@@ -8,12 +8,14 @@
 //   "select"  click pages to pick them (Extract, Delete, Rotate). The effect
 //             ("keep", "remove" or "rotate") decides how picked pages look.
 //   "view"    a read-only preview of the result (Reverse order).
+//   "split"   click a page to start a new file there (Split).
 //
 //   const board = new PageBoard(host, { onChange(pages) {} });
 //   board.configure({ mode: "select", effect: "remove" })
 //   await board.load(file, password)   // "ok", "password" or "wrong-password"
 //   board.order / board.selection      // 0-based page indices
 //   board.setOrder([2, 0, 1]) / board.setSelection([0, 4])   // e.g. from a typed page range
+//   board.splits / board.setSplits([3, 7])   // 0-based pages that start a new file
 
 const BASE = new URL("/static/pdfjs/", location.href).href;
 const THUMB = 132;   // CSS pixels for the longest side of a preview
@@ -118,6 +120,7 @@ export class PageBoard {
     this.drag = null;
     this.mode = "order"; this.effect = null; this.rotation = 90;
     this.picked = new Set(); this.anchor = null;
+    this.starts = new Set();  // split mode: pages that start a new file
 
     const button = (label, fn, name, title) => el("button", { type: "button", class: "btn secondary pb-small", title, onclick: fn }, name ? icon(name) : null, label);
     this.status = el("span", { class: "pb-status" });
@@ -132,7 +135,10 @@ export class PageBoard {
       button("Even", pick((p) => p % 2 === 1), null, "Select pages 2, 4, 6…"),
       button("Invert", () => this.#pick(this.#all().filter((p) => !this.picked.has(p))), null, "Swap selected and unselected pages"),
       button("Clear", pick(() => false), null, "Select no pages"));
-    this.toolbar = el("div", { class: "pb-toolbar" }, this.status, this.orderTools, this.selectTools);
+    this.splitTools = el("div", { class: "pb-tools" },
+      button("Every page", () => this.#split(this.#all().slice(1)), null, "One file per page"),
+      button("Clear", () => this.#split([]), null, "Keep everything in one file"));
+    this.toolbar = el("div", { class: "pb-toolbar" }, this.status, this.orderTools, this.selectTools, this.splitTools);
     this.grid = el("div", { class: "pb-grid", role: "list", "aria-label": "Pages in their new order" });
     this.message = el("div", { class: "pb-message" });
     this.live = el("div", { class: "pb-live", "aria-live": "polite" });
@@ -167,14 +173,32 @@ export class PageBoard {
     this.root.dataset.effect = effect || "";
     this.orderTools.hidden = mode !== "order";
     this.selectTools.hidden = mode !== "select";
-    this.grid.setAttribute("aria-label", { order: "Pages in their new order", select: "Pages; select the ones to use", view: "Pages in the order they will have" }[mode]);
+    this.splitTools.hidden = mode !== "split";
+    this.grid.setAttribute("aria-label", { order: "Pages in their new order", select: "Pages; select the ones to use", view: "Pages in the order they will have", split: "Pages; click a page to start a new file there" }[mode]);
     this.grid.setAttribute("aria-multiselectable", mode === "select" ? "true" : "false");
-    this.picked.clear(); this.anchor = null; this.history = [];
+    this.picked.clear(); this.anchor = null; this.history = []; this.starts.clear();
     if (this.doc) {
       const pages = [...Array(this.total).keys()];
       this.#build(mode === "view" && effect === "reverse" ? pages.reverse() : pages);
       this.#update();
     }
+  }
+
+  get splits() { return [...this.starts].sort((a, b) => a - b); }
+
+  /** Start new files at these pages (0-based) without reporting it back. */
+  setSplits(pages) {
+    if (!this.doc) return false;
+    this.starts = new Set(pages.filter((p) => p > 0 && p < this.total));
+    this.#update();
+    return true;
+  }
+
+  #split(pages) {
+    const before = this.splits.join();
+    this.starts = new Set(pages.filter((p) => p > 0 && p < this.total));
+    this.#update();
+    if (this.splits.join() !== before) this.onChange(this.splits);
   }
 
   /** Select these pages (0-based) without reporting it back. */
@@ -536,6 +560,7 @@ export class PageBoard {
     if (this.mode === "select" && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") { e.preventDefault(); this.#pick(this.#all()); return; }
     if (!tile) return;
     if (this.mode === "select" && (e.key === " " || e.key === "Enter")) { e.preventDefault(); this.#toggle(tile, e.shiftKey); return; }
+    if (this.mode === "split" && (e.key === " " || e.key === "Enter")) { e.preventDefault(); this.#toggleSplit(tile); return; }
     const tiles = [...this.grid.children], i = tiles.indexOf(tile);
     const cols = Math.max(1, tiles.filter((t) => t.offsetTop === tiles[0].offsetTop).length);
     const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -cols, ArrowDown: cols }[e.key];
@@ -566,8 +591,19 @@ export class PageBoard {
 
   #click(e) {
     const tile = e.target.closest(".pb-tile");
-    if (!tile || this.mode !== "select") return;
-    this.#toggle(tile, e.shiftKey);
+    if (!tile) return;
+    if (this.mode === "select") this.#toggle(tile, e.shiftKey);
+    else if (this.mode === "split") this.#toggleSplit(tile);
+  }
+
+  #toggleSplit(tile) {
+    const page = Number(tile.dataset.page);
+    if (page === 0) { this.#say("The first page always starts the first file."); return; }
+    const next = new Set(this.starts);
+    next.has(page) ? next.delete(page) : next.add(page);
+    this.#split([...next]);
+    tile.focus({ preventScroll: true });
+    this.#say(`${this.starts.has(page) ? "A new file starts" : "No new file starts"} at page ${page + 1}. ${this.status.textContent}.`);
   }
 
   /** Click: toggle one page. Shift+click: give every page from the last
@@ -606,6 +642,7 @@ export class PageBoard {
     const tiles = [...this.grid.children];
     if (tiles.length && !tiles.some((t) => t.tabIndex === 0)) tiles[0].tabIndex = 0;
     if (this.mode === "select") return this.#updateSelect(tiles);
+    if (this.mode === "split") return this.#updateSplit(tiles);
     tiles.forEach((t, i) => {
       t.querySelector(".pb-pos").textContent = i + 1;
       const page = Number(t.dataset.page);
@@ -627,6 +664,27 @@ export class PageBoard {
     this.undoBtn.disabled = !this.history.length;
     this.message.hidden = tiles.length > 0;
     if (!tiles.length) this.message.textContent = "All pages removed. Use Undo or Reset to bring them back.";
+  }
+
+  #updateSplit(tiles) {
+    let file = 0;
+    const ranges = [];
+    tiles.forEach((t) => {
+      const page = Number(t.dataset.page);
+      if (page === 0 || this.starts.has(page)) { file++; ranges.push([page, page]); }
+      ranges[ranges.length - 1][1] = page;
+      t.querySelector(".pb-pos").textContent = page + 1;
+      t.classList.toggle("split-start", page > 0 && this.starts.has(page));
+      t.dataset.file = file;
+      t.style.setProperty("--file-tint", file % 2 ? "transparent" : "var(--surface-2)");
+      t.setAttribute("aria-label", `Page ${page + 1}, file ${file}${this.starts.has(page) ? ", starts a new file" : ""}`);
+      const label = t.querySelector(".pb-file") || t.appendChild(el("span", { class: "pb-file" }));
+      label.textContent = page === 0 || this.starts.has(page) ? `File ${file}` : "";
+    });
+    const span = ([a, b]) => (a === b ? `${a + 1}` : `${a + 1}–${b + 1}`);
+    this.status.textContent = ranges.length === 1 ? "1 file — click a page to start a new file there"
+      : `${ranges.length} files: pages ${ranges.slice(0, 6).map(span).join(", ")}${ranges.length > 6 ? ", …" : ""}`;
+    this.message.hidden = true;
   }
 
   #updateSelect(tiles) {

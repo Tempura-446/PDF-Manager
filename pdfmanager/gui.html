@@ -226,6 +226,29 @@ body.pb-dragging, body.pb-dragging * { cursor: grabbing !important; }
 .pb-live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .pb-hint { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; }
 .pb-hint:empty { display: none; }
+/* region editor (crop, redact) */
+.region-editor .pb-toolbar { margin-bottom: 10px; }
+.re-nav { display: flex; align-items: center; gap: 6px; }
+.re-nav .chip-btn { box-shadow: none; }
+.re-page-label { font-size: 13px; font-weight: 600; min-width: 92px; text-align: center; font-variant-numeric: tabular-nums; }
+.re-stage { position: relative; margin: 0 auto; box-shadow: 0 0 0 1px var(--border), 0 4px 18px rgb(0 0 0 / .12); background: #fff; }
+.re-canvas { display: block; }
+.re-overlay { position: absolute; inset: 0; overflow: hidden; cursor: crosshair; touch-action: none; outline: none; }
+.region-editor[data-mode="crop"] .re-overlay { cursor: default; }
+.re-overlay:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
+.re-rect { position: absolute; box-sizing: border-box; }
+.re-crop { border: 2px solid var(--accent); box-shadow: 0 0 0 9999px rgb(20 20 18 / .5); cursor: move; }
+.re-box { background: #000; cursor: move; }
+.re-box.selected { outline: 2px solid var(--focus); outline-offset: 1px; }
+.re-match { position: absolute; background: repeating-linear-gradient(-45deg, rgb(0 0 0 / .75) 0 5px, rgb(0 0 0 / .45) 5px 10px); outline: 1px solid #000; pointer-events: none; }
+.re-handle { position: absolute; width: 12px; height: 12px; background: #fff; border: 2px solid var(--accent); border-radius: 3px; }
+.re-box .re-handle { border-color: var(--focus); }
+.re-n, .re-s { left: calc(50% - 6px); cursor: ns-resize; } .re-n { top: -7px; } .re-s { bottom: -7px; }
+.re-e, .re-w { top: calc(50% - 6px); cursor: ew-resize; } .re-e { right: -7px; } .re-w { left: -7px; }
+.re-ne { top: -7px; right: -7px; cursor: nesw-resize; } .re-sw { bottom: -7px; left: -7px; cursor: nesw-resize; }
+.re-nw { top: -7px; left: -7px; cursor: nwse-resize; } .re-se { bottom: -7px; right: -7px; cursor: nwse-resize; }
+.re-delete { position: absolute; top: -12px; right: -34px; width: 24px; height: 24px; border-radius: 50%; border: 0; background: var(--err); color: #fff; display: grid; place-items: center; cursor: pointer; padding: 0; }
+.re-delete svg { width: 13px; height: 13px; stroke-width: 2.4; }
 #panel-card.muted #panel-host { opacity: .45; pointer-events: none; }
 /* bookmark editor */
 .bm-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: min(60vh, 640px); overflow-y: auto; }
@@ -267,6 +290,15 @@ body.pb-dragging, body.pb-dragging * { cursor: grabbing !important; }
 .pb-tile.turned .pb-thumb img { transform: rotate(var(--pb-turn, 90deg)) scale(var(--pb-fit, .8)); }
 @media (prefers-reduced-motion: reduce) { .pb-thumb img { transition: none; } }
 .pb-tile:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* split mode */
+.page-board[data-mode="split"] .pb-tile { cursor: pointer; touch-action: auto; background: var(--file-tint); border-radius: 0; }
+.page-board[data-mode="split"] .pb-tile:hover { background: var(--accent-soft); }
+.page-board[data-mode="split"] .pb-pos { background: var(--surface-3); color: var(--muted); }
+.page-board[data-mode="split"] .pb-tile.split-start::before {
+  content: ""; position: absolute; left: -9px; top: 4px; bottom: 4px; width: 4px; border-radius: 4px; background: var(--accent);
+}
+.pb-file { position: absolute; top: 4px; right: 4px; font-size: 11px; font-weight: 700; color: var(--accent); background: var(--surface); border-radius: 999px; padding: 1px 7px; box-shadow: var(--shadow); z-index: 1; }
+.pb-file:empty { display: none; }
 @media (hover: none) { .pb-actions { opacity: 1; } }
 @media (pointer: coarse) { .pb-tile { touch-action: auto; } }
 
@@ -784,11 +816,26 @@ const BOARD_TEXT = {
   remove: ["Click the pages to delete", "Shift+click selects a range. With the keyboard: arrow keys, then Space to select; Ctrl+A selects all."],
   rotate: ["Click the pages to rotate", "The previews show the result. Shift+click selects a range; with no page selected, every page is rotated."],
   reverse: ["Preview of the result", ""],
+  split: ["Click a page to start a new file there", "Each colour band becomes one file. With the keyboard: arrow keys, then Space."],
 };
 const boardField = () => current && current.board && current.board.field ? $("f-" + current.board.field) : null;
 function boardChanged(pages) {
   const f = boardField();
-  if (f) f.value = boardLib.formatRanges(pages);
+  if (!f) return;
+  f.value = current.board.mode === "split" ? splitsToRanges(pages, board.total) : boardLib.formatRanges(pages);
+}
+// Split: pages that start a new file (0-based) <-> "1-3 4-7 8-12".
+function splitsToRanges(starts, total) {
+  const firsts = [0, ...starts], parts = [];
+  firsts.forEach((a, i) => { const b = (firsts[i + 1] ?? total) - 1; parts.push(a === b ? `${a + 1}` : `${a + 1}-${b + 1}`); });
+  return parts.join(" ");
+}
+function rangesToSplits(text, total) {
+  const groups = text.split(/[;\s]+/).filter(Boolean).map((t) => boardLib.parseRanges(t, total));
+  if (!groups.length || groups.some((g) => !g)) return null;
+  const flat = groups.flat();
+  if (flat.length !== total || flat.some((p, i) => p !== i)) return null;  // must cover every page once, in order
+  return groups.slice(1).map((g) => g[0]);
 }
 async function syncBoard() {
   const spec = current && current.board;
@@ -816,6 +863,13 @@ async function syncBoard() {
   if (spec.degrees) board.setRotation($("f-" + spec.degrees).value);
   const f = boardField();
   if (!f) return;
+  if (spec.mode === "split") {
+    const every = Number($("f-" + spec.every)?.value) || 1;
+    const typed = rangesToSplits(f.value, board.total);
+    board.setSplits(typed || [...Array(board.total).keys()].filter((p) => p > 0 && p % every === 0));
+    f.value = splitsToRanges(board.splits, board.total);
+    return;
+  }
   const typed = boardLib.parseRanges(f.value, board.total);
   if (spec.mode === "order") {
     if (typed) board.setOrder(typed);
@@ -826,6 +880,17 @@ $("form").addEventListener("input", (e) => {
   const spec = current && current.board;
   if (!spec || !board || !board.doc || !boardLib || board.tool !== current.id) return;
   if (spec.degrees && e.target.id === "f-" + spec.degrees) board.setRotation(e.target.value);
+  if (spec.every && e.target.id === "f-" + spec.every) {
+    const every = Math.max(1, Number(e.target.value) || 1);
+    board.setSplits([...Array(board.total).keys()].filter((p) => p > 0 && p % every === 0));
+    boardField().value = splitsToRanges(board.splits, board.total);
+    return;
+  }
+  if (spec.mode === "split" && e.target.id === "f-" + spec.field) {
+    const starts = rangesToSplits(e.target.value, board.total);
+    if (starts) board.setSplits(starts);
+    return;
+  }
   if (e.target.id !== "f-" + spec.field) return;
   const pages = boardLib.parseRanges(e.target.value, board.total);
   if (spec.mode === "order") { if (pages) board.setOrder(pages); }
@@ -864,6 +929,73 @@ const PANELS = {
         },
       };
     },
+  },
+};
+PANELS.crop = {
+  title: "Crop area", sub: "Drag the edges to choose what to keep",
+  async setup(host) {
+    const { RegionEditor } = await import("/static/regions.js");
+    const sides = ["top", "right", "bottom", "left"];
+    const editor = new RegionEditor(host, { mode: "crop", onChange: (m) => {
+      for (const k of sides) { const f = $("f-" + k); if (f) f.value = Math.max(0, (m[k] * 25.4) / 72).toFixed(1); }
+    } });
+    const fromFields = () => Object.fromEntries(sides.map((k) => [k, Math.max(0, Number($("f-" + k)?.value) || 0) * 72 / 25.4]));
+    $("form").addEventListener("input", (e) => { if (current.panel === "crop" && sides.includes(e.target.name)) editor.setCrop(fromFields()); });
+    return {
+      async sync() {
+        const one = items.length === 1;
+        host.hidden = !one;
+        $("panel-hint").textContent = one ? "The darkened part is trimmed off. The same margins are used for every page (or the pages you list under Options)."
+          : "The crop area can be drawn for one file at a time. With several files, type the margins under Options.";
+        if (!one) { editor.close(); return; }
+        editor.setCrop(fromFields());
+        const result = await editor.load(items[0].file, $("pw").value || null);
+        if (result === "password" || result === "wrong-password") $("pw-box").open = true;
+      },
+    };
+  },
+};
+PANELS.redact = {
+  title: "Pages", sub: "Drag on a page to black out an area",
+  async setup(host) {
+    const { RegionEditor } = await import("/static/regions.js");
+    const editor = new RegionEditor(host, { mode: "redact", onChange: (boxes) => { const f = $("f-boxes"); if (f) f.value = JSON.stringify(boxes); } });
+    let timer = null, asked = 0;
+    const findMatches = () => {
+      clearTimeout(timer);
+      timer = setTimeout(async () => {
+        if (current.panel !== "redact" || items.length !== 1 || !editor.doc) return;
+        const ask = ++asked, body = new FormData();
+        body.append("file", items[0].file, items[0].file.name);
+        body.append("password", $("pw").value);
+        for (const k of ["terms", "emails", "phones", "numbers", "case_sensitive", "whole_words"]) {
+          const f = $("f-" + k);
+          if (f) body.append(k, f.type === "checkbox" ? String(f.checked) : f.value);
+        }
+        try {
+          const data = await (await api("/api/redact/find", { method: "POST", body })).json();
+          if (ask === asked) editor.setMatches(data.boxes);
+        } catch (e) { /* the preview is optional */ }
+      }, 450);
+    };
+    $("form").addEventListener("input", (e) => { if (current.panel === "redact" && e.target.name !== "boxes") findMatches(); });
+    $("form").addEventListener("change", (e) => { if (current.panel === "redact" && e.target.type === "checkbox") findMatches(); });
+    return {
+      async sync() {
+        const one = items.length === 1;
+        host.hidden = !one;
+        $("panel-hint").textContent = one ? "Striped: found by the words and numbers under Options. Black: boxes you drew. Click a box to move, resize or remove it. Every page with a redaction becomes a picture."
+          : "Boxes can be drawn for one file at a time. With several files, the words and numbers under Options are blacked out in each.";
+        if (!one) { editor.close(); return; }
+        const result = await editor.load(items[0].file, $("pw").value || null);
+        if (result === "password" || result === "wrong-password") $("pw-box").open = true;
+        if (result !== "ok") return;
+        const f = $("f-boxes");
+        if (f && f.value) editor.setBoxes(JSON.parse(f.value));
+        else if (f) f.value = JSON.stringify(Object.fromEntries(Object.entries(editor.boxes).filter(([, l]) => l.length).map(([p, l]) => [Number(p) + 1, l])));
+        findMatches();
+      },
+    };
   },
 };
 function muteBookmarks() {

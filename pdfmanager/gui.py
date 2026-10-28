@@ -55,7 +55,9 @@ OPERATIONS = [
      "help": "Combine PDFs in the order listed. Drag to reorder.",
      "fields": [_f("bookmarks", "Add a bookmark per file", "check", True)]},
     {"id": "split", "group": "Combine", "label": "Split", "files": "pdf",
-     "help": "Split into several files (downloaded as a ZIP).",
+     "help": "Split into several files (downloaded as a ZIP). With one PDF, click the page "
+             "previews where each new file should start.",
+     "board": {"mode": "split", "field": "ranges", "every": "every"},
      "fields": [_f("every", "Pages per file", "number", 1, min=1),
                 _f("ranges", "…or ranges (one file each)", "text", "",
                    placeholder="1-3, 4-10, 11-", hint="separate ranges with spaces or ;")]},
@@ -114,7 +116,9 @@ OPERATIONS = [
                             ["stretch", "Stretch"], ["none", "Don't scale"]]),
                 _f("auto_orient", "Keep landscape pages landscape", "check", True),
                 _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
-    {"id": "crop", "group": "Layout", "label": "Crop margins", "files": "pdf",
+    {"id": "crop", "group": "Layout", "label": "Crop margins", "files": "pdf", "panel": "crop",
+     "help": "Trim the edges of pages. With one PDF, drag the edges of the box on the page "
+             "preview, or type the margins.",
      "fields": [_f("top", "Top (mm)", "number", 10, min=0),
                 _f("right", "Right (mm)", "number", 10, min=0),
                 _f("bottom", "Bottom (mm)", "number", 10, min=0),
@@ -801,6 +805,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._keep(body)
             if path == "/api/outline":
                 return self._outline(body)
+            if path == "/api/redact/find":
+                return self._redact_find(body)
             if path == "/api/folder":
                 data = json.loads(body or b"{}")
                 result = run_folder_operation(data.get("op"), data.get("options") or {},
@@ -867,6 +873,23 @@ class Handler(BaseHTTPRequestHandler):
             items = (outline.detect_headings(path, password) if _bool(fields.get("detect"))
                      else outline.get_outline(path, password))
         return self._send(HTTPStatus.OK, {"items": items, "pages": pages})
+
+    def _redact_find(self, body):
+        """Where the Redact tool's words and kinds of numbers are found, so
+        the page editor can show them before anything is blacked out."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        terms, patterns, _ = _redact_request({k: v for k, v in fields.items() if k != "boxes"})
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            found = redact.find_text(path, terms, patterns,
+                                     case_sensitive=_bool(fields.get("case_sensitive")),
+                                     whole_words=_bool(fields.get("whole_words")),
+                                     password=fields.get("password") or None)
+        return self._send(HTTPStatus.OK, {"boxes": {str(p + 1): [list(b) for b in boxes]
+                                                    for p, boxes in found.items()}})
 
     def _inspect(self, body):
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
