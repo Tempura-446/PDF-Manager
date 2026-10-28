@@ -5,6 +5,7 @@ import json
 import shutil
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -574,14 +575,100 @@ def test_result_cache_keeps_only_recent_results():
 
 def test_cli_gui_falls_back_to_browser(monkeypatch):
     calls = []
-    monkeypatch.setattr(gui, "desktop_available", lambda: True)
     monkeypatch.setattr(gui, "run_desktop", lambda **kw: calls.append("window") or False)
+    monkeypatch.setattr(gui, "run_app_window", lambda **kw: calls.append("app window") or False)
     monkeypatch.setattr(gui, "serve", lambda **kw: calls.append("browser"))
     assert main(["gui"]) == 0
-    assert calls == ["window", "browser"]  # window failed -> browser
+    assert calls == ["window", "app window", "browser"]  # each failed -> the next
+    calls.clear()
+    monkeypatch.setattr(gui, "run_app_window", lambda **kw: calls.append("app window") or True)
+    assert main(["gui"]) == 0
+    assert calls == ["window", "app window"]
     calls.clear()
     assert main(["gui", "--browser"]) == 0
     assert calls == ["browser"]
+
+
+class _FakeProc:
+    def __init__(self, exit_after=None):
+        self.start, self.exit_after = time.monotonic(), exit_after
+
+    def poll(self):
+        done = self.exit_after is not None and time.monotonic() - self.start >= self.exit_after
+        return 0 if done else None
+
+
+def test_wait_until_closed():
+    handler = type("H", (), {"last_seen": time.monotonic()})
+    t = time.monotonic()
+    gui.wait_until_closed(handler, idle=0.2, poll=0.05)  # browser tab: no pings -> done
+    assert 0.2 <= time.monotonic() - t < 1
+    # App window closed after a while: done at once, pings or not.
+    handler.last_seen = time.monotonic() + 100
+    t = time.monotonic()
+    gui.wait_until_closed(handler, _FakeProc(exit_after=5.3), poll=0.05)
+    assert time.monotonic() - t < 6
+    # Browser handed the window to a running copy: wait for the pings to stop.
+    handler.last_seen = time.monotonic()
+    t = time.monotonic()
+    gui.wait_until_closed(handler, _FakeProc(exit_after=0), idle_handed_off=0.3, poll=0.05)
+    assert 0.3 <= time.monotonic() - t < 1
+
+
+def test_ping_keeps_the_server_alive(server):
+    base, token = server
+    status, _, body = request(base + "/api/ping", token, data=b"")
+    assert status == 200 and json.loads(body) == {"ok": True}
+    assert request(base + "/api/ping", "wrong", data=b"")[0] == 403
+
+
+def test_window_failure_is_remembered(tmp_path, monkeypatch):
+    """When the pywebview window can't open (e.g. Smart App Control blocks
+    its engine), the reason is saved and that version isn't tried again."""
+    starts = []
+    fake = type(sys)("webview")
+    fake.create_window = lambda *a, **kw: object()
+    fake.start = lambda: starts.append(1) or (_ for _ in ()).throw(OSError("blocked"))
+    monkeypatch.setitem(sys.modules, "webview", fake)
+    monkeypatch.setattr(gui, "desktop_available", lambda: True)
+    monkeypatch.setattr(gui, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(gui, "_pywebview_version", lambda: "6.0")
+    assert gui.run_desktop() is False and starts == [1]
+    assert (tmp_path / "window-error.txt").read_text().splitlines() == ["6.0", "OSError: blocked"]
+    assert gui.run_desktop() is False and starts == [1]  # not tried again
+    monkeypatch.setattr(gui, "_pywebview_version", lambda: "6.1")
+    assert gui.run_desktop() is False and starts == [1, 1]  # a new version is tried
+
+
+def test_app_window_uses_edge_or_chrome(tmp_path, monkeypatch):
+    launched = []
+
+    class Proc(_FakeProc):
+        def __init__(self, args, **kw):
+            launched.append(args)
+            super().__init__(exit_after=0)
+
+    monkeypatch.setattr(gui, "find_app_browser", lambda: None)
+    assert gui.run_app_window() is False
+    monkeypatch.setattr(gui, "find_app_browser", lambda: "/opt/edge/msedge")
+    monkeypatch.setattr(gui, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(gui.subprocess, "Popen", Proc)
+    monkeypatch.setattr(gui, "wait_until_closed", lambda handler, proc: None)
+    assert gui.run_app_window() is True
+    args = launched[0]
+    assert args[0] == "/opt/edge/msedge"
+    assert args[1].startswith("--app=http://127.0.0.1:") and "#token=" in args[1]
+    assert f"--user-data-dir={tmp_path / 'window'}" in args
+
+
+def test_find_app_browser_on_linux(tmp_path, monkeypatch):
+    monkeypatch.setattr(gui.sys, "platform", "linux")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert gui.find_app_browser() is None
+    chrome = tmp_path / "google-chrome"
+    chrome.write_text("#!/bin/sh\n")
+    chrome.chmod(0o755)
+    assert gui.find_app_browser() == str(chrome)
 
 
 def test_organize_puts_protected_files_in_their_own_folder(tmp_path):
@@ -711,7 +798,6 @@ def test_reader_save_copy_and_open_dialog_in_desktop_window(tmp_path, monkeypatc
 def test_cli_view_opens_files_in_the_reader(tmp_path, monkeypatch, capsys):
     pdf = make_pdf(tmp_path / "a.pdf")
     calls = []
-    monkeypatch.setattr(gui, "desktop_available", lambda: True)
     monkeypatch.setattr(gui, "run_desktop", lambda **kw: calls.append(kw["open_paths"]) or True)
     assert main(["view", str(pdf)]) == 0
     assert calls == [[str(pdf)]]

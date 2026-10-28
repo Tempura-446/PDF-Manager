@@ -45,9 +45,22 @@ Windows installer).
 ## Desktop app
 
 Start it with **`pdfm-app`** (no terminal window; good for a desktop
-shortcut or the Start menu) or `pdfm gui`. It opens in its own window;
-without pywebview it opens in your web browser instead (`pdfm gui --browser`
-forces that).
+shortcut or the Start menu), `pdfm gui`, or `pyw -m pdfmanager gui` on
+Windows. It opens in its own window, the first way that works:
+
+1. a native window (pywebview, installed with `.[app]`), with the normal
+   Save and Open dialogs;
+2. otherwise an app window of Microsoft Edge (part of Windows 10 and 11),
+   Chrome, Chromium or Brave: no tabs or address bar, and results are
+   saved like downloads;
+3. otherwise a tab in your web browser (`pdfm gui --browser` forces that).
+
+If the native window can't open, for example because Windows **Smart App
+Control** blocks a library it needs, the reason is saved in
+`%LOCALAPPDATA%\PDF Manager\window-error.txt` (`~/.local/share/pdf-manager`
+on Linux) and the app uses the Edge window from then on. Delete that file
+to try the native window again. The app stops by itself when its window is
+closed.
 
 - Drop files anywhere on the window. Each file shows a **preview of its
   first page**, its page count and size; drag the cards to change the
