@@ -612,6 +612,7 @@ def raw_get(base, path, headers=None):
 def test_reader_static_files_are_served(server):
     base, _ = server
     for path, ctype in (("/static/reader.js", "text/javascript"),
+                        ("/static/pages.js", "text/javascript"),
                         ("/static/reader.css", "text/css"),
                         ("/static/pdfjs/build/pdf.min.mjs", "text/javascript"),
                         ("/static/pdfjs/build/pdf.worker.min.mjs", "text/javascript"),
@@ -731,3 +732,19 @@ def test_reader_is_listed_first(server):
     base, token = server
     ops = json.loads(request(base + "/api/operations", token)[2])["operations"]
     assert ops[0]["id"] == "reader" and ops[0]["files"] == "reader"
+
+
+def test_page_tools_have_page_previews():
+    """Every page tool shows the page board, and the board writes into a
+    field the tool actually has."""
+    from pdfmanager import gui
+
+    for op in gui.OPERATIONS:
+        if op["group"] != "Pages":
+            continue
+        board = op.get("board")
+        assert board and board["mode"] in ("order", "select", "view"), op["id"]
+        keys = {f["key"] for f in op["fields"]}
+        for ref in ("field", "degrees"):
+            if ref in board:
+                assert board[ref] in keys, (op["id"], ref)

@@ -57,6 +57,16 @@ forces that).
 - The result appears with a preview. In the app window, **Save…** opens
   the normal save dialog and **Show in folder** reveals the file; in a
   browser, the result downloads. Several files come back as a ZIP.
+- The **page tools** show a preview of every page (with one PDF added):
+  - **Reorder pages:** drag pages into the new order (or click a page and
+    use Alt+arrow keys), duplicate or remove pages, undo with Ctrl+Z.
+  - **Extract pages**, **Delete pages**, **Rotate:** click the pages to use
+    (Shift+click for a range, or All / Odd / Even / Invert / Clear). Pages
+    to delete are crossed out, and rotated pages are shown turned.
+  - **Reverse order:** shows the pages in their new order.
+
+  The page box under Options updates as you go, and typing pages there
+  updates the previews.
 - Folder tools (organize, rename, find duplicates) have **Browse…**
   buttons in the app window and always let you **Preview** before
   anything changes.

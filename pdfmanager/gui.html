@@ -178,6 +178,86 @@ main > .action-bar { max-width: none; width: auto; }
 .chip-btn:disabled { opacity: .4; cursor: default; }
 @media (hover: none) { .card-actions { opacity: 1; } }
 
+/* Page board (Reorder pages) */
+.page-board .pb-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.pb-status { color: var(--muted); font-size: 13px; }
+.pb-tools { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn.pb-small { padding: 5px 11px; font-size: 13px; font-weight: 550; gap: 6px; }
+.btn.pb-small:disabled { cursor: default; opacity: .45; }
+.btn.pb-small svg { width: 14px; height: 14px; }
+.pb-grid {
+  position: relative; display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 14px;
+  max-height: min(68vh, 720px); overflow-y: auto; padding: 4px 4px 8px; margin: -4px; overscroll-behavior: contain;
+}
+.pb-tile {
+  position: relative; border-radius: var(--radius-sm); padding: 6px 6px 4px; cursor: grab; user-select: none;
+  -webkit-user-select: none; touch-action: none; outline: none; border: 1.5px solid transparent;
+}
+.pb-tile:hover { background: var(--surface-2); }
+.pb-tile:focus-visible, .pb-tile:focus { border-color: var(--focus); background: var(--surface-2); }
+.pb-thumb { aspect-ratio: 1 / 1.25; display: grid; place-items: center; }
+.pb-thumb img {
+  max-width: 100%; max-height: 100%; display: block; background: #fff; border-radius: 3px;
+  box-shadow: 0 0 0 1px var(--border), 0 2px 6px rgb(0 0 0 / .08);
+}
+.pb-thumb .loading { width: 20px; height: 20px; border: 2px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+.pb-label { text-align: center; font-size: 12.5px; color: var(--muted); margin-top: 5px; font-variant-numeric: tabular-nums; }
+.pb-tile.moved .pb-label { color: var(--accent); font-weight: 600; }
+.pb-pos {
+  position: absolute; top: 2px; left: 2px; min-width: 22px; height: 22px; border-radius: 999px; padding: 0 6px;
+  background: var(--text); color: var(--bg); font-size: 11.5px; font-weight: 700; display: grid; place-items: center;
+  font-variant-numeric: tabular-nums; z-index: 1;
+}
+.pb-actions { position: absolute; top: 2px; right: 2px; display: flex; flex-direction: column; gap: 3px; opacity: 0; transition: opacity .12s; z-index: 1; }
+.pb-actions .chip-btn { width: 24px; height: 24px; border-radius: 6px; }
+.pb-actions .chip-btn svg { width: 13px; height: 13px; }
+.pb-tile:hover .pb-actions, .pb-tile:focus .pb-actions { opacity: 1; }
+body.pb-dragging .pb-actions { opacity: 0 !important; }
+.pb-placeholder > * { visibility: hidden; }
+.pb-placeholder { border: 1.5px dashed var(--accent); background: var(--accent-soft) !important; }
+.pb-ghost {
+  position: fixed; top: 0; left: 0; z-index: 1000; pointer-events: none; background: var(--surface);
+  box-shadow: var(--shadow-lift); border-color: var(--accent); opacity: .95;
+}
+.pb-ghost .pb-actions { display: none; }
+body.pb-dragging, body.pb-dragging * { cursor: grabbing !important; }
+.pb-message { color: var(--muted); font-size: 14px; padding: 6px 0; }
+.page-board[data-state="password"] .pb-message, .page-board[data-state="wrong-password"] .pb-message, .page-board[data-state="error"] .pb-message { color: var(--err); }
+.pb-live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.pb-hint { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; }
+.pb-hint:empty { display: none; }
+/* select mode (extract, delete, rotate) */
+.page-board[data-mode="select"] .pb-tile, .page-board[data-mode="view"] .pb-tile { cursor: pointer; touch-action: auto; }
+.page-board[data-mode="view"] .pb-tile { cursor: default; }
+.page-board:not([data-mode="order"]) .pb-actions { display: none; }
+.pb-check {
+  position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; border-radius: 999px; z-index: 1;
+  display: none; place-items: center; background: var(--surface); border: 1.5px solid var(--border-strong); color: transparent;
+}
+.pb-check svg { width: 13px; height: 13px; stroke-width: 2.6; }
+.page-board[data-mode="select"] .pb-check { display: grid; }
+.page-board[data-mode="select"] .pb-tile:hover .pb-check { border-color: var(--accent); }
+.pb-tile.picked { border-color: var(--accent); background: var(--accent-soft); }
+.pb-tile.picked:hover, .pb-tile.picked:focus { background: var(--accent-soft); }
+.pb-tile.picked .pb-check { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.pb-tile.picked .pb-label { color: var(--accent); font-weight: 600; }
+.page-board[data-mode="select"] .pb-pos { background: var(--surface-3); color: var(--muted); }
+/* extract: pages that are not picked stay behind */
+.page-board[data-effect="keep"].has-picked .pb-tile:not(.picked) .pb-thumb img { opacity: .4; }
+/* delete: picked pages are crossed out */
+.page-board[data-effect="remove"] .pb-tile.picked { border-color: var(--err); background: var(--err-soft); }
+.page-board[data-effect="remove"] .pb-tile.picked .pb-check { background: var(--err); border-color: var(--err); }
+.page-board[data-effect="remove"] .pb-tile.picked .pb-label { color: var(--err); text-decoration: line-through; }
+.page-board[data-effect="remove"] .pb-tile.picked .pb-thumb img { opacity: .35; filter: grayscale(1); }
+.page-board.pb-warn .pb-status { color: var(--err); }
+/* rotate: picked pages are shown turned */
+.pb-thumb img { transition: transform .2s ease; }
+.pb-tile.turned .pb-thumb img { transform: rotate(var(--pb-turn, 90deg)) scale(var(--pb-fit, .8)); }
+@media (prefers-reduced-motion: reduce) { .pb-thumb img { transition: none; } }
+.pb-tile:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (hover: none) { .pb-actions { opacity: 1; } }
+@media (pointer: coarse) { .pb-tile { touch-action: auto; } }
+
 /* Options */
 .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px 18px; }
 .field label { display: block; font-size: 13px; font-weight: 550; margin-bottom: 5px; }
@@ -265,6 +345,7 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
   .action-bar { margin: auto -16px 0; padding: 12px 16px; }
   .fields { grid-template-columns: 1fr; }
   .file-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+  .pb-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
   .result { flex-direction: column; align-items: flex-start; }
   .tool-icon { width: 40px; height: 40px; }
   .kbd-hint { display: none; }
@@ -312,6 +393,15 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
         <strong id="drop-title">Drop files here or click to choose</strong>
         <small id="drop-hint"></small>
       </label>
+    </section>
+
+    <section class="card" id="pages-card" hidden>
+      <div class="card-head">
+        <h3>Pages</h3>
+        <span class="sub" id="pages-sub"></span>
+      </div>
+      <div id="page-board"></div>
+      <p class="pb-hint" id="pages-hint"></p>
     </section>
 
     <section class="card">
@@ -575,7 +665,7 @@ async function inspect(it) {
 let pwTimer = null;
 $("pw").addEventListener("input", () => {
   clearTimeout(pwTimer);
-  pwTimer = setTimeout(() => items.filter((it) => it.locked).forEach(inspect), 400);
+  pwTimer = setTimeout(() => { items.filter((it) => it.locked).forEach(inspect); syncBoard(); }, 400);
 });
 
 let dragId = null;
@@ -621,6 +711,7 @@ function renderFiles() {
   const size = items.reduce((n, it) => n + it.file.size, 0);
   $("files-sub").textContent = items.length ? `${plural(items.length, "file")}${pages ? " · " + plural(pages, "page") : ""} · ${humanSize(size)}` : "";
   updateSummary();
+  syncBoard();
 }
 function move(from, to) {
   if (to < 0 || to >= items.length || from === to) return;
@@ -652,6 +743,65 @@ document.addEventListener("drop", (e) => {
     const pdf = [...e.dataTransfer.files].find(isPdf);
     if (pdf) reader.openFile(pdf);
   } else addFiles(e.dataTransfer.files);
+});
+
+// ---- page board (the page tools) ---------------------------------------------------
+// With one PDF, the page tools show every page (see static/pages.js and the
+// "board" entry of each tool). Dragging or clicking pages writes the page
+// list into the tool's field, and typing in the field updates the previews.
+let board = null, boardLib = null;
+const BOARD_TEXT = {
+  order: ["Drag pages into the new order", "Tip: click a page, then use the arrow keys to pick and Alt+arrow keys to move it. Delete removes a page, D duplicates it, Ctrl+Z undoes."],
+  keep: ["Click the pages to extract", "Shift+click selects a range. With the keyboard: arrow keys, then Space to select; Ctrl+A selects all."],
+  remove: ["Click the pages to delete", "Shift+click selects a range. With the keyboard: arrow keys, then Space to select; Ctrl+A selects all."],
+  rotate: ["Click the pages to rotate", "The previews show the result. Shift+click selects a range; with no page selected, every page is rotated."],
+  reverse: ["Preview of the result", ""],
+};
+const boardField = () => current && current.board && current.board.field ? $("f-" + current.board.field) : null;
+function boardChanged(pages) {
+  const f = boardField();
+  if (f) f.value = boardLib.formatRanges(pages);
+}
+async function syncBoard() {
+  const spec = current && current.board;
+  const active = !!spec && items.length > 0;
+  $("pages-card").hidden = !active;
+  if (!active || items.length > 1) {
+    $("pages-sub").textContent = "";
+    $("pages-hint").textContent = active ? "Page previews are shown for one file at a time. With several files, the pages typed under Options are used for each of them." : "";
+    if (board) board.close();
+    return;
+  }
+  const [sub, hint] = BOARD_TEXT[spec.effect || spec.mode];
+  $("pages-sub").textContent = sub;
+  $("pages-hint").textContent = hint;
+  if (!boardLib) boardLib = await import("/static/pages.js");
+  if (!board) board = new boardLib.PageBoard($("page-board"), { onChange: boardChanged });
+  if (board.mode !== spec.mode || board.effect !== (spec.effect || null) || board.tool !== current.id) {
+    board.tool = current.id;
+    board.configure({ mode: spec.mode, effect: spec.effect || null });
+  }
+  const it = items[0];
+  const result = await board.load(it.file, $("pw").value || null);
+  if (result === "password" || result === "wrong-password") $("pw-box").open = true;
+  if (result !== "ok" || board.file !== it.file || current.board !== spec) return;
+  if (spec.degrees) board.setRotation($("f-" + spec.degrees).value);
+  const f = boardField();
+  if (!f) return;
+  const typed = boardLib.parseRanges(f.value, board.total);
+  if (spec.mode === "order") {
+    if (typed) board.setOrder(typed);
+    else f.value = boardLib.formatRanges(board.order);
+  } else board.setSelection(typed || []);
+}
+$("form").addEventListener("input", (e) => {
+  const spec = current && current.board;
+  if (!spec || !board || !board.doc || !boardLib || board.tool !== current.id) return;
+  if (spec.degrees && e.target.id === "f-" + spec.degrees) board.setRotation(e.target.value);
+  if (e.target.id !== "f-" + spec.field) return;
+  const pages = boardLib.parseRanges(e.target.value, board.total);
+  if (spec.mode === "order") { if (pages) board.setOrder(pages); }
+  else if (pages || !e.target.value.trim()) board.setSelection(pages || []);
 });
 
 // ---- options -----------------------------------------------------------------
