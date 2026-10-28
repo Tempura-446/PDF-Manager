@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
-from pdfmanager import __version__, core, organize, scan
+from pdfmanager import __version__, archive, core, organize, scan
 from pdfmanager.pageranges import PageRangeError
 
 MAX_UPLOAD = 1024 * 1024 * 1024  # 1 GB
@@ -153,6 +153,11 @@ OPERATIONS = [
                              "top-center", "top-right", "top-left")]),
                 _f("start", "Start at", "number", 1),
                 _f("font_size", "Font size", "number", 10, min=4)]},
+    {"id": "flatten", "group": "Stamp", "label": "Flatten forms & comments", "files": "pdf",
+     "help": "Make filled-in forms and comments part of the page, so they look the same "
+             "everywhere and can't be changed. Links keep working.",
+     "fields": [_f("forms", "Form fields", "check", True),
+                _f("comments", "Comments, highlights, drawings and signatures", "check", True)]},
     {"id": "metadata", "group": "Stamp", "label": "Title & author", "files": "pdf",
      "fields": [_f("title", "Title"), _f("author", "Author"), _f("subject", "Subject"),
                 _f("keywords", "Keywords")]},
@@ -160,6 +165,18 @@ OPERATIONS = [
      "fields": [_f("new_password", "New password", "password", "", required=True)]},
     {"id": "decrypt", "group": "Security", "label": "Remove password", "files": "pdf",
      "help": "Enter the current password in the box above the Run button.", "fields": []},
+    {"id": "sanitize", "group": "Security", "label": "Remove hidden data", "files": "pdf",
+     "help": "Remove information that travels unseen inside a PDF before you share it.",
+     "fields": [_f("metadata", "Author, title, dates and other document details", "check", True),
+                _f("javascript", "Scripts and actions that run programs", "check", True),
+                _f("attachments", "Attached files", "check", True),
+                _f("comments", "Comments, highlights and notes", "check", False)]},
+    {"id": "pdfa", "group": "Convert", "label": "PDF → PDF/A (archive)", "files": "pdf",
+     "help": "Convert to PDF/A, the ISO standard for documents that must stay readable for "
+             "decades: fonts and colour profile are embedded. Needs Ghostscript.",
+     "fields": [_f("level", "Version", "select", "2",
+                   choices=[["2", "PDF/A-2b — recommended"], ["1", "PDF/A-1b — oldest, strictest"],
+                            ["3", "PDF/A-3b — allows attachments"]])]},
     {"id": "from-images", "group": "Convert", "label": "Images → PDF", "files": "images",
      "fields": [_f("size", "Page size", "select", "",
                    choices=[["", "Same as image"]] +
@@ -194,7 +211,7 @@ OPERATIONS = [
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
-SUFFIX = {"clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
+SUFFIX = {"flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
@@ -278,6 +295,27 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                             sensitivity=opts.get("sensitivity") or "medium",
                             auto_rotate=auto_rotate, password=password)
         notes.append(_clean_note(src.name, report))
+    elif op == "flatten":
+        forms, comments = _bool(opts.get("forms", True)), _bool(opts.get("comments", True))
+        if not forms and not comments:
+            raise UserError("choose form fields, comments or both")
+        archive.flatten(src, out, forms=forms, comments=comments, password=password)
+    elif op == "sanitize":
+        counts = archive.sanitize(
+            src, out, **{k: _bool(opts.get(k, d)) for k, d in
+                         (("metadata", True), ("javascript", True), ("attachments", True),
+                          ("comments", False))}, password=password)
+        found = [f"{n} {label}" for key, label in (("metadata", "document details"),
+                                                  ("javascript", "scripts/actions"),
+                                                  ("attachments", "attachments"),
+                                                  ("comments", "comments"))
+                 if (n := counts[key])]
+        notes.append(f"{src.name}: removed " + (", ".join(found) if found else "nothing (none found)"))
+    elif op == "pdfa":
+        if not archive.find_ghostscript():
+            raise UserError("PDF/A needs Ghostscript: install it from "
+                            "https://ghostscript.com/releases/gsdnld.html and try again")
+        archive.to_pdfa(src, out, level=opts.get("level") or "2", password=password)
     elif op == "watermark":
         core.watermark(src, out, text=opts.get("text") or "CONFIDENTIAL",
                        opacity=_num(opts.get("opacity"), float, 0.15),
@@ -333,7 +371,7 @@ def _clean_note(name, report):
 
 def _protect(outputs, password, op):
     """PDFs made from a password-protected file get the same password."""
-    if password and op not in ("decrypt", "encrypt"):
+    if password and op not in ("decrypt", "encrypt", "pdfa"):
         for path in outputs:
             if path.suffix.lower() == ".pdf":
                 core.encrypt(path, path, password)

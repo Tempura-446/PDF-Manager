@@ -11,7 +11,7 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-from pdfmanager import __version__, core, imaging, organize, scan
+from pdfmanager import __version__, archive, core, imaging, organize, scan
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -200,6 +200,26 @@ def run_clean(a, src, out, pw):
     return f"{out}  ({'; '.join(bits) or 'nothing needed changing'})"
 
 
+def run_flatten(a, src, out, pw):
+    if a.forms_only and a.comments_only:
+        raise core.PdfManagerError("choose --forms-only or --comments-only, not both")
+    return archive.flatten(src, out, forms=not a.comments_only, comments=not a.forms_only,
+                           password=pw)
+
+
+def run_sanitize(a, src, out, pw):
+    counts = archive.sanitize(src, out, metadata=not a.keep_metadata,
+                              javascript=not a.keep_javascript,
+                              attachments=not a.keep_attachments, comments=a.comments,
+                              password=pw)
+    found = ", ".join(f"{n} {k}" for k, n in counts.items() if n) or "nothing found"
+    return f"{out}  (removed: {found})"
+
+
+def run_pdfa(a, src, out, pw):
+    return archive.to_pdfa(src, out, level=a.level, password=pw)
+
+
 def run_text(a, src, out, pw):
     text = core.extract_text(src, out, a.pages, pw)
     if out is None:
@@ -250,6 +270,7 @@ OUTPUTS = {
     "nup": ("nup", "pdf"), "compress": ("compressed", "pdf"), "color": ("color", "pdf"),
     "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
     "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
+    "flatten": ("flat", "pdf"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
     "split": ("split", "dir"), "to-images": ("images", "dir"),
 }
 
@@ -280,7 +301,8 @@ def _output_for(a, src, batch):
 
 # Commands whose output should not inherit the input's password.
 # (split re-encrypts its own output files.)
-KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split"}
+KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split",
+                    "pdfa"}  # PDF/A doesn't allow encryption
 
 
 def _reencrypt(out, password):
@@ -580,6 +602,24 @@ def build_parser():
                          "high (also nearly empty pages)")
     sp.add_argument("--rotate", action="store_true",
                     help="turn sideways/upside-down pages upright (needs Tesseract)")
+
+    sp = per_file("flatten", run_flatten,
+                  "make form fields and comments part of the page (links keep working)")
+    sp.add_argument("--forms-only", action="store_true", help="leave comments as they are")
+    sp.add_argument("--comments-only", action="store_true", help="leave form fields as they are")
+
+    sp = per_file("sanitize", run_sanitize,
+                  "remove hidden data: document details, scripts, attached files")
+    sp.add_argument("--keep-metadata", action="store_true",
+                    help="keep author, title, dates and other document details")
+    sp.add_argument("--keep-javascript", action="store_true", help="keep scripts and actions")
+    sp.add_argument("--keep-attachments", action="store_true", help="keep attached files")
+    sp.add_argument("--comments", action="store_true",
+                    help="also remove comments, highlights and notes")
+
+    sp = per_file("pdfa", run_pdfa, "convert to PDF/A for long-term archiving (needs Ghostscript)")
+    sp.add_argument("--level", choices=archive.PDFA_LEVELS, default="2",
+                    help="PDF/A-1b, -2b (default) or -3b")
 
     sp = per_file("text", run_text, "extract text",
                   out_help="write to a .txt file instead of the terminal")
