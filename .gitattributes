@@ -1,0 +1,2 @@
+# Bundled third-party pdf.js (see packaging/update_pdfjs.py)
+pdfmanager/static/pdfjs/** linguist-vendored -diff
