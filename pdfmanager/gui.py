@@ -61,7 +61,10 @@ OPERATIONS = [
     {"id": "delete", "group": "Pages", "label": "Delete pages", "files": "pdf",
      "fields": [_f("pages", "Pages", "text", "", placeholder="2,4-6", required=True)]},
     {"id": "reorder", "group": "Pages", "label": "Reorder pages", "files": "pdf",
-     "fields": [_f("order", "New order", "text", "", placeholder="3,1,2,4-", required=True)]},
+     "help": "Drag the page previews into the new order, or type it. Pages can also "
+             "be duplicated or left out.",
+     "fields": [_f("order", "New order", "text", "", placeholder="3,1,2,4-", required=True,
+                   hint="updates as you drag; e.g. 3,1,2,4- or 5-1")]},
     {"id": "reverse", "group": "Pages", "label": "Reverse order", "files": "pdf", "fields": []},
     {"id": "rotate", "group": "Pages", "label": "Rotate", "files": "pdf",
      "fields": [_f("degrees", "Rotation", "select", "90",

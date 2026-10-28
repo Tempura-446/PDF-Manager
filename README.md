@@ -57,6 +57,10 @@ forces that).
 - The result appears with a preview. In the app window, **Save…** opens
   the normal save dialog and **Show in folder** reveals the file; in a
   browser, the result downloads. Several files come back as a ZIP.
+- **Reorder pages** shows a preview of every page. Drag pages into the new
+  order (or click a page and use Alt+arrow keys), duplicate or remove
+  pages, and undo with Ctrl+Z; the page order box updates as you go, and
+  typing an order there rearranges the previews.
 - Folder tools (organize, rename, find duplicates) have **Browse…**
   buttons in the app window and always let you **Preview** before
   anything changes.
