@@ -226,6 +226,18 @@ body.pb-dragging, body.pb-dragging * { cursor: grabbing !important; }
 .pb-live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .pb-hint { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; }
 .pb-hint:empty { display: none; }
+#panel-card.muted #panel-host { opacity: .45; pointer-events: none; }
+/* bookmark editor */
+.bm-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: min(60vh, 640px); overflow-y: auto; }
+.bm-row { display: flex; align-items: center; gap: 8px; padding-left: calc(var(--level, 0) * 26px); }
+.bm-row::before { content: ""; width: 10px; height: 10px; border-radius: 2px; background: var(--accent); opacity: calc(1 - var(--level, 0) * .25); flex: none; }
+.bm-title { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); }
+.bm-page-wrap { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 13px; }
+.bm-page { width: 68px; padding: 7px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); }
+.bm-title:focus, .bm-page:focus { border-color: var(--focus); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 20%, transparent); }
+.bm-actions { display: flex; gap: 3px; }
+.bm-actions .chip-btn { box-shadow: none; }
+@media (max-width: 760px) { .bm-row { flex-wrap: wrap; } .bm-title { flex-basis: 100%; } }
 /* select mode (extract, delete, rotate) */
 .page-board[data-mode="select"] .pb-tile, .page-board[data-mode="view"] .pb-tile { cursor: pointer; touch-action: auto; }
 .page-board[data-mode="view"] .pb-tile { cursor: default; }
@@ -403,6 +415,15 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
       </div>
       <div id="page-board"></div>
       <p class="pb-hint" id="pages-hint"></p>
+    </section>
+
+    <section class="card" id="panel-card" hidden>
+      <div class="card-head">
+        <h3 id="panel-title"></h3>
+        <span class="sub" id="panel-sub"></span>
+      </div>
+      <div id="panel-host"></div>
+      <p class="pb-hint" id="panel-hint"></p>
     </section>
 
     <section class="card">
@@ -666,7 +687,7 @@ async function inspect(it) {
 let pwTimer = null;
 $("pw").addEventListener("input", () => {
   clearTimeout(pwTimer);
-  pwTimer = setTimeout(() => { items.filter((it) => it.locked).forEach(inspect); syncBoard(); }, 400);
+  pwTimer = setTimeout(() => { items.filter((it) => it.locked).forEach(inspect); syncBoard(); syncPanel(); }, 400);
 });
 
 let dragId = null;
@@ -713,6 +734,7 @@ function renderFiles() {
   $("files-sub").textContent = items.length ? `${plural(items.length, "file")}${pages ? " · " + plural(pages, "page") : ""} · ${humanSize(size)}` : "";
   updateSummary();
   syncBoard();
+  syncPanel();
 }
 function move(from, to) {
   if (to < 0 || to >= items.length || from === to) return;
@@ -805,15 +827,73 @@ $("form").addEventListener("input", (e) => {
   else if (pages || !e.target.value.trim()) board.setSelection(pages || []);
 });
 
+// ---- tool panels ---------------------------------------------------------------------
+// Tools with a "panel" get an extra card between Files and Options (e.g. the
+// bookmark editor). Each panel module is loaded the first time it's needed.
+const panels = {};
+const PANELS = {
+  bookmarks: {
+    title: "Bookmarks", sub: "Shown in the sidebar of PDF readers",
+    async setup(host) {
+      const { BookmarkEditor } = await import("/static/bookmarks.js");
+      const editor = new BookmarkEditor(host, {
+        load: async (detect) => {
+          const body = new FormData();
+          body.append("file", items[0].file, items[0].file.name);
+          body.append("password", $("pw").value);
+          body.append("detect", detect ? "1" : "");
+          return (await api("/api/outline", { method: "POST", body })).json();
+        },
+        onChange: (list) => { const f = $("f-outline"); if (f) f.value = JSON.stringify(list); },
+      });
+      return {
+        async sync() {
+          const one = items.length === 1;
+          $("panel-hint").textContent = one ? "Indent a bookmark to put it under the one above it."
+            : "Bookmarks can be edited for one file at a time. With several files, choose “Create from headings” under Options.";
+          host.hidden = !one;
+          if (!one) { editor.reset(); return; }
+          await editor.open(items[0].id + "\u0000" + $("pw").value);
+          editor.onChange(editor.items);  // the form is rebuilt when switching tools
+          muteBookmarks();
+        },
+      };
+    },
+  },
+};
+function muteBookmarks() {
+  const mode = $("f-mode");
+  $("panel-card").classList.toggle("muted", !!mode && current.panel === "bookmarks" && mode.value !== "edit");
+}
+async function syncPanel() {
+  const kind = current && current.panel;
+  const card = $("panel-card");
+  card.hidden = !kind || !items.length;
+  card.classList.remove("muted");
+  for (const [k, p] of Object.entries(panels)) p.host.hidden = k !== kind;
+  if (card.hidden) return;
+  $("panel-title").textContent = PANELS[kind].title;
+  $("panel-sub").textContent = PANELS[kind].sub || "";
+  if (!panels[kind]) {
+    const host = el("div");
+    $("panel-host").append(host);
+    panels[kind] = { host, loading: PANELS[kind].setup(host) };
+  }
+  const panel = await panels[kind].loading;
+  if (current.panel === kind) await panel.sync();
+}
+$("form").addEventListener("input", (e) => { if (e.target.id === "f-mode") muteBookmarks(); });
+
 // ---- options -----------------------------------------------------------------
 const PATH_FIELDS = new Set(["directory", "dest"]);
 function renderForm() {
   const form = $("form");
   form.replaceChildren();
-  if (!current.fields.length) { form.append(el("p", { class: "empty-note" }, "No options — add files and run.")); return; }
+  if (!current.fields.some((f) => f.kind !== "hidden")) form.append(el("p", { class: "empty-note" }, "No options — add files and run."));
   for (const f of current.fields) {
     const id = "f-" + f.key;
     let input;
+    if (f.kind === "hidden") { form.append(el("input", { id, name: f.key, type: "hidden", value: f.default ?? "" })); continue; }
     if (f.kind === "select") {
       input = el("select", { id, name: f.key });
       for (const [v, label] of f.choices) input.append(el("option", { value: v, selected: String(f.default) === v }, label));

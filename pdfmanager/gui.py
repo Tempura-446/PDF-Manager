@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
-from pdfmanager import __version__, archive, core, organize, scan
+from pdfmanager import __version__, archive, core, organize, outline, scan
 from pdfmanager.pageranges import PageRangeError
 
 MAX_UPLOAD = 1024 * 1024 * 1024  # 1 GB
@@ -81,6 +81,13 @@ OPERATIONS = [
     {"id": "reverse", "group": "Pages", "label": "Reverse order", "files": "pdf",
      "help": "Put the pages in reverse order (last page first).",
      "board": {"mode": "view", "effect": "reverse"}, "fields": []},
+    {"id": "bookmarks", "group": "Pages", "label": "Bookmarks", "files": "pdf", "panel": "bookmarks",
+     "help": "Add, rename and arrange a PDF's bookmarks, or create them from its headings.",
+     "fields": [_f("mode", "Bookmarks", "select", "edit",
+                   choices=[["edit", "Use the list above"],
+                            ["detect", "Create from headings"],
+                            ["clear", "Remove all bookmarks"]]),
+                _f("outline", "", "hidden", "")]},
     {"id": "rotate", "group": "Pages", "label": "Rotate", "files": "pdf",
      "help": "Click the pages to turn, or leave them all unselected to turn every page.",
      "board": {"mode": "select", "effect": "rotate", "field": "pages", "degrees": "degrees"},
@@ -211,7 +218,7 @@ OPERATIONS = [
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
-SUFFIX = {"flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
+SUFFIX = {"bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
@@ -295,6 +302,21 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                             sensitivity=opts.get("sensitivity") or "medium",
                             auto_rotate=auto_rotate, password=password)
         notes.append(_clean_note(src.name, report))
+    elif op == "bookmarks":
+        mode = opts.get("mode") or "edit"
+        if mode == "detect":
+            items = outline.detect_headings(src, password)
+            notes.append(f"{src.name}: {len(items)} bookmark{'s' if len(items) != 1 else ''} "
+                         "created from headings" if items else
+                         f"{src.name}: no headings found (is it a scan? run OCR first)")
+        elif mode == "clear":
+            items = []
+        else:
+            try:
+                items = json.loads(opts.get("outline") or "[]")
+            except ValueError:
+                raise UserError("the bookmark list is damaged; reload the file") from None
+        outline.set_outline(src, out, items, password)
     elif op == "flatten":
         forms, comments = _bool(opts.get("forms", True)), _bool(opts.get("comments", True))
         if not forms and not comments:
@@ -701,6 +723,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._inspect(body)
             if path == "/api/keep":
                 return self._keep(body)
+            if path == "/api/outline":
+                return self._outline(body)
             if path == "/api/folder":
                 data = json.loads(body or b"{}")
                 result = run_folder_operation(data.get("op"), data.get("options") or {},
@@ -752,6 +776,21 @@ class Handler(BaseHTTPRequestHandler):
             raise UserError("no file")
         _, filename, data = uploads[0]
         return self._send(HTTPStatus.OK, {"id": self.results.add(_safe_name(filename), data)})
+
+    def _outline(self, body):
+        """The bookmarks of an uploaded PDF, or (detect=1) suggestions from
+        its headings."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            password = fields.get("password") or None
+            pages = len(core.open_pdf(path, password).pages)
+            items = (outline.detect_headings(path, password) if _bool(fields.get("detect"))
+                     else outline.get_outline(path, password))
+        return self._send(HTTPStatus.OK, {"items": items, "pages": pages})
 
     def _inspect(self, body):
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)

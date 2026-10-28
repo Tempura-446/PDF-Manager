@@ -187,3 +187,89 @@ def test_cli_flatten_and_sanitize(tmp_path):
     assert not PdfReader(tmp_path / "form_flat.pdf").get_fields()
     assert main(["sanitize", str(src), "-o", str(tmp_path / "s.pdf")]) == 0
     assert PdfReader(tmp_path / "s.pdf").metadata.get("/Producer") == "PDF Manager"
+
+
+# -- bookmarks -------------------------------------------------------------------------
+
+from pdfmanager import outline  # noqa: E402
+
+
+def book_pdf(path):
+    """Five pages with 20/15/12.5 pt headings, 11 pt body text and a
+    running header on every page."""
+    c = canvas.Canvas(str(path), pagesize=A4)
+    plan = [[("h1", "1 Introduction"), ("b", ""), ("h2", "1.1 Background")],
+            [("b", ""), ("h2", "1.2 Scope")], [("h1", "2 Methods"), ("b", "")],
+            [("b", ""), ("h3", "2.0.1 Detail")], [("h1", "3 Results")]]
+    for k, parts in enumerate(plan):
+        c.setFont("Helvetica", 9)
+        c.drawString(72, 810, "ACME Report 2026")
+        c.drawString(290, 30, str(k + 1))
+        y = 760
+        for kind, text in parts:
+            if kind == "b":
+                c.setFont("Helvetica", 11)
+                for _ in range(10):
+                    c.drawString(72, y, "Body text body text body text body text body text.")
+                    y -= 15
+            else:
+                c.setFont("Helvetica-Bold", {"h1": 20, "h2": 15, "h3": 12.5}[kind])
+                c.drawString(72, y, text)
+                y -= 30
+        c.showPage()
+    c.save()
+    return path
+
+
+def test_detect_headings(tmp_path):
+    items = outline.detect_headings(book_pdf(tmp_path / "book.pdf"))
+    assert outline.to_text(items) == (
+        "- 1 Introduction (p. 1)\n  - 1.1 Background (p. 1)\n  - 1.2 Scope (p. 2)\n"
+        "- 2 Methods (p. 3)\n  - 2.0.1 Detail (p. 4)\n- 3 Results (p. 5)\n")
+
+
+def test_bookmarks_round_trip(tmp_path):
+    src = book_pdf(tmp_path / "book.pdf")
+    items = [{"title": "Start", "page": 1, "level": 0}, {"title": "Inner", "page": 3, "level": 1},
+             {"title": "Deeper", "page": 4, "level": 2}, {"title": "End", "page": 5, "level": 0}]
+    out = outline.set_outline(src, tmp_path / "out.pdf", items)
+    assert outline.get_outline(out) == items
+    assert PdfReader(out).trailer["/Root"]["/PageMode"] == "/UseOutlines"
+    assert outline.from_text(outline.to_text(items)) == items
+    outline.set_outline(out, tmp_path / "none.pdf", [])
+    assert outline.get_outline(tmp_path / "none.pdf") == []
+
+
+def test_bookmark_checks(tmp_path):
+    src = book_pdf(tmp_path / "book.pdf")
+    with pytest.raises(core.PdfManagerError, match="page 9 doesn't exist"):
+        outline.set_outline(src, tmp_path / "o.pdf", [{"title": "X", "page": 9, "level": 0}])
+    with pytest.raises(core.PdfManagerError, match="no title"):
+        outline.set_outline(src, tmp_path / "o.pdf", [{"title": " ", "page": 1, "level": 0}])
+    # A level can't be skipped: a first item at level 2 becomes level 0.
+    outline.set_outline(src, tmp_path / "o.pdf", [{"title": "A", "page": 1, "level": 2}])
+    assert outline.get_outline(tmp_path / "o.pdf")[0]["level"] == 0
+
+
+def test_cli_bookmarks(tmp_path, capsys):
+    src = book_pdf(tmp_path / "book.pdf")
+    assert main(["bookmarks", str(src)]) == 0
+    assert "no bookmarks" in capsys.readouterr().out
+    (tmp_path / "list.txt").write_text("- One (p. 1)\n  - Two (p. 2)\n- Three (page 5)\n")
+    assert main(["bookmarks", str(src), "--set", str(tmp_path / "list.txt")]) == 0
+    capsys.readouterr()
+    assert main(["bookmarks", str(tmp_path / "book_bookmarks.pdf")]) == 0
+    assert capsys.readouterr().out == "- One (p. 1)\n  - Two (p. 2)\n- Three (p. 5)\n"
+    assert main(["bookmarks", str(src), "--detect", "-n"]) == 0
+    assert "- 3 Results (p. 5)" in capsys.readouterr().out
+
+
+def test_gui_bookmarks(tmp_path):
+    src = book_pdf(tmp_path / "book.pdf")
+    work = tmp_path / "work"
+    work.mkdir()
+    items = [{"title": "Only", "page": 2, "level": 0}]
+    name, data, _ = gui.run_operation("bookmarks", [src], {"mode": "edit",
+                                                           "outline": json.dumps(items)}, work=work)
+    (tmp_path / name).write_bytes(data)
+    assert outline.get_outline(tmp_path / name) == items

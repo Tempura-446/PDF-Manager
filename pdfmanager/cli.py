@@ -11,7 +11,7 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-from pdfmanager import __version__, archive, core, imaging, organize, scan
+from pdfmanager import __version__, archive, core, imaging, organize, outline, scan
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -220,6 +220,27 @@ def run_pdfa(a, src, out, pw):
     return archive.to_pdfa(src, out, level=a.level, password=pw)
 
 
+def run_bookmarks(a, src, out, pw):
+    if a.set and a.detect:
+        raise core.PdfManagerError("use --set or --detect, not both")
+    if a.set:
+        text = Path(a.set).read_text(encoding="utf-8-sig")
+        items = (json.loads(text) if a.set.lower().endswith(".json") else outline.from_text(text))
+    elif a.detect:
+        items = outline.detect_headings(src, pw)
+        if a.dry_run:
+            print(outline.to_text(items) or "no headings found", end="")
+            return None
+    elif a.clear:
+        items = []
+    else:
+        items = outline.get_outline(src, pw)
+        print(outline.to_text(items) or "no bookmarks", end="")
+        return None
+    outline.set_outline(src, out, items, pw)
+    return f"{out}  ({len(items)} bookmark{'s' if len(items) != 1 else ''})"
+
+
 def run_text(a, src, out, pw):
     text = core.extract_text(src, out, a.pages, pw)
     if out is None:
@@ -270,7 +291,7 @@ OUTPUTS = {
     "nup": ("nup", "pdf"), "compress": ("compressed", "pdf"), "color": ("color", "pdf"),
     "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
     "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
-    "flatten": ("flat", "pdf"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
+    "flatten": ("flat", "pdf"), "bookmarks": ("bookmarks", "pdf"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
     "split": ("split", "dir"), "to-images": ("images", "dir"),
 }
 
@@ -620,6 +641,18 @@ def build_parser():
     sp = per_file("pdfa", run_pdfa, "convert to PDF/A for long-term archiving (needs Ghostscript)")
     sp.add_argument("--level", choices=archive.PDFA_LEVELS, default="2",
                     help="PDF/A-1b, -2b (default) or -3b")
+
+    sp = per_file("bookmarks", run_bookmarks,
+                  "list, set or detect bookmarks (without options: list them)")
+    g = sp.add_mutually_exclusive_group()
+    g.add_argument("--set", metavar="FILE",
+                   help="replace the bookmarks with those in FILE: one per line, "
+                        "'- Title (p. 3)', indented two spaces per level (or JSON)")
+    g.add_argument("--detect", action="store_true",
+                   help="create bookmarks from the document's headings")
+    g.add_argument("--clear", action="store_true", help="remove all bookmarks")
+    sp.add_argument("-n", "--dry-run", action="store_true",
+                    help="with --detect: only print what would be added")
 
     sp = per_file("text", run_text, "extract text",
                   out_help="write to a .txt file instead of the terminal")
