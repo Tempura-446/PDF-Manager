@@ -84,6 +84,7 @@ def main():
         "--workpath", str(BUILD / "work"),
         "--specpath", str(BUILD),
         "--add-data", f"{ROOT / 'pdfmanager' / 'gui.html'}{sep}pdfmanager",
+        "--add-data", f"{ROOT / 'pdfmanager' / 'static'}{sep}pdfmanager/static",
         "--collect-all", "pypdfium2",
         "--collect-all", "pypdfium2_raw",
         "--collect-data", "reportlab",

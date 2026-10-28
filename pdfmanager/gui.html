@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PDF Manager</title>
+<link rel="stylesheet" href="/static/reader.css">
 <style>
 :root {
   --bg: #f5f4f0;
@@ -245,8 +246,17 @@ th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--bord
 th { color: var(--muted); font-weight: 600; }
 td { word-break: break-all; }
 
+/* Reader mode: the reader fills the main area. */
+#reader-host { display: none; }
+body.reader-mode .app { height: 100vh; height: 100dvh; }
+body.reader-mode main { padding: 0; min-height: 0; height: 100%; overflow: hidden; }
+body.reader-mode main > :not(#reader-host) { display: none !important; }
+body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-width: none; }
+.reader-loading { display: grid; place-items: center; height: 100%; color: var(--muted); }
+
 @media (max-width: 760px) {
   .app { grid-template-columns: 1fr; align-content: start; }
+  body.reader-mode .app { grid-template-rows: auto minmax(0, 1fr); align-content: stretch; }
   nav { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--border); padding-bottom: 14px; }
   .tools, .search, .nav-foot { display: none; }
   .brand { padding: 14px 16px 10px; }
@@ -319,6 +329,8 @@ td { word-break: break-all; }
     <div class="table-wrap card" id="result-table" hidden></div>
     <div class="spacer"></div>
 
+    <div id="reader-host"></div>
+
     <div class="action-bar"><div class="action-inner">
       <span class="summary"><span id="summary"></span><span class="kbd-hint" id="kbd-hint"></span></span>
       <div class="buttons">
@@ -343,6 +355,7 @@ const isMac = /Mac/.test(navigator.platform);
 
 // ---- icons ----------------------------------------------------------------
 const ICONS = {
+  reader: '<path d="M2 5h6a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2z"/><path d="M22 5h-6a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h7z"/>',
   merge: '<path d="M8 4v5a4 4 0 0 0 4 4h0a4 4 0 0 1 4 4v3"/><path d="M16 4v5a4 4 0 0 1-4 4"/><path d="m13 17 3 3 3-3"/>',
   split: '<path d="M12 3v7"/><path d="M12 10 6 16v5M12 10l6 6v5"/><path d="m3 18 3-3 3 3M15 18l3-3 3 3"/>',
   interleave: '<rect x="3" y="4" width="8" height="10" rx="1.5"/><rect x="13" y="10" width="8" height="10" rx="1.5"/><path d="M7 17v2a1 1 0 0 0 1 1h3M17 7V5a1 1 0 0 0-1-1h-3"/>',
@@ -430,9 +443,41 @@ async function load() {
     $("picker").append(og);
   }
   $("picker").addEventListener("change", (e) => select(e.target.value));
+  const openIds = (new URLSearchParams(location.hash.slice(1)).get("open") || "").split(",").filter(Boolean);
+  if (openIds.length) {
+    await select("reader");
+    reader.openById(openIds[0]);
+    return;
+  }
   let start = "merge";
   try { start = localStorage.getItem("pdfm-op") || start; } catch (e) {}
   select(ops.some((o) => o.id === start) ? start : ops[0].id);
+}
+
+// ---- reader -----------------------------------------------------------------
+let reader = null;
+async function ensureReader() {
+  if (reader) return reader;
+  const host = $("reader-host");
+  host.replaceChildren(el("div", { class: "reader-loading" }, "Loading the reader…"));
+  const { Reader } = await import("/static/reader.js");
+  host.replaceChildren();
+  reader = new Reader(host, {
+    token, isDesktop, api: () => (window.pywebview ? window.pywebview.api : null),
+    tools: ops.filter((o) => o.files === "pdf").map((o) => [o.id, o.label]),
+    onEdit: (toolId, file, password) => {
+      select(toolId);
+      items = [];
+      if (password) { $("pw").value = password; $("pw-box").open = true; }
+      addFiles([file]);
+    },
+  });
+  return reader;
+}
+const inReader = () => current && current.files === "reader";
+async function openInReader(file) {
+  await select("reader");
+  reader.openFile(file, $("pw").value || null);  // the password typed for the tools, if any
 }
 
 function renderTools(query) {
@@ -457,12 +502,15 @@ $("search").addEventListener("keydown", (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "/" && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); $("search").focus(); }
-  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $("run").click(); }
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !inReader()) { e.preventDefault(); $("run").click(); }
 });
 
-function select(id) {
+async function select(id) {
   current = ops.find((o) => o.id === id);
   if ($("search").value) { $("search").value = ""; renderTools(""); }
+  const readerMode = current.files === "reader";
+  document.body.classList.toggle("reader-mode", readerMode);
+  if (reader && !readerMode) reader.hide();
   try { localStorage.setItem("pdfm-op", id); } catch (e) {}
   document.querySelectorAll(".tools button[data-op]").forEach((b) => b.setAttribute("aria-current", String(b.dataset.op === id)));
   $("picker").value = id;
@@ -470,6 +518,12 @@ function select(id) {
   $("title").textContent = current.label;
   $("help").textContent = current.help || defaultHelp(current);
   document.title = current.label + " — PDF Manager";
+  if (readerMode) {
+    await ensureReader();
+    reader.show();
+    if (reader.doc) document.title = reader.name + " — PDF Manager";
+    return;
+  }
   const folder = current.files === null;
   $("files-card").hidden = folder;
   $("pw-box").hidden = folder || current.files === "images";
@@ -544,6 +598,7 @@ function renderFiles() {
       el("div", { class: "file-meta" }, el("div", { class: "file-name" }, it.file.name), sub),
       ordered ? el("span", { class: "order" }, String(i + 1)) : null,
       el("div", { class: "card-actions" },
+        isPdf(it.file) ? el("button", { class: "chip-btn", type: "button", title: "Open in reader", "aria-label": `Open ${it.file.name} in the reader`, onclick: () => openInReader(it.file) }, icon("reader")) : null,
         items.length > 1 ? el("button", { class: "chip-btn", type: "button", title: "Move earlier", "aria-label": `Move ${it.file.name} earlier`, disabled: i === 0, onclick: () => move(i, i - 1) }, icon("left")) : null,
         items.length > 1 ? el("button", { class: "chip-btn", type: "button", title: "Move later", "aria-label": `Move ${it.file.name} later`, disabled: i === items.length - 1, onclick: () => move(i, i + 1) }, icon("right")) : null,
         el("button", { class: "chip-btn", type: "button", title: "Remove", "aria-label": `Remove ${it.file.name}`, onclick: () => { items.splice(i, 1); renderFiles(); } }, icon("x"))));
@@ -590,7 +645,14 @@ const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Fi
 drop.addEventListener("drop", (e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); addFiles(e.dataTransfer.files); } });
 // Dropping files anywhere on the files card (or page) adds them too.
 document.addEventListener("dragover", (e) => { if (hasFiles(e) && current && current.files !== null) e.preventDefault(); });
-document.addEventListener("drop", (e) => { if (hasFiles(e) && current && current.files !== null) { e.preventDefault(); addFiles(e.dataTransfer.files); } });
+document.addEventListener("drop", (e) => {
+  if (!hasFiles(e) || !current || current.files === null) return;
+  e.preventDefault();
+  if (inReader()) {  // dropped outside the reader pane (e.g. on the sidebar)
+    const pdf = [...e.dataTransfer.files].find(isPdf);
+    if (pdf) reader.openFile(pdf);
+  } else addFiles(e.dataTransfer.files);
+});
 
 // ---- options -----------------------------------------------------------------
 const PATH_FIELDS = new Set(["directory", "dest"]);
@@ -699,12 +761,16 @@ async function showResult(name, blob, resultId) {
         const path = await window.pywebview.api.save_result(resultId, name);
         if (!path) return;
         subEl.replaceChildren(el("span", { class: "saving" }, "Saved"), ` to ${path}`);
-        actions.replaceChildren(save, el("button", { class: "btn secondary", type: "button", onclick: () => window.pywebview.api.reveal(path) }, icon("folder"), "Show in folder"));
+        if (!actions.querySelector("[data-reveal]")) save.after(el("button", { class: "btn secondary", type: "button", "data-reveal": "" }, icon("folder"), "Show in folder"));
+        actions.querySelector("[data-reveal]").onclick = () => window.pywebview.api.reveal(path);
       } catch (e) { showError(String(e.message || e)); }
     });
     actions.append(save);
   } else {
     actions.append(el("a", { class: "btn", href: lastUrl, download: name }, icon("download"), "Download"));
+  }
+  if (/\.pdf$/i.test(name)) {
+    actions.append(el("button", { class: "btn secondary", type: "button", onclick: () => openInReader(new File([blob], name, { type: "application/pdf" })) }, icon("reader"), "Open in reader"));
   }
   $("result").replaceChildren(thumb,
     el("div", { class: "result-body" },

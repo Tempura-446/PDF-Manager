@@ -43,7 +43,12 @@ def self_test(result_file):
 
         server, url = gui.make_server()
         Thread(target=server.serve_forever, daemon=True).start()
-        page = urllib.request.urlopen(url.split("#")[0]).read()
+        base = url.split("#")[0]
+        page = urllib.request.urlopen(base).read()
+        # The reader and its bundled pdf.js must be in the bundle too.
+        for asset in ("static/reader.js", "static/pdfjs/build/pdf.min.mjs",
+                      "static/pdfjs/build/pdf.worker.min.mjs", "static/pdfjs/web/pdf_viewer.mjs"):
+            assert urllib.request.urlopen(base + asset).status == 200, f"missing {asset}"
         server.shutdown()
         assert b"PDF Manager" in page, "server did not serve the app page"
         Path(result_file).write_text("ok")

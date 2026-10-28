@@ -42,6 +42,8 @@ def _f(key, label, kind="text", default=None, **extra):
 #   files: "pdf" (one or more PDFs), "pdf1" (exactly one), "pdf2" (two),
 #          "images", or None (folder tools)
 OPERATIONS = [
+    {"id": "reader", "group": "Read", "label": "PDF reader", "files": "reader",
+     "help": "Read PDFs: search, zoom, bookmarks, forms and printing.", "fields": []},
     {"id": "merge", "group": "Combine", "label": "Merge", "files": "pdf", "min": 2,
      "help": "Combine PDFs in the order listed. Drag to reorder.",
      "fields": [_f("bookmarks", "Add a bookmark per file", "check", True)]},
@@ -437,9 +439,51 @@ class ResultCache:
             return self.items.get(key)
 
 
+class OpenFiles:
+    """Files on this computer the reader may load: ones given on the command
+    line ("Open with…") or picked in the desktop Open dialog. The page can
+    only ask for these by id, never for an arbitrary path."""
+
+    def __init__(self):
+        self.items = {}
+        self.lock = threading.Lock()
+
+    def add(self, path):
+        path = Path(path).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"no such file: {path}")
+        key = secrets.token_urlsafe(9)
+        with self.lock:
+            self.items[key] = path
+        return key
+
+    def get(self, key):
+        with self.lock:
+            return self.items.get(key)
+
+
 # --------------------------------------------------------------------------
 # HTTP
 # --------------------------------------------------------------------------
+
+STATIC_TYPES = {
+    ".mjs": "text/javascript", ".js": "text/javascript", ".css": "text/css",
+    ".svg": "image/svg+xml", ".gif": "image/gif", ".png": "image/png",
+    ".wasm": "application/wasm", ".json": "application/json",
+}
+
+
+def _page_csp(allow_eval):
+    """Content-Security-Policy for the app page. pdf.js needs workers,
+    WebAssembly (JPEG 2000 / JBIG2 decoders) and fonts built from data;
+    pywebview's bridge additionally needs eval() in the desktop window."""
+    scripts = "'self' 'unsafe-inline' 'wasm-unsafe-eval'" + (" 'unsafe-eval'" if allow_eval else "")
+    return ("default-src 'self'; "
+            f"script-src {scripts}; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; font-src 'self' data:; "
+            "worker-src 'self' blob:; connect-src 'self' data: blob:; "
+            "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
 def _parse_multipart(content_type, body):
     """Return (fields, files) where files is a list of (field name, filename, bytes)."""
@@ -469,6 +513,7 @@ class Handler(BaseHTTPRequestHandler):
     token = ""
     allowed_hosts = set()
     results = None  # ResultCache
+    opened = None  # OpenFiles
     # pywebview's JavaScript bridge needs eval(); only allowed in the desktop window.
     allow_eval = False
 
@@ -477,7 +522,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- helpers -----------------------------------------------------------
 
-    def _send(self, status, body, ctype="application/json", headers=None):
+    def _send(self, status, body, ctype="application/json", headers=None, cache=False):
         if isinstance(body, (dict, list)):
             body = json.dumps(body).encode()
         elif isinstance(body, str):
@@ -485,7 +530,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", "max-age=3600" if cache else "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         for k, v in (headers or {}).items():
@@ -510,17 +555,36 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/":
             page = resources.files("pdfmanager").joinpath("gui.html").read_text("utf-8")
-            script_src = "'unsafe-inline' 'unsafe-eval'" if self.allow_eval else "'unsafe-inline'"
-            return self._send(HTTPStatus.OK, page, "text/html; charset=utf-8", {
-                "Content-Security-Policy":
-                    "default-src 'self'; style-src 'unsafe-inline'; "
-                    f"script-src {script_src}; img-src 'self' data: blob:",
-            })
+            return self._send(HTTPStatus.OK, page, "text/html; charset=utf-8",
+                              {"Content-Security-Policy": _page_csp(self.allow_eval)})
+        if path.startswith("/static/"):
+            return self._static(path[len("/static/"):])
+        if not self._token_ok():
+            return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
         if path == "/api/operations":
-            if not self._token_ok():
-                return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
             return self._send(HTTPStatus.OK, {"operations": OPERATIONS, "version": __version__})
+        if path.startswith("/api/file/"):
+            return self._open_file(path[len("/api/file/"):])
         self._error(HTTPStatus.NOT_FOUND, "not found")
+
+    def _static(self, rel):
+        """Serve the app's own static files (the reader and pdf.js)."""
+        parts = rel.split("/")
+        if any(p in ("", ".", "..") or "\\" in p or ":" in p for p in parts):
+            return self._error(HTTPStatus.NOT_FOUND, "not found")
+        target = resources.files("pdfmanager").joinpath("static", *parts)
+        if not target.is_file():
+            return self._error(HTTPStatus.NOT_FOUND, "not found")
+        ctype = STATIC_TYPES.get(Path(rel).suffix.lower(), "application/octet-stream")
+        return self._send(HTTPStatus.OK, target.read_bytes(), ctype, cache=True)
+
+    def _open_file(self, key):
+        path = self.opened.get(key) if self.opened is not None else None
+        if path is None or not path.is_file():
+            return self._error(HTTPStatus.NOT_FOUND, "that file is no longer available")
+        quoted = path.name.replace('"', "")
+        return self._send(HTTPStatus.OK, path.read_bytes(), "application/pdf",
+                          {"X-Pdfm-Filename": quoted, "X-Pdfm-Path": str(path)})
 
     def do_POST(self):
         if not self._host_ok():
@@ -537,6 +601,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._run(body)
             if path == "/api/inspect":
                 return self._inspect(body)
+            if path == "/api/keep":
+                return self._keep(body)
             if path == "/api/folder":
                 data = json.loads(body or b"{}")
                 result = run_folder_operation(data.get("op"), data.get("options") or {},
@@ -577,6 +643,15 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
+    def _keep(self, body):
+        """Hold a file (e.g. the reader's copy with filled-in forms) so the
+        desktop window can save it with the native Save dialog."""
+        _, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads or self.results is None:
+            raise UserError("no file")
+        _, filename, data = uploads[0]
+        return self._send(HTTPStatus.OK, {"id": self.results.add(_safe_name(filename), data)})
+
     def _inspect(self, body):
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
         if not uploads:
@@ -588,21 +663,28 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(HTTPStatus.OK, info)
 
 
-def make_server(port=0, desktop=False):
+def make_server(port=0, desktop=False, open_paths=()):
     """Create (but don't start) the server. Returns (server, url). The
-    server's result cache is ``server.RequestHandlerClass.results``."""
+    server's result cache is ``server.RequestHandlerClass.results`` and its
+    openable files ``server.RequestHandlerClass.opened``. ``open_paths``
+    are PDFs to show in the reader straight away."""
     token = secrets.token_urlsafe(24)
+    opened = OpenFiles()
+    open_ids = [opened.add(p) for p in open_paths]
     handler = type("PdfmHandler", (Handler,), {"token": token, "results": ResultCache(),
-                                               "allow_eval": desktop})
+                                               "opened": opened, "allow_eval": desktop})
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     real_port = server.server_address[1]
     handler.allowed_hosts = {f"127.0.0.1:{real_port}", f"localhost:{real_port}"}
-    return server, f"http://127.0.0.1:{real_port}/#token={token}"
+    url = f"http://127.0.0.1:{real_port}/#token={token}"
+    if open_ids:
+        url += "&open=" + ",".join(open_ids)
+    return server, url
 
 
-def serve(port=0, open_browser=True):
+def serve(port=0, open_browser=True, open_paths=()):
     """Run in the browser: print the link, open it, serve until Ctrl+C."""
-    server, url = make_server(port)
+    server, url = make_server(port, open_paths=open_paths)
     print(f"PDF Manager is running at {url}")
     print("Keep this window open while you use it; press Ctrl+C to stop.")
     if open_browser:
@@ -618,9 +700,23 @@ def serve(port=0, open_browser=True):
 class DesktopApi:
     """Functions the page can call in the desktop window (window.pywebview.api)."""
 
-    def __init__(self, results):
+    def __init__(self, results, opened=None):
         self._results = results
+        self._opened = opened
         self._window = None
+
+    def open_pdf(self):
+        """Pick a PDF with the native Open dialog for the reader. Returns
+        {"id", "name"} or None if cancelled."""
+        import webview
+
+        chosen = self._window.create_file_dialog(
+            webview.FileDialog.OPEN, directory=str(Path.home()),
+            file_types=("PDF files (*.pdf)", "All files (*.*)"))
+        if not chosen:
+            return None
+        path = Path(chosen if isinstance(chosen, str) else chosen[0])
+        return {"id": self._opened.add(path), "name": path.name}
 
     def save_result(self, key, suggested_name):
         """Ask where to save a result and write it. Returns the path, or
@@ -670,17 +766,18 @@ def desktop_available():
     return importlib.util.find_spec("webview") is not None
 
 
-def run_desktop(port=0):
+def run_desktop(port=0, open_paths=()):
     """Open PDF Manager in its own window (needs pywebview). Returns False if
     no window could be opened, so the caller can fall back to the browser."""
     try:
         import webview
     except ImportError:
         return False
-    server, url = make_server(port, desktop=True)
+    server, url = make_server(port, desktop=True, open_paths=open_paths)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    api = DesktopApi(server.RequestHandlerClass.results)
+    handler = server.RequestHandlerClass
+    api = DesktopApi(handler.results, handler.opened)
     try:
         window = webview.create_window("PDF Manager", url, js_api=api, width=1180, height=820,
                                        min_size=(400, 560), background_color="#f6f6f3")
@@ -696,8 +793,13 @@ def run_desktop(port=0):
     return True
 
 
-def main_app():
+def main_app(argv=None):
     """Entry point for the `pdfm-app` launcher: a window if possible,
-    otherwise the browser."""
-    if not run_desktop():
-        serve()
+    otherwise the browser. PDFs given as arguments (e.g. by "Open with…" or
+    a file association) open in the reader."""
+    import sys
+
+    args = sys.argv[1:] if argv is None else argv
+    paths = [a for a in args if Path(a).suffix.lower() == ".pdf" and Path(a).is_file()]
+    if not run_desktop(open_paths=paths):
+        serve(open_paths=paths)

@@ -406,12 +406,16 @@ def cmd_watch(a):
 def cmd_gui(a):
     from pdfmanager import gui
 
+    paths = _expand(getattr(a, "files", None) or [])
+    for path in paths:
+        if not Path(path).is_file():
+            raise core.PdfManagerError(f"no such file: {path}")
     if not a.browser and not a.no_browser and gui.desktop_available():
-        if gui.run_desktop(port=a.port):
+        if gui.run_desktop(port=a.port, open_paths=paths):
             return
     elif not a.browser and not a.no_browser:
         print("Tip: pip install pywebview to open PDF Manager in its own window.")
-    gui.serve(port=a.port, open_browser=not a.no_browser)
+    gui.serve(port=a.port, open_browser=not a.no_browser, open_paths=paths)
 
 
 # --------------------------------------------------------------------------
@@ -619,12 +623,17 @@ def build_parser():
     sp.add_argument("--interval", type=float, default=5, help="seconds between checks")
     sp.add_argument("--once", action="store_true", help="process what's there now and exit")
 
-    sp = other("gui", cmd_gui, "open the graphical app (in its own window if pywebview is "
-                               "installed, otherwise in your browser)")
-    sp.add_argument("--browser", action="store_true", help="use the web browser, not a window")
-    sp.add_argument("--port", type=int, default=0, help="port (default: any free port)")
-    sp.add_argument("--no-browser", action="store_true",
-                    help="just start the server and print its link")
+    for name, help_ in (("gui", "open the graphical app (in its own window if pywebview is "
+                                "installed, otherwise in your browser)"),
+                        ("view", "read PDFs in the app's PDF reader")):
+        sp = other(name, cmd_gui, help_)
+        sp.add_argument("files", nargs="*" if name == "gui" else "+",
+                        help="PDF(s) to open in the reader")
+        sp.add_argument("--browser", action="store_true",
+                        help="use the web browser, not a window")
+        sp.add_argument("--port", type=int, default=0, help="port (default: any free port)")
+        sp.add_argument("--no-browser", action="store_true",
+                        help="just start the server and print its link")
 
     return p
 

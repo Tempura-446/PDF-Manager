@@ -3,7 +3,7 @@
 `pdfm` is a PDF toolkit you can use three ways: as a **desktop app**, from
 the **command line**, or as a **Python library**.
 
-It can merge, split, extract, reorder, rotate, resize, crop, n-up, compress
+It includes a full **PDF reader**, and it can merge, split, extract, reorder, rotate, resize, crop, n-up, compress
 (three levels), convert colours (grayscale / RGB / CMYK, with ICC profiles),
 OCR scans, encrypt, watermark, number pages, convert to and from images,
 and organize, rename, de-duplicate and watch whole folders of PDFs.
@@ -70,6 +70,39 @@ listens on `127.0.0.1` and requires a random token that only the app
 window (or the link `pdfm gui` prints) knows, so other websites and other
 computers can't use it.
 
+## PDF reader
+
+Open **PDF reader** at the top of the sidebar, run `pdfm view report.pdf`,
+or open a PDF with the standalone app ("Open with…" → PDF Manager, or drop
+the file on the app). It is built on [pdf.js](https://mozilla.github.io/pdf.js/),
+the engine behind Firefox's PDF viewer, bundled with the app so it works offline.
+
+- **Reading:** continuous scrolling, page numbers (and the document's own
+  page labels), thumbnails, bookmarks, single or two-page view.
+- **Zoom:** automatic, fit page, fit width, actual size or 50–400%;
+  Ctrl/⌘ + mouse wheel or pinch to zoom around the pointer.
+- **Find** (Ctrl+F) with highlighting, match case and whole words.
+- **Select and copy text**; links work (web links open in your browser).
+- **Fill in forms** and save a copy with your entries.
+- Rotate the view, hand tool (drag to scroll), dark pages for night
+  reading, full screen, print, document properties.
+- Password-protected PDFs ask for their password.
+- **Edit with…** sends the open document to any tool (compress, extract
+  pages, OCR, …), and every finished result has **Open in reader**.
+- Remembers the page and zoom of each document.
+
+| Key | Action |
+|---|---|
+| Ctrl/⌘+O | open a PDF |
+| Ctrl/⌘+F, Enter / Shift+Enter, Esc | find, next / previous match, close |
+| Ctrl/⌘ + / − / 0 | zoom in / out / automatic |
+| N or J, P or K, Home, End | next, previous, first, last page |
+| R, Shift+R | rotate clockwise, counter-clockwise |
+| Ctrl/⌘+P, Ctrl/⌘+S | print, save a copy |
+
+The bundled pdf.js (Apache-2.0, see `pdfmanager/static/pdfjs/LICENSE`) is
+updated with `python packaging/update_pdfjs.py <version>`.
+
 ## Command line
 
 Every command that works on PDFs accepts **several files or wildcards**
@@ -84,6 +117,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | Command | What it does | Example |
 |---|---|---|
 | `gui` | open the desktop app | `pdfm gui` |
+| `view` | read PDFs in the reader | `pdfm view report.pdf` |
 | `info` | page count, page sizes, metadata | `pdfm info *.pdf` |
 | `merge` | combine files (optionally picking pages) | `pdfm merge a.pdf b.pdf:1-3 -o all.pdf` |
 | `split` | one file per page, every N pages, or per range | `pdfm split book.pdf -r 1-10 11-20 21-` |

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -33,4 +33,4 @@ pdfm-app = "pdfmanager.gui:main_app"
 packages = ["pdfmanager"]
 
 [tool.setuptools.package-data]
-pdfmanager = ["gui.html"]
+pdfmanager = ["gui.html", "static/*.js", "static/*.css", "static/pdfjs/**/*"]

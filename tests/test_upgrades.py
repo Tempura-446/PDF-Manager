@@ -575,8 +575,8 @@ def test_result_cache_keeps_only_recent_results():
 def test_cli_gui_falls_back_to_browser(monkeypatch):
     calls = []
     monkeypatch.setattr(gui, "desktop_available", lambda: True)
-    monkeypatch.setattr(gui, "run_desktop", lambda port=0: calls.append("window") or False)
-    monkeypatch.setattr(gui, "serve", lambda port=0, open_browser=True: calls.append("browser"))
+    monkeypatch.setattr(gui, "run_desktop", lambda **kw: calls.append("window") or False)
+    monkeypatch.setattr(gui, "serve", lambda **kw: calls.append("browser"))
     assert main(["gui"]) == 0
     assert calls == ["window", "browser"]  # window failed -> browser
     calls.clear()
@@ -590,3 +590,144 @@ def test_organize_puts_protected_files_in_their_own_folder(tmp_path):
     core.encrypt(make_pdf(tmp_path / "a.pdf"), lib / "secret.pdf", "pw")
     plan = organize.organize(lib, by="pages", dry_run=True)
     assert plan[0][1].parent.name == "Password protected"
+
+
+# -- PDF reader ----------------------------------------------------------------
+
+def raw_get(base, path, headers=None):
+    """GET a path exactly as written (urllib would not normalise it either,
+    but http.client makes that explicit)."""
+    import http.client
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(base)
+    conn = http.client.HTTPConnection(parts.hostname, parts.port)
+    conn.request("GET", path, headers=headers or {})
+    res = conn.getresponse()
+    body = res.read()
+    conn.close()
+    return res.status, dict(res.getheaders()), body
+
+
+def test_reader_static_files_are_served(server):
+    base, _ = server
+    for path, ctype in (("/static/reader.js", "text/javascript"),
+                        ("/static/reader.css", "text/css"),
+                        ("/static/pdfjs/build/pdf.min.mjs", "text/javascript"),
+                        ("/static/pdfjs/build/pdf.worker.min.mjs", "text/javascript"),
+                        ("/static/pdfjs/web/pdf_viewer.css", "text/css"),
+                        ("/static/pdfjs/wasm/openjpeg.wasm", "application/wasm"),
+                        ("/static/pdfjs/cmaps/UniJIS-UCS2-H.bcmap", "application/octet-stream")):
+        status, headers, body = raw_get(base, path)
+        assert status == 200 and headers["Content-Type"] == ctype and body, path
+        assert headers["Cache-Control"] == "max-age=3600"
+
+
+@pytest.mark.parametrize("path", [
+    "/static/../gui.py", "/static/pdfjs/../../gui.py", "/static/%2e%2e/gui.py",
+    "/static//etc/passwd", "/static/pdfjs/..\\..\\gui.py", "/static/C:/Windows/win.ini",
+    "/static/missing.js", "/static/",
+])
+def test_reader_static_files_refuse_other_paths(server, path):
+    base, _ = server
+    status, _, body = raw_get(base, path)
+    assert status == 404 and b"import" not in body
+
+
+def test_page_csp_allows_pdfjs_but_nothing_else():
+    csp = gui._page_csp(False)
+    for needed in ("worker-src 'self' blob:", "'wasm-unsafe-eval'", "font-src 'self' data:",
+                   "object-src 'none'", "frame-ancestors 'none'"):
+        assert needed in csp
+    assert "'unsafe-eval'" not in csp and "*" not in csp
+    assert "'unsafe-eval'" in gui._page_csp(True)
+
+
+def test_reader_opens_files_given_on_the_command_line(tmp_path):
+    pdf = make_pdf(tmp_path / "book.pdf", pages=2)
+    srv, url = gui.make_server(open_paths=[pdf])
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        base, fragment = url.split("/#")
+        params = dict(p.split("=", 1) for p in fragment.split("&"))
+        status, headers, body = request(f"{base}/api/file/{params['open']}", params["token"])
+        assert status == 200 and body == pdf.read_bytes()
+        assert headers["X-Pdfm-Filename"] == "book.pdf"
+        assert request(f"{base}/api/file/{params['open']}")[0] == 403  # needs the token
+        assert request(f"{base}/api/file/unknown", params["token"])[0] == 404
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_open_files_only_registers_existing_files(tmp_path):
+    files = gui.OpenFiles()
+    with pytest.raises(FileNotFoundError):
+        files.add(tmp_path / "missing.pdf")
+    key = files.add(make_pdf(tmp_path / "a.pdf"))
+    assert files.get(key) == (tmp_path / "a.pdf").resolve() and files.get("other") is None
+
+
+def test_reader_save_copy_and_open_dialog_in_desktop_window(tmp_path, monkeypatch):
+    import enum
+    import types
+
+    fake = types.ModuleType("webview")
+    fake.FileDialog = enum.IntEnum("FileDialog", {"OPEN": 10, "FOLDER": 20, "SAVE": 30})
+    monkeypatch.setitem(sys.modules, "webview", fake)
+    srv, url = gui.make_server(desktop=True)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base, token = url.split("/#token=")
+    pdf = make_pdf(tmp_path / "a.pdf").read_bytes()
+
+    # "Save a copy": the page hands the bytes to the server, then Python saves them.
+    body, headers = multipart({}, [("file", "a (filled).pdf", pdf)])
+    status, _, data = request(base + "/api/keep", token, body, headers)
+    key = json.loads(data)["id"]
+    target = tmp_path / "copy.pdf"
+    seen = []
+
+    class FakeWindow:
+        def create_file_dialog(self, kind, **kwargs):
+            seen.append((kind, kwargs.get("save_filename") or kwargs.get("file_types")))
+            return (str(target),) if kind == fake.FileDialog.SAVE else (str(tmp_path / "a.pdf"),)
+
+    handler = srv.RequestHandlerClass
+    api = gui.DesktopApi(handler.results, handler.opened)
+    api._window = FakeWindow()
+    assert api.save_result(key, "a (filled).pdf") == str(target) and target.read_bytes() == pdf
+
+    # "Open a PDF": the native dialog's choice becomes an id the page can load.
+    picked = api.open_pdf()
+    assert picked["name"] == "a.pdf"
+    assert request(f"{base}/api/file/{picked['id']}", token)[2] == pdf
+    assert seen[0] == (fake.FileDialog.SAVE, "a (filled).pdf")
+    assert seen[1][0] == fake.FileDialog.OPEN and "PDF files (*.pdf)" in seen[1][1]
+    srv.shutdown()
+    srv.server_close()
+
+
+def test_cli_view_opens_files_in_the_reader(tmp_path, monkeypatch, capsys):
+    pdf = make_pdf(tmp_path / "a.pdf")
+    calls = []
+    monkeypatch.setattr(gui, "desktop_available", lambda: True)
+    monkeypatch.setattr(gui, "run_desktop", lambda **kw: calls.append(kw["open_paths"]) or True)
+    assert main(["view", str(pdf)]) == 0
+    assert calls == [[str(pdf)]]
+    assert main(["view", str(tmp_path / "missing.pdf")]) == 1
+    assert "no such file" in capsys.readouterr().err
+
+
+def test_app_launcher_passes_pdfs_to_the_reader(tmp_path, monkeypatch):
+    pdf = make_pdf(tmp_path / "a.pdf")
+    (tmp_path / "notes.txt").write_text("x")
+    calls = []
+    monkeypatch.setattr(gui, "run_desktop", lambda **kw: calls.append(kw["open_paths"]) or True)
+    gui.main_app([str(pdf), str(tmp_path / "notes.txt"), "--some-flag", str(tmp_path / "gone.pdf")])
+    assert calls == [[str(pdf)]]
+
+
+def test_reader_is_listed_first(server):
+    base, token = server
+    ops = json.loads(request(base + "/api/operations", token)[2])["operations"]
+    assert ops[0]["id"] == "reader" and ops[0]["files"] == "reader"
