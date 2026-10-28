@@ -638,37 +638,42 @@ async function select(id) {
   }
   const folder = current.files === null;
   $("files-card").hidden = folder;
-  $("pw-box").hidden = folder || current.files === "images";
+  $("pw-box").hidden = folder || current.files === "images" || current.files === "office";
   $("preview").hidden = !folder;
   $("run-label").textContent = folder ? "Apply" : "Run";
   $("run").classList.toggle("secondary", folder);
   $("preview").classList.toggle("secondary", !folder);
-  $("file-input").accept = current.files === "images" ? "image/*" : ".pdf,application/pdf";
+  $("file-input").accept = { images: "image/*", office: OFFICE_ACCEPT }[current.files] || ".pdf,application/pdf";
   $("drop-hint").textContent = {
     images: "JPG, PNG, TIFF… one page per image, in this order",
+    office: "Word, Excel, PowerPoint, OpenDocument, RTF or text files",
     pdf2: current.id === "compare" ? "Two PDFs: the original first, then the changed version" : "Two PDFs: front sides first, then back sides",
   }[current.files] || (current.id === "merge" ? "Add PDFs in the order to combine them" : "One or more PDFs");
-  const want = current.files === "images" ? isImage : isPdf;
+  const want = accepts(current.files);
   items = items.filter((it) => want(it.file));
   renderFiles(); renderForm(); clearMessages();
 }
 function defaultHelp(op) { return op.files === "pdf" ? "Add one or more PDFs. Several files come back together as a ZIP." : ""; }
 function isPdf(f) { return f.type === "application/pdf" || /\.pdf$/i.test(f.name); }
+const OFFICE_ACCEPT = ".doc,.docx,.docm,.dot,.dotx,.rtf,.odt,.wpd,.txt,.xls,.xlsx,.xlsm,.xlsb,.ods,.csv,.ppt,.pptx,.pptm,.pps,.ppsx,.odp";
+function isOffice(f) { const ext = (f.name.match(/\.[^.]+$/) || [""])[0].toLowerCase(); return ext && OFFICE_ACCEPT.split(",").includes(ext); }
+function accepts(kind) { return kind === "images" ? isImage : kind === "office" ? isOffice : isPdf; }
 function isImage(f) { return f.type.startsWith("image/"); }
 
 // ---- files -------------------------------------------------------------------
 function addFiles(list) {
-  const want = current.files === "images" ? isImage : isPdf;
+  const want = accepts(current.files);
   const accepted = [...list].filter(want), rejected = list.length - accepted.length;
   for (const file of accepted) {
     const it = { file, id: Math.random().toString(36).slice(2), pages: null, thumb: null, locked: false, loading: true };
     items.push(it);
     if (isImage(file)) { it.thumb = URL.createObjectURL(file); it.loading = false; }
+    else if (!isPdf(file)) it.loading = false;  // Office files: no preview
     else inspect(it);
   }
   renderFiles();
   clearMessages();
-  if (rejected) showError(`${plural(rejected, "file")} skipped — only ${current.files === "images" ? "images" : "PDFs"} can be used here.`);
+  if (rejected) showError(`${plural(rejected, "file")} skipped — only ${{ images: "images", office: "Word, Excel, PowerPoint, OpenDocument, RTF or text files" }[current.files] || "PDFs"} can be used here.`);
 }
 
 async function inspect(it) {

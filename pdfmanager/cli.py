@@ -11,7 +11,8 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-from pdfmanager import __version__, archive, compare, core, imaging, organize, outline, scan
+from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
+                        scan)
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -241,6 +242,34 @@ def run_bookmarks(a, src, out, pw):
     return f"{out}  ({len(items)} bookmark{'s' if len(items) != 1 else ''})"
 
 
+def run_to_word(a, src, out, pw):
+    result, engine = office.pdf_to_word(src, out, engine=a.engine, password=pw)
+    how = {"word": "Microsoft Word", "basic": "built-in converter",
+           "layout": "LibreOffice, exact layout"}[engine]
+    return f"{result}  ({how})"
+
+
+def cmd_from_office(a):
+    failures = 0
+    files = _expand(a.inputs)
+    for src in files:
+        if len(files) == 1 and a.output:
+            out = Path(a.output)
+        else:
+            folder = Path(a.output) if a.output else Path(src).parent
+            folder.mkdir(parents=True, exist_ok=True)
+            out = folder / (Path(src).stem + ".pdf")
+        try:
+            result, program = office.office_to_pdf(src, out)
+            print(f"{src} -> {result}  ({program})")
+        except (core.PdfManagerError, OSError) as exc:
+            if len(files) == 1:
+                raise
+            failures += 1
+            print(f"error: {src}: {exc}", file=sys.stderr)
+    return 1 if failures else 0
+
+
 def run_text(a, src, out, pw):
     text = core.extract_text(src, out, a.pages, pw)
     if out is None:
@@ -291,7 +320,7 @@ OUTPUTS = {
     "nup": ("nup", "pdf"), "compress": ("compressed", "pdf"), "color": ("color", "pdf"),
     "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
     "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
-    "flatten": ("flat", "pdf"), "bookmarks": ("bookmarks", "pdf"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
+    "flatten": ("flat", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
     "split": ("split", "dir"), "to-images": ("images", "dir"),
 }
 
@@ -305,6 +334,12 @@ def _output_for(a, src, batch):
     if a.command == "text" and a.output is None:
         return None  # print to the terminal
     src = Path(src)
+    if kind == "docx":
+        if not batch:
+            return Path(a.output) if a.output else src.with_suffix(".docx")
+        folder = Path(a.output) if a.output else src.parent
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder / (src.stem + ".docx")
     if kind == "dir":
         base = Path(a.output) if a.output else src.parent
         return base / f"{src.stem}_{suffix}" if (batch or not a.output) else base
@@ -322,7 +357,7 @@ def _output_for(a, src, batch):
 
 # Commands whose output should not inherit the input's password.
 # (split re-encrypts its own output files.)
-KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split",
+KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split", "to-word",
                     "pdfa"}  # PDF/A doesn't allow encryption
 
 
@@ -682,6 +717,20 @@ def build_parser():
     sp.add_argument("--all-pages", action="store_true",
                     help="show unchanged pages in the report too")
     sp.add_argument("--password")
+
+    sp = per_file("to-word", run_to_word, "convert PDFs to editable Word documents (.docx)",
+                  out_help="output .docx (default: <input>.docx); with several inputs, a folder")
+    sp.add_argument("--engine", choices=office.TO_WORD_ENGINES, default="auto",
+                    help="auto (default): Microsoft Word if installed, else the built-in "
+                         "converter; word; basic (built-in: paragraphs, headings, pictures); "
+                         "layout (LibreOffice: exact look, text in boxes)")
+
+    sp = other("from-office", cmd_from_office,
+               "convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF "
+               "(needs Microsoft Office or LibreOffice; text files always work)")
+    sp.add_argument("inputs", nargs="+")
+    sp.add_argument("-o", "--output", help="output PDF, or a folder for several inputs "
+                                           "(default: next to each input)")
 
     sp = other("from-images", cmd_from_images, "save images (JPG, PNG, ...) as a PDF")
     sp.add_argument("images", nargs="+")

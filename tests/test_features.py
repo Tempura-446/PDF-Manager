@@ -336,3 +336,132 @@ def test_cli_and_gui_compare(tmp_path, capsys):
     notes = []
     name, _, _ = gui.run_operation("compare", [old, new], {}, work=work, notes=notes)
     assert name == "v1_vs_v2.pdf" and notes == ["3 pages with differences"]
+
+
+# -- Word and Office ------------------------------------------------------------------
+
+import re  # noqa: E402
+import zipfile  # noqa: E402
+
+from pdfmanager import office  # noqa: E402
+
+needs_libreoffice = pytest.mark.skipif(not office.find_libreoffice(), reason="needs LibreOffice")
+
+
+def docx_paragraphs(path):
+    xml = zipfile.ZipFile(path).read("word/document.xml").decode()
+    rows = []
+    for p in re.findall(r"<w:p>(.*?)</w:p>", xml):
+        style = re.search(r'pStyle w:val="Heading(\d)"', p)
+        text = "".join(re.findall(r"<w:t[^>]*>(.*?)</w:t>", p))
+        rows.append((int(style.group(1)) if style else 0,
+                     text or ("[picture]" if "<w:drawing>" in p else "[page break]")))
+    return rows
+
+
+def article_pdf(path, tmp_path):
+    Image.new("RGB", (400, 300), (200, 60, 40)).save(tmp_path / "pic.png")
+    c = canvas.Canvas(str(path), pagesize=A4)
+    c.setFont("Helvetica-Bold", 20)
+    c.drawString(72, 770, "A Title")
+    c.setFont("Helvetica", 11)
+    y = 740
+    for para in range(2):
+        for k in range(3):
+            c.drawString(72, y, f"Paragraph {para + 1} line {k + 1} with words.")
+            y -= 14
+        y -= 14
+    c.drawImage(str(tmp_path / "pic.png"), 72, y - 150, 200, 150)
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(72, y - 180, "Section two")
+    c.showPage()
+    c.save()
+    return path
+
+
+def test_pdf_to_word_builtin(tmp_path, monkeypatch):
+    monkeypatch.setattr(office, "has_word", lambda: False)
+    out, engine = office.pdf_to_word(article_pdf(tmp_path / "a.pdf", tmp_path), tmp_path / "a.docx")
+    assert engine == "basic"
+    assert docx_paragraphs(out) == [
+        (1, "A Title"),
+        (0, "Paragraph 1 line 1 with words. Paragraph 1 line 2 with words. "
+            "Paragraph 1 line 3 with words."),
+        (0, "Paragraph 2 line 1 with words. Paragraph 2 line 2 with words. "
+            "Paragraph 2 line 3 with words."),
+        (0, "[picture]"), (2, "Section two")]
+    assert any(n.startswith("word/media/") for n in zipfile.ZipFile(out).namelist())
+
+
+def test_pdf_to_word_drops_running_headers(tmp_path, monkeypatch):
+    monkeypatch.setattr(office, "has_word", lambda: False)
+    out, _ = office.pdf_to_word(book_pdf(tmp_path / "book.pdf"), tmp_path / "book.docx")
+    texts = [t for _, t in docx_paragraphs(out)]
+    assert "ACME Report 2026" not in texts and "3" not in texts
+    assert [(lvl, t) for lvl, t in docx_paragraphs(out) if lvl][:2] == [(1, "1 Introduction"),
+                                                                       (2, "1.1 Background")]
+
+
+def test_word_is_used_when_installed(tmp_path, monkeypatch):
+    """With Word installed, the conversion runs a PowerShell script that
+    automates it; the file paths travel in environment variables."""
+    seen = {}
+
+    def fake_run(command, env=None, what=""):
+        seen.update(command=command, env=env)
+        Path(env["PDFM_OUT"]).write_bytes(b"docx")
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(office, "has_word", lambda: True)
+    monkeypatch.setattr(office, "_run", fake_run)
+    out, engine = office.pdf_to_word(text_pdf(tmp_path / "a.pdf"), tmp_path / "a.docx")
+    assert engine == "word" and out.read_bytes() == b"docx"
+    assert seen["command"][0] == "powershell" and "Word.Application" in seen["command"][-1]
+    assert seen["env"]["PDFM_IN"].endswith("a.pdf")
+
+
+def test_text_file_to_pdf_without_office(tmp_path, monkeypatch):
+    monkeypatch.setattr(office, "find_libreoffice", lambda: None)
+    (tmp_path / "notes.txt").write_text("First line\nSecond line\n", encoding="utf-8")
+    out, program = office.office_to_pdf(tmp_path / "notes.txt", tmp_path / "notes.pdf")
+    assert program == "PDF Manager"
+    assert "Second line" in PdfReader(out).pages[0].extract_text()
+    (tmp_path / "x.docx").write_bytes(b"")
+    with pytest.raises(core.PdfManagerError, match="needs Microsoft Office or LibreOffice"):
+        office.office_to_pdf(tmp_path / "x.docx", tmp_path / "x.pdf")
+    with pytest.raises(core.PdfManagerError, match="can't convert .zip"):
+        office.office_to_pdf(tmp_path / "x.zip", tmp_path / "x.pdf")
+
+
+@needs_libreoffice
+def test_word_document_to_pdf_with_libreoffice(tmp_path, monkeypatch):
+    monkeypatch.setattr(office, "has_word", lambda: False)
+    docx, _ = office.pdf_to_word(article_pdf(tmp_path / "a.pdf", tmp_path), tmp_path / "a.docx")
+    out, program = office.office_to_pdf(docx, tmp_path / "back.pdf")
+    assert program == "LibreOffice"
+    assert "Section two" in PdfReader(out).pages[0].extract_text()
+
+
+def test_cli_to_word(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(office, "has_word", lambda: False)
+    src = text_pdf(tmp_path / "doc.pdf", ["Hello Word"])
+    assert main(["to-word", str(src)]) == 0
+    assert "built-in converter" in capsys.readouterr().out
+    assert (0, "Hello Word") in docx_paragraphs(tmp_path / "doc.docx")
+
+
+def test_gui_to_word_and_from_office(tmp_path, monkeypatch):
+    monkeypatch.setattr(office, "has_word", lambda: False)
+    monkeypatch.setattr(office, "find_libreoffice", lambda: None)
+    work = tmp_path / "w1"
+    work.mkdir()
+    notes = []
+    name, data, ctype = gui.run_operation("to-word", [text_pdf(tmp_path / "doc.pdf")], {},
+                                          work=work, notes=notes)
+    assert name == "doc.docx" and ctype.endswith("wordprocessingml.document")
+    assert data.startswith(b"PK") and "install Microsoft Word" in notes[0]
+    (tmp_path / "t.txt").write_text("plain text")
+    work = tmp_path / "w2"
+    work.mkdir()
+    name, data, _ = gui.run_operation("from-office", [tmp_path / "t.txt"], {}, work=work)
+    assert name == "t.pdf" and data.startswith(b"%PDF")

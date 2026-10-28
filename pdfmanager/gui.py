@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
-from pdfmanager import __version__, archive, compare, core, organize, outline, scan
+from pdfmanager import __version__, archive, compare, core, office, organize, outline, scan
 from pdfmanager.pageranges import PageRangeError
 
 MAX_UPLOAD = 1024 * 1024 * 1024  # 1 GB
@@ -198,6 +198,19 @@ OPERATIONS = [
                 _f("dpi", "Resolution (DPI)", "number", 150, min=36, max=600),
                 _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
     {"id": "text", "group": "Convert", "label": "PDF → text", "files": "pdf", "fields": []},
+    {"id": "to-word", "group": "Convert", "label": "PDF → Word", "files": "pdf",
+     "help": "Turn PDFs into editable Word documents (.docx).",
+     "fields": [_f("engine", "Converter", "select", "auto",
+                   choices=[["auto", "Best available (Microsoft Word if installed)"],
+                            ["basic", "Built-in — paragraphs, headings and pictures"],
+                            ["layout", "Exact layout — needs LibreOffice; text in boxes"],
+                            ["word", "Microsoft Word only"]],
+                   hint="Microsoft Word gives the most editable result. The built-in "
+                        "converter turns tables and columns into plain paragraphs.")]},
+    {"id": "from-office", "group": "Convert", "label": "Office → PDF", "files": "office",
+     "help": "Convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF. "
+             "Uses Microsoft Office if installed, otherwise LibreOffice.",
+     "fields": []},
     {"id": "organize", "group": "Folders", "label": "Organize folder", "files": None,
      "help": "Sort the PDFs in a folder on this computer into sub-folders.",
      "fields": [_f("directory", "Folder", "text", "", placeholder="/Users/me/Downloads",
@@ -376,6 +389,15 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
     elif op == "text":
         out = out.with_suffix(".txt")
         core.extract_text(src, out, None, password)
+    elif op == "to-word":
+        out = out_dir / f"{src.stem}.docx"
+        _, engine = office.pdf_to_word(src, out, opts.get("engine") or "auto", password)
+        if engine == "basic" and (opts.get("engine") or "auto") == "auto":
+            notes.append("Converted with the built-in converter. For a more editable "
+                         "result, install Microsoft Word.")
+    elif op == "from-office":
+        out = out_dir / f"{src.stem}.pdf"
+        office.office_to_pdf(src, out)
     else:
         raise UserError(f"unknown operation {op!r}")
     return [out]
@@ -470,7 +492,9 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
     _protect(outputs, password, op)
     if len(outputs) == 1:
         path = outputs[0]
-        ctype = "text/plain; charset=utf-8" if path.suffix == ".txt" else "application/pdf"
+        ctype = {".txt": "text/plain; charset=utf-8",
+                 ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                 }.get(path.suffix, "application/pdf")
         return path.name, path.read_bytes(), ctype
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
