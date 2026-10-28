@@ -12,7 +12,7 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
-                        scan)
+                        redact, scan)
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -270,6 +270,18 @@ def cmd_from_office(a):
     return 1 if failures else 0
 
 
+def run_redact(a, src, out, pw):
+    patterns = list(a.pattern or []) + [redact.PRESETS[p] for p in a.find or []]
+    if not (a.text or patterns or a.box):
+        raise core.PdfManagerError("say what to redact: --text, --pattern, --find or --box")
+    found = redact.redact(src, out, terms=a.text or [], patterns=patterns, boxes=a.box or [],
+                          case_sensitive=a.case_sensitive, whole_words=a.whole_words,
+                          dpi=a.dpi, password=pw)
+    if not found:
+        return f"{out}  (nothing found to redact)"
+    return f"{out}  ({sum(found.values())} area(s) on page(s) {', '.join(map(str, found))})"
+
+
 def run_text(a, src, out, pw):
     text = core.extract_text(src, out, a.pages, pw)
     if out is None:
@@ -320,7 +332,7 @@ OUTPUTS = {
     "nup": ("nup", "pdf"), "compress": ("compressed", "pdf"), "color": ("color", "pdf"),
     "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
     "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
-    "flatten": ("flat", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
+    "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
     "split": ("split", "dir"), "to-images": ("images", "dir"),
 }
 
@@ -689,6 +701,20 @@ def build_parser():
     sp.add_argument("--keep-attachments", action="store_true", help="keep attached files")
     sp.add_argument("--comments", action="store_true",
                     help="also remove comments, highlights and notes")
+
+    sp = per_file("redact", run_redact,
+                  "permanently black out text or areas (redacted pages become images)")
+    sp.add_argument("-t", "--text", action="append", metavar="TEXT",
+                    help="text to black out (repeat for more)")
+    sp.add_argument("--pattern", action="append", metavar="REGEX",
+                    help="regular expression to black out, e.g. '\\d{3}-\\d{2}-\\d{4}'")
+    sp.add_argument("--find", action="append", choices=list(redact.PRESETS),
+                    help="also black out all emails, phone numbers or long numbers")
+    sp.add_argument("--box", action="append", metavar="PAGE:X0,Y0,X1,Y1",
+                    help="black out an area, in points from the bottom-left corner")
+    sp.add_argument("--case-sensitive", action="store_true")
+    sp.add_argument("--whole-words", action="store_true")
+    sp.add_argument("--dpi", type=int, default=200, help="resolution of redacted pages")
 
     sp = per_file("pdfa", run_pdfa, "convert to PDF/A for long-term archiving (needs Ghostscript)")
     sp.add_argument("--level", choices=archive.PDFA_LEVELS, default="2",

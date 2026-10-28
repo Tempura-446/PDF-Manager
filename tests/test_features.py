@@ -465,3 +465,89 @@ def test_gui_to_word_and_from_office(tmp_path, monkeypatch):
     work.mkdir()
     name, data, _ = gui.run_operation("from-office", [tmp_path / "t.txt"], {}, work=work)
     assert name == "t.pdf" and data.startswith(b"%PDF")
+
+
+# -- redaction ---------------------------------------------------------------------------
+
+from pdfmanager import redact  # noqa: E402
+
+
+def secret_pdf(path, rotate=0):
+    from pypdf import PdfWriter
+
+    c = canvas.Canvas(str(path), pagesize=A4)
+    c.setFont("Helvetica", 14)
+    c.drawString(72, 700, "Call John Smith at 555-1234 or mail john@example.com.")
+    c.drawString(72, 680, "Card 4111 1111 1111 1111 expires soon.")
+    c.acroForm.textfield(name="ssn", value="secret", x=72, y=600, width=150, height=20)
+    c.showPage()
+    c.drawString(72, 700, "Page two mentions nobody.")
+    c.showPage()
+    c.save()
+    if rotate:
+        writer = PdfWriter(clone_from=str(path))
+        writer.pages[0].rotate(rotate)
+        writer.write(path)
+    return path
+
+
+def dark_fraction(path, page, box):
+    """Share of black pixels in ``box`` (points, PDF coordinates) of a page."""
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(str(path))
+    p = doc[page]
+    p.set_rotation(0)
+    image = p.render(scale=1).to_pil().convert("L")
+    height = p.get_height()
+    x0, y0, x1, y1 = box
+    crop = image.crop((int(x0), int(height - y1), int(x1), int(height - y0)))
+    doc.close()
+    return sum(crop.histogram()[:40]) / (crop.width * crop.height)
+
+
+@pytest.mark.parametrize("rotate", [0, 90])
+def test_redact_removes_the_text(tmp_path, rotate):
+    src = secret_pdf(tmp_path / "s.pdf", rotate)
+    found = redact.redact(src, tmp_path / "out.pdf", terms=["john smith"],
+                          patterns=[redact.PRESETS["emails"]])
+    assert found == {1: 2}
+    reader = PdfReader(tmp_path / "out.pdf")
+    assert reader.pages[0].extract_text() == ""  # the page is a picture now
+    assert reader.pages[0].rotation == rotate
+    assert "nobody" in reader.pages[1].extract_text()  # other pages untouched
+    assert not reader.get_fields()  # the form field on the redacted page is gone
+    assert dark_fraction(tmp_path / "out.pdf", 0, (102, 702, 170, 710)) > 0.9  # "John Smith"
+    assert dark_fraction(tmp_path / "out.pdf", 0, (72, 682, 100, 690)) < 0.5  # "Card"
+
+
+def test_redact_presets_and_boxes(tmp_path):
+    src = secret_pdf(tmp_path / "s.pdf")
+    found = redact.redact(src, tmp_path / "out.pdf", patterns=[redact.PRESETS["numbers"],
+                                                               redact.PRESETS["phones"]],
+                          boxes=["2:70,690,200,720"])
+    assert found == {1: 2, 2: 1}
+    assert dark_fraction(tmp_path / "out.pdf", 1, (75, 695, 195, 715)) > 0.95
+    assert redact.redact(src, tmp_path / "none.pdf", terms=["nothing here"]) == {}
+
+
+def test_redact_whole_words_and_case(tmp_path):
+    src = secret_pdf(tmp_path / "s.pdf")
+    assert len(redact.find_text(src, ["smit"])[0]) == 1
+    assert redact.find_text(src, ["smit"], whole_words=True) == {}
+    assert redact.find_text(src, ["JOHN"], case_sensitive=True) == {}
+
+
+def test_cli_and_gui_redact(tmp_path, capsys):
+    src = secret_pdf(tmp_path / "s.pdf")
+    assert main(["redact", str(src), "-t", "John Smith", "--find", "emails"]) == 0
+    assert "2 area(s) on page(s) 1" in capsys.readouterr().out
+    assert main(["redact", str(src)]) == 1
+    work = tmp_path / "work"
+    work.mkdir()
+    notes = []
+    name, data, _ = gui.run_operation(
+        "redact", [src], {"terms": "Smith, Card", "boxes": json.dumps({"2": [[70, 690, 200, 720]]})},
+        work=work, notes=notes)
+    assert name == "s_redacted.pdf"
+    assert notes == ["s.pdf: blacked out 3 areas on pages 1, 2"]

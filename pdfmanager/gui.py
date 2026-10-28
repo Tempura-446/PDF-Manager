@@ -32,7 +32,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
-from pdfmanager import __version__, archive, compare, core, office, organize, outline, scan
+from pdfmanager import (__version__, archive, compare, core, office, organize, outline, redact,
+                        scan)
 from pdfmanager.pageranges import PageRangeError
 
 MAX_UPLOAD = 1024 * 1024 * 1024  # 1 GB
@@ -176,6 +177,17 @@ OPERATIONS = [
      "fields": [_f("new_password", "New password", "password", "", required=True)]},
     {"id": "decrypt", "group": "Security", "label": "Remove password", "files": "pdf",
      "help": "Enter the current password in the box above the Run button.", "fields": []},
+    {"id": "redact", "group": "Security", "label": "Redact", "files": "pdf", "panel": "redact",
+     "help": "Permanently black out names, numbers or areas. Pages with redactions become "
+             "pictures, so what's under the black boxes is really gone.",
+     "fields": [_f("terms", "Words or phrases", "text", "", placeholder="John Smith, 555-1234",
+                   hint="separate several with commas"),
+                _f("emails", "All email addresses", "check", False),
+                _f("phones", "All phone numbers", "check", False),
+                _f("numbers", "Card, account and ID numbers", "check", False),
+                _f("case_sensitive", "Match upper/lower case", "check", False),
+                _f("whole_words", "Whole words only", "check", False),
+                _f("boxes", "", "hidden", "")]},
     {"id": "sanitize", "group": "Security", "label": "Remove hidden data", "files": "pdf",
      "help": "Remove information that travels unseen inside a PDF before you share it.",
      "fields": [_f("metadata", "Author, title, dates and other document details", "check", True),
@@ -235,7 +247,7 @@ OPERATIONS = [
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
-SUFFIX = {"bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
+SUFFIX = {"redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
@@ -334,6 +346,18 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             except ValueError:
                 raise UserError("the bookmark list is damaged; reload the file") from None
         outline.set_outline(src, out, items, password)
+    elif op == "redact":
+        terms, patterns, boxes = _redact_request(opts)
+        if not (terms or patterns or boxes):
+            raise UserError("enter words to black out, tick a kind of number, or draw boxes "
+                            "on the pages")
+        found = redact.redact(src, out, terms=terms, patterns=patterns, boxes=boxes,
+                              case_sensitive=_bool(opts.get("case_sensitive")),
+                              whole_words=_bool(opts.get("whole_words")), password=password)
+        notes.append(f"{src.name}: " + (
+            f"blacked out {sum(found.values())} area{'s' if sum(found.values()) != 1 else ''} "
+            f"on page{'s' if len(found) != 1 else ''} {_pages_list(list(found))}" if found
+            else "nothing matched, so nothing was blacked out"))
     elif op == "flatten":
         forms, comments = _bool(opts.get("forms", True)), _bool(opts.get("comments", True))
         if not forms and not comments:
@@ -401,6 +425,20 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
     else:
         raise UserError(f"unknown operation {op!r}")
     return [out]
+
+
+def _redact_request(opts):
+    """(terms, patterns, boxes) from the Redact tool's options. Boxes come
+    from the page editor as {"1": [[x0, y0, x1, y1], ...]} (1-based pages)."""
+    terms = [t.strip() for t in re.split(r"[,;\n]", opts.get("terms") or "") if t.strip()]
+    patterns = [redact.PRESETS[k] for k in redact.PRESETS if _bool(opts.get(k))]
+    try:
+        raw = json.loads(opts.get("boxes") or "{}")
+        boxes = {int(page) - 1: [tuple(float(v) for v in box) for box in found]
+                 for page, found in raw.items() if found}
+    except (ValueError, TypeError, AttributeError):
+        raise UserError("the boxes drawn on the pages are damaged; draw them again") from None
+    return terms, patterns, boxes
 
 
 def _pages_list(numbers):
