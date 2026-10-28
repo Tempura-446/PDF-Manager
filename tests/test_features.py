@@ -2,7 +2,6 @@
 Office conversion, redaction and recipes."""
 
 import json
-import shutil
 from pathlib import Path
 
 import pytest
@@ -629,3 +628,65 @@ def test_gui_recipe(recipe_home):
     assert name == "d_last-page.pdf"
     (tmp_path / name).write_bytes(data)
     assert PdfReader(tmp_path / name).pages[0].extract_text().strip() == "B"
+
+
+# -- server endpoints ------------------------------------------------------------------
+
+import threading  # noqa: E402
+import urllib.request  # noqa: E402
+
+
+@pytest.fixture
+def app(recipe_home):
+    srv, url = gui.make_server()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base, token = url.split("/#token=")
+    yield base, token
+    srv.shutdown()
+    srv.server_close()
+
+
+def post(base, token, path, fields=None, file=None, json_body=None):
+    headers = {"X-Pdfm-Token": token}
+    if json_body is not None:
+        data, headers["Content-Type"] = json.dumps(json_body).encode(), "application/json"
+    else:
+        boundary = "pdfmtestboundary"
+        parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+                 for k, v in (fields or {}).items()]
+        if file is not None:
+            parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
+                         f'filename="{file.name}"\r\nContent-Type: application/pdf\r\n\r\n'.encode()
+                         + file.read_bytes() + b"\r\n")
+        data = b"".join(parts) + f"--{boundary}--\r\n".encode()
+        headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
+    request = urllib.request.Request(base + path, data=data, headers=headers)
+    with urllib.request.urlopen(request) as res:
+        return json.loads(res.read())
+
+
+def test_outline_endpoint(app, tmp_path):
+    base, token = app
+    src = book_pdf(tmp_path / "book.pdf")
+    assert post(base, token, "/api/outline", {"password": ""}, src) == {"items": [], "pages": 5}
+    detected = post(base, token, "/api/outline", {"detect": "1"}, src)
+    assert detected["items"][0] == {"title": "1 Introduction", "page": 1, "level": 0}
+
+
+def test_redact_find_endpoint(app, tmp_path):
+    base, token = app
+    src = secret_pdf(tmp_path / "s.pdf")
+    found = post(base, token, "/api/redact/find", {"terms": "John Smith", "emails": "true"}, src)
+    assert list(found["boxes"]) == ["1"] and len(found["boxes"]["1"]) == 2
+
+
+def test_recipes_endpoints(app):
+    base, token = app
+    saved = post(base, token, "/api/recipes/save",
+                 json_body={"name": "Share", "steps": [{"op": "sanitize", "options": {}}]})
+    assert saved["recipe"]["name"] == "Share" and len(saved["recipes"]) == 1
+    request = urllib.request.Request(base + "/api/recipes", headers={"X-Pdfm-Token": token})
+    with urllib.request.urlopen(request) as res:
+        listing = json.loads(res.read())
+    assert listing["recipes"][0]["name"] == "Share" and "ocr" in listing["step_ops"]
+    assert post(base, token, "/api/recipes/delete", json_body={"name": "Share"}) == {"recipes": []}

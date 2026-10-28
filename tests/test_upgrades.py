@@ -700,6 +700,9 @@ def test_reader_static_files_are_served(server):
     base, _ = server
     for path, ctype in (("/static/reader.js", "text/javascript"),
                         ("/static/pages.js", "text/javascript"),
+                        ("/static/regions.js", "text/javascript"),
+                        ("/static/bookmarks.js", "text/javascript"),
+                        ("/static/recipes.js", "text/javascript"),
                         ("/static/reader.css", "text/css"),
                         ("/static/pdfjs/build/pdf.min.mjs", "text/javascript"),
                         ("/static/pdfjs/build/pdf.worker.min.mjs", "text/javascript"),
