@@ -7,9 +7,10 @@
 //
 // Features: continuous scrolling, page navigation, zoom (presets, Ctrl+wheel,
 // pinch), rotation, single/two-page view, thumbnails, outline (bookmarks),
-// find with highlighting, text selection, links, form filling, document
-// properties, hand tool, dark pages, full screen, printing, saving a copy and
-// handing the document to one of the app's tools.
+// find with highlighting, text selection, links, form filling, annotating
+// (highlight, text, drawing, pictures) and signing, document properties,
+// hand tool, dark pages, full screen, printing, saving a copy and handing the
+// document to one of the app's tools.
 
 const BASE = new URL("/static/pdfjs/", location.href).href;
 let pdfjs = null;   // pdf.js display API
@@ -47,7 +48,22 @@ const ICON = {
   save: '<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>', info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
   tool: '<path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3-3 8-8-1.3-1.3a4 4 0 0 0-5-5z"/><path d="m4 20 4-4"/>',
   twisty: '<path d="m9 6 6 6-6 6"/>',
+  pen: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  pointer: '<path d="m4 4 7 17 2.5-7.5L21 11z"/>',
+  highlight: '<path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/>',
+  text: '<path d="M5 6V4h14v2M12 4v16M9 20h6"/>',
+  draw: '<path d="M3 17c3-3 5-9 8-9s1 8 4 8 4-4 6-6"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
+  sign: '<path d="M3 17c2-1 3-5 5-5s0 5 2 5 3-6 5-6 1 6 3 6 2-2 3-2"/><path d="M3 21h18"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+  redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
 };
+
+// Annotation colours (highlights use the pale versions, as on paper).
+const COLORS = [["Black", "#000000", "#bdbdbd"], ["Blue", "#1f4fd8", "#80ebff"], ["Red", "#d52b1e", "#ff4f5f"],
+  ["Green", "#1f8a3b", "#53ffbc"], ["Yellow", "#b8860b", "#ffff98"]];
+const HIGHLIGHT_COLORS = "yellow=#FFFF98,green=#53FFBC,blue=#80EBFF,pink=#FFCBE6,red=#FF4F5F";
 const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
 
 const ZOOM_PRESETS = [
@@ -112,6 +128,7 @@ export class Reader {
     this.rotCcwBtn = b("ccw", "Rotate counter-clockwise", { disabled: true, class: "rd-btn rd-hide-narrow" });
     this.rotCwBtn = b("cw", "Rotate clockwise (R)", { disabled: true, class: "rd-btn rd-hide-narrow" });
     this.findBtn = b("search", "Find in document (Ctrl+F)", { disabled: true, "aria-pressed": "false" });
+    this.annotateBtn = b("pen", "Annotate and sign", { disabled: true, "aria-pressed": "false" });
     this.moreBtn = b("more", "More", { "aria-haspopup": "menu", "aria-expanded": "false" });
 
     const toolbar = el("div", { class: "rd-toolbar", role: "toolbar", "aria-label": "Reader" },
@@ -122,7 +139,7 @@ export class Reader {
       el("span", { class: "rd-sep" }),
       el("div", { class: "rd-group" }, this.zoomOutBtn, this.zoomSelect, this.zoomInBtn),
       el("span", { class: "rd-sep rd-hide-narrow" }),
-      el("div", { class: "rd-group" }, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.moreBtn));
+      el("div", { class: "rd-group" }, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.annotateBtn, this.moreBtn));
 
     // Find bar
     this.findInput = el("input", { type: "search", placeholder: "Find in document", "aria-label": "Find in document", autocomplete: "off", spellcheck: "false" });
@@ -139,6 +156,27 @@ export class Reader {
       el("label", {}, this.findCase, "Match case"),
       el("label", {}, this.findWord, "Whole words"),
       this.findStatus, el("span", { style: "flex:1" }), this.findCloseBtn);
+
+    // Annotation bar
+    const tool = (name, label, mode) => el("button", { class: "rd-btn rd-tool", type: "button", title: label, "aria-pressed": "false", "data-mode": mode, html: svg(name) + `<span>${label}</span>` });
+    this.annotTools = [
+      tool("pointer", "Select", "NONE"), tool("highlight", "Highlight", "HIGHLIGHT"), tool("text", "Text", "FREETEXT"),
+      tool("draw", "Draw", "INK"), tool("image", "Picture", "STAMP"),
+    ];
+    this.signBtn = el("button", { class: "rd-btn rd-tool", type: "button", title: "Add your signature", html: svg("sign") + "<span>Sign</span>" });
+    this.swatches = COLORS.map(([name, ink, mark], i) => el("button", { class: "rd-swatch", type: "button", title: name, "aria-label": name, "aria-pressed": String(i === 1),
+      style: `--ink:${ink};--mark:${mark}`, "data-index": i }));
+    this.sizeSelect = el("select", { class: "rd-zoom", "aria-label": "Line thickness or text size" });
+    this.undoBtn = b("undo", "Undo (Ctrl+Z)", { disabled: true });
+    this.redoBtn = b("redo", "Redo (Ctrl+Y)", { disabled: true });
+    this.deleteBtn = b("trash", "Delete the selected annotation (Delete)", { disabled: true });
+    this.annotSaveBtn = el("button", { class: "rd-btn primary", type: "button", title: "Save a copy with your changes (Ctrl+S)", html: svg("save") + "<span>Save a copy</span>" });
+    this.annotCloseBtn = b("x", "Close the annotation tools");
+    this.annotbar = el("div", { class: "rd-findbar rd-annotbar", hidden: true, role: "toolbar", "aria-label": "Annotate" },
+      ...this.annotTools, this.signBtn, el("span", { class: "rd-sep" }),
+      el("div", { class: "rd-swatches", role: "group", "aria-label": "Colour" }, ...this.swatches), this.sizeSelect,
+      el("span", { class: "rd-sep" }), this.undoBtn, this.redoBtn, this.deleteBtn,
+      el("span", { style: "flex:1" }), this.annotSaveBtn, this.annotCloseBtn);
 
     // Sidebar
     this.thumbsTab = el("button", { class: "rd-tab", type: "button", role: "tab", "aria-selected": "true" }, "Pages");
@@ -167,7 +205,7 @@ export class Reader {
     this.body = el("div", { class: "rd-body" }, this.sidebar, this.main);
 
     this.menu = el("div", { class: "rd-menu", role: "menu", hidden: true });
-    this.root.append(toolbar, this.findbar, this.body, this.menu, this.fileInput);
+    this.root.append(toolbar, this.findbar, this.annotbar, this.body, this.menu, this.fileInput);
     this.host.append(this.root);
     this.#wire();
   }
@@ -193,7 +231,7 @@ export class Reader {
       el("hr"),
       this.#menuItem("full", "Full screen", () => this.toggleFullscreen()),
       this.#menuItem("print", "Print…", () => this.print()),
-      this.#menuItem("save", this.#formsChanged() ? "Save a copy with your form entries…" : "Save a copy…", () => this.saveCopy()),
+      this.#menuItem("save", this.#changed() ? "Save a copy with your changes…" : "Save a copy…", () => this.saveCopy()),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
     ];
     if (this.onEdit && this.tools.length) {
@@ -248,6 +286,18 @@ export class Reader {
     this.findWord.addEventListener("change", () => this.#find("entirewordchange"));
     this.findAll.addEventListener("change", () => this.#find("highlightallchange"));
     this.findCloseBtn.addEventListener("click", () => this.closeFind());
+
+    // Annotating
+    this.annotateBtn.addEventListener("click", () => (this.annotbar.hidden ? this.openAnnotate() : this.closeAnnotate()));
+    for (const btn of this.annotTools) btn.addEventListener("click", () => this.#setEditMode(btn.dataset.mode, btn.dataset.mode === "STAMP"));
+    this.signBtn.addEventListener("click", () => this.sign());
+    for (const sw of this.swatches) sw.addEventListener("click", () => this.#setColor(+sw.dataset.index));
+    this.sizeSelect.addEventListener("change", () => this.#setSize(+this.sizeSelect.value));
+    this.undoBtn.addEventListener("click", () => this.uiManager?.undo());
+    this.redoBtn.addEventListener("click", () => this.uiManager?.redo());
+    this.deleteBtn.addEventListener("click", () => this.uiManager?.delete());
+    this.annotSaveBtn.addEventListener("click", () => this.saveCopy());
+    this.annotCloseBtn.addEventListener("click", () => this.closeAnnotate());
 
     // Drop a PDF anywhere on the reader to open it.
     const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
@@ -305,6 +355,7 @@ export class Reader {
     if (mod && e.key === "0") { e.preventDefault(); this.pdfViewer.currentScaleValue = "auto"; return; }
     if (mod || e.altKey || isTyping(e)) return;
     if (e.key === "Escape" && !this.findbar.hidden) { this.closeFind(); return; }
+    if (e.key === "Escape" && this.editMode && this.editMode !== "NONE") { this.#setEditMode("NONE"); return; }
     const v = this.pdfViewer;
     switch (e.key) {
       case "n": case "j": v.nextPage(); break;
@@ -355,6 +406,7 @@ export class Reader {
   }
 
   async openBytes(bytes, name, password = null) {
+    if (this.#changed() && !confirm(`Your changes to “${this.name}” haven't been saved. Open the other file anyway?`)) return;
     this.#busy(true);
     try {
       await loadPdfjs();
@@ -390,7 +442,7 @@ export class Reader {
       document.title = name + " — PDF Manager";
       this.empty.hidden = true;
       for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
-        this.zoomSelect, this.rotCcwBtn, this.rotCwBtn, this.findBtn]) c.disabled = false;
+        this.zoomSelect, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.annotateBtn]) c.disabled = false;
       this.pageCount.textContent = `of ${doc.numPages}`;
       this.#setSidebar(store.get("pdfm-reader-sidebar", window.innerWidth > 760));
       this.#buildThumbs();
@@ -420,9 +472,20 @@ export class Reader {
       container: this.container, viewer: this.viewerEl, eventBus,
       linkService: this.linkService, findController: this.findController,
       annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS,
+      annotationEditorMode: pdfjs.AnnotationEditorType.NONE,
+      annotationEditorHighlightColors: HIGHLIGHT_COLORS,
       imageResourcesPath: BASE + "web/images/",
     });
     this.linkService.setViewer(this.pdfViewer);
+    eventBus.on("annotationeditoruimanager", ({ uiManager }) => { this.uiManager = uiManager; this.#applyAnnotParams(); });
+    // pdf.js asks to switch tools itself, e.g. after a picture is pasted.
+    eventBus.on("switchannotationeditormode", ({ mode }) => this.#setEditMode(this.#modeName(mode)));
+    eventBus.on("annotationeditormodechanged", ({ mode }) => this.#showEditMode(this.#modeName(mode)));
+    eventBus.on("editingstateschanged", ({ details }) => {
+      this.undoBtn.disabled = !details.hasSomethingToUndo;
+      this.redoBtn.disabled = !details.hasSomethingToRedo;
+      this.deleteBtn.disabled = !details.hasSelectedEditor;
+    });
 
     eventBus.on("pagesinit", () => {
       const saved = store.get("pdfm-pos:" + this.#key(), null);
@@ -447,6 +510,8 @@ export class Reader {
 
   async #closeDocument() {
     this.closeFind();
+    this.closeAnnotate();
+    this.uiManager = null;
     this.labels = null;
     if (this.thumbObserver) { this.thumbObserver.disconnect(); this.thumbObserver = null; }
     this.thumbsList.replaceChildren();
@@ -670,6 +735,175 @@ export class Reader {
     if (state === FindState.WRAPPED) this.toast("Reached the end — continued from the other end", 1500);
   }
 
+  // ---- annotating and signing ------------------------------------------------------
+  openAnnotate() {
+    if (!this.doc) return;
+    this.annotbar.hidden = false;
+    this.annotateBtn.setAttribute("aria-pressed", "true");
+    this.#showEditMode(this.editMode || "NONE");
+  }
+  closeAnnotate() {
+    if (this.annotbar.hidden) return;
+    this.annotbar.hidden = true;
+    this.annotateBtn.setAttribute("aria-pressed", "false");
+    if (this.editMode && this.editMode !== "NONE") this.#setEditMode("NONE");
+  }
+
+  #modeName(mode) {
+    return Object.entries(pdfjs.AnnotationEditorType).find(([, v]) => v === mode)?.[0] || "NONE";
+  }
+
+  /** Switch the pdf.js editing tool: NONE (select), HIGHLIGHT, FREETEXT, INK or STAMP. */
+  #setEditMode(name, create = false) {
+    if (!this.pdfViewer || !this.doc) return;
+    const mode = pdfjs.AnnotationEditorType[name];
+    if (mode === undefined) return;
+    if (this.annotbar.hidden && name !== "NONE") this.openAnnotate();
+    try {
+      this.pdfViewer.annotationEditorMode = { mode };
+    } catch (e) { this.toast("Annotating isn't available for this document."); return; }
+    this.#showEditMode(name);
+    // "Picture" asks for an image file straight away.
+    if (create && this.uiManager) setTimeout(() => this.uiManager.updateParams(pdfjs.AnnotationEditorParamsType.CREATE, null), 50);
+  }
+
+  #showEditMode(name) {
+    this.editMode = name;
+    for (const btn of this.annotTools) btn.setAttribute("aria-pressed", String(btn.dataset.mode === name));
+    const sizes = name === "FREETEXT" ? [[10, "10 pt"], [12, "12 pt"], [14, "14 pt"], [18, "18 pt"], [24, "24 pt"], [36, "36 pt"]]
+      : name === "INK" ? [[1, "Thin"], [2, "Fine"], [4, "Medium"], [8, "Thick"], [14, "Marker"]]
+      : name === "HIGHLIGHT" ? [[8, "Thin"], [12, "Normal"], [20, "Wide"]] : [];
+    const key = { FREETEXT: "text", INK: "ink", HIGHLIGHT: "mark" }[name];
+    const chosen = this.annotParams?.size?.[key];
+    this.sizeSelect.replaceChildren(...sizes.map(([v, label]) => el("option", { value: v, selected: v === chosen }, label)));
+    this.sizeSelect.hidden = !sizes.length;
+    this.root.querySelector(".rd-swatches").hidden = !key;
+  }
+
+  #applyAnnotParams() {
+    this.annotParams ||= store.get("pdfm-annot", { color: 1, size: { text: 12, ink: 2, mark: 12 } });
+    this.#setColor(this.annotParams.color, false);
+    for (const [key, value] of Object.entries(this.annotParams.size)) this.#setSize(value, key, false);
+  }
+
+  #setColor(index, remember = true) {
+    const [, ink, mark] = COLORS[index] || COLORS[1];
+    for (const sw of this.swatches) sw.setAttribute("aria-pressed", String(+sw.dataset.index === index));
+    const P = pdfjs.AnnotationEditorParamsType;
+    if (this.uiManager) {
+      // Applies to the selected annotations, or else to new ones.
+      this.uiManager.updateParams(P.FREETEXT_COLOR, ink);
+      this.uiManager.updateParams(P.INK_COLOR, ink);
+      this.uiManager.updateParams(P.HIGHLIGHT_COLOR, mark);
+    }
+    if (remember) { this.annotParams.color = index; store.set("pdfm-annot", this.annotParams); }
+  }
+
+  #setSize(value, key = { FREETEXT: "text", INK: "ink", HIGHLIGHT: "mark" }[this.editMode], remember = true) {
+    if (!key || !value) return;
+    const P = pdfjs.AnnotationEditorParamsType;
+    const type = { text: P.FREETEXT_SIZE, ink: P.INK_THICKNESS, mark: P.HIGHLIGHT_THICKNESS }[key];
+    if (this.uiManager) this.uiManager.updateParams(type, value);
+    if (remember) { this.annotParams.size[key] = value; store.set("pdfm-annot", this.annotParams); }
+  }
+
+  /** Draw, type or pick a signature, then place it on the current page. */
+  async sign() {
+    if (!this.doc || !this.uiManager) return;
+    const image = await this.#signatureDialog();
+    if (!image) return;
+    const file = new File([image], "signature.png", { type: "image/png" });
+    const layer = this.uiManager.currentLayer;
+    if (!layer) { this.toast("Scroll to the page to sign, then try again."); return; }
+    if (this.annotbar.hidden) this.openAnnotate();
+    await layer.pasteEditor({ mode: pdfjs.AnnotationEditorType.STAMP }, { bitmapFile: file });
+    this.toast("Drag the signature into place; use the corners to resize it.", 5000);
+  }
+
+  #signatureDialog() {
+    const saved = store.get("pdfm-signature", null);
+    const W = 520, H = 180, ratio = Math.min(window.devicePixelRatio || 1, 2);
+    const pad = el("canvas", { class: "rd-sigpad", width: W * ratio, height: H * ratio, "aria-label": "Draw your signature here" });
+    const ctx = pad.getContext("2d");
+    ctx.scale(ratio, ratio);
+    ctx.lineCap = ctx.lineJoin = "round"; ctx.lineWidth = 2.6; ctx.strokeStyle = "#111";
+    let drawn = false, last = null;
+    const point = (e) => { const r = pad.getBoundingClientRect(); return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height]; };
+    pad.addEventListener("pointerdown", (e) => { pad.setPointerCapture(e.pointerId); last = point(e); drawn = true; ctx.beginPath(); ctx.arc(last[0], last[1], 1.2, 0, 7); ctx.fillStyle = "#111"; ctx.fill(); });
+    pad.addEventListener("pointermove", (e) => {
+      if (!last) return;
+      const p = point(e);
+      ctx.beginPath(); ctx.moveTo(...last); ctx.lineTo(...p); ctx.stroke();
+      last = p;
+    });
+    pad.addEventListener("pointerup", () => { last = null; });
+    const typed = el("input", { type: "text", class: "rd-sigtext", placeholder: "Or type your name", "aria-label": "Type your name", autocomplete: "name" });
+    const clear = () => { ctx.clearRect(0, 0, W, H); drawn = false; };
+    typed.addEventListener("input", () => {
+      clear();
+      if (!typed.value.trim()) return;
+      ctx.fillStyle = "#111";
+      let size = 64;
+      do { ctx.font = `italic ${size}px "Segoe Script", "Brush Script MT", "Lucida Handwriting", "Apple Chancery", cursive`; size -= 4; }
+      while (ctx.measureText(typed.value).width > W - 40 && size > 16);
+      ctx.textBaseline = "middle"; ctx.textAlign = "center";
+      ctx.fillText(typed.value, W / 2, H / 2);
+      drawn = true;
+    });
+    const pick = el("input", { type: "file", accept: "image/*", hidden: true });
+    let picked = null;
+    pick.addEventListener("change", async () => {
+      const f = pick.files[0];
+      if (!f) return;
+      const img = new Image();
+      img.src = URL.createObjectURL(f);
+      await img.decode().catch(() => {});
+      clear();
+      const s = Math.min((W - 20) / img.width, (H - 20) / img.height, 1);
+      ctx.drawImage(img, (W - img.width * s) / 2, (H - img.height * s) / 2, img.width * s, img.height * s);
+      URL.revokeObjectURL(img.src);
+      drawn = true; picked = f;
+    });
+    const remember = el("input", { type: "checkbox", checked: true });
+    const body = [
+      el("p", {}, "Draw your signature with the mouse, pen or finger, type your name, or use a picture of your signature."),
+      pad,
+      el("div", { class: "rd-sigrow" }, typed,
+        el("button", { type: "button", class: "rd-btn", onclick: () => pick.click() }, "Picture…"),
+        el("button", { type: "button", class: "rd-btn", onclick: () => { typed.value = ""; clear(); } }, "Clear"), pick),
+      el("label", { class: "rd-sigremember" }, remember, "Remember this signature on this computer"),
+    ];
+    const buttons = [["cancel", "Cancel"], ["ok", "Place signature", true]];
+    if (saved) buttons.splice(1, 0, ["saved", "Use saved signature"]);
+    return this.#dialog("Sign", body, buttons).then(async (answer) => {
+      if (answer === "saved") return (await fetch(saved)).blob();
+      if (answer !== "ok") return null;
+      if (!drawn) { this.toast("Draw or type a signature first."); return null; }
+      const blob = picked && !typed.value ? picked : await this.#trim(pad);
+      if (remember.checked) {
+        const reader = new FileReader();
+        reader.onload = () => store.set("pdfm-signature", reader.result);
+        reader.readAsDataURL(blob);
+      }
+      return blob;
+    });
+  }
+
+  /** The drawn part of a canvas as a PNG with a transparent background. */
+  async #trim(canvas) {
+    const { width, height } = canvas;
+    const data = canvas.getContext("2d").getImageData(0, 0, width, height).data;
+    let x0 = width, y0 = height, x1 = -1, y1 = -1;
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      if (data[(y * width + x) * 4 + 3] > 8) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+    const m = 6, out = document.createElement("canvas");
+    x0 = Math.max(0, x0 - m); y0 = Math.max(0, y0 - m); x1 = Math.min(width - 1, x1 + m); y1 = Math.min(height - 1, y1 + m);
+    out.width = Math.max(1, x1 - x0 + 1); out.height = Math.max(1, y1 - y0 + 1);
+    out.getContext("2d").drawImage(canvas, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+    return new Promise((resolve) => out.toBlob(resolve, "image/png"));
+  }
+
   // ---- dialogs ----------------------------------------------------------------
   #dialog(title, body, buttons) {
     return new Promise((resolve) => {
@@ -733,16 +967,18 @@ export class Reader {
   }
 
   // ---- saving, printing, editing ------------------------------------------------
-  #formsChanged() { return !!(this.doc && this.doc.annotationStorage.size > 0); }
+  /** Filled-in form fields or annotations that aren't in the file yet. */
+  #changed() { return !!(this.doc && this.doc.annotationStorage.size > 0); }
 
   async #currentBytes() {
-    // With filled-in form fields, save them into the copy.
-    return this.#formsChanged() ? await this.doc.saveDocument() : this.bytes;
+    if (!this.#changed()) return this.bytes;
+    this.uiManager?.commitOrRemove?.();  // finish the annotation being edited
+    return await this.doc.saveDocument();
   }
 
   #copyName() {
     const stem = this.name.replace(/\.pdf$/i, "");
-    return this.#formsChanged() ? `${stem} (filled).pdf` : `${stem}.pdf`;
+    return this.#changed() ? `${stem} (edited).pdf` : `${stem}.pdf`;
   }
 
   async saveCopy() {
