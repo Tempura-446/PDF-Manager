@@ -1,6 +1,7 @@
 """Sort, rename and catalogue collections of PDF files."""
 
 import csv
+import hashlib
 import re
 import shutil
 from datetime import datetime
@@ -116,17 +117,71 @@ def _unique(target, taken):
     return candidate
 
 
-def organize(directory, by="year", dest=None, move=False, recursive=False, dry_run=False):
+DUPLICATE_MODES = ("keep", "skip", "folder")
+
+
+def file_hash(path, chunk=1 << 20):
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        while block := fh.read(chunk):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def find_duplicates(directory, recursive=False):
+    """Return groups (lists of paths) of byte-identical PDFs, each group
+    sorted so the oldest file comes first."""
+    by_size = {}
+    for path in find_pdfs(directory, recursive):
+        by_size.setdefault(path.stat().st_size, []).append(path)
+    groups = {}
+    for paths in by_size.values():
+        if len(paths) < 2:
+            continue  # a file with a unique size can't have a duplicate
+        for path in paths:
+            groups.setdefault(file_hash(path), []).append(path)
+    return [sorted(g, key=lambda p: (p.stat().st_mtime, str(p)))
+            for g in groups.values() if len(g) > 1]
+
+
+def organize(directory, by="year", dest=None, move=False, recursive=False, dry_run=False,
+             duplicates="keep"):
     """Copy (or move) PDFs from ``directory`` into sub-folders of ``dest``
-    grouped by ``by``. Returns a list of (source, destination) pairs."""
+    grouped by ``by``. Returns a list of (source, destination) pairs; a
+    destination of ``None`` means the file was skipped as a duplicate.
+
+    ``duplicates`` decides what happens to a file identical to one already
+    in ``dest`` or earlier in this run: "keep" (organize it anyway),
+    "skip" (leave it where it is) or "folder" (put it in a "Duplicates"
+    sub-folder for review)."""
+    if duplicates not in DUPLICATE_MODES:
+        raise PdfManagerError(f"duplicates must be one of {', '.join(DUPLICATE_MODES)}")
     directory = Path(directory)
     dest = Path(dest) if dest else directory
+    sources = [p for p in find_pdfs(directory, recursive)
+               if not (dest in p.parents and p.parent != directory)]  # organized earlier
+
+    seen = set()
+    if duplicates != "keep":
+        if dest.is_dir() and dest != directory:
+            seen = {file_hash(p) for p in find_pdfs(dest, recursive=True)}
+        elif dest == directory:
+            seen = {file_hash(p) for p in find_pdfs(dest, recursive=True) if p not in sources}
+
     plan = []
     planned = set()
-    for path in find_pdfs(directory, recursive):
-        if dest in path.parents and path.parent != directory:
-            continue  # already organized by a previous run
-        folder = dest / group_name(describe(path), by)
+    for path in sources:
+        folder = None
+        if duplicates != "keep":
+            digest = file_hash(path)
+            if digest in seen:
+                if duplicates == "skip":
+                    plan.append((path, None))
+                    continue
+                folder = dest / "Duplicates"
+            seen.add(digest)
+        if folder is None:
+            folder = dest / group_name(describe(path), by)
         target = folder / path.name
         if target.resolve() == path.resolve():
             continue
@@ -134,30 +189,36 @@ def organize(directory, by="year", dest=None, move=False, recursive=False, dry_r
 
     if not dry_run:
         for src, dst in plan:
+            if dst is None:
+                continue
             dst.parent.mkdir(parents=True, exist_ok=True)
             (shutil.move if move else shutil.copy2)(str(src), str(dst))
     return plan
 
 
+def format_name(record, pattern):
+    """Build a file name (without .pdf) from a ``describe`` record. ``pattern``
+    may use {title}, {author}, {pages}, {date:...} and {stem}."""
+    path = record["path"]
+    fields = {
+        "title": record["title"] or path.stem,
+        "author": record["author"] or "Unknown",
+        "pages": record["pages"] if record["pages"] is not None else 0,
+        "date": record["date"],
+        "stem": path.stem,
+    }
+    try:
+        return _safe(pattern.format(**fields))
+    except (KeyError, ValueError, IndexError) as exc:
+        raise PdfManagerError(f"bad rename pattern {pattern!r}: {exc}") from None
+
+
 def rename(directory, pattern="{date:%Y-%m-%d} {title}", recursive=False, dry_run=False):
-    """Rename PDFs using their metadata. ``pattern`` may use {title},
-    {author}, {pages}, {date:...} and {stem} (the current name)."""
+    """Rename PDFs using their metadata (see ``format_name``)."""
     plan = []
     planned = set()
     for path in find_pdfs(directory, recursive):
-        rec = describe(path)
-        fields = {
-            "title": rec["title"] or path.stem,
-            "author": rec["author"] or "Unknown",
-            "pages": rec["pages"] if rec["pages"] is not None else 0,
-            "date": rec["date"],
-            "stem": path.stem,
-        }
-        try:
-            new_stem = _safe(pattern.format(**fields))
-        except (KeyError, ValueError) as exc:
-            raise PdfManagerError(f"bad rename pattern {pattern!r}: {exc}") from None
-        target = path.with_name(new_stem + ".pdf")
+        target = path.with_name(format_name(describe(path), pattern) + ".pdf")
         if target == path:
             continue
         plan.append((path, _unique(target, planned)))

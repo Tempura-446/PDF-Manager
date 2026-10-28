@@ -277,15 +277,15 @@ def test_cli_end_to_end(tmp_path, doc, capsys):
     assert main(["resize", str(merged), "-s", "letter"]) == 0
     assert page_size(tmp_path / "merged_resized.pdf") == (612, 792)
 
-    assert main(["split", str(merged), "-n", "3", "-d", str(tmp_path / "parts")]) == 0
+    assert main(["split", str(merged), "-n", "3", "-o", str(tmp_path / "parts")]) == 0
     assert len(list((tmp_path / "parts").iterdir())) == 2
 
-    assert main(["crop", str(doc), "10", "-o", str(tmp_path / "c.pdf")]) == 0
+    assert main(["crop", str(doc), "-m", "10", "-o", str(tmp_path / "c.pdf")]) == 0
     assert main(["info", str(doc), "--json"]) == 0
     assert '"pages": 5' in capsys.readouterr().out
 
 
 def test_cli_reports_errors(tmp_path, doc, capsys):
-    assert main(["extract", str(doc), "9"]) == 1
+    assert main(["extract", str(doc), "-p", "9"]) == 1
     assert "out of range" in capsys.readouterr().err
     assert main(["info", str(tmp_path / "missing.pdf")]) == 1

@@ -6,8 +6,10 @@ import os
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter, Transformation
-from pypdf.generic import RectangleObject
+from pypdf.errors import PyPdfError
+from pypdf.generic import ArrayObject, FloatObject, NameObject, NumberObject, RectangleObject
 
+from pdfmanager import imaging
 from pdfmanager.pageranges import parse_page_ranges
 
 POINTS_PER_INCH = 72
@@ -41,12 +43,16 @@ class PdfManagerError(Exception):
 # --------------------------------------------------------------------------
 
 def open_pdf(path, password=None):
-    reader = PdfReader(str(path))
+    try:
+        reader = PdfReader(str(path))
+    except PyPdfError as exc:
+        raise PdfManagerError(f"{path} is not a readable PDF ({exc})") from None
     if reader.is_encrypted:
+        if reader.decrypt(password or ""):
+            return reader  # owner-password-only files open with an empty password
         if password is None:
             raise PdfManagerError(f"{path} is encrypted; supply a password")
-        if not reader.decrypt(password):
-            raise PdfManagerError(f"wrong password for {path}")
+        raise PdfManagerError(f"wrong password for {path}")
     return reader
 
 
@@ -110,6 +116,45 @@ def _page_size(page):
     if (page.rotation or 0) % 180 == 90:
         w, h = h, w
     return w, h
+
+
+def _transform_annotations(page, op):
+    """Move and resize the page's annotations (links, form fields, comments)
+    by ``op`` so they stay on top of the content they belong to."""
+    annots = page.get("/Annots")
+    if annots is None:
+        return
+    for ref in annots.get_object():
+        annot = ref.get_object()
+        rect = annot.get("/Rect")
+        if rect is not None and len(rect) == 4:
+            x1, y1 = op.apply_on((float(rect[0]), float(rect[1])))
+            x2, y2 = op.apply_on((float(rect[2]), float(rect[3])))
+            annot[NameObject("/Rect")] = RectangleObject(
+                [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)])
+        quads = annot.get("/QuadPoints")
+        if quads is not None:
+            points = []
+            for i in range(0, len(quads) - 1, 2):
+                points.extend(op.apply_on((float(quads[i]), float(quads[i + 1]))))
+            annot[NameObject("/QuadPoints")] = ArrayObject(FloatObject(v) for v in points)
+
+
+def _transfer_rotation(page):
+    """Like ``page.transfer_rotation_to_content()`` but also rotates the
+    page's annotations."""
+    rotation = (page.rotation or 0) % 360
+    if not rotation:
+        return
+    box = page.mediabox
+    corners = [(float(box.left), float(box.bottom)), (float(box.right), float(box.top))]
+    rotate = Transformation().rotate(-rotation)
+    turned = [rotate.apply_on(c) for c in corners]
+    page.transfer_rotation_to_content()
+    new = page.mediabox
+    dx = float(new.left) - min(x for x, _ in turned)
+    dy = float(new.bottom) - min(y for _, y in turned)
+    _transform_annotations(page, rotate.translate(dx, dy))
 
 
 def _describe_size(w, h):
@@ -298,7 +343,7 @@ def resize(path, output, size=None, scale=None, fit="fit", pages=None,
         if targets is not None and i not in targets:
             continue
         # Bake any /Rotate into the content so the geometry below is simple.
-        page.transfer_rotation_to_content()
+        _transfer_rotation(page)
         box = page.mediabox
         sw, sh = float(box.width), float(box.height)
         left, bottom = float(box.left), float(box.bottom)
@@ -323,8 +368,8 @@ def resize(path, output, size=None, scale=None, fit="fit", pages=None,
         dy = (th - sh * sy) / 2
         op = Transformation().translate(-left, -bottom).scale(sx, sy).translate(dx, dy)
         page.add_transformation(op)
-        new_box = RectangleObject([0, 0, tw, th])
-        page.mediabox = new_box
+        _transform_annotations(page, op)
+        page.mediabox = RectangleObject([0, 0, tw, th])
         for name in ("/CropBox", "/TrimBox", "/BleedBox", "/ArtBox"):
             if name in page:
                 del page[name]
@@ -367,13 +412,16 @@ def n_up(path, output, per_sheet=2, size="a4", password=None):
 
     # Work on a copy so pages can be normalised without touching the reader.
     source = PdfWriter(clone_from=open_pdf(path, password))
+    page_numbers = {p.indirect_reference.idnum: i for i, p in enumerate(source.pages)}
+    for page in source.pages:
+        _retarget_links(page, page_numbers)
     writer = PdfWriter()
     sheet = None
     for i, src in enumerate(source.pages):
         slot = i % per_sheet
         if slot == 0:
             sheet = writer.add_blank_page(width=sw, height=sh)
-        src.transfer_rotation_to_content()
+        _transfer_rotation(src)
         box = src.mediabox
         pw, ph = float(box.width), float(box.height)
         s = min(cell_w / pw, cell_h / ph) * 0.95
@@ -381,33 +429,120 @@ def n_up(path, output, per_sheet=2, size="a4", password=None):
         x = col * cell_w + (cell_w - pw * s) / 2
         y = sh - (row + 1) * cell_h + (cell_h - ph * s) / 2
         op = Transformation().translate(-float(box.left), -float(box.bottom)).scale(s, s).translate(x, y)
-        sheet.merge_transformed_page(src, op)
+        sheet.merge_transformed_page(src, op)  # also moves the annotations
+    _resolve_links(writer, per_sheet)
     return _write(writer, output)
+
+
+_LINK_TARGET = NameObject("/PdfmTargetPage")
+
+
+def _retarget_links(page, page_numbers):
+    """Replace links to other pages with a placeholder page number, so
+    merging doesn't drag whole pages along; ``_resolve_links`` points them
+    at the right sheet afterwards. Named destinations can't be kept."""
+    annots = page.get("/Annots")
+    if annots is None:
+        return
+    keep = ArrayObject()
+    for ref in annots.get_object():
+        annot = ref.get_object()
+        if annot.get("/Subtype") == "/Link":
+            dest = annot.get("/Dest")
+            action = annot.get("/A")
+            if action is not None and action.get_object().get("/S") == "/GoTo":
+                dest = action.get_object().get("/D")
+            if dest is not None:
+                dest = dest.get_object()
+                target = None
+                if isinstance(dest, ArrayObject) and dest and hasattr(dest[0], "idnum"):
+                    target = page_numbers.get(dest[0].idnum)
+                for key in ("/Dest", "/A"):
+                    if key in annot:
+                        del annot[key]
+                if target is None:
+                    continue  # named or broken destination: drop the link
+                annot[_LINK_TARGET] = NumberObject(target)
+        keep.append(ref)
+    page[NameObject("/Annots")] = keep
+
+
+def _resolve_links(writer, per_sheet):
+    for sheet in writer.pages:
+        for ref in sheet.get("/Annots", ArrayObject()):
+            annot = ref.get_object()
+            if _LINK_TARGET in annot:
+                target = writer.pages[int(annot[_LINK_TARGET]) // per_sheet]
+                annot[NameObject("/Dest")] = ArrayObject(
+                    [target.indirect_reference, NameObject("/Fit")])
+                del annot[_LINK_TARGET]
 
 
 # --------------------------------------------------------------------------
 # File size, security, metadata
 # --------------------------------------------------------------------------
 
-def compress(path, output, image_quality=None, password=None):
-    """Losslessly compress content streams and deduplicate objects.
-    Optionally re-encode images as JPEG at ``image_quality`` (1-95)."""
-    reader = open_pdf(path, password)
-    writer = PdfWriter(clone_from=reader)
+def _finish_compression(writer):
     for page in writer.pages:
         page.compress_content_streams()
-        if image_quality:
-            for img in page.images:
-                try:
-                    img.replace(img.image, quality=image_quality)
-                except Exception:
-                    # Some image types (masks, odd colour spaces) can't be
-                    # re-encoded; leave them untouched.
-                    pass
     try:
         writer.compress_identical_objects(remove_duplicates=True, remove_unreferenced=True)
     except TypeError:  # pypdf < 6
         writer.compress_identical_objects(remove_identicals=True, remove_orphans=True)
+
+
+def compress(path, output, level="medium", image_quality=None, max_dpi=None, password=None):
+    """Reduce file size.
+
+    ``level`` is a preset:
+      - "low":    lossless only (compress streams, remove duplicate objects)
+      - "medium": also downsample images above 150 DPI, JPEG quality 75
+      - "high":   also downsample images above 96 DPI, JPEG quality 50
+                  ("large" is accepted as an alias)
+    ``image_quality`` (1-95) and ``max_dpi`` override the preset's values.
+    Images are only replaced when the new version is smaller.
+    """
+    try:
+        level = imaging.normalize_level(level)
+    except ValueError as exc:
+        raise PdfManagerError(str(exc)) from None
+    preset_dpi, preset_quality = imaging.COMPRESSION_LEVELS[level]
+    max_dpi = preset_dpi if max_dpi is None else max_dpi
+    image_quality = preset_quality if image_quality is None else image_quality
+    if image_quality is not None and not 1 <= image_quality <= 95:
+        raise PdfManagerError("image quality must be between 1 and 95")
+    if max_dpi is not None and max_dpi < 1:
+        raise PdfManagerError("maximum DPI must be at least 1")
+
+    reader = open_pdf(path, password)
+    writer = PdfWriter(clone_from=reader)
+    if max_dpi or image_quality:
+        imaging.downsample_images(writer, max_dpi, image_quality or 85)
+    _finish_compression(writer)
+    return _write(writer, output)
+
+
+def convert_color(path, output, target, icc_profile=None, password=None):
+    """Convert a PDF's colours to ``target`` ("gray", "rgb" or "cmyk").
+
+    Converts colours set in page content and form XObjects with the device,
+    calibrated and ICC-based colour spaces, plus all images. With
+    ``icc_profile`` images are converted through that profile and it is
+    embedded as the document's output intent (e.g. for print shops).
+    Gradients, patterns and spot colours are left unchanged."""
+    if target not in imaging.COLOR_TARGETS:
+        raise PdfManagerError(f"colour target must be one of {', '.join(imaging.COLOR_TARGETS)}")
+    if icc_profile and not Path(icc_profile).is_file():
+        raise PdfManagerError(f"ICC profile not found: {icc_profile}")
+    reader = open_pdf(path, password)
+    writer = PdfWriter(clone_from=reader)
+    from PIL import ImageCms
+
+    try:
+        imaging.convert_colors(writer, target, icc_profile)
+    except (OSError, ImageCms.PyCMSError) as exc:  # unreadable or wrong-type ICC profile
+        raise PdfManagerError(f"cannot use ICC profile {icc_profile}: {exc}") from None
+    _finish_compression(writer)
     return _write(writer, output)
 
 
@@ -559,6 +694,47 @@ def images_to_pdf(images, output, size=None, margin=0):
             c.drawImage(ImageReader(im), x, y, width=dw, height=dh)
             c.showPage()
     c.save()
+    return output
+
+
+def ocr(path, output, language="eng", force=False, deskew=False, password=None):
+    """Add a searchable, selectable text layer to scanned pages.
+
+    Needs the optional ``ocrmypdf`` package and the Tesseract program.
+    Pages that already have text are left alone unless ``force`` is set, in
+    which case they are rasterised and recognised again. ``language`` uses
+    Tesseract codes, joined with '+' for several (e.g. "eng+deu")."""
+    try:
+        import ocrmypdf
+        from ocrmypdf.exceptions import ExitCodeException, MissingDependencyError
+    except ImportError:
+        raise PdfManagerError(
+            "OCR needs OCRmyPDF and Tesseract: pip install ocrmypdf, then install "
+            "Tesseract (https://tesseract-ocr.github.io/tessdoc/Installation.html)"
+        ) from None
+    source = Path(path)
+    tmp_in = None
+    if password is not None or PdfReader(str(path)).is_encrypted:
+        # OCRmyPDF can't open encrypted files; give it a decrypted copy.
+        tmp_in = Path(output).with_name(Path(output).name + ".src.tmp.pdf")
+        decrypt(path, tmp_in, password or "")
+        source = tmp_in
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    tmp_out = output.with_name(output.name + ".tmp.pdf")
+    try:
+        ocrmypdf.ocr(str(source), str(tmp_out), language=language.split("+"),
+                     skip_text=not force, force_ocr=force, deskew=deskew,
+                     progress_bar=False)
+        os.replace(tmp_out, output)
+    except MissingDependencyError as exc:
+        raise PdfManagerError(f"OCR is missing a program: {exc}") from None
+    except ExitCodeException as exc:
+        raise PdfManagerError(f"OCR failed: {exc}") from None
+    finally:
+        for tmp in (tmp_in, tmp_out):
+            if tmp is not None and tmp.exists():
+                tmp.unlink()
     return output
 
 

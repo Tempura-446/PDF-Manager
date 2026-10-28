@@ -2,19 +2,25 @@
 
 import argparse
 import getpass
+import glob
 import json
+import logging
+import os
 import sys
 from pathlib import Path
 
-from pdfmanager import __version__, core, organize
+from pypdf import PdfReader
+
+from pdfmanager import __version__, core, imaging, organize
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
+PASSWORD_ENV = "PDFM_PASSWORD"
 
 
-def _default_output(path, suffix):
+def _default_output(path, suffix, ext=".pdf"):
     p = Path(path)
-    return p.with_name(f"{p.stem}_{suffix}.pdf")
+    return p.with_name(f"{p.stem}_{suffix}{ext}")
 
 
 def _human_size(n):
@@ -26,9 +32,283 @@ def _human_size(n):
 
 def _print_plan(plan, verb, dry_run):
     for src, dst in plan:
-        print(f"{'would ' + verb if dry_run else verb}: {src} -> {dst}")
-    print(f"{len(plan)} file(s) {'to ' + verb if dry_run else 'done'}")
+        if dst is None:
+            print(f"{'would skip' if dry_run else 'skipped'} duplicate: {src}")
+        else:
+            print(f"{'would ' + verb if dry_run else verb}: {src} -> {dst}")
+    count = sum(1 for _, dst in plan if dst is not None)
+    print(f"{count} file(s) {'to ' + verb if dry_run else 'done'}")
 
+
+def _expand(patterns):
+    """Expand wildcards ourselves so `*.pdf` also works on Windows."""
+    paths = []
+    for pattern in patterns:
+        matches = sorted(glob.glob(pattern)) if glob.has_magic(pattern) else []
+        if glob.has_magic(pattern) and not matches:
+            raise core.PdfManagerError(f"no files match {pattern!r}")
+        paths.extend(matches or [pattern])
+    return paths
+
+
+# --------------------------------------------------------------------------
+# Passwords
+# --------------------------------------------------------------------------
+
+class _Passwords:
+    """Find the password for each encrypted input: --password, then the
+    PDFM_PASSWORD environment variable, then passwords already typed in
+    this run, then an interactive prompt. Passwords given on the command
+    line end up in shell history, so prompting is preferred."""
+
+    def __init__(self, given):
+        self.known = [p for p in (given, os.environ.get(PASSWORD_ENV)) if p]
+
+    def for_file(self, path):
+        try:
+            reader = PdfReader(str(path))
+        except Exception:
+            return None  # let the command report the real error
+        if not reader.is_encrypted:
+            return None
+        for candidate in ["", *self.known]:
+            if reader.decrypt(candidate):
+                return candidate
+        if not sys.stdin.isatty():
+            raise core.PdfManagerError(
+                f"{path} is encrypted; pass --password or set {PASSWORD_ENV}")
+        for _ in range(3):
+            candidate = getpass.getpass(f"Password for {Path(path).name}: ")
+            if reader.decrypt(candidate):
+                self.known.append(candidate)
+                return candidate
+            print("wrong password", file=sys.stderr)
+        raise core.PdfManagerError(f"wrong password for {path}")
+
+
+def _ask_new_password():
+    pw = getpass.getpass("New password: ")
+    if getpass.getpass("Repeat password: ") != pw:
+        raise core.PdfManagerError("passwords do not match")
+    if not pw:
+        raise core.PdfManagerError("password must not be empty")
+    return pw
+
+
+# --------------------------------------------------------------------------
+# Per-file commands. Each takes (args, input path, output path, password).
+# --------------------------------------------------------------------------
+
+def run_extract(a, src, out, pw):
+    return core.select_pages(src, out, a.pages, pw)
+
+
+def run_delete(a, src, out, pw):
+    return core.delete_pages(src, out, a.pages, pw)
+
+
+def run_reorder(a, src, out, pw):
+    return core.select_pages(src, out, a.order, pw)
+
+
+def run_reverse(a, src, out, pw):
+    return core.reverse(src, out, pw)
+
+
+def run_rotate(a, src, out, pw):
+    return core.rotate(src, out, a.degrees, a.pages, pw)
+
+
+def run_resize(a, src, out, pw):
+    return core.resize(src, out, size=a.size, scale=a.scale, fit=a.fit, pages=a.pages,
+                       auto_orient=not a.keep_orientation, password=pw)
+
+
+def _crop_margins(values):
+    vals = [float(v) * core.POINTS_PER_MM for v in values]
+    if len(vals) == 1:
+        return vals * 4
+    if len(vals) == 2:  # vertical, horizontal (like CSS)
+        return [vals[1], vals[0], vals[1], vals[0]]
+    if len(vals) == 4:  # top right bottom left (CSS order) -> left bottom right top
+        t, r, b, l = vals
+        return [l, b, r, t]
+    raise core.PdfManagerError("give 1, 2 or 4 margin values")
+
+
+def run_crop(a, src, out, pw):
+    return core.crop(src, out, _crop_margins(a.margins), a.pages, pw)
+
+
+def run_nup(a, src, out, pw):
+    return core.n_up(src, out, a.per_sheet, a.size, pw)
+
+
+def run_compress(a, src, out, pw):
+    result = core.compress(src, out, level=a.level, image_quality=a.image_quality,
+                           max_dpi=a.max_dpi, password=pw)
+    before, after = Path(src).stat().st_size, Path(result).stat().st_size
+    pct = (1 - after / before) * 100 if before else 0
+    return f"{result}  ({_human_size(before)} -> {_human_size(after)}, {pct:.1f}% smaller)"
+
+
+def run_color(a, src, out, pw):
+    return core.convert_color(src, out, a.to, a.icc, pw)
+
+
+def run_encrypt(a, src, out, pw):
+    return core.encrypt(src, out, a.user_password, a.owner_password, pw)
+
+
+def run_decrypt(a, src, out, pw):
+    if pw is None:
+        raise core.PdfManagerError(f"{src} is not encrypted")
+    return core.decrypt(src, out, pw)
+
+
+def run_metadata(a, src, out, pw):
+    fields = dict(title=a.title, author=a.author, subject=a.subject, keywords=a.keywords)
+    if all(v is None for v in fields.values()):
+        _print_info(core.info(src, pw))
+        return None
+    return core.set_metadata(src, out, pw, **fields)
+
+
+def run_watermark(a, src, out, pw):
+    return core.watermark(src, out, text=a.text, stamp_pdf=a.stamp, opacity=a.opacity,
+                          font_size=a.font_size, angle=a.angle, pages=a.pages,
+                          below=a.below, password=pw)
+
+
+def run_number(a, src, out, pw):
+    return core.number_pages(src, out, fmt=a.format, position=a.position,
+                             font_size=a.font_size, start=a.start, pages=a.pages, password=pw)
+
+
+def run_ocr(a, src, out, pw):
+    return core.ocr(src, out, language=a.language, force=a.force, deskew=a.deskew, password=pw)
+
+
+def run_text(a, src, out, pw):
+    text = core.extract_text(src, out, a.pages, pw)
+    if out is None:
+        print(text)
+        return None
+    return out
+
+
+def run_split(a, src, out, pw):
+    files = core.split(src, out, every=a.every, ranges=a.ranges, prefix=a.prefix, password=pw)
+    for f in files if pw else ():
+        _reencrypt(f, pw)
+    return f"{len(files)} file(s) in {out}"
+
+
+def run_to_images(a, src, out, pw):
+    files = core.pdf_to_images(src, out, a.dpi, a.format, a.pages, pw)
+    return f"{len(files)} image(s) in {out}"
+
+
+def _print_info(data):
+    print(f"{data['file']}")
+    print(f"  pages:     {data['pages']}")
+    print(f"  file size: {_human_size(data['file_size'])}")
+    print("  page size: " + ", ".join(f"{k} ({v})" for k, v in data["page_sizes"].items()))
+    for key in ("title", "author", "subject", "creator", "producer", "created", "modified"):
+        if data[key]:
+            print(f"  {key + ':':10} {data[key]}")
+    if data["encrypted"]:
+        print("  encrypted: yes")
+
+
+def run_info(a, src, out, pw):
+    data = core.info(src, pw)
+    if a.json:
+        print(json.dumps(data, default=str, indent=2))
+    else:
+        _print_info(data)
+
+
+# How each per-file command names its output when -o is not given:
+# (suffix, kind) where kind is "pdf", "dir", "txt" or None (no output).
+OUTPUTS = {
+    "info": (None, None), "metadata": ("edited", "pdf"), "text": (None, "txt"),
+    "extract": ("extract", "pdf"), "delete": ("edited", "pdf"),
+    "reorder": ("reordered", "pdf"), "reverse": ("reversed", "pdf"),
+    "rotate": ("rotated", "pdf"), "resize": ("resized", "pdf"), "crop": ("cropped", "pdf"),
+    "nup": ("nup", "pdf"), "compress": ("compressed", "pdf"), "color": ("color", "pdf"),
+    "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
+    "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"),
+    "split": ("split", "dir"), "to-images": ("images", "dir"),
+}
+
+
+def _output_for(a, src, batch):
+    suffix, kind = OUTPUTS[a.command]
+    if kind is None:
+        return None
+    if a.command == "metadata" and a.output is None:
+        return src  # metadata edits happen in place by default
+    if a.command == "text" and a.output is None:
+        return None  # print to the terminal
+    src = Path(src)
+    if kind == "dir":
+        base = Path(a.output) if a.output else src.parent
+        return base / f"{src.stem}_{suffix}" if (batch or not a.output) else base
+    if not batch:
+        return Path(a.output) if a.output else _default_output(src, suffix)
+    if a.output:  # batch: -o is a folder; keep the original file names
+        folder = Path(a.output)
+        if folder.exists() and not folder.is_dir():
+            raise core.PdfManagerError("with several input files, -o must be a folder")
+        folder.mkdir(parents=True, exist_ok=True)
+        if folder.resolve() != src.parent.resolve():
+            return folder / (src.stem + (".txt" if kind == "txt" else ".pdf"))
+    return _default_output(src, suffix, ".txt" if kind == "txt" else ".pdf")
+
+
+# Commands whose output should not inherit the input's password.
+# (split re-encrypts its own output files.)
+KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split"}
+
+
+def _reencrypt(out, password):
+    """Outputs made from a password-protected file get the same password,
+    so editing a protected PDF never silently produces an unprotected one."""
+    core.encrypt(out, out, password)
+
+
+def run_per_file(a):
+    inputs = _expand(a.inputs)
+    batch = len(inputs) > 1
+    passwords = _Passwords(a.password)
+    if a.command == "encrypt" and not a.user_password:
+        a.user_password = _ask_new_password()
+    failures = 0
+    for src in inputs:
+        try:
+            out = _output_for(a, src, batch)
+            pw = passwords.for_file(src)
+            result = a.run(a, src, out, pw)
+            if pw and a.command not in KEEP_UNENCRYPTED and result is not None:
+                _reencrypt(out, pw)
+            if result is not None:
+                print(f"{src} -> {result}" if batch else f"-> {result}")
+        except (core.PdfManagerError, PageRangeError, FileNotFoundError, OSError) as exc:
+            if not batch:
+                raise
+            failures += 1
+            message = str(exc)
+            print(f"error: {message if str(src) in message else f'{src}: {message}'}",
+                  file=sys.stderr)
+    if batch:
+        print(f"{len(inputs) - failures} of {len(inputs)} file(s) done")
+    return 1 if failures else 0
+
+
+# --------------------------------------------------------------------------
+# Multi-input and folder commands
+# --------------------------------------------------------------------------
 
 def _merge_inputs(items):
     """Accept 'file.pdf' or 'file.pdf:1-3' for per-file page selection."""
@@ -38,173 +318,41 @@ def _merge_inputs(items):
         if sep and spec and not Path(item).exists() and Path(path).exists():
             result.append((path, spec))
         else:
-            result.append(item)
+            result.extend(_expand([item]))
     return result
 
 
-def cmd_info(a):
-    for path in a.files:
-        data = core.info(path, a.password)
-        if a.json:
-            print(json.dumps(data, default=str, indent=2))
-            continue
-        print(f"{data['file']}")
-        print(f"  pages:     {data['pages']}")
-        print(f"  file size: {_human_size(data['file_size'])}")
-        print("  page size: " + ", ".join(f"{k} ({v})" for k, v in data["page_sizes"].items()))
-        for key in ("title", "author", "subject", "creator", "producer", "created", "modified"):
-            if data[key]:
-                print(f"  {key + ':':10} {data[key]}")
-        if data["encrypted"]:
-            print("  encrypted: yes")
-
-
 def cmd_merge(a):
-    out = core.merge(_merge_inputs(a.inputs), a.output, bookmarks=not a.no_bookmarks,
-                     password=a.password)
-    print(f"merged {len(a.inputs)} file(s) -> {out}")
-
-
-def cmd_split(a):
-    files = core.split(a.input, a.outdir or Path(a.input).stem + "_split", every=a.every,
-                       ranges=a.ranges, prefix=a.prefix, password=a.password)
-    for f in files:
-        print(f)
-    print(f"wrote {len(files)} file(s)")
-
-
-def cmd_extract(a):
-    out = core.select_pages(a.input, a.output or _default_output(a.input, "extract"), a.pages,
-                            a.password)
-    print(f"-> {out}")
-
-
-def cmd_delete(a):
-    out = core.delete_pages(a.input, a.output or _default_output(a.input, "edited"), a.pages,
-                            a.password)
-    print(f"-> {out}")
-
-
-def cmd_reorder(a):
-    out = core.select_pages(a.input, a.output or _default_output(a.input, "reordered"), a.order,
-                            a.password)
-    print(f"-> {out}")
-
-
-def cmd_reverse(a):
-    print(f"-> {core.reverse(a.input, a.output or _default_output(a.input, 'reversed'), a.password)}")
+    inputs = _merge_inputs(a.inputs)
+    passwords = _Passwords(a.password)
+    # All inputs share one password argument in core.merge; check each up front.
+    pws = {passwords.for_file(i[0] if isinstance(i, tuple) else i) for i in inputs} - {None}
+    if len(pws) > 1:
+        raise core.PdfManagerError("encrypted inputs use different passwords; decrypt them first")
+    pw = pws.pop() if pws else None
+    out = core.merge(inputs, a.output, bookmarks=not a.no_bookmarks, password=pw)
+    if pw:
+        _reencrypt(out, pw)
+    print(f"merged {len(inputs)} file(s) -> {out}")
 
 
 def cmd_interleave(a):
-    print(f"-> {core.interleave(a.front, a.back, a.output, not a.no_reverse, a.password)}")
-
-
-def cmd_rotate(a):
-    out = core.rotate(a.input, a.output or _default_output(a.input, "rotated"), a.degrees,
-                      a.pages, a.password)
+    passwords = _Passwords(a.password)
+    pw = passwords.for_file(a.front) or passwords.for_file(a.back)
+    out = core.interleave(a.front, a.back, a.output, not a.no_reverse, pw)
+    if pw:
+        _reencrypt(out, pw)
     print(f"-> {out}")
-
-
-def cmd_resize(a):
-    out = core.resize(a.input, a.output or _default_output(a.input, "resized"), size=a.size,
-                      scale=a.scale, fit=a.fit, pages=a.pages,
-                      auto_orient=not a.keep_orientation, password=a.password)
-    print(f"-> {out}")
-
-
-def cmd_crop(a):
-    vals = [float(v) * core.POINTS_PER_MM for v in a.margins]
-    if len(vals) == 1:
-        vals *= 4
-    elif len(vals) == 2:  # vertical, horizontal (like CSS)
-        vals = [vals[1], vals[0], vals[1], vals[0]]
-    elif len(vals) != 4:
-        raise core.PdfManagerError("give 1, 2 or 4 margin values")
-    else:  # top right bottom left (CSS order) -> left bottom right top
-        t, r, b, l = vals
-        vals = [l, b, r, t]
-    out = core.crop(a.input, a.output or _default_output(a.input, "cropped"), vals, a.pages,
-                    a.password)
-    print(f"-> {out}")
-
-
-def cmd_nup(a):
-    out = core.n_up(a.input, a.output or _default_output(a.input, f"{a.per_sheet}up"),
-                    a.per_sheet, a.size, a.password)
-    print(f"-> {out}")
-
-
-def cmd_compress(a):
-    out = core.compress(a.input, a.output or _default_output(a.input, "compressed"),
-                        a.image_quality, a.password)
-    before, after = Path(a.input).stat().st_size, Path(out).stat().st_size
-    pct = (1 - after / before) * 100 if before else 0
-    print(f"-> {out}  ({_human_size(before)} -> {_human_size(after)}, {pct:.0f}% smaller)")
-
-
-def _ask_password(prompt, confirm=False):
-    pw = getpass.getpass(prompt)
-    if confirm and getpass.getpass("Repeat password: ") != pw:
-        raise core.PdfManagerError("passwords do not match")
-    return pw
-
-
-def cmd_encrypt(a):
-    user_pw = a.user_password or _ask_password("New password: ", confirm=True)
-    out = core.encrypt(a.input, a.output or _default_output(a.input, "encrypted"), user_pw,
-                       a.owner_password, a.password)
-    print(f"-> {out}")
-
-
-def cmd_decrypt(a):
-    pw = a.password or _ask_password("Password: ")
-    print(f"-> {core.decrypt(a.input, a.output or _default_output(a.input, 'decrypted'), pw)}")
-
-
-def cmd_metadata(a):
-    fields = dict(title=a.title, author=a.author, subject=a.subject, keywords=a.keywords)
-    if not any(v is not None for v in fields.values()):
-        return cmd_info(argparse.Namespace(files=[a.input], password=a.password, json=False))
-    out = core.set_metadata(a.input, a.output or a.input, a.password, **fields)
-    print(f"-> {out}")
-
-
-def cmd_watermark(a):
-    out = core.watermark(a.input, a.output or _default_output(a.input, "watermarked"),
-                         text=a.text, stamp_pdf=a.stamp, opacity=a.opacity,
-                         font_size=a.font_size, angle=a.angle, pages=a.pages,
-                         below=a.below, password=a.password)
-    print(f"-> {out}")
-
-
-def cmd_number(a):
-    out = core.number_pages(a.input, a.output or _default_output(a.input, "numbered"),
-                            fmt=a.format, position=a.position, font_size=a.font_size,
-                            start=a.start, pages=a.pages, password=a.password)
-    print(f"-> {out}")
-
-
-def cmd_text(a):
-    text = core.extract_text(a.input, a.output, a.pages, a.password)
-    if a.output:
-        print(f"-> {a.output}")
-    else:
-        print(text)
 
 
 def cmd_from_images(a):
     margin = a.margin * core.POINTS_PER_MM
-    print(f"-> {core.images_to_pdf(a.images, a.output, a.size, margin)}")
-
-
-def cmd_to_images(a):
-    files = core.pdf_to_images(a.input, a.outdir or Path(a.input).stem + "_images", a.dpi,
-                               a.format, a.pages, a.password)
-    print(f"wrote {len(files)} image(s) to {files[0].parent if files else a.outdir}")
+    print(f"-> {core.images_to_pdf(_expand(a.images), a.output, a.size, margin)}")
 
 
 def cmd_organize(a):
-    plan = organize.organize(a.directory, a.by, a.dest, a.move, a.recursive, a.dry_run)
+    plan = organize.organize(a.directory, a.by, a.dest, a.move, a.recursive, a.dry_run,
+                             a.duplicates)
     _print_plan(plan, "move" if a.move else "copy", a.dry_run)
 
 
@@ -218,66 +366,122 @@ def cmd_catalog(a):
     print(f"catalogued {count} PDF(s) -> {out}")
 
 
+def cmd_duplicates(a):
+    groups = organize.find_duplicates(a.directory, a.recursive)
+    removed = 0
+    for group in groups:
+        keep, *extra = group
+        print(f"keep:      {keep}")
+        for path in extra:
+            if a.delete:
+                path.unlink()
+                removed += 1
+                print(f"deleted:   {path}")
+            else:
+                print(f"duplicate: {path}")
+    if not groups:
+        print("no duplicates found")
+    elif a.delete:
+        print(f"deleted {removed} duplicate(s)")
+    else:
+        print(f"{sum(len(g) - 1 for g in groups)} duplicate(s); use --delete to remove them "
+              "(the oldest copy is kept)")
+
+
+def cmd_watch(a):
+    from pdfmanager import watch
+
+    settings = watch.WatchSettings(
+        inbox=a.inbox, dest=a.dest, by=a.by, rename=a.rename, compress=a.compress,
+        ocr=a.ocr, ocr_language=a.language, skip_duplicates=a.skip_duplicates,
+        keep_originals=not a.delete_originals)
+    if a.once:
+        state = watch._State()
+        watch.poll(settings, state)  # first poll only records sizes
+        watch.poll(settings, state)
+        return
+    watch.watch(settings, interval=a.interval)
+
+
+def cmd_gui(a):
+    from pdfmanager import gui
+
+    gui.serve(port=a.port, open_browser=not a.no_browser)
+
+
+# --------------------------------------------------------------------------
+# Parser
+# --------------------------------------------------------------------------
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="pdfm",
-        description="Manage PDF files: merge, split, resize, rotate, compress, organize and more.",
+        description="Manage PDF files: merge, split, resize, rotate, compress, convert "
+                    "colours, OCR, organize and more. Run `pdfm gui` for a graphical app.",
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
-    def add(name, func, help_, *, inp=True, out=True):
+    def per_file(name, run, help_, out_help=None):
+        """A command that processes one or more input PDFs independently."""
         sp = sub.add_parser(name, help=help_, description=help_)
-        if inp:
-            sp.add_argument("input", help="input PDF")
-        if out:
-            sp.add_argument("-o", "--output", help="output PDF (default: <input>_<command>.pdf)")
-        sp.add_argument("--password", help="password for encrypted input")
+        sp.add_argument("inputs", nargs="+", metavar="input",
+                        help="input PDF(s); wildcards like *.pdf are allowed")
+        sp.add_argument("-o", "--output", help=out_help or (
+            "output file (default: <input>_<command>.pdf); with several inputs, "
+            "a folder to write them into"))
+        sp.add_argument("--password", help=f"password for encrypted input (better: let pdfm "
+                                           f"prompt, or set {PASSWORD_ENV})")
+        sp.set_defaults(func=run_per_file, run=run)
+        return sp
+
+    def other(name, func, help_):
+        sp = sub.add_parser(name, help=help_, description=help_)
         sp.set_defaults(func=func)
         return sp
 
-    sp = add("info", cmd_info, "show page count, sizes and metadata", inp=False, out=False)
-    sp.add_argument("files", nargs="+")
+    sp = per_file("info", run_info, "show page count, sizes and metadata")
     sp.add_argument("--json", action="store_true", help="print JSON")
 
-    sp = add("merge", cmd_merge, "combine PDFs into one", inp=False, out=False)
+    sp = other("merge", cmd_merge, "combine PDFs into one")
     sp.add_argument("inputs", nargs="+", help="PDFs to merge; use file.pdf:1-3 to pick pages")
     sp.add_argument("-o", "--output", required=True)
     sp.add_argument("--no-bookmarks", action="store_true",
                     help="don't add a bookmark for each merged file")
+    sp.add_argument("--password")
 
-    sp = add("split", cmd_split, "split a PDF into several files", out=False)
-    sp.add_argument("-d", "--outdir", help="output directory (default: <input>_split)")
+    sp = per_file("split", run_split, "split a PDF into several files",
+                  out_help="output folder (default: <input>_split)")
     g = sp.add_mutually_exclusive_group()
     g.add_argument("-n", "--every", type=int, help="pages per output file (default: 1)")
     g.add_argument("-r", "--ranges", nargs="+", metavar="RANGE",
                    help="one output file per range, e.g. -r 1-3 4-10 11-")
     sp.add_argument("--prefix", help="output filename prefix (default: input name)")
 
-    sp = add("extract", cmd_extract, "copy selected pages into a new PDF")
-    sp.add_argument("pages", help=PAGES_HELP)
+    sp = per_file("extract", run_extract, "copy selected pages into a new PDF")
+    sp.add_argument("-p", "--pages", required=True, help=PAGES_HELP)
 
-    sp = add("delete", cmd_delete, "remove pages")
-    sp.add_argument("pages", help=PAGES_HELP)
+    sp = per_file("delete", run_delete, "remove pages")
+    sp.add_argument("-p", "--pages", required=True, help=PAGES_HELP)
 
-    sp = add("reorder", cmd_reorder, "rearrange pages (pages can be repeated or dropped)")
-    sp.add_argument("order", help="new page order, e.g. '3,1,2,4-'")
+    sp = per_file("reorder", run_reorder, "rearrange pages (pages can be repeated or dropped)")
+    sp.add_argument("--order", required=True, help="new page order, e.g. '3,1,2,4-'")
 
-    add("reverse", cmd_reverse, "reverse page order")
+    per_file("reverse", run_reverse, "reverse page order")
 
-    sp = add("interleave", cmd_interleave,
-             "merge separately scanned front and back sides", inp=False, out=False)
+    sp = other("interleave", cmd_interleave, "merge separately scanned front and back sides")
     sp.add_argument("front")
     sp.add_argument("back")
     sp.add_argument("-o", "--output", required=True)
     sp.add_argument("--no-reverse", action="store_true",
                     help="back pages are already in order (not reversed)")
+    sp.add_argument("--password")
 
-    sp = add("rotate", cmd_rotate, "rotate pages")
-    sp.add_argument("degrees", type=int, help="90, 180, 270 or -90")
+    sp = per_file("rotate", run_rotate, "rotate pages")
+    sp.add_argument("-d", "--degrees", type=int, required=True, help="90, 180, 270 or -90")
     sp.add_argument("-p", "--pages", help=PAGES_HELP + " (default: all)")
 
-    sp = add("resize", cmd_resize, "change page size (e.g. to A4 or Letter) or scale pages")
+    sp = per_file("resize", run_resize, "change page size (e.g. to A4 or Letter) or scale pages")
     g = sp.add_mutually_exclusive_group(required=True)
     g.add_argument("-s", "--size",
                    help="a4, a3, a5, letter, legal, ..., '210x297mm', '8.5x11in'; "
@@ -289,32 +493,44 @@ def build_parser():
                     help="don't rotate the target size to match landscape pages")
     sp.add_argument("-p", "--pages", help=PAGES_HELP + " (default: all)")
 
-    sp = add("crop", cmd_crop, "trim page margins")
-    sp.add_argument("margins", nargs="+",
+    sp = per_file("crop", run_crop, "trim page margins")
+    sp.add_argument("-m", "--margins", nargs="+", required=True, metavar="MM",
                     help="margins in mm: ALL | VERTICAL HORIZONTAL | TOP RIGHT BOTTOM LEFT")
     sp.add_argument("-p", "--pages", help=PAGES_HELP + " (default: all)")
 
-    sp = add("nup", cmd_nup, "print several pages per sheet")
+    sp = per_file("nup", run_nup, "print several pages per sheet")
     sp.add_argument("-n", "--per-sheet", type=int, default=2, choices=[2, 4, 6, 8, 9])
     sp.add_argument("-s", "--size", default="a4", help="sheet size (default: a4)")
 
-    sp = add("compress", cmd_compress, "reduce file size")
+    sp = per_file("compress", run_compress, "reduce file size")
+    sp.add_argument("-l", "--level", default="medium",
+                    choices=["low", "medium", "high", "large"],
+                    help="low: lossless only; medium (default): images max 150 DPI, "
+                         "JPEG quality 75; high/large: images max 96 DPI, quality 50")
     sp.add_argument("-q", "--image-quality", type=int, metavar="1-95",
-                    help="also re-encode images as JPEG at this quality (lossy)")
+                    help="override the level's JPEG quality")
+    sp.add_argument("--max-dpi", type=int, help="override the level's image resolution")
 
-    sp = add("encrypt", cmd_encrypt, "password-protect a PDF (AES-256)")
+    sp = per_file("color", run_color, "convert colours to grayscale, RGB or CMYK")
+    sp.add_argument("--to", required=True, choices=imaging.COLOR_TARGETS)
+    sp.add_argument("--icc", metavar="PROFILE.icc",
+                    help="convert images through this ICC profile and embed it as the "
+                         "output intent (e.g. your printer's CMYK profile)")
+
+    sp = per_file("encrypt", run_encrypt, "password-protect PDFs (AES-256)")
     sp.add_argument("--user-password", help="password to open (prompted if omitted)")
     sp.add_argument("--owner-password", help="password for full permissions")
 
-    add("decrypt", cmd_decrypt, "remove password protection")
+    per_file("decrypt", run_decrypt, "remove password protection")
 
-    sp = add("metadata", cmd_metadata, "show or set title/author/subject/keywords")
+    sp = per_file("metadata", run_metadata, "show or set title/author/subject/keywords",
+                  out_help="output file (default: edit in place)")
     sp.add_argument("--title")
     sp.add_argument("--author")
     sp.add_argument("--subject")
     sp.add_argument("--keywords")
 
-    sp = add("watermark", cmd_watermark, "stamp text or another PDF onto pages")
+    sp = per_file("watermark", run_watermark, "stamp text or another PDF onto pages")
     g = sp.add_mutually_exclusive_group(required=True)
     g.add_argument("-t", "--text", help="watermark text, e.g. CONFIDENTIAL")
     g.add_argument("--stamp", help="PDF whose first page is overlaid")
@@ -324,7 +540,7 @@ def build_parser():
     sp.add_argument("--below", action="store_true", help="place under the page content")
     sp.add_argument("-p", "--pages", help=PAGES_HELP + " (default: all)")
 
-    sp = add("number", cmd_number, "add page numbers")
+    sp = per_file("number", run_number, "add page numbers")
     sp.add_argument("--format", default="{n} / {total}", help="default: '{n} / {total}'")
     sp.add_argument("--position", default="bottom-center",
                     choices=["bottom-center", "bottom-right", "bottom-left",
@@ -333,55 +549,86 @@ def build_parser():
     sp.add_argument("--start", type=int, default=1, help="first number (default: 1)")
     sp.add_argument("-p", "--pages", help=PAGES_HELP + " (default: all)")
 
-    sp = add("text", cmd_text, "extract text", out=False)
-    sp.add_argument("-o", "--output", help="write to a .txt file instead of the terminal")
+    sp = per_file("ocr", run_ocr, "make scanned PDFs searchable (needs OCRmyPDF + Tesseract)")
+    sp.add_argument("--language", default="eng", help="Tesseract language(s), e.g. eng+deu")
+    sp.add_argument("--force", action="store_true", help="redo pages that already have text")
+    sp.add_argument("--deskew", action="store_true", help="straighten crooked scans")
+
+    sp = per_file("text", run_text, "extract text",
+                  out_help="write to a .txt file instead of the terminal")
     sp.add_argument("-p", "--pages", help=PAGES_HELP)
 
-    sp = add("from-images", cmd_from_images, "save images (JPG, PNG, ...) as a PDF",
-             inp=False, out=False)
+    sp = other("from-images", cmd_from_images, "save images (JPG, PNG, ...) as a PDF")
     sp.add_argument("images", nargs="+")
     sp.add_argument("-o", "--output", required=True)
     sp.add_argument("-s", "--size", help="fit images onto this paper size (default: image size)")
     sp.add_argument("--margin", type=float, default=0, help="margin in mm")
 
-    sp = add("to-images", cmd_to_images, "render pages to image files", out=False)
-    sp.add_argument("-d", "--outdir", help="output directory (default: <input>_images)")
+    sp = per_file("to-images", run_to_images, "render pages to image files",
+                  out_help="output folder (default: <input>_images)")
     sp.add_argument("--dpi", type=int, default=150)
     sp.add_argument("-f", "--format", default="png", help="png, jpg, ... (default: png)")
     sp.add_argument("-p", "--pages", help=PAGES_HELP)
 
-    sp = add("organize", cmd_organize, "sort PDFs in a folder into sub-folders",
-             inp=False, out=False)
+    sp = other("organize", cmd_organize, "sort PDFs in a folder into sub-folders")
     sp.add_argument("directory")
     sp.add_argument("--by", choices=organize.GROUPINGS, default="year")
     sp.add_argument("--dest", help="where to create the sub-folders (default: the directory)")
     sp.add_argument("--move", action="store_true", help="move files instead of copying")
+    sp.add_argument("--duplicates", choices=organize.DUPLICATE_MODES, default="keep",
+                    help="what to do with files identical to one already organized: keep "
+                         "(default), skip, or folder (put in a Duplicates folder)")
     sp.add_argument("-R", "--recursive", action="store_true")
     sp.add_argument("-n", "--dry-run", action="store_true", help="only show what would happen")
 
-    sp = add("rename", cmd_rename, "rename PDFs from their metadata", inp=False, out=False)
+    sp = other("rename", cmd_rename, "rename PDFs from their metadata")
     sp.add_argument("directory")
     sp.add_argument("--pattern", default="{date:%Y-%m-%d} {title}",
                     help="fields: {title} {author} {pages} {date:%%Y-%%m-%%d} {stem}")
     sp.add_argument("-R", "--recursive", action="store_true")
     sp.add_argument("-n", "--dry-run", action="store_true")
 
-    sp = add("catalog", cmd_catalog, "write a CSV inventory of a folder of PDFs",
-             inp=False, out=False)
+    sp = other("catalog", cmd_catalog, "write a CSV inventory of a folder of PDFs")
     sp.add_argument("directory")
     sp.add_argument("-o", "--output", default="catalog.csv")
     sp.add_argument("-R", "--recursive", action="store_true")
+
+    sp = other("duplicates", cmd_duplicates, "find identical PDFs in a folder")
+    sp.add_argument("directory")
+    sp.add_argument("-R", "--recursive", action="store_true")
+    sp.add_argument("--delete", action="store_true", help="delete all but the oldest copy")
+
+    sp = other("watch", cmd_watch,
+               "watch an inbox folder and process new PDFs automatically")
+    sp.add_argument("inbox")
+    sp.add_argument("--dest", required=True, help="where processed files go")
+    sp.add_argument("--by", choices=organize.GROUPINGS, help="sort into sub-folders")
+    sp.add_argument("--rename", metavar="PATTERN", help="rename, e.g. '{date:%%Y-%%m-%%d} {title}'")
+    sp.add_argument("--compress", choices=["low", "medium", "high", "large"])
+    sp.add_argument("--ocr", action="store_true", help="make scans searchable")
+    sp.add_argument("--language", default="eng", help="OCR language(s)")
+    sp.add_argument("--skip-duplicates", action="store_true",
+                    help="don't process files identical to one already in --dest")
+    sp.add_argument("--delete-originals", action="store_true",
+                    help="delete originals instead of moving them to <inbox>/originals")
+    sp.add_argument("--interval", type=float, default=5, help="seconds between checks")
+    sp.add_argument("--once", action="store_true", help="process what's there now and exit")
+
+    sp = other("gui", cmd_gui, "open the graphical app in your web browser")
+    sp.add_argument("--port", type=int, default=0, help="port (default: any free port)")
+    sp.add_argument("--no-browser", action="store_true", help="don't open a browser")
 
     return p
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    # pypdf logs a warning for every small defect it repairs; only show errors.
+    logging.getLogger("pypdf").setLevel(logging.ERROR)
     try:
-        args.func(args)
+        return args.func(args) or 0
     except (core.PdfManagerError, PageRangeError, FileNotFoundError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         return 130
-    return 0

@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Manager</title>
+<style>
+:root {
+  --bg: #f6f6f3;
+  --surface: #ffffff;
+  --surface-2: #f0efea;
+  --text: #1d1d1b;
+  --muted: #66655f;
+  --border: #dddcd5;
+  --accent: #b4442d;
+  --accent-text: #ffffff;
+  --accent-soft: #f6e4df;
+  --ok: #2f7a4f;
+  --ok-soft: #e1f0e6;
+  --err: #a8321f;
+  --err-soft: #f8e1dc;
+  --focus: #2a5bd7;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 4px 16px rgb(0 0 0 / 0.04);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161615;
+    --surface: #1f1f1d;
+    --surface-2: #2a2a27;
+    --text: #ecebe6;
+    --muted: #a3a29b;
+    --border: #3a3a36;
+    --accent: #e0745b;
+    --accent-text: #1a0d09;
+    --accent-soft: #3a231d;
+    --ok: #74c493;
+    --ok-soft: #1d3326;
+    --err: #f08a74;
+    --err-soft: #3d201a;
+    --focus: #8fb0ff;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161615; --surface: #1f1f1d; --surface-2: #2a2a27; --text: #ecebe6;
+  --muted: #a3a29b; --border: #3a3a36; --accent: #e0745b; --accent-text: #1a0d09;
+  --accent-soft: #3a231d; --ok: #74c493; --ok-soft: #1d3326; --err: #f08a74;
+  --err-soft: #3d201a; --focus: #8fb0ff; --shadow: none; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.app { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100vh; }
+
+/* Sidebar */
+nav {
+  border-right: 1px solid var(--border);
+  padding: 20px 12px 32px;
+  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+}
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 18px; }
+.brand svg { flex: none; }
+.brand strong { font-size: 16px; letter-spacing: -0.01em; }
+.brand span { color: var(--muted); font-size: 12px; }
+nav h2 {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted); margin: 16px 10px 4px;
+}
+nav button {
+  display: block; width: 100%; text-align: left; border: 0; background: none;
+  padding: 6px 10px; border-radius: 7px; cursor: pointer; color: var(--text);
+}
+nav button:hover { background: var(--surface-2); }
+nav button[aria-current="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.mobile-picker { display: none; }
+
+/* Main */
+main { padding: 32px clamp(16px, 4vw, 48px) 64px; max-width: 880px; width: 100%; }
+main > header h1 { font-size: 26px; letter-spacing: -0.02em; margin: 0 0 4px; }
+main > header p { color: var(--muted); margin: 0 0 24px; }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 20px; margin-bottom: 16px;
+}
+.card h3 { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
+
+.drop {
+  display: block;
+  border: 1.5px dashed var(--border); border-radius: var(--radius); padding: 28px 16px;
+  text-align: center; color: var(--muted); cursor: pointer; transition: border-color .15s, background .15s;
+}
+.drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.drop strong { color: var(--text); }
+.drop input { display: none; }
+
+.files { list-style: none; margin: 12px 0 0; padding: 0; }
+.files li {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px; margin-top: 6px; background: var(--surface);
+}
+.files li.dragging { opacity: .4; }
+.files .handle { cursor: grab; color: var(--muted); user-select: none; }
+.files .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files .size { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.icon-btn {
+  border: 0; background: none; cursor: pointer; color: var(--muted); padding: 2px 6px;
+  border-radius: 6px; line-height: 1;
+}
+.icon-btn:hover { background: var(--surface-2); color: var(--text); }
+
+.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px 16px; }
+.field label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+.field .hint { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.field input[type=text], .field input[type=number], .field input[type=password], .field select {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface);
+}
+.field input[type=file] { font-size: 13px; max-width: 100%; }
+.field.check { display: flex; align-items: center; gap: 8px; align-self: end; padding-bottom: 8px; }
+.field.check label { margin: 0; font-weight: 400; font-size: 14px; }
+.field.check input { width: 16px; height: 16px; accent-color: var(--accent); }
+.empty-note { color: var(--muted); margin: 0; }
+
+details.pw { margin-top: 16px; }
+details.pw summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+details.pw .field { margin-top: 10px; max-width: 320px; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.btn {
+  border: 1px solid transparent; border-radius: 8px; padding: 9px 18px; font-weight: 600;
+  cursor: pointer; background: var(--accent); color: var(--accent-text);
+}
+.btn.secondary { background: var(--surface); color: var(--text); border-color: var(--border); }
+.btn:disabled { opacity: .55; cursor: progress; }
+
+.status { margin-top: 14px; padding: 10px 12px; border-radius: 8px; font-size: 14px; display: none; }
+.status.show { display: block; }
+.status.ok { background: var(--ok-soft); color: var(--ok); }
+.status.err { background: var(--err-soft); color: var(--err); }
+.status.busy { background: var(--surface-2); color: var(--muted); }
+.status a { color: inherit; font-weight: 600; }
+
+.table-wrap { overflow-x: auto; margin-top: 14px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+td { word-break: break-all; }
+
+.theme-toggle { margin: 24px 10px 0; font-size: 13px; color: var(--muted); }
+
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; align-content: start; }
+  nav { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--border); padding: 14px 16px; }
+  nav .groups, nav .theme-toggle { display: none; }
+  .brand { padding: 0 0 10px; }
+  .mobile-picker { display: block; width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  main { padding: 20px 16px 48px; }
+  .fields { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <nav aria-label="Tools">
+    <div class="brand">
+      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+        <rect x="5" y="2" width="18" height="24" rx="3" fill="var(--accent)"/>
+        <path d="M9 9h10M9 13h10M9 17h6" stroke="var(--accent-text)" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <div><strong>PDF Manager</strong><br><span id="version"></span></div>
+    </div>
+    <select class="mobile-picker" id="picker" aria-label="Choose a tool"></select>
+    <div class="groups" id="groups"></div>
+    <div class="theme-toggle">
+      <label>Theme
+        <select id="theme">
+          <option value="">System</option><option value="light">Light</option><option value="dark">Dark</option>
+        </select>
+      </label>
+    </div>
+  </nav>
+
+  <main>
+    <header>
+      <h1 id="title">PDF Manager</h1>
+      <p id="help"></p>
+    </header>
+
+    <section class="card" id="files-card">
+      <h3 id="files-title">Files</h3>
+      <label class="drop" id="drop">
+        <input type="file" id="file-input" multiple>
+        <div><strong>Drop files here</strong> or click to choose</div>
+        <div id="drop-hint" style="font-size:13px;margin-top:4px"></div>
+      </label>
+      <ul class="files" id="file-list"></ul>
+    </section>
+
+    <section class="card">
+      <h3>Options</h3>
+      <form id="form" class="fields" autocomplete="off"></form>
+      <details class="pw" id="pw-box">
+        <summary>Password-protected files?</summary>
+        <div class="field">
+          <label for="pw">Current password</label>
+          <input type="password" id="pw" autocomplete="off">
+          <div class="hint">Results stay protected with the same password.</div>
+        </div>
+      </details>
+    </section>
+
+    <div class="actions">
+      <button class="btn secondary" id="preview" hidden>Preview</button>
+      <button class="btn" id="run">Run</button>
+    </div>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+    <div class="table-wrap" id="result-table"></div>
+  </main>
+</div>
+
+<script>
+"use strict";
+const token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
+const $ = (id) => document.getElementById(id);
+let ops = [], current = null, files = [], lastUrl = null;
+
+// ---- theme ---------------------------------------------------------------
+function applyTheme(v) {
+  if (v) document.documentElement.dataset.theme = v; else delete document.documentElement.dataset.theme;
+}
+try { const t = localStorage.getItem("pdfm-theme") || ""; $("theme").value = t; applyTheme(t); } catch (e) {}
+$("theme").addEventListener("change", (e) => {
+  applyTheme(e.target.value);
+  try { localStorage.setItem("pdfm-theme", e.target.value); } catch (err) {}
+});
+
+// ---- helpers -------------------------------------------------------------
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else if (v === true) node.setAttribute(k, "");
+    else if (v !== false && v != null) node.setAttribute(k, v);
+  }
+  for (const c of children) node.append(c);
+  return node;
+}
+function humanSize(n) {
+  const units = ["B", "KB", "MB", "GB"]; let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(1) : n) + " " + units[i];
+}
+function status(kind, text, link) {
+  const s = $("status");
+  s.className = "status show " + kind;
+  s.textContent = text;
+  if (link) { s.append(" "); s.append(link); }
+}
+function clearStatus() { $("status").className = "status"; $("result-table").replaceChildren(); }
+
+// ---- operations ----------------------------------------------------------
+async function load() {
+  if (!token) { status("err", "Open PDF Manager with the link printed in the terminal (it contains a security token)."); return; }
+  const res = await fetch("/api/operations", { headers: { "X-Pdfm-Token": token } });
+  if (!res.ok) { status("err", "Could not connect. Restart `pdfm gui` and use the new link."); return; }
+  const data = await res.json();
+  ops = data.operations;
+  $("version").textContent = "v" + data.version;
+  const groups = {};
+  for (const op of ops) (groups[op.group] ||= []).push(op);
+  for (const [name, list] of Object.entries(groups)) {
+    $("groups").append(el("h2", {}, name));
+    const og = el("optgroup", { label: name });
+    for (const op of list) {
+      $("groups").append(el("button", { type: "button", "data-op": op.id, onclick: () => select(op.id) }, op.label));
+      og.append(el("option", { value: op.id }, op.label));
+    }
+    $("picker").append(og);
+  }
+  $("picker").addEventListener("change", (e) => select(e.target.value));
+  let start = "merge";
+  try { start = localStorage.getItem("pdfm-op") || start; } catch (e) {}
+  select(ops.some((o) => o.id === start) ? start : ops[0].id);
+}
+
+function select(id) {
+  current = ops.find((o) => o.id === id);
+  try { localStorage.setItem("pdfm-op", id); } catch (e) {}
+  document.querySelectorAll("nav button[data-op]").forEach((b) => b.setAttribute("aria-current", b.dataset.op === id));
+  $("picker").value = id;
+  $("title").textContent = current.label;
+  $("help").textContent = current.help || defaultHelp(current);
+  const folder = current.files === null;
+  $("files-card").hidden = folder;
+  $("pw-box").hidden = folder || current.files === "images";
+  $("preview").hidden = !folder;
+  $("run").textContent = folder ? "Apply" : "Run";
+  // For folder tools the safe action (Preview) is the primary button.
+  $("run").classList.toggle("secondary", folder);
+  $("preview").classList.toggle("secondary", !folder);
+  const accept = current.files === "images" ? "image/*" : ".pdf,application/pdf";
+  $("file-input").accept = accept;
+  $("drop-hint").textContent = {
+    images: "JPG, PNG, TIFF, … — one page per image, in this order",
+    pdf2: "Two PDFs: front sides first, then back sides",
+  }[current.files] || (current.id === "merge" ? "PDFs, in the order to combine them" : "One or more PDFs — each is processed separately");
+  // Drop files of the wrong kind when switching tools.
+  files = files.filter((f) => current.files === "images" ? f.type.startsWith("image/") : isPdf(f));
+  renderFiles();
+  renderForm();
+  clearStatus();
+}
+
+function defaultHelp(op) {
+  return op.files === "pdf" ? "Add one or more PDFs. With several files you get a ZIP." : "";
+}
+
+function percentSmaller(before, after) {
+  const pct = (1 - after / before) * 100;
+  if (pct <= 0) return "no smaller — the file was already compact";
+  return (pct > 99 ? pct.toFixed(1) : Math.round(pct)) + "% smaller";
+}
+
+function isPdf(f) { return f.type === "application/pdf" || /\.pdf$/i.test(f.name); }
+
+// ---- files ---------------------------------------------------------------
+function addFiles(list) {
+  const want = current.files === "images" ? (f) => f.type.startsWith("image/") : isPdf;
+  const accepted = [...list].filter(want);
+  const rejected = list.length - accepted.length;
+  files.push(...accepted);
+  renderFiles();
+  if (rejected) status("err", `${rejected} file(s) skipped: ${current.files === "images" ? "only images" : "only PDFs"} can be used here.`);
+  else clearStatus();
+}
+
+let dragIndex = null;
+function renderFiles() {
+  const ul = $("file-list");
+  ul.replaceChildren();
+  files.forEach((f, i) => {
+    const li = el("li", { draggable: "true" },
+      el("span", { class: "handle", title: "Drag to reorder", "aria-hidden": "true" }, "⠿"),
+      el("span", { class: "name", title: f.name }, f.name),
+      el("span", { class: "size" }, humanSize(f.size)),
+      el("button", { class: "icon-btn", type: "button", title: "Move up", "aria-label": "Move " + f.name + " up",
+        disabled: i === 0, onclick: () => move(i, i - 1) }, "↑"),
+      el("button", { class: "icon-btn", type: "button", title: "Move down", "aria-label": "Move " + f.name + " down",
+        disabled: i === files.length - 1, onclick: () => move(i, i + 1) }, "↓"),
+      el("button", { class: "icon-btn", type: "button", title: "Remove", "aria-label": "Remove " + f.name,
+        onclick: () => { files.splice(i, 1); renderFiles(); } }, "✕"));
+    li.addEventListener("dragstart", () => { dragIndex = i; li.classList.add("dragging"); });
+    li.addEventListener("dragend", () => li.classList.remove("dragging"));
+    li.addEventListener("dragover", (e) => { if (dragIndex !== null) e.preventDefault(); });
+    li.addEventListener("drop", (e) => { e.preventDefault(); e.stopPropagation(); if (dragIndex !== null) move(dragIndex, i); dragIndex = null; });
+    ul.append(li);
+  });
+}
+function move(from, to) {
+  if (to < 0 || to >= files.length) return;
+  const [f] = files.splice(from, 1); files.splice(to, 0, f); renderFiles();
+}
+
+const drop = $("drop");
+$("file-input").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
+["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => {
+  if (e.dataTransfer && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); drop.classList.add("over"); }
+}));
+["dragleave", "drop"].forEach((t) => drop.addEventListener(t, () => drop.classList.remove("over")));
+drop.addEventListener("drop", (e) => { e.preventDefault(); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+
+// ---- options form --------------------------------------------------------
+function renderForm() {
+  const form = $("form");
+  form.replaceChildren();
+  if (!current.fields.length) { form.append(el("p", { class: "empty-note" }, "No options — just add files and run.")); return; }
+  for (const f of current.fields) {
+    const id = "f-" + f.key;
+    let input;
+    if (f.kind === "select") {
+      input = el("select", { id, name: f.key });
+      for (const [v, label] of f.choices) input.append(el("option", { value: v, selected: String(f.default) === v }, label));
+    } else if (f.kind === "check") {
+      input = el("input", { id, name: f.key, type: "checkbox", checked: !!f.default });
+    } else if (f.kind === "file") {
+      input = el("input", { id, name: f.key, type: "file", accept: f.accept || "" });
+    } else {
+      input = el("input", {
+        id, name: f.key, type: f.kind === "number" ? "number" : f.kind === "password" ? "password" : "text",
+        value: f.default ?? "", placeholder: f.placeholder || "", min: f.min, max: f.max,
+        step: f.step || (f.kind === "number" ? "any" : null), required: !!f.required,
+      });
+    }
+    const wrap = f.kind === "check"
+      ? el("div", { class: "field check", "data-key": f.key }, input, el("label", { for: id }, f.label))
+      : el("div", { class: "field", "data-key": f.key }, el("label", { for: id }, f.label), input);
+    if (f.hint) wrap.append(el("div", { class: "hint" }, f.hint));
+    form.append(wrap);
+  }
+  updateVisibility();
+}
+$("form").addEventListener("input", updateVisibility);
+$("form").addEventListener("submit", (e) => { e.preventDefault(); run(false); });
+function updateVisibility() {
+  for (const f of current.fields) {
+    if (!f.show_if) continue;
+    const ok = Object.entries(f.show_if).every(([k, v]) => $("f-" + k).value === v);
+    document.querySelector(`.field[data-key="${f.key}"]`).hidden = !ok;
+  }
+}
+function collectOptions() {
+  const opts = {}, extra = {};
+  for (const f of current.fields) {
+    const input = $("f-" + f.key);
+    if (f.kind === "check") opts[f.key] = input.checked ? "true" : "false";
+    else if (f.kind === "file") { if (input.files[0]) extra[f.key] = input.files[0]; }
+    else opts[f.key] = input.value;
+  }
+  return { opts, extra };
+}
+
+// ---- running -------------------------------------------------------------
+async function run(preview) {
+  if (current.files === null) return runFolder(!preview);
+  const need = current.files === "pdf2" ? 2 : current.min || 1;
+  if (files.length < need) { status("err", need === 1 ? "Add a file first." : `Add at least ${need} files.`); return; }
+  const missing = current.fields.find((f) => f.required && !$("f-" + f.key).value.trim());
+  if (missing) { status("err", `Please fill in “${missing.label}”.`); $("f-" + missing.key).focus(); return; }
+  const { opts, extra } = collectOptions();
+  const body = new FormData();
+  body.append("op", current.id);
+  body.append("password", $("pw").value);
+  for (const [k, v] of Object.entries(opts)) body.append(k, v);
+  for (const [k, v] of Object.entries(extra)) body.append(k, v, v.name);
+  for (const f of files) body.append("files", f, f.name);
+  busy(true, current.id === "ocr" ? "Recognising text — this can take a while…" : "Working…");
+  try {
+    const res = await fetch("/api/run", { method: "POST", headers: { "X-Pdfm-Token": token }, body });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    const name = res.headers.get("X-Pdfm-Filename") || "result.pdf";
+    const blob = await res.blob();
+    if (lastUrl) URL.revokeObjectURL(lastUrl);
+    lastUrl = URL.createObjectURL(blob);
+    const link = el("a", { href: lastUrl, download: name }, "Download " + name);
+    const before = files.reduce((n, f) => n + f.size, 0);
+    const sizeNote = current.id === "compress"
+      ? ` ${humanSize(before)} → ${humanSize(blob.size)} (${percentSmaller(before, blob.size)}).`
+      : ` ${humanSize(blob.size)}.`;
+    status("ok", "Done." + sizeNote, link);
+    link.click();
+  } catch (err) {
+    status("err", "Error: " + err.message);
+  } finally { busy(false); }
+}
+
+async function runFolder(apply) {
+  const missing = current.fields.find((f) => f.required && !$("f-" + f.key).value.trim());
+  if (missing) { status("err", `Please fill in “${missing.label}”.`); $("f-" + missing.key).focus(); return; }
+  const { opts } = collectOptions();
+  if (apply && (opts.move === "true" || opts.delete === "true" || current.id === "rename")) {
+    const verb = current.id === "rename" ? "rename files" : opts.delete === "true" ? "delete duplicate files" : "move files";
+    if (!confirm(`This will ${verb} on your computer. Continue?`)) return;
+  }
+  busy(true, apply ? "Applying…" : "Previewing…");
+  try {
+    const res = await fetch("/api/folder", {
+      method: "POST", headers: { "X-Pdfm-Token": token, "Content-Type": "application/json" },
+      body: JSON.stringify({ op: current.id, options: opts, apply }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    const n = data.rows.length;
+    status("ok", n === 0 ? "Nothing to do." : apply ? `Done — ${n} file(s).` : `Preview — ${n} file(s). Nothing has changed yet; click Apply to do it.`);
+    if (n) {
+      const table = el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "File"), el("th", {}, apply ? "Result" : "Will become"))));
+      const tbody = el("tbody");
+      for (const [a, b] of data.rows) tbody.append(el("tr", {}, el("td", {}, a), el("td", {}, b)));
+      table.append(tbody);
+      $("result-table").replaceChildren(table);
+    }
+  } catch (err) {
+    status("err", "Error: " + err.message);
+  } finally { busy(false); }
+}
+
+function busy(on, text) {
+  $("run").disabled = on; $("preview").disabled = on;
+  if (on) { $("result-table").replaceChildren(); status("busy", text); }
+}
+$("run").addEventListener("click", () => run(false));
+$("preview").addEventListener("click", () => run(true));
+
+load();
+</script>
+</body>
+</html>
