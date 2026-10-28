@@ -1,15 +1,19 @@
-// Page board: a preview of every page of one PDF, dragged into a new order.
-// Used by "Reorder pages"; the order is shown to the user (and sent to the
-// server) as a page range such as "3,1-2,4-10".
+// Page board: a preview of every page of one PDF, used by the page tools.
+// What the user does with the pages is shown to them (and sent to the
+// server) as a page range such as "3,1-2,4-10". Modes:
 //
-//   const board = new PageBoard(host, { onChange(order) {} });
+//   "order"   drag pages into a new order (Reorder pages). Pages can also be
+//             moved with the keyboard (arrow keys pick a page, Alt+arrow keys
+//             move it), duplicated and removed.
+//   "select"  click pages to pick them (Extract, Delete, Rotate). The effect
+//             ("keep", "remove" or "rotate") decides how picked pages look.
+//   "view"    a read-only preview of the result (Reverse order).
+//
+//   const board = new PageBoard(host, { onChange(pages) {} });
+//   board.configure({ mode: "select", effect: "remove" })
 //   await board.load(file, password)   // "ok", "password" or "wrong-password"
-//   board.order                        // 0-based page indices, in the new order
-//   board.setOrder([2, 0, 1])          // e.g. from a typed page range
-//
-// Pages can be dragged with the mouse, pen or touch, or moved with the
-// keyboard (arrow keys pick a page, Alt+arrow keys move it, Delete removes
-// it). Each page can also be duplicated or removed.
+//   board.order / board.selection      // 0-based page indices
+//   board.setOrder([2, 0, 1]) / board.setSelection([0, 4])   // e.g. from a typed page range
 
 const BASE = new URL("/static/pdfjs/", location.href).href;
 const THUMB = 132;   // CSS pixels for the longest side of a preview
@@ -27,7 +31,8 @@ async function loadPdfjs() {
 const ICON = {
   left: '<path d="m15 18-6-6 6-6"/>', right: '<path d="m9 18 6-6-6-6"/>',
   copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
-  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>', check: '<path d="M20 6 9 17l-5-5"/>',
+  cw: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
   reverse: '<path d="M4 7h13l-3-3M20 17H7l3 3"/>',
   reset: '<path d="M4 11a8 8 0 1 1 2.3 5.7"/><path d="M4 4v7h7"/>',
@@ -111,13 +116,23 @@ export class PageBoard {
     this.history = [];
     this.seq = 0;
     this.drag = null;
+    this.mode = "order"; this.effect = null; this.rotation = 90;
+    this.picked = new Set(); this.anchor = null;
 
+    const button = (label, fn, name, title) => el("button", { type: "button", class: "btn secondary pb-small", title, onclick: fn }, name ? icon(name) : null, label);
     this.status = el("span", { class: "pb-status" });
-    this.undoBtn = el("button", { type: "button", class: "btn secondary pb-small", title: "Undo (Ctrl+Z)", onclick: () => this.undo() }, icon("undo"), "Undo");
-    this.toolbar = el("div", { class: "pb-toolbar" }, this.status,
-      el("div", { class: "pb-tools" }, this.undoBtn,
-        el("button", { type: "button", class: "btn secondary pb-small", onclick: () => this.#change(this.order.reverse()) }, icon("reverse"), "Reverse"),
-        el("button", { type: "button", class: "btn secondary pb-small", onclick: () => this.#change([...Array(this.total).keys()]) }, icon("reset"), "Reset")));
+    this.undoBtn = button("Undo", () => this.undo(), "undo", "Undo (Ctrl+Z)");
+    this.orderTools = el("div", { class: "pb-tools" }, this.undoBtn,
+      button("Reverse", () => this.#change(this.order.reverse()), "reverse"),
+      button("Reset", () => this.#change([...Array(this.total).keys()]), "reset"));
+    const pick = (fn) => () => this.#pick(this.#all().filter(fn));
+    this.selectTools = el("div", { class: "pb-tools" },
+      button("All", pick(() => true), null, "Select all pages (Ctrl+A)"),
+      button("Odd", pick((p) => p % 2 === 0), null, "Select pages 1, 3, 5…"),
+      button("Even", pick((p) => p % 2 === 1), null, "Select pages 2, 4, 6…"),
+      button("Invert", () => this.#pick(this.#all().filter((p) => !this.picked.has(p))), null, "Swap selected and unselected pages"),
+      button("Clear", pick(() => false), null, "Select no pages"));
+    this.toolbar = el("div", { class: "pb-toolbar" }, this.status, this.orderTools, this.selectTools);
     this.grid = el("div", { class: "pb-grid", role: "list", "aria-label": "Pages in their new order" });
     this.message = el("div", { class: "pb-message" });
     this.live = el("div", { class: "pb-live", "aria-live": "polite" });
@@ -132,12 +147,51 @@ export class PageBoard {
     }, { root: this.grid, rootMargin: "200px 0px" });
 
     this.grid.addEventListener("pointerdown", (e) => this.#pointerDown(e));
+    this.grid.addEventListener("click", (e) => this.#click(e));
     this.grid.addEventListener("keydown", (e) => this.#keyDown(e));
-    this.grid.addEventListener("focusin", (e) => { const t = e.target.closest(".pb-tile"); if (t) this.#select(t); });
+    this.grid.addEventListener("focusin", (e) => { const t = e.target.closest(".pb-tile"); if (t) this.#rove(t); });
+    this.configure({ mode: "order" });
     this.#state("empty");
   }
 
   get order() { return [...this.grid.children].map((t) => Number(t.dataset.page)); }
+  get selection() { return [...this.picked].sort((a, b) => a - b); }
+
+  /** Switch mode ("order", "select" or "view") and effect; the open PDF is kept.
+   *  Every switch starts again from the original page order and no selection. */
+  configure({ mode, effect = null, onChange } = {}) {
+    if (onChange) this.onChange = onChange;
+    this.#endDrag(false);
+    this.mode = mode; this.effect = effect;
+    this.root.dataset.mode = mode;
+    this.root.dataset.effect = effect || "";
+    this.orderTools.hidden = mode !== "order";
+    this.selectTools.hidden = mode !== "select";
+    this.grid.setAttribute("aria-label", { order: "Pages in their new order", select: "Pages; select the ones to use", view: "Pages in the order they will have" }[mode]);
+    this.grid.setAttribute("aria-multiselectable", mode === "select" ? "true" : "false");
+    this.picked.clear(); this.anchor = null; this.history = [];
+    if (this.doc) {
+      const pages = [...Array(this.total).keys()];
+      this.#build(mode === "view" && effect === "reverse" ? pages.reverse() : pages);
+      this.#update();
+    }
+  }
+
+  /** Select these pages (0-based) without reporting it back. */
+  setSelection(pages) {
+    if (!this.doc) return false;
+    this.picked = new Set(pages.filter((p) => p >= 0 && p < this.total));
+    this.#update();
+    return true;
+  }
+
+  /** How far "rotate" turns the picked pages, in degrees clockwise. */
+  setRotation(degrees) {
+    this.rotation = ((Number(degrees) || 0) % 360 + 360) % 360;
+    this.root.style.setProperty("--pb-turn", this.rotation + "deg");
+    this.root.style.setProperty("--pb-fit", this.rotation % 180 ? "0.8" : "1");
+    this.#update();
+  }
 
   /** Open a PDF. Returns "ok", or "password" / "wrong-password" when it is protected. */
   load(file, password = null) {
@@ -178,9 +232,8 @@ export class PageBoard {
     }
     if (gen !== this.gen) return "stale";
     this.total = this.doc.numPages;
-    this.history = [];
-    this.#build([...Array(this.total).keys()]);
     this.#state("ready");
+    this.configure({ mode: this.mode, effect: this.effect });
     return "ok";
   }
 
@@ -222,6 +275,7 @@ export class PageBoard {
 
   #build(order) {
     this.observer.disconnect();
+    this.grid.setAttribute("role", this.mode === "select" ? "listbox" : "list");
     this.grid.replaceChildren(...order.map((p) => this.#tile(p)));
     for (const t of this.grid.children) this.observer.observe(t);
   }
@@ -230,9 +284,10 @@ export class PageBoard {
     const thumb = el("div", { class: "pb-thumb" });
     const url = this.thumbs.get(page);
     thumb.append(url ? el("img", { src: url, alt: "", draggable: "false" }) : el("span", { class: "loading" }));
-    const tile = el("div", { class: "pb-tile", role: "listitem", tabindex: "-1", "data-page": page, "data-key": ++this.seq },
+    const tile = el("div", { class: "pb-tile", role: this.mode === "select" ? "option" : "listitem", tabindex: "-1", "data-page": page, "data-key": ++this.seq },
       thumb,
       el("span", { class: "pb-pos" }),
+      el("span", { class: "pb-check", "aria-hidden": "true" }, icon(this.effect === "remove" ? "x" : this.effect === "rotate" ? "cw" : "check")),
       el("div", { class: "pb-label" }, `Page ${page + 1}`),
       el("div", { class: "pb-actions" },
         this.#action("left", "Move earlier", (t) => this.#moveBy(t, -1)),
@@ -370,6 +425,10 @@ export class PageBoard {
   #pointerDown(e) {
     const tile = e.target.closest(".pb-tile");
     if (!tile || e.button !== 0 || e.target.closest("button") || this.drag) return;
+    if (this.mode !== "order") {
+      if (e.shiftKey) e.preventDefault();  // no text selection on Shift+click
+      return;
+    }
     e.preventDefault();  // no text selection; focus is handled below
     tile.focus({ preventScroll: true });
     const move = (ev) => this.#pointerMove(ev), up = (ev) => this.#endDrag(ev.type === "pointerup");
@@ -473,16 +532,20 @@ export class PageBoard {
 
   #keyDown(e) {
     const tile = e.target.closest(".pb-tile");
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); this.undo(); return; }
+    if (this.mode === "order" && (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); this.undo(); return; }
+    if (this.mode === "select" && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") { e.preventDefault(); this.#pick(this.#all()); return; }
     if (!tile) return;
+    if (this.mode === "select" && (e.key === " " || e.key === "Enter")) { e.preventDefault(); this.#toggle(tile, e.shiftKey); return; }
     const tiles = [...this.grid.children], i = tiles.indexOf(tile);
     const cols = Math.max(1, tiles.filter((t) => t.offsetTop === tiles[0].offsetTop).length);
     const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -cols, ArrowDown: cols }[e.key];
-    if (step && (e.altKey || e.shiftKey)) {
+    if (this.mode !== "order" && !step && e.key !== "Home" && e.key !== "End") return;
+    if (step && (e.altKey || e.shiftKey) && this.mode === "order") {
       e.preventDefault();
       const to = Math.max(0, Math.min(tiles.length - 1, i + step));
       if (to !== i) this.#moveBy(tile, to - i);
     } else if (step) {
+      if (this.mode !== "order" && (e.altKey || e.shiftKey)) return;
       e.preventDefault();
       const t = tiles[Math.max(0, Math.min(tiles.length - 1, i + step))];
       t.focus(); t.scrollIntoView({ block: "nearest" });
@@ -497,7 +560,42 @@ export class PageBoard {
     }
   }
 
-  #select(tile) {
+  // ---- selecting (select mode) -----------------------------------------------------
+
+  #all() { return [...Array(this.total).keys()]; }
+
+  #click(e) {
+    const tile = e.target.closest(".pb-tile");
+    if (!tile || this.mode !== "select") return;
+    this.#toggle(tile, e.shiftKey);
+  }
+
+  /** Click: toggle one page. Shift+click: give every page from the last
+   *  clicked one to this one the state the last clicked one has. */
+  #toggle(tile, range) {
+    const page = Number(tile.dataset.page);
+    const next = new Set(this.picked);
+    if (range && this.anchor !== null) {
+      const on = next.has(this.anchor);
+      const [a, b] = this.anchor < page ? [this.anchor, page] : [page, this.anchor];
+      for (let p = a; p <= b; p++) on ? next.add(p) : next.delete(p);
+    } else {
+      next.has(page) ? next.delete(page) : next.add(page);
+      this.anchor = page;
+    }
+    this.#pick([...next]);
+    tile.focus({ preventScroll: true });
+    this.#say(`Page ${page + 1} ${this.picked.has(page) ? "selected" : "not selected"}. ${this.status.textContent}.`);
+  }
+
+  #pick(pages) {
+    const before = this.selection.join();
+    this.picked = new Set(pages);
+    this.#update();
+    if (this.selection.join() !== before) this.onChange(this.selection);
+  }
+
+  #rove(tile) {
     for (const t of this.grid.querySelectorAll(".pb-tile[tabindex='0']")) if (t !== tile) t.tabIndex = -1;
     tile.tabIndex = 0;  // one tab stop for the whole grid
   }
@@ -506,13 +604,19 @@ export class PageBoard {
 
   #update() {
     const tiles = [...this.grid.children];
+    if (tiles.length && !tiles.some((t) => t.tabIndex === 0)) tiles[0].tabIndex = 0;
+    if (this.mode === "select") return this.#updateSelect(tiles);
     tiles.forEach((t, i) => {
       t.querySelector(".pb-pos").textContent = i + 1;
       const page = Number(t.dataset.page);
       t.classList.toggle("moved", page !== i);
       t.setAttribute("aria-label", `Page ${page + 1}, position ${i + 1} of ${tiles.length}`);
     });
-    if (tiles.length && !tiles.some((t) => t.tabIndex === 0)) tiles[0].tabIndex = 0;
+    if (this.mode === "view") {
+      this.status.textContent = `${tiles.length} ${tiles.length === 1 ? "page" : "pages"} in the order they will have`;
+      this.message.hidden = true;
+      return;
+    }
     const order = this.order, used = new Set(order);
     const removed = this.total - used.size, extra = order.length - used.size;
     const bits = [`${order.length} ${order.length === 1 ? "page" : "pages"}`];
@@ -523,6 +627,30 @@ export class PageBoard {
     this.undoBtn.disabled = !this.history.length;
     this.message.hidden = tiles.length > 0;
     if (!tiles.length) this.message.textContent = "All pages removed. Use Undo or Reset to bring them back.";
+  }
+
+  #updateSelect(tiles) {
+    const n = this.picked.size, total = this.total;
+    // Rotate with nothing picked rotates every page (an empty page list means all).
+    const all = this.effect === "rotate" && n === 0;
+    tiles.forEach((t) => {
+      const page = Number(t.dataset.page), on = this.picked.has(page);
+      t.querySelector(".pb-pos").textContent = page + 1;
+      t.classList.toggle("picked", on);
+      t.classList.toggle("turned", this.effect === "rotate" && (on || all) && this.rotation !== 0);
+      t.setAttribute("aria-selected", String(on));
+      t.setAttribute("aria-label", `Page ${page + 1}`);
+    });
+    this.root.classList.toggle("has-picked", n > 0);
+    const pages = (k) => `${k} ${k === 1 ? "page" : "pages"}`;
+    this.status.textContent = {
+      keep: n ? `${pages(n)} of ${total} selected to extract` : `Click the pages to extract`,
+      remove: n === total ? `All pages selected — at least one page has to stay`
+        : n ? `${pages(n)} will be deleted · ${pages(total - n)} left` : `Click the pages to delete`,
+      rotate: n ? `${pages(n)} of ${total} will be rotated` : `No pages selected — all ${total} will be rotated`,
+    }[this.effect] || `${pages(n)} selected`;
+    this.root.classList.toggle("pb-warn", this.effect === "remove" && n === total);
+    this.message.hidden = true;
   }
 
   #state(name, detail) {

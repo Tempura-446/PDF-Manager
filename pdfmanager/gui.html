@@ -225,6 +225,36 @@ body.pb-dragging, body.pb-dragging * { cursor: grabbing !important; }
 .page-board[data-state="password"] .pb-message, .page-board[data-state="wrong-password"] .pb-message, .page-board[data-state="error"] .pb-message { color: var(--err); }
 .pb-live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .pb-hint { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; }
+.pb-hint:empty { display: none; }
+/* select mode (extract, delete, rotate) */
+.page-board[data-mode="select"] .pb-tile, .page-board[data-mode="view"] .pb-tile { cursor: pointer; touch-action: auto; }
+.page-board[data-mode="view"] .pb-tile { cursor: default; }
+.page-board:not([data-mode="order"]) .pb-actions { display: none; }
+.pb-check {
+  position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; border-radius: 999px; z-index: 1;
+  display: none; place-items: center; background: var(--surface); border: 1.5px solid var(--border-strong); color: transparent;
+}
+.pb-check svg { width: 13px; height: 13px; stroke-width: 2.6; }
+.page-board[data-mode="select"] .pb-check { display: grid; }
+.page-board[data-mode="select"] .pb-tile:hover .pb-check { border-color: var(--accent); }
+.pb-tile.picked { border-color: var(--accent); background: var(--accent-soft); }
+.pb-tile.picked:hover, .pb-tile.picked:focus { background: var(--accent-soft); }
+.pb-tile.picked .pb-check { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.pb-tile.picked .pb-label { color: var(--accent); font-weight: 600; }
+.page-board[data-mode="select"] .pb-pos { background: var(--surface-3); color: var(--muted); }
+/* extract: pages that are not picked stay behind */
+.page-board[data-effect="keep"].has-picked .pb-tile:not(.picked) .pb-thumb img { opacity: .4; }
+/* delete: picked pages are crossed out */
+.page-board[data-effect="remove"] .pb-tile.picked { border-color: var(--err); background: var(--err-soft); }
+.page-board[data-effect="remove"] .pb-tile.picked .pb-check { background: var(--err); border-color: var(--err); }
+.page-board[data-effect="remove"] .pb-tile.picked .pb-label { color: var(--err); text-decoration: line-through; }
+.page-board[data-effect="remove"] .pb-tile.picked .pb-thumb img { opacity: .35; filter: grayscale(1); }
+.page-board.pb-warn .pb-status { color: var(--err); }
+/* rotate: picked pages are shown turned */
+.pb-thumb img { transition: transform .2s ease; }
+.pb-tile.turned .pb-thumb img { transform: rotate(var(--pb-turn, 90deg)) scale(var(--pb-fit, .8)); }
+@media (prefers-reduced-motion: reduce) { .pb-thumb img { transition: none; } }
+.pb-tile:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 @media (hover: none) { .pb-actions { opacity: 1; } }
 @media (pointer: coarse) { .pb-tile { touch-action: auto; } }
 
@@ -368,7 +398,7 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
     <section class="card" id="pages-card" hidden>
       <div class="card-head">
         <h3>Pages</h3>
-        <span class="sub">Drag pages into the new order</span>
+        <span class="sub" id="pages-sub"></span>
       </div>
       <div id="page-board"></div>
       <p class="pb-hint" id="pages-hint"></p>
@@ -715,36 +745,63 @@ document.addEventListener("drop", (e) => {
   } else addFiles(e.dataTransfer.files);
 });
 
-// ---- page board (Reorder pages) ---------------------------------------------------
-// With one PDF, "Reorder pages" shows every page; dragging them writes the
-// new order into the "New order" field, and typing an order there rearranges
-// the previews.
+// ---- page board (the page tools) ---------------------------------------------------
+// With one PDF, the page tools show every page (see static/pages.js and the
+// "board" entry of each tool). Dragging or clicking pages writes the page
+// list into the tool's field, and typing in the field updates the previews.
 let board = null, boardLib = null;
+const BOARD_TEXT = {
+  order: ["Drag pages into the new order", "Tip: click a page, then use the arrow keys to pick and Alt+arrow keys to move it. Delete removes a page, D duplicates it, Ctrl+Z undoes."],
+  keep: ["Click the pages to extract", "Shift+click selects a range. With the keyboard: arrow keys, then Space to select; Ctrl+A selects all."],
+  remove: ["Click the pages to delete", "Shift+click selects a range. With the keyboard: arrow keys, then Space to select; Ctrl+A selects all."],
+  rotate: ["Click the pages to rotate", "The previews show the result. Shift+click selects a range; with no page selected, every page is rotated."],
+  reverse: ["Preview of the result", ""],
+};
+const boardField = () => current && current.board && current.board.field ? $("f-" + current.board.field) : null;
+function boardChanged(pages) {
+  const f = boardField();
+  if (f) f.value = boardLib.formatRanges(pages);
+}
 async function syncBoard() {
-  const card = $("pages-card");
-  const active = current && current.id === "reorder" && items.length > 0;
-  card.hidden = !active;
+  const spec = current && current.board;
+  const active = !!spec && items.length > 0;
+  $("pages-card").hidden = !active;
   if (!active || items.length > 1) {
-    $("pages-hint").textContent = active ? "Page previews are shown for one file at a time. With several files, the order typed under Options is used for each of them." : "";
+    $("pages-sub").textContent = "";
+    $("pages-hint").textContent = active ? "Page previews are shown for one file at a time. With several files, the pages typed under Options are used for each of them." : "";
     if (board) board.close();
     return;
   }
-  $("pages-hint").textContent = "Tip: click a page, then use the arrow keys to pick and Alt+arrow keys to move it. Delete removes a page, D duplicates it, Ctrl+Z undoes.";
+  const [sub, hint] = BOARD_TEXT[spec.effect || spec.mode];
+  $("pages-sub").textContent = sub;
+  $("pages-hint").textContent = hint;
   if (!boardLib) boardLib = await import("/static/pages.js");
-  if (!board) board = new boardLib.PageBoard($("page-board"), { onChange: (order) => { const f = $("f-order"); if (f) f.value = boardLib.formatRanges(order); } });
+  if (!board) board = new boardLib.PageBoard($("page-board"), { onChange: boardChanged });
+  if (board.mode !== spec.mode || board.effect !== (spec.effect || null) || board.tool !== current.id) {
+    board.tool = current.id;
+    board.configure({ mode: spec.mode, effect: spec.effect || null });
+  }
   const it = items[0];
   const result = await board.load(it.file, $("pw").value || null);
   if (result === "password" || result === "wrong-password") $("pw-box").open = true;
-  if (result !== "ok" || board.file !== it.file) return;
-  const f = $("f-order");
-  const typed = f && boardLib.parseRanges(f.value, board.total);
-  if (typed) board.setOrder(typed);
-  else if (f) f.value = boardLib.formatRanges(board.order);
+  if (result !== "ok" || board.file !== it.file || current.board !== spec) return;
+  if (spec.degrees) board.setRotation($("f-" + spec.degrees).value);
+  const f = boardField();
+  if (!f) return;
+  const typed = boardLib.parseRanges(f.value, board.total);
+  if (spec.mode === "order") {
+    if (typed) board.setOrder(typed);
+    else f.value = boardLib.formatRanges(board.order);
+  } else board.setSelection(typed || []);
 }
 $("form").addEventListener("input", (e) => {
-  if (e.target.id !== "f-order" || !board || !board.doc || !boardLib) return;
-  const order = boardLib.parseRanges(e.target.value, board.total);
-  if (order) board.setOrder(order);
+  const spec = current && current.board;
+  if (!spec || !board || !board.doc || !boardLib || board.tool !== current.id) return;
+  if (spec.degrees && e.target.id === "f-" + spec.degrees) board.setRotation(e.target.value);
+  if (e.target.id !== "f-" + spec.field) return;
+  const pages = boardLib.parseRanges(e.target.value, board.total);
+  if (spec.mode === "order") { if (pages) board.setOrder(pages); }
+  else if (pages || !e.target.value.trim()) board.setSelection(pages || []);
 });
 
 // ---- options -----------------------------------------------------------------
