@@ -826,10 +826,10 @@ def test_page_tools_have_page_previews():
     from pdfmanager import gui
 
     for op in gui.OPERATIONS:
-        if op["group"] != "Pages":
+        if op["group"] != "Pages" or op.get("panel"):  # bookmarks have their own editor
             continue
         board = op.get("board")
-        assert board and board["mode"] in ("order", "select", "view"), op["id"]
+        assert board and board["mode"] in ("order", "select", "view", "split"), op["id"]
         keys = {f["key"] for f in op["fields"]}
         for ref in ("field", "degrees"):
             if ref in board:
