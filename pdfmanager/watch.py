@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pdfmanager import core, organize, scan
+from pdfmanager import core, organize, recipes, scan
 
 
 @dataclass
@@ -20,6 +20,7 @@ class WatchSettings:
     auto_rotate: bool = False     # turn pages upright (needs Tesseract)
     ocr: bool = False
     ocr_language: str = "eng"
+    recipe: list = None           # steps of a recipe to run (see recipes.py)
     skip_duplicates: bool = False
     keep_originals: bool = True   # move originals to <inbox>/originals instead of deleting
 
@@ -66,6 +67,8 @@ def process_file(path, settings, known_hashes=None):
                        auto_rotate=settings.auto_rotate)
         if settings.ocr:
             core.ocr(work, work, language=settings.ocr_language)
+        if settings.recipe:
+            recipes.run(settings.recipe, work, work)
         if settings.compress:
             core.compress(work, work, level=settings.compress)
         record = organize.describe(work)

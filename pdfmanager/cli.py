@@ -12,7 +12,7 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
-                        redact, scan)
+                        recipes, redact, scan)
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -463,6 +463,73 @@ def cmd_compare(a):
     print(f"-> {out}")
 
 
+def _parse_steps(tokens):
+    """['clean', 'ocr', 'language=deu', 'compress', 'level=high'] -> steps."""
+    steps = []
+    for token in tokens:
+        key, sep, value = token.partition("=")
+        if sep:
+            if not steps:
+                raise core.PdfManagerError(f"{token!r} comes before any step")
+            steps[-1]["options"][key.strip().replace("-", "_")] = value
+        else:
+            steps.append({"op": token, "options": {}})
+    return steps
+
+
+def cmd_recipe(a):
+    if a.action != "list" and not a.name:
+        raise core.PdfManagerError(f"pdfm recipe {a.action} needs a recipe name")
+    if a.action == "list":
+        saved = recipes.load_all()
+        for name, recipe in saved.items():
+            print(f"{name}: {recipes.describe(recipe['steps'])}")
+        if not saved:
+            print("no recipes yet; create one with: pdfm recipe save NAME clean ocr compress "
+                  "level=high")
+        print(f"(saved in {recipes.recipes_file()})")
+    elif a.action == "show":
+        recipe = recipes.get(a.name)
+        for n, step in enumerate(recipe["steps"], 1):
+            options = " ".join(f"{k}={v}" for k, v in step["options"].items())
+            print(f"{n}. {step['op']} {options}".rstrip())
+    elif a.action == "save":
+        recipe = recipes.save(a.name, _parse_steps(a.args))
+        print(f"saved {recipe['name']!r}: {recipes.describe(recipe['steps'])}")
+    elif a.action == "delete":
+        recipes.delete(a.name)
+        print(f"deleted {a.name!r}")
+    else:  # run
+        steps = recipes.get(a.name)["steps"]
+        files = _expand(a.args)
+        if not files:
+            raise core.PdfManagerError("name the PDF(s) to run the recipe on")
+        passwords = _Passwords(a.password)
+        slug = "".join(c if c.isalnum() else "-" for c in a.name.lower()).strip("-") or "recipe"
+        failures = 0
+        for src in files:
+            try:
+                if len(files) == 1 and a.output:
+                    out = Path(a.output)
+                elif a.output:
+                    Path(a.output).mkdir(parents=True, exist_ok=True)
+                    out = Path(a.output) / Path(src).name
+                else:
+                    out = _default_output(src, slug)
+                pw = passwords.for_file(src)
+                notes = []
+                recipes.run(steps, src, out, pw, notes)
+                if pw:
+                    _reencrypt(out, pw)
+                print(f"{src} -> {out}" + (f"  ({'; '.join(notes)})" if notes else ""))
+            except (core.PdfManagerError, PageRangeError, OSError) as exc:
+                if len(files) == 1:
+                    raise
+                failures += 1
+                print(f"error: {src}: {exc}", file=sys.stderr)
+        return 1 if failures else 0
+
+
 def cmd_from_images(a):
     margin = a.margin * core.POINTS_PER_MM
     print(f"-> {core.images_to_pdf(_expand(a.images), a.output, a.size, margin)}")
@@ -512,6 +579,7 @@ def cmd_watch(a):
     settings = watch.WatchSettings(
         inbox=a.inbox, dest=a.dest, by=a.by, rename=a.rename, compress=a.compress,
         remove_blank=a.clean, auto_rotate=a.rotate,
+        recipe=recipes.get(a.recipe)["steps"] if a.recipe else None,
         ocr=a.ocr, ocr_language=a.language, skip_duplicates=a.skip_duplicates,
         keep_originals=not a.delete_originals)
     if a.once:
@@ -758,6 +826,15 @@ def build_parser():
     sp.add_argument("-o", "--output", help="output PDF, or a folder for several inputs "
                                            "(default: next to each input)")
 
+    sp = other("recipe", cmd_recipe, "save and run recipes: several tools in a row")
+    sp.add_argument("action", choices=["list", "show", "save", "run", "delete"])
+    sp.add_argument("name", nargs="?", help="recipe name")
+    sp.add_argument("args", nargs="*", metavar="ARG",
+                    help="save: steps and their options, e.g. clean ocr language=eng compress "
+                         "level=high; run: the PDF(s)")
+    sp.add_argument("-o", "--output", help="run: output file, or a folder for several inputs")
+    sp.add_argument("--password")
+
     sp = other("from-images", cmd_from_images, "save images (JPG, PNG, ...) as a PDF")
     sp.add_argument("images", nargs="+")
     sp.add_argument("-o", "--output", required=True)
@@ -809,6 +886,7 @@ def build_parser():
     sp.add_argument("--rotate", action="store_true",
                     help="turn sideways/upside-down pages upright (needs Tesseract)")
     sp.add_argument("--ocr", action="store_true", help="make scans searchable")
+    sp.add_argument("--recipe", metavar="NAME", help="run a saved recipe on each file")
     sp.add_argument("--language", default="eng", help="OCR language(s)")
     sp.add_argument("--skip-duplicates", action="store_true",
                     help="don't process files identical to one already in --dest")

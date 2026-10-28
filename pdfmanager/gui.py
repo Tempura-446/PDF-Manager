@@ -32,8 +32,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
-from pdfmanager import (__version__, archive, compare, core, office, organize, outline, redact,
-                        scan)
+from pdfmanager import (__version__, archive, compare, core, office, organize, outline, recipes,
+                        redact, scan)
+from pdfmanager.appdata import data_dir
 from pdfmanager.pageranges import PageRangeError
 
 MAX_UPLOAD = 1024 * 1024 * 1024  # 1 GB
@@ -227,6 +228,10 @@ OPERATIONS = [
      "help": "Convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF. "
              "Uses Microsoft Office if installed, otherwise LibreOffice.",
      "fields": []},
+    {"id": "recipe", "group": "Automate", "label": "Recipes", "files": "pdf", "panel": "recipe",
+     "help": "Run several tools one after another, e.g. clean up scans → OCR → compress. "
+             "Save a recipe to use it again here, from the command line or in a watch folder.",
+     "fields": [_f("steps", "", "hidden", ""), _f("recipe_name", "", "hidden", "")]},
     {"id": "organize", "group": "Folders", "label": "Organize folder", "files": None,
      "help": "Sort the PDFs in a folder on this computer into sub-folders.",
      "fields": [_f("directory", "Folder", "text", "", placeholder="/Users/me/Downloads",
@@ -251,7 +256,7 @@ OPERATIONS = [
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
-SUFFIX = {"redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
+SUFFIX = {"recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
@@ -362,6 +367,17 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             f"blacked out {sum(found.values())} area{'s' if sum(found.values()) != 1 else ''} "
             f"on page{'s' if len(found) != 1 else ''} {_pages_list(list(found))}" if found
             else "nothing matched, so nothing was blacked out"))
+    elif op == "recipe":
+        try:
+            steps = json.loads(opts.get("steps") or "[]")
+        except ValueError:
+            raise UserError("the recipe is damaged; build it again") from None
+        if not steps:
+            raise UserError("add at least one step to the recipe")
+        name = re.sub(r"[^\w-]+", "-", (opts.get("recipe_name") or "").strip()).strip("-").lower()
+        if name:
+            out = out_dir / f"{src.stem}_{name}.pdf"
+        recipes.run(steps, src, out, password, notes)
     elif op == "flatten":
         forms, comments = _bool(opts.get("forms", True)), _bool(opts.get("comments", True))
         if not forms and not comments:
@@ -761,6 +777,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
         if path == "/api/operations":
             return self._send(HTTPStatus.OK, {"operations": OPERATIONS, "version": __version__})
+        if path == "/api/recipes":
+            return self._send(HTTPStatus.OK, {"recipes": list(recipes.load_all().values()),
+                                              "step_ops": list(recipes.STEP_OPS)})
         if path.startswith("/api/file/"):
             return self._open_file(path[len("/api/file/"):])
         self._error(HTTPStatus.NOT_FOUND, "not found")
@@ -807,6 +826,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._outline(body)
             if path == "/api/redact/find":
                 return self._redact_find(body)
+            if path == "/api/recipes/save":
+                data = json.loads(body or b"{}")
+                saved = recipes.save(data.get("name"), data.get("steps"))
+                return self._send(HTTPStatus.OK, {"recipe": saved,
+                                                  "recipes": list(recipes.load_all().values())})
+            if path == "/api/recipes/delete":
+                recipes.delete(json.loads(body or b"{}").get("name"))
+                return self._send(HTTPStatus.OK, {"recipes": list(recipes.load_all().values())})
             if path == "/api/folder":
                 data = json.loads(body or b"{}")
                 result = run_folder_operation(data.get("op"), data.get("options") or {},
@@ -1030,17 +1057,6 @@ def reveal_in_file_manager(path):
 
 def desktop_available():
     return importlib.util.find_spec("webview") is not None
-
-
-def data_dir():
-    """Where the app keeps its settings (the app-window browser profile and
-    a note about why the pywebview window didn't open)."""
-    if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-        return base / "PDF Manager"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "PDF Manager"
-    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "pdf-manager"
 
 
 def _pywebview_version():

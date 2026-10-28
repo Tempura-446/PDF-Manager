@@ -226,6 +226,26 @@ body.pb-dragging, body.pb-dragging * { cursor: grabbing !important; }
 .pb-live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .pb-hint { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; }
 .pb-hint:empty { display: none; }
+/* recipe builder */
+.recipe-builder .pb-toolbar { align-items: center; }
+.rc-picker, .rc-add, .rc-name { padding: 6px 9px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); font-size: 14px; }
+.rc-picker { min-width: 200px; }
+.rc-name { width: 190px; }
+.rc-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; counter-reset: step; }
+.rc-step { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; background: var(--surface); position: relative; }
+.rc-step + .rc-step::before { content: ""; position: absolute; left: 22px; top: -11px; height: 10px; border-left: 2px solid var(--border-strong); }
+.rc-head { display: flex; align-items: center; gap: 10px; }
+.rc-head strong { font-size: 14px; }
+.rc-num { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: var(--accent-text); font-size: 12px; font-weight: 700; display: grid; place-items: center; flex: none; }
+.rc-actions { margin-left: auto; display: flex; gap: 4px; }
+.rc-actions .chip-btn { box-shadow: none; }
+.rc-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px 14px; margin-top: 10px; padding-left: 32px; }
+.rc-fields .field label { font-size: 12.5px; }
+.rc-fields .field.check { padding-bottom: 4px; }
+.rc-fields .field input[type=text], .rc-fields .field input[type=number], .rc-fields .field select { padding: 6px 9px; }
+.rc-footer { margin-top: 12px; }
+.rc-starters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.rc-starters-label { color: var(--muted); font-size: 13px; }
 /* region editor (crop, redact) */
 .region-editor .pb-toolbar { margin-bottom: 10px; }
 .re-nav { display: flex; align-items: center; gap: 6px; }
@@ -522,6 +542,16 @@ const ICONS = {
   "from-images": '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
   "to-images": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="m8 17 3-3 2 2 2-2 2 2"/>',
   text: '<path d="M4 6h16M4 12h16M4 18h10"/>',
+  clean: '<path d="m5 19 9-9"/><path d="M14 10 19 5"/><path d="M15 3v2M19 7h2M16.5 3.5l1 1M3 21l2-2"/><path d="M9 4H5a2 2 0 0 0-2 2v4M21 14v4a2 2 0 0 1-2 2h-4"/>',
+  bookmarks: '<path d="M6 3h12v18l-6-4-6 4z"/>',
+  flatten: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h6"/><path d="M15 17l2 2 3-4"/>',
+  sanitize: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/>',
+  redact: '<path d="M4 6h16M4 18h9"/><rect x="4" y="10" width="13" height="4" rx="1" fill="currentColor"/>',
+  pdfa: '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4"/>',
+  compare: '<rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="16" rx="1.5"/><path d="M6 9h1M17 9h1M6 13h1M16 13h3"/>',
+  "to-word": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="m8 11 1.5 6 2.5-4 2.5 4 1.5-6"/>',
+  "from-office": '<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><path d="M17 14v6M14 17l3 3 3-3"/>',
+  recipe: '<path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1.4"/><circle cx="4" cy="12" r="1.4"/><circle cx="4" cy="18" r="1.4"/>',
   organize: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M8 13h8"/>',
   rename: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/>',
   duplicates: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
@@ -998,6 +1028,34 @@ PANELS.redact = {
     };
   },
 };
+PANELS.recipe = {
+  title: "Recipe", sub: "Runs from top to bottom", always: true,
+  async setup(host) {
+    const { RecipeBuilder } = await import("/static/recipes.js");
+    const meta = await (await api("/api/recipes")).json();
+    const usable = meta.step_ops.map((id) => ops.find((o) => o.id === id)).filter(Boolean);
+    const json = (method, path, data) => api(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }).then((r) => r.json());
+    const builder = new RecipeBuilder(host, {
+      ops: usable,
+      api: { list: async () => meta.recipes ? { recipes: meta.recipes } : (await api("/api/recipes")).json(),
+             save: (name, steps) => json("POST", "/api/recipes/save", { name, steps }),
+             remove: (name) => json("POST", "/api/recipes/delete", { name }) },
+      onChange: (steps, name) => {
+        const s = $("f-steps"), n = $("f-recipe_name");
+        if (s) s.value = JSON.stringify(steps);
+        if (n) n.value = name || "";
+      },
+    });
+    await builder.refresh();
+    meta.recipes = null;  // later refreshes ask the server
+    return {
+      async sync() {
+        $("panel-hint").textContent = items.length > 1 ? "The recipe runs on each file; the results come back as a ZIP." : "";
+        builder.emit();
+      },
+    };
+  },
+};
 function muteBookmarks() {
   const mode = $("f-mode");
   $("panel-card").classList.toggle("muted", !!mode && current.panel === "bookmarks" && mode.value !== "edit");
@@ -1005,7 +1063,7 @@ function muteBookmarks() {
 async function syncPanel() {
   const kind = current && current.panel;
   const card = $("panel-card");
-  card.hidden = !kind || !items.length;
+  card.hidden = !kind || (!items.length && !PANELS[kind].always);
   card.classList.remove("muted");
   for (const [k, p] of Object.entries(panels)) p.host.hidden = k !== kind;
   if (card.hidden) return;

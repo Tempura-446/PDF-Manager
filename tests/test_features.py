@@ -551,3 +551,81 @@ def test_cli_and_gui_redact(tmp_path, capsys):
         work=work, notes=notes)
     assert name == "s_redacted.pdf"
     assert notes == ["s.pdf: blacked out 3 areas on pages 1, 2"]
+
+
+# -- recipes -------------------------------------------------------------------------------
+
+from pdfmanager import recipes, watch  # noqa: E402
+
+
+@pytest.fixture
+def recipe_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(recipes, "data_dir", lambda: tmp_path / "appdata")
+    return tmp_path
+
+
+def test_recipe_save_list_delete(recipe_home):
+    recipes.save("  Scan   inbox ", [{"op": "clean"}, {"op": "compress", "options": {"level": "high"}}])
+    assert list(recipes.load_all()) == ["Scan inbox"]
+    assert recipes.get("Scan inbox")["steps"][1] == {"op": "compress", "options": {"level": "high"}}
+    assert recipes.describe(recipes.get("Scan inbox")["steps"]) == "Clean up scans → Compress"
+    with pytest.raises(core.PdfManagerError, match="can't be used in a recipe"):
+        recipes.save("bad", [{"op": "merge"}])
+    with pytest.raises(core.PdfManagerError, match="at least one step"):
+        recipes.save("empty", [])
+    recipes.delete("Scan inbox")
+    assert recipes.load_all() == {}
+
+
+def test_recipe_runs_steps_in_order(recipe_home):
+    tmp_path = recipe_home
+    src = scan_pdf(tmp_path / "scan.pdf", [scan_page(), scan_page(blank=True), scan_page()])
+    core.encrypt(src, tmp_path / "locked.pdf", "pw")
+    notes = []
+    steps = [{"op": "clean"}, {"op": "rotate", "options": {"degrees": "90", "pages": "1"}},
+             {"op": "number", "options": {"format": "Page {n}"}}]
+    out = recipes.run(steps, tmp_path / "locked.pdf", tmp_path / "out.pdf", "pw", notes)
+    reader = PdfReader(out)
+    assert len(reader.pages) == 2 and reader.pages[0].rotation == 90
+    assert "Page 2" in reader.pages[1].extract_text()
+    assert notes == ["locked.pdf: removed blank page 2"]
+    with pytest.raises(core.PdfManagerError, match="step 1 .Extract pages.: fill in"):
+        recipes.run([{"op": "extract"}], src, tmp_path / "x.pdf")
+
+
+def test_cli_recipe(recipe_home, capsys):
+    tmp_path = recipe_home
+    assert main(["recipe", "save", "share", "sanitize", "number", "format=p{n}",
+                 "compress", "level=high"]) == 0
+    assert "Remove hidden data → Page numbers → Compress" in capsys.readouterr().out
+    assert main(["recipe", "show", "share"]) == 0
+    assert capsys.readouterr().out.splitlines()[1] == "2. number format=p{n}"
+    src = text_pdf(tmp_path / "doc.pdf", ["One", "Two"])
+    assert main(["recipe", "run", "share", str(src)]) == 0
+    assert "p2" in PdfReader(tmp_path / "doc_share.pdf").pages[1].extract_text()
+    assert main(["recipe", "run", "missing", str(src)]) == 1
+    assert main(["recipe", "delete", "share"]) == 0
+
+
+def test_watch_runs_a_recipe(recipe_home):
+    tmp_path = recipe_home
+    inbox, dest = tmp_path / "inbox", tmp_path / "dest"
+    inbox.mkdir()
+    text_pdf(inbox / "a.pdf", ["One"])
+    settings = watch.WatchSettings(inbox=inbox, dest=dest,
+                                   recipe=[{"op": "number", "options": {"format": "#{n}"}}])
+    result = watch.process_file(inbox / "a.pdf", settings)
+    assert "#1" in PdfReader(result).pages[0].extract_text()
+
+
+def test_gui_recipe(recipe_home):
+    tmp_path = recipe_home
+    work = tmp_path / "work"
+    work.mkdir()
+    steps = [{"op": "reverse"}, {"op": "extract", "options": {"pages": "1"}}]
+    name, data, _ = gui.run_operation("recipe", [text_pdf(tmp_path / "d.pdf", ["A", "B"])],
+                                      {"steps": json.dumps(steps), "recipe_name": "Last page!"},
+                                      work=work)
+    assert name == "d_last-page.pdf"
+    (tmp_path / name).write_bytes(data)
+    assert PdfReader(tmp_path / name).pages[0].extract_text().strip() == "B"
