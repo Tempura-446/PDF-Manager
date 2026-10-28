@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdf-manager"
+version = "0.1.0"
+description = "Command-line tool to merge, split, resize, rotate, compress and organize PDF files"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "pypdf>=4.0",
+    "reportlab>=4.0",
+    "Pillow>=9.0",
+    "cryptography>=3.1",
+]
+
+[project.optional-dependencies]
+render = ["pypdfium2>=4.0"]
+test = ["pytest>=7"]
+
+[project.scripts]
+pdfm = "pdfmanager.cli:main"
+
+[tool.setuptools]
+packages = ["pdfmanager"]
