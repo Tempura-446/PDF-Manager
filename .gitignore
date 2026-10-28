@@ -1,6 +1,7 @@
 __pycache__/
 *.egg-info/
-build/
-dist/
+# Only the top-level build output; pdfmanager/static/pdfjs/build/ is vendored code.
+/build/
+/dist/
 .pytest_cache/
 .venv/
