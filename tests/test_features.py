@@ -273,3 +273,66 @@ def test_gui_bookmarks(tmp_path):
                                                            "outline": json.dumps(items)}, work=work)
     (tmp_path / name).write_bytes(data)
     assert outline.get_outline(tmp_path / name) == items
+
+
+# -- compare -------------------------------------------------------------------------------
+
+from pdfmanager import compare  # noqa: E402
+
+
+def versions(tmp_path):
+    def doc(path, pages):
+        c = canvas.Canvas(str(path), pagesize=A4)
+        for lines in pages:
+            y = 760
+            for line in lines:
+                if line == "BOX":
+                    c.rect(300, 300, 120, 80, fill=1)
+                    continue
+                c.setFont("Helvetica", 13)
+                c.drawString(72, y, line)
+                y -= 20
+            c.showPage()
+        c.save()
+        return path
+
+    old = doc(tmp_path / "v1.pdf", [["Chapter one", "The price is 100 dollars."],
+                                     ["Chapter two", "Nothing changes.", "BOX"],
+                                     ["Chapter three", "Final words."]])
+    new = doc(tmp_path / "v2.pdf", [["Chapter one", "The price is 120 dollars."],
+                                     ["Inserted page", "brand new"],
+                                     ["Chapter two", "Nothing changes."],
+                                     ["Chapter three", "Final words."]])
+    return old, new
+
+
+def test_compare_finds_changes_and_inserted_pages(tmp_path):
+    old, new = versions(tmp_path)
+    summary = compare.compare(old, new, tmp_path / "diff.pdf")
+    got = [(c["old"], c["new"], c["kind"], c["removed"], c["added"]) for c in summary["changes"]]
+    assert got == [(1, 1, "changed", ["100"], ["120"]), (None, 2, "added", [], []),
+                   (2, 3, "changed", [], [])]
+    assert summary["changes"][2]["areas"]  # the removed box is outlined
+    report = PdfReader(tmp_path / "diff.pdf")
+    assert len(report.pages) == 4  # summary + three pages
+    assert "3 pages with differences" in report.pages[0].extract_text()
+
+
+def test_compare_identical(tmp_path):
+    old, _ = versions(tmp_path)
+    summary = compare.compare(old, old, tmp_path / "diff.pdf")
+    assert summary["changes"] == []
+    assert "No differences found" in PdfReader(tmp_path / "diff.pdf").pages[0].extract_text()
+
+
+def test_cli_and_gui_compare(tmp_path, capsys):
+    old, new = versions(tmp_path)
+    assert main(["compare", str(old), str(new)]) == 0
+    out = capsys.readouterr().out
+    assert "page 1: - 100; + 120" in out and "3 page(s) differ" in out
+    assert (tmp_path / "v1_vs_v2.pdf").exists()
+    work = tmp_path / "work"
+    work.mkdir()
+    notes = []
+    name, _, _ = gui.run_operation("compare", [old, new], {}, work=work, notes=notes)
+    assert name == "v1_vs_v2.pdf" and notes == ["3 pages with differences"]

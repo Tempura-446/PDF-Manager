@@ -646,7 +646,7 @@ async function select(id) {
   $("file-input").accept = current.files === "images" ? "image/*" : ".pdf,application/pdf";
   $("drop-hint").textContent = {
     images: "JPG, PNG, TIFF… one page per image, in this order",
-    pdf2: "Two PDFs: front sides first, then back sides",
+    pdf2: current.id === "compare" ? "Two PDFs: the original first, then the changed version" : "Two PDFs: front sides first, then back sides",
   }[current.files] || (current.id === "merge" ? "Add PDFs in the order to combine them" : "One or more PDFs");
   const want = current.files === "images" ? isImage : isPdf;
   items = items.filter((it) => want(it.file));
@@ -694,7 +694,7 @@ let dragId = null;
 function renderFiles() {
   const grid = $("file-grid");
   grid.replaceChildren();
-  const ordered = current && (current.id === "merge" || current.id === "interleave" || current.files === "images");
+  const ordered = current && (current.id === "merge" || current.files === "pdf2" || current.files === "images");
   items.forEach((it, i) => {
     const thumb = el("div", { class: "thumb" });
     if (it.loading) thumb.append(el("span", { class: "loading", "aria-label": "Loading preview" }));

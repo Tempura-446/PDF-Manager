@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
-from pdfmanager import __version__, archive, core, organize, outline, scan
+from pdfmanager import __version__, archive, compare, core, organize, outline, scan
 from pdfmanager.pageranges import PageRangeError
 
 MAX_UPLOAD = 1024 * 1024 * 1024  # 1 GB
@@ -62,6 +62,10 @@ OPERATIONS = [
      "help": "Combine separately scanned front sides (first file) and back sides "
              "(second file).",
      "fields": [_f("reverse_back", "Back sides are in reverse order", "check", True)]},
+    {"id": "compare", "group": "Combine", "label": "Compare", "files": "pdf2",
+     "help": "Find what changed between two versions: add the original first, then the "
+             "changed version. You get a report with the differences marked.",
+     "fields": [_f("all_pages", "Include unchanged pages in the report", "check", False)]},
     {"id": "extract", "group": "Pages", "label": "Extract pages", "files": "pdf",
      "help": "Click the pages to copy into a new PDF, or type them.",
      "board": {"mode": "select", "effect": "keep", "field": "pages"},
@@ -437,6 +441,16 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
             raise UserError("add exactly two files: front sides, then back sides")
         out = out_dir / f"{files[0].stem}_interleaved.pdf"
         core.interleave(files[0], files[1], out, _bool(opts.get("reverse_back", True)), password)
+        outputs = [out]
+    elif op == "compare":
+        if len(files) != 2:
+            raise UserError("add exactly two files: the original, then the changed version")
+        out = out_dir / f"{files[0].stem}_vs_{files[1].stem}.pdf"
+        summary = compare.compare(files[0], files[1], out, password, password,
+                                  all_pages=_bool(opts.get("all_pages")))
+        changed = [c for c in summary["changes"] if c["kind"] != "same"]
+        notes.append(f"{len(changed)} page{'s' if len(changed) != 1 else ''} with differences"
+                     if changed else "No differences found.")
         outputs = [out]
     elif op == "from-images":
         out = out_dir / (files[0].stem + ".pdf" if len(files) == 1 else "images.pdf")

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-from pdfmanager import __version__, archive, core, imaging, organize, outline, scan
+from pdfmanager import __version__, archive, compare, core, imaging, organize, outline, scan
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -399,6 +399,23 @@ def cmd_interleave(a):
     print(f"-> {out}")
 
 
+def cmd_compare(a):
+    passwords = _Passwords(a.password)
+    out = a.output or _default_output(a.old, f"vs_{Path(a.new).stem}")
+    summary = compare.compare(a.old, a.new, out, passwords.for_file(a.old),
+                              passwords.for_file(a.new), all_pages=a.all_pages)
+    changes = [c for c in summary["changes"] if c["kind"] != "same"]
+    for c in changes:
+        where = (f"page {c['new']} added" if c["kind"] == "added" else
+                 f"page {c['old']} removed" if c["kind"] == "removed" else
+                 f"page {c['old']}" + (f" (now {c['new']})" if c["old"] != c["new"] else ""))
+        detail = "; ".join([f"- {w}" for w in c["removed"][:3]] + [f"+ {w}" for w in c["added"][:3]])
+        print(f"{where}: {detail or 'layout or pictures changed'}" if c["kind"] == "changed"
+              else where)
+    print(f"{len(changes)} page(s) differ" if changes else "no differences")
+    print(f"-> {out}")
+
+
 def cmd_from_images(a):
     margin = a.margin * core.POINTS_PER_MM
     print(f"-> {core.images_to_pdf(_expand(a.images), a.output, a.size, margin)}")
@@ -657,6 +674,14 @@ def build_parser():
     sp = per_file("text", run_text, "extract text",
                   out_help="write to a .txt file instead of the terminal")
     sp.add_argument("-p", "--pages", help=PAGES_HELP)
+
+    sp = other("compare", cmd_compare, "compare two versions of a PDF and write a report")
+    sp.add_argument("old", help="the original")
+    sp.add_argument("new", help="the changed version")
+    sp.add_argument("-o", "--output", help="report file (default: <old>_vs_<new>.pdf)")
+    sp.add_argument("--all-pages", action="store_true",
+                    help="show unchanged pages in the report too")
+    sp.add_argument("--password")
 
     sp = other("from-images", cmd_from_images, "save images (JPG, PNG, ...) as a PDF")
     sp.add_argument("images", nargs="+")
