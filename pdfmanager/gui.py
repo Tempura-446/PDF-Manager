@@ -8,8 +8,10 @@ start-up, and only localhost Host headers are accepted, so other web pages
 and other machines can't drive the server.
 """
 
+import base64
 import email.parser
 import email.policy
+import importlib.util
 import io
 import json
 import re
@@ -379,6 +381,63 @@ def run_folder_operation(op, opts, apply):
 
 
 # --------------------------------------------------------------------------
+# Thumbnails and results
+# --------------------------------------------------------------------------
+
+THUMB_WIDTH = 240
+
+
+def inspect_pdf(path, password=None):
+    """Page count, size label and a first-page thumbnail (data URL) for the
+    file cards and the result preview."""
+    try:
+        reader = core.open_pdf(path, password)
+    except core.PdfManagerError as exc:
+        locked = "encrypted" in str(exc) or "password" in str(exc)
+        return {"pages": None, "locked": locked, "error": None if locked else str(exc)}
+    info = {"pages": len(reader.pages), "locked": False, "error": None, "thumb": None}
+    try:
+        import pypdfium2 as pdfium
+
+        with core.PDFIUM_LOCK:
+            doc = pdfium.PdfDocument(str(path), password=password)
+            try:
+                page = doc[0]
+                scale = THUMB_WIDTH / max(page.get_width(), 1)
+                image = page.render(scale=min(scale, 2.0)).to_pil().convert("RGB")
+            finally:
+                doc.close()
+        buf = io.BytesIO()
+        image.save(buf, "JPEG", quality=82)
+        info["thumb"] = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        pass  # thumbnails are a nicety; never fail because of them
+    return info
+
+
+class ResultCache:
+    """Keeps the last few results so the desktop window can save them with a
+    native Save dialog (browsers download them directly instead)."""
+
+    def __init__(self, keep=5):
+        self.keep = keep
+        self.items = {}
+        self.lock = threading.Lock()
+
+    def add(self, name, data):
+        key = secrets.token_urlsafe(12)
+        with self.lock:
+            self.items[key] = (name, data)
+            while len(self.items) > self.keep:
+                self.items.pop(next(iter(self.items)))
+        return key
+
+    def get(self, key):
+        with self.lock:
+            return self.items.get(key)
+
+
+# --------------------------------------------------------------------------
 # HTTP
 # --------------------------------------------------------------------------
 
@@ -409,6 +468,9 @@ class Handler(BaseHTTPRequestHandler):
     server_version = f"pdfm/{__version__}"
     token = ""
     allowed_hosts = set()
+    results = None  # ResultCache
+    # pywebview's JavaScript bridge needs eval(); only allowed in the desktop window.
+    allow_eval = False
 
     def log_message(self, fmt, *args):  # keep the terminal quiet
         pass
@@ -448,10 +510,11 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/":
             page = resources.files("pdfmanager").joinpath("gui.html").read_text("utf-8")
+            script_src = "'unsafe-inline' 'unsafe-eval'" if self.allow_eval else "'unsafe-inline'"
             return self._send(HTTPStatus.OK, page, "text/html; charset=utf-8", {
                 "Content-Security-Policy":
                     "default-src 'self'; style-src 'unsafe-inline'; "
-                    "script-src 'unsafe-inline'; img-src 'self' data: blob:",
+                    f"script-src {script_src}; img-src 'self' data: blob:",
             })
         if path == "/api/operations":
             if not self._token_ok():
@@ -472,6 +535,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/run":
                 return self._run(body)
+            if path == "/api/inspect":
+                return self._inspect(body)
             if path == "/api/folder":
                 data = json.loads(body or b"{}")
                 result = run_folder_operation(data.get("op"), data.get("options") or {},
@@ -504,18 +569,31 @@ class Handler(BaseHTTPRequestHandler):
                     extra[name] = path
             name, data, ctype = run_operation(op, files, fields, password, extra, work)
             quoted = name.replace('"', "")
-            return self._send(HTTPStatus.OK, data, ctype, {
-                "Content-Disposition": f'attachment; filename="{quoted}"',
-                "X-Pdfm-Filename": quoted,
-            })
+            headers = {"Content-Disposition": f'attachment; filename="{quoted}"',
+                       "X-Pdfm-Filename": quoted}
+            if self.headers.get("X-Pdfm-Keep") == "1" and self.results is not None:
+                headers["X-Pdfm-Result-Id"] = self.results.add(name, data)
+            return self._send(HTTPStatus.OK, data, ctype, headers)
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
+    def _inspect(self, body):
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            info = inspect_pdf(path, fields.get("password") or None)
+        return self._send(HTTPStatus.OK, info)
 
-def make_server(port=0):
-    """Create (but don't start) the server. Returns (server, url)."""
+
+def make_server(port=0, desktop=False):
+    """Create (but don't start) the server. Returns (server, url). The
+    server's result cache is ``server.RequestHandlerClass.results``."""
     token = secrets.token_urlsafe(24)
-    handler = type("PdfmHandler", (Handler,), {"token": token})
+    handler = type("PdfmHandler", (Handler,), {"token": token, "results": ResultCache(),
+                                               "allow_eval": desktop})
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     real_port = server.server_address[1]
     handler.allowed_hosts = {f"127.0.0.1:{real_port}", f"localhost:{real_port}"}
@@ -523,6 +601,7 @@ def make_server(port=0):
 
 
 def serve(port=0, open_browser=True):
+    """Run in the browser: print the link, open it, serve until Ctrl+C."""
     server, url = make_server(port)
     print(f"PDF Manager is running at {url}")
     print("Keep this window open while you use it; press Ctrl+C to stop.")
@@ -534,3 +613,91 @@ def serve(port=0, open_browser=True):
         pass
     finally:
         server.server_close()
+
+
+class DesktopApi:
+    """Functions the page can call in the desktop window (window.pywebview.api)."""
+
+    def __init__(self, results):
+        self._results = results
+        self._window = None
+
+    def save_result(self, key, suggested_name):
+        """Ask where to save a result and write it. Returns the path, or
+        None if the user cancelled."""
+        import webview
+
+        item = self._results.get(key)
+        if item is None:
+            raise ValueError("that result has expired; run the tool again")
+        name, data = item
+        chosen = self._window.create_file_dialog(
+            webview.FileDialog.SAVE, directory=str(Path.home()),
+            save_filename=suggested_name or name)
+        if not chosen:
+            return None
+        target = Path(chosen if isinstance(chosen, str) else chosen[0])
+        target.write_bytes(data)
+        return str(target)
+
+    def pick_folder(self):
+        import webview
+
+        chosen = self._window.create_file_dialog(webview.FileDialog.FOLDER,
+                                                 directory=str(Path.home()))
+        return (chosen if isinstance(chosen, str) else chosen[0]) if chosen else None
+
+    def reveal(self, path):
+        """Show a saved file in Explorer / Finder / the file manager."""
+        reveal_in_file_manager(path)
+
+
+def reveal_in_file_manager(path):
+    import subprocess
+    import sys
+
+    path = Path(path)
+    if sys.platform == "win32":
+        subprocess.Popen(["explorer", "/select,", str(path)])
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path.parent if path.is_file() else path)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def desktop_available():
+    return importlib.util.find_spec("webview") is not None
+
+
+def run_desktop(port=0):
+    """Open PDF Manager in its own window (needs pywebview). Returns False if
+    no window could be opened, so the caller can fall back to the browser."""
+    try:
+        import webview
+    except ImportError:
+        return False
+    server, url = make_server(port, desktop=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    api = DesktopApi(server.RequestHandlerClass.results)
+    try:
+        window = webview.create_window("PDF Manager", url, js_api=api, width=1180, height=820,
+                                       min_size=(400, 560), background_color="#f6f6f3")
+        api._window = window
+        webview.start()
+    except Exception as exc:  # e.g. no GUI toolkit on this Linux machine
+        print(f"Could not open the app window ({exc}); opening your browser instead.")
+        server.shutdown()
+        server.server_close()
+        return False
+    server.shutdown()
+    server.server_close()
+    return True
+
+
+def main_app():
+    """Entry point for the `pdfm-app` launcher: a window if possible,
+    otherwise the browser."""
+    if not run_desktop():
+        serve()

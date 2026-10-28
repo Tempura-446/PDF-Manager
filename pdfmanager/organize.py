@@ -48,19 +48,21 @@ def _meaningful(value):
 def describe(path):
     """Collect the metadata used for grouping and renaming."""
     path = Path(path)
-    record = {"path": path, "name": path.name, "bytes": path.stat().st_size,
-              "pages": None, "title": None, "author": None, "date": None, "error": None}
+    record = {"path": path, "name": path.name, "bytes": path.stat().st_size, "pages": None,
+              "title": None, "author": None, "date": None, "error": None, "locked": False}
     try:
         reader = PdfReader(str(path))
-        if reader.is_encrypted:
-            # Many "encrypted" PDFs only have an owner password.
-            reader.decrypt("")
-        meta = reader.metadata or {}
-        record["pages"] = len(reader.pages)
-        record["title"] = _meaningful(meta.get("/Title"))
-        record["author"] = _meaningful(meta.get("/Author"))
-        record["date"] = _pdf_date(meta.get("/CreationDate")) or _pdf_date(meta.get("/ModDate"))
-    except Exception as exc:  # unreadable/corrupt/password-protected
+        # Many "encrypted" PDFs only have an owner password and open with "".
+        if reader.is_encrypted and not reader.decrypt(""):
+            record.update(error="password protected", locked=True)
+        else:
+            meta = reader.metadata or {}
+            record["pages"] = len(reader.pages)
+            record["title"] = _meaningful(meta.get("/Title"))
+            record["author"] = _meaningful(meta.get("/Author"))
+            record["date"] = (_pdf_date(meta.get("/CreationDate"))
+                              or _pdf_date(meta.get("/ModDate")))
+    except Exception as exc:  # unreadable/corrupt
         record["error"] = str(exc) or exc.__class__.__name__
     if record["date"] is None:
         record["date"] = datetime.fromtimestamp(path.stat().st_mtime)
@@ -74,7 +76,7 @@ def _safe(name):
 
 def group_name(record, by):
     if record["error"] and by in ("author", "pages", "title-letter"):
-        return "Unreadable"
+        return "Password protected" if record.get("locked") else "Unreadable"
     if by == "year":
         return f"{record['date']:%Y}"
     if by == "month":

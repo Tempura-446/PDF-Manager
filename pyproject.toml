@@ -13,16 +13,21 @@ dependencies = [
     "reportlab>=4.0",
     "Pillow>=9.0",
     "cryptography>=3.1",
+    "pypdfium2>=4.0",
 ]
 
 [project.optional-dependencies]
-render = ["pypdfium2>=4.0"]
+app = ["pywebview>=5"]
 ocr = ["ocrmypdf>=15"]
-all = ["pypdfium2>=4.0", "ocrmypdf>=15"]
-test = ["pytest>=7", "pypdfium2>=4.0"]
+all = ["pywebview>=5", "ocrmypdf>=15"]
+build = ["pywebview>=5", "pyinstaller>=6"]
+test = ["pytest>=7"]
 
 [project.scripts]
 pdfm = "pdfmanager.cli:main"
+
+[project.gui-scripts]
+pdfm-app = "pdfmanager.gui:main_app"
 
 [tool.setuptools]
 packages = ["pdfmanager"]

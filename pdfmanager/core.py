@@ -3,6 +3,7 @@ can be used from the CLI or imported as a library."""
 
 import io
 import os
+import threading
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter, Transformation
@@ -738,27 +739,31 @@ def ocr(path, output, language="eng", force=False, deskew=False, password=None):
     return output
 
 
+# pdfium is not thread-safe: every use of pypdfium2 must hold this lock
+# (the GUI server renders thumbnails for several files at once).
+PDFIUM_LOCK = threading.Lock()
+
+
 def pdf_to_images(path, outdir, dpi=150, fmt="png", pages=None, password=None):
-    """Render pages to image files. Requires the optional pypdfium2 package."""
-    try:
-        import pypdfium2 as pdfium
-    except ImportError:
-        raise PdfManagerError("rendering pages needs pypdfium2: pip install pypdfium2") from None
-    doc = pdfium.PdfDocument(str(path), password=password)
-    try:
-        total = len(doc)
-        indices = parse_page_ranges(pages, total) if pages else range(total)
-        outdir = Path(outdir)
-        outdir.mkdir(parents=True, exist_ok=True)
-        width = len(str(total))
-        written = []
-        for i in indices:
-            image = doc[i].render(scale=dpi / 72).to_pil()
-            if fmt.lower() in ("jpg", "jpeg") and image.mode != "RGB":
-                image = image.convert("RGB")
-            target = outdir / f"{Path(path).stem}_{i + 1:0{width}d}.{fmt}"
-            image.save(target)
-            written.append(target)
-        return written
-    finally:
-        doc.close()
+    """Render pages to image files with pypdfium2."""
+    import pypdfium2 as pdfium
+
+    outdir = Path(outdir)
+    with PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(str(path), password=password)
+        try:
+            total = len(doc)
+            indices = parse_page_ranges(pages, total) if pages else range(total)
+            outdir.mkdir(parents=True, exist_ok=True)
+            width = len(str(total))
+            written = []
+            for i in indices:
+                image = doc[i].render(scale=dpi / 72).to_pil()
+                if fmt.lower() in ("jpg", "jpeg") and image.mode != "RGB":
+                    image = image.convert("RGB")
+                target = outdir / f"{Path(path).stem}_{i + 1:0{width}d}.{fmt}"
+                image.save(target)
+                written.append(target)
+            return written
+        finally:
+            doc.close()

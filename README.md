@@ -1,7 +1,7 @@
 # PDF-Manager
 
-`pdfm` is a PDF toolkit you can use three ways: as a **graphical app** in
-your browser, from the **command line**, or as a **Python library**.
+`pdfm` is a PDF toolkit you can use three ways: as a **desktop app**, from
+the **command line**, or as a **Python library**.
 
 It can merge, split, extract, reorder, rotate, resize, crop, n-up, compress
 (three levels), convert colours (grayscale / RGB / CMYK, with ICC profiles),
@@ -10,32 +10,65 @@ and organize, rename, de-duplicate and watch whole folders of PDFs.
 
 ## Install
 
+### Easiest: the standalone app
+
+Download **PDF-Manager-windows.zip** or **PDF-Manager-linux.zip** from the
+latest run of the [Build app](../../actions/workflows/build-app.yml)
+workflow (open the run, then *Artifacts*), unzip it, and double-click
+**PDF Manager**. Nothing else to install (OCR still needs Tesseract, below).
+
+To build it yourself, including on a Mac:
+
+```bash
+pip install -e ".[build]"
+python packaging/build_app.py      # result in dist/
+```
+
+### With Python
+
 Requires Python 3.10 or newer.
 
 ```bash
-pip install -e .            # core features + the `pdfm` command
-pip install -e ".[all]"     # + page rendering (to-images) and OCR
+pip install -e ".[app]"     # everything + the desktop window
+pip install -e ".[all]"     # the same, plus OCR
+pip install -e .            # without the desktop window (the app opens in your browser)
 ```
+
+On Linux the desktop window also needs a web engine: `pip install "pywebview[qt]"`
+(or the GTK packages, see the [pywebview docs](https://pywebview.flowrl.com/guide/installation.html)).
+Without it, the app opens in your browser instead.
 
 OCR also needs the [Tesseract](https://tesseract-ocr.github.io/tessdoc/Installation.html)
 program (`brew install tesseract`, `sudo apt install tesseract-ocr`, or the
 Windows installer).
 
-## Graphical app
+## Desktop app
 
-```bash
-pdfm gui
-```
+Start it with **`pdfm-app`** (no terminal window; good for a desktop
+shortcut or the Start menu) or `pdfm gui`. It opens in its own window;
+without pywebview it opens in your web browser instead (`pdfm gui --browser`
+forces that).
 
-This opens PDF Manager in your web browser. Drop files in, pick a tool, set
-the options and click **Run**; the result downloads automatically (several
-files come back as a ZIP). The folder tools (organize, rename, find
-duplicates) work on folders on your computer and always let you
-**Preview** before anything changes.
+- Drop files anywhere on the window. Each file shows a **preview of its
+  first page**, its page count and size; drag the cards to change the
+  order (for merging, interleaving and images).
+- Pick a tool on the left, or press **/** to search for one. Set the
+  options and click **Run** (or Ctrl/⌘+Enter).
+- The result appears with a preview. In the app window, **Save…** opens
+  the normal save dialog and **Show in folder** reveals the file; in a
+  browser, the result downloads. Several files come back as a ZIP.
+- Folder tools (organize, rename, find duplicates) have **Browse…**
+  buttons in the app window and always let you **Preview** before
+  anything changes.
+- Password-protected PDFs: enter the password once under the options;
+  results stay protected with the same password.
+- Light and dark themes follow your system, or pick one at the bottom of
+  the sidebar.
 
-The app runs only on your own computer (`127.0.0.1`) and is protected by a
-random token in the link it prints, so other websites and other computers
-can't use it. Keep the terminal open while you use it; press Ctrl+C to stop.
+Everything runs on your own computer. The app's built-in server only
+listens on `127.0.0.1` and requires a random token that only the app
+window (or the link `pdfm gui` prints) knows, so other websites and other
+computers can't use it.
 
 ## Command line
 
@@ -50,7 +83,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 
 | Command | What it does | Example |
 |---|---|---|
-| `gui` | open the graphical app | `pdfm gui` |
+| `gui` | open the desktop app | `pdfm gui` |
 | `info` | page count, page sizes, metadata | `pdfm info *.pdf` |
 | `merge` | combine files (optionally picking pages) | `pdfm merge a.pdf b.pdf:1-3 -o all.pdf` |
 | `split` | one file per page, every N pages, or per range | `pdfm split book.pdf -r 1-10 11-20 21-` |

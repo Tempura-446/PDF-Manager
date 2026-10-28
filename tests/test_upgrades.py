@@ -3,6 +3,7 @@ batch CLI, duplicates, watch folders, OCR and the web GUI."""
 
 import json
 import shutil
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -476,3 +477,116 @@ def test_gui_folder_preview_then_apply(server, tmp_path):
     assert len(list(lib.iterdir())) == 2  # preview changed nothing
     request(base + "/api/folder", token, json.dumps({**payload, "apply": True}).encode(), headers)
     assert len(list(lib.iterdir())) == 1
+
+
+# -- GUI: thumbnails, desktop window support -------------------------------
+
+def test_gui_inspect_returns_thumbnail_and_pages(server, tmp_path):
+    base, token = server
+    pdf = make_pdf(tmp_path / "a.pdf", pages=3).read_bytes()
+    body, headers = multipart({}, [("file", "a.pdf", pdf)])
+    status, _, data = request(base + "/api/inspect", token, body, headers)
+    info = json.loads(data)
+    assert status == 200 and info["pages"] == 3 and info["thumb"].startswith("data:image/jpeg")
+
+    enc = core.encrypt(tmp_path / "a.pdf", tmp_path / "e.pdf", "pw").read_bytes()
+    body, headers = multipart({}, [("file", "e.pdf", enc)])
+    info = json.loads(request(base + "/api/inspect", token, body, headers)[2])
+    assert info["locked"] and info["pages"] is None
+    body, headers = multipart({"password": "pw"}, [("file", "e.pdf", enc)])
+    info = json.loads(request(base + "/api/inspect", token, body, headers)[2])
+    assert info["pages"] == 3 and info["thumb"]
+
+
+def test_gui_renders_thumbnails_concurrently_without_crashing(server, tmp_path):
+    # pdfium isn't thread-safe; without core.PDFIUM_LOCK this crashes the process.
+    base, token = server
+    pdf = photo_pdf(tmp_path / "a.pdf", tmp_path).read_bytes()
+    body, headers = multipart({}, [("file", "a.pdf", pdf)])
+    results = []
+
+    def hit():
+        for _ in range(2):
+            results.append(json.loads(request(base + "/api/inspect", token, body, headers)[2]))
+
+    threads = [threading.Thread(target=hit) for _ in range(16)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(results) == 32 and all(r["thumb"] for r in results)
+
+
+def test_gui_csp_allows_eval_only_in_desktop_window():
+    for desktop, expected in ((False, False), (True, True)):
+        srv, url = gui.make_server(desktop=desktop)
+        thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        thread.start()
+        try:
+            _, headers, _ = request(url.split("#")[0])
+            assert ("'unsafe-eval'" in headers["Content-Security-Policy"]) is expected
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+
+def test_gui_keeps_results_for_the_desktop_save_dialog(server, tmp_path, monkeypatch):
+    import enum
+    import types
+
+    # A stand-in for pywebview, which the test environment doesn't need.
+    fake = types.ModuleType("webview")
+    fake.FileDialog = enum.IntEnum("FileDialog", {"OPEN": 10, "FOLDER": 20, "SAVE": 30})
+    monkeypatch.setitem(sys.modules, "webview", fake)
+    base, token = server
+    pdf = make_pdf(tmp_path / "a.pdf").read_bytes()
+    body, headers = multipart({"op": "reverse"}, [("files", "a.pdf", pdf)])
+    _, res_headers, _ = request(base + "/api/run", token, body, headers)
+    assert "X-Pdfm-Result-Id" not in res_headers  # browsers download directly
+
+    _, res_headers, data = request(base + "/api/run", token, body, {**headers, "X-Pdfm-Keep": "1"})
+    key = res_headers["X-Pdfm-Result-Id"]
+
+    # The desktop API saves that result wherever the Save dialog says.
+    cache = gui.ResultCache()
+    cache.items[key] = ("a_reversed.pdf", data)
+    api = gui.DesktopApi(cache)
+    target = tmp_path / "chosen.pdf"
+
+    class FakeWindow:
+        def create_file_dialog(self, kind, **kwargs):
+            assert kind == fake.FileDialog.SAVE
+            assert kwargs["save_filename"] == "a_reversed.pdf"
+            return (str(target),)
+
+    api._window = FakeWindow()
+    assert api.save_result(key, "a_reversed.pdf") == str(target)
+    assert target.read_bytes() == data
+    with pytest.raises(ValueError):
+        api.save_result("expired", "x.pdf")
+
+
+def test_result_cache_keeps_only_recent_results():
+    cache = gui.ResultCache(keep=2)
+    keys = [cache.add(f"{i}.pdf", b"x") for i in range(3)]
+    assert cache.get(keys[0]) is None and cache.get(keys[2]) == ("2.pdf", b"x")
+
+
+def test_cli_gui_falls_back_to_browser(monkeypatch):
+    calls = []
+    monkeypatch.setattr(gui, "desktop_available", lambda: True)
+    monkeypatch.setattr(gui, "run_desktop", lambda port=0: calls.append("window") or False)
+    monkeypatch.setattr(gui, "serve", lambda port=0, open_browser=True: calls.append("browser"))
+    assert main(["gui"]) == 0
+    assert calls == ["window", "browser"]  # window failed -> browser
+    calls.clear()
+    assert main(["gui", "--browser"]) == 0
+    assert calls == ["browser"]
+
+
+def test_organize_puts_protected_files_in_their_own_folder(tmp_path):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    core.encrypt(make_pdf(tmp_path / "a.pdf"), lib / "secret.pdf", "pw")
+    plan = organize.organize(lib, by="pages", dry_run=True)
+    assert plan[0][1].parent.name == "Password protected"
