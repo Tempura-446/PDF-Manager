@@ -179,5 +179,5 @@ pip install -e ".[test]"
 pytest
 ```
 
-GitHub Actions runs the suite on Linux, Windows and macOS, plus an OCR job
-with Tesseract.
+GitHub Actions runs the suite on Linux (Python 3.10 and 3.13) and Windows,
+plus an OCR job with Tesseract.
