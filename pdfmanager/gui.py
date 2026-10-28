@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 import webbrowser
 import zipfile
 from http import HTTPStatus
@@ -31,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
-from pdfmanager import __version__, core, organize
+from pdfmanager import __version__, core, organize, scan
 from pdfmanager.pageranges import PageRangeError
 
 MAX_UPLOAD = 1024 * 1024 * 1024  # 1 GB
@@ -128,6 +129,14 @@ OPERATIONS = [
      "fields": [_f("language", "Language(s)", "text", "eng", placeholder="eng+deu"),
                 _f("deskew", "Straighten crooked scans", "check", False),
                 _f("force", "Redo pages that already have text", "check", False)]},
+    {"id": "clean", "group": "Optimize", "label": "Clean up scans", "files": "pdf",
+     "help": "Remove blank pages and turn sideways or upside-down pages the right way up.",
+     "fields": [_f("remove_blank", "Remove blank pages", "check", True),
+                _f("sensitivity", "Blank page detection", "select", "medium",
+                   choices=[["low", "Strict — only completely empty pages"],
+                            ["medium", "Normal — allows a few specks"],
+                            ["high", "Generous — also nearly empty pages"]]),
+                _f("auto_rotate", "Turn pages upright (needs Tesseract)", "check", False)]},
     {"id": "watermark", "group": "Stamp", "label": "Watermark", "files": "pdf",
      "fields": [_f("text", "Text", "text", "CONFIDENTIAL", required=True),
                 _f("opacity", "Opacity", "number", 0.15, min=0.01, max=1, step=0.05),
@@ -185,7 +194,7 @@ OPERATIONS = [
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
-SUFFIX = {"extract": "extract", "delete": "edited", "reorder": "reordered",
+SUFFIX = {"clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
@@ -217,9 +226,11 @@ def _pages(opts, key="pages"):
     return (opts.get(key) or "").strip() or None
 
 
-def _run_file_op(op, src, out_dir, opts, password, extra_files):
-    """Run a single-input operation. Returns a list of output paths."""
+def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
+    """Run a single-input operation. Returns a list of output paths.
+    Messages for the user (e.g. which pages were removed) go in ``notes``."""
     out = out_dir / f"{src.stem}_{SUFFIX.get(op, op)}.pdf"
+    notes = [] if notes is None else notes
     if op == "extract":
         core.select_pages(src, out, opts["pages"], password)
     elif op == "delete":
@@ -258,6 +269,15 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files):
         core.ocr(src, out, language=opts.get("language") or "eng",
                  force=_bool(opts.get("force")), deskew=_bool(opts.get("deskew")),
                  password=password)
+    elif op == "clean":
+        auto_rotate = _bool(opts.get("auto_rotate"))
+        if auto_rotate and not scan.find_tesseract():
+            raise UserError("turning pages upright needs the Tesseract program; install it "
+                            "(see the OCR tool) or untick that option")
+        report = scan.clean(src, out, remove_blank=_bool(opts.get("remove_blank", True)),
+                            sensitivity=opts.get("sensitivity") or "medium",
+                            auto_rotate=auto_rotate, password=password)
+        notes.append(_clean_note(src.name, report))
     elif op == "watermark":
         core.watermark(src, out, text=opts.get("text") or "CONFIDENTIAL",
                        opacity=_num(opts.get("opacity"), float, 0.15),
@@ -297,6 +317,20 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files):
     return [out]
 
 
+def _pages_list(numbers):
+    return ", ".join(map(str, numbers)) if len(numbers) <= 12 else f"{len(numbers)} pages"
+
+
+def _clean_note(name, report):
+    removed, rotated = report["removed"], report["rotated"]
+    bits = []
+    if removed:
+        bits.append(f"removed blank page{'s' if len(removed) > 1 else ''} {_pages_list(removed)}")
+    if rotated:
+        bits.append(f"turned page{'s' if len(rotated) > 1 else ''} {_pages_list(list(rotated))}")
+    return f"{name}: " + ("; ".join(bits) if bits else "nothing needed changing")
+
+
 def _protect(outputs, password, op):
     """PDFs made from a password-protected file get the same password."""
     if password and op not in ("decrypt", "encrypt"):
@@ -316,9 +350,10 @@ def _flatten_outputs(outputs, out_dir):
     return flat
 
 
-def run_operation(op, files, opts, password=None, extra_files=None, work=None):
+def run_operation(op, files, opts, password=None, extra_files=None, work=None, notes=None):
     """Run ``op`` on uploaded ``files`` (paths in the temporary folder
-    ``work``). Returns (filename, bytes, content type) for the download."""
+    ``work``). Returns (filename, bytes, content type) for the download;
+    messages for the user are appended to ``notes``."""
     spec = OPS.get(op)
     if spec is None:
         raise UserError(f"unknown operation {op!r}")
@@ -355,7 +390,7 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None):
             sub = out_dir / f"{index:03d}"
             sub.mkdir()
             outputs.extend((sub, p) for p in _run_file_op(op, src, sub, opts, password,
-                                                           extra_files))
+                                                           extra_files, notes))
         outputs = _flatten_outputs(outputs, out_dir)
 
     _protect(outputs, password, op)
@@ -658,10 +693,13 @@ class Handler(BaseHTTPRequestHandler):
                     files.append(path)
                 elif data:  # extra file field, e.g. an ICC profile
                     extra[name] = path
-            name, data, ctype = run_operation(op, files, fields, password, extra, work)
+            notes = []
+            name, data, ctype = run_operation(op, files, fields, password, extra, work, notes)
             quoted = name.replace('"', "")
             headers = {"Content-Disposition": f'attachment; filename="{quoted}"',
                        "X-Pdfm-Filename": quoted}
+            if notes:
+                headers["X-Pdfm-Note"] = urllib.parse.quote("\n".join(notes))
             if self.headers.get("X-Pdfm-Keep") == "1" and self.results is not None:
                 headers["X-Pdfm-Result-Id"] = self.results.add(name, data)
             return self._send(HTTPStatus.OK, data, ctype, headers)

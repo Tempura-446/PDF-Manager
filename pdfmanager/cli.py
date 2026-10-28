@@ -11,7 +11,7 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-from pdfmanager import __version__, core, imaging, organize
+from pdfmanager import __version__, core, imaging, organize, scan
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -189,6 +189,17 @@ def run_ocr(a, src, out, pw):
     return core.ocr(src, out, language=a.language, force=a.force, deskew=a.deskew, password=pw)
 
 
+def run_clean(a, src, out, pw):
+    report = scan.clean(src, out, remove_blank=not a.keep_blank, sensitivity=a.sensitivity,
+                        auto_rotate=a.rotate, password=pw)
+    bits = []
+    if report["removed"]:
+        bits.append("removed blank pages " + ", ".join(map(str, report["removed"])))
+    if report["rotated"]:
+        bits.append("turned " + ", ".join(f"page {n} by {d}°" for n, d in report["rotated"].items()))
+    return f"{out}  ({'; '.join(bits) or 'nothing needed changing'})"
+
+
 def run_text(a, src, out, pw):
     text = core.extract_text(src, out, a.pages, pw)
     if out is None:
@@ -238,7 +249,7 @@ OUTPUTS = {
     "rotate": ("rotated", "pdf"), "resize": ("resized", "pdf"), "crop": ("cropped", "pdf"),
     "nup": ("nup", "pdf"), "compress": ("compressed", "pdf"), "color": ("color", "pdf"),
     "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
-    "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"),
+    "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
     "split": ("split", "dir"), "to-images": ("images", "dir"),
 }
 
@@ -393,6 +404,7 @@ def cmd_watch(a):
 
     settings = watch.WatchSettings(
         inbox=a.inbox, dest=a.dest, by=a.by, rename=a.rename, compress=a.compress,
+        remove_blank=a.clean, auto_rotate=a.rotate,
         ocr=a.ocr, ocr_language=a.language, skip_duplicates=a.skip_duplicates,
         keep_originals=not a.delete_originals)
     if a.once:
@@ -561,6 +573,14 @@ def build_parser():
     sp.add_argument("--force", action="store_true", help="redo pages that already have text")
     sp.add_argument("--deskew", action="store_true", help="straighten crooked scans")
 
+    sp = per_file("clean", run_clean, "clean up scans: remove blank pages, turn pages upright")
+    sp.add_argument("--keep-blank", action="store_true", help="don't remove blank pages")
+    sp.add_argument("--sensitivity", choices=list(scan.BLANK_THRESHOLDS), default="medium",
+                    help="blank page detection: low (only empty pages), medium (default), "
+                         "high (also nearly empty pages)")
+    sp.add_argument("--rotate", action="store_true",
+                    help="turn sideways/upside-down pages upright (needs Tesseract)")
+
     sp = per_file("text", run_text, "extract text",
                   out_help="write to a .txt file instead of the terminal")
     sp.add_argument("-p", "--pages", help=PAGES_HELP)
@@ -612,6 +632,9 @@ def build_parser():
     sp.add_argument("--by", choices=organize.GROUPINGS, help="sort into sub-folders")
     sp.add_argument("--rename", metavar="PATTERN", help="rename, e.g. '{date:%%Y-%%m-%%d} {title}'")
     sp.add_argument("--compress", choices=["low", "medium", "high", "large"])
+    sp.add_argument("--clean", action="store_true", help="remove blank pages")
+    sp.add_argument("--rotate", action="store_true",
+                    help="turn sideways/upside-down pages upright (needs Tesseract)")
     sp.add_argument("--ocr", action="store_true", help="make scans searchable")
     sp.add_argument("--language", default="eng", help="OCR language(s)")
     sp.add_argument("--skip-duplicates", action="store_true",

@@ -319,6 +319,7 @@ details.pw summary svg { width: 15px; height: 15px; }
 .result-name { font-size: 16px; font-weight: 600; margin: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .result-sub { color: var(--muted); font-size: 13.5px; }
 .result-sub .saving { color: var(--ok); font-weight: 600; }
+.result-note { font-size: 13.5px; margin-top: 6px; }
 .result-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .table-wrap { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
@@ -885,14 +886,15 @@ async function run(preview) {
     const res = await api("/api/run", { method: "POST", body, headers: isDesktop() ? { "X-Pdfm-Keep": "1" } : {} });
     const name = res.headers.get("X-Pdfm-Filename") || "result.pdf";
     const resultId = res.headers.get("X-Pdfm-Result-Id");
+    const note = decodeURIComponent(res.headers.get("X-Pdfm-Note") || "");
     const blob = await res.blob();
-    await showResult(name, blob, resultId);
+    await showResult(name, blob, resultId, note);
   } catch (err) {
     showError(err.message);
   } finally { busy(false); }
 }
 
-async function showResult(name, blob, resultId) {
+async function showResult(name, blob, resultId, note = "") {
   if (lastUrl) URL.revokeObjectURL(lastUrl);
   lastUrl = URL.createObjectURL(blob);
   const before = items.reduce((n, it) => n + it.file.size, 0);
@@ -925,7 +927,8 @@ async function showResult(name, blob, resultId) {
   $("result").replaceChildren(thumb,
     el("div", { class: "result-body" },
       el("div", { class: "result-title" }, icon("check"), "Done"),
-      el("div", { class: "result-name" }, name), subEl, actions));
+      el("div", { class: "result-name" }, name), subEl,
+      note ? el("div", { class: "result-note" }, ...note.split("\n").map((line) => el("div", {}, line))) : null, actions));
   $("result").hidden = false;
   $("result").scrollIntoView({ behavior: "smooth", block: "nearest" });
   if (!isDesktop()) actions.querySelector("a").click();
