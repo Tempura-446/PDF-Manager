@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 import webbrowser
 import zipfile
 from http import HTTPStatus
@@ -31,7 +32,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
-from pdfmanager import __version__, core, organize
+from pdfmanager import (__version__, archive, compare, core, office, organize, outline, recipes,
+                        redact, scan)
+from pdfmanager.appdata import data_dir
 from pdfmanager.pageranges import PageRangeError
 
 MAX_UPLOAD = 1024 * 1024 * 1024  # 1 GB
@@ -53,7 +56,9 @@ OPERATIONS = [
      "help": "Combine PDFs in the order listed. Drag to reorder.",
      "fields": [_f("bookmarks", "Add a bookmark per file", "check", True)]},
     {"id": "split", "group": "Combine", "label": "Split", "files": "pdf",
-     "help": "Split into several files (downloaded as a ZIP).",
+     "help": "Split into several files (downloaded as a ZIP). With one PDF, click the page "
+             "previews where each new file should start.",
+     "board": {"mode": "split", "field": "ranges", "every": "every"},
      "fields": [_f("every", "Pages per file", "number", 1, min=1),
                 _f("ranges", "…or ranges (one file each)", "text", "",
                    placeholder="1-3, 4-10, 11-", hint="separate ranges with spaces or ;")]},
@@ -61,6 +66,10 @@ OPERATIONS = [
      "help": "Combine separately scanned front sides (first file) and back sides "
              "(second file).",
      "fields": [_f("reverse_back", "Back sides are in reverse order", "check", True)]},
+    {"id": "compare", "group": "Combine", "label": "Compare", "files": "pdf2",
+     "help": "Find what changed between two versions: add the original first, then the "
+             "changed version. You get a report with the differences marked.",
+     "fields": [_f("all_pages", "Include unchanged pages in the report", "check", False)]},
     {"id": "extract", "group": "Pages", "label": "Extract pages", "files": "pdf",
      "help": "Click the pages to copy into a new PDF, or type them.",
      "board": {"mode": "select", "effect": "keep", "field": "pages"},
@@ -80,6 +89,13 @@ OPERATIONS = [
     {"id": "reverse", "group": "Pages", "label": "Reverse order", "files": "pdf",
      "help": "Put the pages in reverse order (last page first).",
      "board": {"mode": "view", "effect": "reverse"}, "fields": []},
+    {"id": "bookmarks", "group": "Pages", "label": "Bookmarks", "files": "pdf", "panel": "bookmarks",
+     "help": "Add, rename and arrange a PDF's bookmarks, or create them from its headings.",
+     "fields": [_f("mode", "Bookmarks", "select", "edit",
+                   choices=[["edit", "Use the list above"],
+                            ["detect", "Create from headings"],
+                            ["clear", "Remove all bookmarks"]]),
+                _f("outline", "", "hidden", "")]},
     {"id": "rotate", "group": "Pages", "label": "Rotate", "files": "pdf",
      "help": "Click the pages to turn, or leave them all unselected to turn every page.",
      "board": {"mode": "select", "effect": "rotate", "field": "pages", "degrees": "degrees"},
@@ -101,7 +117,9 @@ OPERATIONS = [
                             ["stretch", "Stretch"], ["none", "Don't scale"]]),
                 _f("auto_orient", "Keep landscape pages landscape", "check", True),
                 _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
-    {"id": "crop", "group": "Layout", "label": "Crop margins", "files": "pdf",
+    {"id": "crop", "group": "Layout", "label": "Crop margins", "files": "pdf", "panel": "crop",
+     "help": "Trim the edges of pages. With one PDF, drag the edges of the box on the page "
+             "preview, or type the margins.",
      "fields": [_f("top", "Top (mm)", "number", 10, min=0),
                 _f("right", "Right (mm)", "number", 10, min=0),
                 _f("bottom", "Bottom (mm)", "number", 10, min=0),
@@ -128,6 +146,14 @@ OPERATIONS = [
      "fields": [_f("language", "Language(s)", "text", "eng", placeholder="eng+deu"),
                 _f("deskew", "Straighten crooked scans", "check", False),
                 _f("force", "Redo pages that already have text", "check", False)]},
+    {"id": "clean", "group": "Optimize", "label": "Clean up scans", "files": "pdf",
+     "help": "Remove blank pages and turn sideways or upside-down pages the right way up.",
+     "fields": [_f("remove_blank", "Remove blank pages", "check", True),
+                _f("sensitivity", "Blank page detection", "select", "medium",
+                   choices=[["low", "Strict — only completely empty pages"],
+                            ["medium", "Normal — allows a few specks"],
+                            ["high", "Generous — also nearly empty pages"]]),
+                _f("auto_rotate", "Turn pages upright (needs Tesseract)", "check", False)]},
     {"id": "watermark", "group": "Stamp", "label": "Watermark", "files": "pdf",
      "fields": [_f("text", "Text", "text", "CONFIDENTIAL", required=True),
                 _f("opacity", "Opacity", "number", 0.15, min=0.01, max=1, step=0.05),
@@ -144,6 +170,11 @@ OPERATIONS = [
                              "top-center", "top-right", "top-left")]),
                 _f("start", "Start at", "number", 1),
                 _f("font_size", "Font size", "number", 10, min=4)]},
+    {"id": "flatten", "group": "Stamp", "label": "Flatten forms & comments", "files": "pdf",
+     "help": "Make filled-in forms and comments part of the page, so they look the same "
+             "everywhere and can't be changed. Links keep working.",
+     "fields": [_f("forms", "Form fields", "check", True),
+                _f("comments", "Comments, highlights, drawings and signatures", "check", True)]},
     {"id": "metadata", "group": "Stamp", "label": "Title & author", "files": "pdf",
      "fields": [_f("title", "Title"), _f("author", "Author"), _f("subject", "Subject"),
                 _f("keywords", "Keywords")]},
@@ -151,6 +182,29 @@ OPERATIONS = [
      "fields": [_f("new_password", "New password", "password", "", required=True)]},
     {"id": "decrypt", "group": "Security", "label": "Remove password", "files": "pdf",
      "help": "Enter the current password in the box above the Run button.", "fields": []},
+    {"id": "redact", "group": "Security", "label": "Redact", "files": "pdf", "panel": "redact",
+     "help": "Permanently black out names, numbers or areas. Pages with redactions become "
+             "pictures, so what's under the black boxes is really gone.",
+     "fields": [_f("terms", "Words or phrases", "text", "", placeholder="John Smith, 555-1234",
+                   hint="separate several with commas"),
+                _f("emails", "All email addresses", "check", False),
+                _f("phones", "All phone numbers", "check", False),
+                _f("numbers", "Card, account and ID numbers", "check", False),
+                _f("case_sensitive", "Match upper/lower case", "check", False),
+                _f("whole_words", "Whole words only", "check", False),
+                _f("boxes", "", "hidden", "")]},
+    {"id": "sanitize", "group": "Security", "label": "Remove hidden data", "files": "pdf",
+     "help": "Remove information that travels unseen inside a PDF before you share it.",
+     "fields": [_f("metadata", "Author, title, dates and other document details", "check", True),
+                _f("javascript", "Scripts and actions that run programs", "check", True),
+                _f("attachments", "Attached files", "check", True),
+                _f("comments", "Comments, highlights and notes", "check", False)]},
+    {"id": "pdfa", "group": "Convert", "label": "PDF → PDF/A (archive)", "files": "pdf",
+     "help": "Convert to PDF/A, the ISO standard for documents that must stay readable for "
+             "decades: fonts and colour profile are embedded. Needs Ghostscript.",
+     "fields": [_f("level", "Version", "select", "2",
+                   choices=[["2", "PDF/A-2b — recommended"], ["1", "PDF/A-1b — oldest, strictest"],
+                            ["3", "PDF/A-3b — allows attachments"]])]},
     {"id": "from-images", "group": "Convert", "label": "Images → PDF", "files": "images",
      "fields": [_f("size", "Page size", "select", "",
                    choices=[["", "Same as image"]] +
@@ -161,6 +215,23 @@ OPERATIONS = [
                 _f("dpi", "Resolution (DPI)", "number", 150, min=36, max=600),
                 _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
     {"id": "text", "group": "Convert", "label": "PDF → text", "files": "pdf", "fields": []},
+    {"id": "to-word", "group": "Convert", "label": "PDF → Word", "files": "pdf",
+     "help": "Turn PDFs into editable Word documents (.docx).",
+     "fields": [_f("engine", "Converter", "select", "auto",
+                   choices=[["auto", "Best available (Microsoft Word if installed)"],
+                            ["basic", "Built-in — paragraphs, headings and pictures"],
+                            ["layout", "Exact layout — needs LibreOffice; text in boxes"],
+                            ["word", "Microsoft Word only"]],
+                   hint="Microsoft Word gives the most editable result. The built-in "
+                        "converter turns tables and columns into plain paragraphs.")]},
+    {"id": "from-office", "group": "Convert", "label": "Office → PDF", "files": "office",
+     "help": "Convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF. "
+             "Uses Microsoft Office if installed, otherwise LibreOffice.",
+     "fields": []},
+    {"id": "recipe", "group": "Automate", "label": "Recipes", "files": "pdf", "panel": "recipe",
+     "help": "Run several tools one after another, e.g. clean up scans → OCR → compress. "
+             "Save a recipe to use it again here, from the command line or in a watch folder.",
+     "fields": [_f("steps", "", "hidden", ""), _f("recipe_name", "", "hidden", "")]},
     {"id": "organize", "group": "Folders", "label": "Organize folder", "files": None,
      "help": "Sort the PDFs in a folder on this computer into sub-folders.",
      "fields": [_f("directory", "Folder", "text", "", placeholder="/Users/me/Downloads",
@@ -185,7 +256,7 @@ OPERATIONS = [
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
-SUFFIX = {"extract": "extract", "delete": "edited", "reorder": "reordered",
+SUFFIX = {"recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
@@ -217,9 +288,11 @@ def _pages(opts, key="pages"):
     return (opts.get(key) or "").strip() or None
 
 
-def _run_file_op(op, src, out_dir, opts, password, extra_files):
-    """Run a single-input operation. Returns a list of output paths."""
+def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
+    """Run a single-input operation. Returns a list of output paths.
+    Messages for the user (e.g. which pages were removed) go in ``notes``."""
     out = out_dir / f"{src.stem}_{SUFFIX.get(op, op)}.pdf"
+    notes = [] if notes is None else notes
     if op == "extract":
         core.select_pages(src, out, opts["pages"], password)
     elif op == "delete":
@@ -258,6 +331,74 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files):
         core.ocr(src, out, language=opts.get("language") or "eng",
                  force=_bool(opts.get("force")), deskew=_bool(opts.get("deskew")),
                  password=password)
+    elif op == "clean":
+        auto_rotate = _bool(opts.get("auto_rotate"))
+        if auto_rotate and not scan.find_tesseract():
+            raise UserError("turning pages upright needs the Tesseract program; install it "
+                            "(see the OCR tool) or untick that option")
+        report = scan.clean(src, out, remove_blank=_bool(opts.get("remove_blank", True)),
+                            sensitivity=opts.get("sensitivity") or "medium",
+                            auto_rotate=auto_rotate, password=password)
+        notes.append(_clean_note(src.name, report))
+    elif op == "bookmarks":
+        mode = opts.get("mode") or "edit"
+        if mode == "detect":
+            items = outline.detect_headings(src, password)
+            notes.append(f"{src.name}: {len(items)} bookmark{'s' if len(items) != 1 else ''} "
+                         "created from headings" if items else
+                         f"{src.name}: no headings found (is it a scan? run OCR first)")
+        elif mode == "clear":
+            items = []
+        else:
+            try:
+                items = json.loads(opts.get("outline") or "[]")
+            except ValueError:
+                raise UserError("the bookmark list is damaged; reload the file") from None
+        outline.set_outline(src, out, items, password)
+    elif op == "redact":
+        terms, patterns, boxes = _redact_request(opts)
+        if not (terms or patterns or boxes):
+            raise UserError("enter words to black out, tick a kind of number, or draw boxes "
+                            "on the pages")
+        found = redact.redact(src, out, terms=terms, patterns=patterns, boxes=boxes,
+                              case_sensitive=_bool(opts.get("case_sensitive")),
+                              whole_words=_bool(opts.get("whole_words")), password=password)
+        notes.append(f"{src.name}: " + (
+            f"blacked out {sum(found.values())} area{'s' if sum(found.values()) != 1 else ''} "
+            f"on page{'s' if len(found) != 1 else ''} {_pages_list(list(found))}" if found
+            else "nothing matched, so nothing was blacked out"))
+    elif op == "recipe":
+        try:
+            steps = json.loads(opts.get("steps") or "[]")
+        except ValueError:
+            raise UserError("the recipe is damaged; build it again") from None
+        if not steps:
+            raise UserError("add at least one step to the recipe")
+        name = re.sub(r"[^\w-]+", "-", (opts.get("recipe_name") or "").strip()).strip("-").lower()
+        if name:
+            out = out_dir / f"{src.stem}_{name}.pdf"
+        recipes.run(steps, src, out, password, notes)
+    elif op == "flatten":
+        forms, comments = _bool(opts.get("forms", True)), _bool(opts.get("comments", True))
+        if not forms and not comments:
+            raise UserError("choose form fields, comments or both")
+        archive.flatten(src, out, forms=forms, comments=comments, password=password)
+    elif op == "sanitize":
+        counts = archive.sanitize(
+            src, out, **{k: _bool(opts.get(k, d)) for k, d in
+                         (("metadata", True), ("javascript", True), ("attachments", True),
+                          ("comments", False))}, password=password)
+        found = [f"{n} {label}" for key, label in (("metadata", "document details"),
+                                                  ("javascript", "scripts/actions"),
+                                                  ("attachments", "attachments"),
+                                                  ("comments", "comments"))
+                 if (n := counts[key])]
+        notes.append(f"{src.name}: removed " + (", ".join(found) if found else "nothing (none found)"))
+    elif op == "pdfa":
+        if not archive.find_ghostscript():
+            raise UserError("PDF/A needs Ghostscript: install it from "
+                            "https://ghostscript.com/releases/gsdnld.html and try again")
+        archive.to_pdfa(src, out, level=opts.get("level") or "2", password=password)
     elif op == "watermark":
         core.watermark(src, out, text=opts.get("text") or "CONFIDENTIAL",
                        opacity=_num(opts.get("opacity"), float, 0.15),
@@ -292,14 +433,51 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files):
     elif op == "text":
         out = out.with_suffix(".txt")
         core.extract_text(src, out, None, password)
+    elif op == "to-word":
+        out = out_dir / f"{src.stem}.docx"
+        _, engine = office.pdf_to_word(src, out, opts.get("engine") or "auto", password)
+        if engine == "basic" and (opts.get("engine") or "auto") == "auto":
+            notes.append("Converted with the built-in converter. For a more editable "
+                         "result, install Microsoft Word.")
+    elif op == "from-office":
+        out = out_dir / f"{src.stem}.pdf"
+        office.office_to_pdf(src, out)
     else:
         raise UserError(f"unknown operation {op!r}")
     return [out]
 
 
+def _redact_request(opts):
+    """(terms, patterns, boxes) from the Redact tool's options. Boxes come
+    from the page editor as {"1": [[x0, y0, x1, y1], ...]} (1-based pages)."""
+    terms = [t.strip() for t in re.split(r"[,;\n]", opts.get("terms") or "") if t.strip()]
+    patterns = [redact.PRESETS[k] for k in redact.PRESETS if _bool(opts.get(k))]
+    try:
+        raw = json.loads(opts.get("boxes") or "{}")
+        boxes = {int(page) - 1: [tuple(float(v) for v in box) for box in found]
+                 for page, found in raw.items() if found}
+    except (ValueError, TypeError, AttributeError):
+        raise UserError("the boxes drawn on the pages are damaged; draw them again") from None
+    return terms, patterns, boxes
+
+
+def _pages_list(numbers):
+    return ", ".join(map(str, numbers)) if len(numbers) <= 12 else f"{len(numbers)} pages"
+
+
+def _clean_note(name, report):
+    removed, rotated = report["removed"], report["rotated"]
+    bits = []
+    if removed:
+        bits.append(f"removed blank page{'s' if len(removed) > 1 else ''} {_pages_list(removed)}")
+    if rotated:
+        bits.append(f"turned page{'s' if len(rotated) > 1 else ''} {_pages_list(list(rotated))}")
+    return f"{name}: " + ("; ".join(bits) if bits else "nothing needed changing")
+
+
 def _protect(outputs, password, op):
     """PDFs made from a password-protected file get the same password."""
-    if password and op not in ("decrypt", "encrypt"):
+    if password and op not in ("decrypt", "encrypt", "pdfa"):
         for path in outputs:
             if path.suffix.lower() == ".pdf":
                 core.encrypt(path, path, password)
@@ -316,9 +494,10 @@ def _flatten_outputs(outputs, out_dir):
     return flat
 
 
-def run_operation(op, files, opts, password=None, extra_files=None, work=None):
+def run_operation(op, files, opts, password=None, extra_files=None, work=None, notes=None):
     """Run ``op`` on uploaded ``files`` (paths in the temporary folder
-    ``work``). Returns (filename, bytes, content type) for the download."""
+    ``work``). Returns (filename, bytes, content type) for the download;
+    messages for the user are appended to ``notes``."""
     spec = OPS.get(op)
     if spec is None:
         raise UserError(f"unknown operation {op!r}")
@@ -343,6 +522,16 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None):
         out = out_dir / f"{files[0].stem}_interleaved.pdf"
         core.interleave(files[0], files[1], out, _bool(opts.get("reverse_back", True)), password)
         outputs = [out]
+    elif op == "compare":
+        if len(files) != 2:
+            raise UserError("add exactly two files: the original, then the changed version")
+        out = out_dir / f"{files[0].stem}_vs_{files[1].stem}.pdf"
+        summary = compare.compare(files[0], files[1], out, password, password,
+                                  all_pages=_bool(opts.get("all_pages")))
+        changed = [c for c in summary["changes"] if c["kind"] != "same"]
+        notes.append(f"{len(changed)} page{'s' if len(changed) != 1 else ''} with differences"
+                     if changed else "No differences found.")
+        outputs = [out]
     elif op == "from-images":
         out = out_dir / (files[0].stem + ".pdf" if len(files) == 1 else "images.pdf")
         core.images_to_pdf(files, out, opts.get("size") or None,
@@ -355,13 +544,15 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None):
             sub = out_dir / f"{index:03d}"
             sub.mkdir()
             outputs.extend((sub, p) for p in _run_file_op(op, src, sub, opts, password,
-                                                           extra_files))
+                                                           extra_files, notes))
         outputs = _flatten_outputs(outputs, out_dir)
 
     _protect(outputs, password, op)
     if len(outputs) == 1:
         path = outputs[0]
-        ctype = "text/plain; charset=utf-8" if path.suffix == ".txt" else "application/pdf"
+        ctype = {".txt": "text/plain; charset=utf-8",
+                 ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                 }.get(path.suffix, "application/pdf")
         return path.name, path.read_bytes(), ctype
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -586,6 +777,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
         if path == "/api/operations":
             return self._send(HTTPStatus.OK, {"operations": OPERATIONS, "version": __version__})
+        if path == "/api/recipes":
+            return self._send(HTTPStatus.OK, {"recipes": list(recipes.load_all().values()),
+                                              "step_ops": list(recipes.STEP_OPS)})
         if path.startswith("/api/file/"):
             return self._open_file(path[len("/api/file/"):])
         self._error(HTTPStatus.NOT_FOUND, "not found")
@@ -628,6 +822,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._inspect(body)
             if path == "/api/keep":
                 return self._keep(body)
+            if path == "/api/outline":
+                return self._outline(body)
+            if path == "/api/redact/find":
+                return self._redact_find(body)
+            if path == "/api/recipes/save":
+                data = json.loads(body or b"{}")
+                saved = recipes.save(data.get("name"), data.get("steps"))
+                return self._send(HTTPStatus.OK, {"recipe": saved,
+                                                  "recipes": list(recipes.load_all().values())})
+            if path == "/api/recipes/delete":
+                recipes.delete(json.loads(body or b"{}").get("name"))
+                return self._send(HTTPStatus.OK, {"recipes": list(recipes.load_all().values())})
             if path == "/api/folder":
                 data = json.loads(body or b"{}")
                 result = run_folder_operation(data.get("op"), data.get("options") or {},
@@ -658,10 +864,13 @@ class Handler(BaseHTTPRequestHandler):
                     files.append(path)
                 elif data:  # extra file field, e.g. an ICC profile
                     extra[name] = path
-            name, data, ctype = run_operation(op, files, fields, password, extra, work)
+            notes = []
+            name, data, ctype = run_operation(op, files, fields, password, extra, work, notes)
             quoted = name.replace('"', "")
             headers = {"Content-Disposition": f'attachment; filename="{quoted}"',
                        "X-Pdfm-Filename": quoted}
+            if notes:
+                headers["X-Pdfm-Note"] = urllib.parse.quote("\n".join(notes))
             if self.headers.get("X-Pdfm-Keep") == "1" and self.results is not None:
                 headers["X-Pdfm-Result-Id"] = self.results.add(name, data)
             return self._send(HTTPStatus.OK, data, ctype, headers)
@@ -676,6 +885,38 @@ class Handler(BaseHTTPRequestHandler):
             raise UserError("no file")
         _, filename, data = uploads[0]
         return self._send(HTTPStatus.OK, {"id": self.results.add(_safe_name(filename), data)})
+
+    def _outline(self, body):
+        """The bookmarks of an uploaded PDF, or (detect=1) suggestions from
+        its headings."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            password = fields.get("password") or None
+            pages = len(core.open_pdf(path, password).pages)
+            items = (outline.detect_headings(path, password) if _bool(fields.get("detect"))
+                     else outline.get_outline(path, password))
+        return self._send(HTTPStatus.OK, {"items": items, "pages": pages})
+
+    def _redact_find(self, body):
+        """Where the Redact tool's words and kinds of numbers are found, so
+        the page editor can show them before anything is blacked out."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        terms, patterns, _ = _redact_request({k: v for k, v in fields.items() if k != "boxes"})
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            found = redact.find_text(path, terms, patterns,
+                                     case_sensitive=_bool(fields.get("case_sensitive")),
+                                     whole_words=_bool(fields.get("whole_words")),
+                                     password=fields.get("password") or None)
+        return self._send(HTTPStatus.OK, {"boxes": {str(p + 1): [list(b) for b in boxes]
+                                                    for p, boxes in found.items()}})
 
     def _inspect(self, body):
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
@@ -816,17 +1057,6 @@ def reveal_in_file_manager(path):
 
 def desktop_available():
     return importlib.util.find_spec("webview") is not None
-
-
-def data_dir():
-    """Where the app keeps its settings (the app-window browser profile and
-    a note about why the pywebview window didn't open)."""
-    if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-        return base / "PDF Manager"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "PDF Manager"
-    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "pdf-manager"
 
 
 def _pywebview_version():

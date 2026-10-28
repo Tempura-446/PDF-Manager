@@ -11,7 +11,8 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-from pdfmanager import __version__, core, imaging, organize
+from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
+                        recipes, redact, scan)
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -189,6 +190,98 @@ def run_ocr(a, src, out, pw):
     return core.ocr(src, out, language=a.language, force=a.force, deskew=a.deskew, password=pw)
 
 
+def run_clean(a, src, out, pw):
+    report = scan.clean(src, out, remove_blank=not a.keep_blank, sensitivity=a.sensitivity,
+                        auto_rotate=a.rotate, password=pw)
+    bits = []
+    if report["removed"]:
+        bits.append("removed blank pages " + ", ".join(map(str, report["removed"])))
+    if report["rotated"]:
+        bits.append("turned " + ", ".join(f"page {n} by {d}°" for n, d in report["rotated"].items()))
+    return f"{out}  ({'; '.join(bits) or 'nothing needed changing'})"
+
+
+def run_flatten(a, src, out, pw):
+    if a.forms_only and a.comments_only:
+        raise core.PdfManagerError("choose --forms-only or --comments-only, not both")
+    return archive.flatten(src, out, forms=not a.comments_only, comments=not a.forms_only,
+                           password=pw)
+
+
+def run_sanitize(a, src, out, pw):
+    counts = archive.sanitize(src, out, metadata=not a.keep_metadata,
+                              javascript=not a.keep_javascript,
+                              attachments=not a.keep_attachments, comments=a.comments,
+                              password=pw)
+    found = ", ".join(f"{n} {k}" for k, n in counts.items() if n) or "nothing found"
+    return f"{out}  (removed: {found})"
+
+
+def run_pdfa(a, src, out, pw):
+    return archive.to_pdfa(src, out, level=a.level, password=pw)
+
+
+def run_bookmarks(a, src, out, pw):
+    if a.set and a.detect:
+        raise core.PdfManagerError("use --set or --detect, not both")
+    if a.set:
+        text = Path(a.set).read_text(encoding="utf-8-sig")
+        items = (json.loads(text) if a.set.lower().endswith(".json") else outline.from_text(text))
+    elif a.detect:
+        items = outline.detect_headings(src, pw)
+        if a.dry_run:
+            print(outline.to_text(items) or "no headings found", end="")
+            return None
+    elif a.clear:
+        items = []
+    else:
+        items = outline.get_outline(src, pw)
+        print(outline.to_text(items) or "no bookmarks", end="")
+        return None
+    outline.set_outline(src, out, items, pw)
+    return f"{out}  ({len(items)} bookmark{'s' if len(items) != 1 else ''})"
+
+
+def run_to_word(a, src, out, pw):
+    result, engine = office.pdf_to_word(src, out, engine=a.engine, password=pw)
+    how = {"word": "Microsoft Word", "basic": "built-in converter",
+           "layout": "LibreOffice, exact layout"}[engine]
+    return f"{result}  ({how})"
+
+
+def cmd_from_office(a):
+    failures = 0
+    files = _expand(a.inputs)
+    for src in files:
+        if len(files) == 1 and a.output:
+            out = Path(a.output)
+        else:
+            folder = Path(a.output) if a.output else Path(src).parent
+            folder.mkdir(parents=True, exist_ok=True)
+            out = folder / (Path(src).stem + ".pdf")
+        try:
+            result, program = office.office_to_pdf(src, out)
+            print(f"{src} -> {result}  ({program})")
+        except (core.PdfManagerError, OSError) as exc:
+            if len(files) == 1:
+                raise
+            failures += 1
+            print(f"error: {src}: {exc}", file=sys.stderr)
+    return 1 if failures else 0
+
+
+def run_redact(a, src, out, pw):
+    patterns = list(a.pattern or []) + [redact.PRESETS[p] for p in a.find or []]
+    if not (a.text or patterns or a.box):
+        raise core.PdfManagerError("say what to redact: --text, --pattern, --find or --box")
+    found = redact.redact(src, out, terms=a.text or [], patterns=patterns, boxes=a.box or [],
+                          case_sensitive=a.case_sensitive, whole_words=a.whole_words,
+                          dpi=a.dpi, password=pw)
+    if not found:
+        return f"{out}  (nothing found to redact)"
+    return f"{out}  ({sum(found.values())} area(s) on page(s) {', '.join(map(str, found))})"
+
+
 def run_text(a, src, out, pw):
     text = core.extract_text(src, out, a.pages, pw)
     if out is None:
@@ -238,7 +331,8 @@ OUTPUTS = {
     "rotate": ("rotated", "pdf"), "resize": ("resized", "pdf"), "crop": ("cropped", "pdf"),
     "nup": ("nup", "pdf"), "compress": ("compressed", "pdf"), "color": ("color", "pdf"),
     "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
-    "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"),
+    "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
+    "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
     "split": ("split", "dir"), "to-images": ("images", "dir"),
 }
 
@@ -252,6 +346,12 @@ def _output_for(a, src, batch):
     if a.command == "text" and a.output is None:
         return None  # print to the terminal
     src = Path(src)
+    if kind == "docx":
+        if not batch:
+            return Path(a.output) if a.output else src.with_suffix(".docx")
+        folder = Path(a.output) if a.output else src.parent
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder / (src.stem + ".docx")
     if kind == "dir":
         base = Path(a.output) if a.output else src.parent
         return base / f"{src.stem}_{suffix}" if (batch or not a.output) else base
@@ -269,7 +369,8 @@ def _output_for(a, src, batch):
 
 # Commands whose output should not inherit the input's password.
 # (split re-encrypts its own output files.)
-KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split"}
+KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split", "to-word",
+                    "pdfa"}  # PDF/A doesn't allow encryption
 
 
 def _reencrypt(out, password):
@@ -345,6 +446,90 @@ def cmd_interleave(a):
     print(f"-> {out}")
 
 
+def cmd_compare(a):
+    passwords = _Passwords(a.password)
+    out = a.output or _default_output(a.old, f"vs_{Path(a.new).stem}")
+    summary = compare.compare(a.old, a.new, out, passwords.for_file(a.old),
+                              passwords.for_file(a.new), all_pages=a.all_pages)
+    changes = [c for c in summary["changes"] if c["kind"] != "same"]
+    for c in changes:
+        where = (f"page {c['new']} added" if c["kind"] == "added" else
+                 f"page {c['old']} removed" if c["kind"] == "removed" else
+                 f"page {c['old']}" + (f" (now {c['new']})" if c["old"] != c["new"] else ""))
+        detail = "; ".join([f"- {w}" for w in c["removed"][:3]] + [f"+ {w}" for w in c["added"][:3]])
+        print(f"{where}: {detail or 'layout or pictures changed'}" if c["kind"] == "changed"
+              else where)
+    print(f"{len(changes)} page(s) differ" if changes else "no differences")
+    print(f"-> {out}")
+
+
+def _parse_steps(tokens):
+    """['clean', 'ocr', 'language=deu', 'compress', 'level=high'] -> steps."""
+    steps = []
+    for token in tokens:
+        key, sep, value = token.partition("=")
+        if sep:
+            if not steps:
+                raise core.PdfManagerError(f"{token!r} comes before any step")
+            steps[-1]["options"][key.strip().replace("-", "_")] = value
+        else:
+            steps.append({"op": token, "options": {}})
+    return steps
+
+
+def cmd_recipe(a):
+    if a.action != "list" and not a.name:
+        raise core.PdfManagerError(f"pdfm recipe {a.action} needs a recipe name")
+    if a.action == "list":
+        saved = recipes.load_all()
+        for name, recipe in saved.items():
+            print(f"{name}: {recipes.describe(recipe['steps'])}")
+        if not saved:
+            print("no recipes yet; create one with: pdfm recipe save NAME clean ocr compress "
+                  "level=high")
+        print(f"(saved in {recipes.recipes_file()})")
+    elif a.action == "show":
+        recipe = recipes.get(a.name)
+        for n, step in enumerate(recipe["steps"], 1):
+            options = " ".join(f"{k}={v}" for k, v in step["options"].items())
+            print(f"{n}. {step['op']} {options}".rstrip())
+    elif a.action == "save":
+        recipe = recipes.save(a.name, _parse_steps(a.args))
+        print(f"saved {recipe['name']!r}: {recipes.describe(recipe['steps'])}")
+    elif a.action == "delete":
+        recipes.delete(a.name)
+        print(f"deleted {a.name!r}")
+    else:  # run
+        steps = recipes.get(a.name)["steps"]
+        files = _expand(a.args)
+        if not files:
+            raise core.PdfManagerError("name the PDF(s) to run the recipe on")
+        passwords = _Passwords(a.password)
+        slug = "".join(c if c.isalnum() else "-" for c in a.name.lower()).strip("-") or "recipe"
+        failures = 0
+        for src in files:
+            try:
+                if len(files) == 1 and a.output:
+                    out = Path(a.output)
+                elif a.output:
+                    Path(a.output).mkdir(parents=True, exist_ok=True)
+                    out = Path(a.output) / Path(src).name
+                else:
+                    out = _default_output(src, slug)
+                pw = passwords.for_file(src)
+                notes = []
+                recipes.run(steps, src, out, pw, notes)
+                if pw:
+                    _reencrypt(out, pw)
+                print(f"{src} -> {out}" + (f"  ({'; '.join(notes)})" if notes else ""))
+            except (core.PdfManagerError, PageRangeError, OSError) as exc:
+                if len(files) == 1:
+                    raise
+                failures += 1
+                print(f"error: {src}: {exc}", file=sys.stderr)
+        return 1 if failures else 0
+
+
 def cmd_from_images(a):
     margin = a.margin * core.POINTS_PER_MM
     print(f"-> {core.images_to_pdf(_expand(a.images), a.output, a.size, margin)}")
@@ -393,6 +578,8 @@ def cmd_watch(a):
 
     settings = watch.WatchSettings(
         inbox=a.inbox, dest=a.dest, by=a.by, rename=a.rename, compress=a.compress,
+        remove_blank=a.clean, auto_rotate=a.rotate,
+        recipe=recipes.get(a.recipe)["steps"] if a.recipe else None,
         ocr=a.ocr, ocr_language=a.language, skip_duplicates=a.skip_duplicates,
         keep_originals=not a.delete_originals)
     if a.once:
@@ -561,9 +748,92 @@ def build_parser():
     sp.add_argument("--force", action="store_true", help="redo pages that already have text")
     sp.add_argument("--deskew", action="store_true", help="straighten crooked scans")
 
+    sp = per_file("clean", run_clean, "clean up scans: remove blank pages, turn pages upright")
+    sp.add_argument("--keep-blank", action="store_true", help="don't remove blank pages")
+    sp.add_argument("--sensitivity", choices=list(scan.BLANK_THRESHOLDS), default="medium",
+                    help="blank page detection: low (only empty pages), medium (default), "
+                         "high (also nearly empty pages)")
+    sp.add_argument("--rotate", action="store_true",
+                    help="turn sideways/upside-down pages upright (needs Tesseract)")
+
+    sp = per_file("flatten", run_flatten,
+                  "make form fields and comments part of the page (links keep working)")
+    sp.add_argument("--forms-only", action="store_true", help="leave comments as they are")
+    sp.add_argument("--comments-only", action="store_true", help="leave form fields as they are")
+
+    sp = per_file("sanitize", run_sanitize,
+                  "remove hidden data: document details, scripts, attached files")
+    sp.add_argument("--keep-metadata", action="store_true",
+                    help="keep author, title, dates and other document details")
+    sp.add_argument("--keep-javascript", action="store_true", help="keep scripts and actions")
+    sp.add_argument("--keep-attachments", action="store_true", help="keep attached files")
+    sp.add_argument("--comments", action="store_true",
+                    help="also remove comments, highlights and notes")
+
+    sp = per_file("redact", run_redact,
+                  "permanently black out text or areas (redacted pages become images)")
+    sp.add_argument("-t", "--text", action="append", metavar="TEXT",
+                    help="text to black out (repeat for more)")
+    sp.add_argument("--pattern", action="append", metavar="REGEX",
+                    help="regular expression to black out, e.g. '\\d{3}-\\d{2}-\\d{4}'")
+    sp.add_argument("--find", action="append", choices=list(redact.PRESETS),
+                    help="also black out all emails, phone numbers or long numbers")
+    sp.add_argument("--box", action="append", metavar="PAGE:X0,Y0,X1,Y1",
+                    help="black out an area, in points from the bottom-left corner")
+    sp.add_argument("--case-sensitive", action="store_true")
+    sp.add_argument("--whole-words", action="store_true")
+    sp.add_argument("--dpi", type=int, default=200, help="resolution of redacted pages")
+
+    sp = per_file("pdfa", run_pdfa, "convert to PDF/A for long-term archiving (needs Ghostscript)")
+    sp.add_argument("--level", choices=archive.PDFA_LEVELS, default="2",
+                    help="PDF/A-1b, -2b (default) or -3b")
+
+    sp = per_file("bookmarks", run_bookmarks,
+                  "list, set or detect bookmarks (without options: list them)")
+    g = sp.add_mutually_exclusive_group()
+    g.add_argument("--set", metavar="FILE",
+                   help="replace the bookmarks with those in FILE: one per line, "
+                        "'- Title (p. 3)', indented two spaces per level (or JSON)")
+    g.add_argument("--detect", action="store_true",
+                   help="create bookmarks from the document's headings")
+    g.add_argument("--clear", action="store_true", help="remove all bookmarks")
+    sp.add_argument("-n", "--dry-run", action="store_true",
+                    help="with --detect: only print what would be added")
+
     sp = per_file("text", run_text, "extract text",
                   out_help="write to a .txt file instead of the terminal")
     sp.add_argument("-p", "--pages", help=PAGES_HELP)
+
+    sp = other("compare", cmd_compare, "compare two versions of a PDF and write a report")
+    sp.add_argument("old", help="the original")
+    sp.add_argument("new", help="the changed version")
+    sp.add_argument("-o", "--output", help="report file (default: <old>_vs_<new>.pdf)")
+    sp.add_argument("--all-pages", action="store_true",
+                    help="show unchanged pages in the report too")
+    sp.add_argument("--password")
+
+    sp = per_file("to-word", run_to_word, "convert PDFs to editable Word documents (.docx)",
+                  out_help="output .docx (default: <input>.docx); with several inputs, a folder")
+    sp.add_argument("--engine", choices=office.TO_WORD_ENGINES, default="auto",
+                    help="auto (default): Microsoft Word if installed, else the built-in "
+                         "converter; word; basic (built-in: paragraphs, headings, pictures); "
+                         "layout (LibreOffice: exact look, text in boxes)")
+
+    sp = other("from-office", cmd_from_office,
+               "convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF "
+               "(needs Microsoft Office or LibreOffice; text files always work)")
+    sp.add_argument("inputs", nargs="+")
+    sp.add_argument("-o", "--output", help="output PDF, or a folder for several inputs "
+                                           "(default: next to each input)")
+
+    sp = other("recipe", cmd_recipe, "save and run recipes: several tools in a row")
+    sp.add_argument("action", choices=["list", "show", "save", "run", "delete"])
+    sp.add_argument("name", nargs="?", help="recipe name")
+    sp.add_argument("args", nargs="*", metavar="ARG",
+                    help="save: steps and their options, e.g. clean ocr language=eng compress "
+                         "level=high; run: the PDF(s)")
+    sp.add_argument("-o", "--output", help="run: output file, or a folder for several inputs")
+    sp.add_argument("--password")
 
     sp = other("from-images", cmd_from_images, "save images (JPG, PNG, ...) as a PDF")
     sp.add_argument("images", nargs="+")
@@ -612,7 +882,11 @@ def build_parser():
     sp.add_argument("--by", choices=organize.GROUPINGS, help="sort into sub-folders")
     sp.add_argument("--rename", metavar="PATTERN", help="rename, e.g. '{date:%%Y-%%m-%%d} {title}'")
     sp.add_argument("--compress", choices=["low", "medium", "high", "large"])
+    sp.add_argument("--clean", action="store_true", help="remove blank pages")
+    sp.add_argument("--rotate", action="store_true",
+                    help="turn sideways/upside-down pages upright (needs Tesseract)")
     sp.add_argument("--ocr", action="store_true", help="make scans searchable")
+    sp.add_argument("--recipe", metavar="NAME", help="run a saved recipe on each file")
     sp.add_argument("--language", default="eng", help="OCR language(s)")
     sp.add_argument("--skip-duplicates", action="store_true",
                     help="don't process files identical to one already in --dest")

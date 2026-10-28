@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pdfmanager import core, organize
+from pdfmanager import core, organize, recipes, scan
 
 
 @dataclass
@@ -16,8 +16,11 @@ class WatchSettings:
     by: str = None                # organize into sub-folders (see organize.GROUPINGS)
     rename: str = None            # rename pattern (see organize.format_name)
     compress: str = None          # compression level
+    remove_blank: bool = False    # drop blank pages
+    auto_rotate: bool = False     # turn pages upright (needs Tesseract)
     ocr: bool = False
     ocr_language: str = "eng"
+    recipe: list = None           # steps of a recipe to run (see recipes.py)
     skip_duplicates: bool = False
     keep_originals: bool = True   # move originals to <inbox>/originals instead of deleting
 
@@ -59,8 +62,13 @@ def process_file(path, settings, known_hashes=None):
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp) / path.name
         shutil.copy2(path, work)
+        if settings.remove_blank or settings.auto_rotate:
+            scan.clean(work, work, remove_blank=settings.remove_blank,
+                       auto_rotate=settings.auto_rotate)
         if settings.ocr:
             core.ocr(work, work, language=settings.ocr_language)
+        if settings.recipe:
+            recipes.run(settings.recipe, work, work)
         if settings.compress:
             core.compress(work, work, level=settings.compress)
         record = organize.describe(work)

@@ -3,10 +3,13 @@
 `pdfm` is a PDF toolkit you can use three ways: as a **desktop app**, from
 the **command line**, or as a **Python library**.
 
-It includes a full **PDF reader**, and it can merge, split, extract, reorder, rotate, resize, crop, n-up, compress
-(three levels), convert colours (grayscale / RGB / CMYK, with ICC profiles),
-OCR scans, encrypt, watermark, number pages, convert to and from images,
-and organize, rename, de-duplicate and watch whole folders of PDFs.
+It includes a full **PDF reader** where you can also annotate and sign, and
+it can merge, split, compare, extract, reorder, rotate, resize, crop, n-up,
+compress (three levels), convert colours (grayscale / RGB / CMYK, with ICC
+profiles), OCR and clean up scans, redact, flatten, remove hidden data,
+convert to PDF/A, Word and from Office files or images, edit bookmarks,
+encrypt, watermark and number pages, run several of these in a row as a
+**recipe**, and organize, rename, de-duplicate and watch whole folders of PDFs.
 
 ## Install
 
@@ -40,7 +43,10 @@ Without it, the app opens in your browser instead.
 
 OCR also needs the [Tesseract](https://tesseract-ocr.github.io/tessdoc/Installation.html)
 program (`brew install tesseract`, `sudo apt install tesseract-ocr`, or the
-Windows installer).
+Windows installer). A few tools use other free programs if you have them:
+turning scanned pages upright uses Tesseract, PDF/A uses
+[Ghostscript](https://ghostscript.com/releases/gsdnld.html), and Office →
+PDF uses Microsoft Office or [LibreOffice](https://www.libreoffice.org).
 
 ## Desktop app
 
@@ -77,9 +83,17 @@ closed.
     (Shift+click for a range, or All / Odd / Even / Invert / Clear). Pages
     to delete are crossed out, and rotated pages are shown turned.
   - **Reverse order:** shows the pages in their new order.
+  - **Split:** click a page to start a new file there.
 
   The page box under Options updates as you go, and typing pages there
   updates the previews.
+- **Crop margins** shows the page with a box to drag. **Redact** lets you
+  draw boxes to black out, and shows where the words you typed are found.
+- **Bookmarks** has an editor: rename, indent and reorder bookmarks, or
+  detect them from the document's headings.
+- **Recipes** run several tools in a row (for example *Clean up scans →
+  OCR → Compress*). Build one from steps, save it by name, and use it again
+  in the app, with `pdfm recipe run`, or in a watch folder.
 - Folder tools (organize, rename, find duplicates) have **Browse…**
   buttons in the app window and always let you **Preview** before
   anything changes.
@@ -107,6 +121,11 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
 - **Find** (Ctrl+F) with highlighting, match case and whole words.
 - **Select and copy text**; links work (web links open in your browser).
 - **Fill in forms** and save a copy with your entries.
+- **Annotate and sign** (the pen button): highlight text, add text, draw,
+  add pictures, and sign by drawing, typing your name or using a picture of
+  your signature (remembered on this computer if you like). Colours and
+  sizes, undo/redo, and **Save a copy** with your changes. Use *Flatten
+  forms & comments* afterwards to make them part of the page.
 - Rotate the view, hand tool (drag to scroll), dark pages for night
   reading, full screen, print, document properties.
 - Password-protected PDFs ask for their password.
@@ -161,6 +180,16 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `watermark` | stamp text or another PDF | `pdfm watermark doc.pdf -t CONFIDENTIAL` |
 | `number` | add page numbers | `pdfm number doc.pdf --format "Page {n} of {total}"` |
 | `text` | extract text | `pdfm text doc.pdf -o doc.txt` |
+| `clean` | remove blank pages, turn pages upright | `pdfm clean scan.pdf --rotate` |
+| `compare` | report what changed between two versions | `pdfm compare v1.pdf v2.pdf` |
+| `bookmarks` | list, set or detect bookmarks | `pdfm bookmarks doc.pdf --detect` |
+| `redact` | black out text, numbers or areas for good | `pdfm redact doc.pdf -t "John Smith" --find emails` |
+| `flatten` | make forms and comments part of the page | `pdfm flatten form.pdf` |
+| `sanitize` | remove hidden data (details, scripts, attachments) | `pdfm sanitize doc.pdf` |
+| `pdfa` | convert to PDF/A for archiving | `pdfm pdfa doc.pdf --level 2` |
+| `to-word` | convert to an editable Word document | `pdfm to-word doc.pdf` |
+| `from-office` | convert Word, Excel, PowerPoint, … to PDF | `pdfm from-office report.docx` |
+| `recipe` | save and run recipes (several tools in a row) | `pdfm recipe run "Scans" *.pdf` |
 | `from-images` | save images as a PDF | `pdfm from-images *.jpg -o photos.pdf -s a4 --margin 10` |
 | `to-images` | render pages to PNG/JPG | `pdfm to-images doc.pdf --dpi 200 -p 1` |
 | `organize` | sort a folder of PDFs into sub-folders | `pdfm organize ~/Downloads --by year --dest ~/PDFs --move` |
@@ -221,6 +250,82 @@ identical to one already organized: `keep` (default), `skip`, or `folder`
 (put it in a `Duplicates` folder to review). `pdfm duplicates` lists
 identical files and, with `--delete`, removes all but the oldest copy.
 
+### Scan clean-up
+
+`clean` removes blank pages (`--sensitivity low` keeps any page with a mark
+on it, `high` also removes nearly empty ones) and, with `--rotate`, turns
+sideways or upside-down pages upright using Tesseract's orientation
+detection.
+
+### Comparing
+
+`compare old.pdf new.pdf` matches pages by their text, so an inserted or
+removed page doesn't make every later page look different. The report PDF
+starts with a summary, then shows each changed page side by side with the
+changed areas outlined in red and the removed (−) and added (+) words.
+
+### Bookmarks
+
+`pdfm bookmarks doc.pdf` lists the bookmarks, one per line:
+
+```
+- Introduction (p. 1)
+  - Background (p. 2)
+- Results (p. 5)
+```
+
+Edit such a list and apply it with `--set list.txt`, create bookmarks from
+the document's headings with `--detect` (`-n` to preview), or remove them
+with `--clear`. Headings are found by font size and bold lines; running
+headers and footers are ignored. Scans need OCR first.
+
+### Redaction
+
+`redact` blacks out text (`-t`, repeatable), regular expressions
+(`--pattern`), all email addresses, phone numbers or long numbers
+(`--find emails|phones|numbers`) and areas (`--box PAGE:X0,Y0,X1,Y1` in
+points from the bottom left). Every page with a redaction is replaced by a
+picture of the page with the black boxes burned in, so the text underneath
+is really gone (other pages are untouched). Run OCR afterwards to make those
+pages searchable again; metadata isn't changed, so use `sanitize` too.
+
+### Archiving and privacy
+
+- `flatten` draws filled-in form fields and comments (highlights, notes,
+  drawings, signatures) into the page. Links keep working.
+- `sanitize` removes the document details (author, title, dates, XMP),
+  JavaScript and actions that launch programs, and attached files;
+  `--comments` also removes comments. Form fields are kept.
+- `pdfa` converts to PDF/A-1b, -2b (default) or -3b with Ghostscript:
+  fonts embedded, colours tied to sRGB, no encryption or scripts.
+
+### Word and Office
+
+`to-word` converts with Microsoft Word when it's installed (the most
+editable result), otherwise with the built-in converter (paragraphs,
+headings and pictures in reading order; tables and columns become plain
+paragraphs). `--engine layout` uses LibreOffice instead, which keeps the
+exact look but puts every line in its own text box.
+
+`from-office` converts Word, Excel, PowerPoint, OpenDocument, RTF and text
+files to PDF with Microsoft Office or, without it, LibreOffice. Text files
+always work.
+
+### Recipes
+
+A recipe is a list of tools run one after another. Save one with the steps
+and their options (the same options as in the app):
+
+```bash
+pdfm recipe save "Scans" clean ocr language=eng compress level=high number "format=Page {n}"
+pdfm recipe run "Scans" *.pdf -o done/
+pdfm recipe list
+```
+
+Recipes are stored in `recipes.json` in the app's data folder
+(`%LOCALAPPDATA%\PDF Manager` on Windows, `~/.local/share/pdf-manager` on
+Linux), shared by the app, the command line and `pdfm watch --recipe NAME`.
+
 ### Watching a folder
 
 ```bash
@@ -229,7 +334,8 @@ pdfm watch ~/Scans/inbox --dest ~/Documents/PDFs --by month \
 ```
 
 Every PDF that lands in the inbox is OCR'd, compressed, renamed and filed
-into the destination. A file is only picked up once it has stopped
+into the destination. Add `--clean` to drop blank pages, `--rotate` to turn
+pages upright and `--recipe NAME` to run a saved recipe. A file is only picked up once it has stopped
 changing, so large copies aren't grabbed half-written. Originals are moved
 to `inbox/originals` (or deleted with `--delete-originals`). A file that
 can't be processed is reported and skipped; watching continues. Use
@@ -270,4 +376,5 @@ pytest
 ```
 
 GitHub Actions runs the suite on Linux (Python 3.10 and 3.13) and Windows,
-plus an OCR job with Tesseract.
+plus a job with Tesseract, Ghostscript and LibreOffice for the tests that
+need those programs.

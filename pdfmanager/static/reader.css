@@ -1,6 +1,6 @@
 /* PDF reader. Uses the app's colour tokens from gui.html. */
 
-.rd { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--surface-3); }
+.rd { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--surface-3); container-type: inline-size; }
 .rd [hidden] { display: none !important; }
 .rd button { font: inherit; color: inherit; }
 
@@ -174,3 +174,28 @@
   .rd-sidebar { position: absolute; inset: 0 auto 0 0; z-index: 10; box-shadow: var(--shadow-lift); }
   .rd-zoom { max-width: 96px; }
 }
+
+/* ---- Annotation bar ---- */
+.rd-annotbar { gap: 4px; }
+.rd-tool span { font-size: 13.5px; }
+.rd-swatches { display: flex; gap: 4px; padding: 0 4px; }
+.rd-swatch {
+  width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--surface); background: var(--ink); cursor: pointer; padding: 0;
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+.rd-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); }
+.rd-annotbar .rd-zoom { height: 32px; }
+@container (max-width: 1080px) { .rd-tool span { display: none; } .rd-annotbar .rd-btn.primary span { display: none; } }
+
+/* ---- Signature dialog ---- */
+.rd-dialog:has(.rd-sigpad) { width: min(580px, calc(100vw - 32px)); }
+.rd-sigpad {
+  display: block; width: 100%; aspect-ratio: 520 / 180; border: 1px dashed var(--border-strong); border-radius: 10px;
+  background: #fff linear-gradient(transparent calc(100% - 46px), #d8d6cf calc(100% - 46px), #d8d6cf calc(100% - 45px), transparent calc(100% - 45px));
+  touch-action: none; cursor: crosshair;
+}
+.rd-sigrow { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+.rd-sigtext { flex: 1; min-width: 0; height: 36px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
+.rd-sigrow .rd-btn { border-color: var(--border-strong); }
+.rd-sigremember { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 13.5px; color: var(--muted); }
+.rd-sigremember input { accent-color: var(--accent); }

@@ -700,6 +700,9 @@ def test_reader_static_files_are_served(server):
     base, _ = server
     for path, ctype in (("/static/reader.js", "text/javascript"),
                         ("/static/pages.js", "text/javascript"),
+                        ("/static/regions.js", "text/javascript"),
+                        ("/static/bookmarks.js", "text/javascript"),
+                        ("/static/recipes.js", "text/javascript"),
                         ("/static/reader.css", "text/css"),
                         ("/static/pdfjs/build/pdf.min.mjs", "text/javascript"),
                         ("/static/pdfjs/build/pdf.worker.min.mjs", "text/javascript"),
@@ -826,10 +829,10 @@ def test_page_tools_have_page_previews():
     from pdfmanager import gui
 
     for op in gui.OPERATIONS:
-        if op["group"] != "Pages":
+        if op["group"] != "Pages" or op.get("panel"):  # bookmarks have their own editor
             continue
         board = op.get("board")
-        assert board and board["mode"] in ("order", "select", "view"), op["id"]
+        assert board and board["mode"] in ("order", "select", "view", "split"), op["id"]
         keys = {f["key"] for f in op["fields"]}
         for ref in ("field", "degrees"):
             if ref in board:
