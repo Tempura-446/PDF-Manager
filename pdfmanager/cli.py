@@ -410,12 +410,10 @@ def cmd_gui(a):
     for path in paths:
         if not Path(path).is_file():
             raise core.PdfManagerError(f"no such file: {path}")
-    if not a.browser and not a.no_browser and gui.desktop_available():
-        if gui.run_desktop(port=a.port, open_paths=paths):
-            return
-    elif not a.browser and not a.no_browser:
-        print("Tip: pip install pywebview to open PDF Manager in its own window.")
-    gui.serve(port=a.port, open_browser=not a.no_browser, open_paths=paths)
+    if a.browser or a.no_browser:
+        gui.serve(port=a.port, open_browser=not a.no_browser, open_paths=paths)
+    else:
+        gui.launch(paths, port=a.port)
 
 
 # --------------------------------------------------------------------------
@@ -623,8 +621,8 @@ def build_parser():
     sp.add_argument("--interval", type=float, default=5, help="seconds between checks")
     sp.add_argument("--once", action="store_true", help="process what's there now and exit")
 
-    for name, help_ in (("gui", "open the graphical app (in its own window if pywebview is "
-                                "installed, otherwise in your browser)"),
+    for name, help_ in (("gui", "open the graphical app in its own window (or your browser "
+                                "if no window can be opened)"),
                         ("view", "read PDFs in the app's PDF reader")):
         sp = other(name, cmd_gui, help_)
         sp.add_argument("files", nargs="*" if name == "gui" else "+",

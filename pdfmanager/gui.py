@@ -1,5 +1,6 @@
-"""A small local web app: ``pdfm gui`` serves a page on 127.0.0.1 and opens it
-in the browser. Uses only the standard library.
+"""A small local web app: ``pdfm gui`` serves a page on 127.0.0.1 and shows
+it in its own window (pywebview, or else Edge/Chrome in app mode) or in the
+browser. Uses only the standard library.
 
 Uploads are processed in a temporary folder and the result is sent back as
 a download. Folder tools (organize, rename, duplicates) work on paths on
@@ -14,11 +15,15 @@ import email.policy
 import importlib.util
 import io
 import json
+import os
 import re
 import secrets
 import shutil
+import subprocess
+import sys
 import tempfile
 import threading
+import time
 import webbrowser
 import zipfile
 from http import HTTPStatus
@@ -560,7 +565,10 @@ class Handler(BaseHTTPRequestHandler):
         return self.headers.get("Host", "") in self.allowed_hosts
 
     def _token_ok(self):
-        return secrets.compare_digest(self.headers.get("X-Pdfm-Token", ""), self.token)
+        ok = secrets.compare_digest(self.headers.get("X-Pdfm-Token", ""), self.token)
+        if ok:
+            type(self).last_seen = time.monotonic()  # the page is still open
+        return ok
 
     # -- routes ------------------------------------------------------------
 
@@ -612,6 +620,8 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         path = self.path.split("?", 1)[0]
         try:
+            if path == "/api/ping":  # sent regularly while the page is open
+                return self._send(HTTPStatus.OK, {"ok": True})
             if path == "/api/run":
                 return self._run(body)
             if path == "/api/inspect":
@@ -687,7 +697,8 @@ def make_server(port=0, desktop=False, open_paths=()):
     opened = OpenFiles()
     open_ids = [opened.add(p) for p in open_paths]
     handler = type("PdfmHandler", (Handler,), {"token": token, "results": ResultCache(),
-                                               "opened": opened, "allow_eval": desktop})
+                                               "opened": opened, "allow_eval": desktop,
+                                               "last_seen": time.monotonic()})
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     real_port = server.server_address[1]
     handler.allowed_hosts = {f"127.0.0.1:{real_port}", f"localhost:{real_port}"}
@@ -697,21 +708,47 @@ def make_server(port=0, desktop=False, open_paths=()):
     return server, url
 
 
-def serve(port=0, open_browser=True, open_paths=()):
-    """Run in the browser: print the link, open it, serve until Ctrl+C."""
+def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False):
+    """Run in the browser: print the link, open it, serve until Ctrl+C (or,
+    with ``exit_when_closed``, until the page has been closed)."""
     server, url = make_server(port, open_paths=open_paths)
     print(f"PDF Manager is running at {url}")
     print("Keep this window open while you use it; press Ctrl+C to stop.")
     if open_browser:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     try:
-        server.serve_forever()
+        if exit_when_closed:
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            wait_until_closed(server.RequestHandlerClass)
+            server.shutdown()
+        else:
+            server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
 
 
+def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=2.0):
+    """Block until the page is gone. The page pings the server every 15
+    seconds (less often while hidden), which updates ``handler.last_seen``.
+
+    With ``proc`` (the browser started for an app window): return as soon
+    as it exits, the window was closed. If it exits within a few seconds,
+    the browser handed the window to a copy that was already running, so
+    fall back to the pings."""
+    started = time.monotonic()
+    while True:
+        time.sleep(poll)
+        quiet = time.monotonic() - handler.last_seen
+        if proc is None:
+            if quiet > idle:
+                return
+            continue
+        if proc.poll() is None:
+            continue
+        if time.monotonic() - started > 5 + poll or quiet > idle_handed_off:
+            return
 class DesktopApi:
     """Functions the page can call in the desktop window (window.pywebview.api)."""
 
@@ -781,25 +818,65 @@ def desktop_available():
     return importlib.util.find_spec("webview") is not None
 
 
+def data_dir():
+    """Where the app keeps its settings (the app-window browser profile and
+    a note about why the pywebview window didn't open)."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+        return base / "PDF Manager"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "PDF Manager"
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "pdf-manager"
+
+
+def _pywebview_version():
+    try:
+        from importlib.metadata import version
+
+        return version("pywebview")
+    except Exception:
+        return "unknown"
+
+
+def _window_note():
+    return data_dir() / "window-error.txt"
+
+
 def run_desktop(port=0, open_paths=()):
     """Open PDF Manager in its own window (needs pywebview). Returns False if
-    no window could be opened, so the caller can fall back to the browser."""
-    try:
-        import webview
-    except ImportError:
+    no window could be opened, so the caller can fall back to the browser.
+
+    If the window can't open (for example Windows Smart App Control blocks
+    a library pywebview needs), the reason is saved and this pywebview
+    version isn't tried again, so the user doesn't see the error at every
+    start. Installing another pywebview version tries again."""
+    if not desktop_available():
         return False
+    note, version = _window_note(), _pywebview_version()
+    try:
+        if note.read_text(encoding="utf-8").splitlines()[0] == version:
+            return False
+    except (OSError, IndexError):
+        pass
     server, url = make_server(port, desktop=True, open_paths=open_paths)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     handler = server.RequestHandlerClass
     api = DesktopApi(handler.results, handler.opened)
     try:
+        import webview
+
         window = webview.create_window("PDF Manager", url, js_api=api, width=1180, height=820,
                                        min_size=(400, 560), background_color="#f6f6f3")
         api._window = window
         webview.start()
-    except Exception as exc:  # e.g. no GUI toolkit on this Linux machine
-        print(f"Could not open the app window ({exc}); opening your browser instead.")
+    except Exception as exc:  # e.g. a missing or blocked web engine
+        print(f"Could not open the app window ({exc}); trying another way.")
+        try:
+            note.parent.mkdir(parents=True, exist_ok=True)
+            note.write_text(f"{version}\n{type(exc).__name__}: {exc}\n", encoding="utf-8")
+        except OSError:
+            pass
         server.shutdown()
         server.server_close()
         return False
@@ -808,13 +885,74 @@ def run_desktop(port=0, open_paths=()):
     return True
 
 
-def main_app(argv=None):
-    """Entry point for the `pdfm-app` launcher: a window if possible,
-    otherwise the browser. PDFs given as arguments (e.g. by "Open with…" or
-    a file association) open in the reader."""
-    import sys
+def find_app_browser():
+    """A Chromium-based browser that can show the app as a window of its
+    own, without tabs or an address bar: Edge (part of Windows), Chrome,
+    Chromium or Brave. Returns its path or None."""
+    if sys.platform == "win32":
+        bases = [os.environ.get(k) for k in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA")]
+        apps = ["Microsoft/Edge/Application/msedge.exe", "Google/Chrome/Application/chrome.exe",
+                "BraveSoftware/Brave-Browser/Application/brave.exe"]
+        for app in apps:
+            for base in filter(None, bases):
+                if (Path(base) / app).is_file():
+                    return str(Path(base) / app)
+        return None
+    if sys.platform == "darwin":
+        for app in ("Microsoft Edge", "Google Chrome", "Chromium", "Brave Browser"):
+            path = Path("/Applications") / f"{app}.app" / "Contents" / "MacOS" / app
+            if path.is_file():
+                return str(path)
+        return None
+    for name in ("microsoft-edge", "microsoft-edge-stable", "google-chrome", "google-chrome-stable",
+                 "chromium", "chromium-browser", "brave-browser"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
 
+
+def run_app_window(port=0, open_paths=()):
+    """Open PDF Manager as an Edge/Chrome app window. Returns False if no
+    such browser is installed. Results are saved like downloads."""
+    browser = find_app_browser()
+    if not browser:
+        return False
+    server, url = make_server(port, open_paths=open_paths)
+    profile = data_dir() / "window"
+    try:
+        profile.mkdir(parents=True, exist_ok=True)
+        # A profile of its own keeps the window separate from the user's
+        # normal browsing and lets us tell when it has been closed.
+        proc = subprocess.Popen(
+            [browser, f"--app={url}", f"--user-data-dir={profile}", "--no-first-run",
+             "--no-default-browser-check", "--window-size=1180,820"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        server.server_close()
+        return False
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        wait_until_closed(server.RequestHandlerClass, proc)
+    except KeyboardInterrupt:
+        pass
+    server.shutdown()
+    server.server_close()
+    return True
+
+
+def launch(open_paths=(), port=0):
+    """Open the app the best way available: its own pywebview window, else
+    an Edge/Chrome app window, else a browser tab. Returns once closed."""
+    if run_desktop(port=port, open_paths=open_paths):
+        return
+    if run_app_window(port=port, open_paths=open_paths):
+        return
+    serve(port=port, open_paths=open_paths, exit_when_closed=True)
+
+
+def main_app(argv=None):
+    """Entry point for the `pdfm-app` launcher. PDFs given as arguments
+    (e.g. by "Open with…" or a file association) open in the reader."""
     args = sys.argv[1:] if argv is None else argv
-    paths = [a for a in args if Path(a).suffix.lower() == ".pdf" and Path(a).is_file()]
-    if not run_desktop(open_paths=paths):
-        serve(open_paths=paths)
+    launch([a for a in args if Path(a).suffix.lower() == ".pdf" and Path(a).is_file()])

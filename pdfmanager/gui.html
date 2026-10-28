@@ -975,6 +975,12 @@ function busy(on, text, which = "run") {
 $("run").addEventListener("click", () => run(false));
 $("preview").addEventListener("click", () => run(true));
 
+// Tell the server the page is still open; it shuts down some time after the
+// last window running the app has closed.
+const ping = () => { if (token) api("/api/ping", { method: "POST" }).catch(() => {}); };
+setInterval(ping, 15000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) ping(); });
+
 // In the desktop window, re-render once pywebview's API is ready (adds Browse… buttons).
 window.addEventListener("pywebviewready", () => { if (current) renderForm(); });
 load();
