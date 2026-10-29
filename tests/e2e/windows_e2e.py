@@ -90,11 +90,20 @@ def debugging_ready():
 
 
 def app_page(browser):
-    for context in browser.contexts:
-        for page in context.pages:
-            if "#token=" in page.url or page.url.startswith("http://127.0.0.1:"):
-                return page
+    pages = [page for context in browser.contexts for page in context.pages]
+    for page in pages:
+        if "#token=" in page.url or page.url.startswith("http://127.0.0.1:"):
+            return page
     return None
+
+
+def targets():
+    """What the window's debugging port lists (for failure messages)."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/json/list", timeout=5) as res:
+            return [(t.get("type"), t.get("url")) for t in json.load(res)]
+    except OSError as exc:
+        return f"can't list: {exc}"
 
 
 def window_handles(title_part="PDF Manager"):
@@ -160,7 +169,11 @@ def run(mode):
         raise
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{PORT}")
-        page = wait_for(lambda: app_page(browser), 30, "the app page")
+        try:
+            page = wait_for(lambda: app_page(browser), 30, "the app page")
+        except AssertionError:
+            log("pages:", [pg.url for c in browser.contexts for pg in c.pages], "targets:", targets())
+            raise
         exercise(page, pdf)
 
         # Opening a PDF again (e.g. from Explorer) hands it to the running app.
