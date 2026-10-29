@@ -635,12 +635,15 @@ def test_windows_setup_registers_and_removes(tmp_path, monkeypatch):
     assert len(done) == 4
     assert made[0][0] == tmp_path / "Start" / "PDF Manager.lnk"
     assert made[1][0] == tmp_path / "Desktop" / "PDF Manager.lnk"
-    assert made[0][2] == "-m pdfmanager gui"
+    assert made[0][2] == "-I -m pdfmanager gui"  # -I: the PDF's folder isn't searched for modules
     assert (app_dir / "PDF Manager.ico").stat().st_size > 1000
-    assert str(app_dir) in (app_dir / "uninstall.ps1").read_text(encoding="utf-8-sig")
+    uninstall = (app_dir / "uninstall.ps1").read_text(encoding="utf-8-sig")
+    assert str(app_dir) in uninstall and "setup-windows" not in uninstall  # works without Python
+    assert str(tmp_path / "Start" / "PDF Manager.lnk") in uninstall
+    assert "PDFManager.Document" in uninstall and r"HKCU:\Software\PDFManager" in uninstall
     keys = reg.keys
     command = keys[r"software\classes\pdfmanager.document\shell\open\command"][""]
-    assert command.endswith('-m pdfmanager gui "%1"')
+    assert command.endswith('-I -m pdfmanager gui "%1"')
     assert keys[r"software\classes\.pdf\openwithprogids"] == {"PDFManager.Document": ""}
     assert keys[r"software\registeredapplications"]["PDF Manager"] == r"Software\PDFManager\Capabilities"
     uninstall = keys[r"software\microsoft\windows\currentversion\uninstall\pdfmanager"]
@@ -675,19 +678,25 @@ def test_windows_shortcuts_and_registry_for_real(tmp_path, monkeypatch):
 
     folders = {winsetup.CSIDL_PROGRAMS: tmp_path / "Start", winsetup.CSIDL_DESKTOPDIRECTORY: tmp_path / "Desktop"}
     monkeypatch.setattr(winsetup, "_folder", folders.get)
+    # Keys of their own, so an installed PDF Manager on this computer is left alone.
+    monkeypatch.setattr(winsetup, "NAME", "PDF Manager Test")
+    monkeypatch.setattr(winsetup, "PROG_ID", "PDFManagerTest.Document")
+    monkeypatch.setattr(winsetup, "APP_KEY", r"Software\PDFManagerTest")
+    monkeypatch.setattr(winsetup, "UNINSTALL_KEY",
+                        r"Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFManagerTest")
     winsetup.install(tmp_path / "app")
     try:
-        target, args = winsetup.read_shortcut(tmp_path / "Start" / "PDF Manager.lnk")
-        assert Path(target).name.lower() in ("pythonw.exe", "python.exe") and args == "-m pdfmanager gui"
-        assert (tmp_path / "Desktop" / "PDF Manager.lnk").exists()
+        target, args = winsetup.read_shortcut(tmp_path / "Start" / "PDF Manager Test.lnk")
+        assert Path(target).name.lower() in ("pythonw.exe", "python.exe") and args == "-I -m pdfmanager gui"
+        assert (tmp_path / "Desktop" / "PDF Manager Test.lnk").exists()
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, winsetup.UNINSTALL_KEY) as key:
-            assert winreg.QueryValueEx(key, "DisplayName")[0] == "PDF Manager"
+            assert winreg.QueryValueEx(key, "DisplayName")[0] == "PDF Manager Test"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
                             rf"{winsetup.CLASSES}\{winsetup.PROG_ID}\shell\open\command") as key:
-            assert winreg.QueryValueEx(key, "")[0].endswith('-m pdfmanager gui "%1"')
+            assert winreg.QueryValueEx(key, "")[0].endswith('-I -m pdfmanager gui "%1"')
     finally:
         winsetup.remove()
-    assert not (tmp_path / "Start" / "PDF Manager.lnk").exists()
+    assert not (tmp_path / "Start" / "PDF Manager Test.lnk").exists()
     with pytest.raises(FileNotFoundError):
         winreg.OpenKey(winreg.HKEY_CURRENT_USER, winsetup.UNINSTALL_KEY)
 
@@ -781,7 +790,7 @@ def test_update_install(updates, tmp_path, monkeypatch):
 
     monkeypatch.setattr(update.subprocess, "run", fake_run)
     assert update.install(python="py") == "9.0.0"
-    assert ran[0][:5] == ["py", "-m", "pip", "install", "--upgrade"]
+    assert ran[0][:6] == ["py", "-I", "-m", "pip", "install", "--upgrade"]
     assert ran[0][-1].split("Tempura-446-PDF-Manager-abc123")[1] in ("", "[app]")
     monkeypatch.setattr(update.subprocess, "run", lambda cmd, **kw: type(
         "Failed", (), {"returncode": 1, "stdout": "", "stderr": "ERROR: no space left"})())
@@ -822,3 +831,97 @@ def test_restart_ends_the_wait():
     started = time.monotonic()
     gui.wait_until_closed(H, poll=0.05)
     assert time.monotonic() - started < 2
+
+
+# -- launching: proxies, several launches at once, hand-offs --------------------------------------
+
+def test_handing_over_ignores_proxies(app, tmp_path, monkeypatch):
+    """The call to the running copy stays on this computer even with a proxy set."""
+    base, token, srv = app
+    gui._register_instance(srv, "browser")
+    opened = []
+    monkeypatch.setattr(gui.webbrowser, "open", opened.append)
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9/")  # nothing listens there
+    monkeypatch.delenv("no_proxy", raising=False)
+    assert gui.forward_to_running_app([text_pdf(tmp_path / "a.pdf")]) is True
+    assert len(opened) == 1
+    gui._unregister_instance(srv)
+
+
+def test_launches_at_the_same_time_share_one_copy(tmp_path, monkeypatch):
+    """Three PDFs opened together in Explorer start three launches at once;
+    only the first becomes the app, the others hand their files to it."""
+    monkeypatch.setattr(gui, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(gui, "run_desktop", lambda **kw: False)
+    monkeypatch.setattr(gui, "run_app_window", lambda **kw: False)
+    started, opened, servers = [], [], []
+
+    def fake_serve(**kw):
+        started.append(kw["open_paths"])
+        srv, _ = gui.make_server()
+        servers.append(srv)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        gui._register_instance(srv, "browser")
+        time.sleep(0.6)  # "running"
+        gui._unregister_instance(srv)
+
+    monkeypatch.setattr(gui, "serve", fake_serve)
+    monkeypatch.setattr(gui.webbrowser, "open", opened.append)
+    pdfs = [text_pdf(tmp_path / f"{i}.pdf") for i in range(3)]
+    threads = [threading.Thread(target=gui.launch, args=([pdf],)) for pdf in pdfs]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(15)
+    for srv in servers:
+        srv.shutdown()
+        srv.server_close()
+    assert len(started) == 1 and len(opened) == 2
+    assert gui._startup.fh is None  # the lock is let go
+
+
+def test_hand_off_to_a_running_browser_waits_for_the_pages():
+    """The browser exits at once when it hands the window to a copy already
+    running; the app then lives as long as the page keeps pinging."""
+    handler = type("H", (), {"last_seen": time.monotonic(), "closed_at": None})
+    stop = time.monotonic() + 1.2
+
+    def ping():
+        while time.monotonic() < stop:
+            handler.last_seen = time.monotonic()
+            time.sleep(0.05)
+
+    threading.Thread(target=ping, daemon=True).start()
+    t = time.monotonic()
+
+    class ExitedAtOnce:
+        def poll(self):
+            return 0
+
+    gui.wait_until_closed(handler, ExitedAtOnce(), idle_handed_off=0.3, poll=0.05, handoff=0.5)
+    assert 1.4 <= time.monotonic() - t < 3  # pings until 1.2 s, then 0.3 s quiet
+
+
+def test_only_the_desktop_window_waits_for_events(app):
+    base, token, srv = app
+    gui._register_instance(srv, "app-window", browser="/opt/edge", profile="p")
+    t = time.monotonic()
+    status, _, out = call(base, token, "/api/events?after=0")
+    assert status == 200 and json.loads(out)["none"] is True and time.monotonic() - t < 2
+    gui._register_instance(srv, "desktop")
+    t = time.monotonic()
+    threading.Timer(0.2, lambda: srv.RequestHandlerClass.events.push({"open": ["x"]})).start()
+    data = json.loads(call(base, token, "/api/events?after=0")[2])
+    assert data["events"] == [{"open": ["x"]}] and "none" not in data
+    gui._unregister_instance(srv)
+
+
+def test_file_names_with_brackets_are_not_patterns(tmp_path):
+    from pdfmanager.cli import _expand
+
+    odd = text_pdf(tmp_path / "Report [12].pdf")
+    text_pdf(tmp_path / "Report 1.pdf")
+    assert _expand([str(odd)]) == [str(odd)]
+    with pytest.raises(core.PdfManagerError, match="no files match"):
+        _expand([str(tmp_path / "Invoice [2024].pdf")])
+    assert _expand([str(tmp_path / "Report *.pdf")]) == sorted([str(tmp_path / "Report 1.pdf"), str(odd)])

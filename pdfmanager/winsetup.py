@@ -24,6 +24,8 @@ CLASSES = r"Software\Classes"
 CSIDL_PROGRAMS, CSIDL_DESKTOPDIRECTORY = 0x02, 0x10
 
 UNINSTALL_PS1 = r"""# Removes PDF Manager (run from Settings > Apps, or right-click > Run with PowerShell).
+# Plain commands only, so it also works where scripts are limited (Smart App Control)
+# and without Python.
 $ErrorActionPreference = "Continue"
 $app = "{app_dir}"
 Write-Host "Removing PDF Manager..."
@@ -32,7 +34,12 @@ Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe' OR Name = 'python.ex
     Where-Object {{ $_.CommandLine -like "*-m pdfmanager*" }} |
     ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
 Start-Sleep -Seconds 1
-& "$app\venv\Scripts\python.exe" -m pdfmanager setup-windows --remove
+foreach ($lnk in @({shortcuts})) {{ Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue }}
+foreach ($key in @("HKCU:\Software\Classes\{prog_id}", "HKCU:\{app_key}", "HKCU:\{uninstall_key}")) {{
+    Remove-Item -Path $key -Recurse -Force -ErrorAction SilentlyContinue
+}}
+Remove-ItemProperty -Path "HKCU:\Software\Classes\.pdf\OpenWithProgids" -Name "{prog_id}" -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKCU:\Software\RegisteredApplications" -Name "{name}" -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $app -Recurse -Force -ErrorAction SilentlyContinue
 if (Test-Path -LiteralPath $app) {{
     Write-Host "Some files could not be removed: $app"
@@ -41,6 +48,11 @@ if (Test-Path -LiteralPath $app) {{
 }}
 Start-Sleep -Seconds 4
 """
+
+
+def _ps(text):
+    """``text`` inside a double-quoted PowerShell string."""
+    return str(text).replace("`", "``").replace('"', '`"').replace("$", "`$")
 
 
 def _require_windows():
@@ -228,15 +240,20 @@ def install(app_dir=None, desktop=True, open_with=True):
     app_dir = Path(app_dir or default_app_dir())
     app_dir.mkdir(parents=True, exist_ok=True)
     icon = appicon.save_ico(app_dir / "PDF Manager.ico")
-    (app_dir / "uninstall.ps1").write_text(UNINSTALL_PS1.format(app_dir=app_dir), encoding="utf-8-sig")
+    (app_dir / "uninstall.ps1").write_text(UNINSTALL_PS1.format(
+        app_dir=_ps(app_dir), prog_id=PROG_ID, app_key=APP_KEY, uninstall_key=UNINSTALL_KEY,
+        name=_ps(NAME), shortcuts=", ".join(f'"{_ps(p)}"' for p in shortcut_paths(True))),
+        encoding="utf-8-sig")
     exe = pythonw()
     done = []
+    # -I: the folder the PDF is in (the working directory when Explorer opens
+    # a file) must not be searched for Python modules.
     for path in shortcut_paths(desktop):
-        make_shortcut(path, exe, "-m pdfmanager gui", icon=icon, workdir=Path.home(),
+        make_shortcut(path, exe, "-I -m pdfmanager gui", icon=icon, workdir=Path.home(),
                       description="Read, edit and organize PDFs")
         done.append(f"shortcut: {path}")
     if open_with:
-        register_open_with(f'"{exe}" -m pdfmanager gui "%1"', icon)
+        register_open_with(f'"{exe}" -I -m pdfmanager gui "%1"', icon)
         done.append('"Open with" for PDF files')
     register_uninstall(app_dir, icon)
     done.append("Settings > Apps entry (to uninstall)")
@@ -257,7 +274,7 @@ def remove():
     _notify_shell()
 
 
-def launch_detached(args=("-m", "pdfmanager", "gui")):
+def launch_detached(args=("-I", "-m", "pdfmanager", "gui")):
     """Start the installed app without a console window."""
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     return subprocess.Popen([str(pythonw()), *args], creationflags=flags, close_fds=True,

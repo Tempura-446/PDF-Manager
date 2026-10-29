@@ -39,7 +39,10 @@ jobs:
         shell: pwsh
         run: |
           $app = "$env:LOCALAPPDATA\PDF Manager\app"
-          & "$app\venv\Scripts\python.exe" -m pdfmanager --version
+          & "$app\venv\Scripts\python.exe" -I -m pdfmanager --version
+          # the installed copy, not this checkout
+          & "$app\venv\Scripts\python.exe" -I -c 'import pdfmanager, sys; print(pdfmanager.__file__); sys.exit(0 if "\\venv\\" in pdfmanager.__file__ else 1)'
+          if ($LASTEXITCODE -ne 0) { throw "pdfmanager is not installed in the venv" }
           $shell = New-Object -ComObject WScript.Shell
           foreach ($folder in @([Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPath("Desktop"))) {
             $lnk = $shell.CreateShortcut((Join-Path $folder "PDF Manager.lnk"))

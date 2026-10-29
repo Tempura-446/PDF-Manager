@@ -77,7 +77,7 @@ def make_pdf(path, pages=3):
 def start(mode, *files):
     env = dict(os.environ, PDFM_WINDOW=mode, PDFM_DEBUG_PORT=str(PORT))
     # What the Start menu shortcut runs:
-    return subprocess.Popen([str(VENV / "pythonw.exe"), "-m", "pdfmanager", "gui", *map(str, files)],
+    return subprocess.Popen([str(VENV / "pythonw.exe"), "-I", "-m", "pdfmanager", "gui", *map(str, files)],
                             env=env, cwd=str(Path.home()))
 
 

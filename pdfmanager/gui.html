@@ -1596,6 +1596,7 @@ async function listen() {
   for (;;) {
     try {
       const data = await (await api(`/api/events?after=${after}`)).json();
+      if (data.none) return;  // not the app's own window: nothing will come
       after = data.last;
       for (const event of data.events) if (event.open && event.open.length) openInReaderById(event.open);
     } catch (e) { await new Promise((r) => setTimeout(r, 3000)); }

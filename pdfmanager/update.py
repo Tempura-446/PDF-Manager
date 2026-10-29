@@ -207,7 +207,7 @@ def install(python=None):
         progress.say(f"Installing version {version}…")
         extra = "[app]" if _has_pywebview() else ""
         proc = subprocess.run(
-            [python or sys.executable, "-m", "pip", "install", "--upgrade", "--disable-pip-version-check",
+            [python or sys.executable, "-I", "-m", "pip", "install", "--upgrade", "--disable-pip-version-check",
              "--no-input", f"{project}{extra}"],
             capture_output=True, text=True, timeout=900,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -253,7 +253,7 @@ def restart_after(pid):
     windowless = exe.with_name("pythonw.exe")
     exe = windowless if windowless.exists() else exe
     flags = (getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
-    return subprocess.Popen([str(exe), "-m", "pdfmanager.update", "--relaunch-after", str(pid)],
+    return subprocess.Popen([str(exe), "-I", "-m", "pdfmanager.update", "--relaunch-after", str(pid)],
                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, creationflags=flags, close_fds=True,
                             start_new_session=os.name == "posix", cwd=str(Path.home()))

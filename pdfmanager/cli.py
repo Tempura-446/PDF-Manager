@@ -45,6 +45,9 @@ def _expand(patterns):
     """Expand wildcards ourselves so `*.pdf` also works on Windows."""
     paths = []
     for pattern in patterns:
+        if os.path.exists(pattern):  # a real name, even with [ ] in it
+            paths.append(pattern)
+            continue
         matches = sorted(glob.glob(pattern)) if glob.has_magic(pattern) else []
         if glob.has_magic(pattern) and not matches:
             raise core.PdfManagerError(f"no files match {pattern!r}")

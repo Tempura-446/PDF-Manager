@@ -112,7 +112,7 @@ if ($LASTEXITCODE -ne 0) { throw "Installing PDF Manager's packages failed (see 
 Say "Done"
 
 Step "Adding shortcuts and Open with"
-$setup = @("-m", "pdfmanager", "setup-windows", "--app-dir", $appDir)
+$setup = @("-I", "-m", "pdfmanager", "setup-windows", "--app-dir", $appDir)
 if ($NoDesktop) { $setup += "--no-desktop" }
 if ($NoOpenWith) { $setup += "--no-open-with" }
 & $venvPython @setup | ForEach-Object { Say $_ }
@@ -124,7 +124,7 @@ if (-not $NoDesktop) { Write-Host " or on your desktop" -NoNewline -ForegroundCo
 Write-Host "." -ForegroundColor Green
 Write-Host "To remove it: Settings > Apps > Installed apps > PDF Manager > Uninstall."
 if (-not $NoLaunch) {
-    Start-Process -FilePath (Join-Path $venv "Scripts\pythonw.exe") -ArgumentList "-m", "pdfmanager", "gui" `
+    Start-Process -FilePath (Join-Path $venv "Scripts\pythonw.exe") -ArgumentList "-I", "-m", "pdfmanager", "gui" `
         -WorkingDirectory $env:USERPROFILE
     Start-Sleep -Seconds 4  # time to read the message before the window closes
 }

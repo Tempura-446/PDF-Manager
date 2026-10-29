@@ -1241,6 +1241,12 @@ class Handler(BaseHTTPRequestHandler):
             after = int(query.get("after", ["0"])[0])
         except ValueError:
             after = 0
+        mode = type(self).instance_mode
+        if mode is not None and mode != "desktop":
+            # Only the app's own window gets events; other kinds open a new
+            # window instead. Answer at once so the page stops asking (a
+            # browser allows few connections per site).
+            return self._send(HTTPStatus.OK, {"events": [], "last": after, "none": True})
         events, last = self.events.wait(after, timeout=20)
         return self._send(HTTPStatus.OK, {"events": events, "last": last})
 
@@ -1406,6 +1412,7 @@ def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False):
             _unregister_instance(server)
             server.shutdown()
         else:
+            server.RequestHandlerClass.instance_mode = "browser"  # no events to wait for
             server.serve_forever()
     except KeyboardInterrupt:
         pass
@@ -1413,7 +1420,8 @@ def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False):
         server.server_close()
 
 
-def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5, grace=2.0):
+def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5, grace=2.0,
+                      handoff=5.0):
     """Block until the app's pages are gone.
 
     Each page says when its window closes (/api/bye) and otherwise pings the
@@ -1424,11 +1432,12 @@ def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5
     browser was killed).
 
     With ``proc`` (the browser started for an app window): if it exits after
-    the first few seconds, the window was closed. If it exits sooner, the
-    browser handed the window to a copy that was already running, so only
+    the first ``handoff`` seconds, the window was closed. If it exits sooner,
+    the browser handed the window to a copy that was already running, so only
     the pages' signals count. A browser that keeps running in the background
     after its window is closed (Edge does) doesn't keep the app alive."""
     started = time.monotonic()
+    exited_at = None
     pages = getattr(handler, "pages", None)
     if pages is None:
         pages = {}
@@ -1446,7 +1455,9 @@ def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5
             return
         quiet = now - handler.last_seen
         if proc is not None and proc.poll() is not None:
-            if now - started > 5 + poll or quiet > idle_handed_off:
+            if exited_at is None:
+                exited_at = now
+            if exited_at - started > handoff + poll or quiet > idle_handed_off:
                 return
         elif quiet > idle:
             return
@@ -1458,6 +1469,59 @@ def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5
 
 def _instance_file():
     return data_dir() / "instance.json"
+
+
+class _StartupLock:
+    """Only one launch at a time looks for a running copy and registers
+    itself, so files opened together (e.g. selected in Explorer and opened
+    at once) all land in one app rather than each starting its own."""
+
+    def __init__(self):
+        self.fh = None
+
+    def acquire(self, timeout=30):
+        try:
+            path = data_dir() / "launch.lock"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fh = open(path, "a+b")
+        except OSError:
+            return
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.fh = fh
+                return
+            except OSError:
+                if time.monotonic() > deadline:  # carry on without it
+                    fh.close()
+                    return
+                time.sleep(0.1)
+
+    def release(self):
+        fh, self.fh = self.fh, None
+        if fh is None:
+            return
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        fh.close()
+
+
+_startup = _StartupLock()
 
 
 def _register_instance(server, mode, **extra):
@@ -1476,6 +1540,7 @@ def _register_instance(server, mode, **extra):
         os.replace(tmp, target)
     except OSError:
         pass
+    _startup.release()  # later launches can find this copy now
 
 
 def _unregister_instance(server):
@@ -1505,8 +1570,10 @@ def forward_to_running_app(paths=()):
     request = urllib.request.Request(f"http://127.0.0.1:{port}/api/instance", data=body,
                                      headers={"Content-Type": "application/json",
                                               "Host": f"127.0.0.1:{port}"})
+    # Straight to this computer: a system or http_proxy proxy must not see it.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(request, timeout=5) as res:
+        with opener.open(request, timeout=5) as res:
             answer = json.loads(res.read())
     except (OSError, ValueError):
         return False  # not running any more (or something else has the port)
@@ -1811,16 +1878,20 @@ def launch(open_paths=(), port=0):
     """Open the app the best way available: its own pywebview window, else
     an Edge/Chrome app window, else a browser tab. Returns once closed. If
     the app is already running, it gets the files instead."""
-    if not port and forward_to_running_app(open_paths):
-        return
-    # PDFM_WINDOW=desktop, app-window or browser uses only that kind of
-    # window (for tests and troubleshooting).
-    choice = os.environ.get("PDFM_WINDOW", "").strip().lower()
-    if choice in ("", "desktop") and run_desktop(port=port, open_paths=open_paths):
-        return
-    if choice in ("", "app-window") and run_app_window(port=port, open_paths=open_paths):
-        return
-    serve(port=port, open_paths=open_paths, exit_when_closed=True)
+    _startup.acquire()
+    try:
+        if not port and forward_to_running_app(open_paths):
+            return
+        # PDFM_WINDOW=desktop, app-window or browser uses only that kind of
+        # window (for tests and troubleshooting).
+        choice = os.environ.get("PDFM_WINDOW", "").strip().lower()
+        if choice in ("", "desktop") and run_desktop(port=port, open_paths=open_paths):
+            return
+        if choice in ("", "app-window") and run_app_window(port=port, open_paths=open_paths):
+            return
+        serve(port=port, open_paths=open_paths, exit_when_closed=True)
+    finally:
+        _startup.release()
 
 
 def main_app(argv=None):
