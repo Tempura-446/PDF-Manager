@@ -105,13 +105,22 @@ def edit_text(path, output, edits, password=None):
 
     reader = core.open_pdf(path, password)
     by_page = {}
+    if not isinstance(edits, (list, tuple)):
+        raise core.PdfManagerError("the changes should be a list")
     for edit in edits:
-        page = int(edit.get("page", 0))
+        try:
+            page = int(edit.get("page", 0))
+            x0, y0, x1, y1 = (float(v) for v in edit["rect"])
+            text = edit.get("text")
+        except (AttributeError, KeyError, TypeError, ValueError):
+            raise core.PdfManagerError("a change needs a page, the box around the words "
+                                       "(four numbers) and the new words") from None
+        if not all(math.isfinite(v) for v in (x0, y0, x1, y1)):
+            raise core.PdfManagerError("the box around the words isn't on the page")
         if not 1 <= page <= len(reader.pages):
             raise core.PdfManagerError(f"page {page} doesn't exist")
-        x0, y0, x1, y1 = (float(v) for v in edit["rect"])
         rect = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
-        by_page.setdefault(page, []).append((rect, str(edit.get("text") or "")))
+        by_page.setdefault(page, []).append((rect, "" if text is None else str(text)))
     if not by_page:
         raise core.PdfManagerError("no changes to make")
 
@@ -144,8 +153,12 @@ def edit_text(path, output, edits, password=None):
             doc.close()
 
     writer = core.clone_document(reader)
+    # Pages can share one content stream (after Compress, or a duplicated
+    # page): the change must land on this page only.
+    shared = core._shared_objects(writer)
     for number, plan in plans.items():
         page = writer.pages[number - 1]
+        core._own_contents(page, shared)
         box = page.mediabox
         left, bottom = float(box.left), float(box.bottom)
 

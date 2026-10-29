@@ -658,3 +658,52 @@ def test_pictures_are_read_the_same_way_pypdf_reads_them(tmp_path):
     assert ImageChops.difference(imaging._decode(jpeg), original.convert("RGB")).getbbox() is None
     # A JPEG shrunk anyway is decoded at a smaller scale.
     assert imaging._decode(jpeg, (20, 15)).size == (20, 15)
+
+
+# -- edit text ----------------------------------------------------------------------------------------
+
+def word_box(path, page, word):
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        textpage = doc[page].get_textpage()
+        start = textpage.get_text_range().find(word)
+        if start < 0:
+            return None
+        boxes = [textpage.get_charbox(start + k) for k in range(len(word))]
+        return [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)]
+    finally:
+        doc.close()
+
+
+def test_editing_text_on_a_shared_page_changes_that_page_only(tmp_path):
+    from pdfmanager import textedit
+
+    c = canvas.Canvas(str(tmp_path / "same.pdf"), pagesize=letter)
+    for _ in range(3):
+        c.setFont("Helvetica", 12)
+        c.drawString(72, 700, "Identical page text 1234")
+        c.showPage()
+    c.save()
+    small = core.compress(tmp_path / "same.pdf", tmp_path / "small.pdf", "low")
+    pages = PdfReader(str(small)).pages
+    assert pages[0]["/Contents"].indirect_reference == pages[1]["/Contents"].indirect_reference
+    out = tmp_path / "edited.pdf"
+    assert textedit.edit_text(small, out, [{"page": 2, "rect": word_box(small, 1, "1234"), "text": "9999"}]) == 1
+    assert [word_box(out, p, "9999") is not None for p in range(3)] == [False, True, False]
+    old, new = word_box(small, 1, "1234"), word_box(out, 1, "9999")
+    assert abs(old[0] - new[0]) < 1.5 and abs(old[1] - new[1]) < 1.5  # in the old words' place
+
+
+@pytest.mark.parametrize("edits", [
+    [{"page": 1, "rect": "abc", "text": "x"}], [{"page": 1, "text": "x"}], [{"page": "one", "rect": [1, 2, 3, 4]}],
+    [{"page": 1, "rect": [1, 2], "text": "x"}], [{"page": 1, "rect": [1, 2, 3, float("nan")]}], "not a list", [5],
+    [{"page": 9, "rect": [1, 2, 3, 4], "text": "x"}], [],
+])
+def test_a_malformed_text_change_is_a_plain_error(tmp_path, edits):
+    from pdfmanager import textedit
+
+    src = toc_pdf(tmp_path / "toc.pdf", chapters=1)
+    with pytest.raises(core.PdfManagerError):
+        textedit.edit_text(src, tmp_path / "out.pdf", edits)
