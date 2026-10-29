@@ -8,36 +8,66 @@ outlined in red, and the words that were removed and added.
 """
 
 import difflib
+import io
 import re
 from pathlib import Path
 
 from PIL import Image, ImageChops
+from pypdf.generic import DictionaryObject, NameObject
 
-from pdfmanager import core, progress
+from pdfmanager import core, fonts, progress
 
 CELL = 6          # pixels per cell when grouping changed pixels into areas
 THRESHOLD = 48    # 0-255 difference for a pixel to count as changed
 DPI = 90
 
 
+def _field_values(path, password):
+    """{0-based page: "what is filled into the form fields on it"}."""
+    from pdfmanager.forms import _inherited
+
+    values = {}
+    for number, page in enumerate(core.open_pdf(path, password).pages):
+        words = []
+        for ref in page.get("/Annots") or []:
+            annot = ref.get_object()
+            if isinstance(annot, DictionaryObject) and annot.get("/Subtype") == "/Widget":
+                value = _inherited(annot, "/V")
+                if isinstance(value, (str, NameObject)):
+                    words.append(str(value))
+        if words:
+            values[number] = " ".join(words)
+    return values
+
+
 def _load(path, password, dpi):
-    """(text, image) for every page."""
+    """(text, PNG bytes of the page picture) for every page. The pictures
+    are kept compressed: at 90 dpi an A4 page is over 2 MB of pixels, and
+    both documents' pages are held for the whole run."""
     import pypdfium2 as pdfium
 
     pages = []
+    fields = _field_values(path, password)  # pdfium's text leaves out form fields
     with core.PDFIUM_LOCK:
         doc = pdfium.PdfDocument(str(path), password=password)
+        doc.init_forms()  # so filled-in fields are in the picture
         try:
             for number, page in enumerate(doc):
                 progress.report(number, len(doc), "page")
                 textpage = page.get_textpage()
-                text = textpage.get_text_range()
+                text = textpage.get_text_range() + " " + fields.get(number, "")
                 textpage.close()
                 image = page.render(scale=dpi / 72).to_pil().convert("RGB")
-                pages.append((" ".join(text.split()), image))
+                buf = io.BytesIO()
+                image.save(buf, "PNG", compress_level=1)
+                pages.append((" ".join(text.split()), buf.getvalue()))
         finally:
             doc.close()
     return pages
+
+
+def _picture(png):
+    return Image.open(io.BytesIO(png)).convert("RGB")
 
 
 def _align(old, new):
@@ -113,7 +143,7 @@ def compare(old, new, output, old_password=None, new_password=None, all_pages=Fa
             kind, removed, added, areas = ("added" if i is None else "removed"), [], [], []
         else:
             removed, added = _word_changes(a[i][0], b[j][0])
-            areas = _changed_areas(a[i][1], b[j][1])
+            areas = _changed_areas(_picture(a[i][1]), _picture(b[j][1]))
             kind = "changed" if removed or added or areas else "same"
         rows.append({"old": None if i is None else i + 1, "new": None if j is None else j + 1,
                      "kind": kind, "removed": removed, "added": added, "areas": areas})
@@ -129,9 +159,19 @@ def compare(old, new, output, old_password=None, new_password=None, all_pages=Fa
 RED, GREEN, GRAY = (0.80, 0.16, 0.10), (0.12, 0.50, 0.25), (0.42, 0.41, 0.39)
 
 
-def _clip(text, n):
-    text = re.sub(r"\s+", " ", text)
-    return text if len(text) <= n else text[: n - 1] + "…"
+def _write(c, x, y, text, size, width):
+    """Draw ``text`` in a font that can show it (the documents can be in
+    any alphabet), cut to ``width`` points."""
+    from reportlab.pdfbase import pdfmetrics
+
+    text = re.sub(r"\s+", " ", text)[:400]
+    font = fonts.font_for(text)
+    if pdfmetrics.stringWidth(text, font, size) > width:
+        while text and pdfmetrics.stringWidth(text + "…", font, size) > width:
+            text = text[:-1]
+        text += "…"
+    c.setFont(font, size)
+    c.drawString(x, y, text)
 
 
 def _label(row):
@@ -159,10 +199,9 @@ def _report(old_name, new_name, a, b, rows, output, all_pages, dpi):
     changed = [r for r in rows if r["kind"] != "same"]
     c.setFont("Helvetica-Bold", 20)
     c.drawString(margin, H - margin - 14, "Comparison")
-    c.setFont("Helvetica", 11)
     c.setFillColorRGB(*GRAY)
-    c.drawString(margin, H - margin - 36, _clip(f"Original: {old_name} ({len(a)} pages)", 120))
-    c.drawString(margin, H - margin - 52, _clip(f"Changed: {new_name} ({len(b)} pages)", 120))
+    _write(c, margin, H - margin - 36, f"Original: {old_name} ({len(a)} pages)", 11, W - 2 * margin)
+    _write(c, margin, H - margin - 52, f"Changed: {new_name} ({len(b)} pages)", 11, W - 2 * margin)
     c.setFillColorRGB(0, 0, 0)
     c.setFont("Helvetica-Bold", 13)
     y = H - margin - 86
@@ -176,12 +215,13 @@ def _report(old_name, new_name, a, b, rows, output, all_pages, dpi):
             break
         bits = []
         if row["removed"]:
-            bits.append("removed “" + _clip(" ".join(row["removed"]), 50) + "”")
+            bits.append("removed “" + " ".join(row["removed"])[:60] + "”")
         if row["added"]:
-            bits.append("added “" + _clip(" ".join(row["added"]), 50) + "”")
+            bits.append("added “" + " ".join(row["added"])[:60] + "”")
         if row["kind"] == "changed" and not bits:
             bits.append("layout or pictures changed")
-        c.drawString(margin, y, _clip(_label(row) + (": " + "; ".join(bits) if bits else ""), 150))
+        _write(c, margin, y, _label(row) + (": " + "; ".join(bits) if bits else ""), 10.5,
+               W - 2 * margin)
         y -= 15
     c.showPage()
 
@@ -202,7 +242,7 @@ def _report(old_name, new_name, a, b, rows, output, all_pages, dpi):
             c.setFillColorRGB(0, 0, 0)
             if not number:
                 continue
-            image = pages[number - 1][1]
+            image = _picture(pages[number - 1][1])
             iw, ih = image.size
             scale = min(half / iw, (box_h - 12) / ih)
             dw, dh = iw * scale, ih * scale
@@ -212,7 +252,7 @@ def _report(old_name, new_name, a, b, rows, output, all_pages, dpi):
             c.rect(ix, iy, dw, dh, stroke=1, fill=0)
             # Outline the changed areas (computed on the original's pixels;
             # scale them to this image if its size differs).
-            ref = a[row["old"] - 1][1].size if row["old"] else (iw, ih)
+            ref = Image.open(io.BytesIO(a[row["old"] - 1][1])).size if row["old"] else (iw, ih)
             fx, fy = iw / ref[0], ih / ref[1]
             c.setStrokeColorRGB(*RED)
             c.setFillColorRGB(*RED, alpha=0.12)
@@ -226,8 +266,7 @@ def _report(old_name, new_name, a, b, rows, output, all_pages, dpi):
         for sign, colour, phrases in (("−", RED, row["removed"]), ("+", GREEN, row["added"])):
             for phrase in phrases[:3]:
                 c.setFillColorRGB(*colour)
-                c.setFont("Helvetica", 10)
-                c.drawString(margin, y, _clip(f"{sign} {phrase}", 160))
+                _write(c, margin, y, f"{sign} {phrase}", 10, W - 2 * margin)
                 y -= 13
         if row["kind"] == "changed" and not row["removed"] and not row["added"]:
             c.setFillColorRGB(*GRAY)

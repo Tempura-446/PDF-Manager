@@ -6,7 +6,6 @@ thin border, and a tick in a checked box), so it looks the same everywhere,
 and readers draw the text in as it's typed.
 """
 
-from pypdf import PdfWriter
 from pypdf.generic import (ArrayObject, DecodedStreamObject, DictionaryObject, FloatObject,
                            NameObject, NumberObject, TextStringObject)
 
@@ -80,6 +79,8 @@ def existing_fields(path, password=None):
     for number, page in enumerate(reader.pages, 1):
         for ref in page.get("/Annots") or []:
             annot = ref.get_object()
+            if not isinstance(annot, DictionaryObject):
+                continue  # a null or missing annotation: viewers skip it too
             if annot.get("/Subtype") != "/Widget" or "/Rect" not in annot:
                 continue
             x0, y0, x1, y1 = (float(v) for v in annot["/Rect"])
@@ -187,7 +188,7 @@ def add_fields(path, output, fields, border=True, font_size=0, password=None):
     for page_fields in existing_fields(path, password).values():
         taken.update(f["name"] for f in page_fields)
 
-    writer = PdfWriter(clone_from=reader)
+    writer = core.clone_document(reader)
     acroform = _child(writer._root_object, "/AcroForm", DictionaryObject)
     field_list = _child(acroform, "/Fields", ArrayObject)
     fonts = _fonts(writer, acroform)

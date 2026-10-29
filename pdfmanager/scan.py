@@ -15,8 +15,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-from pypdf import PdfWriter
-
 from pdfmanager import core, progress
 
 # Fraction of dark pixels below which a page counts as blank.
@@ -33,6 +31,7 @@ def ink_coverage(path, password=None, dpi=40):
     coverage = []
     with core.PDFIUM_LOCK:
         doc = pdfium.PdfDocument(str(path), password=password)
+        doc.init_forms()  # filled-in fields count as ink too
         try:
             for number, page in enumerate(doc):
                 progress.report(number, len(doc), "page")
@@ -87,6 +86,7 @@ def detect_rotation(path, password=None, pages=None, dpi=150):
         images = []
         with core.PDFIUM_LOCK:
             doc = pdfium.PdfDocument(str(path), password=password)
+            doc.init_forms()
             try:
                 for i, page in enumerate(doc):
                     if pages is not None and i not in pages:
@@ -107,17 +107,25 @@ def detect_rotation(path, password=None, pages=None, dpi=150):
 
 
 def _osd(tesseract, image):
+    """(degrees, confidence) from Tesseract; (0, 0.0) when it can't tell."""
     try:
         result = subprocess.run([tesseract, str(image), "stdout", "--psm", "0"],
                                 capture_output=True, text=True, timeout=120,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    except (OSError, subprocess.TimeoutExpired):
-        return 0, 0.0
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise core.PdfManagerError(f"Tesseract could not check which way up the pages are: {exc}") \
+            from None
     out = result.stdout + result.stderr
+    if "Too few characters" in out:
+        return 0, 0.0  # a picture or an empty page
     rotate = re.search(r"Rotate:\s*(\d+)", out)
+    if result.returncode or not rotate:
+        # A missing osd.traineddata (often a TESSDATA_PREFIX left by another
+        # program) must not pass for "the page is upright".
+        detail = " ".join(line.strip() for line in out.strip().splitlines()[-3:])
+        raise core.PdfManagerError(
+            "Tesseract could not check which way up the pages are: " + (detail or "no answer"))
     confidence = re.search(r"Orientation confidence:\s*([\d.]+)", out)
-    if not rotate:
-        return 0, 0.0  # e.g. "Too few characters" on a picture or an empty page
     return int(rotate.group(1)) % 360, float(confidence.group(1)) if confidence else 0.0
 
 
@@ -138,7 +146,7 @@ def clean(path, output, remove_blank=True, sensitivity="medium", auto_rotate=Fal
     if auto_rotate:
         with progress.section(1, 2):
             turns = detect_rotation(path, password, set(keep))
-    writer = PdfWriter(clone_from=reader)
+    writer = core.clone_document(reader)
     for i, page in enumerate(writer.pages):
         if i in turns:
             page.rotate(turns[i])
