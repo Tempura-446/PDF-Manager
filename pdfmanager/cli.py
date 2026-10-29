@@ -711,14 +711,7 @@ def cmd_watch(a):
         ocr=a.ocr, ocr_language=a.language, skip_duplicates=a.skip_duplicates,
         keep_originals=not a.delete_originals)
     if a.once:
-        settings.dest.mkdir(parents=True, exist_ok=True)
-        known = ({organize.file_hash(p) for p in organize.find_pdfs(settings.dest, recursive=True)}
-                 if a.skip_duplicates else None)
-        state = watch._State()
-        watch.poll(settings, state, known)  # first poll only records sizes
-        if state.sizes:  # give a file still being copied in time to change
-            time.sleep(min(a.interval, 2))
-        watch.poll(settings, state, known)
+        state = watch.once(settings, settle=min(a.interval, 2))
         return 1 if state.failed else 0
     watch.watch(settings, interval=a.interval)
 

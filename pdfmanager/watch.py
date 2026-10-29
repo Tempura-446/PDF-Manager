@@ -181,6 +181,7 @@ def once(settings, skip_duplicates=False, settle=2.0, log=print):
     known = _known(settings) if settings.skip_duplicates else None
     state = _State()
     poll(settings, state, known, log)  # only records sizes
-    time.sleep(settle)
+    if state.sizes:  # something is there: give a file still being written time to change
+        time.sleep(settle)
     poll(settings, state, known, log)
     return state

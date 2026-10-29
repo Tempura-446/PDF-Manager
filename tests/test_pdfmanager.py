@@ -262,7 +262,8 @@ def test_rename_collision(tmp_path):
 def test_catalog(tmp_path, library):
     out, count = organize.catalog(library, tmp_path / "cat.csv")
     assert count == 4
-    rows = list(csv.DictReader(open(out)))
+    assert out.read_bytes().startswith(b"\xef\xbb\xbf")  # Excel needs the mark
+    rows = list(csv.DictReader(open(out, encoding="utf-8-sig")))
     assert {r["file"].split(os.sep)[-1]: r["pages"] for r in rows}["b.pdf"] == "12"
 
 

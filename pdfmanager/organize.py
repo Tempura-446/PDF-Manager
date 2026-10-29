@@ -274,7 +274,8 @@ def catalog(directory, output, recursive=False):
     """Write a CSV inventory of the PDFs in ``directory``."""
     output = Path(output)
     rows = [describe(p) for p in find_pdfs(directory, recursive)]
-    with open(output, "w", newline="", encoding="utf-8") as fh:
+    # With a byte-order mark, so Excel reads accented names right.
+    with open(output, "w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.writer(fh)
         writer.writerow(["file", "pages", "size_bytes", "title", "author", "date", "error"])
         for r in rows:
