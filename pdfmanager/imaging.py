@@ -145,14 +145,28 @@ def _decode(obj):
     return image
 
 
-def _skip(obj):
-    # Stencil masks and 1-bit images compress best as they are; JBIG2/CCITT
-    # scans are already tiny.
+def _filters(obj):
+    filters = obj.get("/Filter")
+    return [filters] if not isinstance(filters, (list, ArrayObject)) else list(filters)
+
+
+def _keyed(obj):
+    """Transparent by colour key: the /Mask ranges name the original
+    samples, so re-encoding the picture would paint the key colour."""
+    mask = obj.get("/Mask")
+    return isinstance(mask.get_object() if mask is not None else None, ArrayObject)
+
+
+def _bilevel(obj):
+    """Black-and-white already: stencil masks, 1-bit images, JBIG2/CCITT scans."""
     if obj.get("/ImageMask") or obj.get("/BitsPerComponent", 8) == 1:
         return True
-    filters = obj.get("/Filter")
-    filters = [filters] if not isinstance(filters, (list, ArrayObject)) else list(filters)
-    return any(f in ("/JBIG2Decode", "/CCITTFaxDecode") for f in filters)
+    return any(f in ("/JBIG2Decode", "/CCITTFaxDecode") for f in _filters(obj))
+
+
+def _skip(obj):
+    # Black-and-white pictures compress best as they are.
+    return _bilevel(obj) or _keyed(obj)
 
 
 def _flatten(image):
@@ -217,9 +231,14 @@ def downsample_images(writer, max_dpi, jpeg_quality):
     """Downsample/re-encode images. Returns (images changed, bytes saved)."""
     changed = saved = 0
     done = set()
+    # A picture used on several pages is resized for the largest of them.
+    sizes = {}
+    for page in writer.pages:
+        for key, (w, h) in image_display_sizes(page, writer).items():
+            old = sizes.get(key, (0, 0))
+            sizes[key] = (max(old[0], w), max(old[1], h))
     for number, page in enumerate(writer.pages):
         progress.report(number, len(writer.pages), "page")
-        sizes = image_display_sizes(page, writer)
         for key, obj in _page_images(page):
             if key in done or _skip(obj):
                 continue
@@ -342,6 +361,8 @@ def _convert_content(operations, resources, target):
             n = fill_n if op in (b"sc", b"scn") else stroke_n
             if n and len(operands) == n and all(not isinstance(v, NameObject) for v in operands):
                 values = _convert_values([float(v) for v in operands], target)
+                if target == "rgb" and len(values) == 1:
+                    values = values * 3  # the space was set to /DeviceRGB above
                 out.append(([FloatObject(round(v, 4)) for v in values], op))
                 continue
         out.append((operands, op))
@@ -410,9 +431,18 @@ def convert_colors(writer, target, icc_profile=None):
             cs = ContentStream(form, writer)
             ops = _convert_content(cs.operations, form_res, target)
             cs.operations = ops
-            form.set_data(cs.get_data())
+            # Stored afresh with Flate, whatever filters (ASCII85, LZW...) it had.
+            form._data = zlib.compress(cs.get_data())
+            form[NameObject("/Filter")] = NameObject("/FlateDecode")
+            form[NameObject("/Length")] = NumberObject(len(form._data))
+            if "/DecodeParms" in form:
+                del form["/DecodeParms"]
+            if hasattr(form, "decoded_self"):
+                form.decoded_self = None
         for key, obj in _page_images(page):
-            if key in done_images or obj.get("/ImageMask"):
+            # Black-and-white pictures are gray already (and far smaller as
+            # they are); colour-keyed ones can't be re-encoded.
+            if key in done_images or _bilevel(obj) or _keyed(obj):
                 continue
             done_images.add(key)
             try:

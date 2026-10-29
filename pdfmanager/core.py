@@ -727,9 +727,12 @@ def compress(path, output, level="medium", image_quality=None, max_dpi=None, pas
 
     reader = open_pdf(path, password)
     writer = clone_document(reader)
-    if max_dpi or image_quality:
-        imaging.downsample_images(writer, max_dpi, image_quality or 85)
-    _finish_compression(writer)
+    try:
+        if max_dpi or image_quality:
+            imaging.downsample_images(writer, max_dpi, image_quality or 85)
+        _finish_compression(writer)
+    except PyPdfError as exc:  # a stream pypdf can't rewrite
+        raise PdfManagerError(f"can't rewrite {path} ({exc})") from None
     return _write(writer, output)
 
 
@@ -751,9 +754,11 @@ def convert_color(path, output, target, icc_profile=None, password=None):
 
     try:
         imaging.convert_colors(writer, target, icc_profile)
+        _finish_compression(writer)
     except (OSError, ImageCms.PyCMSError) as exc:  # unreadable or wrong-type ICC profile
         raise PdfManagerError(f"cannot use ICC profile {icc_profile}: {exc}") from None
-    _finish_compression(writer)
+    except PyPdfError as exc:  # a stream pypdf can't rewrite
+        raise PdfManagerError(f"can't rewrite {path} ({exc})") from None
     return _write(writer, output)
 
 
@@ -778,7 +783,59 @@ def set_metadata(path, output, password=None, **fields):
     updates = {f"/{k.capitalize()}": v for k, v in fields.items() if v is not None}
     if updates:
         writer.add_metadata(updates)
+        _update_xmp(writer, updates)
     return _write(writer, output)
+
+
+# Where viewers look first for the title and author: the XMP metadata, when
+# a file has it (Word, LibreOffice, InDesign and Ghostscript all write it).
+_XMP_FIELDS = {
+    "/Title": ("dc:title", "http://purl.org/dc/elements/1.1/", "Alt"),
+    "/Author": ("dc:creator", "http://purl.org/dc/elements/1.1/", "Seq"),
+    "/Subject": ("dc:description", "http://purl.org/dc/elements/1.1/", "Alt"),
+    "/Keywords": ("pdf:Keywords", "http://ns.adobe.com/pdf/1.3/", None),
+}
+
+
+def _update_xmp(writer, updates):
+    """Keep the XMP metadata in step with the Info fields, so readers that
+    prefer it (this app's own, Acrobat) show the new title and author."""
+    from xml.sax.saxutils import escape
+
+    ref = writer._root_object.get("/Metadata")
+    stream = ref.get_object() if ref is not None else None
+    if not isinstance(stream, StreamObject):
+        return
+    try:
+        xml = stream.get_data().decode("utf-8")
+    except (UnicodeDecodeError, PyPdfError):
+        return
+    for key, value in updates.items():
+        if key not in _XMP_FIELDS:
+            continue
+        tag, namespace, kind = _XMP_FIELDS[key]
+        prefix = tag.split(":")[0]
+        text = escape(str(value))
+        if kind == "Alt":
+            inner = f'<rdf:Alt><rdf:li xml:lang="x-default">{text}</rdf:li></rdf:Alt>'
+        elif kind == "Seq":
+            inner = f"<rdf:Seq><rdf:li>{text}</rdf:li></rdf:Seq>"
+        else:
+            inner = text
+        element = f'<{tag} xmlns:{prefix}="{namespace}">{inner}</{tag}>' if text else ""
+        pattern = re.compile(rf"<{tag}\b[^>]*?(?:/>|>.*?</{tag}>)", re.DOTALL)
+        if pattern.search(xml):
+            xml = pattern.sub(lambda m: element, xml, count=1)
+        elif element and "</rdf:Description>" in xml:
+            xml = xml.replace("</rdf:Description>", element + "</rdf:Description>", 1)
+    data = xml.encode("utf-8")
+    for key in ("/Filter", "/DecodeParms"):
+        if key in stream:
+            del stream[key]
+    stream._data = data
+    stream[NameObject("/Length")] = NumberObject(len(data))
+    if hasattr(stream, "decoded_self"):
+        stream.decoded_self = None
 
 
 # --------------------------------------------------------------------------
@@ -872,10 +929,13 @@ def number_pages(path, output, fmt="{n} / {total}", position="bottom-center",
 _NUMBER_FORMAT = re.compile(r"(?:[^{}]|\{\{|\}\}|\{(?:n|total)(?::[^{}]*)?\})*")
 
 
-def _safe_filename(name, fallback):
+def _safe_filename(name, fallback, limit=120):
     name = Path(str(name).replace("\\", "/")).name
     name = "".join("_" if c in '<>:"|?*' or ord(c) < 32 else c for c in name).strip(" .")
-    return name or fallback
+    stem, suffix = Path(name).stem, Path(name).suffix[:16]
+    while len((stem + suffix).encode("utf-8")) > limit and stem:  # file systems stop at 255 bytes
+        stem = stem[:-1]
+    return (stem + suffix).strip(" .") or fallback
 
 
 def extract_media(path, outdir, images=True, attachments=True, min_size=16, password=None):
@@ -922,8 +982,18 @@ def extract_media(path, outdir, images=True, attachments=True, min_size=16, pass
                     continue
                 seen.add(digest)
                 ext = Path(image.name).suffix.lower() or ".png"
+                if ext in (".jp2", ".jpx") and image.image is not None:
+                    # A photo with a soft mask comes back as JPEG 2000, which
+                    # few programs open; PNG keeps the transparency too.
+                    buf = io.BytesIO()
+                    image.image.save(buf, "PNG")
+                    data, ext = buf.getvalue(), ".png"
                 out = target(outdir, f"{stem}_page{number}_{k}{ext}")
-                out.write_bytes(data)
+                try:
+                    out.write_bytes(data)
+                except OSError:
+                    saved.setdefault("skipped", []).append(out.name)
+                    continue
                 saved["images"].append(out)
     if attachments:
         files = []
@@ -959,7 +1029,11 @@ def extract_media(path, outdir, images=True, attachments=True, min_size=16, pass
                 continue
             seen.add(digest)
             out = target(outdir / "attachments", _safe_filename(str(name), "attachment"))
-            out.write_bytes(data)
+            try:
+                out.write_bytes(data)
+            except OSError:  # a name the file system won't take: the rest is still saved
+                saved.setdefault("skipped", []).append(out.name)
+                continue
             saved["attachments"].append(out)
     return saved
 
@@ -1062,27 +1136,54 @@ def images_to_pdf(images, output, size=None, margin=0):
     output.parent.mkdir(parents=True, exist_ok=True)
     c = canvas.Canvas(str(output))
     for img_path in images:
-        with Image.open(img_path) as im:
-            im.load()
-            dpi = im.info.get("dpi", (72, 72))[0] or 72
-            iw, ih = im.size[0] * 72 / dpi, im.size[1] * 72 / dpi
-            if im.mode not in ("RGB", "L", "CMYK"):
-                im = im.convert("RGB")
-            if size:
-                pw, ph = parse_paper_size(size)
-                if (iw > ih) != (pw > ph):
-                    pw, ph = ph, pw
-                s = min((pw - 2 * margin) / iw, (ph - 2 * margin) / ih)
-                dw, dh = iw * s, ih * s
-                x, y = (pw - dw) / 2, (ph - dh) / 2
-            else:
-                pw, ph = iw + 2 * margin, ih + 2 * margin
-                dw, dh, x, y = iw, ih, margin, margin
-            c.setPageSize((pw, ph))
-            c.drawImage(ImageReader(im), x, y, width=dw, height=dh)
-            c.showPage()
+        try:
+            opened = Image.open(img_path)
+        except (OSError, ValueError) as exc:  # not a picture, or a damaged one
+            raise PdfManagerError(f"{img_path} is not a picture ({exc})") from None
+        with opened as source:
+            # A scanner's TIFF holds a page per frame.
+            for frame in range(getattr(source, "n_frames", 1)):
+                if frame:
+                    source.seek(frame)
+                source.load()
+                # Pillow gives TIFF resolutions as fractions; the page size must be plain numbers.
+                dpi_x, dpi_y = (float(v) if v and float(v) >= 1 else 72.0
+                                for v in (source.info.get("dpi") or (72, 72))[:2])
+                im = _page_image(source)
+                iw, ih = im.width * 72 / dpi_x, im.height * 72 / dpi_y
+                if size:
+                    pw, ph = parse_paper_size(size)
+                    if (iw > ih) != (pw > ph):
+                        pw, ph = ph, pw
+                    s = min((pw - 2 * margin) / iw, (ph - 2 * margin) / ih)
+                    dw, dh = iw * s, ih * s
+                    x, y = (pw - dw) / 2, (ph - dh) / 2
+                else:
+                    pw, ph = iw + 2 * margin, ih + 2 * margin
+                    dw, dh, x, y = iw, ih, margin, margin
+                c.setPageSize((pw, ph))
+                c.drawImage(ImageReader(im), x, y, width=dw, height=dh)
+                c.showPage()
     c.save()
     return output
+
+
+def _page_image(im):
+    """The picture as it should appear on the page: turned the way the
+    camera recorded it, transparent parts on white, and 16-bit scans and
+    palettes brought to 8 bits."""
+    from PIL import Image, ImageOps
+
+    im = ImageOps.exif_transpose(im) or im
+    if im.mode.startswith("I"):  # 16-bit (or wider) grayscale: scale, don't clip
+        im = im.convert("I").point(lambda v: v / 256).convert("L")
+    elif im.mode in ("RGBA", "LA", "PA") or "transparency" in im.info:
+        rgba = im.convert("RGBA")
+        im = Image.new("RGB", rgba.size, "white")
+        im.paste(rgba, mask=rgba.getchannel("A"))
+    if im.mode not in ("RGB", "L", "CMYK"):
+        im = im.convert("RGB")
+    return im
 
 
 def ocr(path, output, language="eng", force=False, deskew=False, password=None):
@@ -1102,7 +1203,7 @@ def ocr(path, output, language="eng", force=False, deskew=False, password=None):
         ) from None
     source = Path(path)
     tmp_in = None
-    if password is not None or PdfReader(str(path)).is_encrypted:
+    if open_pdf(path, password).is_encrypted:  # also a plain error for a damaged file
         # OCRmyPDF can't open encrypted files; give it a decrypted copy.
         tmp_in = Path(output).with_name(Path(output).name + ".src.tmp.pdf")
         decrypt(path, tmp_in, password or "")
@@ -1138,7 +1239,11 @@ def pdf_to_images(path, outdir, dpi=150, fmt="png", pages=None, password=None):
 
     outdir = Path(outdir)
     with PDFIUM_LOCK:
-        doc = pdfium.PdfDocument(str(path), password=password)
+        open_pdf(path, password)  # a plain error for a damaged file or a wrong password
+        try:
+            doc = pdfium.PdfDocument(str(path), password=password)
+        except pdfium.PdfiumError as exc:
+            raise PdfManagerError(f"{path} can't be rendered ({exc})") from None
         try:
             total = len(doc)
             indices = parse_page_ranges(pages, total) if pages else range(total)
@@ -1151,7 +1256,7 @@ def pdf_to_images(path, outdir, dpi=150, fmt="png", pages=None, password=None):
                 if fmt.lower() in ("jpg", "jpeg") and image.mode != "RGB":
                     image = image.convert("RGB")
                 target = outdir / f"{Path(path).stem}_{i + 1:0{width}d}.{fmt}"
-                image.save(target)
+                image.save(target, dpi=(dpi, dpi))  # so the pictures keep their size
                 written.append(target)
             return written
         finally:

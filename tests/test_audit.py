@@ -352,3 +352,192 @@ def test_a_long_chain_of_next_page_links_is_copied(tmp_path):
     link = reader.pages[5]["/Annots"][0].get_object()
     assert reader.get_page_number(link["/Dest"][0].get_object()) == 6
     core.watermark(out, tmp_path / "wm.pdf", text="DRAFT", pages="1")
+
+
+# -- pictures in and out ---------------------------------------------------------------------------
+
+def render(path, page=0, scale=1.0):
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        return doc[page].render(scale=scale).to_pil().convert("RGB")
+    finally:
+        doc.close()
+
+
+def test_images_to_pdf_takes_scans_as_they_are(tmp_path):
+    from PIL import Image
+
+    # A4 at 300 dpi: Pillow reads the TIFF resolution back as a fraction.
+    Image.new("L", (2480, 3508), 200).save(tmp_path / "scan.tif", dpi=(300, 300))
+    out = core.images_to_pdf([tmp_path / "scan.tif"], tmp_path / "scan.pdf")
+    width, height = (float(v) for v in PdfReader(str(out)).pages[0].mediabox[2:])
+    assert (round(width), round(height)) == (595, 842)
+    assert core.info(out)["page_sizes"] == {"A4": 1}
+    # A scanner's multi-page TIFF: a page per frame.
+    frames = [Image.new("L", (200, 300), v) for v in (40, 120, 220)]
+    frames[0].save(tmp_path / "pages.tif", save_all=True, append_images=frames[1:], dpi=(72, 72))
+    out = core.images_to_pdf([tmp_path / "pages.tif"], tmp_path / "pages.pdf")
+    assert len(PdfReader(str(out)).pages) == 3
+    assert render(out, 2).getpixel((100, 150))[0] > 200
+
+
+def test_images_to_pdf_keeps_phone_photos_upright_and_transparency_white(tmp_path):
+    from PIL import Image
+
+    photo = Image.new("RGB", (400, 300), (10, 120, 220))
+    exif = Image.Exif()
+    exif[0x0112] = 6  # stored sideways: turn 90° clockwise to show
+    photo.save(tmp_path / "photo.jpg", exif=exif)
+    out = core.images_to_pdf([tmp_path / "photo.jpg"], tmp_path / "photo.pdf")
+    width, height = (float(v) for v in PdfReader(str(out)).pages[0].mediabox[2:])
+    assert (round(width), round(height)) == (300, 400)
+    logo = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+    logo.paste((200, 30, 30, 255), (25, 25, 75, 75))
+    logo.save(tmp_path / "logo.png")
+    out = core.images_to_pdf([tmp_path / "logo.png"], tmp_path / "logo.pdf")
+    picture = render(out)
+    assert picture.getpixel((5, 5)) == (255, 255, 255) and picture.getpixel((50, 50))[0] > 150
+    deep = Image.new("I;16", (50, 50), 32768)  # a 16-bit mid-gray scan
+    deep.save(tmp_path / "deep.png")
+    out = core.images_to_pdf([tmp_path / "deep.png"], tmp_path / "deep.pdf")
+    assert 100 < render(out).getpixel((25, 25))[0] < 160
+    with pytest.raises(core.PdfManagerError, match="not a picture"):
+        core.images_to_pdf([toc_pdf(tmp_path / "toc.pdf", 1)], tmp_path / "x.pdf")
+
+
+def test_rendered_pages_keep_their_resolution(tmp_path):
+    from PIL import Image
+
+    src = toc_pdf(tmp_path / "toc.pdf", chapters=1)
+    files = core.pdf_to_images(src, tmp_path / "imgs", dpi=150, pages="1")
+    with Image.open(files[0]) as im:
+        assert tuple(round(v) for v in im.info["dpi"]) == (150, 150)
+    back = core.images_to_pdf(files, tmp_path / "back.pdf")
+    assert core.info(back)["page_sizes"] == {"Letter": 1}
+    (tmp_path / "bad.pdf").write_bytes(b"%PDF-1.4\n%%EOF")
+    with pytest.raises(core.PdfManagerError):
+        core.pdf_to_images(tmp_path / "bad.pdf", tmp_path / "x")
+
+
+# -- colours and compression -----------------------------------------------------------------------
+
+def content_pdf(path, content, resources=None, xobjects=None):
+    """A letter page with the given content stream (and XObjects)."""
+    from pypdf.generic import DecodedStreamObject
+
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    stream = DecodedStreamObject()
+    stream.set_data(content)
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    res = DictionaryObject(resources or {})
+    if xobjects:
+        res[NameObject("/XObject")] = DictionaryObject({NameObject(k): writer._add_object(v) for k, v in xobjects.items()})
+    page[NameObject("/Resources")] = res
+    writer.write(str(path))
+    return path
+
+
+def test_gray_fills_become_rgb_triples(tmp_path):
+    src = content_pdf(tmp_path / "gray.pdf", b"/DeviceGray cs 0.5 sc 100 100 200 200 re f")
+    out = core.convert_color(src, tmp_path / "rgb.pdf", "rgb")
+    data = PdfReader(str(out)).pages[0].get_contents().get_data()
+    assert b"/DeviceRGB cs" in data and b"0.5 0.5 0.5 sc" in data
+    assert render(out).getpixel((200, 792 - 200)) == (128, 128, 128)
+
+
+def test_colour_conversion_rewrites_forms_with_other_filters(tmp_path):
+    import base64
+    import zlib
+    from pypdf.generic import EncodedStreamObject
+
+    form = EncodedStreamObject()
+    form[NameObject("/Type")] = NameObject("/XObject")
+    form[NameObject("/Subtype")] = NameObject("/Form")
+    form[NameObject("/BBox")] = RectangleObject([0, 0, 200, 200])
+    form[NameObject("/Filter")] = ArrayObject([NameObject("/ASCII85Decode"), NameObject("/FlateDecode")])
+    form._data = base64.a85encode(zlib.compress(b"1 0 0 rg 0 0 200 200 re f"), adobe=True)
+    src = content_pdf(tmp_path / "form.pdf", b"q 1 0 0 1 100 100 cm /Fx Do Q", xobjects={"/Fx": form})
+    out = core.convert_color(src, tmp_path / "gray.pdf", "gray")
+    pixel = render(out).getpixel((200, 792 - 200))
+    assert pixel[0] == pixel[1] == pixel[2] and 60 < pixel[0] < 100  # red, as gray
+
+
+def test_black_and_white_and_keyed_pictures_are_left_alone(tmp_path):
+    import zlib
+    from pypdf.generic import DecodedStreamObject
+
+    scan = DecodedStreamObject()
+    scan.set_data(b"\xaa" * 8)
+    scan.update({NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Image"),
+                 NameObject("/Width"): NumberObject(8), NameObject("/Height"): NumberObject(8),
+                 NameObject("/ColorSpace"): NameObject("/DeviceGray"), NameObject("/BitsPerComponent"): NumberObject(1)})
+    keyed = DecodedStreamObject()
+    keyed.set_data(bytes([0, 1] * 32))
+    keyed.update({NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Image"),
+                  NameObject("/Width"): NumberObject(8), NameObject("/Height"): NumberObject(8),
+                  NameObject("/ColorSpace"): ArrayObject([NameObject("/Indexed"), NameObject("/DeviceRGB"), NumberObject(1),
+                                                          __import__("pypdf").generic.ByteStringObject(b"\xff\x00\xff\x00\x00\xff")]),
+                  NameObject("/BitsPerComponent"): NumberObject(8),
+                  NameObject("/Mask"): ArrayObject([NumberObject(0), NumberObject(0)])})
+    src = content_pdf(tmp_path / "pics.pdf", b"q 300 0 0 300 50 50 cm /Scan Do Q q 100 0 0 100 400 400 cm /Logo Do Q",
+                      xobjects={"/Scan": scan, "/Logo": keyed})
+    for out in (core.convert_color(src, tmp_path / "gray.pdf", "gray"), core.compress(src, tmp_path / "small.pdf", "high")):
+        xobjects = PdfReader(str(out)).pages[0]["/Resources"]["/XObject"]
+        assert xobjects["/Scan"].get_object()["/BitsPerComponent"] == 1
+        assert "/Mask" in xobjects["/Logo"].get_object() and xobjects["/Logo"].get_object()["/ColorSpace"][0] == "/Indexed"
+
+
+def test_compress_sizes_a_shared_picture_for_its_largest_use(tmp_path):
+    from PIL import Image
+
+    Image.effect_noise((1600, 1200), 80).convert("RGB").save(tmp_path / "photo.jpg", quality=95)
+    c = canvas.Canvas(str(tmp_path / "album.pdf"), pagesize=letter)
+    c.drawImage(str(tmp_path / "photo.jpg"), 72, 600, width=72, height=54)  # a thumbnail
+    c.showPage()
+    c.drawImage(str(tmp_path / "photo.jpg"), 36, 200, width=540, height=405)  # the same picture, large
+    c.showPage()
+    c.save()
+    out = core.compress(tmp_path / "album.pdf", tmp_path / "small.pdf", "medium")
+    widths = {int(x.get_object()["/Width"]) for page in PdfReader(str(out)).pages
+              for x in page["/Resources"]["/XObject"].values()}
+    assert len(widths) == 1 and widths.pop() >= 1000  # 150 dpi over 7.5 inches, not over 1 inch
+
+
+def test_metadata_reaches_the_xmp_too(tmp_path):
+    from pypdf.generic import DecodedStreamObject
+
+    src = toc_pdf(tmp_path / "toc.pdf", chapters=1)
+    w = PdfWriter(clone_from=str(src))
+    xmp = DecodedStreamObject()
+    xmp.set_data(b'<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/">'
+                 b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" '
+                 b'xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title><rdf:Alt><rdf:li xml:lang="x-default">Draft</rdf:li>'
+                 b'</rdf:Alt></dc:title></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>')
+    xmp.update({NameObject("/Type"): NameObject("/Metadata"), NameObject("/Subtype"): NameObject("/XML")})
+    w._root_object[NameObject("/Metadata")] = w._add_object(xmp)
+    w.write(str(src))
+    out = core.set_metadata(src, tmp_path / "titled.pdf", title="Q3 Report", author="Ann & Bo")
+    reader = PdfReader(str(out))
+    assert reader.metadata.title == "Q3 Report"
+    assert reader.xmp_metadata.dc_title == {"x-default": "Q3 Report"} and reader.xmp_metadata.dc_creator == ["Ann & Bo"]
+
+
+def test_extracted_pictures_and_attachments_have_usable_names(tmp_path):
+    from PIL import Image
+    from pypdf.generic import DecodedStreamObject
+
+    Image.new("RGBA", (64, 64), (200, 40, 40, 128)).save(tmp_path / "soft.png")
+    c = canvas.Canvas(str(tmp_path / "pics.pdf"), pagesize=letter)
+    c.drawImage(str(tmp_path / "soft.png"), 72, 500, width=144, height=144, mask="auto")
+    c.showPage()
+    c.save()
+    w = PdfWriter(clone_from=str(tmp_path / "pics.pdf"))
+    w.add_attachment("x" * 300 + ".txt", b"a very long name")
+    w.write(str(tmp_path / "pics.pdf"))
+    saved = core.extract_media(tmp_path / "pics.pdf", tmp_path / "out")
+    assert saved["images"] and all(p.suffix in (".png", ".jpg", ".jpeg") for p in saved["images"])
+    assert len(saved["attachments"]) == 1 and len(saved["attachments"][0].name) <= 120
+    assert saved["attachments"][0].suffix == ".txt" and saved["attachments"][0].read_bytes() == b"a very long name"
