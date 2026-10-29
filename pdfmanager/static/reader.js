@@ -51,6 +51,7 @@ const ICON = {
   save: '<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>', info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
   tool: '<path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3-3 8-8-1.3-1.3a4 4 0 0 0-5-5z"/><path d="m4 20 4-4"/>',
   twisty: '<path d="m9 6 6 6-6 6"/>',
+  command: '<path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z"/>',
   sliders: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   pen: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
@@ -102,7 +103,7 @@ const store = {
 };
 
 export class Reader {
-  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools } = {}) {
+  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands } = {}) {
     this.host = host;
     this.token = token;
     this.isDesktop = isDesktop || (() => false);
@@ -110,6 +111,7 @@ export class Reader {
     this.tools = tools;
     this.onEdit = onEdit;
     this.onAllTools = onAllTools;
+    this.onCommands = onCommands;
     // Everything that changes which document is shown runs one after the
     // other (see #serial): two loads at once would show the wrong tab or
     // trip over the shared worker.
@@ -169,11 +171,12 @@ export class Reader {
     this.saveBtn = t("save", "Save a copy", "Save a copy (Ctrl+S)");
     this.moreBtn = b("more", "More", { "aria-haspopup": "menu", "aria-expanded": "false" });
     this.appToolsBtn = this.onAllTools ? t("grid", "All tools", "Show every ZPDF tool") : null;
+    this.commandsBtn = this.onCommands ? t("command", "Commands", "Search every command and tool (Ctrl+K)") : null;
     this.tray = el("div", { class: "rd-tray", role: "toolbar", "aria-label": "Tools", hidden: true },
       this.openBtn, this.findBtn, this.annotateBtn,
       el("span", { class: "rd-sep" }), this.rotCcwBtn, this.rotCwBtn,
       el("span", { class: "rd-sep" }), this.printBtn, this.saveBtn, this.moreBtn,
-      el("span", { style: "flex:1" }), this.appToolsBtn);
+      el("span", { style: "flex:1" }), this.commandsBtn, this.appToolsBtn);
 
     // Find bar
     this.findInput = el("input", { type: "search", placeholder: "Find in document", "aria-label": "Find in document", autocomplete: "off", spellcheck: "false" });
@@ -198,7 +201,7 @@ export class Reader {
       tool("draw", "Draw", "INK"), tool("image", "Picture", "STAMP"),
       tool("edittext", "Edit text", "EDITTEXT"),
     ];
-    this.annotTools.at(-1).title = "Change words on the page: click a line of text";
+    this.annotTools.at(-1).title = "Change words on the page: click a line of text (E)";
     this.signBtn = el("button", { class: "rd-btn rd-tool", type: "button", title: "Add your signature", html: svg("sign") + "<span>Sign</span>" });
     this.swatches = COLORS.map(([name, ink, mark], i) => el("button", { class: "rd-swatch", type: "button", title: name, "aria-label": name, "aria-pressed": String(i === 1),
       style: `--ink:${ink};--mark:${mark}`, "data-index": i }));
@@ -236,7 +239,7 @@ export class Reader {
         el("h2", {}, "Read a PDF"),
         el("p", {}, "Drop a PDF here, or open one from your computer."),
         this.emptyOpenBtn,
-        el("p", { class: "keys" }, "T tools · Ctrl+F find · Ctrl +/− zoom · N / P next / previous page")),
+        el("p", { class: "keys" }, "Ctrl+K commands · T tools · E edit text · Ctrl+F find · N / P pages")),
       this.recentBox = el("section", { class: "rd-recent", hidden: true, "aria-label": "Recent files" },
         el("h3", {}, "Recent"), this.recentList = el("ul", {})));
     this.main = el("div", { class: "rd-main" }, this.container, this.loading, this.empty);
@@ -325,6 +328,7 @@ export class Reader {
     this.printBtn.addEventListener("click", () => this.print());
     this.saveBtn.addEventListener("click", () => this.saveCopy());
     if (this.appToolsBtn) this.appToolsBtn.addEventListener("click", () => this.onAllTools());
+    if (this.commandsBtn) this.commandsBtn.addEventListener("click", () => this.onCommands());
     document.addEventListener("pointerdown", (e) => { if (!this.menu.hidden && !this.menu.contains(e.target) && e.target !== this.moreBtn && !this.moreBtn.contains(e.target)) this.#closeMenu(); });
     this.thumbsTab.addEventListener("click", () => this.#showTab("thumbs"));
     this.outlineTab.addEventListener("click", () => this.#showTab("outline"));
@@ -429,6 +433,7 @@ export class Reader {
       case "r": this.rotate(90); break;
       case "R": this.rotate(-90); break;
       case "t": this.toggleTray(); break;
+      case "e": this.useTool(this.textEditMode ? "NONE" : "EDITTEXT"); break;
       case "Home": v.currentPageNumber = 1; break;
       case "End": v.currentPageNumber = v.pagesCount; break;
       case "ArrowLeft": if (this.container.scrollWidth <= this.container.clientWidth) v.previousPage(); else return; break;
@@ -1612,6 +1617,55 @@ export class Reader {
         box.remove();
       }, 1000);
     }
+  }
+
+  // ---- for the command palette and the page menu ----------------------------------------
+  /** Switch on an annotation tool or Edit text (EDITTEXT); NONE goes back to reading. */
+  useTool(name) {
+    if (!this.doc) return;
+    if (name === "NONE") { this.closeAnnotate(); return; }
+    this.openAnnotate();
+    this.#setEditMode(name, name === "STAMP");
+  }
+  editWith(toolId) { return this.#edit(toolId); }
+  goToPage(n) { if (this.doc && n >= 1 && n <= this.pdfViewer.pagesCount) this.pdfViewer.currentPageNumber = n; }
+  showBookmarks() { this.#setSidebar(true); this.#showTab("outline"); }
+
+  /** What there is to do with the open document, for the command palette:
+   *  [{label, keys?, words?, run}]. */
+  commands() {
+    const open = { icon: "open", label: "Open a PDF", keys: "Ctrl+O", words: "file browse", run: () => this.chooseFile() };
+    if (!this.doc) return [open];
+    const v = this.pdfViewer;
+    const tool = (label, mode, words = "", icon = "pen") => ({ icon, label, words: "annotate " + words, run: () => this.useTool(mode) });
+    const list = [
+      { icon: "edittext", label: "Edit text", keys: "E", words: "change words typo rewrite paragraph add text", run: () => this.useTool("EDITTEXT") },
+      { icon: "search", label: "Find in document", keys: "Ctrl+F", words: "search look for", run: () => this.openFind() },
+      tool("Highlight text", "HIGHLIGHT", "mark marker", "highlight"), tool("Add a text box", "FREETEXT", "note comment type", "text"),
+      tool("Draw", "INK", "pen ink freehand", "draw"), tool("Add a picture", "STAMP", "image photo stamp", "image"),
+      { icon: "sign", label: "Sign", words: "signature autograph", run: () => this.sign() },
+      { icon: "cw", label: "Rotate clockwise", keys: "R", words: "turn right", run: () => this.rotate(90) },
+      { icon: "ccw", label: "Rotate counter-clockwise", keys: "Shift+R", words: "turn left anticlockwise", run: () => this.rotate(-90) },
+      { icon: "sidebar", label: this.sidebar.hidden ? "Show thumbnails" : "Hide thumbnails", words: "sidebar pages", run: () => this.toggleSidebar() },
+      { icon: "book", label: "Show bookmarks", words: "outline contents chapters sidebar", run: () => this.showBookmarks() },
+      { icon: "full", label: "Fit page", words: "zoom whole", run: () => { v.currentScaleValue = "page-fit"; } },
+      { icon: "spread", label: "Fit width", words: "zoom", run: () => { v.currentScaleValue = "page-width"; } },
+      { icon: "plus", label: "Actual size", words: "zoom 100%", run: () => { v.currentScaleValue = "page-actual"; } },
+      { icon: "plus", label: "Zoom in", keys: "Ctrl +", run: () => v.increaseScale() },
+      { icon: "minus", label: "Zoom out", keys: "Ctrl −", run: () => v.decreaseScale() },
+      { icon: "up", label: "First page", keys: "Home", words: "start beginning", run: () => this.goToPage(1) },
+      { icon: "down", label: "Last page", keys: "End", words: "end", run: () => this.goToPage(v.pagesCount) },
+      { icon: "spread", label: "Two-page view", words: "spread book", run: () => this.toggleSpread() },
+      { icon: "moon", label: "Dark pages", words: "night invert", run: () => this.toggleDarkPages() },
+      { icon: "hand", label: "Hand tool", words: "drag scroll pan", run: () => this.toggleHand() },
+      { icon: "full", label: "Full screen", words: "presentation", run: () => this.toggleFullscreen() },
+      { icon: "print", label: "Print", keys: "Ctrl+P", run: () => this.print() },
+      { icon: "save", label: this.#edited() ? "Save a copy with your changes" : "Save a copy", keys: "Ctrl+S", words: "download export", run: () => this.saveCopy() },
+      { icon: "info", label: "Document properties", words: "info metadata author title", run: () => this.showProperties() },
+      { icon: "x", label: "Close this document", words: "tab", run: () => this.closeTab() },
+      open,
+    ];
+    return list.map((c) => ({ ...c, svg: svg(c.icon || "book") }));
   }
 
   async #edit(toolId) {
