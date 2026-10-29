@@ -21,7 +21,7 @@
 // crop margins {left, bottom, right, top}; redact boxes {"1": [[x0, y0, x1, y1]]}
 // with 1-based page numbers; form fields {"1": [{ rect, type, name }]}.
 
-import { DOC_OPTIONS, loadPdfjs } from "./pdfjs.js";
+import { DOC_OPTIONS, destroyTask, loadPdfjs, openDocument } from "./pdfjs.js";
 
 const ICON = {
   prev: '<path d="m15 18-6-6 6-6"/>', next: '<path d="m9 18 6-6-6-6"/>',
@@ -111,11 +111,11 @@ export class RegionEditor {
     const lib = await loadPdfjs();
     const data = new Uint8Array(await file.arrayBuffer());
     if (gen !== this.gen) return "stale";
-    const task = lib.getDocument({ ...DOC_OPTIONS, data, password: password || undefined });
+    const task = await openDocument({ ...DOC_OPTIONS, data, password: password || undefined });
     let locked = null;
     task.onPassword = (update, reason) => {
       locked = reason === lib.PasswordResponses.INCORRECT_PASSWORD ? "wrong-password" : "password";
-      task.destroy();
+      destroyTask(task);
     };
     this.task = task;
     try {
@@ -140,7 +140,7 @@ export class RegionEditor {
     this.boxes = {}; this.matches = {}; this.kinds = {}; this.existing = {}; this.selected = -1;
     const task = this.task;
     this.task = null;
-    if (task) await task.destroy().catch(() => {});
+    await destroyTask(task);
     this.#state("empty");
   }
 

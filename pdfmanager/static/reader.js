@@ -12,7 +12,7 @@
 // hand tool, dark pages, full screen, printing, saving a copy and handing the
 // document to one of the app's tools.
 
-import { BASE, DOC_OPTIONS, loadPdfjs as loadLibrary } from "./pdfjs.js";
+import { BASE, DOC_OPTIONS, destroyTask, loadPdfjs as loadLibrary, openDocument } from "./pdfjs.js";
 import * as files from "./files.js";
 
 let pdfjs = null;   // pdf.js display API
@@ -90,7 +90,7 @@ function el(tag, attrs = {}, ...children) {
 let tabSeq = 0;
 function sameBytes(a, b) {
   if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i += Math.max(1, Math.floor(a.length / 4096))) if (a[i] !== b[i]) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
 }
 const isTyping = (e) => /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.target.isContentEditable;
@@ -107,6 +107,10 @@ export class Reader {
     this.api = api || (() => null);
     this.tools = tools;
     this.onEdit = onEdit;
+    // Everything that changes which document is shown runs one after the
+    // other (see #serial): two loads at once would show the wrong tab or
+    // trip over the shared worker.
+    this.chain = Promise.resolve();
     this.doc = null;
     this.tabs = [];          // open documents (see openBytes)
     this.activeTab = null;
@@ -489,9 +493,17 @@ export class Reader {
       const name = res.headers.get("X-Pdfm-Filename") || "document.pdf";
       await this.openBytes(new Uint8Array(await res.arrayBuffer()), name, null, goto);
     } catch (e) {
-      this.#busy(false);
       this.toast("Could not open the file: " + (e.message || e));
+    } finally {
+      this.#busy(false);
     }
+  }
+
+  /** Run ``fn`` after the document changes started before it. */
+  #serial(fn) {
+    const run = this.chain.then(() => fn());
+    this.chain = run.catch(() => {});
+    return run;
   }
 
   async openFile(file, password = null) {
@@ -499,18 +511,29 @@ export class Reader {
   }
 
   /** Open a PDF in a new tab, or switch to its tab if it's already open. */
-  async openBytes(bytes, name, password = null, goto = null) {
+  openBytes(bytes, name, password = null, goto = null) {
+    return this.#serial(() => this.#openBytesNow(bytes, name, password, goto));
+  }
+
+  async #openBytesNow(bytes, name, password, goto) {
     const same = this.tabs.find((t) => t.name === name && sameBytes(t.original, bytes));
-    if (same) { await this.#switchTo(same); if (goto) this.#goto(goto); return; }
+    if (same) {
+      if (same === this.activeTab) { if (goto) this.#goto(goto); }
+      else { if (goto) same.goto = goto; await this.#switchToNow(same); }  // applied once its pages are there
+      return;
+    }
     const previous = this.activeTab;
     await this.#stash();
-    // edited: bytes holds changes made here; dirty: changes not saved to a file yet.
-    const tab = { id: ++tabSeq, original: bytes, bytes, name, password, edited: false, dirty: false, goto };
+    // edited: bytes holds changes made here; dirty: changes not saved to a file
+    // yet; version: counts every change, so a save knows what it included.
+    const tab = { id: ++tabSeq, original: bytes, bytes, name, password, edited: false, dirty: false, version: 0, goto };
     this.tabs.push(tab);
     if (!(await this.#load(tab))) {
       this.tabs.splice(this.tabs.indexOf(tab), 1);
-      if (previous && this.tabs.includes(previous)) await this.#load(previous);
-      else this.#showEmpty();
+      if (!(previous && this.tabs.includes(previous) && await this.#load(previous))) {
+        await this.#closeDocument();
+        this.#showEmpty();
+      }
     }
     this.#renderTabs();
   }
@@ -525,23 +548,30 @@ export class Reader {
     tab.edited = true;
   }
 
-  async #switchTo(tab) {
-    if (tab === this.activeTab) return;
+  #switchTo(tab) {
+    return this.#serial(() => this.#switchToNow(tab));
+  }
+
+  async #switchToNow(tab) {
+    if (tab === this.activeTab || !this.tabs.includes(tab)) return;
     await this.#stash();
-    await this.#load(tab);
+    if (!(await this.#load(tab))) { await this.#closeDocument(); this.#showEmpty(); }
     this.#renderTabs();
   }
 
-  async closeTab(tab = this.activeTab) {
-    if (!tab) return;
+  closeTab(tab = this.activeTab) {
+    return this.#serial(() => this.#closeTabNow(tab));
+  }
+
+  async #closeTabNow(tab) {
+    if (!tab || !this.tabs.includes(tab)) return;
     if (tab.dirty && !confirm(`Close “${tab.name}” without saving your changes?`)) return;
     const i = this.tabs.indexOf(tab);
     this.tabs.splice(i, 1);
     if (tab === this.activeTab) {
       this.activeTab = null;
       const next = this.tabs[i] || this.tabs[i - 1];
-      if (next) await this.#load(next);
-      else { await this.#closeDocument(); this.#showEmpty(); }
+      if (!next || !(await this.#load(next))) { await this.#closeDocument(); this.#showEmpty(); }
     }
     this.#renderTabs();
   }
@@ -589,6 +619,7 @@ export class Reader {
 
   #showEmpty() {
     this.activeTab = null;
+    this.#busy(false);
     this.empty.hidden = false;
     this.titleEl.textContent = "";
     this.pageInput.value = "";
@@ -611,7 +642,7 @@ export class Reader {
       this.bytes = tab.bytes;
       this.name = tab.name;
       this.password = tab.password;
-      const task = pdfjs.getDocument({
+      const task = await openDocument({
         ...DOC_OPTIONS,
         data: tab.bytes.slice(),  // pdf.js takes ownership of the buffer; keep our copy intact
         password: tab.password || undefined,
@@ -620,7 +651,7 @@ export class Reader {
       task.onPassword = (update, reason) => {
         this.#busy(false);
         this.#askPassword(reason === pdfjs.PasswordResponses.INCORRECT_PASSWORD).then((pw) => {
-          if (pw === null) { task.destroy(); return; }
+          if (pw === null) { destroyTask(task); return; }
           this.password = tab.password = pw;
           this.#busy(true);
           update(pw);
@@ -631,6 +662,7 @@ export class Reader {
       this.doc = doc;
       this.activeTab = tab;
       doc.annotationStorage.onSetModified = () => {
+        tab.version = (tab.version || 0) + 1;
         if (!tab.dirty) { tab.dirty = true; this.#renderTabs(); }
       };
       this.pdfViewer.setDocument(doc);
@@ -721,16 +753,17 @@ export class Reader {
     if (this.thumbObserver) { this.thumbObserver.disconnect(); this.thumbObserver = null; }
     this.thumbsList.replaceChildren();
     this.outlineList.replaceChildren();
-    if (this.doc) {
+    const doc = this.doc, task = this.task;
+    this.doc = null;
+    this.task = null;
+    if (doc) {
       this.pdfViewer.setDocument(null);
       this.linkService.setDocument(null);
       this.findController.setDocument(null);
-      const doc = this.doc;
-      this.doc = null;
-      // pdf.js frees a document through the task that loaded it.
-      await (doc.loadingTask || this.task).destroy();
+      await destroyTask(doc.loadingTask || task);  // pdf.js frees a document through its task
+    } else if (task) {
+      await destroyTask(task);  // e.g. cancelled at the password prompt: wait for it to be gone
     }
-    this.task = null;
   }
 
   #key() { return this.doc ? this.doc.fingerprints[0] : ""; }
@@ -1217,15 +1250,19 @@ export class Reader {
     const layer = pageEl.querySelector(".textLayer").getBoundingClientRect();
     const style = getComputedStyle(span);
     const original = span.textContent;
+    const viewport = this.pdfViewer.getPageView(pageNumber - 1).viewport;
+    // With the view turned, the line runs up or down the screen: size the box
+    // from the line's own length and height.
+    const sideways = viewport.rotation % 180 !== 0;
+    const lineW = sideways ? box.height : box.width, lineH = sideways ? box.width : box.height;
     const input = el("input", { type: "text", class: "rd-textedit", value: original, spellcheck: "true",
       "aria-label": "New text (Enter to change, Esc to cancel)" });
     Object.assign(input.style, {
       left: `${box.left - page.left - pageEl.clientLeft - 3}px`, top: `${box.top - page.top - pageEl.clientTop - 2}px`,
-      width: `${Math.max(box.width + 40, 80)}px`, height: `${box.height + 4}px`,
-      fontSize: `${Math.max(8, box.height * 0.8)}px`, fontFamily: style.fontFamily,
+      width: `${Math.max(lineW + 40, 80)}px`, height: `${lineH + 4}px`,
+      fontSize: `${Math.max(8, lineH * 0.8)}px`, fontFamily: style.fontFamily,
     });
     // The words' box in PDF points (measured from the page as drawn).
-    const viewport = this.pdfViewer.getPageView(pageNumber - 1).viewport;
     const [ax, ay] = viewport.convertToPdfPoint(box.left - layer.left, box.top - layer.top);
     const [bx, by] = viewport.convertToPdfPoint(box.right - layer.left, box.bottom - layer.top);
     const rect = [Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)];
@@ -1255,38 +1292,51 @@ export class Reader {
       top: this.container.scrollTop, left: this.container.scrollLeft };
   }
 
-  async #applyTextEdit(edit) {
-    const tab = this.activeTab;
-    if (!tab || !this.doc) return;
-    this.#busy(true);
-    try {
-      const bytes = await this.#currentBytes();
-      const body = new FormData();
-      body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
-      body.append("password", tab.password || "");
-      body.append("edits", JSON.stringify([edit]));
-      const res = await fetch("/api/text/edit", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-      const changed = new Uint8Array(await res.arrayBuffer());
-      if (tab !== this.activeTab) return;
-      (tab.undo ||= []).push(bytes);
-      if (tab.undo.length > 30) tab.undo.shift();
-      Object.assign(tab, { bytes: changed, edited: true, dirty: true, goto: this.#view() });
-      await this.#reloadEditing(tab);
-    } catch (e) {
-      this.#busy(false);
-      this.toast("Could not change the text: " + (e.message || e));
-    }
+  #applyTextEdit(edit) {
+    // In the queue: a save or a tab switch asked for meanwhile waits for it.
+    return this.#serial(async () => {
+      const tab = this.activeTab;
+      if (!tab || !this.doc) return;
+      this.#busy(true);
+      try {
+        const bytes = await this.#currentBytes();
+        const body = new FormData();
+        body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
+        body.append("password", tab.password || "");
+        body.append("edits", JSON.stringify([edit]));
+        const res = await fetch("/api/text/edit", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+        const changed = new Uint8Array(await res.arrayBuffer());
+        if (!this.tabs.includes(tab)) return;
+        (tab.undo ||= []).push(bytes);
+        if (tab.undo.length > 30) tab.undo.shift();
+        Object.assign(tab, { bytes: changed, afterEdit: changed, edited: true, dirty: true,
+          version: (tab.version || 0) + 1 });
+        if (tab === this.activeTab) { tab.goto = this.#view(); await this.#reloadEditing(tab); }
+        else this.#renderTabs();
+      } catch (e) {
+        this.toast("Could not change the text: " + (e.message || e));
+      } finally {
+        this.#busy(false);
+      }
+    });
   }
 
-  async #undoTextEdit() {
-    const tab = this.activeTab;
-    const previous = tab?.undo?.pop();
-    if (!previous) return;
-    const back = previous === tab.original;
-    Object.assign(tab, { bytes: previous, edited: !back, dirty: !back, goto: this.#view() });
-    await this.#reloadEditing(tab);
-    this.toast("Text change undone", 1500);
+  #undoTextEdit() {
+    return this.#serial(async () => {
+      const tab = this.activeTab;
+      if (!tab?.undo?.length) return;
+      // Undoing goes back to the bytes before the change; anything added
+      // since (drawings, form entries) would go with it.
+      if ((this.#changed() || tab.bytes !== tab.afterEdit)
+          && !confirm("Undoing the text change also takes away the annotations and form entries made since it. Continue?")) return;
+      const previous = tab.undo.pop();
+      const back = previous === tab.original;
+      Object.assign(tab, { bytes: previous, afterEdit: previous, edited: !back, dirty: !back, goto: this.#view(),
+        version: (tab.version || 0) + 1 });
+      await this.#reloadEditing(tab);
+      this.toast("Text change undone", 1500);
+    });
   }
 
   /** Show the tab's changed bytes, staying in the Edit text tool. */
@@ -1316,7 +1366,9 @@ export class Reader {
   }
 
   async saveCopy() {
+    await this.chain;  // a text change still on its way is included
     if (!this.doc) return;
+    const tab = this.activeTab, version = tab.version || 0;
     const bytes = await this.#currentBytes();
     const name = this.#copyName();
     const api = this.api();
@@ -1327,7 +1379,7 @@ export class Reader {
         const res = await fetch("/api/keep", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
         const { id } = await res.json();
         const path = await api.save_result(id, name);
-        if (path) { this.#markSaved(); this.toast("Saved to " + path, 5000, ["Show in folder", () => api.reveal(path)]); }
+        if (path) { this.#markSaved(tab, version); this.toast("Saved to " + path, 5000, ["Show in folder", () => api.reveal(path)]); }
       } catch (e) { this.toast("Could not save: " + (e.message || e)); }
       return;
     }
@@ -1335,7 +1387,7 @@ export class Reader {
     if (files.canSave) {
       try {
         const saved = await files.saveAs(blob, name);
-        if (saved) { this.#markSaved(); this.toast("Saved as " + saved); }
+        if (saved) { this.#markSaved(tab, version); this.toast("Saved as " + saved); }
         return;
       } catch (e) {
         if (e.name !== "SecurityError") { this.toast("Could not save: " + (e.message || e)); return; }
@@ -1346,7 +1398,7 @@ export class Reader {
     const a = el("a", { href: url, download: name });
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
-    this.#markSaved();
+    this.#markSaved(tab, version);
   }
 
   /** Commit the annotation being drawn or typed. */
@@ -1354,8 +1406,11 @@ export class Reader {
     try { this.uiManager?.endCurrentEditing?.(); } catch (e) { /* nothing being edited */ }
   }
 
-  #markSaved() {
-    if (this.activeTab) { this.activeTab.dirty = false; this.#renderTabs(); }
+  /** The tab's changes up to ``version`` are in a file now. */
+  #markSaved(tab, version) {
+    if (!tab || !this.tabs.includes(tab) || (tab.version || 0) !== version) return;  // changed since
+    tab.dirty = false;
+    this.#renderTabs();
   }
 
   async print() {
@@ -1392,6 +1447,7 @@ export class Reader {
   }
 
   async #edit(toolId) {
+    await this.chain;
     if (!this.doc || !this.onEdit) return;
     const bytes = await this.#currentBytes();
     this.onEdit(toolId, new File([bytes], this.#copyName(), { type: "application/pdf" }), this.password);

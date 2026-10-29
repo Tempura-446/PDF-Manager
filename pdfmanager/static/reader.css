@@ -94,6 +94,7 @@
 .rd-container.hand { cursor: grab; }
 .rd-container.hand.grabbing { cursor: grabbing; }
 .rd-container.hand .textLayer { pointer-events: none; }
+.rd-edittext .rd-container.hand .textLayer { pointer-events: auto; }  /* Edit text still needs the lines */
 .rd-container.dark .page .canvasWrapper { filter: invert(1) hue-rotate(180deg); }
 
 /* ---- Empty state ---- */

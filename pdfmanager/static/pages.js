@@ -17,7 +17,7 @@
 //   board.setOrder([2, 0, 1]) / board.setSelection([0, 4])   // e.g. from a typed page range
 //   board.splits / board.setSplits([3, 7])   // 0-based pages that start a new file
 
-import { DOC_OPTIONS, loadPdfjs } from "./pdfjs.js";
+import { DOC_OPTIONS, destroyTask, loadPdfjs, openDocument } from "./pdfjs.js";
 
 const THUMB = 132;   // CSS pixels for the longest side of a preview
 const RENDERERS = 2; // pages rendered at the same time
@@ -225,11 +225,11 @@ export class PageBoard {
     const lib = await loadPdfjs();
     const data = new Uint8Array(await file.arrayBuffer());
     if (gen !== this.gen) return "stale";
-    const task = lib.getDocument({ ...DOC_OPTIONS, data, password: password || undefined });
+    const task = await openDocument({ ...DOC_OPTIONS, data, password: password || undefined });
     let locked = null;
     task.onPassword = (update, reason) => {
       locked = reason === lib.PasswordResponses.INCORRECT_PASSWORD ? "wrong-password" : "password";
-      task.destroy();
+      destroyTask(task);
     };
     this.task = task;
     try {
@@ -263,7 +263,7 @@ export class PageBoard {
     this.file = null; this.password = null; this.doc = null; this.total = 0;
     const task = this.task;
     this.task = null;
-    if (task) await task.destroy().catch(() => {});
+    await destroyTask(task);
     this.#state("empty");
   }
 
