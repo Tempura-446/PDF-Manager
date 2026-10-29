@@ -91,6 +91,10 @@ on Linux) and the app uses the Edge window from then on. Delete that file
 to try the native window again. The app stops by itself when its window is
 closed.
 
+- The app opens on a **Home** screen: open or drop PDFs to read them, go
+  back to the tools you used recently, reopen a recent file, or pick any
+  tool from the list with a line about each. In a narrower window the
+  sidebar becomes a rail of icons; on a phone it's a menu.
 - Drop files anywhere on the window. Each file shows a **preview of its
   first page**, its page count and size; drag the cards to change the
   order (for merging, interleaving and images).
@@ -110,7 +114,8 @@ closed.
 
   The page box under Options updates as you go, and typing pages there
   updates the previews.
-- **Crop margins** shows the page with a box to drag. **Redact** lets you
+- **Crop margins** shows the page with a box to drag (the margins are as
+  the page is shown, also for turned pages). **Redact** lets you
   draw boxes to black out, and shows where the words you typed are found.
 - **Bookmarks** has an editor: rename, indent and reorder bookmarks, or
   detect them from the document's headings.
@@ -250,7 +255,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `to-word` | convert to an editable Word document | `pdfm to-word doc.pdf` |
 | `from-office` | convert Word, Excel, PowerPoint, … to PDF | `pdfm from-office report.docx` |
 | `recipe` | save and run recipes (several tools in a row) | `pdfm recipe run "Scans" *.pdf` |
-| `from-images` | save images as a PDF | `pdfm from-images *.jpg -o photos.pdf -s a4 --margin 10` |
+| `from-images` | save pictures as a PDF (photos the right way up, scanners' multi-page TIFFs) | `pdfm from-images *.jpg -o photos.pdf -s a4 --margin 10` |
 | `to-images` | render pages to PNG/JPG | `pdfm to-images doc.pdf --dpi 200 -p 1` |
 | `organize` | sort a folder of PDFs into sub-folders | `pdfm organize ~/Downloads --by year --dest ~/PDFs --move` |
 | `rename` | rename PDFs from their metadata | `pdfm rename ~/PDFs --pattern "{date:%Y-%m-%d} {title}" -n` |
