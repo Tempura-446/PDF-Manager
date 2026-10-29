@@ -711,6 +711,34 @@ class FakeRegistry:
         self.keys.pop(path.lower())
 
 
+def test_an_install_under_the_old_name_gets_the_new_name(tmp_path, monkeypatch):
+    import sys
+    from pdfmanager import winsetup
+
+    reg = FakeRegistry()
+    monkeypatch.setitem(sys.modules, "winreg", reg)
+    monkeypatch.setattr(winsetup.sys, "platform", "win32")
+    folders = {winsetup.CSIDL_PROGRAMS: tmp_path / "Start", winsetup.CSIDL_DESKTOPDIRECTORY: tmp_path / "Desktop"}
+    monkeypatch.setattr(winsetup, "_folder", folders.get)
+    monkeypatch.setattr(winsetup, "_notify_shell", lambda: None)
+    monkeypatch.setattr(winsetup, "make_shortcut", lambda path, *a, **kw: Path(path).write_text("lnk"))
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    monkeypatch.setattr(winsetup, "default_app_dir", lambda: app_dir)
+    assert not winsetup.rename_old_install()  # nothing installed under the old name
+    for folder in folders.values():
+        folder.mkdir()
+    (tmp_path / "Start" / "PDF Manager.lnk").write_text("old")  # no desktop shortcut
+    (app_dir / "PDF Manager.ico").write_bytes(b"old")
+    reg.keys[r"software\registeredapplications"] = {"PDF Manager": "old"}
+    assert winsetup.rename_old_install()
+    assert sorted(p.name for p in tmp_path.glob("*/*.lnk")) == ["ZPDF.lnk"]
+    assert (tmp_path / "Start" / "ZPDF.lnk").exists()
+    assert (app_dir / "ZPDF.ico").exists() and not (app_dir / "PDF Manager.ico").exists()
+    assert list(reg.keys[r"software\registeredapplications"]) == ["ZPDF"]
+    assert not winsetup.rename_old_install()  # once is enough
+
+
 def test_windows_setup_registers_and_removes(tmp_path, monkeypatch):
     import sys
     from pdfmanager import winsetup
@@ -732,28 +760,28 @@ def test_windows_setup_registers_and_removes(tmp_path, monkeypatch):
     app_dir = tmp_path / "app"
     done = winsetup.install(app_dir)
     assert len(done) == 4
-    assert made[0][0] == tmp_path / "Start" / "PDF Manager.lnk"
-    assert made[1][0] == tmp_path / "Desktop" / "PDF Manager.lnk"
+    assert made[0][0] == tmp_path / "Start" / "ZPDF.lnk"
+    assert made[1][0] == tmp_path / "Desktop" / "ZPDF.lnk"
     assert made[0][2] == "-I -m pdfmanager gui"  # -I: the PDF's folder isn't searched for modules
-    assert (app_dir / "PDF Manager.ico").stat().st_size > 1000
+    assert (app_dir / "ZPDF.ico").stat().st_size > 1000
     uninstall = (app_dir / "uninstall.ps1").read_text(encoding="utf-8-sig")
     assert str(app_dir) in uninstall and "setup-windows" not in uninstall  # works without Python
-    assert str(tmp_path / "Start" / "PDF Manager.lnk") in uninstall
+    assert str(tmp_path / "Start" / "ZPDF.lnk") in uninstall
     assert "PDFManager.Document" in uninstall and r"HKCU:\Software\PDFManager" in uninstall
     keys = reg.keys
     command = keys[r"software\classes\pdfmanager.document\shell\open\command"][""]
     assert command.endswith('-I -m pdfmanager gui "%1"')
     assert keys[r"software\classes\.pdf\openwithprogids"] == {"PDFManager.Document": ""}
-    assert keys[r"software\registeredapplications"]["PDF Manager"] == r"Software\PDFManager\Capabilities"
+    assert keys[r"software\registeredapplications"]["ZPDF"] == r"Software\PDFManager\Capabilities"
     uninstall = keys[r"software\microsoft\windows\currentversion\uninstall\pdfmanager"]
-    assert uninstall["DisplayName"] == "PDF Manager" and "uninstall.ps1" in uninstall["UninstallString"]
+    assert uninstall["DisplayName"] == "ZPDF" and "uninstall.ps1" in uninstall["UninstallString"]
     winsetup.remove()
-    assert not (tmp_path / "Start" / "PDF Manager.lnk").exists()
-    assert not (tmp_path / "Desktop" / "PDF Manager.lnk").exists()
+    assert not (tmp_path / "Start" / "ZPDF.lnk").exists()
+    assert not (tmp_path / "Desktop" / "ZPDF.lnk").exists()
     assert not any(k.startswith(r"software\classes\pdfmanager") or k.startswith(r"software\pdfmanager")
                    or k.endswith(r"uninstall\pdfmanager") for k in keys)
     assert keys[r"software\classes\.pdf\openwithprogids"] == {}
-    assert "PDF Manager" not in keys[r"software\registeredapplications"]
+    assert "ZPDF" not in keys[r"software\registeredapplications"]
     # without a desktop shortcut or Open with
     made.clear()
     reg.keys.clear()
@@ -777,25 +805,25 @@ def test_windows_shortcuts_and_registry_for_real(tmp_path, monkeypatch):
 
     folders = {winsetup.CSIDL_PROGRAMS: tmp_path / "Start", winsetup.CSIDL_DESKTOPDIRECTORY: tmp_path / "Desktop"}
     monkeypatch.setattr(winsetup, "_folder", folders.get)
-    # Keys of their own, so an installed PDF Manager on this computer is left alone.
-    monkeypatch.setattr(winsetup, "NAME", "PDF Manager Test")
+    # Keys of their own, so an installed ZPDF on this computer is left alone.
+    monkeypatch.setattr(winsetup, "NAME", "ZPDF Test")
     monkeypatch.setattr(winsetup, "PROG_ID", "PDFManagerTest.Document")
     monkeypatch.setattr(winsetup, "APP_KEY", r"Software\PDFManagerTest")
     monkeypatch.setattr(winsetup, "UNINSTALL_KEY",
                         r"Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFManagerTest")
     winsetup.install(tmp_path / "app")
     try:
-        target, args = winsetup.read_shortcut(tmp_path / "Start" / "PDF Manager Test.lnk")
+        target, args = winsetup.read_shortcut(tmp_path / "Start" / "ZPDF Test.lnk")
         assert Path(target).name.lower() in ("pythonw.exe", "python.exe") and args == "-I -m pdfmanager gui"
-        assert (tmp_path / "Desktop" / "PDF Manager Test.lnk").exists()
+        assert (tmp_path / "Desktop" / "ZPDF Test.lnk").exists()
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, winsetup.UNINSTALL_KEY) as key:
-            assert winreg.QueryValueEx(key, "DisplayName")[0] == "PDF Manager Test"
+            assert winreg.QueryValueEx(key, "DisplayName")[0] == "ZPDF Test"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
                             rf"{winsetup.CLASSES}\{winsetup.PROG_ID}\shell\open\command") as key:
             assert winreg.QueryValueEx(key, "")[0].endswith('-I -m pdfmanager gui "%1"')
     finally:
         winsetup.remove()
-    assert not (tmp_path / "Start" / "PDF Manager Test.lnk").exists()
+    assert not (tmp_path / "Start" / "ZPDF Test.lnk").exists()
     with pytest.raises(FileNotFoundError):
         winreg.OpenKey(winreg.HKEY_CURRENT_USER, winsetup.UNINSTALL_KEY)
 
@@ -822,7 +850,7 @@ class FakeGitHub:
         if url.endswith("/repos/Tempura-446/PDF-Manager"):
             body = json.dumps({"default_branch": "main"}).encode()
         elif "/contents/pdfmanager/__init__.py?ref=main" in url:
-            body = f'"""PDF Manager."""\n\n__version__ = "{self.version}"\n'.encode()
+            body = f'"""ZPDF."""\n\n__version__ = "{self.version}"\n'.encode()
         elif url.endswith("/zipball/main"):
             body = self.zipball
         else:

@@ -289,7 +289,7 @@ def sanitize(path, output, metadata=True, javascript=True, attachments=True, com
         del root["/Names"]
     if metadata:
         writer._info = None
-        writer.add_metadata({"/Producer": "PDF Manager"})
+        writer.add_metadata({"/Producer": "ZPDF"})
     core._write(writer, output)
     return counts
 

@@ -1,6 +1,6 @@
 """Entry point for the standalone app built by build_app.py.
 
-``"PDF Manager" --self-test RESULT_FILE`` checks that the bundle is complete
+``"ZPDF" --self-test RESULT_FILE`` checks that the bundle is complete
 (PDF reading and writing, rendering, compression, the window library and
 the built-in server) without opening a window, writes "ok" or the error to
 RESULT_FILE and exits with 0 or 1. The build workflow runs it on every build.
@@ -33,7 +33,7 @@ def self_test(result_file):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "test.pdf"
             c = canvas.Canvas(str(src))
-            c.drawString(72, 720, "PDF Manager self-test")
+            c.drawString(72, 720, "ZPDF self-test")
             c.showPage()
             c.save()
             info = gui.inspect_pdf(src)
@@ -51,7 +51,7 @@ def self_test(result_file):
                       "static/pdfjs/build/pdf.worker.min.mjs", "static/pdfjs/web/pdf_viewer.mjs"):
             assert urllib.request.urlopen(base + asset).status == 200, f"missing {asset}"
         server.shutdown()
-        assert b"PDF Manager" in page, "server did not serve the app page"
+        assert b"ZPDF" in page, "server did not serve the app page"
         Path(result_file).write_text("ok")
         return 0
     except Exception:

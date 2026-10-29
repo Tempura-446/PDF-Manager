@@ -1,6 +1,6 @@
 """End-to-end test of the installed app on Windows.
 
-Run by .github/workflows/windows-e2e.yml after "Install PDF Manager.cmd".
+Run by .github/workflows/windows-e2e.yml after "Install ZPDF.cmd".
 It starts the installed app the way its Start menu shortcut does, drives
 its window through the Chrome DevTools protocol (which both Edge and the
 WebView2 control behind the app's own window speak), uses a few tools,
@@ -112,7 +112,7 @@ def targets():
         return f"can't list: {exc}"
 
 
-def window_handles(title_part="PDF Manager"):
+def window_handles(title_part="ZPDF"):
     """Visible top-level windows whose title contains ``title_part``."""
     user32 = ctypes.windll.user32
     found = []

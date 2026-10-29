@@ -1,11 +1,11 @@
-# Installs PDF Manager for the current Windows user (no administrator rights
-# needed). Start it with "Install PDF Manager.cmd" in the PDF Manager folder.
+# Installs ZPDF for the current Windows user (no administrator rights
+# needed). Start it with "Install ZPDF.cmd" in the ZPDF folder.
 #
 #   1. Finds Python 3.10 or newer, or installs Python from python.org (with
 #      winget, or the official signed installer).
-#   2. Installs PDF Manager in its own folder: %LOCALAPPDATA%\PDF Manager\app
+#   2. Installs ZPDF in its own folder: %LOCALAPPDATA%\PDF Manager\app
 #      (running it again updates it).
-#   3. Adds Start menu and desktop shortcuts, PDF Manager in "Open with" for
+#   3. Adds Start menu and desktop shortcuts, ZPDF in "Open with" for
 #      PDFs, and an entry in Settings > Apps to uninstall it.
 #
 # The app runs with Python's own pythonw.exe, which is signed, so Windows
@@ -28,7 +28,7 @@ function Step($text) { Write-Host ""; Write-Host "> $text" -ForegroundColor Cyan
 
 $source = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 if (-not (Test-Path (Join-Path $source "pyproject.toml"))) {
-    throw "Run this from the unzipped PDF Manager folder (pyproject.toml not found in $source)."
+    throw "Run this from the unzipped ZPDF folder (pyproject.toml not found in $source)."
 }
 $appDir = Join-Path $env:LOCALAPPDATA "PDF Manager\app"
 $venv = Join-Path $appDir "venv"
@@ -92,13 +92,13 @@ function Install-Python {
     return $found
 }
 
-Write-Host "PDF Manager installer" -ForegroundColor Cyan
+Write-Host "ZPDF installer" -ForegroundColor Cyan
 
 Step "Looking for Python 3.10 or newer"
 $python = Find-Python
 if ($python) { Say "Found $python" } else { $python = Install-Python; Say "Installed $python" }
 
-Step "Installing PDF Manager in $appDir"
+Step "Installing ZPDF in $appDir"
 New-Item -ItemType Directory -Force -Path $appDir | Out-Null
 $venvPython = Join-Path $venv "Scripts\python.exe"
 if (-not (Test-Python $venvPython)) {
@@ -108,7 +108,7 @@ if (-not (Test-Python $venvPython)) {
 }
 & $venvPython -m pip install --disable-pip-version-check --quiet --upgrade pip
 & $venvPython -m pip install --disable-pip-version-check --quiet --upgrade "$source[app]"
-if ($LASTEXITCODE -ne 0) { throw "Installing PDF Manager's packages failed (see above)." }
+if ($LASTEXITCODE -ne 0) { throw "Installing ZPDF's packages failed (see above)." }
 Say "Done"
 
 Step "Adding shortcuts and Open with"
@@ -119,10 +119,10 @@ if ($NoOpenWith) { $setup += "--no-open-with" }
 if ($LASTEXITCODE -ne 0) { throw "Adding the shortcuts failed (see above)." }
 
 Write-Host ""
-Write-Host "PDF Manager is installed. Find it in the Start menu" -NoNewline -ForegroundColor Green
+Write-Host "ZPDF is installed. Find it in the Start menu" -NoNewline -ForegroundColor Green
 if (-not $NoDesktop) { Write-Host " or on your desktop" -NoNewline -ForegroundColor Green }
 Write-Host "." -ForegroundColor Green
-Write-Host "To remove it: Settings > Apps > Installed apps > PDF Manager > Uninstall."
+Write-Host "To remove it: Settings > Apps > Installed apps > ZPDF > Uninstall."
 if (-not $NoLaunch) {
     Start-Process -FilePath (Join-Path $venv "Scripts\pythonw.exe") -ArgumentList "-I", "-m", "pdfmanager", "gui" `
         -WorkingDirectory $env:USERPROFILE

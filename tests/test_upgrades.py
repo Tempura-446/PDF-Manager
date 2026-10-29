@@ -402,7 +402,7 @@ def multipart(fields, files):
 def test_gui_page_and_security(server):
     base, token = server
     status, headers, body = request(base + "/")
-    assert status == 200 and b"PDF Manager" in body
+    assert status == 200 and b"ZPDF" in body
     assert "Content-Security-Policy" in headers
     assert request(base + "/api/operations")[0] == 403
     assert request(base + "/api/operations", "wrong")[0] == 403

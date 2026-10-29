@@ -1409,7 +1409,7 @@ class Handler(BaseHTTPRequestHandler):
         """Start the app again: a helper waits for this copy to end."""
         cls = type(self)
         if not self._can_restart():
-            raise UserError("close PDF Manager and open it again to use the new version")
+            raise UserError("close ZPDF and open it again to use the new version")
         update.restart_after(os.getpid())
         cls.quit_requested = True
         _log(f"restart asked for; mode {cls.instance_mode}")
@@ -1519,7 +1519,7 @@ def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False):
     """Run in the browser: print the link, open it, serve until Ctrl+C (or,
     with ``exit_when_closed``, until the page has been closed)."""
     server, url = make_server(port, open_paths=open_paths, prefer=APP_PORT)
-    print(f"PDF Manager is running at {url}")
+    print(f"ZPDF is running at {url}")
     print("Keep this window open while you use it; press Ctrl+C to stop.")
     if open_browser:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
@@ -1693,7 +1693,7 @@ def _unregister_instance(server):
 
 
 def forward_to_running_app(paths=()):
-    """If PDF Manager is already running, hand it ``paths`` to open and
+    """If ZPDF is already running, hand it ``paths`` to open and
     return True, so this launch can end: there's only ever one copy.
 
     The running app either opens them itself (its own window, which comes
@@ -1721,7 +1721,7 @@ def forward_to_running_app(paths=()):
         return False  # not running any more (or something else has the port)
     if not isinstance(answer, dict) or not secrets.compare_digest(
             str(answer.get("proof", "")), _proof(secret, "answer", nonce)):
-        return False  # not PDF Manager
+        return False  # not ZPDF
     if answer.get("handled"):
         return True
     url = str(answer.get("url") or "")
@@ -1837,7 +1837,7 @@ def _window_note():
 
 
 def run_desktop(port=0, open_paths=()):
-    """Open PDF Manager in its own window (needs pywebview). Returns False if
+    """Open ZPDF in its own window (needs pywebview). Returns False if
     no window could be opened, so the caller can fall back to the browser.
 
     If the window can't open (for example Windows Smart App Control blocks
@@ -1861,7 +1861,7 @@ def run_desktop(port=0, open_paths=()):
     try:
         import webview
 
-        window = webview.create_window("PDF Manager", url, js_api=api, width=1180, height=820,
+        window = webview.create_window("ZPDF", url, js_api=api, width=1180, height=820,
                                        min_size=(400, 560), background_color="#f6f6f3")
         api._window = window
         handler.bring_to_front = lambda: _raise_window(window)
@@ -1933,7 +1933,7 @@ def find_app_browser():
 
 
 def run_app_window(port=0, open_paths=()):
-    """Open PDF Manager as an Edge/Chrome app window. Returns False if no
+    """Open ZPDF as an Edge/Chrome app window. Returns False if no
     such browser is installed. Results are saved like downloads."""
     browser = find_app_browser()
     if not browser:
@@ -2047,6 +2047,19 @@ def _raise_window(window):
         pass
 
 
+def _rename_old_install():
+    """Shortcuts made before the app was called ZPDF get the new name and icon."""
+    from pdfmanager import update, winsetup
+
+    if update.how_installed() != "pip":
+        return
+    try:
+        if winsetup.rename_old_install():
+            _log("launch: renamed the shortcuts of an earlier install")
+    except Exception as exc:  # noqa: BLE001 - the app starts all the same
+        _log(f"launch: renaming the old shortcuts failed: {exc!r}")
+
+
 def launch(open_paths=(), port=0):
     """Open the app the best way available: its own pywebview window, else
     an Edge/Chrome app window, else a browser tab. Returns once closed. If
@@ -2057,6 +2070,8 @@ def launch(open_paths=(), port=0):
         if not port and forward_to_running_app(open_paths):
             _log("launch: handed to the running copy")
             return
+        if sys.platform == "win32":
+            threading.Thread(target=_rename_old_install, daemon=True).start()
         # PDFM_WINDOW=desktop, app-window or browser uses only that kind of
         # window (for tests and troubleshooting).
         choice = os.environ.get("PDFM_WINDOW", "").strip().lower()

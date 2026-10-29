@@ -1,4 +1,4 @@
-# PDF-Manager
+# ZPDF
 
 `pdfm` is a PDF toolkit you can use three ways: as a **desktop app**, from
 the **command line**, or as a **Python library**.
@@ -18,14 +18,14 @@ organize, rename, de-duplicate, **search** and watch whole folders of PDFs.
 ### Easiest on Windows: the installer
 
 1. On GitHub, **Code → Download ZIP**, and unzip it (right-click → *Extract All*).
-2. In the unzipped folder, double-click **Install PDF Manager.cmd**. If
+2. In the unzipped folder, double-click **Install ZPDF.cmd**. If
    Windows asks, choose *More info → Run anyway* (it's a plain text script:
    you can read what it does in `packaging/windows/install.ps1`).
 
 It installs Python from python.org if you don't have it (with winget or the
-official, signed installer), installs PDF Manager in its own folder
+official, signed installer), installs ZPDF in its own folder
 (`%LOCALAPPDATA%\PDF Manager\app`), and adds **Start menu and desktop
-shortcuts**, **PDF Manager in "Open with"** (and in *Settings → Default
+shortcuts**, **ZPDF in "Open with"** (and in *Settings → Default
 apps*) for PDFs, and an entry in **Settings → Apps** to uninstall it. No
 administrator rights are needed, and you can delete the unzipped folder
 afterwards. Running it again updates the installed copy (or use the
@@ -38,10 +38,10 @@ PowerShell commands, so it also works where Smart App Control limits scripts.
 
 ### The standalone app
 
-Download **PDF-Manager-windows.zip** or **PDF-Manager-linux.zip** from the
+Download **ZPDF-windows.zip** or **ZPDF-linux.zip** from the
 latest run of the [Build app](../../actions/workflows/build-app.yml)
 workflow (open the run, then *Artifacts*), unzip it, and double-click
-**PDF Manager**. Nothing else to install (OCR still needs Tesseract, below).
+**ZPDF**. Nothing else to install (OCR still needs Tesseract, below).
 
 To build it yourself, including on a Mac:
 
@@ -165,7 +165,7 @@ computers can't use it.
 ## PDF reader
 
 Open **PDF reader** at the top of the sidebar, run `pdfm view report.pdf`,
-or open a PDF with the standalone app ("Open with…" → PDF Manager, or drop
+or open a PDF with the standalone app ("Open with…" → ZPDF, or drop
 the file on the app). It is built on [pdf.js](https://mozilla.github.io/pdf.js/),
 the engine behind Firefox's PDF viewer, bundled with the app so it works offline.
 
@@ -286,7 +286,7 @@ An image is only replaced if the new version is smaller. `--image-quality`
 and `--max-dpi` override a level's settings.
 
 At every level the result is then repacked with [qpdf](https://qpdf.readthedocs.io)
-(through pikepdf, installed with PDF Manager): the many small objects a PDF
+(through pikepdf, installed with ZPDF): the many small objects a PDF
 is made of go into compressed object streams. It's lossless and takes a
 third or more off text-heavy documents; files that are mostly pictures
 barely change.
@@ -492,7 +492,7 @@ pytest
 GitHub Actions runs the suite on Linux (Python 3.10 and 3.13) and Windows,
 plus a job with Tesseract, Ghostscript and LibreOffice for the tests that
 need those programs, and a **Windows end-to-end** job: it installs the app
-with `Install PDF Manager.cmd` (with PowerShell limited the way Smart App
+with `Install ZPDF.cmd` (with PowerShell limited the way Smart App
 Control limits it), starts it like its Start menu shortcut, uses tools and
 the reader in both kinds of window (its own window and the Edge window),
 opens a second file from "outside", restarts it as after an update, closes

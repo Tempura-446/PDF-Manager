@@ -168,7 +168,7 @@ export class Reader {
     this.printBtn = t("print", "Print", "Print (Ctrl+P)");
     this.saveBtn = t("save", "Save a copy", "Save a copy (Ctrl+S)");
     this.moreBtn = b("more", "More", { "aria-haspopup": "menu", "aria-expanded": "false" });
-    this.appToolsBtn = this.onAllTools ? t("grid", "All tools", "Show every PDF Manager tool") : null;
+    this.appToolsBtn = this.onAllTools ? t("grid", "All tools", "Show every ZPDF tool") : null;
     this.tray = el("div", { class: "rd-tray", role: "toolbar", "aria-label": "Tools", hidden: true },
       this.openBtn, this.findBtn, this.annotateBtn,
       el("span", { class: "rd-sep" }), this.rotCcwBtn, this.rotCwBtn,
@@ -655,7 +655,7 @@ export class Reader {
       this.zoomSelect, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.annotateBtn]) c.disabled = true;
     this.sidebar.hidden = true;
     this.root.classList.remove("reading");
-    if (this.active) document.title = "PDF reader — PDF Manager";
+    if (this.active) document.title = "PDF reader — ZPDF";
     this.refreshRecent();
   }
 
@@ -700,7 +700,7 @@ export class Reader {
       // when the pages appear, e.g. from the folder search.)
       this.titleEl.textContent = tab.name;
       this.titleEl.title = tab.name;
-      document.title = tab.name + " — PDF Manager";
+      document.title = tab.name + " — ZPDF";
       this.empty.hidden = true;
       for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
         this.zoomSelect, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.annotateBtn]) c.disabled = false;

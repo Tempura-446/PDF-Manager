@@ -1,12 +1,12 @@
-"""Build a standalone, double-clickable PDF Manager app with PyInstaller.
+"""Build a standalone, double-clickable ZPDF app with PyInstaller.
 
     pip install -e ".[build]"
     python packaging/build_app.py
 
 Produces, in dist/:
-  - Windows: "PDF Manager/PDF Manager.exe" (zipped as PDF-Manager-windows.zip)
-  - macOS:   "PDF Manager.app"             (zipped as PDF-Manager-macos.zip)
-  - Linux:   "PDF Manager/PDF Manager"     (zipped as PDF-Manager-linux.zip)
+  - Windows: "ZPDF/ZPDF.exe" (zipped as ZPDF-windows.zip)
+  - macOS:   "ZPDF.app"             (zipped as ZPDF-macos.zip)
+  - Linux:   "ZPDF/ZPDF"     (zipped as ZPDF-linux.zip)
 
 The app opens in its own window (pywebview). OCR still needs Tesseract
 installed on the computer; everything else is bundled.
@@ -22,7 +22,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 BUILD = ROOT / "build" / "app"
-NAME = "PDF Manager"
+NAME = "ZPDF"
 
 from pdfmanager.appicon import ICO_SIZES, make_icon  # noqa: E402
 
@@ -76,7 +76,7 @@ def main():
     dist = ROOT / "dist"
     target = dist / (f"{NAME}.app" if system == "Darwin" else NAME)
     label = {"Windows": "windows", "Darwin": "macos"}.get(system, "linux")
-    archive = shutil.make_archive(str(dist / f"PDF-Manager-{label}"), "zip", dist, target.name)
+    archive = shutil.make_archive(str(dist / f"ZPDF-{label}"), "zip", dist, target.name)
     print(f"\nBuilt {target}\nZipped to {archive}")
 
 

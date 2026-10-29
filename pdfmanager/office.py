@@ -421,7 +421,7 @@ def _write_docx(pages, output, title=""):
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
         'xmlns:dc="http://purl.org/dc/elements/1.1/">'
-        f'<dc:title>{escape(title)}</dc:title><dc:creator>PDF Manager</dc:creator></cp:coreProperties>')
+        f'<dc:title>{escape(title)}</dc:title><dc:creator>ZPDF</dc:creator></cp:coreProperties>')
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as z:
@@ -516,7 +516,7 @@ def office_to_pdf(path, output):
     if find_libreoffice():
         return _libreoffice(path, output, "pdf"), "LibreOffice"
     if suffix == ".txt":
-        return text_to_pdf(path, output), "PDF Manager"
+        return text_to_pdf(path, output), "ZPDF"
     raise core.PdfManagerError(
         f"converting {suffix} files needs Microsoft Office or LibreOffice "
         "(free: https://www.libreoffice.org)")
