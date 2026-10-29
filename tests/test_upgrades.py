@@ -669,7 +669,7 @@ def test_leftover_browser_is_stopped(tmp_path):
     if sys.platform != "win32":
         assert {ours.pid, leftover.pid} <= set(gui._profile_processes(profile))
     t = time.monotonic()
-    gui._close_browser(ours, profile)
+    gui._close_browser(ours, profile, Path(sys.executable).name)  # by name: quick on Windows
     assert ours.poll() is not None and time.monotonic() - t < 10
     if sys.platform != "win32":
         assert leftover.wait(timeout=5) is not None

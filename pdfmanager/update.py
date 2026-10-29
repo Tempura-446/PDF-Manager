@@ -254,9 +254,11 @@ def restart_after(pid):
 
 
 def _relaunch(pid):
-    _wait_for_exit(pid)
     from pdfmanager import gui
 
+    gui._log(f"relaunch helper: waiting for {pid} to end")
+    _wait_for_exit(pid)
+    gui._log("relaunch helper: starting the app again")
     gui.launch()
 
 

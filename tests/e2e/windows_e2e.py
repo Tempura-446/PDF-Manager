@@ -75,7 +75,7 @@ def make_pdf(path, pages=3):
 
 
 def start(mode, *files):
-    env = dict(os.environ, PDFM_WINDOW=mode, PDFM_DEBUG_PORT=str(PORT))
+    env = dict(os.environ, PDFM_WINDOW=mode, PDFM_DEBUG_PORT=str(PORT), PDFM_LOG="1")
     # What the Start menu shortcut runs:
     return subprocess.Popen([str(VENV / "pythonw.exe"), "-I", "-m", "pdfmanager", "gui", *map(str, files)],
                             env=env, cwd=str(Path.home()))
@@ -147,6 +147,23 @@ def exercise(page, pdf):
     log("reader shows:", page.inner_text(".rd-title"))
 
 
+def app_log():
+    try:
+        return (DATA / "app.log").read_text(encoding="utf-8")
+    except OSError:
+        return "(no app.log)"
+
+
+def stacks(token):
+    """Every thread's stack in the running app (PDFM_LOG makes it available)."""
+    try:
+        req = urllib.request.Request("http://127.0.0.1:47821/api/debug/stacks", headers={"X-Pdfm-Token": token})
+        with urllib.request.urlopen(req, timeout=5) as res:
+            return res.read().decode("utf-8", "replace")
+    except OSError as exc:
+        return f"(no stacks: {exc})"
+
+
 def no_leftovers(what):
     deadline = time.monotonic() + 45
     left = ours()
@@ -156,6 +173,7 @@ def no_leftovers(what):
     if left:
         for pid, name, cmd in left:
             log("STILL RUNNING:", pid, name, cmd[:200])
+        log("app.log:\n" + app_log())
         raise AssertionError(f"processes left running after {what}")
     log(f"nothing left running after {what}")
 
@@ -214,7 +232,13 @@ def run(mode):
                 "async (t) => (await fetch('/api/update/restart', {method: 'POST', headers: {'X-Pdfm-Token': t}})).status",
                 token)
             assert status == 200, f"restart answered {status}"
-            wait_for(lambda: not debugging_ready() or None, 60, "the old window to close")
+            try:
+                wait_for(lambda: not debugging_ready() or None, 60, "the old window to close")
+            except AssertionError:
+                log("app.log:\n" + app_log())
+                log("old app's threads:\n" + stacks(token))
+                log("processes:", ours())
+                raise
 
             def new_instance():
                 try:

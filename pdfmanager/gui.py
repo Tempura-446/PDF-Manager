@@ -876,6 +876,26 @@ def _safe_name(name):
     return re.sub(r'[<>:"|?*\x00-\x1f]', "_", name).strip(" .") or "file"
 
 
+def _log(message):
+    """Opt-in trail of what the app does (PDFM_LOG=1 writes app.log in the
+    app's data folder), for troubleshooting start-up and shutdown."""
+    if not os.environ.get("PDFM_LOG"):
+        return
+    try:
+        with open(data_dir() / "app.log", "a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%H:%M:%S')} [{os.getpid()}] {message}\n")
+    except OSError:
+        pass
+
+
+def _thread_stacks():
+    import traceback
+
+    names = {t.ident: t.name for t in threading.enumerate()}
+    return "\n".join(f"--- {names.get(ident, ident)}\n" + "".join(traceback.format_stack(frame))
+                     for ident, frame in sys._current_frames().items())
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = f"pdfm/{__version__}"
     protocol_version = "HTTP/1.1"  # keep connections open between requests
@@ -967,6 +987,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(HTTPStatus.OK, update.public_settings())
         if path == "/api/update":
             return self._send(HTTPStatus.OK, {**update.check(), "can_restart": self._can_restart()})
+        if path == "/api/debug/stacks" and os.environ.get("PDFM_LOG"):
+            return self._send(HTTPStatus.OK, _thread_stacks(), "text/plain; charset=utf-8")
         self._error(HTTPStatus.NOT_FOUND, "not found")
 
     def _static(self, rel):
@@ -1305,6 +1327,7 @@ class Handler(BaseHTTPRequestHandler):
             raise UserError("close PDF Manager and open it again to use the new version")
         update.restart_after(os.getpid())
         cls.quit_requested = True
+        _log(f"restart asked for; mode {cls.instance_mode}")
         if cls.instance_mode == "desktop":
             threading.Timer(0.5, cls.quit_app).start()  # once this answer has been sent
         return self._send(HTTPStatus.OK, {"restarting": True})
@@ -1442,7 +1465,8 @@ def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5
     while True:
         time.sleep(poll)
         if getattr(handler, "quit_requested", False):
-            return  # restarting after an update
+            _log("closing: restart asked for")
+            return
         now = time.monotonic()
         for page, seen in list(pages.items()):
             if now - seen > idle:
@@ -1450,14 +1474,17 @@ def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5
         closed = handler.closed_at
         if (closed is not None and not pages and handler.last_seen <= closed
                 and now - closed > grace):
+            _log("closing: the last page said goodbye")
             return
         quiet = now - handler.last_seen
         if proc is not None and proc.poll() is not None:
             if exited_at is None:
                 exited_at = now
             if exited_at - started > handoff + poll or quiet > idle_handed_off:
+                _log(f"closing: the browser exited (after {exited_at - started:.1f}s; quiet {quiet:.0f}s)")
                 return
         elif quiet > idle:
+            _log(f"closing: no page heard from for {quiet:.0f}s")
             return
 
 
@@ -1528,6 +1555,7 @@ def _register_instance(server, mode, **extra):
     handler.instance_secret = secrets.token_urlsafe(32)
     handler.instance_mode = mode
     handler.instance_extra = {k: str(v) for k, v in extra.items()}
+    _log(f"registered as {mode} on port {server.server_address[1]}")
     record = {"port": server.server_address[1], "pid": os.getpid(),
               "secret": handler.instance_secret, "mode": mode}
     try:
@@ -1816,37 +1844,49 @@ def run_app_window(port=0, open_paths=()):
         return False
     threading.Thread(target=server.serve_forever, daemon=True).start()
     _register_instance(server, "app-window", browser=browser, profile=profile)
+    _log(f"app window: {browser} on port {server.server_address[1]}, profile {profile}")
     try:
         wait_until_closed(server.RequestHandlerClass, proc)
     except KeyboardInterrupt:
         pass
     _unregister_instance(server)
+    _log("app window: instance file removed")
     server.shutdown()
     server.server_close()
-    _close_browser(proc, profile)
+    _log("app window: server stopped")
+    _close_browser(proc, profile, Path(browser).name)
+    _log("app window: browser closed")
     if not primary:
         shutil.rmtree(profile, ignore_errors=True)
     return True
 
 
-def _profile_processes(profile):
+def _profile_processes(profile, exe=None):
     """Ids of browser processes running with this profile (Edge and Chrome
-    may keep running in the background after their last window closes)."""
+    may keep running in the background after their last window closes).
+    ``exe`` (e.g. "msedge.exe") narrows the search, which is much quicker
+    on Windows."""
     marker = f"--user-data-dir={profile}"
     if sys.platform == "win32":
         # The whole argument (a prefix would also match "...window-9000").
         pattern = re.sub(r"([\\.^$|?*+()\[\]{}])", r"\\\1", marker) + '("|\\s|$)'
-        script = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and "
+        where = f"-Filter \"Name = '{exe}'\" " if exe and re.fullmatch(r"[\w.-]+", exe) else ""
+        script = (f"Get-CimInstance Win32_Process {where}| Where-Object {{ $_.CommandLine -and "
                   "($_.CommandLine -match $env:PDFM_PROFILE_RE) } | "
                   "ForEach-Object { $_.ProcessId }")
+        started = time.monotonic()
         try:
             out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                                  capture_output=True, text=True, timeout=20,
                                  env={**os.environ, "PDFM_PROFILE_RE": pattern},
-                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
-        except (OSError, subprocess.TimeoutExpired):
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            _log(f"profile processes: {exc}")
             return []
-        return [int(p) for p in out.split() if p.isdigit()]
+        pids = [int(p) for p in out.stdout.split() if p.isdigit()]
+        _log(f"profile processes ({exe or 'any'}): {pids} in {time.monotonic() - started:.1f}s"
+             + (f"; stderr: {out.stderr.strip()[:200]}" if out.stderr.strip() else ""))
+        return pids
     pids = []
     for entry in Path("/proc").glob("[0-9]*/cmdline"):
         try:
@@ -1858,7 +1898,7 @@ def _profile_processes(profile):
     return pids
 
 
-def _close_browser(proc, profile):
+def _close_browser(proc, profile, exe=None):
     """Stop the browser that showed the app window once the window is gone."""
     try:
         proc.wait(timeout=1.5)  # usually it quits by itself
@@ -1870,7 +1910,7 @@ def _close_browser(proc, profile):
             proc.kill()
     # A browser started earlier with this profile (e.g. kept running in the
     # background by Edge) may still be there.
-    for pid in _profile_processes(profile):
+    for pid in _profile_processes(profile, exe):
         if pid == os.getpid():
             continue
         try:
@@ -1895,8 +1935,10 @@ def launch(open_paths=(), port=0):
     an Edge/Chrome app window, else a browser tab. Returns once closed. If
     the app is already running, it gets the files instead."""
     _startup.acquire()
+    _log(f"launch: {list(map(str, open_paths))} port {port}")
     try:
         if not port and forward_to_running_app(open_paths):
+            _log("launch: handed to the running copy")
             return
         # PDFM_WINDOW=desktop, app-window or browser uses only that kind of
         # window (for tests and troubleshooting).
