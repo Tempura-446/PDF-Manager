@@ -92,7 +92,13 @@ def debugging_ready():
 def app_page(browser):
     pages = [page for context in browser.contexts for page in context.pages]
     for page in pages:
-        if "#token=" in page.url or page.url.startswith("http://127.0.0.1:"):
+        # Ask the page: in WebView2, Playwright may still report the
+        # about:blank it attached to before the app's page loaded.
+        try:
+            href = page.evaluate("() => location.href")
+        except Exception:
+            continue
+        if "#token=" in href:
             return page
     return None
 
