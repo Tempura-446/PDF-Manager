@@ -636,6 +636,10 @@ async function load() {
   if (window.requestIdleCallback) requestIdleCallback(warmUp, { timeout: 2000 }); else setTimeout(warmUp, 1000);
 }
 
+// Saving with the computer's own dialogs in a browser window (static/files.js).
+let filesLib = null;
+import("/static/files.js").then((m) => { filesLib = m; }).catch(() => {});
+
 // ---- reader -----------------------------------------------------------------
 let reader = null;
 async function ensureReader() {
@@ -1202,8 +1206,18 @@ async function showResult(name, blob, resultId, note = "") {
       } catch (e) { showError(String(e.message || e)); }
     });
     actions.append(save);
+  } else if (filesLib && filesLib.canSave) {
+    // Edge or Chrome: the computer's own Save dialog (it needs a click).
+    const save = el("button", { class: "btn", type: "button" }, icon("download"), "Save…");
+    save.addEventListener("click", async () => {
+      try {
+        const saved = await filesLib.saveAs(blob, name);
+        if (saved) subEl.replaceChildren(el("span", { class: "saving" }, "Saved"), ` as ${saved}`);
+      } catch (e) { showError("Could not save: " + (e.message || e)); }
+    });
+    actions.append(save, el("a", { class: "btn secondary", href: lastUrl, download: name }, "Download"));
   } else {
-    actions.append(el("a", { class: "btn", href: lastUrl, download: name }, icon("download"), "Download"));
+    actions.append(el("a", { class: "btn", href: lastUrl, download: name, "data-auto": "" }, icon("download"), "Download"));
   }
   if (/\.pdf$/i.test(name)) {
     actions.append(el("button", { class: "btn secondary", type: "button", onclick: () => openInReader(new File([blob], name, { type: "application/pdf" })) }, icon("reader"), "Open in reader"));
@@ -1215,7 +1229,8 @@ async function showResult(name, blob, resultId, note = "") {
       note ? el("div", { class: "result-note" }, ...note.split("\n").map((line) => el("div", {}, line))) : null, actions));
   $("result").hidden = false;
   $("result").scrollIntoView({ behavior: "smooth", block: "nearest" });
-  if (!isDesktop()) actions.querySelector("a").click();
+  const auto = actions.querySelector("a[data-auto]");
+  if (auto) auto.click();  // browsers without a Save dialog: download straight away
   if (/\.pdf$/i.test(name)) {
     const body = new FormData();
     body.append("file", blob, name);

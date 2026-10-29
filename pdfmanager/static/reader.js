@@ -13,6 +13,7 @@
 // document to one of the app's tools.
 
 import { BASE, DOC_OPTIONS, loadPdfjs as loadLibrary } from "./pdfjs.js";
+import * as files from "./files.js";
 
 let pdfjs = null;   // pdf.js display API
 let viewer = null;  // pdf.js viewer components
@@ -998,7 +999,18 @@ export class Reader {
       } catch (e) { this.toast("Could not save: " + (e.message || e)); }
       return;
     }
-    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+    const blob = new Blob([bytes], { type: "application/pdf" });
+    if (files.canSave) {
+      try {
+        const saved = await files.saveAs(blob, name);
+        if (saved) this.toast("Saved as " + saved);
+        return;
+      } catch (e) {
+        if (e.name !== "SecurityError") { this.toast("Could not save: " + (e.message || e)); return; }
+        // not called from a click (e.g. Ctrl+S in some browsers): download instead
+      }
+    }
+    const url = URL.createObjectURL(blob);
     const a = el("a", { href: url, download: name });
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
