@@ -26,7 +26,7 @@ import zipfile
 from pathlib import Path
 
 from pdfmanager import __version__, core, progress
-from pdfmanager.appdata import data_dir
+from pdfmanager.appdata import data_dir, write_private
 
 REPO = "Tempura-446/PDF-Manager"
 API = "https://api.github.com"
@@ -55,13 +55,7 @@ def save_settings(**changes):
             data.pop(key, None)
         else:
             data[key] = value
-    target = _settings_file()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(target.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    os.replace(tmp, target)
-    if os.name == "posix":
-        os.chmod(target, 0o600)  # holds the token
+    write_private(_settings_file(), json.dumps(data, indent=2))  # holds the token
     return data
 
 

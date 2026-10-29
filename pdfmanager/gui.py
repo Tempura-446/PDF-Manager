@@ -13,6 +13,7 @@ import base64
 import email.parser
 import email.policy
 import hashlib
+import hmac
 import importlib.util
 import inspect
 import io
@@ -40,7 +41,7 @@ from pathlib import Path
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
                         forms, recipes, redact, scan, search, textedit, update)
-from pdfmanager.appdata import data_dir
+from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
 MAX_UPLOAD = 1024 * 1024 * 1024  # 1 GB
@@ -810,12 +811,8 @@ class RecentFiles:
 
     @classmethod
     def _save(cls, items):
-        target = cls._file()
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            tmp = target.with_name(target.name + ".tmp")
-            tmp.write_text(json.dumps(items[:cls.LIMIT], indent=1), encoding="utf-8")
-            os.replace(tmp, target)
+            write_private(cls._file(), json.dumps(items[:cls.LIMIT], indent=1))
         except OSError:
             pass  # a recent-files list isn't worth failing over
 
@@ -1209,9 +1206,11 @@ class Handler(BaseHTTPRequestHandler):
         open (see forward_to_running_app). It proves it's the same user
         with the secret from instance.json in the app's data folder."""
         data = json.loads(body or b"{}")
-        if not self.instance_secret or not secrets.compare_digest(
-                str(data.get("secret", "")), self.instance_secret):
+        nonce = str(data.get("nonce", ""))
+        if not self.instance_secret or not nonce or not secrets.compare_digest(
+                str(data.get("proof", "")), _proof(self.instance_secret, "open", nonce)):
             return self._error(HTTPStatus.FORBIDDEN, "not allowed")
+        proof = _proof(self.instance_secret, "answer", nonce)
         ids = []
         for path in data.get("paths") or []:
             try:
@@ -1226,12 +1225,11 @@ class Handler(BaseHTTPRequestHandler):
                 # thread, and the other launch only waits a few seconds
                 # before opening a second copy instead.
                 threading.Thread(target=raise_window, daemon=True).start()
-            return self._send(HTTPStatus.OK, {"handled": True})
+            return self._send(HTTPStatus.OK, {"handled": True, "proof": proof})
         url = f"http://127.0.0.1:{self.server.server_address[1]}/#token={self.token}"
         if ids:
             url += "&open=" + ",".join(ids)
-        return self._send(HTTPStatus.OK, {"url": url, "mode": self.instance_mode,
-                                          **(self.instance_extra or {})})
+        return self._send(HTTPStatus.OK, {"url": url, "mode": self.instance_mode, "proof": proof})
 
     def _events(self):
         """Long poll: events for the page (files handed over by another
@@ -1532,12 +1530,8 @@ def _register_instance(server, mode, **extra):
     handler.instance_extra = {k: str(v) for k, v in extra.items()}
     record = {"port": server.server_address[1], "pid": os.getpid(),
               "secret": handler.instance_secret, "mode": mode}
-    target = _instance_file()
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_name(target.name + f".{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(record), encoding="utf-8")
-        os.replace(tmp, target)
+        write_private(_instance_file(), json.dumps(record))
     except OSError:
         pass
     _startup.release()  # later launches can find this copy now
@@ -1565,7 +1559,10 @@ def forward_to_running_app(paths=()):
         port, secret = int(record["port"]), str(record["secret"])
     except (OSError, ValueError, KeyError, TypeError):
         return False
-    body = json.dumps({"secret": secret,
+    # Neither side sends the secret: each proves it knows it (anything else
+    # could be listening on that port after a crash left instance.json behind).
+    nonce = secrets.token_urlsafe(16)
+    body = json.dumps({"nonce": nonce, "proof": _proof(secret, "open", nonce),
                        "paths": [str(Path(p).resolve()) for p in paths]}).encode()
     request = urllib.request.Request(f"http://127.0.0.1:{port}/api/instance", data=body,
                                      headers={"Content-Type": "application/json",
@@ -1577,23 +1574,39 @@ def forward_to_running_app(paths=()):
             answer = json.loads(res.read())
     except (OSError, ValueError):
         return False  # not running any more (or something else has the port)
+    if not isinstance(answer, dict) or not secrets.compare_digest(
+            str(answer.get("proof", "")), _proof(secret, "answer", nonce)):
+        return False  # not PDF Manager
     if answer.get("handled"):
         return True
-    url = answer.get("url")
-    if not url:
+    url = str(answer.get("url") or "")
+    if not url.startswith(f"http://127.0.0.1:{port}/#token="):
         return False
-    if answer.get("mode") == "app-window" and answer.get("browser"):
-        try:
-            subprocess.Popen([answer["browser"], f"--app={url}",
-                              f"--user-data-dir={answer.get('profile', '')}",
-                              "--no-first-run", "--no-default-browser-check"],
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL)
-            return True
-        except OSError:
-            pass
+    if answer.get("mode") == "app-window":
+        # The same kind of window, with this computer's browser and the
+        # running copy's profile (both found here, not taken from the answer).
+        browser = find_app_browser()
+        if browser:
+            try:
+                subprocess.Popen([browser, f"--app={url}", f"--user-data-dir={_window_profile(port)}",
+                                  "--no-first-run", "--no-default-browser-check"],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+                return True
+            except OSError:
+                pass
     webbrowser.open(url)
     return True
+
+
+def _proof(secret, purpose, nonce):
+    """HMAC proof that a side knows the instance secret."""
+    return hmac.new(secret.encode(), f"{purpose} {nonce}".encode(), hashlib.sha256).hexdigest()
+
+
+def _window_profile(port):
+    """The browser profile of the app window served on ``port``."""
+    return data_dir() / ("window" if port == APP_PORT else f"window-{port}")
 
 
 class DesktopApi:
@@ -1786,7 +1799,7 @@ def run_app_window(port=0, open_paths=()):
     # A second copy of the app (on another port) gets a temporary profile of
     # its own, so each copy only ever closes its own browser.
     primary = server.server_address[1] == APP_PORT
-    profile = data_dir() / ("window" if primary else f"window-{server.server_address[1]}")
+    profile = _window_profile(server.server_address[1])
     try:
         profile.mkdir(parents=True, exist_ok=True)
         # PDFM_BROWSER_ARGS: more options for the browser (for tests and
@@ -1821,13 +1834,15 @@ def _profile_processes(profile):
     may keep running in the background after their last window closes)."""
     marker = f"--user-data-dir={profile}"
     if sys.platform == "win32":
+        # The whole argument (a prefix would also match "...window-9000").
+        pattern = re.sub(r"([\\.^$|?*+()\[\]{}])", r"\\\1", marker) + '("|\\s|$)'
         script = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and "
-                  "$_.CommandLine.Contains($env:PDFM_PROFILE) } | "
+                  "($_.CommandLine -match $env:PDFM_PROFILE_RE) } | "
                   "ForEach-Object { $_.ProcessId }")
         try:
             out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                                  capture_output=True, text=True, timeout=20,
-                                 env={**os.environ, "PDFM_PROFILE": marker},
+                                 env={**os.environ, "PDFM_PROFILE_RE": pattern},
                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
         except (OSError, subprocess.TimeoutExpired):
             return []
@@ -1835,7 +1850,8 @@ def _profile_processes(profile):
     pids = []
     for entry in Path("/proc").glob("[0-9]*/cmdline"):
         try:
-            if marker in entry.read_bytes().replace(b"\0", b" ").decode("utf-8", "replace"):
+            args = entry.read_bytes().decode("utf-8", "replace").split("\0")
+            if marker in args:
                 pids.append(int(entry.parent.name))
         except (OSError, ValueError):
             continue

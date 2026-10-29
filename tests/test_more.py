@@ -193,14 +193,17 @@ def test_files_are_handed_to_the_running_app(app, tmp_path, monkeypatch):
     ids = events["events"][0]["open"]
     assert len(ids) == 1
     assert call(base, token, f"/api/file/{ids[0]}")[2].startswith(b"%PDF")
-    # Edge window: the new launch opens a window on the running app.
+    # Edge window: the new launch opens a window on the running app, with
+    # the browser and profile it works out itself (nothing from the answer).
     launched = []
     monkeypatch.setattr(gui.subprocess, "Popen", lambda args, **kw: launched.append(args))
-    gui._register_instance(srv, "app-window", browser="/opt/edge", profile=tmp_path / "window")
+    monkeypatch.setattr(gui, "find_app_browser", lambda: "/opt/edge")
+    monkeypatch.setattr(gui, "data_dir", lambda: tmp_path)
+    gui._register_instance(srv, "app-window")
     assert gui.forward_to_running_app([pdf]) is True
     assert launched[0][0] == "/opt/edge" and launched[0][1].startswith("--app=http://127.0.0.1:")
     assert f"#token={token}&open=" in launched[0][1]
-    assert launched[0][2] == f"--user-data-dir={tmp_path / 'window'}"
+    assert launched[0][2] == f"--user-data-dir={tmp_path / f'window-{srv.server_address[1]}'}"
     # Browser tab: a new tab.
     opened = []
     monkeypatch.setattr(gui.webbrowser, "open", opened.append)
@@ -214,6 +217,101 @@ def test_handing_over_needs_the_secret(app):
     base, token, srv = app
     gui._register_instance(srv, "desktop")
     assert call(base, token, "/api/instance", {"secret": "guess", "paths": []})[0] == 403
+    assert call(base, token, "/api/instance", {"nonce": "n", "proof": "guess", "paths": []})[0] == 403
+    # the real proof works, and the answer proves the server knows the secret too
+    secret = srv.RequestHandlerClass.instance_secret
+    status, _, out = call(base, token, "/api/instance", {"nonce": "n", "proof": gui._proof(secret, "open", "n")})
+    assert status == 200 and json.loads(out)["proof"] == gui._proof(secret, "answer", "n")
+    assert "secret" not in out.decode()
+
+
+def test_an_impostor_on_the_port_is_ignored(tmp_path, monkeypatch):
+    """After a crash instance.json can name a port someone else now listens
+    on; its answers must not be acted on."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Impostor(BaseHTTPRequestHandler):
+        seen = []
+
+        def do_POST(self):
+            Impostor.seen.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            body = json.dumps({"url": "http://127.0.0.1:1/#token=x", "mode": "app-window",
+                               "browser": "/tmp/evil"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), Impostor)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setattr(gui, "data_dir", lambda: tmp_path)
+    (tmp_path / "instance.json").write_text(json.dumps({"port": srv.server_address[1], "pid": 1, "secret": "s3cret"}))
+    launched, opened = [], []
+    monkeypatch.setattr(gui.subprocess, "Popen", lambda args, **kw: launched.append(args))
+    monkeypatch.setattr(gui.webbrowser, "open", opened.append)
+    assert gui.forward_to_running_app([text_pdf(tmp_path / "a.pdf")]) is False
+    assert launched == [] and opened == []
+    assert "secret" not in Impostor.seen[0] and Impostor.seen[0]["proof"] != "s3cret"  # never sent
+    srv.shutdown()
+    srv.server_close()
+
+
+@pytest.mark.skipif(__import__("os").name != "posix", reason="file modes")
+def test_app_files_are_private(tmp_path, monkeypatch, app):
+    import os
+    import stat
+    from pdfmanager import appdata, search, update
+
+    private = lambda: appdata._private_dir(tmp_path / "home" / "pdf-manager")  # noqa: E731
+    folder = private()
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o700
+    base, token, srv = app
+    for module in (gui, update, search):
+        monkeypatch.setattr(module, "data_dir", private)
+    gui._register_instance(srv, "browser")
+    update.save_settings(github_token="ghp_x")
+    search._db().close()
+    gui.RecentFiles.add(text_pdf(tmp_path / "a.pdf"))
+    for name in ("instance.json", "settings.json", "search.sqlite", "recent.json"):
+        assert stat.S_IMODE((folder / name).stat().st_mode) == 0o600, name
+    assert not list(folder.glob("*.tmp"))
+    gui._unregister_instance(srv)
+
+
+def test_uninstaller_only_deletes_the_installers_folder(tmp_path, monkeypatch):
+    import sys
+    from pdfmanager import winsetup
+
+    reg = FakeRegistry()
+    monkeypatch.setitem(sys.modules, "winreg", reg)
+    monkeypatch.setattr(winsetup.sys, "platform", "win32")
+    monkeypatch.setattr(winsetup, "_folder", {winsetup.CSIDL_PROGRAMS: tmp_path / "S", winsetup.CSIDL_DESKTOPDIRECTORY: tmp_path / "D"}.get)
+    monkeypatch.setattr(winsetup, "_notify_shell", lambda: None)
+    monkeypatch.setattr(winsetup, "make_shortcut", lambda path, *a, **k: Path(path).parent.mkdir(parents=True, exist_ok=True) or Path(path).write_text("x"))
+    monkeypatch.setattr(winsetup, "data_dir", lambda: tmp_path / "data")
+    winsetup.install(tmp_path / "data" / "app")  # where the installer puts it
+    assert "Remove-Item -LiteralPath $app -Recurse" in (tmp_path / "data" / "app" / "uninstall.ps1").read_text(encoding="utf-8-sig")
+    winsetup.install(tmp_path / "src" / "venv")  # a hand-made environment somewhere else
+    script = (tmp_path / "src" / "venv" / "uninstall.ps1").read_text(encoding="utf-8-sig")
+    assert "Remove-Item -LiteralPath $app" not in script and "left for you" in script
+
+
+@pytest.mark.skipif(not __import__("pathlib").Path("/proc").is_dir(), reason="needs /proc")
+def test_profile_processes_match_the_whole_argument(tmp_path):
+    import subprocess
+    import sys
+
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", f"--user-data-dir={tmp_path / 'window-9000'}"])
+    try:
+        time.sleep(0.3)
+        assert other.pid in gui._profile_processes(tmp_path / "window-9000")
+        assert other.pid not in gui._profile_processes(tmp_path / "window")  # a prefix is not a match
+    finally:
+        other.kill()
+        other.wait()
 
 
 def test_stale_instance_file_is_ignored(app, tmp_path):

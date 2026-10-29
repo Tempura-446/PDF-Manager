@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from pdfmanager import __version__, appicon, core
+from pdfmanager.appdata import data_dir
 
 NAME = "PDF Manager"
 PROG_ID = "PDFManager.Document"
@@ -40,13 +41,19 @@ foreach ($key in @("HKCU:\Software\Classes\{prog_id}", "HKCU:\{app_key}", "HKCU:
 }}
 Remove-ItemProperty -Path "HKCU:\Software\Classes\.pdf\OpenWithProgids" -Name "{prog_id}" -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path "HKCU:\Software\RegisteredApplications" -Name "{name}" -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $app -Recurse -Force -ErrorAction SilentlyContinue
-if (Test-Path -LiteralPath $app) {{
+{remove_files}Start-Sleep -Seconds 4
+"""
+
+# Only a folder the installer made is deleted; a copy set up by hand in
+# some other folder keeps its files.
+REMOVE_FILES_PS1 = r"""Remove-Item -LiteralPath $app -Recurse -Force -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $app) {
     Write-Host "Some files could not be removed: $app"
-}} else {{
+} else {
     Write-Host "PDF Manager was removed. Your recipes and settings are kept in $env:LOCALAPPDATA\PDF Manager; delete that folder to remove them too."
-}}
-Start-Sleep -Seconds 4
+}
+"""
+KEEP_FILES_PS1 = r"""Write-Host "The shortcuts and Open with entries were removed. The program's files in $app are left for you to delete."
 """
 
 
@@ -240,9 +247,11 @@ def install(app_dir=None, desktop=True, open_with=True):
     app_dir = Path(app_dir or default_app_dir())
     app_dir.mkdir(parents=True, exist_ok=True)
     icon = appicon.save_ico(app_dir / "PDF Manager.ico")
+    ours = data_dir() in Path(app_dir).resolve().parents  # the installer's own folder
     (app_dir / "uninstall.ps1").write_text(UNINSTALL_PS1.format(
         app_dir=_ps(app_dir), prog_id=PROG_ID, app_key=APP_KEY, uninstall_key=UNINSTALL_KEY,
-        name=_ps(NAME), shortcuts=", ".join(f'"{_ps(p)}"' for p in shortcut_paths(True))),
+        name=_ps(NAME), shortcuts=", ".join(f'"{_ps(p)}"' for p in shortcut_paths(True)),
+        remove_files=REMOVE_FILES_PS1 if ours else KEEP_FILES_PS1),
         encoding="utf-8-sig")
     exe = pythonw()
     done = []

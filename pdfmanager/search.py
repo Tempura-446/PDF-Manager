@@ -12,14 +12,14 @@ import threading
 from pathlib import Path
 
 from pdfmanager import core, organize, progress
-from pdfmanager.appdata import data_dir
+from pdfmanager.appdata import data_dir, touch_private
 
 _lock = threading.Lock()
 
 
 def _db():
     target = data_dir() / "search.sqlite"
-    target.parent.mkdir(parents=True, exist_ok=True)
+    touch_private(target)  # it holds the text of every PDF searched
     conn = sqlite3.connect(target, timeout=30)
     conn.execute("CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, size INTEGER, "
                  "mtime REAL, pages INTEGER, error TEXT)")
