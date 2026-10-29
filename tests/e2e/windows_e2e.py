@@ -186,10 +186,25 @@ def run(mode):
         second = make_pdf(tmp / "second.pdf", pages=2)
         handed = start(mode, second)
         assert handed.wait(60) == 0, "the second launch should hand the file over and end"
-        page.wait_for_function(
-            "() => [...document.querySelectorAll('.rd-doctab, .rd-title')].some((e) => e.textContent.includes('second.pdf'))",
-            timeout=30000)
-        log("second launch handed its file to the running app")
+        # Its own window opens the file in a new tab; with the Edge window the
+        # running app opens it in a new window of its own.
+        shows_second = ("() => [...document.querySelectorAll('.rd-doctab, .rd-title')]"
+                        ".some((e) => e.textContent.includes('second.pdf'))")
+
+        def window_with_second():
+            for pg in [pg for c in browser.contexts for pg in c.pages]:
+                try:
+                    if pg.evaluate(shows_second):
+                        return pg
+                except Exception:
+                    continue  # still loading
+            return None
+
+        shown = wait_for(window_with_second, 45, "the second file in the reader")
+        log("second launch handed its file to the running app",
+            "(same window)" if shown == page else "(new window)")
+        if shown != page:
+            shown.close()
 
         if mode == "app-window":
             # Restarting (as after an update): this copy ends, a new one opens.

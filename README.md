@@ -141,7 +141,8 @@ closed.
 - Light and dark themes follow your system, or pick one at the bottom of
   the sidebar.
 - Only **one copy** runs: opening a PDF from Explorer (or starting the app
-  again) brings the running app to the front with the file in the reader.
+  again) brings the running app to the front with the file in the reader
+  (in the Edge window, the file opens in a new window of the running app).
 - **Updates:** when there's a newer version on GitHub, an **Update** button
   appears in the sidebar; it downloads and installs it and starts the app
   again. The repository is private, so the check needs a GitHub token that
