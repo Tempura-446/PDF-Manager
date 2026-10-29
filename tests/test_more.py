@@ -679,3 +679,135 @@ def test_windows_shortcuts_and_registry_for_real(tmp_path, monkeypatch):
     assert not (tmp_path / "Start" / "PDF Manager.lnk").exists()
     with pytest.raises(FileNotFoundError):
         winreg.OpenKey(winreg.HKEY_CURRENT_USER, winsetup.UNINSTALL_KEY)
+
+
+# -- updates --------------------------------------------------------------------------------------
+
+class FakeGitHub:
+    """Answers update.py's requests like GitHub's API."""
+
+    def __init__(self, version="9.0.0", status=200, zipball=b""):
+        self.version, self.status, self.zipball, self.requests = version, status, zipball, []
+
+    real = staticmethod(urllib.request.urlopen)
+
+    def __call__(self, req, timeout=None):
+        import urllib.error
+
+        if not getattr(req, "full_url", str(req)).startswith("https://api.github.com"):
+            return self.real(req) if timeout is None else self.real(req, timeout=timeout)
+        self.requests.append(req)
+        if self.status != 200:
+            raise urllib.error.HTTPError(req.full_url, self.status, "Not Found", {}, None)
+        url = req.full_url
+        if url.endswith("/repos/Tempura-446/PDF-Manager"):
+            body = json.dumps({"default_branch": "main"}).encode()
+        elif "/contents/pdfmanager/__init__.py?ref=main" in url:
+            body = f'"""PDF Manager."""\n\n__version__ = "{self.version}"\n'.encode()
+        elif url.endswith("/zipball/main"):
+            body = self.zipball
+        else:
+            raise AssertionError(url)
+        return io.BytesIO(body)
+
+
+@pytest.fixture
+def updates(tmp_path, monkeypatch):
+    from pdfmanager import appdata, update
+
+    monkeypatch.setattr(update, "data_dir", lambda: tmp_path / "appdata")
+    github = FakeGitHub()
+    monkeypatch.setattr(update.urllib.request, "urlopen", github)
+    return update, github
+
+
+def test_update_check(updates):
+    from pdfmanager import __version__
+
+    update, github = updates
+    info = update.check()
+    assert info["current"] == __version__ and info["latest"] == "9.0.0" and info["available"]
+    assert info["error"] is None and info["how"] == "source"  # this test runs from a checkout
+    asked = len(github.requests)
+    assert update.check()["available"] and len(github.requests) == asked  # remembered for a while
+    github.version = __version__
+    assert not update.check(force=True)["available"]
+    # a private repository without a token
+    github.status = 404
+    info = update.check(force=True)
+    assert not info["available"] and "add a GitHub token in Settings" in info["error"]
+    update.save_settings(github_token="ghp_secret")
+    assert "the token can't read the repository" in update.check(force=True)["error"]
+    req = github.requests[-1]
+    assert req.unredirected_hdrs["Authorization"] == "Bearer ghp_secret"
+    assert "Authorization" not in req.headers  # not sent on to other servers after a redirect
+    # turned off: no requests
+    update.save_settings(check_updates=False)
+    (update.data_dir() / "update.json").unlink()
+    asked = len(github.requests)
+    assert update.check()["latest"] is None and len(github.requests) == asked
+    assert update.parse_version("0.10.1") > update.parse_version("0.9.9")
+
+
+def test_update_install(updates, tmp_path, monkeypatch):
+    import zipfile
+
+    update, github = updates
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("Tempura-446-PDF-Manager-abc123/pyproject.toml", "[project]\n")
+        zf.writestr("Tempura-446-PDF-Manager-abc123/pdfmanager/__init__.py", '__version__ = "9.0.0"\n')
+    github.zipball = buf.getvalue()
+    with pytest.raises(core.PdfManagerError, match="git pull"):
+        update.install()  # running from a checkout
+    monkeypatch.setattr(update, "how_installed", lambda: "pip")
+    ran = []
+
+    def fake_run(cmd, **kw):
+        ran.append(cmd)
+        assert (Path(cmd[-1].replace("[app]", "")) / "pyproject.toml").exists()
+        return type("Done", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(update.subprocess, "run", fake_run)
+    assert update.install(python="py") == "9.0.0"
+    assert ran[0][:5] == ["py", "-m", "pip", "install", "--upgrade"]
+    assert ran[0][-1].split("Tempura-446-PDF-Manager-abc123")[1] in ("", "[app]")
+    monkeypatch.setattr(update.subprocess, "run", lambda cmd, **kw: type(
+        "Failed", (), {"returncode": 1, "stdout": "", "stderr": "ERROR: no space left"})())
+    with pytest.raises(core.PdfManagerError, match="no space left"):
+        update.install()
+    # a download with paths leading outside its folder is refused
+    bad = io.BytesIO()
+    with zipfile.ZipFile(bad, "w") as zf:
+        zf.writestr("../evil.txt", "x")
+    with pytest.raises(core.PdfManagerError, match="unsafe"):
+        update._extract(bad.getvalue(), tmp_path / "x")
+
+
+def test_settings_and_update_endpoints(app, updates):
+    base, token, srv = app
+    update, github = updates
+    status, _, data = call(base, token, "/api/settings")
+    assert status == 200 and json.loads(data) == {"repo": "Tempura-446/PDF-Manager", "token_set": False,
+                                                 "check": True, "how": "source"}
+    status, _, data = call(base, token, "/api/settings", {"token": "ghp_x", "check": False})
+    assert json.loads(data)["token_set"] and "ghp_x" not in data.decode()
+    assert update.settings()["github_token"] == "ghp_x" and update.settings()["check_updates"] is False
+    assert call(base, token, "/api/settings", {"repo": "not a repo"})[0] == 400
+    call(base, token, "/api/settings", {"clear_token": True, "check": True})
+    assert "github_token" not in update.settings() and "check_updates" not in update.settings()
+    status, _, data = call(base, token, "/api/update/check", {})
+    info = json.loads(data)
+    assert info["available"] and info["latest"] == "9.0.0" and info["can_restart"] is False
+    status, _, data = call(base, token, "/api/update/restart", {})
+    assert status == 400 and "open it again" in json.loads(data)["error"]
+
+
+def test_restart_ends_the_wait():
+    class H:
+        pages, closed_at, last_seen, quit_requested = {}, None, time.monotonic(), False
+
+    threading.Timer(0.3, lambda: setattr(H, "quit_requested", True)).start()
+    started = time.monotonic()
+    gui.wait_until_closed(H, poll=0.05)
+    assert time.monotonic() - started < 2

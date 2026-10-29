@@ -39,7 +39,7 @@ from importlib import resources
 from pathlib import Path
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
-                        forms, recipes, redact, scan, search, textedit)
+                        forms, recipes, redact, scan, search, textedit, update)
 from pdfmanager.appdata import data_dir
 from pdfmanager.pageranges import PageRangeError
 
@@ -892,6 +892,8 @@ class Handler(BaseHTTPRequestHandler):
     instance_mode = None
     instance_extra = None
     bring_to_front = None
+    quit_app = None  # closes the pywebview window (to restart after an update)
+    quit_requested = False  # makes wait_until_closed return
     opened = None  # OpenFiles
     # pywebview's JavaScript bridge needs eval(); only allowed in the desktop window.
     allow_eval = False
@@ -964,6 +966,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._recent()
         if path == "/api/events":
             return self._events()
+        if path == "/api/settings":
+            return self._send(HTTPStatus.OK, update.public_settings())
+        if path == "/api/update":
+            return self._send(HTTPStatus.OK, {**update.check(), "can_restart": self._can_restart()})
         self._error(HTTPStatus.NOT_FOUND, "not found")
 
     def _static(self, rel):
@@ -1046,6 +1052,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._form_fields(body)
             if path == "/api/text/edit":
                 return self._text_edit(body)
+            if path == "/api/settings":
+                return self._save_settings(body)
+            if path == "/api/update/check":
+                return self._send(HTTPStatus.OK, {**update.check(force=True),
+                                                  "can_restart": self._can_restart()})
+            if path == "/api/update/install":
+                return self._job_or_now(lambda: {"json": {"version": update.install()}})
+            if path == "/api/update/restart":
+                return self._restart()
             if path == "/api/recipes/save":
                 data = json.loads(body or b"{}")
                 saved = recipes.save(data.get("name"), data.get("steps"))
@@ -1254,6 +1269,39 @@ class Handler(BaseHTTPRequestHandler):
             found = forms.existing_fields(path, fields.get("password") or None)
         return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})
 
+    def _save_settings(self, body):
+        data = json.loads(body or b"{}")
+        changes = {}
+        if "repo" in data:
+            repo = str(data["repo"] or "").strip().strip("/")
+            if repo and not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+                raise UserError("the repository should look like owner/name")
+            changes["update_repo"] = "" if repo == update.REPO else repo
+        if data.get("token"):
+            changes["github_token"] = str(data["token"]).strip()
+        if data.get("clear_token"):
+            changes["github_token"] = ""
+        if "check" in data:
+            changes["check_updates"] = None if data["check"] else False
+        update.save_settings(**changes)
+        return self._send(HTTPStatus.OK, update.public_settings())
+
+    def _can_restart(self):
+        """Can this copy close itself and start again (after an update)?"""
+        mode = type(self).instance_mode
+        return mode in ("app-window", "browser") or (mode == "desktop" and type(self).quit_app is not None)
+
+    def _restart(self):
+        """Start the app again: a helper waits for this copy to end."""
+        cls = type(self)
+        if not self._can_restart():
+            raise UserError("close PDF Manager and open it again to use the new version")
+        update.restart_after(os.getpid())
+        cls.quit_requested = True
+        if cls.instance_mode == "desktop":
+            threading.Timer(0.5, cls.quit_app).start()  # once this answer has been sent
+        return self._send(HTTPStatus.OK, {"restarting": True})
+
     def _text_edit(self, body):
         """Change words on the reader's pages; sends back the changed PDF."""
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
@@ -1383,6 +1431,8 @@ def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5
         pages = {}
     while True:
         time.sleep(poll)
+        if getattr(handler, "quit_requested", False):
+            return  # restarting after an update
         now = time.monotonic()
         for page, seen in list(pages.items()):
             if now - seen > idle:
@@ -1587,6 +1637,7 @@ def run_desktop(port=0, open_paths=()):
                                        min_size=(400, 560), background_color="#f6f6f3")
         api._window = window
         handler.bring_to_front = lambda: _raise_window(window)
+        handler.quit_app = lambda: window.destroy()
         # Keep the window's cache and settings between launches (pywebview
         # otherwise starts every time like a private browser window).
         options = {}

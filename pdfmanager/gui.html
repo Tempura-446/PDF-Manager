@@ -106,6 +106,26 @@ nav {
 .tools .none { color: var(--faint); font-size: 14px; padding: 8px 10px; }
 .nav-foot { border-top: 1px solid var(--border); padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: var(--muted); }
 .nav-foot select { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 2px 4px; font-size: 13px; }
+.nav-foot .chip-btn { box-shadow: none; }
+.update-btn { margin: 0 14px 10px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent)); color: var(--accent); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.update-btn:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.update-btn svg { width: 16px; height: 16px; }
+.app-dialog { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); padding: 0; width: min(520px, calc(100vw - 32px)); box-shadow: 0 20px 60px rgb(0 0 0 / .3); }
+.app-dialog::backdrop { background: rgb(0 0 0 / .35); }
+.app-dialog form { padding: 22px 24px; display: flex; flex-direction: column; gap: 10px; }
+.app-dialog h2 { margin: 0; font-size: 18px; }
+.app-dialog h3 { margin: 8px 0 0; font-size: 14px; }
+.app-dialog p { margin: 0; font-size: 14px; }
+.dlg-version, .dlg-hint { color: var(--muted); font-size: 13px !important; line-height: 1.45; }
+.dlg-check { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.dlg-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.dlg-field em { font-style: normal; color: var(--ok, #15803d); }
+.dlg-field input { padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; }
+.dlg-field input:focus { border-color: var(--focus); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 20%, transparent); }
+.dlg-status { min-height: 1.3em; font-size: 13.5px !important; }
+.dlg-status.err { color: var(--err); }
+.dlg-buttons { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.link-btn { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
 .mobile-picker { display: none; }
 
 /* ---- Main ---- */
@@ -461,9 +481,15 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
     </div>
     <select class="mobile-picker" id="picker" aria-label="Choose a tool"></select>
     <div class="tools" id="tools"></div>
+    <button class="update-btn" id="update-btn" type="button" hidden>
+      <svg class="i" viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg><span id="update-label">Update available</span>
+    </button>
     <div class="nav-foot">
       <label for="theme">Theme</label>
       <select id="theme"><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+      <button class="chip-btn" id="settings-btn" type="button" title="Settings" aria-label="Settings">
+        <svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
     </div>
   </nav>
 
@@ -540,6 +566,43 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
     </div></div>
   </main>
 </div>
+
+<dialog class="app-dialog" id="settings-dialog" aria-labelledby="settings-title">
+  <form method="dialog" id="settings-form">
+    <h2 id="settings-title">Settings</h2>
+    <p class="dlg-version" id="settings-version"></p>
+    <h3>Updates</h3>
+    <label class="dlg-check"><input type="checkbox" id="set-check"> Check for new versions when PDF Manager starts</label>
+    <label class="dlg-field"><span>GitHub repository</span><input type="text" id="set-repo" spellcheck="false" autocomplete="off" placeholder="owner/name"></label>
+    <label class="dlg-field"><span>GitHub token <em id="set-token-state"></em></span>
+      <input type="password" id="set-token" autocomplete="off" spellcheck="false" placeholder="paste a token to change it"></label>
+    <p class="dlg-hint">The repository is private, so checking for updates needs a token that can read it:
+      on GitHub, <em>Settings → Developer settings → Fine-grained tokens</em>, give it access to this repository
+      with <em>Contents: Read-only</em>. It's kept on this computer only.
+      <button type="button" class="link-btn" id="set-token-clear">Forget the token</button></p>
+    <p class="dlg-status" id="set-status" aria-live="polite"></p>
+    <div class="dlg-buttons">
+      <button type="button" class="btn secondary" id="set-check-now">Check now</button>
+      <span style="flex:1"></span>
+      <button type="button" class="btn secondary" value="cancel" id="set-cancel">Close</button>
+      <button type="submit" class="btn" id="set-save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="app-dialog" id="update-dialog" aria-labelledby="update-title">
+  <form method="dialog">
+    <h2 id="update-title">Update PDF Manager</h2>
+    <p id="update-text"></p>
+    <span class="job-progress" id="update-progress" hidden role="progressbar" aria-label="Progress"><span></span></span>
+    <p class="dlg-status" id="update-status" aria-live="polite"></p>
+    <div class="dlg-buttons">
+      <span style="flex:1"></span>
+      <button type="button" class="btn secondary" id="update-later">Later</button>
+      <button type="button" class="btn" id="update-go">Update now</button>
+    </div>
+  </form>
+</dialog>
 
 <script>
 "use strict";
@@ -655,6 +718,7 @@ async function load() {
   }
   $("picker").addEventListener("change", (e) => select(e.target.value));
   listen();
+  setTimeout(checkForUpdates, 4000);
   const openIds = (new URLSearchParams(location.hash.slice(1)).get("open") || "").split(",").filter(Boolean);
   if (openIds.length) {
     await openInReaderById(openIds);
@@ -1408,6 +1472,114 @@ $("cancel").addEventListener("click", async () => {
 $("run").addEventListener("click", () => run(false));
 $("preview").addEventListener("click", () => run(true));
 
+// ---- settings and updates ---------------------------------------------------------
+// The app checks GitHub for a newer version (at most twice a day); an
+// "Update" button appears in the sidebar when there is one.
+const jsonApi = async (path, data) => (await api(path, data === undefined ? {} : {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })).json();
+let updateInfo = null;
+function showUpdate(info) {
+  updateInfo = info;
+  $("update-btn").hidden = !info.available;
+  if (info.available) $("update-label").textContent = `Update to ${info.latest}`;
+}
+async function checkForUpdates() {
+  try { showUpdate(await jsonApi("/api/update")); } catch (e) { /* offline: try again next time */ }
+}
+function updateStatus(id, text, error = false) { $(id).textContent = text; $(id).classList.toggle("err", error); }
+
+async function openSettings() {
+  const s = await jsonApi("/api/settings");
+  $("settings-version").textContent = `You have version ${$("version").textContent.replace("Version ", "")}` +
+    ({ source: " (running from a source folder: update it with git pull)", frozen: " (the standalone app: download a new one to update it)" }[s.how] || ".");
+  $("set-check").checked = s.check;
+  $("set-repo").value = s.repo;
+  $("set-token").value = "";
+  $("set-token-state").textContent = s.token_set ? "· saved" : "";
+  $("set-token-clear").hidden = !s.token_set;
+  updateStatus("set-status", "");
+  $("settings-dialog").showModal();
+}
+async function saveSettings() {
+  const data = { check: $("set-check").checked, repo: $("set-repo").value.trim() };
+  if ($("set-token").value.trim()) data.token = $("set-token").value.trim();
+  const s = await jsonApi("/api/settings", data);
+  $("set-token").value = "";
+  $("set-token-state").textContent = s.token_set ? "· saved" : "";
+  $("set-token-clear").hidden = !s.token_set;
+  return s;
+}
+$("settings-btn").addEventListener("click", () => openSettings().catch((e) => showError(e.message)));
+$("set-cancel").addEventListener("click", () => $("settings-dialog").close());
+$("settings-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try { await saveSettings(); $("settings-dialog").close(); checkForUpdates(); }
+  catch (err) { updateStatus("set-status", err.message, true); }
+});
+$("set-token-clear").addEventListener("click", async () => {
+  try { await jsonApi("/api/settings", { clear_token: true }); $("set-token-state").textContent = ""; $("set-token-clear").hidden = true; updateStatus("set-status", "The token was removed."); }
+  catch (err) { updateStatus("set-status", err.message, true); }
+});
+$("set-check-now").addEventListener("click", async () => {
+  updateStatus("set-status", "Checking…");
+  try {
+    await saveSettings();
+    const info = await jsonApi("/api/update/check", {});
+    showUpdate(info);
+    if (info.error) updateStatus("set-status", "Couldn't check: " + info.error, true);
+    else if (info.available) updateStatus("set-status", `Version ${info.latest} is available — use the Update button in the sidebar.`);
+    else updateStatus("set-status", `You have the newest version (${info.latest}).`);
+  } catch (err) { updateStatus("set-status", err.message, true); }
+});
+
+$("update-btn").addEventListener("click", () => {
+  const info = updateInfo;
+  if (!info) return;
+  $("update-text").textContent = info.how === "pip"
+    ? `Version ${info.latest} is available (you have ${info.current}). It's downloaded from GitHub and installed, then PDF Manager starts again. Save your work in the reader first.`
+    : info.how === "source" ? `Version ${info.latest} is available (you have ${info.current}). This copy runs from a source folder: update it with git pull.`
+    : `Version ${info.latest} is available (you have ${info.current}). Download the new standalone app from GitHub to update.`;
+  $("update-go").hidden = info.how !== "pip";
+  $("update-go").disabled = false;
+  $("update-later").textContent = info.how === "pip" ? "Later" : "Close";
+  $("update-progress").hidden = true;
+  updateStatus("update-status", "");
+  $("update-dialog").showModal();
+});
+$("update-later").addEventListener("click", () => $("update-dialog").close());
+$("update-go").addEventListener("click", async () => {
+  if (reader && reader.hasUnsavedChanges() && !confirm("The reader has changes that haven't been saved. Update anyway?")) return;
+  const go = $("update-go"), bar = $("update-progress");
+  go.disabled = true; $("update-later").disabled = true; bar.hidden = false;
+  try {
+    const { job } = await (await api("/api/update/install", { method: "POST", headers: { "X-Pdfm-Async": "1" } })).json();
+    let state;
+    for (let wait = 300; ; wait = Math.min(wait * 1.4, 1000)) {
+      await new Promise((r) => setTimeout(r, wait));
+      state = await (await api(`/api/job/${job}`)).json();
+      if (state.message) updateStatus("update-status", state.message);
+      bar.firstElementChild.style.width = `${Math.max(8, Math.round(state.fraction * 100))}%`;
+      if (state.state !== "running") break;
+    }
+    const { version } = await (await api(`/api/job/${job}/result`)).json();  // throws with the error if it failed
+    bar.firstElementChild.style.width = "100%";
+    if (!updateInfo.can_restart) {
+      updateStatus("update-status", `Version ${version} is installed. Close PDF Manager and open it again to use it.`);
+      $("update-later").disabled = false; $("update-later").textContent = "Close"; go.hidden = true;
+      return;
+    }
+    updateStatus("update-status", `Version ${version} is installed. Starting it…`);
+    restarting = true;
+    await api("/api/update/restart", { method: "POST" });
+    // A browser tab can't close itself: say where the new copy is.
+    setTimeout(() => updateStatus("update-status", "PDF Manager has started again in a new window. You can close this one."), 8000);
+  } catch (e) {
+    updateStatus("update-status", "The update didn't work: " + (e.message || e), true);
+    go.disabled = false; $("update-later").disabled = false;
+  }
+});
+let restarting = false;
+
 // Tell the server the page is still open; it shuts down some time after the
 // last window running the app has closed.
 const ping = () => { if (token) api("/api/ping", { method: "POST" }).catch(() => {}); };
@@ -1415,7 +1587,7 @@ const ping = () => { if (token) api("/api/ping", { method: "POST" }).catch(() =>
 window.addEventListener("pagehide", () => { if (token) navigator.sendBeacon(`/api/bye?token=${encodeURIComponent(token)}&page=${pageId}`); });
 
 // Warn before closing the window with unsaved changes in the reader.
-window.addEventListener("beforeunload", (e) => { if (reader && reader.hasUnsavedChanges()) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("beforeunload", (e) => { if (!restarting && reader && reader.hasUnsavedChanges()) { e.preventDefault(); e.returnValue = ""; } });
 
 // Files handed over by another launch of the app (e.g. a PDF opened from
 // Explorer while the app is already running) arrive as events.
