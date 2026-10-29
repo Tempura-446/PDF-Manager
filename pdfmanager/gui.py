@@ -39,7 +39,7 @@ from importlib import resources
 from pathlib import Path
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
-                        forms, recipes, redact, scan, search)
+                        forms, recipes, redact, scan, search, textedit)
 from pdfmanager.appdata import data_dir
 from pdfmanager.pageranges import PageRangeError
 
@@ -1044,6 +1044,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._redact_find(body)
             if path == "/api/form/fields":
                 return self._form_fields(body)
+            if path == "/api/text/edit":
+                return self._text_edit(body)
             if path == "/api/recipes/save":
                 data = json.loads(body or b"{}")
                 saved = recipes.save(data.get("name"), data.get("steps"))
@@ -1251,6 +1253,25 @@ class Handler(BaseHTTPRequestHandler):
             path.write_bytes(uploads[0][2])
             found = forms.existing_fields(path, fields.get("password") or None)
         return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})
+
+    def _text_edit(self, body):
+        """Change words on the reader's pages; sends back the changed PDF."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        try:
+            edits = json.loads(fields.get("edits") or "[]")
+        except ValueError:
+            raise UserError("the changes are damaged; make them again") from None
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "edited.pdf"
+            src.write_bytes(uploads[0][2])
+            textedit.edit_text(src, out, edits, password)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)  # stays protected
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf")
 
     def _inspect(self, body):
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)

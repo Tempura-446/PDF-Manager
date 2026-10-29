@@ -483,3 +483,68 @@ def test_cli_and_app_form_fields(tmp_path, capsys, app):
     status, _, res = call(base, token, "/api/form/fields", body, headers)
     assert status == 200
     assert [f["name"] for f in json.loads(res)["fields"]["1"]] == ["Name", "Checkbox 1"]
+
+
+# -- changing words on a page ---------------------------------------------------------------------
+
+def edit_pdf(path):
+    c = canvas.Canvas(str(path), pagesize=A4)
+    c.setFillColorRGB(0.85, 0.92, 1)
+    c.rect(0, 600, 595, 242, fill=1, stroke=0)
+    c.setFillColorRGB(0.8, 0, 0)
+    c.setFont("Times-Bold", 18)
+    c.drawString(72, 760, "Invoice for March")
+    c.setFillColorRGB(0, 0, 0)
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 700, "Total due: 1,200.00 EUR")
+    c.save()
+    return path
+
+
+def test_edit_text(tmp_path):
+    import pypdfium2 as pdfium
+    from pdfmanager import textedit
+
+    src = edit_pdf(tmp_path / "invoice.pdf")
+    out = tmp_path / "edited.pdf"
+    assert textedit.edit_text(src, out, [
+        {"page": 1, "rect": [72, 755, 230, 775], "text": "Invoice for April"},
+        {"page": 1, "rect": [72, 697, 200, 711], "text": ""},  # just cover it
+        {"page": 1, "rect": [300, 300, 400, 320], "text": "New words"},  # nothing there before
+    ]) == 3
+    doc = pdfium.PdfDocument(str(out))
+    page = doc[0]
+    text = page.get_textpage().get_text_range()
+    assert "Invoice for April" in text and "New words" in text
+    assert "Invoice for March" in text  # still underneath, as the tool says
+    image = page.render(scale=1).to_pil().convert("RGB")
+    # the new title is red like the old one
+    reds = [image.getpixel((x, 842 - 763)) for x in range(72, 230)]
+    assert any(r > 150 and g < 60 and b < 60 for r, g, b in reds)
+    # the covered total is gone from view: the line is all background colour
+    row = {image.getpixel((x, 842 - 703)) for x in range(72, 200)}
+    assert row == {image.getpixel((60, 842 - 703))}
+    doc.close()
+    # the new title uses the same kind of font, size and colour
+    from pypdf import PdfReader as Reader
+    fonts = Reader(out).pages[0]["/Resources"]["/Font"]
+    assert any(f.get_object()["/BaseFont"] == "/Times-Bold" for f in fonts.values())
+    with pytest.raises(core.PdfManagerError, match="page 2 doesn't exist"):
+        textedit.edit_text(src, out, [{"page": 2, "rect": [0, 0, 1, 1], "text": "x"}])
+    with pytest.raises(core.PdfManagerError, match="no changes"):
+        textedit.edit_text(src, out, [])
+
+
+def test_edit_text_endpoint_keeps_the_password(app, tmp_path):
+    base, token, _ = app
+    src = edit_pdf(tmp_path / "invoice.pdf")
+    core.encrypt(src, tmp_path / "locked.pdf", "secret")
+    edits = json.dumps([{"page": 1, "rect": [72, 755, 230, 775], "text": "Invoice for May"}])
+    body, headers = multipart({"password": "secret", "edits": edits}, [("file", tmp_path / "locked.pdf")])
+    status, res_headers, data = call(base, token, "/api/text/edit", body, headers)
+    assert status == 200 and res_headers["Content-Type"] == "application/pdf"
+    reader = PdfReader(io.BytesIO(data))
+    assert reader.is_encrypted and reader.decrypt("secret")
+    assert "Invoice for May" in reader.pages[0].extract_text()
+    body, headers = multipart({"password": "wrong", "edits": edits}, [("file", tmp_path / "locked.pdf")])
+    assert call(base, token, "/api/text/edit", body, headers)[0] == 400

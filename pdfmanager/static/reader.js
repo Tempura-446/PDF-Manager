@@ -58,6 +58,7 @@ const ICON = {
   draw: '<path d="M3 17c3-3 5-9 8-9s1 8 4 8 4-4 6-6"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
   sign: '<path d="M3 17c2-1 3-5 5-5s0 5 2 5 3-6 5-6 1 6 3 6 2-2 3-2"/><path d="M3 21h18"/>',
+  edittext: '<path d="M4 7V5h11v2M9.5 5v13M7 18h4"/><path d="m14 20 6.5-6.5-2-2L12 18v2z"/>',
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
   redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
@@ -173,7 +174,9 @@ export class Reader {
     this.annotTools = [
       tool("pointer", "Select", "NONE"), tool("highlight", "Highlight", "HIGHLIGHT"), tool("text", "Text", "FREETEXT"),
       tool("draw", "Draw", "INK"), tool("image", "Picture", "STAMP"),
+      tool("edittext", "Edit text", "EDITTEXT"),
     ];
+    this.annotTools.at(-1).title = "Change words on the page: click a line of text";
     this.signBtn = el("button", { class: "rd-btn rd-tool", type: "button", title: "Add your signature", html: svg("sign") + "<span>Sign</span>" });
     this.swatches = COLORS.map(([name, ink, mark], i) => el("button", { class: "rd-swatch", type: "button", title: name, "aria-label": name, "aria-pressed": String(i === 1),
       style: `--ink:${ink};--mark:${mark}`, "data-index": i }));
@@ -316,7 +319,7 @@ export class Reader {
     this.signBtn.addEventListener("click", () => this.sign());
     for (const sw of this.swatches) sw.addEventListener("click", () => this.#setColor(+sw.dataset.index));
     this.sizeSelect.addEventListener("change", () => this.#setSize(+this.sizeSelect.value));
-    this.undoBtn.addEventListener("click", () => this.uiManager?.undo());
+    this.undoBtn.addEventListener("click", () => (this.textEditMode ? this.#undoTextEdit() : this.uiManager?.undo()));
     this.redoBtn.addEventListener("click", () => this.uiManager?.redo());
     this.deleteBtn.addEventListener("click", () => this.uiManager?.delete());
     this.annotSaveBtn.addEventListener("click", () => this.saveCopy());
@@ -352,7 +355,7 @@ export class Reader {
     // Hand tool: drag to scroll.
     let drag = null;
     this.container.addEventListener("pointerdown", (e) => {
-      if (!this.container.classList.contains("hand") || e.button !== 0 || e.target.closest("a, input, textarea, select, button")) return;
+      if (!this.container.classList.contains("hand") || this.textEditMode || e.button !== 0 || e.target.closest("a, input, textarea, select, button")) return;
       drag = { x: e.clientX, y: e.clientY, left: this.container.scrollLeft, top: this.container.scrollTop };
       this.container.classList.add("grabbing");
       this.container.setPointerCapture(e.pointerId);
@@ -367,6 +370,9 @@ export class Reader {
     this.container.addEventListener("pointerup", endDrag);
     this.container.addEventListener("pointercancel", endDrag);
 
+    // Edit text tool: click a line of text to change it.
+    this.container.addEventListener("click", (e) => this.#textClick(e), true);
+
     document.addEventListener("keydown", (e) => this.#onKey(e));
   }
 
@@ -379,6 +385,7 @@ export class Reader {
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
     if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); this.print(); return; }
     if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); this.saveCopy(); return; }
+    if (mod && e.key.toLowerCase() === "z" && this.textEditMode && !isTyping(e)) { e.preventDefault(); this.#undoTextEdit(); return; }
     if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); this.pdfViewer.increaseScale(); return; }
     if (mod && e.key === "-") { e.preventDefault(); this.pdfViewer.decreaseScale(); return; }
     if (mod && e.key === "0") { e.preventDefault(); this.pdfViewer.currentScaleValue = "auto"; return; }
@@ -896,9 +903,12 @@ export class Reader {
     if (doc.numPages >= 20) this.#showTab("outline");
   }
 
-  /** Show page ``page`` and search for ``find`` from there. */
-  #goto({ page, find } = {}) {
+  /** Show page ``page`` and search for ``find`` from there; ``scale`` and
+   *  ``top``/``left`` (scroll position) bring back an earlier view. */
+  #goto({ page, find, scale, top, left } = {}) {
+    if (scale) this.pdfViewer.currentScaleValue = scale;
     if (page && page <= this.pdfViewer.pagesCount) this.pdfViewer.currentPageNumber = page;
+    if (top != null) { this.container.scrollTop = top; this.container.scrollLeft = left || 0; }
     if (find) {
       this.openFind();
       this.findInput.value = find;
@@ -961,22 +971,35 @@ export class Reader {
     return Object.entries(pdfjs.AnnotationEditorType).find(([, v]) => v === mode)?.[0] || "NONE";
   }
 
-  /** Switch the pdf.js editing tool: NONE (select), HIGHLIGHT, FREETEXT, INK or STAMP. */
+  /** Switch the pdf.js editing tool: NONE (select), HIGHLIGHT, FREETEXT, INK
+   *  or STAMP; or EDITTEXT, this reader's own tool for changing words. */
   #setEditMode(name, create = false) {
     if (!this.pdfViewer || !this.doc) return;
+    const editText = name === "EDITTEXT";
+    if (editText && !this.textEditHinted) {
+      this.textEditHinted = true;
+      this.toast("Click a line of text to change it. The old words are covered with the colour around them, not removed — to remove text for good, use Redact.", 7000);
+    }
+    this.textEditMode = editText;
+    this.root.classList.toggle("rd-edittext", editText);
+    if (editText) name = "NONE";
     const mode = pdfjs.AnnotationEditorType[name];
     if (mode === undefined) return;
-    if (this.annotbar.hidden && name !== "NONE") this.openAnnotate();
+    if (this.annotbar.hidden && (name !== "NONE" || editText)) this.openAnnotate();
     try {
-      this.pdfViewer.annotationEditorMode = { mode };
-    } catch (e) { this.toast("Annotating isn't available for this document."); return; }
+      if (!(editText && this.pdfViewer.annotationEditorMode === mode)) this.pdfViewer.annotationEditorMode = { mode };
+    } catch (e) {
+      if (!editText) { this.toast("Annotating isn't available for this document."); return; }
+    }
     this.#showEditMode(name);
     // "Picture" asks for an image file straight away.
     if (create && this.uiManager) setTimeout(() => this.uiManager.updateParams(pdfjs.AnnotationEditorParamsType.CREATE, null), 50);
   }
 
   #showEditMode(name) {
+    if (name === "NONE" && this.textEditMode) name = "EDITTEXT";
     this.editMode = name;
+    if (name === "EDITTEXT") this.undoBtn.disabled = !this.activeTab?.undo?.length;
     for (const btn of this.annotTools) btn.setAttribute("aria-pressed", String(btn.dataset.mode === name));
     const sizes = name === "FREETEXT" ? [[10, "10 pt"], [12, "12 pt"], [14, "14 pt"], [18, "18 pt"], [24, "24 pt"], [36, "36 pt"]]
       : name === "INK" ? [[1, "Thin"], [2, "Fine"], [4, "Medium"], [8, "Thick"], [14, "Marker"]]
@@ -1172,6 +1195,108 @@ export class Reader {
     this.toastEl = t;
     clearTimeout(this.toastTimer);
     this.toastTimer = setTimeout(() => t.remove(), ms);
+  }
+
+  // ---- changing words on the page ----------------------------------------------------
+  /** Edit text tool: a click on a line of text opens a box to retype it. */
+  #textClick(e) {
+    if (!this.textEditMode || e.button !== 0) return;
+    const span = e.target.closest?.(".textLayer span");
+    if (!span || span.classList.contains("markedContent") || !span.textContent.trim() || window.getSelection()?.toString().length > 1) return;
+    const pageEl = span.closest(".page");
+    const pageNumber = Number(pageEl?.dataset.pageNumber);
+    if (!pageNumber) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.#openTextEditor(span, pageEl, pageNumber);
+  }
+
+  #openTextEditor(span, pageEl, pageNumber) {
+    this.textEditor?.remove();
+    const box = span.getBoundingClientRect(), page = pageEl.getBoundingClientRect();
+    const layer = pageEl.querySelector(".textLayer").getBoundingClientRect();
+    const style = getComputedStyle(span);
+    const original = span.textContent;
+    const input = el("input", { type: "text", class: "rd-textedit", value: original, spellcheck: "true",
+      "aria-label": "New text (Enter to change, Esc to cancel)" });
+    Object.assign(input.style, {
+      left: `${box.left - page.left - pageEl.clientLeft - 3}px`, top: `${box.top - page.top - pageEl.clientTop - 2}px`,
+      width: `${Math.max(box.width + 40, 80)}px`, height: `${box.height + 4}px`,
+      fontSize: `${Math.max(8, box.height * 0.8)}px`, fontFamily: style.fontFamily,
+    });
+    // The words' box in PDF points (measured from the page as drawn).
+    const viewport = this.pdfViewer.getPageView(pageNumber - 1).viewport;
+    const [ax, ay] = viewport.convertToPdfPoint(box.left - layer.left, box.top - layer.top);
+    const [bx, by] = viewport.convertToPdfPoint(box.right - layer.left, box.bottom - layer.top);
+    const rect = [Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)];
+    let done = false;
+    const finish = (apply) => {
+      if (done) return;
+      done = true;
+      input.remove();
+      if (this.textEditor === input) this.textEditor = null;
+      if (apply && input.value !== original) this.#applyTextEdit({ page: pageNumber, rect, text: input.value });
+    };
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener("blur", () => finish(true));
+    pageEl.append(input);
+    this.textEditor = input;
+    input.focus();
+    input.select();
+  }
+
+  /** The view (page, zoom, scroll), to come back to after reloading. */
+  #view() {
+    return { page: this.pdfViewer.currentPageNumber, scale: this.pdfViewer.currentScaleValue,
+      top: this.container.scrollTop, left: this.container.scrollLeft };
+  }
+
+  async #applyTextEdit(edit) {
+    const tab = this.activeTab;
+    if (!tab || !this.doc) return;
+    this.#busy(true);
+    try {
+      const bytes = await this.#currentBytes();
+      const body = new FormData();
+      body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
+      body.append("password", tab.password || "");
+      body.append("edits", JSON.stringify([edit]));
+      const res = await fetch("/api/text/edit", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+      const changed = new Uint8Array(await res.arrayBuffer());
+      if (tab !== this.activeTab) return;
+      (tab.undo ||= []).push(bytes);
+      if (tab.undo.length > 30) tab.undo.shift();
+      Object.assign(tab, { bytes: changed, edited: true, dirty: true, goto: this.#view() });
+      await this.#reloadEditing(tab);
+    } catch (e) {
+      this.#busy(false);
+      this.toast("Could not change the text: " + (e.message || e));
+    }
+  }
+
+  async #undoTextEdit() {
+    const tab = this.activeTab;
+    const previous = tab?.undo?.pop();
+    if (!previous) return;
+    const back = previous === tab.original;
+    Object.assign(tab, { bytes: previous, edited: !back, dirty: !back, goto: this.#view() });
+    await this.#reloadEditing(tab);
+    this.toast("Text change undone", 1500);
+  }
+
+  /** Show the tab's changed bytes, staying in the Edit text tool. */
+  async #reloadEditing(tab) {
+    await this.#load(tab);
+    this.#renderTabs();
+    if (tab !== this.activeTab) return;
+    this.openAnnotate();
+    this.#setEditMode("EDITTEXT");
+    this.undoBtn.disabled = !tab.undo?.length;
   }
 
   // ---- saving, printing, editing ------------------------------------------------
