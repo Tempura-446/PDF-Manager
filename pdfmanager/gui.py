@@ -1222,7 +1222,10 @@ class Handler(BaseHTTPRequestHandler):
             self.events.push({"open": ids})
             raise_window = type(self).bring_to_front  # a plain function, not a method
             if raise_window:
-                raise_window()
+                # Not before answering: pywebview waits for the window's own
+                # thread, and the other launch only waits a few seconds
+                # before opening a second copy instead.
+                threading.Thread(target=raise_window, daemon=True).start()
             return self._send(HTTPStatus.OK, {"handled": True})
         url = f"http://127.0.0.1:{self.server.server_address[1]}/#token={self.token}"
         if ids:

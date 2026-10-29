@@ -172,14 +172,25 @@ def test_recent_files(app, tmp_path):
 def test_files_are_handed_to_the_running_app(app, tmp_path, monkeypatch):
     base, token, srv = app
     pdf = text_pdf(tmp_path / "a.pdf")
-    raised = []
-    srv.RequestHandlerClass.bring_to_front = lambda: raised.append(1)
+    raised = threading.Event()
+    release = threading.Event()
+
+    def bring_to_front():  # pywebview can take a while (it waits for the window's thread)
+        raised.set()
+        release.wait(10)
+
+    srv.RequestHandlerClass.bring_to_front = bring_to_front
     gui._register_instance(srv, "desktop")
-    # Its own window: the app opens the files itself and comes to the front.
+    # Its own window: the app opens the files itself and comes to the front,
+    # answering straight away (not after the window has come up).
+    started = time.monotonic()
     assert gui.forward_to_running_app([pdf]) is True
+    assert time.monotonic() - started < 3
+    assert raised.wait(5)
+    release.set()
     events = json.loads(call(base, token, "/api/events?after=0")[2])
     ids = events["events"][0]["open"]
-    assert raised == [1] and len(ids) == 1
+    assert len(ids) == 1
     assert call(base, token, f"/api/file/{ids[0]}")[2].startswith(b"%PDF")
     # Edge window: the new launch opens a window on the running app.
     launched = []
