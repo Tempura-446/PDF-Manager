@@ -238,3 +238,49 @@ def test_page_ids_are_tracked(app):
     assert "p1" in srv.RequestHandlerClass.pages
     call(base, token, f"/api/bye?token={token}&page=p1", b"")
     assert "p1" not in srv.RequestHandlerClass.pages
+
+
+# -- headers and footers ------------------------------------------------------------------
+
+def test_headers_and_footers(tmp_path):
+    from pypdf import PdfWriter
+
+    src = text_pdf(tmp_path / "doc.pdf", ["One", "Two", "Three"])
+    writer = PdfWriter(clone_from=str(src))
+    writer.pages[1].rotate(90)
+    writer.write(src)
+    nxt = core.headers_footers(src, tmp_path / "out.pdf",
+                               {"top_right": "{file}", "bottom_center": "Page {n} of {total}",
+                                "bottom_right": "{bates}", "top_left": "{unknown} stays"},
+                               bates_prefix="ABC", bates_start=41, pages="2-3")
+    assert nxt == 43
+    reader = PdfReader(tmp_path / "out.pdf")
+    assert "Page" not in reader.pages[0].extract_text()  # not in the page list
+    second = reader.pages[1].extract_text()
+    assert "Page 1 of 3" in second and "ABC000041" in second and "doc" in second
+    assert "{unknown} stays" in second
+    assert "ABC000042" in reader.pages[2].extract_text()
+    with pytest.raises(core.PdfManagerError, match="at least one"):
+        core.headers_footers(src, tmp_path / "x.pdf", {"top_left": " "})
+
+
+def test_bates_numbers_continue_across_files(tmp_path, capsys):
+    a = text_pdf(tmp_path / "a.pdf", ["1", "2"])
+    b = text_pdf(tmp_path / "b.pdf", ["3", "4", "5"])
+    assert main(["headers", str(a), str(b), "-o", str(tmp_path / "out"), "--bottom-right",
+                 "{bates}", "--bates", "X-", "--bates-digits", "4"]) == 0
+    out = capsys.readouterr().out
+    assert "X-0001–X-0002" in out and "X-0003–X-0005" in out
+    assert "X-0005" in PdfReader(tmp_path / "out" / "b.pdf").pages[2].extract_text()
+    # The app does the same for several files.
+    work = tmp_path / "work"
+    work.mkdir()
+    name, data, _ = gui.run_operation("headers", [a, b], {"bottom_right": "{bates}",
+                                                         "bates_prefix": "Q", "bates_start": "9",
+                                                         "bates_digits": "3"}, work=work)
+    import io
+    import zipfile
+
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        second = PdfReader(io.BytesIO(z.read("b_headers.pdf")))
+    assert "Q011" in second.pages[0].extract_text()

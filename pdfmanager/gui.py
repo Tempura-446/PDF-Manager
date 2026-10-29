@@ -181,6 +181,22 @@ OPERATIONS = [
              "everywhere and can't be changed. Links keep working.",
      "fields": [_f("forms", "Form fields", "check", True),
                 _f("comments", "Comments, highlights, drawings and signatures", "check", True)]},
+    {"id": "headers", "group": "Stamp", "label": "Headers & footers", "files": "pdf",
+     "help": "Add text at the top or bottom of every page: a title, the date, page numbers or "
+             "Bates numbers (which continue from one file to the next).",
+     "fields": [_f("top_left", "Top left"), _f("top_center", "Top centre"),
+                _f("top_right", "Top right", "text", "", placeholder="{date}"),
+                _f("bottom_left", "Bottom left", "text", "", placeholder="{file}"),
+                _f("bottom_center", "Bottom centre", "text", "", placeholder="Page {n} of {total}"),
+                _f("bottom_right", "Bottom right", "text", "", placeholder="{bates}",
+                   hint="{n} page · {total} pages · {file} file name · {title} · {date} · "
+                        "{bates} Bates number"),
+                _f("bates_prefix", "Bates prefix", "text", "", placeholder="ABC"),
+                _f("bates_start", "First Bates number", "number", 1, min=0),
+                _f("bates_digits", "Bates digits", "number", 6, min=1, max=12),
+                _f("font_size", "Font size", "number", 9, min=4),
+                _f("margin", "Distance from edge (mm)", "number", 10, min=0),
+                _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
     {"id": "metadata", "group": "Stamp", "label": "Title & author", "files": "pdf",
      "fields": [_f("title", "Title"), _f("author", "Author"), _f("subject", "Subject"),
                 _f("keywords", "Keywords")]},
@@ -262,7 +278,7 @@ OPERATIONS = [
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
-SUFFIX = {"recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
+SUFFIX = {"headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
@@ -389,6 +405,18 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         if name:
             out = out_dir / f"{src.stem}_{name}.pdf"
         recipes.run(steps, src, out, password, notes)
+    elif op == "headers":
+        # Bates numbers continue from file to file: the next number is kept
+        # in the options between files.
+        first = _num(opts.get("_bates_next"), int, None)
+        if first is None:
+            first = _num(opts.get("bates_start"), int, 1)
+        opts["_bates_next"] = core.headers_footers(
+            src, out, {spot: opts.get(spot) or "" for spot in core.HEADER_SPOTS},
+            font_size=_num(opts.get("font_size"), float, 9),
+            margin_mm=_num(opts.get("margin"), float, 10), pages=_pages(opts),
+            bates_prefix=opts.get("bates_prefix") or "", bates_start=first,
+            bates_digits=_num(opts.get("bates_digits"), int, 6), password=password)
     elif op == "flatten":
         forms, comments = _bool(opts.get("forms", True)), _bool(opts.get("comments", True))
         if not forms and not comments:

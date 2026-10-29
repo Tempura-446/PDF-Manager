@@ -282,6 +282,19 @@ def run_redact(a, src, out, pw):
     return f"{out}  ({sum(found.values())} area(s) on page(s) {', '.join(map(str, found))})"
 
 
+def run_headers(a, src, out, pw):
+    texts = {spot: getattr(a, spot) for spot in core.HEADER_SPOTS}
+    # Bates numbers continue from file to file in a batch.
+    first = getattr(a, "bates_next", a.bates_start)
+    a.bates_next = core.headers_footers(
+        src, out, texts, font_size=a.font_size, margin_mm=a.margin, pages=a.pages, start=a.start,
+        bates_prefix=a.bates or "", bates_start=first, bates_digits=a.bates_digits, password=pw)
+    if any("{bates}" in (t or "") for t in texts.values()):
+        width = a.bates_digits
+        return f"{out}  (Bates {a.bates or ''}{first:0{width}d}–{a.bates or ''}{a.bates_next - 1:0{width}d})"
+    return out
+
+
 def run_text(a, src, out, pw):
     text = core.extract_text(src, out, a.pages, pw)
     if out is None:
@@ -332,7 +345,7 @@ OUTPUTS = {
     "nup": ("nup", "pdf"), "compress": ("compressed", "pdf"), "color": ("color", "pdf"),
     "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
     "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
-    "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
+    "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "headers": ("headers", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
     "split": ("split", "dir"), "to-images": ("images", "dir"),
 }
 
@@ -741,6 +754,21 @@ def build_parser():
                              "top-center", "top-right", "top-left"])
     sp.add_argument("--font-size", type=float, default=10)
     sp.add_argument("--start", type=int, default=1, help="first number (default: 1)")
+    sp.add_argument("-p", "--pages", help=PAGES_HELP + " (default: all)")
+
+    sp = per_file("headers", run_headers,
+                  "add headers and footers, e.g. a title, the date or Bates numbers")
+    for spot in core.HEADER_SPOTS:
+        sp.add_argument("--" + spot.replace("_", "-"), dest=spot, metavar="TEXT",
+                        help=f"text {spot.replace('_', ' ')}" if spot != "top_left" else
+                        "text top left; any text may use {n} (page), {total}, {file}, {title}, "
+                        "{date} and {bates}")
+    sp.add_argument("--font-size", type=float, default=9)
+    sp.add_argument("--margin", type=float, default=10, help="distance from the edge in mm")
+    sp.add_argument("--start", type=int, default=1, help="first page number (default: 1)")
+    sp.add_argument("--bates", metavar="PREFIX", help="Bates prefix for {bates}, e.g. ABC")
+    sp.add_argument("--bates-start", type=int, default=1, help="first Bates number")
+    sp.add_argument("--bates-digits", type=int, default=6, help="digits (default: 6)")
     sp.add_argument("-p", "--pages", help=PAGES_HELP + " (default: all)")
 
     sp = per_file("ocr", run_ocr, "make scanned PDFs searchable (needs OCRmyPDF + Tesseract)")

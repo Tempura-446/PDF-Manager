@@ -18,7 +18,7 @@ from pdfmanager.appdata import data_dir
 
 # Tools that take one PDF and give one PDF back, and need no extra files.
 STEP_OPS = ("clean", "ocr", "compress", "color", "rotate", "extract", "delete", "reorder",
-            "reverse", "resize", "crop", "nup", "watermark", "number", "metadata",
+            "reverse", "resize", "crop", "nup", "watermark", "number", "headers", "metadata",
             "bookmarks", "flatten", "sanitize", "redact", "pdfa")
 
 

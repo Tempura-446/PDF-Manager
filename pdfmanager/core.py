@@ -655,6 +655,81 @@ def number_pages(path, output, fmt="{n} / {total}", position="bottom-center",
     return _write(writer, output)
 
 
+HEADER_SPOTS = ("top_left", "top_center", "top_right", "bottom_left", "bottom_center",
+                "bottom_right")
+
+
+class _Fields(dict):
+    def __missing__(self, key):
+        return "{" + key + "}"  # leave unknown {placeholders} as typed
+
+
+def _upright(page):
+    """(visual width, visual height, matrix) to draw on ``page`` as it's
+    shown, i.e. after its /Rotate, so text comes out upright."""
+    box = page.mediabox
+    w, h, left, bottom = float(box.width), float(box.height), float(box.left), float(box.bottom)
+    rotation = page.rotation % 360
+    matrix = {0: (1, 0, 0, 1, 0, 0), 90: (0, 1, -1, 0, w, 0),
+              180: (-1, 0, 0, -1, w, h), 270: (0, -1, 1, 0, 0, h)}[rotation]
+    a, b, c, d, e, f = matrix
+    visual = (h, w) if rotation in (90, 270) else (w, h)
+    return visual[0], visual[1], Transformation((a, b, c, d, e + left, f + bottom))
+
+
+def headers_footers(path, output, texts, font_size=9, margin_mm=10, pages=None, start=1,
+                    bates_prefix="", bates_start=1, bates_digits=6, date_format="%Y-%m-%d",
+                    password=None):
+    """Add headers and footers. ``texts`` maps spots (see HEADER_SPOTS, e.g.
+    "top_right") to text, which may use {n} (page number, counting from
+    ``start``), {total}, {file}, {title}, {date} and {bates} (Bates number:
+    ``bates_prefix`` and a number from ``bates_start`` with ``bates_digits``
+    digits, e.g. ABC000123). Returns the next Bates number, so numbering can
+    continue in the next file."""
+    import datetime
+
+    texts = {k: v for k, v in (texts or {}).items() if v and v.strip()}
+    unknown = set(texts) - set(HEADER_SPOTS)
+    if unknown:
+        raise PdfManagerError(f"unknown position {sorted(unknown)[0]!r}")
+    if not texts:
+        raise PdfManagerError("enter the text for at least one header or footer")
+    reader = open_pdf(path, password)
+    total = len(reader.pages)
+    targets = set(parse_page_ranges(pages, total)) if pages else None
+    title = (reader.metadata or {}).get("/Title") or ""
+    writer = PdfWriter(clone_from=reader)
+    margin = margin_mm * POINTS_PER_MM
+    fields = _Fields(total=total, file=Path(path).stem, title=str(title),
+                     date=datetime.date.today().strftime(date_format))
+    n, bates = start, bates_start
+    for i, page in enumerate(writer.pages):
+        progress.report(i, total, "page")
+        if targets is not None and i not in targets:
+            continue
+        fields.update(n=n, bates=f"{bates_prefix}{bates:0{bates_digits}d}")
+        lines = {spot: text.format_map(fields) for spot, text in texts.items()}
+        n += 1
+        bates += 1
+        w, h, matrix = _upright(page)
+
+        def draw(c, w, h, lines=lines):
+            c.setFont("Helvetica", font_size)
+            for spot, text in lines.items():
+                vert, horiz = spot.split("_")
+                y = h - margin - font_size * 0.8 if vert == "top" else margin
+                if horiz == "center":
+                    c.drawCentredString(w / 2, y, text)
+                elif horiz == "right":
+                    c.drawRightString(w - margin, y, text)
+                else:
+                    c.drawString(margin, y, text)
+
+        page.merge_transformed_page(_overlay_page(w, h, draw), matrix)
+    _write(writer, output)
+    return bates
+
+
 # --------------------------------------------------------------------------
 # Conversion
 # --------------------------------------------------------------------------
