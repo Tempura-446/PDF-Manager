@@ -94,8 +94,11 @@ def describe(steps):
     return " → ".join(OPS[s["op"]]["label"] for s in steps)
 
 
-def run(steps, src, output, password=None, notes=None):
-    """Run the steps on ``src`` and write the result to ``output``."""
+def run(steps, src, output, password=None, notes=None, state=None):
+    """Run the steps on ``src`` and write the result to ``output``. ``state``
+    is a dict the caller keeps from file to file for what continues across
+    them (the next Bates number of a Headers & footers step)."""
+    state = {} if state is None else state
     from pdfmanager import gui
 
     steps = check_steps(steps)
@@ -115,11 +118,15 @@ def run(steps, src, output, password=None, notes=None):
                             f"step {n} ({spec['label']}): fill in “{field['label']}”")
                 out_dir = Path(tmp) / f"step{n}"
                 out_dir.mkdir()
+                options = dict(step["options"])
+                if step["op"] == "headers" and "_bates_next" in state:
+                    options["_bates_next"] = state["_bates_next"]
                 try:
-                    outputs = gui._run_file_op(step["op"], current, out_dir, step["options"],
-                                               None, {}, notes)
+                    outputs = gui._run_file_op(step["op"], current, out_dir, options, None, {}, notes)
                 except gui.UserError as exc:
                     raise core.PdfManagerError(f"step {n} ({spec['label']}): {exc}") from None
+                if step["op"] == "headers" and "_bates_next" in options:
+                    state["_bates_next"] = options["_bates_next"]
                 pdfs = [p for p in outputs if p.suffix.lower() == ".pdf"]
                 if len(pdfs) != 1:
                     raise core.PdfManagerError(f"step {n} ({spec['label']}) didn't give one PDF")

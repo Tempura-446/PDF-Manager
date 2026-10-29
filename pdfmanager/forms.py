@@ -24,27 +24,38 @@ def _num(v):
     return FloatObject(round(float(v), 3))
 
 
+def _walk_up(field):
+    """``field``, its parent, grandparent... stopping at a loop (a damaged
+    or crafted file can point a field at its own child)."""
+    seen = set()
+    while field is not None and len(seen) < 64:
+        key = getattr(getattr(field, "indirect_reference", None), "idnum", None) or id(field)
+        if key in seen:
+            return
+        seen.add(key)
+        yield field
+        field = field["/Parent"].get_object() if "/Parent" in field else None
+
+
 def _field_of(widget):
     """The field a widget belongs to (a widget may be its own field)."""
-    while "/T" not in widget and "/Parent" in widget:
-        widget = widget["/Parent"].get_object()
-    return widget
+    last = widget
+    for field in _walk_up(widget):
+        last = field
+        if "/T" in field:
+            return field
+    return last
 
 
 def _inherited(field, key, default=None):
-    while field is not None:
-        if key in field:
-            return field[key]
-        field = field["/Parent"].get_object() if "/Parent" in field else None
+    for ancestor in _walk_up(field):
+        if key in ancestor:
+            return ancestor[key]
     return default
 
 
 def _qualified_name(field):
-    parts = []
-    while field is not None:
-        if "/T" in field:
-            parts.append(str(field["/T"]))
-        field = field["/Parent"].get_object() if "/Parent" in field else None
+    parts = [str(f["/T"]) for f in _walk_up(field) if "/T" in f]
     return ".".join(reversed(parts))
 
 

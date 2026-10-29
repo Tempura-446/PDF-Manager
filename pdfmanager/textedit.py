@@ -12,42 +12,12 @@ searching can find them); to remove text for good, use Redact.
 import ctypes
 import math
 import statistics
-import unicodedata
-from pathlib import Path
 
 from pypdf import PdfWriter, Transformation
 
-from pdfmanager import core
+from pdfmanager import core, fonts
 
 PAD = 0.6  # points added around the old words' box
-BASE14 = {  # (family, bold, italic) -> standard PDF font
-    ("sans", False, False): "Helvetica", ("sans", True, False): "Helvetica-Bold",
-    ("sans", False, True): "Helvetica-Oblique", ("sans", True, True): "Helvetica-BoldOblique",
-    ("serif", False, False): "Times-Roman", ("serif", True, False): "Times-Bold",
-    ("serif", False, True): "Times-Italic", ("serif", True, True): "Times-BoldItalic",
-    ("mono", False, False): "Courier", ("mono", True, False): "Courier-Bold",
-    ("mono", False, True): "Courier-Oblique", ("mono", True, True): "Courier-BoldOblique",
-}
-SERIF_NAMES = ("times", "serif", "roman", "georgia", "garamond", "cambria", "minion", "book",
-               "palatino", "baskerville", "caslon", "didot", "song", "ming", "batang")
-MONO_NAMES = ("courier", "mono", "consol", "menlo", "inconsolata", "typewriter")
-BOLD_NAMES = ("bold", "black", "heavy", "semibold", "demi")
-# Fonts with many scripts, for words the standard fonts can't show. Only
-# TrueType fonts work here (not the CFF-based .otf/.ttc ones).
-UNICODE_FONTS = [
-    r"C:\Windows\Fonts\arial.ttf", r"C:\Windows\Fonts\segoeui.ttf",
-    r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simsun.ttc", r"C:\Windows\Fonts\msgothic.ttc",
-    r"C:\Windows\Fonts\malgun.ttf", r"C:\Windows\Fonts\Nirmala.ttf", r"C:\Windows\Fonts\seguisym.ttf",
-    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf", "/Library/Fonts/Arial Unicode.ttf",
-    "/System/Library/Fonts/Supplemental/Arial.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-    "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-    "/usr/share/fonts/truetype/arphic/uming.ttc",
-]
-_loaded = {}
 
 
 def _raw():
@@ -86,15 +56,15 @@ def _style(textpage, index):
     scale = math.hypot(m.a, m.b) or 1.0
     x, y = ctypes.c_double(), ctypes.c_double()
     raw.FPDFText_GetCharOrigin(tp, index, ctypes.byref(x), ctypes.byref(y))
-    if flags.value & 1 or any(n in name for n in MONO_NAMES):
+    if flags.value & 1 or any(n in name for n in fonts.MONO_NAMES):
         family = "mono"
-    elif (flags.value & 2 or any(n in name for n in SERIF_NAMES)) and "sans" not in name:
+    elif (flags.value & 2 or any(n in name for n in fonts.SERIF_NAMES)) and "sans" not in name:
         family = "serif"
     else:
         family = "sans"
     return {
         "family": family,
-        "bold": weight >= 600 or bool(flags.value & (1 << 18)) or any(n in name for n in BOLD_NAMES),
+        "bold": weight >= 600 or bool(flags.value & (1 << 18)) or any(n in name for n in fonts.BOLD_NAMES),
         "italic": bool(flags.value & 64) or "italic" in name or "oblique" in name,
         "size": raw.FPDFText_GetFontSize(tp, index) * scale,
         "color": color, "angle": math.degrees(math.atan2(m.b, m.a)),
@@ -124,43 +94,6 @@ def _background(page, image, box):
     if not pixels:
         return (1, 1, 1)
     return tuple(statistics.median(p[i] for p in pixels) / 255 for i in range(3))
-
-
-def _font(text, style):
-    """A reportlab font name able to show ``text``, close to ``style``."""
-    try:
-        text.encode("cp1252")
-        return BASE14[(style["family"], style["bold"], style["italic"])]
-    except UnicodeEncodeError:
-        pass
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-
-    needed = {ord(ch) for ch in text if not ch.isspace()}
-    for path in UNICODE_FONTS:
-        if not Path(path).is_file():
-            continue
-        if path not in _loaded:
-            name = "PdfmEdit" + str(len(_loaded))
-            try:
-                font = TTFont(name, path, subfontIndex=0) if path.lower().endswith(".ttc") \
-                    else TTFont(name, path)
-                pdfmetrics.registerFont(font)
-                _loaded[path] = (name, set(font.face.charToGlyph))
-            except Exception:  # not a TrueType font reportlab can use
-                _loaded[path] = None
-        if _loaded[path] and needed <= _loaded[path][1]:
-            return _loaded[path][0]
-    # Chinese, Japanese and Korean without a suitable font installed: fonts
-    # that PDF readers supply themselves.
-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-
-    names = " ".join(unicodedata.name(ch, "") for ch in text)
-    cid = ("HYSMyeongJo-Medium" if "HANGUL" in names else
-           "HeiseiMin-W3" if "HIRAGANA" in names or "KATAKANA" in names else "STSong-Light")
-    if cid not in pdfmetrics.getRegisteredFontNames():
-        pdfmetrics.registerFont(UnicodeCIDFont(cid))
-    return cid
 
 
 def edit_text(path, output, edits, password=None):
@@ -226,7 +159,8 @@ def edit_text(path, output, edits, password=None):
                 c.translate(style["origin"][0] - left, style["origin"][1] - bottom)
                 c.rotate(style["angle"])
                 c.setFillColorRGB(*style["color"])
-                c.setFont(_font(text, style), max(1.0, style["size"]))
+                c.setFont(fonts.font_for(text, style["family"], style["bold"], style["italic"]),
+                          max(1.0, style["size"]))
                 c.drawString(0, 0, text)
                 c.restoreState()
 

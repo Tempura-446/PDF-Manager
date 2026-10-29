@@ -3,14 +3,16 @@ can be used from the CLI or imported as a library."""
 
 import io
 import os
+import re
 import threading
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter, Transformation
 from pypdf.errors import PyPdfError
-from pypdf.generic import ArrayObject, FloatObject, NameObject, NumberObject, RectangleObject
+from pypdf.generic import (ArrayObject, DictionaryObject, FloatObject, NameObject, NumberObject,
+                           RectangleObject)
 
-from pdfmanager import imaging, progress
+from pdfmanager import fonts, imaging, progress
 from pdfmanager.pageranges import parse_page_ranges
 
 POINTS_PER_INCH = 72
@@ -605,7 +607,7 @@ def watermark(path, output, text=None, stamp_pdf=None, opacity=0.15,
         if stamp_page is None:
             def draw(c, w, h):
                 c.setFillAlpha(opacity)
-                c.setFont("Helvetica-Bold", font_size)
+                c.setFont(fonts.font_for(text, bold=True), font_size)
                 c.translate(w / 2, h / 2)
                 c.rotate(angle)
                 c.drawCentredString(0, -font_size / 3, text)
@@ -641,7 +643,7 @@ def number_pages(path, output, fmt="{n} / {total}", position="bottom-center",
         w, h = float(box.width), float(box.height)
 
         def draw(c, w, h, label=label):
-            c.setFont("Helvetica", font_size)
+            c.setFont(fonts.font_for(label), font_size)
             y = margin if vert == "bottom" else h - margin
             if horiz == "center":
                 c.drawCentredString(w / 2, y, label)
@@ -710,21 +712,36 @@ def extract_media(path, outdir, images=True, attachments=True, min_size=16, pass
                 saved["images"].append(out)
     if attachments:
         files = []
-        for name, contents in (reader.attachments or {}).items():
-            files.extend((name, data) for data in contents)
+        entries = getattr(reader, "attachment_list", None)
+        if entries is not None:  # pypdf 5.4+: one entry per attached file, with its file name
+            for entry in entries:
+                try:
+                    files.append((entry.alternative_name or entry.name, entry.content))
+                except Exception:  # a damaged entry
+                    continue
+        else:
+            for name, contents in (reader.attachments or {}).items():
+                files.extend((name, data) for data in contents)
         for page in reader.pages:
             for ref in page.get("/Annots") or []:
                 annot = ref.get_object()
                 if annot.get("/Subtype") != "/FileAttachment" or "/FS" not in annot:
                     continue
                 spec = annot["/FS"].get_object()
+                if not isinstance(spec, DictionaryObject):  # a bare file name: nothing embedded
+                    continue
                 try:
                     data = spec["/EF"].get_object()["/F"].get_object().get_data()
-                except (KeyError, AttributeError):
+                except (KeyError, AttributeError, TypeError):
                     continue
                 files.append((spec.get("/UF") or spec.get("/F") or "attachment", data))
+        seen = set()  # the same file listed under two names is saved once
         for name, data in files:
-            out = target(outdir / "attachments", _safe_filename(name, "attachment"))
+            digest = hashlib.sha1(data).digest()
+            if digest in seen:
+                continue
+            seen.add(digest)
+            out = target(outdir / "attachments", _safe_filename(str(name), "attachment"))
             out.write_bytes(data)
             saved["attachments"].append(out)
     return saved
@@ -734,15 +751,14 @@ HEADER_SPOTS = ("top_left", "top_center", "top_right", "bottom_left", "bottom_ce
                 "bottom_right")
 
 
-class _Fields(dict):
-    def __missing__(self, key):
-        return "{" + key + "}"  # leave unknown {placeholders} as typed
+_HEADER_TOKEN = re.compile(r"\{(n|total|file|title|date|bates)\}")
 
 
 def _upright(page):
     """(visual width, visual height, matrix) to draw on ``page`` as it's
-    shown, i.e. after its /Rotate, so text comes out upright."""
-    box = page.mediabox
+    shown: inside its crop box, and after its /Rotate, so text comes out
+    upright."""
+    box = page.cropbox
     w, h, left, bottom = float(box.width), float(box.height), float(box.left), float(box.bottom)
     rotation = page.rotation % 360
     matrix = {0: (1, 0, 0, 1, 0, 0), 90: (0, 1, -1, 0, w, 0),
@@ -775,22 +791,24 @@ def headers_footers(path, output, texts, font_size=9, margin_mm=10, pages=None, 
     title = (reader.metadata or {}).get("/Title") or ""
     writer = PdfWriter(clone_from=reader)
     margin = margin_mm * POINTS_PER_MM
-    fields = _Fields(total=total, file=Path(path).stem, title=str(title),
-                     date=datetime.date.today().strftime(date_format))
+    fields = {"total": total, "file": Path(path).stem, "title": str(title),
+              "date": datetime.date.today().strftime(date_format)}
     n, bates = start, bates_start
     for i, page in enumerate(writer.pages):
         progress.report(i, total, "page")
         if targets is not None and i not in targets:
             continue
         fields.update(n=n, bates=f"{bates_prefix}{bates:0{bates_digits}d}")
-        lines = {spot: text.format_map(fields) for spot, text in texts.items()}
+        # Only the known {names} are filled in; other braces stay as typed.
+        lines = {spot: _HEADER_TOKEN.sub(lambda m: str(fields[m.group(1)]), text)
+                 for spot, text in texts.items()}
         n += 1
         bates += 1
         w, h, matrix = _upright(page)
 
         def draw(c, w, h, lines=lines):
-            c.setFont("Helvetica", font_size)
             for spot, text in lines.items():
+                c.setFont(fonts.font_for(text), font_size)  # a font that has the letters
                 vert, horiz = spot.split("_")
                 y = h - margin - font_size * 0.8 if vert == "top" else margin
                 if horiz == "center":

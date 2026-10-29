@@ -428,7 +428,7 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         name = re.sub(r"[^\w-]+", "-", (opts.get("recipe_name") or "").strip()).strip("-").lower()
         if name:
             out = out_dir / f"{src.stem}_{name}.pdf"
-        recipes.run(steps, src, out, password, notes)
+        recipes.run(steps, src, out, password, notes, state=opts.setdefault("_state", {}))
     elif op == "form":
         try:
             raw = json.loads(opts.get("fields") or "{}")

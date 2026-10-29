@@ -524,6 +524,7 @@ def _parse_steps(tokens):
 
 
 def cmd_recipe(a):
+    state = {}  # carried from file to file (Bates numbers)
     if a.action != "list" and not a.name:
         raise core.PdfManagerError(f"pdfm recipe {a.action} needs a recipe name")
     if a.action == "list":
@@ -564,7 +565,7 @@ def cmd_recipe(a):
                     out = _default_output(src, slug)
                 pw = passwords.for_file(src)
                 notes = []
-                recipes.run(steps, src, out, pw, notes)
+                recipes.run(steps, src, out, pw, notes, state=state)
                 if pw:
                     _reencrypt(out, pw)
                 print(f"{src} -> {out}" + (f"  ({'; '.join(notes)})" if notes else ""))

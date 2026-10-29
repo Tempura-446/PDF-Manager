@@ -4,6 +4,7 @@ fields, text edits, Windows set-up and updates."""
 
 import io
 import json
+import re
 import threading
 from pathlib import Path
 import time
@@ -925,3 +926,111 @@ def test_file_names_with_brackets_are_not_patterns(tmp_path):
     with pytest.raises(core.PdfManagerError, match="no files match"):
         _expand([str(tmp_path / "Invoice [2024].pdf")])
     assert _expand([str(tmp_path / "Report *.pdf")]) == sorted([str(tmp_path / "Report 1.pdf"), str(odd)])
+
+
+# -- fixes from the review: PDF processing --------------------------------------------------------
+
+def page_text(path, page=0, bounded=False):
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(str(path))
+    pg = doc[page]
+    tp = pg.get_textpage()
+    if bounded:  # only what the crop box shows
+        left, bottom, right, top = pg.get_cropbox()
+        text = tp.get_text_bounded(left=left, bottom=bottom, right=right, top=top)
+    else:
+        text = tp.get_text_range()
+    doc.close()
+    return text
+
+
+def test_headers_stay_inside_the_crop_box(tmp_path):
+    from pypdf import PdfWriter
+
+    src = text_pdf(tmp_path / "bleed.pdf")
+    w = PdfWriter(clone_from=src)
+    from pypdf.generic import RectangleObject
+    w.pages[0].cropbox = RectangleObject([50, 50, 562, 742])  # bleed: viewers show only this
+    w.write(src)
+    out = tmp_path / "out.pdf"
+    core.headers_footers(src, out, {"top_left": "TOPLEFT", "bottom_center": "{bates}"},
+                         bates_prefix="ABC")
+    shown = page_text(out, bounded=True)
+    assert "TOPLEFT" in shown and "ABC000001" in shown
+    # ... and on a rotated page with a crop box
+    w = PdfWriter(clone_from=src)
+    w.pages[0].rotate(270)
+    w.write(src)
+    core.headers_footers(src, out, {"top_left": "TOPLEFT"})
+    assert "TOPLEFT" in page_text(out, bounded=True)
+
+
+def test_header_text_with_braces_and_other_alphabets(tmp_path):
+    src = text_pdf(tmp_path / "Raport_Łódź.pdf")
+    out = tmp_path / "out.pdf"
+    core.headers_footers(src, out, {"top_left": "Draft } {} {0} {n}", "top_center": "{file}",
+                                    "bottom_left": "Страница {n}"})
+    text = page_text(out)
+    assert "Draft } {} {0} 1" in text
+    assert "Raport_Łódź" in text and "Страница 1" in text
+
+
+def test_bates_numbers_continue_through_a_recipe(tmp_path):
+    from pdfmanager import recipes
+
+    a, b = text_pdf(tmp_path / "a.pdf"), text_pdf(tmp_path / "b.pdf")
+    steps = [{"op": "headers", "options": {"bottom_right": "{bates}", "bates_prefix": "ABC"}}]
+    state = {}
+    recipes.run(steps, a, tmp_path / "a_out.pdf", state=state)
+    recipes.run(steps, b, tmp_path / "b_out.pdf", state=state)
+    assert "ABC000001" in page_text(tmp_path / "a_out.pdf")
+    assert "ABC000002" in page_text(tmp_path / "b_out.pdf")
+    # the app's recipe tool keeps the state between the files of one run
+    work = tmp_path / "work"
+    work.mkdir()
+    opts = {"steps": json.dumps(steps)}
+    name, data, _ = gui.run_operation("recipe", [a, b], opts, work=work)
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        texts = {n: zf.read(n) for n in zf.namelist()}
+    found = sorted(re.search(rb"ABC00000(\d)", d).group(1) for d in texts.values())
+    assert found == [b"1", b"2"]
+
+
+def test_form_fields_with_a_parent_loop_dont_hang(tmp_path):
+    from pypdf import PdfWriter
+    from pypdf.generic import NameObject
+    from pdfmanager import forms
+
+    src = text_pdf(tmp_path / "f.pdf")
+    forms.add_fields(src, tmp_path / "form.pdf", [{"page": 1, "rect": [72, 700, 300, 720], "name": "a"}])
+    w = PdfWriter(clone_from=tmp_path / "form.pdf")
+    widget = w.pages[0]["/Annots"][0].get_object()
+    widget[NameObject("/Parent")] = w.pages[0]["/Annots"][0]  # points at itself
+    w.write(tmp_path / "loop.pdf")
+    done = []
+    worker = threading.Thread(target=lambda: done.append(forms.existing_fields(tmp_path / "loop.pdf")))
+    worker.start()
+    worker.join(10)
+    assert done and done[0][1][0]["name"] == "a"
+
+
+def test_attachments_saved_once_and_bare_file_specs_skipped(tmp_path):
+    from pypdf import PdfWriter
+    from pypdf.generic import DictionaryObject, NameObject, TextStringObject, ArrayObject, FloatObject
+
+    src = text_pdf(tmp_path / "att.pdf")
+    w = PdfWriter(clone_from=src)
+    w.add_attachment("report.txt", b"the same bytes")
+    w.add_attachment("copy of report.txt", b"the same bytes")
+    # a file-attachment comment whose file spec is just a name (nothing embedded)
+    annot = DictionaryObject({NameObject("/Type"): NameObject("/Annot"),
+                              NameObject("/Subtype"): NameObject("/FileAttachment"),
+                              NameObject("/Rect"): ArrayObject([FloatObject(10), FloatObject(10), FloatObject(30), FloatObject(30)]),
+                              NameObject("/FS"): TextStringObject("other.pdf")})
+    w.pages[0][NameObject("/Annots")] = ArrayObject([w._add_object(annot)])
+    w.write(src)
+    out = tmp_path / "media"
+    saved = core.extract_media(src, out, images=False)
+    assert len(saved["attachments"]) == 1 and saved["attachments"][0].read_bytes() == b"the same bytes"
