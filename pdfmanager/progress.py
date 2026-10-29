@@ -34,6 +34,7 @@ class Job:
         self.result = None       # what the job returned
         self.error = None
         self.finished_at = None
+        self.thread = None       # set by start()
 
     def cancel(self):
         self.cancelled = True
@@ -68,8 +69,9 @@ class Job:
     def start(self, func, *args, **kwargs):
         """Run ``func`` as this job in a background thread."""
         context = contextvars.copy_context()
-        threading.Thread(target=context.run, args=(self.run, func, *args), kwargs=kwargs,
-                         daemon=True).start()
+        self.thread = threading.Thread(target=context.run, args=(self.run, func, *args),
+                                       kwargs=kwargs, daemon=True)
+        self.thread.start()
         return self
 
 
@@ -138,19 +140,38 @@ class JobStore:
         self.keep = keep_seconds
         self.lock = threading.Lock()
 
+    def _prune(self):
+        # Called with the lock held. A finished job nobody collected (its
+        # page was closed) holds its whole result, so it goes after a while
+        # whether or not another job comes along.
+        now = time.monotonic()
+        for key in [k for k, j in self.jobs.items()
+                    if j.finished_at and now - j.finished_at > self.keep]:
+            del self.jobs[key]
+
     def add(self, job):
         with self.lock:
-            now = time.monotonic()
-            for key in [k for k, j in self.jobs.items()
-                        if j.finished_at and now - j.finished_at > self.keep]:
-                del self.jobs[key]
+            self._prune()
             self.jobs[job.id] = job
         return job
 
     def get(self, job_id):
         with self.lock:
+            self._prune()
             return self.jobs.get(job_id)
 
     def pop(self, job_id):
         with self.lock:
             return self.jobs.pop(job_id, None)
+
+    def stop(self, timeout=3.0):
+        """Cancel the jobs still running and wait up to ``timeout`` seconds
+        in all for them to stop (the app is closing)."""
+        with self.lock:
+            running = [j for j in self.jobs.values() if j.state == "running"]
+        deadline = time.monotonic() + timeout
+        for job in running:
+            job.cancel()
+        for job in running:
+            if job.thread is not None:
+                job.thread.join(max(0.0, deadline - time.monotonic()))

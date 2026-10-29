@@ -490,7 +490,7 @@ export class Reader {
     try {
       const res = await fetch("/api/file/" + encodeURIComponent(id), { headers: { "X-Pdfm-Token": this.token } });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-      const name = res.headers.get("X-Pdfm-Filename") || "document.pdf";
+      const name = decodeURIComponent(res.headers.get("X-Pdfm-Filename") || "") || "document.pdf";
       await this.openBytes(new Uint8Array(await res.arrayBuffer()), name, null, goto);
     } catch (e) {
       this.toast("Could not open the file: " + (e.message || e));
