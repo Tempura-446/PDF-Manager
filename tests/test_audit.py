@@ -333,3 +333,22 @@ def test_page_number_format_is_checked(tmp_path):
         core.number_pages(src, tmp_path / "n.pdf", fmt="Page {page}")
     out = core.number_pages(src, tmp_path / "n.pdf", fmt="{{{n:02d} of {total}}}")
     assert texts(out)[0].endswith("{01 of 2}")
+
+
+def test_a_long_chain_of_next_page_links_is_copied(tmp_path):
+    # Every page links to the next: copying objects recursively would go
+    # as deep as the document is long.
+    c = canvas.Canvas(str(tmp_path / "chain.pdf"), pagesize=letter)
+    pages = 400
+    for i in range(pages):
+        c.bookmarkPage(f"p{i}")
+        c.drawString(72, 700, f"Page {i + 1}")
+        c.linkAbsolute("", f"p{(i + 1) % pages}", (72, 690, 200, 705))
+        c.showPage()
+    c.save()
+    out = core.rotate(tmp_path / "chain.pdf", tmp_path / "turned.pdf", 90)
+    reader = PdfReader(str(out))
+    assert len(reader.pages) == pages and reader.pages[0].rotation == 90
+    link = reader.pages[5]["/Annots"][0].get_object()
+    assert reader.get_page_number(link["/Dest"][0].get_object()) == 6
+    core.watermark(out, tmp_path / "wm.pdf", text="DRAFT", pages="1")

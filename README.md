@@ -227,7 +227,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `interleave` | merge separately scanned fronts and backs | `pdfm interleave fronts.pdf backs.pdf -o book.pdf` |
 | `rotate` | rotate all or some pages | `pdfm rotate *.pdf -d 90 -p 2-3` |
 | `resize` | change paper size or scale pages | `pdfm resize doc.pdf -s a4` · `--scale 0.5` |
-| `crop` | trim margins (mm, CSS-style order) | `pdfm crop doc.pdf -m 10` · `-m 10 5 10 5` |
+| `crop` | trim margins (mm, CSS-style order, as the page is shown) | `pdfm crop doc.pdf -m 10` · `-m 10 5 10 5` |
 | `nup` | 2/4/6/8/9 pages per sheet | `pdfm nup slides.pdf -n 4` |
 | `compress` | shrink files: `low`, `medium`, `high` | `pdfm compress *.pdf -l high -o small/` |
 | `color` | convert to grayscale, RGB or CMYK | `pdfm color doc.pdf --to cmyk --icc printer.icc` |

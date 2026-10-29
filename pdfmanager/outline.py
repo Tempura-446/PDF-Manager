@@ -66,7 +66,7 @@ def set_outline(path, output, items, password=None):
     """Replace all bookmarks with ``items`` (an empty list removes them)."""
     reader = core.open_pdf(path, password)
     items = _check(items, len(reader.pages))
-    writer = PdfWriter(clone_from=reader)
+    writer = core.clone_document(reader)
     root = writer._root_object
     if "/Outlines" in root:
         del root["/Outlines"]

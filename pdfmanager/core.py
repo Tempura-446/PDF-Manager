@@ -137,6 +137,29 @@ def _reorder_pages(writer, order):
     writer.flattened_pages = flat
 
 
+def clone_document(reader):
+    """A writer with everything in ``reader``, like ``PdfWriter(clone_from=
+    reader)``, also for long documents whose pages link to each other:
+    pypdf copies objects recursively, and a chain of "next page" links
+    through hundreds of pages is deeper than Python allows. The pages'
+    annotations are copied after the rest, when their target pages are
+    already known."""
+    detached = []
+    for i, page in enumerate(reader.pages):
+        stored = reader.get_object(page.indirect_reference)  # the object pypdf copies from
+        if isinstance(stored, DictionaryObject) and "/Annots" in stored:
+            detached.append((i, stored, stored.raw_get("/Annots")))
+            del stored["/Annots"]
+    try:
+        writer = PdfWriter(clone_from=reader)
+    finally:
+        for _, stored, annots in detached:
+            stored[NameObject("/Annots")] = annots
+    for i, _, annots in detached:
+        writer.pages[i][NameObject("/Annots")] = annots.clone(writer)
+    return writer
+
+
 def _content_refs(page):
     """References to the page's content stream(s)."""
     contents = page.get("/Contents")
@@ -475,7 +498,7 @@ def rotate(path, output, degrees, pages=None, password=None):
         raise PdfManagerError("rotation must be a multiple of 90 degrees")
     reader = open_pdf(path, password)
     targets = set(parse_page_ranges(pages, len(reader.pages))) if pages else None
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     for i, page in enumerate(writer.pages):
         if targets is None or i in targets:
             page.rotate(degrees)
@@ -504,7 +527,7 @@ def resize(path, output, size=None, scale=None, fit="fit", pages=None,
     reader = open_pdf(path, password)
     targets = set(parse_page_ranges(pages, len(reader.pages))) if pages else None
     target = parse_paper_size(size) if size else None
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     shared = _shared_objects(writer)
 
     for i, page in enumerate(writer.pages):
@@ -562,7 +585,7 @@ def crop(path, output, margins, pages=None, visual=True, password=None):
     are in the page's own coordinates (what the page editor measures)."""
     reader = open_pdf(path, password)
     targets = set(parse_page_ranges(pages, len(reader.pages))) if pages else None
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     for i, page in enumerate(writer.pages):
         if targets is not None and i not in targets:
             continue
@@ -595,7 +618,7 @@ def n_up(path, output, per_sheet=2, size="a4", password=None):
     cell_w, cell_h = sw / cols, sh / rows
 
     # Work on a copy so pages can be normalised without touching the reader.
-    source = PdfWriter(clone_from=open_pdf(path, password))
+    source = clone_document(open_pdf(path, password))
     shared = _shared_objects(source)
     page_numbers = {p.indirect_reference.idnum: i for i, p in enumerate(source.pages)}
     for page in source.pages:
@@ -703,7 +726,7 @@ def compress(path, output, level="medium", image_quality=None, max_dpi=None, pas
         raise PdfManagerError("maximum DPI must be at least 1")
 
     reader = open_pdf(path, password)
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     if max_dpi or image_quality:
         imaging.downsample_images(writer, max_dpi, image_quality or 85)
     _finish_compression(writer)
@@ -723,7 +746,7 @@ def convert_color(path, output, target, icc_profile=None, password=None):
     if icc_profile and not Path(icc_profile).is_file():
         raise PdfManagerError(f"ICC profile not found: {icc_profile}")
     reader = open_pdf(path, password)
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     from PIL import ImageCms
 
     try:
@@ -736,7 +759,7 @@ def convert_color(path, output, target, icc_profile=None, password=None):
 
 def encrypt(path, output, user_password, owner_password=None, password=None):
     reader = open_pdf(path, password)
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     writer.encrypt(user_password=user_password,
                    owner_password=owner_password or user_password,
                    algorithm="AES-256")
@@ -745,13 +768,13 @@ def encrypt(path, output, user_password, owner_password=None, password=None):
 
 def decrypt(path, output, password):
     reader = open_pdf(path, password)
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     return _write(writer, output)
 
 
 def set_metadata(path, output, password=None, **fields):
     reader = open_pdf(path, password)
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     updates = {f"/{k.capitalize()}": v for k, v in fields.items() if v is not None}
     if updates:
         writer.add_metadata(updates)
@@ -782,7 +805,7 @@ def watermark(path, output, text=None, stamp_pdf=None, opacity=0.15,
     reader = open_pdf(path, password)
     targets = set(parse_page_ranges(pages, len(reader.pages))) if pages else None
     stamp_page = open_pdf(stamp_pdf).pages[0] if stamp_pdf else None
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     shared = _shared_objects(writer)
 
     for i, page in enumerate(writer.pages):
@@ -814,7 +837,7 @@ def number_pages(path, output, fmt="{n} / {total}", position="bottom-center",
     reader = open_pdf(path, password)
     total = len(reader.pages)
     targets = set(parse_page_ranges(pages, total)) if pages else None
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     shared = _shared_objects(writer)
     vert, horiz = position.split("-")
     margin = 28
@@ -983,7 +1006,7 @@ def headers_footers(path, output, texts, font_size=9, margin_mm=10, pages=None, 
     total = len(reader.pages)
     targets = set(parse_page_ranges(pages, total)) if pages else None
     title = (reader.metadata or {}).get("/Title") or ""
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     shared = _shared_objects(writer)
     margin = margin_mm * POINTS_PER_MM
     fields = {"total": total, "file": Path(path).stem, "title": str(title),
