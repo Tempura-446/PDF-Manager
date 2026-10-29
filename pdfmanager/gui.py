@@ -30,6 +30,7 @@ import tempfile
 import threading
 import time
 import urllib.parse
+import urllib.request
 import webbrowser
 import zipfile
 from http import HTTPStatus
@@ -685,6 +686,26 @@ class OpenFiles:
             return self.items.get(key)
 
 
+class Events:
+    """Messages for the app's pages, numbered; pages ask for the ones after
+    the last they've seen and wait for new ones."""
+
+    def __init__(self):
+        self.items = []
+        self.cond = threading.Condition()
+
+    def push(self, event):
+        with self.cond:
+            self.items.append(event)
+            self.cond.notify_all()
+
+    def wait(self, after, timeout=20):
+        with self.cond:
+            if len(self.items) <= after:
+                self.cond.wait(timeout)
+            return self.items[after:], len(self.items)
+
+
 class RecentFiles:
     """PDFs recently opened in the reader from this computer, newest first,
     kept in recent.json in the app's data folder."""
@@ -782,6 +803,12 @@ class Handler(BaseHTTPRequestHandler):
     allowed_hosts = set()
     results = None  # ResultCache
     jobs = None  # progress.JobStore
+    pages = None  # open pages: id -> when last heard from
+    events = None  # Events for the pages
+    instance_secret = None  # see forward_to_running_app
+    instance_mode = None
+    instance_extra = None
+    bring_to_front = None
     opened = None  # OpenFiles
     # pywebview's JavaScript bridge needs eval(); only allowed in the desktop window.
     allow_eval = False
@@ -820,7 +847,11 @@ class Handler(BaseHTTPRequestHandler):
     def _token_ok(self):
         ok = secrets.compare_digest(self.headers.get("X-Pdfm-Token", ""), self.token)
         if ok:
-            type(self).last_seen = time.monotonic()  # the page is still open
+            now = time.monotonic()
+            type(self).last_seen = now  # a page is still open
+            page = self.headers.get("X-Pdfm-Page", "")[:64]
+            if page and self.pages is not None:
+                self.pages[page] = now
         return ok
 
     # -- routes ------------------------------------------------------------
@@ -848,6 +879,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._job(path, "GET")
         if path == "/api/recent":
             return self._recent()
+        if path == "/api/events":
+            return self._events()
         self._error(HTTPStatus.NOT_FOUND, "not found")
 
     def _static(self, rel):
@@ -898,6 +931,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(HTTPStatus.FORBIDDEN, "bad host")
         if self.path.split("?", 1)[0] == "/api/bye":
             return self._bye()
+        if self.path.split("?", 1)[0] == "/api/instance":
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 1_000_000:
+                return self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "too large")
+            try:
+                return self._instance(self.rfile.read(length))
+            except ValueError:
+                return self._error(HTTPStatus.BAD_REQUEST, "bad request")
         if not self._token_ok():
             return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
         length = int(self.headers.get("Content-Length") or 0)
@@ -1045,11 +1086,50 @@ class Handler(BaseHTTPRequestHandler):
         navigator.sendBeacon, which can't add headers, so the token comes
         in the query string; this request can do nothing else."""
         self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 65536))
-        token = urllib.parse.parse_qs(self.path.partition("?")[2]).get("token", [""])[0]
-        if not secrets.compare_digest(token, self.token):
+        query = urllib.parse.parse_qs(self.path.partition("?")[2])
+        if not secrets.compare_digest(query.get("token", [""])[0], self.token):
             return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
+        if self.pages is not None:
+            self.pages.pop(query.get("page", [""])[0], None)
         type(self).closed_at = time.monotonic()
         return self._send(HTTPStatus.OK, {"ok": True})
+
+    def _instance(self, body):
+        """Another launch of the app hands over the files it was asked to
+        open (see forward_to_running_app). It proves it's the same user
+        with the secret from instance.json in the app's data folder."""
+        data = json.loads(body or b"{}")
+        if not self.instance_secret or not secrets.compare_digest(
+                str(data.get("secret", "")), self.instance_secret):
+            return self._error(HTTPStatus.FORBIDDEN, "not allowed")
+        ids = []
+        for path in data.get("paths") or []:
+            try:
+                ids.append(self.opened.add(path))
+            except (OSError, ValueError):
+                continue
+        if self.instance_mode == "desktop":
+            self.events.push({"open": ids})
+            raise_window = type(self).bring_to_front  # a plain function, not a method
+            if raise_window:
+                raise_window()
+            return self._send(HTTPStatus.OK, {"handled": True})
+        url = f"http://127.0.0.1:{self.server.server_address[1]}/#token={self.token}"
+        if ids:
+            url += "&open=" + ",".join(ids)
+        return self._send(HTTPStatus.OK, {"url": url, "mode": self.instance_mode,
+                                          **(self.instance_extra or {})})
+
+    def _events(self):
+        """Long poll: events for the page (files handed over by another
+        launch), after the one numbered ``after``."""
+        query = urllib.parse.parse_qs(self.path.partition("?")[2])
+        try:
+            after = int(query.get("after", ["0"])[0])
+        except ValueError:
+            after = 0
+        events, last = self.events.wait(after, timeout=20)
+        return self._send(HTTPStatus.OK, {"events": events, "last": last})
 
     def _redact_find(self, body):
         """Where the Redact tool's words and kinds of numbers are found, so
@@ -1116,7 +1196,8 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None):
     handler = type("PdfmHandler", (Handler,), {"token": token, "results": ResultCache(),
                                                "opened": opened, "allow_eval": desktop,
                                                "last_seen": time.monotonic(),
-                                               "closed_at": None, "jobs": progress.JobStore()})
+                                               "closed_at": None, "jobs": progress.JobStore(),
+                                               "pages": {}, "events": Events()})
     server = None
     if not port and prefer:
         try:
@@ -1144,7 +1225,9 @@ def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False):
     try:
         if exit_when_closed:
             threading.Thread(target=server.serve_forever, daemon=True).start()
-            wait_until_closed(server.RequestHandlerClass, grace=20)
+            _register_instance(server, "browser")
+            wait_until_closed(server.RequestHandlerClass, grace=5)
+            _unregister_instance(server)
             server.shutdown()
         else:
             server.serve_forever()
@@ -1155,26 +1238,33 @@ def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False):
 
 
 def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5, grace=2.0):
-    """Block until the page is gone.
+    """Block until the app's pages are gone.
 
-    When its window closes, the page says so (/api/bye); if nothing is heard
-    from it within ``grace`` seconds after that (a reload asks for the page
-    again straight away), it's gone. The page also pings the server every
-    15 seconds (less often while hidden), which updates
-    ``handler.last_seen``; after ``idle`` seconds without a ping, the page
-    counts as gone too (e.g. the browser was killed).
+    Each page says when its window closes (/api/bye) and otherwise pings the
+    server every 15 seconds (less often while hidden). When the last page
+    has said goodbye and no page has been heard from for ``grace`` seconds
+    (a reload asks for the page again straight away), the app is closed.
+    A page not heard from for ``idle`` seconds counts as gone (e.g. its
+    browser was killed).
 
     With ``proc`` (the browser started for an app window): if it exits after
     the first few seconds, the window was closed. If it exits sooner, the
     browser handed the window to a copy that was already running, so only
-    the page's signals count. A browser that keeps running in the background
+    the pages' signals count. A browser that keeps running in the background
     after its window is closed (Edge does) doesn't keep the app alive."""
     started = time.monotonic()
+    pages = getattr(handler, "pages", None)
+    if pages is None:
+        pages = {}
     while True:
         time.sleep(poll)
         now = time.monotonic()
+        for page, seen in list(pages.items()):
+            if now - seen > idle:
+                pages.pop(page, None)
         closed = handler.closed_at
-        if closed is not None and handler.last_seen <= closed and now - closed > grace:
+        if (closed is not None and not pages and handler.last_seen <= closed
+                and now - closed > grace):
             return
         quiet = now - handler.last_seen
         if proc is not None and proc.poll() is not None:
@@ -1182,6 +1272,83 @@ def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5
                 return
         elif quiet > idle:
             return
+
+
+# --------------------------------------------------------------------------
+# One running copy
+# --------------------------------------------------------------------------
+
+def _instance_file():
+    return data_dir() / "instance.json"
+
+
+def _register_instance(server, mode, **extra):
+    """Let later launches find this one (see forward_to_running_app)."""
+    handler = server.RequestHandlerClass
+    handler.instance_secret = secrets.token_urlsafe(32)
+    handler.instance_mode = mode
+    handler.instance_extra = {k: str(v) for k, v in extra.items()}
+    record = {"port": server.server_address[1], "pid": os.getpid(),
+              "secret": handler.instance_secret, "mode": mode}
+    target = _instance_file()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(record), encoding="utf-8")
+        os.replace(tmp, target)
+    except OSError:
+        pass
+
+
+def _unregister_instance(server):
+    target = _instance_file()
+    try:
+        record = json.loads(target.read_text(encoding="utf-8"))
+        if record.get("pid") == os.getpid() and record.get("port") == server.server_address[1]:
+            target.unlink()
+    except (OSError, ValueError):
+        pass
+
+
+def forward_to_running_app(paths=()):
+    """If PDF Manager is already running, hand it ``paths`` to open and
+    return True, so this launch can end: there's only ever one copy.
+
+    The running app either opens them itself (its own window, which comes
+    to the front) or answers with an address to open, as a new window in
+    its Edge/Chrome copy or a new browser tab."""
+    try:
+        record = json.loads(_instance_file().read_text(encoding="utf-8"))
+        port, secret = int(record["port"]), str(record["secret"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    body = json.dumps({"secret": secret,
+                       "paths": [str(Path(p).resolve()) for p in paths]}).encode()
+    request = urllib.request.Request(f"http://127.0.0.1:{port}/api/instance", data=body,
+                                     headers={"Content-Type": "application/json",
+                                              "Host": f"127.0.0.1:{port}"})
+    try:
+        with urllib.request.urlopen(request, timeout=5) as res:
+            answer = json.loads(res.read())
+    except (OSError, ValueError):
+        return False  # not running any more (or something else has the port)
+    if answer.get("handled"):
+        return True
+    url = answer.get("url")
+    if not url:
+        return False
+    if answer.get("mode") == "app-window" and answer.get("browser"):
+        try:
+            subprocess.Popen([answer["browser"], f"--app={url}",
+                              f"--user-data-dir={answer.get('profile', '')}",
+                              "--no-first-run", "--no-default-browser-check"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+            return True
+        except OSError:
+            pass
+    webbrowser.open(url)
+    return True
 
 
 class DesktopApi:
@@ -1287,12 +1454,14 @@ def run_desktop(port=0, open_paths=()):
     thread.start()
     handler = server.RequestHandlerClass
     api = DesktopApi(handler.results, handler.opened)
+    _register_instance(server, "desktop")
     try:
         import webview
 
         window = webview.create_window("PDF Manager", url, js_api=api, width=1180, height=820,
                                        min_size=(400, 560), background_color="#f6f6f3")
         api._window = window
+        handler.bring_to_front = lambda: _raise_window(window)
         # Keep the window's cache and settings between launches (pywebview
         # otherwise starts every time like a private browser window).
         options = {}
@@ -1301,8 +1470,10 @@ def run_desktop(port=0, open_paths=()):
             storage.mkdir(parents=True, exist_ok=True)
             options = {"private_mode": False, "storage_path": str(storage)}
         webview.start(**options)
+        _unregister_instance(server)
     except Exception as exc:  # e.g. a missing or blocked web engine
         print(f"Could not open the app window ({exc}); trying another way.")
+        _unregister_instance(server)
         try:
             note.parent.mkdir(parents=True, exist_ok=True)
             note.write_text(f"{version}\n{type(exc).__name__}: {exc}\n", encoding="utf-8")
@@ -1366,10 +1537,12 @@ def run_app_window(port=0, open_paths=()):
         server.server_close()
         return False
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    _register_instance(server, "app-window", browser=browser, profile=profile)
     try:
         wait_until_closed(server.RequestHandlerClass, proc)
     except KeyboardInterrupt:
         pass
+    _unregister_instance(server)
     server.shutdown()
     server.server_close()
     _close_browser(proc, profile)
@@ -1425,9 +1598,23 @@ def _close_browser(proc, profile):
             pass
 
 
+def _raise_window(window):
+    """Bring the pywebview window to the front (a file was handed to it)."""
+    try:
+        window.restore()
+        window.show()
+        window.on_top = True
+        window.on_top = False
+    except Exception:
+        pass
+
+
 def launch(open_paths=(), port=0):
     """Open the app the best way available: its own pywebview window, else
-    an Edge/Chrome app window, else a browser tab. Returns once closed."""
+    an Edge/Chrome app window, else a browser tab. Returns once closed. If
+    the app is already running, it gets the files instead."""
+    if not port and forward_to_running_app(open_paths):
+        return
     if run_desktop(port=port, open_paths=open_paths):
         return
     if run_app_window(port=port, open_paths=open_paths):

@@ -86,6 +86,12 @@ function el(tag, attrs = {}, ...children) {
   for (const c of children) if (c != null) node.append(c);
   return node;
 }
+let tabSeq = 0;
+function sameBytes(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += Math.max(1, Math.floor(a.length / 4096))) if (a[i] !== b[i]) return false;
+  return true;
+}
 const isTyping = (e) => /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.target.isContentEditable;
 const store = {
   get(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; } },
@@ -101,7 +107,9 @@ export class Reader {
     this.tools = tools;
     this.onEdit = onEdit;
     this.doc = null;
-    this.bytes = null;       // original file bytes
+    this.tabs = [];          // open documents (see openBytes)
+    this.activeTab = null;
+    this.bytes = null;       // the shown document's bytes
     this.name = "";
     this.password = null;
     this.active = false;
@@ -210,7 +218,16 @@ export class Reader {
     this.body = el("div", { class: "rd-body" }, this.sidebar, this.main);
 
     this.menu = el("div", { class: "rd-menu", role: "menu", hidden: true });
-    this.root.append(toolbar, this.findbar, this.annotbar, this.body, this.menu, this.fileInput);
+    this.tabbar = el("div", { class: "rd-tabbar", role: "tablist", "aria-label": "Open documents", hidden: true });
+    this.root.append(toolbar, this.tabbar, this.findbar, this.annotbar, this.body, this.menu, this.fileInput);
+    // A drawing in progress takes every click in the window as the next
+    // stroke; end it first when the tabs, toolbar or menu are used. This
+    // listens on the window before pdf.js does, so it runs first.
+    const outside = [this.tabbar, toolbar, this.menu];
+    window.addEventListener("pointerdown", (e) => {
+      if (!outside.some((area) => area.contains(e.target))) return;
+      this.#finishEditing();
+    }, { capture: true });
     this.host.append(this.root);
     this.#wire();
   }
@@ -236,8 +253,9 @@ export class Reader {
       el("hr"),
       this.#menuItem("full", "Full screen", () => this.toggleFullscreen()),
       this.#menuItem("print", "Print…", () => this.print()),
-      this.#menuItem("save", this.#changed() ? "Save a copy with your changes…" : "Save a copy…", () => this.saveCopy()),
+      this.#menuItem("save", this.#edited() ? "Save a copy with your changes…" : "Save a copy…", () => this.saveCopy()),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
+      this.#menuItem("x", "Close this document", () => this.closeTab()),
     ];
     if (this.onEdit && this.tools.length) {
       items.push(el("hr"), el("div", { class: "label" }, "Edit with"));
@@ -471,27 +489,130 @@ export class Reader {
     await this.openBytes(new Uint8Array(await file.arrayBuffer()), file.name || "document.pdf", password);
   }
 
+  /** Open a PDF in a new tab, or switch to its tab if it's already open. */
   async openBytes(bytes, name, password = null) {
-    if (this.#changed() && !confirm(`Your changes to “${this.name}” haven't been saved. Open the other file anyway?`)) return;
+    const same = this.tabs.find((t) => t.name === name && sameBytes(t.original, bytes));
+    if (same) { await this.#switchTo(same); return; }
+    const previous = this.activeTab;
+    await this.#stash();
+    // edited: bytes holds changes made here; dirty: changes not saved to a file yet.
+    const tab = { id: ++tabSeq, original: bytes, bytes, name, password, edited: false, dirty: false };
+    this.tabs.push(tab);
+    if (!(await this.#load(tab))) {
+      this.tabs.splice(this.tabs.indexOf(tab), 1);
+      if (previous && this.tabs.includes(previous)) await this.#load(previous);
+      else this.#showEmpty();
+    }
+    this.#renderTabs();
+  }
+
+  /** Keep the open tab's unsaved annotations and form entries in its bytes
+   *  before another document takes its place in the viewer. */
+  async #stash() {
+    const tab = this.activeTab;
+    this.#finishEditing();
+    if (!tab || !this.doc || !this.#changed()) return;
+    tab.bytes = await this.doc.saveDocument();
+    tab.edited = true;
+  }
+
+  async #switchTo(tab) {
+    if (tab === this.activeTab) return;
+    await this.#stash();
+    await this.#load(tab);
+    this.#renderTabs();
+  }
+
+  async closeTab(tab = this.activeTab) {
+    if (!tab) return;
+    if (tab.dirty && !confirm(`Close “${tab.name}” without saving your changes?`)) return;
+    const i = this.tabs.indexOf(tab);
+    this.tabs.splice(i, 1);
+    if (tab === this.activeTab) {
+      this.activeTab = null;
+      const next = this.tabs[i] || this.tabs[i - 1];
+      if (next) await this.#load(next);
+      else { await this.#closeDocument(); this.#showEmpty(); }
+    }
+    this.#renderTabs();
+  }
+
+  /** Any tab with changes that haven't been saved to a file? */
+  hasUnsavedChanges() {
+    return this.tabs.some((t) => t.dirty);
+  }
+
+  /** Show the tab bar. Tabs keep their elements (a click mustn't land on an
+   *  element that was replaced halfway through it). */
+  #renderTabs() {
+    this.tabbar.hidden = this.tabs.length < 2;
+    this.tabEls ||= new Map();
+    for (const [id, parts] of this.tabEls) if (!this.tabs.some((t) => t.id === id)) { parts.wrap.remove(); this.tabEls.delete(id); }
+    if (!this.addTabBtn) {
+      this.addTabBtn = el("button", { type: "button", class: "rd-btn rd-doctab-add", title: "Open another PDF", "aria-label": "Open another PDF", html: svg("plus") });
+      this.addTabBtn.addEventListener("click", () => this.chooseFile());
+    }
+    const order = this.tabs.map((tab) => {
+      let parts = this.tabEls.get(tab.id);
+      if (!parts) {
+        const dot = el("span", { class: "rd-dot", title: "Unsaved changes" });
+        const label = el("span", { class: "rd-doctab-label" }, tab.name);
+        const btn = el("button", { type: "button", class: "rd-doctab-name", role: "tab", title: tab.name }, dot, label);
+        btn.addEventListener("click", () => this.#switchTo(tab));
+        const close = el("button", { type: "button", class: "rd-doctab-x", title: "Close", "aria-label": `Close ${tab.name}`, html: svg("x") });
+        close.addEventListener("click", () => this.closeTab(tab));
+        const wrap = el("div", { class: "rd-doctab" }, btn, close);
+        wrap.addEventListener("auxclick", (e) => { if (e.button === 1) { e.preventDefault(); this.closeTab(tab); } });
+        parts = { wrap, btn, dot };
+        this.tabEls.set(tab.id, parts);
+      }
+      const active = tab === this.activeTab;
+      parts.wrap.classList.toggle("active", active);
+      parts.btn.setAttribute("aria-selected", String(active));
+      parts.dot.hidden = !tab.dirty;
+      return parts.wrap;
+    });
+    // Re-append only if the order changed, so elements stay where they are.
+    const current = [...this.tabbar.children].filter((n) => n !== this.addTabBtn);
+    if (current.length !== order.length || current.some((n, i) => n !== order[i])) this.tabbar.replaceChildren(...order, this.addTabBtn);
+    else if (!this.addTabBtn.isConnected) this.tabbar.append(this.addTabBtn);
+  }
+
+  #showEmpty() {
+    this.activeTab = null;
+    this.empty.hidden = false;
+    this.titleEl.textContent = "";
+    this.pageInput.value = "";
+    this.pageCount.textContent = "";
+    for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
+      this.zoomSelect, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.annotateBtn]) c.disabled = true;
+    this.sidebar.hidden = true;
+    if (this.active) document.title = "PDF reader — PDF Manager";
+    this.refreshRecent();
+  }
+
+  /** Show ``tab``'s document in the viewer. Returns false if it couldn't be
+   *  opened (not a PDF, or the password prompt was cancelled). */
+  async #load(tab) {
     this.#busy(true);
     try {
       await loadPdfjs();
       this.#ensureViewer();
       await this.#closeDocument();
-      this.bytes = bytes;
-      this.name = name;
-      this.password = password;
+      this.bytes = tab.bytes;
+      this.name = tab.name;
+      this.password = tab.password;
       const task = pdfjs.getDocument({
         ...DOC_OPTIONS,
-        data: bytes.slice(),  // pdf.js takes ownership of the buffer; keep our copy intact
-        password: password || undefined,
+        data: tab.bytes.slice(),  // pdf.js takes ownership of the buffer; keep our copy intact
+        password: tab.password || undefined,
         enableXfa: true,
       });
       task.onPassword = (update, reason) => {
         this.#busy(false);
         this.#askPassword(reason === pdfjs.PasswordResponses.INCORRECT_PASSWORD).then((pw) => {
           if (pw === null) { task.destroy(); return; }
-          this.password = pw;
+          this.password = tab.password = pw;
           this.#busy(true);
           update(pw);
         });
@@ -499,12 +620,16 @@ export class Reader {
       this.task = task;
       const doc = await task.promise;
       this.doc = doc;
+      this.activeTab = tab;
+      doc.annotationStorage.onSetModified = () => {
+        if (!tab.dirty) { tab.dirty = true; this.#renderTabs(); }
+      };
       this.pdfViewer.setDocument(doc);
       this.linkService.setDocument(doc, null);
       this.findController.setDocument(doc);
-      this.titleEl.textContent = name;
-      this.titleEl.title = name;
-      document.title = name + " — PDF Manager";
+      this.titleEl.textContent = tab.name;
+      this.titleEl.title = tab.name;
+      document.title = tab.name + " — PDF Manager";
       this.empty.hidden = true;
       for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
         this.zoomSelect, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.annotateBtn]) c.disabled = false;
@@ -517,11 +642,13 @@ export class Reader {
         // Only use labels that differ from plain page numbers.
         if (labels.some((l, i) => l !== String(i + 1))) { this.labels = labels; this.pdfViewer.setPageLabels(labels); this.#updatePage(); }
       }).catch(() => {});
+      return true;
     } catch (e) {
-      if (e && e.name === "PasswordException") return;  // cancelled at the password prompt
       await this.#closeDocument();
-      this.empty.hidden = false;
-      this.toast(e && e.name === "InvalidPDFException" ? `“${name}” isn't a valid PDF.` : "Could not open the PDF: " + (e.message || e));
+      if (!(e && e.name === "PasswordException")) {  // not just cancelled at the password prompt
+        this.toast(e && e.name === "InvalidPDFException" ? `“${tab.name}” isn't a valid PDF.` : "Could not open the PDF: " + (e.message || e));
+      }
+      return false;
     } finally {
       this.#busy(false);
     }
@@ -1034,16 +1161,17 @@ export class Reader {
   // ---- saving, printing, editing ------------------------------------------------
   /** Filled-in form fields or annotations that aren't in the file yet. */
   #changed() { return !!(this.doc && this.doc.annotationStorage.size > 0); }
+  #edited() { return this.#changed() || !!this.activeTab?.edited; }
 
   async #currentBytes() {
+    this.#finishEditing();
     if (!this.#changed()) return this.bytes;
-    this.uiManager?.commitOrRemove?.();  // finish the annotation being edited
     return await this.doc.saveDocument();
   }
 
   #copyName() {
     const stem = this.name.replace(/\.pdf$/i, "");
-    return this.#changed() ? `${stem} (edited).pdf` : `${stem}.pdf`;
+    return this.#edited() ? `${stem} (edited).pdf` : `${stem}.pdf`;
   }
 
   async saveCopy() {
@@ -1058,7 +1186,7 @@ export class Reader {
         const res = await fetch("/api/keep", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
         const { id } = await res.json();
         const path = await api.save_result(id, name);
-        if (path) this.toast("Saved to " + path, 5000, ["Show in folder", () => api.reveal(path)]);
+        if (path) { this.#markSaved(); this.toast("Saved to " + path, 5000, ["Show in folder", () => api.reveal(path)]); }
       } catch (e) { this.toast("Could not save: " + (e.message || e)); }
       return;
     }
@@ -1066,7 +1194,7 @@ export class Reader {
     if (files.canSave) {
       try {
         const saved = await files.saveAs(blob, name);
-        if (saved) this.toast("Saved as " + saved);
+        if (saved) { this.#markSaved(); this.toast("Saved as " + saved); }
         return;
       } catch (e) {
         if (e.name !== "SecurityError") { this.toast("Could not save: " + (e.message || e)); return; }
@@ -1077,6 +1205,16 @@ export class Reader {
     const a = el("a", { href: url, download: name });
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
+    this.#markSaved();
+  }
+
+  /** Commit the annotation being drawn or typed. */
+  #finishEditing() {
+    try { this.uiManager?.endCurrentEditing?.(); } catch (e) { /* nothing being edited */ }
+  }
+
+  #markSaved() {
+    if (this.activeTab) { this.activeTab.dirty = false; this.#renderTabs(); }
   }
 
   async print() {

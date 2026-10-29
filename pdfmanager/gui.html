@@ -598,8 +598,11 @@ function humanSize(n) {
 function plural(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
 function showError(text) { const e = $("error"); e.replaceChildren(icon("alert"), el("span", {}, text)); e.hidden = false; }
 function clearMessages() { $("error").hidden = true; $("result").hidden = true; $("result-table").hidden = true; }
+// Each window of the app tells the server it's there, so closing one window
+// doesn't stop the app while another is still open.
+const pageId = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).slice(0, 36);
 async function api(path, options = {}) {
-  const res = await fetch(path, { ...options, headers: { "X-Pdfm-Token": token, ...(options.headers || {}) } });
+  const res = await fetch(path, { ...options, headers: { "X-Pdfm-Token": token, "X-Pdfm-Page": pageId, ...(options.headers || {}) } });
   if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
   return res;
 }
@@ -621,10 +624,10 @@ async function load() {
     $("picker").append(og);
   }
   $("picker").addEventListener("change", (e) => select(e.target.value));
+  listen();
   const openIds = (new URLSearchParams(location.hash.slice(1)).get("open") || "").split(",").filter(Boolean);
   if (openIds.length) {
-    await select("reader");
-    reader.openById(openIds[0]);
+    await openInReaderById(openIds);
     return;
   }
   let start = "merge";
@@ -1316,7 +1319,27 @@ $("preview").addEventListener("click", () => run(true));
 // last window running the app has closed.
 const ping = () => { if (token) api("/api/ping", { method: "POST" }).catch(() => {}); };
 // Tell the server when the window closes, so the app stops right away.
-window.addEventListener("pagehide", () => { if (token) navigator.sendBeacon("/api/bye?token=" + encodeURIComponent(token)); });
+window.addEventListener("pagehide", () => { if (token) navigator.sendBeacon(`/api/bye?token=${encodeURIComponent(token)}&page=${pageId}`); });
+
+// Warn before closing the window with unsaved changes in the reader.
+window.addEventListener("beforeunload", (e) => { if (reader && reader.hasUnsavedChanges()) { e.preventDefault(); e.returnValue = ""; } });
+
+// Files handed over by another launch of the app (e.g. a PDF opened from
+// Explorer while the app is already running) arrive as events.
+async function listen() {
+  let after = 0;
+  for (;;) {
+    try {
+      const data = await (await api(`/api/events?after=${after}`)).json();
+      after = data.last;
+      for (const event of data.events) if (event.open && event.open.length) openInReaderById(event.open);
+    } catch (e) { await new Promise((r) => setTimeout(r, 3000)); }
+  }
+}
+async function openInReaderById(ids) {
+  await select("reader");
+  for (const id of ids) await reader.openById(id);  // each in its own tab
+}
 setInterval(ping, 15000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) ping(); });
 

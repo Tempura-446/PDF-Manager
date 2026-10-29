@@ -163,3 +163,78 @@ def test_recent_files(app, tmp_path):
     call(base, token, "/api/recent/forget", {"path": files[0]["path"]})
     assert json.loads(call(base, token, "/api/recent")[2])["files"] == []
     assert call(base, "wrong", "/api/recent")[0] == 403
+
+
+# -- one running copy ---------------------------------------------------------------------
+
+def test_files_are_handed_to_the_running_app(app, tmp_path, monkeypatch):
+    base, token, srv = app
+    pdf = text_pdf(tmp_path / "a.pdf")
+    raised = []
+    srv.RequestHandlerClass.bring_to_front = lambda: raised.append(1)
+    gui._register_instance(srv, "desktop")
+    # Its own window: the app opens the files itself and comes to the front.
+    assert gui.forward_to_running_app([pdf]) is True
+    events = json.loads(call(base, token, "/api/events?after=0")[2])
+    ids = events["events"][0]["open"]
+    assert raised == [1] and len(ids) == 1
+    assert call(base, token, f"/api/file/{ids[0]}")[2].startswith(b"%PDF")
+    # Edge window: the new launch opens a window on the running app.
+    launched = []
+    monkeypatch.setattr(gui.subprocess, "Popen", lambda args, **kw: launched.append(args))
+    gui._register_instance(srv, "app-window", browser="/opt/edge", profile=tmp_path / "window")
+    assert gui.forward_to_running_app([pdf]) is True
+    assert launched[0][0] == "/opt/edge" and launched[0][1].startswith("--app=http://127.0.0.1:")
+    assert f"#token={token}&open=" in launched[0][1]
+    assert launched[0][2] == f"--user-data-dir={tmp_path / 'window'}"
+    # Browser tab: a new tab.
+    opened = []
+    monkeypatch.setattr(gui.webbrowser, "open", opened.append)
+    gui._register_instance(srv, "browser")
+    assert gui.forward_to_running_app([]) is True and opened[0].endswith(f"#token={token}")
+    gui._unregister_instance(srv)
+    assert gui.forward_to_running_app([pdf]) is False  # nothing registered
+
+
+def test_handing_over_needs_the_secret(app):
+    base, token, srv = app
+    gui._register_instance(srv, "desktop")
+    assert call(base, token, "/api/instance", {"secret": "guess", "paths": []})[0] == 403
+
+
+def test_stale_instance_file_is_ignored(app, tmp_path):
+    from pdfmanager import appdata
+
+    target = appdata.data_dir() / "instance.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"port": 1, "secret": "x", "pid": 1, "mode": "desktop"}))
+    assert gui.forward_to_running_app([]) is False
+
+
+def test_closing_one_of_two_windows_keeps_the_app():
+    pages = {"a": time.monotonic(), "b": time.monotonic()}
+    handler = type("H", (), {"last_seen": time.monotonic(), "closed_at": None, "pages": pages})
+
+    def close_a_then_b():
+        time.sleep(0.2)
+        pages.pop("a")
+        handler.closed_at = time.monotonic()
+        time.sleep(0.6)  # b is still open: the app must keep running
+        assert not done
+        pages.pop("b")
+        handler.closed_at = time.monotonic()
+
+    done = []
+    threading.Thread(target=close_a_then_b, daemon=True).start()
+    t = time.monotonic()
+    gui.wait_until_closed(handler, poll=0.05, grace=0.2)
+    done.append(1)
+    assert 1.0 <= time.monotonic() - t < 2
+
+
+def test_page_ids_are_tracked(app):
+    base, token, srv = app
+    call(base, token, "/api/ping", b"", {"X-Pdfm-Page": "p1"})
+    assert "p1" in srv.RequestHandlerClass.pages
+    call(base, token, f"/api/bye?token={token}&page=p1", b"")
+    assert "p1" not in srv.RequestHandlerClass.pages

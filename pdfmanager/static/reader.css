@@ -222,3 +222,16 @@
 .rd-recent-text small { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rd-recent-x { margin-right: 6px; opacity: .5; }
 .rd-recent li:hover .rd-recent-x, .rd-recent-x:focus-visible { opacity: 1; }
+
+/* ---- Document tabs ---- */
+.rd-tabbar { display: flex; align-items: flex-end; gap: 2px; padding: 6px 10px 0; background: var(--surface-2); border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: thin; }
+.rd-doctab { display: flex; align-items: center; max-width: 220px; min-width: 110px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); }
+.rd-doctab:hover { background: var(--surface-3); }
+.rd-doctab.active { background: var(--surface); border-color: var(--border); color: var(--text); margin-bottom: -1px; padding-bottom: 1px; }
+.rd-doctab-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 7px 4px 7px 12px; border: 0; background: none; cursor: pointer; font-size: 13px; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; color: inherit; }
+.rd-doctab-x { width: 24px; height: 24px; margin-right: 4px; border: 0; border-radius: 6px; background: none; cursor: pointer; display: grid; place-items: center; color: var(--muted); padding: 0; flex: none; }
+.rd-doctab-x:hover { background: var(--surface-3); color: var(--text); }
+.rd-doctab-x svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.rd-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+.rd-doctab-add { height: 30px; min-width: 30px; margin-bottom: 3px; }
+.rd-doctab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
