@@ -685,6 +685,50 @@ class OpenFiles:
             return self.items.get(key)
 
 
+class RecentFiles:
+    """PDFs recently opened in the reader from this computer, newest first,
+    kept in recent.json in the app's data folder."""
+
+    LIMIT = 30
+    lock = threading.Lock()
+
+    @staticmethod
+    def _file():
+        return data_dir() / "recent.json"
+
+    @classmethod
+    def load(cls):
+        try:
+            items = json.loads(cls._file().read_text(encoding="utf-8"))
+            return [i for i in items if isinstance(i, dict) and i.get("path")]
+        except (OSError, ValueError):
+            return []
+
+    @classmethod
+    def _save(cls, items):
+        target = cls._file()
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_name(target.name + ".tmp")
+            tmp.write_text(json.dumps(items[:cls.LIMIT], indent=1), encoding="utf-8")
+            os.replace(tmp, target)
+        except OSError:
+            pass  # a recent-files list isn't worth failing over
+
+    @classmethod
+    def add(cls, path):
+        path = str(Path(path).resolve())
+        with cls.lock:
+            items = [i for i in cls.load() if os.path.normcase(i["path"]) != os.path.normcase(path)]
+            items.insert(0, {"path": path, "opened": time.time()})
+            cls._save(items)
+
+    @classmethod
+    def forget(cls, path=None):
+        with cls.lock:
+            cls._save([] if path is None else [i for i in cls.load() if i["path"] != path])
+
+
 # --------------------------------------------------------------------------
 # HTTP
 # --------------------------------------------------------------------------
@@ -802,6 +846,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._open_file(path[len("/api/file/"):])
         if path.startswith("/api/job/"):
             return self._job(path, "GET")
+        if path == "/api/recent":
+            return self._recent()
         self._error(HTTPStatus.NOT_FOUND, "not found")
 
     def _static(self, rel):
@@ -831,8 +877,21 @@ class Handler(BaseHTTPRequestHandler):
         if path is None or not path.is_file():
             return self._error(HTTPStatus.NOT_FOUND, "that file is no longer available")
         quoted = path.name.replace('"', "")
-        return self._send(HTTPStatus.OK, path.read_bytes(), "application/pdf",
+        data = path.read_bytes()
+        RecentFiles.add(path)
+        return self._send(HTTPStatus.OK, data, "application/pdf",
                           {"X-Pdfm-Filename": quoted, "X-Pdfm-Path": str(path)})
+
+    def _recent(self):
+        """Recently opened files that still exist, each with an id the
+        reader can open."""
+        files = []
+        for item in RecentFiles.load():
+            path = Path(item["path"])
+            if path.is_file() and self.opened is not None:
+                files.append({"id": self.opened.add(path), "name": path.name, "path": str(path),
+                              "folder": str(path.parent), "opened": item.get("opened")})
+        return self._send(HTTPStatus.OK, {"files": files})
 
     def do_POST(self):
         if not self._host_ok():
@@ -873,6 +932,10 @@ class Handler(BaseHTTPRequestHandler):
                     data.get("op"), data.get("options") or {}, bool(data.get("apply")))})
             if path.startswith("/api/job/"):
                 return self._job(path, "POST")
+            if path == "/api/recent/forget":
+                data = json.loads(body or b"{}")
+                RecentFiles.forget(data.get("path") if not data.get("all") else None)
+                return self._send(HTTPStatus.OK, {"ok": True})
             return self._error(HTTPStatus.NOT_FOUND, "not found")
         except EXPECTED_ERRORS as exc:
             return self._error(HTTPStatus.BAD_REQUEST, str(exc))

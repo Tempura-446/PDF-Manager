@@ -203,7 +203,9 @@ export class Reader {
         el("h2", {}, "Read a PDF"),
         el("p", {}, "Drop a PDF here, or open one from your computer."),
         this.emptyOpenBtn,
-        el("p", { class: "keys" }, "Ctrl+F find · Ctrl +/− zoom · R rotate · N / P next / previous page")));
+        el("p", { class: "keys" }, "Ctrl+F find · Ctrl +/− zoom · R rotate · N / P next / previous page")),
+      this.recentBox = el("section", { class: "rd-recent", hidden: true, "aria-label": "Recent files" },
+        el("h3", {}, "Recent"), this.recentList = el("ul", {})));
     this.main = el("div", { class: "rd-main" }, this.container, this.loading, this.empty);
     this.body = el("div", { class: "rd-body" }, this.sidebar, this.main);
 
@@ -310,8 +312,14 @@ export class Reader {
       this.empty.classList.remove("over");
       if (!hasFiles(e)) return;
       e.preventDefault(); e.stopPropagation();
-      const file = [...e.dataTransfer.files].find((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
-      if (file) this.openFile(file); else this.toast("That isn't a PDF.");
+      const isPdf = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+      const file = [...e.dataTransfer.files].find(isPdf);
+      if (!file) { this.toast("That isn't a PDF."); return; }
+      // Remember dropped files for Recent (the handle must be asked for right away).
+      const item = [...e.dataTransfer.items].find((i) => i.kind === "file" && i.getAsFile() && isPdf(i.getAsFile()));
+      const handle = item && item.getAsFileSystemHandle ? item.getAsFileSystemHandle() : null;
+      if (handle) handle.then((h) => h && h.kind === "file" && files.rememberHandle(h)).catch(() => {});
+      this.openFile(file);
     });
 
     // Ctrl/⌘ + wheel zooms around the pointer.
@@ -375,7 +383,10 @@ export class Reader {
   }
 
   // ---- visibility (called by the app when switching tools) --------------------
-  show() { this.active = true; this.root.hidden = false; if (this.doc) this.container.focus({ preventScroll: true }); }
+  show() {
+    this.active = true; this.root.hidden = false;
+    if (this.doc) this.container.focus({ preventScroll: true }); else this.refreshRecent();
+  }
   hide() { this.active = false; this.root.hidden = true; this.#closeMenu(); }
 
   // ---- opening ------------------------------------------------------------------
@@ -388,7 +399,59 @@ export class Reader {
       } catch (e) { this.toast(String(e.message || e)); }
       return;
     }
+    if (files.canOpen) {
+      // The browser's Open dialog gives a handle, so the file can be reopened from Recent.
+      try {
+        const [picked] = await files.openPdfs(false);
+        if (picked) { files.rememberHandle(picked.handle); await this.openFile(picked.file); }
+      } catch (e) { this.fileInput.click(); }
+      return;
+    }
     this.fileInput.click();
+  }
+
+  // ---- recent files ---------------------------------------------------------------
+  /** Fill the start screen's Recent list: files opened from this computer by
+   *  path (desktop window, "Open with") and by browser handle. */
+  async refreshRecent() {
+    let server = [];
+    try {
+      const res = await fetch("/api/recent", { headers: { "X-Pdfm-Token": this.token } });
+      if (res.ok) server = (await res.json()).files;
+    } catch (e) { /* offline or an old server */ }
+    const handles = files.canOpen ? await files.recentHandles() : [];
+    const entries = [
+      ...server.map((f) => ({ name: f.name, where: f.folder, path: f.path, opened: (f.opened || 0) * 1000,
+        open: () => this.openById(f.id), forget: () => this.#forgetRecent({ path: f.path }) })),
+      ...handles.map((h) => ({ name: h.name, where: "", opened: h.opened,
+        open: async () => {
+          const file = await files.fileFromHandle(h.handle);
+          if (!file) { this.toast(`“${h.name}” can't be opened any more. It may have been moved or deleted.`); return; }
+          files.rememberHandle(h.handle);
+          await this.openFile(file);
+        },
+        forget: async () => { await files.forgetHandle(h.key); this.refreshRecent(); } })),
+    ].sort((a, b) => b.opened - a.opened).slice(0, 15);
+    const when = (t) => {
+      if (!t) return "";
+      const d = new Date(t), today = new Date();
+      const days = Math.round((new Date(today.toDateString()) - new Date(d.toDateString())) / 86400000);
+      const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      return days === 0 ? `Today ${time}` : days === 1 ? `Yesterday ${time}` : d.toLocaleDateString();
+    };
+    this.recentList.replaceChildren(...entries.map((e) => el("li", {},
+      el("button", { type: "button", class: "rd-recent-open", title: e.path || e.name, onclick: () => e.open() },
+        el("span", { class: "rd-recent-icon", html: svg("book") }),
+        el("span", { class: "rd-recent-text" }, el("strong", {}, e.name), el("small", {}, [e.where, when(e.opened)].filter(Boolean).join(" · ")))),
+      el("button", { type: "button", class: "rd-btn rd-recent-x", title: "Remove from Recent", "aria-label": `Remove ${e.name} from Recent`, html: svg("x"), onclick: () => e.forget() }))));
+    this.recentBox.hidden = !entries.length;
+  }
+
+  async #forgetRecent(data) {
+    try {
+      await fetch("/api/recent/forget", { method: "POST", headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/json" }, body: JSON.stringify(data) });
+    } catch (e) { /* ignore */ }
+    this.refreshRecent();
   }
 
   async openById(id) {

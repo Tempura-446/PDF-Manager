@@ -97,7 +97,11 @@
 .rd-container.dark .page .canvasWrapper { filter: invert(1) hue-rotate(180deg); }
 
 /* ---- Empty state ---- */
-.rd-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; background: var(--bg); }
+.rd-empty {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px;
+  padding: 24px; background: var(--bg); overflow-y: auto;
+}
+.rd-empty:has(.rd-recent:not([hidden])) { justify-content: flex-start; padding-top: 6vh; }
 .rd-empty-card {
   max-width: 460px; width: 100%; text-align: center; padding: 40px 28px; border: 1.5px dashed var(--border-strong);
   border-radius: 16px; background: var(--surface); transition: border-color .15s, background .15s;
@@ -199,3 +203,22 @@
 .rd-sigrow .rd-btn { border-color: var(--border-strong); }
 .rd-sigremember { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 13.5px; color: var(--muted); }
 .rd-sigremember input { accent-color: var(--accent); }
+
+/* ---- Recent files (start screen) ---- */
+.rd-recent { width: min(560px, 100%); }
+.rd-recent h3 { font-size: 11px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); margin: 0 0 6px 4px; }
+.rd-recent ul { list-style: none; margin: 0; padding: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.rd-recent li { display: flex; align-items: center; border-top: 1px solid var(--border); }
+.rd-recent li:first-child { border-top: 0; }
+.rd-recent-open {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 0; background: none;
+  text-align: left; cursor: pointer; color: var(--text);
+}
+.rd-recent-open:hover { background: var(--surface-2); }
+.rd-recent-icon { width: 32px; height: 32px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; flex: none; }
+.rd-recent-icon svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.rd-recent-text { min-width: 0; display: flex; flex-direction: column; }
+.rd-recent-text strong { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rd-recent-text small { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rd-recent-x { margin-right: 6px; opacity: .5; }
+.rd-recent li:hover .rd-recent-x, .rd-recent-x:focus-visible { opacity: 1; }

@@ -144,3 +144,22 @@ def test_failed_job_result_is_an_error(app, tmp_path):
         time.sleep(0.05)
     status, _, out = call(base, token, f"/api/job/{job}/result")
     assert status == 400 and "out of range" in json.loads(out)["error"]
+
+
+# -- recent files -------------------------------------------------------------------------
+
+def test_recent_files(app, tmp_path):
+    base, token, srv = app
+    a, b = text_pdf(tmp_path / "a.pdf"), text_pdf(tmp_path / "b.pdf")
+    opened = srv.RequestHandlerClass.opened
+    for path in (a, b, a):  # opening by id (desktop Open dialog, "Open with") records it
+        assert call(base, token, f"/api/file/{opened.add(path)}")[0] == 200
+    files = json.loads(call(base, token, "/api/recent")[2])["files"]
+    assert [f["name"] for f in files] == ["a.pdf", "b.pdf"]  # newest first, no repeats
+    # Each comes with an id the reader can open, and files that are gone are left out.
+    assert call(base, token, f"/api/file/{files[1]['id']}")[2].startswith(b"%PDF")
+    b.unlink()
+    assert [f["name"] for f in json.loads(call(base, token, "/api/recent")[2])["files"]] == ["a.pdf"]
+    call(base, token, "/api/recent/forget", {"path": files[0]["path"]})
+    assert json.loads(call(base, token, "/api/recent")[2])["files"] == []
+    assert call(base, "wrong", "/api/recent")[0] == 403
