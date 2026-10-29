@@ -716,7 +716,7 @@ def test_app_window_uses_edge_or_chrome(tmp_path, monkeypatch):
     monkeypatch.setattr(gui, "data_dir", lambda: tmp_path)
     monkeypatch.setattr(gui.subprocess, "Popen", Proc)
     monkeypatch.setattr(gui, "wait_until_closed", lambda handler, proc: None)
-    monkeypatch.setattr(gui, "_profile_processes", lambda profile: [])
+    monkeypatch.setattr(gui, "_profile_processes", lambda profile, exe=None: [])
     import socket
 
     probe = socket.socket()
