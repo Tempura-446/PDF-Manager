@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PDF Manager</title>
+<title>ZPDF</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23e25e42%22/%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%239e2a1c%22/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect%20x%3D%226%22%20y%3D%226%22%20width%3D%2288%22%20height%3D%2288%22%20rx%3D%2222%22%20fill%3D%22url%28%23g%29%22/%3E%3Cpath%20fill%3D%22%23fff%22%20d%3D%22M22%2032C34%2026%2052%2029%2066%2025L80%2024L43%2070C56%2071%2068%2070%2076%2064C79%2062%2083%2062%2082%2066C76%2076%2058%2078%2040%2077L20%2077L57%2031C45%2031%2033%2033%2025%2036C21%2037.5%2019%2034%2022%2032Z%22/%3E%3Cpolygon%20fill%3D%22%23ffd68a%22%20points%3D%2277%2C9%2078.8%2C14.2%2084%2C16%2078.8%2C17.8%2077%2C23%2075.2%2C17.8%2070%2C16%2075.2%2C14.2%22/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/reader.css">
 <style>
 /* ---- Design tokens: "paper & ink" -------------------------------------------------
@@ -98,11 +99,12 @@ nav {
 .brand { display: flex; align-items: center; gap: 11px; padding: 18px 18px 12px; }
 .brand-mark {
   width: 36px; height: 36px; border-radius: 10px; color: var(--accent-text); flex: none;
-  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 80%, white) 0%, var(--accent) 70%);
+  background: linear-gradient(135deg, #e25e42 0%, #9e2a1c 100%);  /* the app icon's red tile */
   box-shadow: inset 0 1px 0 rgb(255 255 255 / .22), 0 1px 2px rgb(27 27 25 / .18);
   display: grid; place-items: center;
 }
-.brand-mark svg { width: 20px; height: 20px; }
+.brand-mark svg { width: 100%; height: 100%; fill: #fff; }
+.brand-mark .spark { fill: #ffd68a; }
 .brand strong { display: block; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; }
 .brand span { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
 .search { position: relative; margin: 2px 12px 8px; }
@@ -602,8 +604,8 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
 <div class="app">
   <nav aria-label="Tools">
     <div class="brand">
-      <div class="brand-mark"><svg class="i" viewBox="0 0 24 24"><path d="M7 3h7l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg></div>
-      <div><strong>PDF Manager</strong><span id="version"></span></div>
+      <div class="brand-mark"><svg viewBox="6 6 88 88" aria-hidden="true"><path d="M22 32C34 26 52 29 66 25L80 24L43 70C56 71 68 70 76 64C79 62 83 62 82 66C76 76 58 78 40 77L20 77L57 31C45 31 33 33 25 36C21 37.5 19 34 22 32Z"/><polygon class="spark" points="77,9 78.8,14.2 84,16 78.8,17.8 77,23 75.2,17.8 70,16 75.2,14.2"/></svg></div>
+      <div><strong>ZPDF</strong><span id="version"></span></div>
     </div>
     <div class="search">
       <svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
@@ -627,7 +629,7 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
   <main>
     <div class="page-head">
       <div class="tool-icon" id="tool-icon"></div>
-      <div><h1 id="title">PDF Manager</h1><p id="help"></p></div>
+      <div><h1 id="title">ZPDF</h1><p id="help"></p></div>
     </div>
 
     <div class="message err" id="error" hidden role="alert"></div>
@@ -704,7 +706,7 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
     <h2 id="settings-title">Settings</h2>
     <p class="dlg-version" id="settings-version"></p>
     <h3>Updates</h3>
-    <label class="dlg-check"><input type="checkbox" id="set-check"> Check for new versions when PDF Manager starts</label>
+    <label class="dlg-check"><input type="checkbox" id="set-check"> Check for new versions when ZPDF starts</label>
     <label class="dlg-field"><span>GitHub repository</span><input type="text" id="set-repo" spellcheck="false" autocomplete="off" placeholder="owner/name"></label>
     <label class="dlg-field"><span>GitHub token <em id="set-token-state"></em></span>
       <input type="password" id="set-token" autocomplete="off" spellcheck="false" placeholder="paste a token to change it"></label>
@@ -724,7 +726,7 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
 
 <dialog class="app-dialog" id="update-dialog" aria-labelledby="update-title">
   <form method="dialog">
-    <h2 id="update-title">Update PDF Manager</h2>
+    <h2 id="update-title">Update ZPDF</h2>
     <p id="update-text"></p>
     <span class="job-progress" id="update-progress" hidden role="progressbar" aria-label="Progress"><span></span></span>
     <p class="dlg-status" id="update-status" aria-live="polite"></p>
@@ -835,10 +837,10 @@ async function api(path, options = {}) {
 
 // ---- tools -----------------------------------------------------------------
 async function load() {
-  if (!token) { showError("Open PDF Manager with the link printed in the terminal (it contains a security token)."); return; }
+  if (!token) { showError("Open ZPDF with the link printed in the terminal (it contains a security token)."); return; }
   let data;
   try { data = await (await api("/api/operations")).json(); }
-  catch (e) { showError("Could not connect. Restart PDF Manager and use the new link."); return; }
+  catch (e) { showError("Could not connect. Restart ZPDF and use the new link."); return; }
   ops = [{ id: "home", group: "", label: "Home", files: "home", help: "" }, ...data.operations];
   $("version").textContent = "Version " + data.version;
   renderTools("");
@@ -953,12 +955,12 @@ async function select(id) {
   $("tool-icon").replaceChildren(icon(id));
   $("title").textContent = current.label;
   $("help").textContent = current.help || defaultHelp(current);
-  document.title = homeMode ? "PDF Manager" : current.label + " — PDF Manager";
+  document.title = homeMode ? "ZPDF" : current.label + " — ZPDF";
   if (homeMode) { renderHome(); return; }
   if (readerMode) {
     await ensureReader();
     reader.show();
-    if (reader.doc) document.title = reader.name + " — PDF Manager";
+    if (reader.doc) document.title = reader.name + " — ZPDF";
     return;
   }
   // Back from the reader to the same tool (e.g. after opening a search
@@ -1772,7 +1774,7 @@ $("update-btn").addEventListener("click", () => {
   const info = updateInfo;
   if (!info) return;
   $("update-text").textContent = info.how === "pip"
-    ? `Version ${info.latest} is available (you have ${info.current}). It's downloaded from GitHub and installed, then PDF Manager starts again. Save your work in the reader first.`
+    ? `Version ${info.latest} is available (you have ${info.current}). It's downloaded from GitHub and installed, then ZPDF starts again. Save your work in the reader first.`
     : info.how === "source" ? `Version ${info.latest} is available (you have ${info.current}). This copy runs from a source folder: update it with git pull.`
     : `Version ${info.latest} is available (you have ${info.current}). Download the new standalone app from GitHub to update.`;
   $("update-go").hidden = info.how !== "pip";
@@ -1800,7 +1802,7 @@ $("update-go").addEventListener("click", async () => {
     const { version } = await (await api(`/api/job/${job}/result`)).json();  // throws with the error if it failed
     bar.firstElementChild.style.width = "100%";
     if (!updateInfo.can_restart) {
-      updateStatus("update-status", `Version ${version} is installed. Close PDF Manager and open it again to use it.`);
+      updateStatus("update-status", `Version ${version} is installed. Close ZPDF and open it again to use it.`);
       $("update-later").disabled = false; $("update-later").textContent = "Close"; go.hidden = true;
       return;
     }
@@ -1808,7 +1810,7 @@ $("update-go").addEventListener("click", async () => {
     restarting = true;
     await api("/api/update/restart", { method: "POST" });
     // A browser tab can't close itself: say where the new copy is.
-    setTimeout(() => updateStatus("update-status", "PDF Manager has started again in a new window. You can close this one."), 8000);
+    setTimeout(() => updateStatus("update-status", "ZPDF has started again in a new window. You can close this one."), 8000);
   } catch (e) {
     updateStatus("update-status", "The update didn't work: " + (e.message || e), true);
     go.disabled = false; $("update-later").disabled = false;

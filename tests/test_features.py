@@ -185,7 +185,7 @@ def test_cli_flatten_and_sanitize(tmp_path):
     assert main(["flatten", str(src)]) == 0
     assert not PdfReader(tmp_path / "form_flat.pdf").get_fields()
     assert main(["sanitize", str(src), "-o", str(tmp_path / "s.pdf")]) == 0
-    assert PdfReader(tmp_path / "s.pdf").metadata.get("/Producer") == "PDF Manager"
+    assert PdfReader(tmp_path / "s.pdf").metadata.get("/Producer") == "ZPDF"
 
 
 # -- bookmarks -------------------------------------------------------------------------
@@ -423,7 +423,7 @@ def test_text_file_to_pdf_without_office(tmp_path, monkeypatch):
     monkeypatch.setattr(office, "find_libreoffice", lambda: None)
     (tmp_path / "notes.txt").write_text("First line\nSecond line\n", encoding="utf-8")
     out, program = office.office_to_pdf(tmp_path / "notes.txt", tmp_path / "notes.pdf")
-    assert program == "PDF Manager"
+    assert program == "ZPDF"
     assert "Second line" in PdfReader(out).pages[0].extract_text()
     (tmp_path / "x.docx").write_bytes(b"")
     with pytest.raises(core.PdfManagerError, match="needs Microsoft Office or LibreOffice"):

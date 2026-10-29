@@ -193,7 +193,7 @@ def _report(old_name, new_name, a, b, rows, output, all_pages, dpi):
     margin = 36
     c = canvas.Canvas(str(output), pagesize=(W, H))
     c.setTitle(f"Comparison of {old_name} and {new_name}")
-    c.setCreator("PDF Manager")
+    c.setCreator("ZPDF")
 
     # Summary page
     changed = [r for r in rows if r["kind"] != "same"]

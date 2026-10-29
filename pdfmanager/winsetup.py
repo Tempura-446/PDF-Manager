@@ -1,5 +1,5 @@
-"""Set up PDF Manager on Windows once it's installed with Python: Start menu
-and desktop shortcuts, PDF Manager in "Open with" and Default apps for
+"""Set up ZPDF on Windows once it's installed with Python: Start menu
+and desktop shortcuts, ZPDF in "Open with" and Default apps for
 PDFs, and an entry in Settings > Apps to uninstall it. Everything is for
 the current user only, so no administrator rights are needed.
 
@@ -17,19 +17,20 @@ from pathlib import Path
 from pdfmanager import __version__, appicon, core
 from pdfmanager.appdata import data_dir
 
-NAME = "PDF Manager"
+NAME = "ZPDF"
+OLD_NAMES = ("PDF Manager",)  # earlier names, whose shortcuts are replaced
 PROG_ID = "PDFManager.Document"
 APP_KEY = r"Software\PDFManager"
 UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFManager"
 CLASSES = r"Software\Classes"
 CSIDL_PROGRAMS, CSIDL_DESKTOPDIRECTORY = 0x02, 0x10
 
-UNINSTALL_PS1 = r"""# Removes PDF Manager (run from Settings > Apps, or right-click > Run with PowerShell).
+UNINSTALL_PS1 = r"""# Removes ZPDF (run from Settings > Apps, or right-click > Run with PowerShell).
 # Plain commands only, so it also works where scripts are limited (Smart App Control)
 # and without Python.
 $ErrorActionPreference = "Continue"
 $app = "{app_dir}"
-Write-Host "Removing PDF Manager..."
+Write-Host "Removing ZPDF..."
 # Close the app if it's running.
 Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe' OR Name = 'python.exe'" |
     Where-Object {{ $_.CommandLine -like "*-m pdfmanager*" }} |
@@ -50,7 +51,7 @@ REMOVE_FILES_PS1 = r"""Remove-Item -LiteralPath $app -Recurse -Force -ErrorActio
 if (Test-Path -LiteralPath $app) {
     Write-Host "Some files could not be removed: $app"
 } else {
-    Write-Host "PDF Manager was removed. Your recipes and settings are kept in $env:LOCALAPPDATA\PDF Manager; delete that folder to remove them too."
+    Write-Host "ZPDF was removed. Your recipes and settings are kept in $env:LOCALAPPDATA\PDF Manager; delete that folder to remove them too."
 }
 """
 KEEP_FILES_PS1 = r"""Write-Host "The shortcuts and Open with entries were removed. The program's files in $app are left for you to delete."
@@ -211,7 +212,7 @@ def _notify_shell():
 
 
 def register_open_with(command, icon):
-    """PDF Manager in "Open with" and in Settings > Default apps for .pdf
+    """ZPDF in "Open with" and in Settings > Default apps for .pdf
     files (it doesn't take over as the default app)."""
     _set(rf"{CLASSES}\{PROG_ID}", {"": "PDF document", "FriendlyTypeName": "PDF document"})
     _set(rf"{CLASSES}\{PROG_ID}\DefaultIcon", {"": f"{icon},0"})
@@ -246,11 +247,11 @@ def install(app_dir=None, desktop=True, open_with=True):
     _require_windows()
     app_dir = Path(app_dir or default_app_dir())
     app_dir.mkdir(parents=True, exist_ok=True)
-    icon = appicon.save_ico(app_dir / "PDF Manager.ico")
+    icon = appicon.save_ico(app_dir / f"{NAME}.ico")
     ours = data_dir() in Path(app_dir).resolve().parents  # the installer's own folder
     (app_dir / "uninstall.ps1").write_text(UNINSTALL_PS1.format(
         app_dir=_ps(app_dir), prog_id=PROG_ID, app_key=APP_KEY, uninstall_key=UNINSTALL_KEY,
-        name=_ps(NAME), shortcuts=", ".join(f'"{_ps(p)}"' for p in shortcut_paths(True)),
+        name=_ps(NAME), shortcuts=", ".join(f'"{_ps(p)}"' for p in shortcut_paths(True) + _old_shortcuts()),
         remove_files=REMOVE_FILES_PS1 if ours else KEEP_FILES_PS1),
         encoding="utf-8-sig")
     exe = pythonw()
@@ -281,6 +282,32 @@ def remove():
     _delete_value(r"Software\RegisteredApplications", NAME)
     _delete_tree(UNINSTALL_KEY)
     _notify_shell()
+
+
+def _old_shortcuts():
+    return [_folder(where) / f"{old}.lnk" for old in OLD_NAMES
+            for where in (CSIDL_PROGRAMS, CSIDL_DESKTOPDIRECTORY)]
+
+
+def rename_old_install():
+    """A copy installed under an earlier name gets the new name and icon:
+    its shortcuts and Open with entry are made again and the old ones taken
+    away. Returns True if there was one."""
+    if sys.platform != "win32":
+        return False
+    old = [p for p in _old_shortcuts() if p.exists()]
+    if not old:
+        return False
+    desktop = any(p.parent == _folder(CSIDL_DESKTOPDIRECTORY) for p in old)
+    app_dir = default_app_dir()
+    install(app_dir, desktop=desktop)
+    for path in old:
+        path.unlink(missing_ok=True)
+    for name in OLD_NAMES:
+        _delete_value(r"Software\RegisteredApplications", name)
+        (app_dir / f"{name}.ico").unlink(missing_ok=True)
+    _notify_shell()
+    return True
 
 
 def launch_detached(args=("-I", "-m", "pdfmanager", "gui")):

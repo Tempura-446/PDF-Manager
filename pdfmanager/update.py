@@ -1,4 +1,4 @@
-"""Updates: see whether a newer PDF Manager is on GitHub and install it.
+"""Updates: see whether a newer ZPDF is on GitHub and install it.
 
 The newest version is the one in pdfmanager/__init__.py on the
 repository's default branch. A private repository needs a GitHub token
@@ -176,7 +176,7 @@ def _extract(data, target):
         zf.extractall(root)
     projects = [p.parent for p in Path(target).glob("*/pyproject.toml")]
     if len(projects) != 1:
-        raise core.PdfManagerError("the download isn't a PDF Manager source folder")
+        raise core.PdfManagerError("the download isn't a ZPDF source folder")
     return projects[0]
 
 

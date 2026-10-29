@@ -54,18 +54,18 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath "dist\PDF Manager\PDF Manager.exe" `
+          $p = Start-Process -FilePath "dist\ZPDF\ZPDF.exe" `
                -ArgumentList "--self-test", "$env:RUNNER_TEMP\selftest.txt" -Wait -PassThru
           Get-Content "$env:RUNNER_TEMP\selftest.txt"
           if ($p.ExitCode -ne 0) { exit 1 }
       - name: Self-test the built app (Linux)
         if: runner.os == 'Linux'
         run: |
-          "dist/PDF Manager/PDF Manager" --self-test "$RUNNER_TEMP/selftest.txt" || status=$?
+          "dist/ZPDF/ZPDF" --self-test "$RUNNER_TEMP/selftest.txt" || status=$?
           cat "$RUNNER_TEMP/selftest.txt"
           exit ${status:-0}
       - uses: actions/upload-artifact@v4
         with:
-          name: PDF-Manager-${{ matrix.label }}
-          path: dist/PDF-Manager-${{ matrix.label }}.zip
+          name: ZPDF-${{ matrix.label }}
+          path: dist/ZPDF-${{ matrix.label }}.zip
           if-no-files-found: error

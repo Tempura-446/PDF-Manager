@@ -1,6 +1,6 @@
 name: Windows end-to-end
 
-# Installs PDF Manager on a clean Windows machine with "Install PDF Manager.cmd"
+# Installs ZPDF on a clean Windows machine with "Install ZPDF.cmd"
 # (under PowerShell's Constrained Language mode, as with Smart App Control),
 # then starts the installed app like its Start menu shortcut does, uses it in
 # both kinds of window (its own WebView2 window and the Edge app window),
@@ -30,7 +30,7 @@ jobs:
         run: |
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v __PSLockdownPolicy /t REG_SZ /d 4 /f
           powershell -NoProfile -Command "$ExecutionContext.SessionState.LanguageMode"
-          call "Install PDF Manager.cmd" -NoLaunch
+          call "Install ZPDF.cmd" -NoLaunch
           set rc=%errorlevel%
           reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v __PSLockdownPolicy /f
           exit /b %rc%
@@ -45,7 +45,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "pdfmanager is not installed in the venv" }
           $shell = New-Object -ComObject WScript.Shell
           foreach ($folder in @([Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPath("Desktop"))) {
-            $lnk = $shell.CreateShortcut((Join-Path $folder "PDF Manager.lnk"))
+            $lnk = $shell.CreateShortcut((Join-Path $folder "ZPDF.lnk"))
             "$($lnk.FullName): $($lnk.TargetPath) $($lnk.Arguments)"
             if ($lnk.TargetPath -notlike "*\venv\Scripts\pythonw.exe") { throw "shortcut target: $($lnk.TargetPath)" }
           }
@@ -80,8 +80,8 @@ jobs:
         shell: pwsh
         run: |
           $left = @("$env:LOCALAPPDATA\PDF Manager\app",
-                    (Join-Path ([Environment]::GetFolderPath("Programs")) "PDF Manager.lnk"),
-                    (Join-Path ([Environment]::GetFolderPath("Desktop")) "PDF Manager.lnk"),
+                    (Join-Path ([Environment]::GetFolderPath("Programs")) "ZPDF.lnk"),
+                    (Join-Path ([Environment]::GetFolderPath("Desktop")) "ZPDF.lnk"),
                     "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFManager",
                     "HKCU:\Software\Classes\PDFManager.Document") | Where-Object { Test-Path $_ }
           if ($left) { $left; throw "left behind after uninstalling" }

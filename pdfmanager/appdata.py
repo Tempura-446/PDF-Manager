@@ -1,4 +1,4 @@
-"""Where PDF Manager keeps its own files: saved recipes, the browser profile
+"""Where ZPDF keeps its own files: saved recipes, the browser profile
 of the app window and a note about why the native window didn't open."""
 
 import os
@@ -47,6 +47,8 @@ def touch_private(path):
 
 
 def _data_dir():
+    # The folders keep the app's first name (it was PDF Manager before
+    # ZPDF), so recipes, settings and installed copies carry over.
     if sys.platform == "win32":
         base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
         return base / "PDF Manager"
