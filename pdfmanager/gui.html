@@ -1306,7 +1306,7 @@ async function run(preview) {
   try {
     const res = await runJob("/api/run", { method: "POST", body, headers: isDesktop() ? { "X-Pdfm-Keep": "1" } : {} });
     if (!res) return;  // cancelled
-    const name = res.headers.get("X-Pdfm-Filename") || "result.pdf";
+    const name = decodeURIComponent(res.headers.get("X-Pdfm-Filename") || "") || "result.pdf";
     const resultId = res.headers.get("X-Pdfm-Result-Id");
     const note = decodeURIComponent(res.headers.get("X-Pdfm-Note") || "");
     const blob = await res.blob();

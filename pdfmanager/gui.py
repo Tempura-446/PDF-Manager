@@ -30,6 +30,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -39,12 +40,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
+from pypdf import PdfReader
+
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
                         forms, recipes, redact, scan, search, textedit, update)
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
-MAX_UPLOAD = 1024 * 1024 * 1024  # 1 GB
+# One run's uploads. Parsing a form upload takes several times its size in
+# memory, so this stays well inside what a laptop has.
+MAX_UPLOAD = 256 * 1024 * 1024
 
 PAPER = ["a4", "letter", "legal", "a3", "a5", "a6", "tabloid", "executive"]
 
@@ -573,6 +578,18 @@ def _protect(outputs, password, op):
                 core.encrypt(path, path, password)
 
 
+def _was_protected(path, password):
+    """Whether an input needed the typed password: only results made from
+    such a file are protected again. The page sends the one password box
+    with every run, also for the files in the batch that were never locked."""
+    if not password or path.suffix.lower() != ".pdf":
+        return False
+    try:
+        return PdfReader(str(path)).is_encrypted
+    except Exception:
+        return False  # not a readable PDF: the tool itself reports that
+
+
 def _flatten_outputs(outputs, out_dir):
     """Move per-input outputs into ``out_dir``, renaming on clashes."""
     taken, flat = set(), []
@@ -601,6 +618,7 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
     out_dir = Path(work or files[0].parent) / "out"
     out_dir.mkdir()
     extra_files = extra_files or {}
+    protect = None  # the outputs made from a password-protected input
 
     if op == "merge":
         out = out_dir / "merged.pdf"
@@ -628,20 +646,25 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
                            _num(opts.get("margin"), float, 0) * core.POINTS_PER_MM)
         outputs = [out]
     else:
-        outputs = []
+        outputs, locked = [], []
         for index, src in enumerate(files):
             # Each input gets its own output folder; flatten afterwards.
             sub = out_dir / f"{index:03d}"
             sub.mkdir()
             label = f"{src.name} ({index + 1} of {len(files)})" if len(files) > 1 else src.name
             with progress.section(index, len(files), label):
-                outputs.extend((sub, p) for p in _run_file_op(op, src, sub, opts, password,
-                                                               extra_files, notes))
-        outputs = _flatten_outputs(outputs, out_dir)
+                made = _run_file_op(op, src, sub, opts, password, extra_files, notes)
+            outputs.extend((sub, p) for p in made)
+            locked.extend([_was_protected(src, password)] * len(made))
+        outputs = _flatten_outputs(outputs, out_dir)  # keeps the order
+        protect = [path for path, was in zip(outputs, locked) if was]
+    if protect is None:
+        # One result from several inputs: protected if any of them was.
+        protect = outputs if any(_was_protected(src, password) for src in files) else []
 
     if not outputs:
         raise UserError("nothing was found to save" + (f" ({'; '.join(notes)})" if notes else ""))
-    _protect(outputs, password, op)
+    _protect(protect, password, op)
     if len(outputs) == 1 and op != "media":
         path = outputs[0]
         ctype = {".txt": "text/plain; charset=utf-8",
@@ -729,8 +752,9 @@ class ResultCache:
     """Keeps the last few results so the desktop window can save them with a
     native Save dialog (browsers download them directly instead)."""
 
-    def __init__(self, keep=5):
+    def __init__(self, keep=5, max_bytes=256 * 1024 * 1024):
         self.keep = keep
+        self.max_bytes = max_bytes
         self.items = {}
         self.lock = threading.Lock()
 
@@ -738,13 +762,46 @@ class ResultCache:
         key = secrets.token_urlsafe(12)
         with self.lock:
             self.items[key] = (name, data)
-            while len(self.items) > self.keep:
+            # Old results go when there are too many or they add up to too
+            # much memory (a few big merges would otherwise stay resident
+            # for the whole session); the newest one is always kept.
+            while len(self.items) > 1 and (
+                    len(self.items) > self.keep
+                    or sum(len(d) for _, d in self.items.values()) > self.max_bytes):
                 self.items.pop(next(iter(self.items)))
         return key
 
     def get(self, key):
         with self.lock:
             return self.items.get(key)
+
+
+class WorkFolders:
+    """The temporary folders of runs in progress (the uploads and partial
+    results of a job). A run removes its own folder when it ends; the ones
+    still here when the app closes belong to jobs cut short, and are
+    removed then rather than left in the temporary folder."""
+
+    def __init__(self):
+        self.items = set()
+        self.lock = threading.Lock()
+
+    def make(self):
+        path = Path(tempfile.mkdtemp(prefix="pdfm-"))
+        with self.lock:
+            self.items.add(path)
+        return path
+
+    def remove(self, path):
+        with self.lock:
+            self.items.discard(path)
+        shutil.rmtree(path, ignore_errors=True)
+
+    def clear(self):
+        with self.lock:
+            left = list(self.items)
+        for path in left:
+            self.remove(path)
 
 
 class OpenFiles:
@@ -876,6 +933,21 @@ def _safe_name(name):
     return re.sub(r'[<>:"|?*\x00-\x1f]', "_", name).strip(" .") or "file"
 
 
+def _download_headers(name):
+    """Content-Disposition and X-Pdfm-Filename for a file called ``name``.
+    HTTP headers only carry latin-1, and names like "John’s report.pdf"
+    or "Отчёт.pdf" don't fit: the real name goes percent-encoded (the
+    filename*= form of RFC 6266; the page decodes X-Pdfm-Filename with
+    decodeURIComponent) next to a plain ASCII stand-in for old clients."""
+    plain = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    plain = re.sub(r'[\\"\x00-\x1f]', "", plain).strip()
+    if not plain or plain.startswith("."):  # nothing of the name survived
+        plain = "file" + Path(name).suffix
+    encoded = urllib.parse.quote(name, safe="")
+    return {"Content-Disposition": f'attachment; filename="{plain}"; filename*=UTF-8\'\'{encoded}',
+            "X-Pdfm-Filename": encoded}
+
+
 def _log(message):
     """Opt-in trail of what the app does (PDFM_LOG=1 writes app.log in the
     app's data folder), for troubleshooting start-up and shutdown."""
@@ -912,6 +984,7 @@ class Handler(BaseHTTPRequestHandler):
     quit_app = None  # closes the pywebview window (to restart after an update)
     quit_requested = False  # makes wait_until_closed return
     opened = None  # OpenFiles
+    work = None  # WorkFolders
     # pywebview's JavaScript bridge needs eval(); only allowed in the desktop window.
     allow_eval = False
 
@@ -925,6 +998,14 @@ class Handler(BaseHTTPRequestHandler):
             body = json.dumps(body).encode()
         elif isinstance(body, str):
             body = body.encode()
+        # Headers can only carry latin-1 (see _download_headers): check them
+        # before the status line is written, so a bad one can't leave a
+        # half-sent answer that a second status line then gets appended to.
+        for k, v in (headers or {}).items():
+            try:
+                f"{k}: {v}".encode("latin-1")
+            except UnicodeEncodeError:
+                raise RuntimeError(f"the {k} header can't be sent as it is") from None
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
@@ -1017,11 +1098,13 @@ class Handler(BaseHTTPRequestHandler):
         path = self.opened.get(key) if self.opened is not None else None
         if path is None or not path.is_file():
             return self._error(HTTPStatus.NOT_FOUND, "that file is no longer available")
-        quoted = path.name.replace('"', "")
         data = path.read_bytes()
         RecentFiles.add(path)
+        # The path is percent-encoded like the name: a folder called
+        # "Документы" would otherwise be unsendable.
         return self._send(HTTPStatus.OK, data, "application/pdf",
-                          {"X-Pdfm-Filename": quoted, "X-Pdfm-Path": str(path)})
+                          {"X-Pdfm-Filename": _download_headers(path.name)["X-Pdfm-Filename"],
+                           "X-Pdfm-Path": urllib.parse.quote(str(path), safe="")})
 
     def _recent(self):
         """Recently opened files that still exist, each with an id the
@@ -1051,7 +1134,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
         length = int(self.headers.get("Content-Length") or 0)
         if length > MAX_UPLOAD:
-            return self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "upload too large (1 GB max)")
+            return self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                               f"upload too large ({MAX_UPLOAD // 2**20} MB max)")
         body = self.rfile.read(length)
         path = self.path.split("?", 1)[0]
         try:
@@ -1123,7 +1207,7 @@ class Handler(BaseHTTPRequestHandler):
         keep = self.headers.get("X-Pdfm-Keep") == "1"
 
         def work_on():
-            work = Path(tempfile.mkdtemp(prefix="pdfm-"))
+            work = self.work.make()
             try:
                 files, extra = [], {}
                 for index, (name, filename, data) in enumerate(uploads):
@@ -1140,7 +1224,7 @@ class Handler(BaseHTTPRequestHandler):
                 name, data, ctype = run_operation(op, files, fields, password, extra, work, notes)
                 return {"file": (name, data, ctype, notes, keep)}
             finally:
-                shutil.rmtree(work, ignore_errors=True)
+                self.work.remove(work)
 
         return self._job_or_now(work_on)
 
@@ -1156,9 +1240,7 @@ class Handler(BaseHTTPRequestHandler):
         if "json" in result:
             return self._send(HTTPStatus.OK, result["json"])
         name, data, ctype, notes, keep = result["file"]
-        quoted = name.replace('"', "")
-        headers = {"Content-Disposition": f'attachment; filename="{quoted}"',
-                   "X-Pdfm-Filename": quoted}
+        headers = _download_headers(name)
         if notes:
             headers["X-Pdfm-Note"] = urllib.parse.quote("\n".join(notes))
         if keep and self.results is not None:
@@ -1180,8 +1262,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(HTTPStatus.BAD_REQUEST, job.error)
             if job.state != "done":
                 return self._error(HTTPStatus.CONFLICT, f"the job is {job.state}")
+            # Forgotten only once the page has the file: if sending it
+            # fails (the window was closed halfway), the page can ask again.
+            self._send_result(job.result)
             self.jobs.pop(job_id)
-            return self._send_result(job.result)
+            return None
         if method == "GET" and not action:
             return self._send(HTTPStatus.OK, job.snapshot())
         return self._error(HTTPStatus.NOT_FOUND, "not found")
@@ -1386,6 +1471,18 @@ class _Server(ThreadingHTTPServer):
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
 
+    def server_close(self):
+        super().server_close()
+        # Every way of ending the app comes through here. Jobs still running
+        # are cancelled and given a moment to tidy up; whatever work folder is
+        # then left (a job stuck in a long step) is removed all the same.
+        handler = self.RequestHandlerClass
+        jobs, work = getattr(handler, "jobs", None), getattr(handler, "work", None)
+        if jobs is not None:
+            jobs.stop()
+        if work is not None:
+            work.clear()
+
 
 def make_server(port=0, desktop=False, open_paths=(), prefer=None):
     """Create (but don't start) the server. Returns (server, url). The
@@ -1400,7 +1497,8 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None):
                                                "opened": opened, "allow_eval": desktop,
                                                "last_seen": time.monotonic(),
                                                "closed_at": None, "jobs": progress.JobStore(),
-                                               "pages": {}, "events": Events()})
+                                               "pages": {}, "events": Events(),
+                                               "work": WorkFolders()})
     server = None
     if not port and prefer:
         try:
@@ -1425,19 +1523,24 @@ def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False):
     print("Keep this window open while you use it; press Ctrl+C to stop.")
     if open_browser:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
+    # Served from a thread in both cases, so that a restart after an update
+    # (which asks this copy to quit) ends this one instead of leaving it
+    # running next to the new copy.
+    threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         if exit_when_closed:
-            threading.Thread(target=server.serve_forever, daemon=True).start()
             _register_instance(server, "browser")
             wait_until_closed(server.RequestHandlerClass, grace=5)
             _unregister_instance(server)
-            server.shutdown()
         else:
             server.RequestHandlerClass.instance_mode = "browser"  # no events to wait for
-            server.serve_forever()
+            while not server.RequestHandlerClass.quit_requested:
+                time.sleep(0.5)
+            _log("closing: restart asked for")
     except KeyboardInterrupt:
         pass
     finally:
+        server.shutdown()
         server.server_close()
 
 
@@ -1456,8 +1559,13 @@ def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5
     the first ``handoff`` seconds, the window was closed. If it exits sooner,
     the browser handed the window to a copy that was already running, so only
     the pages' signals count. A browser that keeps running in the background
-    after its window is closed (Edge does) doesn't keep the app alive."""
-    started = time.monotonic()
+    after its window is closed (Edge does) doesn't keep the app alive.
+
+    Time the computer spent asleep doesn't count: on Windows the clock
+    keeps running through sleep, but the pages can't have pinged, so a
+    poll that comes back much later than asked moves their timestamps on
+    by the gap, and they get the usual ``idle`` seconds to be heard from."""
+    started = last_poll = time.monotonic()
     exited_at = None
     pages = getattr(handler, "pages", None)
     if pages is None:
@@ -1468,6 +1576,15 @@ def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5
             _log("closing: restart asked for")
             return
         now = time.monotonic()
+        gap, last_poll = now - last_poll - poll, now
+        if gap > 5:
+            _log(f"a poll took {gap:.0f}s longer than asked (asleep?); not counting it")
+            handler.last_seen = min(handler.last_seen + gap, now)
+            if handler.closed_at is not None:
+                handler.closed_at = min(handler.closed_at + gap, now)
+            for page, seen in list(pages.items()):
+                if page in pages:  # not one that said goodbye just now
+                    pages[page] = min(seen + gap, now)
         for page, seen in list(pages.items()):
             if now - seen > idle:
                 pages.pop(page, None)
