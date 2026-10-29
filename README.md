@@ -281,6 +281,12 @@ so a large photo shown small is reduced while small images are left alone.
 An image is only replaced if the new version is smaller. `--image-quality`
 and `--max-dpi` override a level's settings.
 
+At every level the result is then repacked with [qpdf](https://qpdf.readthedocs.io)
+(through pikepdf, installed with PDF Manager): the many small objects a PDF
+is made of go into compressed object streams. It's lossless and takes a
+third or more off text-heavy documents; files that are mostly pictures
+barely change.
+
 ### Colour conversion
 
 `pdfm color --to gray|rgb|cmyk` converts page colours (text, lines, fills

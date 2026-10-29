@@ -707,3 +707,61 @@ def test_a_malformed_text_change_is_a_plain_error(tmp_path, edits):
     src = toc_pdf(tmp_path / "toc.pdf", chapters=1)
     with pytest.raises(core.PdfManagerError):
         textedit.edit_text(src, tmp_path / "out.pdf", edits)
+
+
+# -- compression: object streams through qpdf ----------------------------------------------------------
+
+def many_pages(path, pages=120):
+    c = canvas.Canvas(str(path), pagesize=letter)
+    for i in range(pages):
+        c.bookmarkPage(f"p{i}")
+        c.addOutlineEntry(f"Page {i + 1}", f"p{i}")
+        c.drawString(72, 700, f"Page {i + 1} of a long text document")
+        c.showPage()
+    c.save()
+    return path
+
+
+def test_compress_packs_objects_into_object_streams(tmp_path):
+    pytest.importorskip("pikepdf")
+    src = many_pages(tmp_path / "long.pdf")
+    out = core.compress(src, tmp_path / "small.pdf", "low")
+    data = out.read_bytes()
+    assert b"/ObjStm" in data
+    plain = core.clone_document(PdfReader(str(src)))
+    core._write(plain, tmp_path / "unpacked.pdf")
+    assert len(data) < 0.8 * (tmp_path / "unpacked.pdf").stat().st_size
+    # Lossless, and every other tool (pypdf, pdfium) still reads it.
+    reader = PdfReader(str(out))
+    assert len(reader.pages) == 120 and len(reader.outline) == 120
+    assert texts(out) == texts(src)
+    assert render(out, 7).tobytes() == render(src, 7).tobytes()
+    assert len(PdfReader(str(core.encrypt(out, tmp_path / "locked.pdf", "pw")), password="pw").pages) == 120
+
+
+def test_compress_works_without_pikepdf(tmp_path, monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_pikepdf(name, *args, **kwargs):
+        if name == "pikepdf":
+            raise ImportError("not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_pikepdf)
+    src = many_pages(tmp_path / "long.pdf", pages=10)
+    out = core.compress(src, tmp_path / "small.pdf", "low")
+    assert b"/ObjStm" not in out.read_bytes() and texts(out) == texts(src)
+    assert core.pack(out) is False
+
+
+def test_a_recipe_repacks_after_steps_that_follow_compress(tmp_path):
+    pytest.importorskip("pikepdf")
+    from pdfmanager import recipes
+
+    src = many_pages(tmp_path / "long.pdf")
+    out = recipes.run([{"op": "compress", "options": {"level": "low"}},
+                       {"op": "number", "options": {}}], src, tmp_path / "out.pdf")
+    assert b"/ObjStm" in out.read_bytes()
+    assert texts(out)[0].endswith("1 / 120")
