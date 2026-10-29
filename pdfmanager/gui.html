@@ -1260,6 +1260,8 @@ $("preview").addEventListener("click", () => run(true));
 // Tell the server the page is still open; it shuts down some time after the
 // last window running the app has closed.
 const ping = () => { if (token) api("/api/ping", { method: "POST" }).catch(() => {}); };
+// Tell the server when the window closes, so the app stops right away.
+window.addEventListener("pagehide", () => { if (token) navigator.sendBeacon("/api/bye?token=" + encodeURIComponent(token)); });
 setInterval(ping, 15000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) ping(); });
 

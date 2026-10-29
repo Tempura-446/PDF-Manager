@@ -6,6 +6,7 @@ import shutil
 import sys
 import threading
 import time
+from pathlib import Path
 import urllib.error
 import urllib.request
 import uuid
@@ -597,9 +598,12 @@ class _FakeProc:
         done = self.exit_after is not None and time.monotonic() - self.start >= self.exit_after
         return 0 if done else None
 
+    def wait(self, timeout=None):
+        return 0
+
 
 def test_wait_until_closed():
-    handler = type("H", (), {"last_seen": time.monotonic()})
+    handler = type("H", (), {"last_seen": time.monotonic(), "closed_at": None})
     t = time.monotonic()
     gui.wait_until_closed(handler, idle=0.2, poll=0.05)  # browser tab: no pings -> done
     assert 0.2 <= time.monotonic() - t < 1
@@ -613,6 +617,55 @@ def test_wait_until_closed():
     t = time.monotonic()
     gui.wait_until_closed(handler, _FakeProc(exit_after=0), idle_handed_off=0.3, poll=0.05)
     assert 0.3 <= time.monotonic() - t < 1
+
+
+def test_closing_the_window_stops_the_app_even_if_the_browser_lingers():
+    """Edge can keep running in the background after its window is closed;
+    the page's goodbye is what counts."""
+    handler = type("H", (), {"last_seen": time.monotonic(), "closed_at": None})
+    lingering = _FakeProc(exit_after=None)  # never exits
+    threading.Timer(0.3, lambda: setattr(handler, "closed_at", time.monotonic())).start()
+    t = time.monotonic()
+    gui.wait_until_closed(handler, lingering, poll=0.05, grace=0.2)
+    assert 0.5 <= time.monotonic() - t < 2
+
+
+def test_a_reload_is_not_closing():
+    handler = type("H", (), {"last_seen": time.monotonic(), "closed_at": None})
+
+    def reload():
+        handler.closed_at = time.monotonic()
+        time.sleep(0.05)
+        handler.last_seen = time.monotonic()  # the reloaded page asks for its data
+
+    threading.Timer(0.1, reload).start()
+    t = time.monotonic()
+    gui.wait_until_closed(handler, poll=0.05, grace=0.2, idle=1.0)
+    assert time.monotonic() - t >= 1.0  # ended by the idle timeout, not the goodbye
+
+
+def test_bye_needs_the_token(server):
+    base, token = server
+    assert request(base + "/api/bye?token=wrong", data=b"")[0] == 403
+    assert request(base + f"/api/bye?token={token}", data=b"")[0] == 200
+
+
+def test_leftover_browser_is_stopped(tmp_path):
+    import subprocess
+
+    profile = tmp_path / "window"
+    sleeper = [sys.executable, "-c", "import time; time.sleep(60)", f"--user-data-dir={profile}"]
+    ours = subprocess.Popen(sleeper)        # the browser we started, still running
+    leftover = subprocess.Popen(sleeper)   # e.g. one Edge kept in the background
+    if sys.platform != "win32":
+        assert {ours.pid, leftover.pid} <= set(gui._profile_processes(profile))
+    t = time.monotonic()
+    gui._close_browser(ours, profile)
+    assert ours.poll() is not None and time.monotonic() - t < 10
+    if sys.platform != "win32":
+        assert leftover.wait(timeout=5) is not None
+    else:
+        leftover.kill()
 
 
 def test_ping_keeps_the_server_alive(server):
@@ -654,11 +707,28 @@ def test_app_window_uses_edge_or_chrome(tmp_path, monkeypatch):
     monkeypatch.setattr(gui, "data_dir", lambda: tmp_path)
     monkeypatch.setattr(gui.subprocess, "Popen", Proc)
     monkeypatch.setattr(gui, "wait_until_closed", lambda handler, proc: None)
+    monkeypatch.setattr(gui, "_profile_processes", lambda profile: [])
+    import socket
+
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    monkeypatch.setattr(gui, "APP_PORT", probe.getsockname()[1])  # a free port
+    probe.close()
     assert gui.run_app_window() is True
     args = launched[0]
     assert args[0] == "/opt/edge/msedge"
     assert args[1].startswith("--app=http://127.0.0.1:") and "#token=" in args[1]
     assert f"--user-data-dir={tmp_path / 'window'}" in args
+    # A second copy of the app (the app's port is taken) gets a profile of its own.
+    blocker, _ = gui.make_server(prefer=gui.APP_PORT)
+    try:
+        launched.clear()
+        assert gui.run_app_window() is True
+        second = next(a for a in launched[0] if a.startswith("--user-data-dir="))
+        assert second != f"--user-data-dir={tmp_path / 'window'}" and "window-" in second
+        assert not Path(second.split("=", 1)[1]).exists()  # removed afterwards
+    finally:
+        blocker.server_close()
 
 
 def test_find_app_browser_on_linux(tmp_path, monkeypatch):

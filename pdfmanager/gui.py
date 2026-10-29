@@ -21,6 +21,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import socketserver
 import subprocess
@@ -826,6 +827,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._host_ok():
             return self._error(HTTPStatus.FORBIDDEN, "bad host")
+        if self.path.split("?", 1)[0] == "/api/bye":
+            return self._bye()
         if not self._token_ok():
             return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
         length = int(self.headers.get("Content-Length") or 0)
@@ -921,6 +924,17 @@ class Handler(BaseHTTPRequestHandler):
                      else outline.get_outline(path, password))
         return self._send(HTTPStatus.OK, {"items": items, "pages": pages})
 
+    def _bye(self):
+        """The page is being closed (or reloaded). Sent with
+        navigator.sendBeacon, which can't add headers, so the token comes
+        in the query string; this request can do nothing else."""
+        self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 65536))
+        token = urllib.parse.parse_qs(self.path.partition("?")[2]).get("token", [""])[0]
+        if not secrets.compare_digest(token, self.token):
+            return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
+        type(self).closed_at = time.monotonic()
+        return self._send(HTTPStatus.OK, {"ok": True})
+
     def _redact_find(self, body):
         """Where the Redact tool's words and kinds of numbers are found, so
         the page editor can show them before anything is blacked out."""
@@ -985,7 +999,8 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None):
     open_ids = [opened.add(p) for p in open_paths]
     handler = type("PdfmHandler", (Handler,), {"token": token, "results": ResultCache(),
                                                "opened": opened, "allow_eval": desktop,
-                                               "last_seen": time.monotonic()})
+                                               "last_seen": time.monotonic(),
+                                               "closed_at": None})
     server = None
     if not port and prefer:
         try:
@@ -1013,7 +1028,7 @@ def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False):
     try:
         if exit_when_closed:
             threading.Thread(target=server.serve_forever, daemon=True).start()
-            wait_until_closed(server.RequestHandlerClass)
+            wait_until_closed(server.RequestHandlerClass, grace=20)
             server.shutdown()
         else:
             server.serve_forever()
@@ -1023,26 +1038,36 @@ def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False):
         server.server_close()
 
 
-def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=2.0):
-    """Block until the page is gone. The page pings the server every 15
-    seconds (less often while hidden), which updates ``handler.last_seen``.
+def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5, grace=2.0):
+    """Block until the page is gone.
 
-    With ``proc`` (the browser started for an app window): return as soon
-    as it exits, the window was closed. If it exits within a few seconds,
-    the browser handed the window to a copy that was already running, so
-    fall back to the pings."""
+    When its window closes, the page says so (/api/bye); if nothing is heard
+    from it within ``grace`` seconds after that (a reload asks for the page
+    again straight away), it's gone. The page also pings the server every
+    15 seconds (less often while hidden), which updates
+    ``handler.last_seen``; after ``idle`` seconds without a ping, the page
+    counts as gone too (e.g. the browser was killed).
+
+    With ``proc`` (the browser started for an app window): if it exits after
+    the first few seconds, the window was closed. If it exits sooner, the
+    browser handed the window to a copy that was already running, so only
+    the page's signals count. A browser that keeps running in the background
+    after its window is closed (Edge does) doesn't keep the app alive."""
     started = time.monotonic()
     while True:
         time.sleep(poll)
-        quiet = time.monotonic() - handler.last_seen
-        if proc is None:
-            if quiet > idle:
-                return
-            continue
-        if proc.poll() is None:
-            continue
-        if time.monotonic() - started > 5 + poll or quiet > idle_handed_off:
+        now = time.monotonic()
+        closed = handler.closed_at
+        if closed is not None and handler.last_seen <= closed and now - closed > grace:
             return
+        quiet = now - handler.last_seen
+        if proc is not None and proc.poll() is not None:
+            if now - started > 5 + poll or quiet > idle_handed_off:
+                return
+        elif quiet > idle:
+            return
+
+
 class DesktopApi:
     """Functions the page can call in the desktop window (window.pywebview.api)."""
 
@@ -1209,11 +1234,14 @@ def run_app_window(port=0, open_paths=()):
     if not browser:
         return False
     server, url = make_server(port, open_paths=open_paths, prefer=APP_PORT)
-    profile = data_dir() / "window"
+    # A browser profile of its own keeps the window separate from the user's
+    # normal browsing, so closing the app never touches their other windows.
+    # A second copy of the app (on another port) gets a temporary profile of
+    # its own, so each copy only ever closes its own browser.
+    primary = server.server_address[1] == APP_PORT
+    profile = data_dir() / ("window" if primary else f"window-{server.server_address[1]}")
     try:
         profile.mkdir(parents=True, exist_ok=True)
-        # A profile of its own keeps the window separate from the user's
-        # normal browsing and lets us tell when it has been closed.
         proc = subprocess.Popen(
             [browser, f"--app={url}", f"--user-data-dir={profile}", "--no-first-run",
              "--no-default-browser-check", "--window-size=1180,820"],
@@ -1228,7 +1256,57 @@ def run_app_window(port=0, open_paths=()):
         pass
     server.shutdown()
     server.server_close()
+    _close_browser(proc, profile)
+    if not primary:
+        shutil.rmtree(profile, ignore_errors=True)
     return True
+
+
+def _profile_processes(profile):
+    """Ids of browser processes running with this profile (Edge and Chrome
+    may keep running in the background after their last window closes)."""
+    marker = f"--user-data-dir={profile}"
+    if sys.platform == "win32":
+        script = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and "
+                  "$_.CommandLine.Contains($env:PDFM_PROFILE) } | "
+                  "ForEach-Object { $_.ProcessId }")
+        try:
+            out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                                 capture_output=True, text=True, timeout=20,
+                                 env={**os.environ, "PDFM_PROFILE": marker},
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        return [int(p) for p in out.split() if p.isdigit()]
+    pids = []
+    for entry in Path("/proc").glob("[0-9]*/cmdline"):
+        try:
+            if marker in entry.read_bytes().replace(b"\0", b" ").decode("utf-8", "replace"):
+                pids.append(int(entry.parent.name))
+        except (OSError, ValueError):
+            continue
+    return pids
+
+
+def _close_browser(proc, profile):
+    """Stop the browser that showed the app window once the window is gone."""
+    try:
+        proc.wait(timeout=1.5)  # usually it quits by itself
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    # A browser started earlier with this profile (e.g. kept running in the
+    # background by Edge) may still be there.
+    for pid in _profile_processes(profile):
+        if pid == os.getpid():
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
 
 
 def launch(open_paths=(), port=0):
