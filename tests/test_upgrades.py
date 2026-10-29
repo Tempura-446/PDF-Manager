@@ -588,6 +588,15 @@ def test_cli_gui_falls_back_to_browser(monkeypatch):
     calls.clear()
     assert main(["gui", "--browser"]) == 0
     assert calls == ["browser"]
+    # PDFM_WINDOW picks one kind of window
+    calls.clear()
+    monkeypatch.setenv("PDFM_WINDOW", "app-window")
+    assert main(["gui"]) == 0
+    assert calls == ["app window"]
+    calls.clear()
+    monkeypatch.setenv("PDFM_WINDOW", "browser")
+    assert main(["gui"]) == 0
+    assert calls == ["browser"]
 
 
 class _FakeProc:
@@ -719,6 +728,11 @@ def test_app_window_uses_edge_or_chrome(tmp_path, monkeypatch):
     assert args[0] == "/opt/edge/msedge"
     assert args[1].startswith("--app=http://127.0.0.1:") and "#token=" in args[1]
     assert f"--user-data-dir={tmp_path / 'window'}" in args
+    monkeypatch.setenv("PDFM_BROWSER_ARGS", "--remote-debugging-port=9333 --mute-audio")
+    launched.clear()
+    assert gui.run_app_window() is True
+    assert launched[0][-2:] == ["--remote-debugging-port=9333", "--mute-audio"]
+    monkeypatch.delenv("PDFM_BROWSER_ARGS")
     # A second copy of the app (the app's port is taken) gets a profile of its own.
     blocker, _ = gui.make_server(prefer=gui.APP_PORT)
     try:

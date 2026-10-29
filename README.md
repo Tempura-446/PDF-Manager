@@ -3,17 +3,40 @@
 `pdfm` is a PDF toolkit you can use three ways: as a **desktop app**, from
 the **command line**, or as a **Python library**.
 
-It includes a full **PDF reader** where you can also annotate and sign, and
-it can merge, split, compare, extract, reorder, rotate, resize, crop, n-up,
-compress (three levels), convert colours (grayscale / RGB / CMYK, with ICC
-profiles), OCR and clean up scans, redact, flatten, remove hidden data,
-convert to PDF/A, Word and from Office files or images, edit bookmarks,
-encrypt, watermark and number pages, run several of these in a row as a
-**recipe**, and organize, rename, de-duplicate and watch whole folders of PDFs.
+It includes a full **PDF reader** with tabs, where you can also annotate,
+sign and change existing text, and it can merge, split, compare, extract,
+reorder, rotate, resize, crop, n-up, compress (three levels), convert colours
+(grayscale / RGB / CMYK, with ICC profiles), OCR and clean up scans, redact,
+flatten, remove hidden data, convert to PDF/A, Word and from Office files or
+images, edit bookmarks, encrypt, watermark and number pages, add headers,
+footers and **Bates numbers**, create **fillable forms**, pull out pictures
+and attached files, run several of these in a row as a **recipe**, and
+organize, rename, de-duplicate, **search** and watch whole folders of PDFs.
 
 ## Install
 
-### Easiest: the standalone app
+### Easiest on Windows: the installer
+
+1. On GitHub, **Code → Download ZIP**, and unzip it (right-click → *Extract All*).
+2. In the unzipped folder, double-click **Install PDF Manager.cmd**. If
+   Windows asks, choose *More info → Run anyway* (it's a plain text script:
+   you can read what it does in `packaging/windows/install.ps1`).
+
+It installs Python from python.org if you don't have it (with winget or the
+official, signed installer), installs PDF Manager in its own folder
+(`%LOCALAPPDATA%\PDF Manager\app`), and adds **Start menu and desktop
+shortcuts**, **PDF Manager in "Open with"** (and in *Settings → Default
+apps*) for PDFs, and an entry in **Settings → Apps** to uninstall it. No
+administrator rights are needed, and you can delete the unzipped folder
+afterwards. Running it again updates the installed copy (or use the
+**Update** button, below).
+
+The app runs with Python's own `pythonw.exe`, which is signed by the Python
+Software Foundation, so Windows **Smart App Control** lets it start (it may
+block the unsigned standalone app below). The script only uses plain
+PowerShell commands, so it also works where Smart App Control limits scripts.
+
+### The standalone app
 
 Download **PDF-Manager-windows.zip** or **PDF-Manager-linux.zip** from the
 latest run of the [Build app](../../actions/workflows/build-app.yml)
@@ -97,10 +120,36 @@ closed.
 - Folder tools (organize, rename, find duplicates) have **Browse…**
   buttons in the app window and always let you **Preview** before
   anything changes.
+- **Add form fields** makes a fillable form: pick a field type (text,
+  multi-line text, checkbox, signature), then drag a box on the page or
+  just click for a box of the usual size. Click a field to move, resize,
+  rename or remove it. Fields already in the file are shown striped. The
+  fields work in any PDF reader, including the one here.
+- **Headers & footers** adds text at the top or bottom of every page: a
+  title, the date, *Page {n} of {total}*, the file name or **Bates
+  numbers** (e.g. ABC000123), which continue from one file to the next.
+- **Pictures & attachments** saves the pictures in a PDF and the files
+  attached to it, as a ZIP.
+- **Search PDFs** finds words in every PDF in a folder (and its
+  sub-folders). Each result shows the words around the match; click one to
+  open that page in the reader with the words highlighted. The text is
+  kept in a small index, so searching the same folder again is quick.
+- Long jobs show **progress** and can be **cancelled**.
+- **Save…** opens the computer's own Save dialog, also in the Edge window.
 - Password-protected PDFs: enter the password once under the options;
   results stay protected with the same password.
 - Light and dark themes follow your system, or pick one at the bottom of
   the sidebar.
+- Only **one copy** runs: opening a PDF from Explorer (or starting the app
+  again) brings the running app to the front with the file in the reader.
+- **Updates:** when there's a newer version on GitHub, an **Update** button
+  appears in the sidebar; it downloads and installs it and starts the app
+  again. The repository is private, so the check needs a GitHub token that
+  can read it: in **Settings** (the gear at the bottom of the sidebar),
+  paste a fine-grained token with *Contents: Read-only* access to this
+  repository. It's kept on your computer only, and the check can be turned
+  off there. (A copy running from a git checkout is updated with `git
+  pull`, the standalone app by downloading it again.)
 
 Everything runs on your own computer. The app's built-in server only
 listens on `127.0.0.1` and requires a random token that only the app
@@ -114,6 +163,9 @@ or open a PDF with the standalone app ("Open with…" → PDF Manager, or drop
 the file on the app). It is built on [pdf.js](https://mozilla.github.io/pdf.js/),
 the engine behind Firefox's PDF viewer, bundled with the app so it works offline.
 
+- **Tabs:** open several PDFs at once (the + button, or drop more files),
+  each with its own unsaved changes; a dot marks tabs with changes.
+- **Recent files** on the start screen, to open them again with one click.
 - **Reading:** continuous scrolling, page numbers (and the document's own
   page labels), thumbnails, bookmarks, single or two-page view.
 - **Zoom:** automatic, fit page, fit width, actual size or 50–400%;
@@ -126,6 +178,10 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   your signature (remembered on this computer if you like). Colours and
   sizes, undo/redo, and **Save a copy** with your changes. Use *Flatten
   forms & comments* afterwards to make them part of the page.
+- **Edit text** (in the pen bar): click a line of text and retype it. The
+  new words are written in a matching font, size and colour; the old ones
+  are covered with the colour around them (they're still in the file
+  underneath, so use **Redact** to remove text for good). Undo with Ctrl+Z.
 - Rotate the view, hand tool (drag to scroll), dark pages for night
   reading, full screen, print, document properties.
 - Password-protected PDFs ask for their password.
@@ -179,6 +235,9 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `metadata` | show or set title/author/subject/keywords | `pdfm metadata doc.pdf --title "Q3 Report"` |
 | `watermark` | stamp text or another PDF | `pdfm watermark doc.pdf -t CONFIDENTIAL` |
 | `number` | add page numbers | `pdfm number doc.pdf --format "Page {n} of {total}"` |
+| `headers` | headers, footers and Bates numbers | `pdfm headers *.pdf --bottom-right "{bates}" --bates ABC` |
+| `form` | add fillable form fields (or list them) | `pdfm form doc.pdf -f text:1:72,700,300,720:Name` |
+| `extract-media` | save the pictures and attached files | `pdfm extract-media doc.pdf` |
 | `text` | extract text | `pdfm text doc.pdf -o doc.txt` |
 | `clean` | remove blank pages, turn pages upright | `pdfm clean scan.pdf --rotate` |
 | `compare` | report what changed between two versions | `pdfm compare v1.pdf v2.pdf` |
@@ -196,7 +255,9 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `rename` | rename PDFs from their metadata | `pdfm rename ~/PDFs --pattern "{date:%Y-%m-%d} {title}" -n` |
 | `duplicates` | find (and optionally delete) identical PDFs | `pdfm duplicates ~/PDFs -R` |
 | `catalog` | CSV inventory of a folder | `pdfm catalog ~/PDFs -o inventory.csv -R` |
+| `search` | find words in every PDF in a folder | `pdfm search ~/PDFs "invoice 2024" -R` |
 | `watch` | process new PDFs dropped into a folder | see below |
+| `setup-windows` | Windows shortcuts, Open with, uninstall entry (`--remove`) | used by the installer |
 
 Run `pdfm <command> -h` for all options.
 
@@ -341,6 +402,40 @@ to `inbox/originals` (or deleted with `--delete-originals`). A file that
 can't be processed is reported and skipped; watching continues. Use
 `--once` to process what's there and exit, e.g. from a scheduled task.
 
+### Headers, footers and Bates numbers
+
+```bash
+pdfm headers report.pdf --top-right "{date}" --bottom-center "Page {n} of {total}"
+pdfm headers exhibits/*.pdf --bottom-right "{bates}" --bates ABC --bates-start 1000 -o stamped/
+```
+
+Six spots (`--top-left` … `--bottom-right`) take text with `{n}`, `{total}`,
+`{file}`, `{title}`, `{date}` and `{bates}`. Bates numbers continue from
+file to file in the order given (ABC001000, ABC001001, …); the command
+prints the range each file got.
+
+### Form fields
+
+```bash
+pdfm form application.pdf -f text:1:72,700,300,720:Name -f checkbox:1:72,650,84,662:Agree
+pdfm form application_form.pdf        # list the fields
+```
+
+Fields are `text`, `multiline`, `checkbox` or `signature`, with their page
+and box in points from the bottom-left corner (`--fields FILE` reads a JSON
+list). Names are made unique automatically. Drawing them in the app is
+easier: **Add form fields**.
+
+### Searching a folder
+
+```bash
+pdfm search ~/Documents "purchase order" -R --whole-words
+```
+
+Prints each page with a match and the words around it. The text of each
+file is read once and kept in `search.sqlite` in the app's data folder, so
+later searches only read new or changed files. Scanned PDFs need OCR first.
+
 ### Resizing
 
 `--size` accepts `a0`–`a6`, `b4`, `b5`, `letter`, `legal`, `tabloid`,
@@ -377,4 +472,9 @@ pytest
 
 GitHub Actions runs the suite on Linux (Python 3.10 and 3.13) and Windows,
 plus a job with Tesseract, Ghostscript and LibreOffice for the tests that
-need those programs.
+need those programs, and a **Windows end-to-end** job: it installs the app
+with `Install PDF Manager.cmd` (with PowerShell limited the way Smart App
+Control limits it), starts it like its Start menu shortcut, uses tools and
+the reader in both kinds of window (its own window and the Edge window),
+opens a second file from "outside", restarts it as after an update, closes
+it and checks that nothing is left running, then uninstalls it.

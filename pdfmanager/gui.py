@@ -1705,9 +1705,12 @@ def run_app_window(port=0, open_paths=()):
     profile = data_dir() / ("window" if primary else f"window-{server.server_address[1]}")
     try:
         profile.mkdir(parents=True, exist_ok=True)
+        # PDFM_BROWSER_ARGS: more options for the browser, e.g. a remote
+        # debugging port for tests.
+        extra = os.environ.get("PDFM_BROWSER_ARGS", "").split()
         proc = subprocess.Popen(
             [browser, f"--app={url}", f"--user-data-dir={profile}", "--no-first-run",
-             "--no-default-browser-check", "--window-size=1180,820"],
+             "--no-default-browser-check", "--window-size=1180,820", *extra],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError:
         server.server_close()
@@ -1791,9 +1794,12 @@ def launch(open_paths=(), port=0):
     the app is already running, it gets the files instead."""
     if not port and forward_to_running_app(open_paths):
         return
-    if run_desktop(port=port, open_paths=open_paths):
+    # PDFM_WINDOW=desktop, app-window or browser uses only that kind of
+    # window (for tests and troubleshooting).
+    choice = os.environ.get("PDFM_WINDOW", "").strip().lower()
+    if choice in ("", "desktop") and run_desktop(port=port, open_paths=open_paths):
         return
-    if run_app_window(port=port, open_paths=open_paths):
+    if choice in ("", "app-window") and run_app_window(port=port, open_paths=open_paths):
         return
     serve(port=port, open_paths=open_paths, exit_when_closed=True)
 
