@@ -284,3 +284,55 @@ def test_bates_numbers_continue_across_files(tmp_path, capsys):
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         second = PdfReader(io.BytesIO(z.read("b_headers.pdf")))
     assert "Q011" in second.pages[0].extract_text()
+
+
+# -- pictures and attachments -----------------------------------------------------------------
+
+def media_pdf(tmp_path):
+    from PIL import Image
+    from pypdf import PdfWriter
+
+    Image.new("RGB", (300, 200), (200, 30, 30)).save(tmp_path / "red.jpg", quality=90)
+    Image.new("RGB", (120, 120), (30, 30, 200)).save(tmp_path / "blue.png")
+    Image.new("RGB", (4, 4), (0, 0, 0)).save(tmp_path / "dot.png")
+    c = canvas.Canvas(str(tmp_path / "pics.pdf"), pagesize=A4)
+    c.drawImage(str(tmp_path / "red.jpg"), 72, 500, 300, 200)
+    c.drawImage(str(tmp_path / "dot.png"), 72, 400, 4, 4)
+    c.showPage()
+    c.drawImage(str(tmp_path / "red.jpg"), 72, 500, 150, 100)  # the same picture again
+    c.drawImage(str(tmp_path / "blue.png"), 72, 300, 120, 120)
+    c.showPage()
+    c.save()
+    writer = PdfWriter(clone_from=str(tmp_path / "pics.pdf"))
+    writer.add_attachment("notes.txt", b"attached notes")
+    writer.write(tmp_path / "pics.pdf")
+    return tmp_path / "pics.pdf"
+
+
+def test_extract_pictures_and_attachments(tmp_path):
+    found = core.extract_media(media_pdf(tmp_path), tmp_path / "out")
+    from PIL import Image
+
+    # Each picture once (the red one is on both pages), the tiny dot skipped,
+    # JPEG kept as JPEG.
+    sizes = sorted((p.name.split("_")[1], p.suffix, Image.open(p).size) for p in found["images"])
+    assert sizes == [("page1", ".jpg", (300, 200)), ("page2", ".png", (120, 120))]
+    assert [p.read_bytes() for p in found["attachments"]] == [b"attached notes"]
+    assert found["attachments"][0].name == "notes.txt"
+
+
+def test_cli_and_app_extract_media(tmp_path, capsys):
+    src = media_pdf(tmp_path)
+    assert main(["extract-media", str(src), "--no-attachments"]) == 0
+    assert "2 picture(s), 0 attachment(s)" in capsys.readouterr().out
+    assert len(list((tmp_path / "pics_media").glob("pics_page1_*.jpg"))) == 1
+    work = tmp_path / "work"
+    work.mkdir()
+    notes = []
+    name, data, ctype = gui.run_operation("media", [src], {}, work=work, notes=notes)
+    assert name == "pics_media.zip" and ctype == "application/zip"
+    assert notes == ["pics.pdf: 2 pictures, 1 attached file"]
+    work2 = tmp_path / "work2"
+    work2.mkdir()
+    with pytest.raises(gui.UserError, match="nothing was found"):
+        gui.run_operation("media", [text_pdf(tmp_path / "plain.pdf")], {}, work=work2)

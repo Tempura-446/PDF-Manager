@@ -655,6 +655,81 @@ def number_pages(path, output, fmt="{n} / {total}", position="bottom-center",
     return _write(writer, output)
 
 
+def _safe_filename(name, fallback):
+    name = Path(str(name).replace("\\", "/")).name
+    name = "".join("_" if c in '<>:"|?*' or ord(c) < 32 else c for c in name).strip(" .")
+    return name or fallback
+
+
+def extract_media(path, outdir, images=True, attachments=True, min_size=16, password=None):
+    """Save the pictures and/or attached files of a PDF into ``outdir``.
+    Pictures are saved in their own format where possible (JPEG stays JPEG),
+    each picture once even if it's used on several pages; pictures smaller
+    than ``min_size`` pixels (lines, dots, tiny icons) are skipped.
+    Returns {"images": [paths], "attachments": [paths]}."""
+    import hashlib
+
+    reader = open_pdf(path, password)
+    outdir = Path(outdir)
+    stem = Path(path).stem
+    saved = {"images": [], "attachments": []}
+    taken = set()
+
+    def target(folder, name):
+        folder.mkdir(parents=True, exist_ok=True)
+        candidate, n = folder / name, 1
+        while candidate.name.lower() in taken or candidate.exists():
+            n += 1
+            candidate = folder / f"{Path(name).stem} ({n}){Path(name).suffix}"
+        taken.add(candidate.name.lower())
+        return candidate
+
+    if images:
+        seen = set()
+        for number, page in enumerate(reader.pages, 1):
+            progress.report(number - 1, len(reader.pages), "page")
+            try:
+                found = list(page.images)
+            except Exception:
+                continue  # a damaged image dictionary: skip the page's pictures
+            for k, image in enumerate(found, 1):
+                try:
+                    data = image.data
+                    width, height = image.image.size if image.image is not None else (0, 0)
+                except Exception:
+                    continue
+                if width < min_size or height < min_size:
+                    continue
+                digest = hashlib.sha1(data).digest()
+                if digest in seen:
+                    continue
+                seen.add(digest)
+                ext = Path(image.name).suffix.lower() or ".png"
+                out = target(outdir, f"{stem}_page{number}_{k}{ext}")
+                out.write_bytes(data)
+                saved["images"].append(out)
+    if attachments:
+        files = []
+        for name, contents in (reader.attachments or {}).items():
+            files.extend((name, data) for data in contents)
+        for page in reader.pages:
+            for ref in page.get("/Annots") or []:
+                annot = ref.get_object()
+                if annot.get("/Subtype") != "/FileAttachment" or "/FS" not in annot:
+                    continue
+                spec = annot["/FS"].get_object()
+                try:
+                    data = spec["/EF"].get_object()["/F"].get_object().get_data()
+                except (KeyError, AttributeError):
+                    continue
+                files.append((spec.get("/UF") or spec.get("/F") or "attachment", data))
+        for name, data in files:
+            out = target(outdir / "attachments", _safe_filename(name, "attachment"))
+            out.write_bytes(data)
+            saved["attachments"].append(out)
+    return saved
+
+
 HEADER_SPOTS = ("top_left", "top_center", "top_right", "bottom_left", "bottom_center",
                 "bottom_right")
 

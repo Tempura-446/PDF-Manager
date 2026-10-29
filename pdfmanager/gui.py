@@ -237,6 +237,12 @@ OPERATIONS = [
                 _f("dpi", "Resolution (DPI)", "number", 150, min=36, max=600),
                 _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
     {"id": "text", "group": "Convert", "label": "PDF → text", "files": "pdf", "fields": []},
+    {"id": "media", "group": "Convert", "label": "Pictures & attachments", "files": "pdf",
+     "help": "Save the pictures inside PDFs (in their own format, each once) and any files "
+             "attached to them, as a ZIP.",
+     "fields": [_f("images", "Pictures", "check", True),
+                _f("attachments", "Attached files", "check", True),
+                _f("min_size", "Skip pictures smaller than (pixels)", "number", 16, min=1)]},
     {"id": "to-word", "group": "Convert", "label": "PDF → Word", "files": "pdf",
      "help": "Turn PDFs into editable Word documents (.docx).",
      "fields": [_f("engine", "Converter", "select", "auto",
@@ -278,7 +284,7 @@ OPERATIONS = [
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
-SUFFIX = {"headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
+SUFFIX = {"media": "media", "headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
@@ -465,6 +471,16 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         folder = out_dir / f"{src.stem}_split"
         return core.split(src, folder, every=None if ranges else _num(opts.get("every"), int, 1),
                           ranges=ranges or None, password=password)
+    elif op == "media":
+        images, attachments = _bool(opts.get("images", True)), _bool(opts.get("attachments", True))
+        if not images and not attachments:
+            raise UserError("choose pictures, attached files or both")
+        found = core.extract_media(src, out_dir / f"{src.stem}_media", images, attachments,
+                                   _num(opts.get("min_size"), int, 16), password)
+        notes.append(f"{src.name}: {len(found['images'])} picture"
+                     f"{'s' if len(found['images']) != 1 else ''}, {len(found['attachments'])} "
+                     f"attached file{'s' if len(found['attachments']) != 1 else ''}")
+        return found["images"] + found["attachments"]
     elif op == "to-images":
         return core.pdf_to_images(src, out_dir / f"{src.stem}_images",
                                   _num(opts.get("dpi"), int, 150), opts.get("format") or "png",
@@ -516,7 +532,7 @@ def _clean_note(name, report):
 
 def _protect(outputs, password, op):
     """PDFs made from a password-protected file get the same password."""
-    if password and op not in ("decrypt", "encrypt", "pdfa"):
+    if password and op not in ("decrypt", "encrypt", "pdfa", "media"):
         for path in outputs:
             if path.suffix.lower() == ".pdf":
                 core.encrypt(path, path, password)
@@ -588,8 +604,10 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
                                                                extra_files, notes))
         outputs = _flatten_outputs(outputs, out_dir)
 
+    if not outputs:
+        raise UserError("nothing was found to save" + (f" ({'; '.join(notes)})" if notes else ""))
     _protect(outputs, password, op)
-    if len(outputs) == 1:
+    if len(outputs) == 1 and op != "media":
         path = outputs[0]
         ctype = {".txt": "text/plain; charset=utf-8",
                  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

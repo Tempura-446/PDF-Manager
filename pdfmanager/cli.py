@@ -295,6 +295,15 @@ def run_headers(a, src, out, pw):
     return out
 
 
+def run_media(a, src, out, pw):
+    if a.no_images and a.no_attachments:
+        raise core.PdfManagerError("--no-images and --no-attachments leave nothing to do")
+    found = core.extract_media(src, out, images=not a.no_images,
+                               attachments=not a.no_attachments, min_size=a.min_size, password=pw)
+    return (f"{len(found['images'])} picture(s), {len(found['attachments'])} attachment(s) "
+            f"in {out}")
+
+
 def run_text(a, src, out, pw):
     text = core.extract_text(src, out, a.pages, pw)
     if out is None:
@@ -346,7 +355,7 @@ OUTPUTS = {
     "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
     "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
     "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "headers": ("headers", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
-    "split": ("split", "dir"), "to-images": ("images", "dir"),
+    "split": ("split", "dir"), "to-images": ("images", "dir"), "extract-media": ("media", "dir"),
 }
 
 
@@ -383,6 +392,7 @@ def _output_for(a, src, batch):
 # Commands whose output should not inherit the input's password.
 # (split re-encrypts its own output files.)
 KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split", "to-word",
+                    "extract-media",
                     "pdfa"}  # PDF/A doesn't allow encryption
 
 
@@ -868,6 +878,14 @@ def build_parser():
     sp.add_argument("-o", "--output", required=True)
     sp.add_argument("-s", "--size", help="fit images onto this paper size (default: image size)")
     sp.add_argument("--margin", type=float, default=0, help="margin in mm")
+
+    sp = per_file("extract-media", run_media,
+                  "save the pictures and attached files inside PDFs",
+                  out_help="output folder (default: <input>_media)")
+    sp.add_argument("--no-images", action="store_true", help="only attached files")
+    sp.add_argument("--no-attachments", action="store_true", help="only pictures")
+    sp.add_argument("--min-size", type=int, default=16,
+                    help="skip pictures smaller than this many pixels (default: 16)")
 
     sp = per_file("to-images", run_to_images, "render pages to image files",
                   out_help="output folder (default: <input>_images)")
