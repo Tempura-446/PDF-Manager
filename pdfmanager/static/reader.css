@@ -1,4 +1,4 @@
-/* PDF reader. Uses the app's colour tokens from gui.html. */
+/* PDF reader. Uses the app's "paper & ink" tokens from gui.html. */
 
 .rd { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--surface-3); container-type: inline-size; }
 .rd [hidden] { display: none !important; }
@@ -6,161 +6,206 @@
 
 /* ---- Toolbar ---- */
 .rd-toolbar {
-  display: flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 52px;
+  display: flex; align-items: center; gap: 4px; padding: 8px 12px; min-height: 54px;
   background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: nowrap;
 }
 .rd-group { display: flex; align-items: center; gap: 2px; flex: none; }
-.rd-sep { width: 1px; height: 22px; background: var(--border); margin: 0 6px; flex: none; }
-.rd-title { min-width: 0; flex: 1 1 auto; font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 6px; }
+.rd-sep { width: 1px; height: 22px; background: var(--border-strong); opacity: .6; margin: 0 8px; flex: none; }
+.rd-title { min-width: 0; flex: 1 1 auto; font-weight: 600; font-size: 14px; letter-spacing: -0.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 8px; }
 .rd-btn {
-  height: 34px; min-width: 34px; padding: 0 8px; border: 1px solid transparent; border-radius: 8px; background: none;
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; color: var(--text); font-size: 14px;
+  height: 34px; min-width: 34px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-sm); background: none;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; color: var(--text-2); font-size: 14px;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t) var(--ease), box-shadow var(--t);
 }
-.rd-btn:hover { background: var(--surface-2); }
+.rd-btn:hover { background: var(--surface-2); color: var(--text); }
+.rd-btn:active { transform: scale(.96); }
 .rd-btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
-.rd-btn:disabled { opacity: .4; cursor: default; background: none; }
+.rd-btn:disabled { opacity: .38; cursor: default; background: none; transform: none; }
 .rd-btn svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
-.rd-btn.primary { background: var(--accent); color: var(--accent-text); padding: 0 14px; font-weight: 600; }
-.rd-btn.primary:hover { background: var(--accent-hover); }
-.rd-page { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); }
-.rd-page input {
-  width: 56px; height: 32px; text-align: center; border: 1px solid var(--border-strong); border-radius: 7px;
-  background: var(--surface); color: var(--text); font: inherit; font-variant-numeric: tabular-nums;
+.rd-btn.primary {
+  color: var(--accent-text); padding: 0 14px; font-weight: 600;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, white) 0%, var(--accent) 100%);
+  border-color: color-mix(in srgb, var(--accent) 85%, black 10%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .18), 0 1px 2px rgb(27 27 25 / .12);
 }
+.rd-btn.primary:hover { filter: brightness(1.06); background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, white) 0%, var(--accent) 100%); color: var(--accent-text); }
+.rd-btn.primary:active { transform: translateY(1px); box-shadow: inset 0 1px 0 rgb(255 255 255 / .1); }
+.rd-page { display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--muted); font-variant-numeric: tabular-nums; margin-left: 2px; }
+.rd-page input {
+  width: 52px; height: 32px; text-align: center; border: 1px solid var(--border-strong); border-radius: 7px;
+  background: var(--surface); color: var(--text); font: inherit; font-variant-numeric: tabular-nums;
+  transition: border-color var(--t), box-shadow var(--t);
+}
+.rd-page input:focus, .rd-zoom:focus, .rd-findbar input[type=search]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
 .rd-zoom {
   height: 32px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text);
-  padding: 0 6px; font: inherit; font-size: 14px; max-width: 132px;
+  padding: 0 24px 0 8px; font: inherit; font-size: 13.5px; max-width: 132px; appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 13px) 13px, calc(100% - 8px) 13px; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+  transition: border-color var(--t), box-shadow var(--t);
 }
 
-/* ---- Find bar ---- */
+/* ---- Find bar (and the annotation bar, which reuses it) ---- */
 .rd-findbar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px;
-  background: var(--surface); border-bottom: 1px solid var(--border); font-size: 14px;
+  background: var(--surface-2); border-bottom: 1px solid var(--border); font-size: 13.5px;
 }
 .rd-findbar input[type=search] {
-  width: min(320px, 100%); height: 34px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 8px;
-  background: var(--surface); color: var(--text); font: inherit;
+  width: min(320px, 100%); height: 34px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); font: inherit; font-size: 14px; transition: border-color var(--t), box-shadow var(--t), background var(--t);
 }
 .rd-findbar input[type=search].notfound { border-color: var(--err); background: var(--err-soft); }
-.rd-findbar label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); cursor: pointer; user-select: none; }
-.rd-findbar label input { accent-color: var(--accent); }
+.rd-findbar label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; user-select: none; }
+.rd-findbar label input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
 .rd-findstatus { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6em; }
 
 /* ---- Body ---- */
 .rd-body { position: relative; flex: 1; display: flex; min-height: 0; }
 .rd-sidebar {
-  width: 216px; flex: none; display: flex; flex-direction: column; min-height: 0;
+  width: 224px; flex: none; display: flex; flex-direction: column; min-height: 0;
   background: var(--sidebar); border-right: 1px solid var(--border);
 }
-.rd-tabs { display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid var(--border); }
+.rd-tabs { display: flex; gap: 2px; margin: 10px 10px 6px; padding: 3px; border-radius: 10px; background: var(--surface-3); }
 .rd-tab {
-  flex: 1; height: 30px; border: 0; border-radius: 7px; background: none; cursor: pointer; font-size: 13px; font-weight: 550; color: var(--muted);
+  flex: 1; height: 28px; border: 0; border-radius: 7px; background: none; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--muted);
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), box-shadow var(--t);
 }
+.rd-tab:hover { color: var(--text); }
 .rd-tab[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
 .rd-tab:disabled { opacity: .45; cursor: default; }
-.rd-panel { flex: 1; overflow-y: auto; min-height: 0; }
-.rd-thumbs { list-style: none; margin: 0; padding: 12px 0; }
-.rd-thumb { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 0; cursor: pointer; }
+.rd-panel { flex: 1; overflow-y: auto; min-height: 0; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.rd-thumbs { list-style: none; margin: 0; padding: 8px 0 16px; }
+.rd-thumb { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 0; cursor: pointer; }
 .rd-thumb-img {
-  width: 128px; background: #fff; border-radius: 3px; box-shadow: 0 0 0 1px var(--border), 0 1px 3px rgb(0 0 0 / .12);
-  display: grid; place-items: center; overflow: hidden;
+  width: 132px; background: #fff; border-radius: 3px; box-shadow: 0 0 0 1px var(--border), 0 1px 3px rgb(0 0 0 / .12), 0 6px 14px rgb(0 0 0 / .06);
+  display: grid; place-items: center; overflow: hidden; transition: box-shadow var(--t) var(--ease), transform var(--t) var(--ease);
 }
 .rd-thumb-img canvas { display: block; width: 100%; height: 100%; }
-.rd-thumb span { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.rd-thumb:hover .rd-thumb-img { box-shadow: 0 0 0 2px var(--border-strong); }
-.rd-thumb.current .rd-thumb-img { box-shadow: 0 0 0 3px var(--accent); }
-.rd-thumb.current span { color: var(--accent); font-weight: 650; }
+.rd-thumb span { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 24px; height: 20px; padding: 0 7px; border-radius: 999px; display: grid; place-items: center; transition: background var(--t), color var(--t); }
+.rd-thumb:hover .rd-thumb-img { box-shadow: 0 0 0 1px var(--border-strong), 0 2px 6px rgb(0 0 0 / .14), 0 10px 22px rgb(0 0 0 / .08); transform: translateY(-1px); }
+.rd-thumb.current .rd-thumb-img { box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px var(--accent-ring); }
+.rd-thumb.current span { color: var(--accent-text); background: var(--accent); font-weight: 650; }
 .rd-outline, .rd-outline ul { list-style: none; margin: 0; padding: 0; }
-.rd-outline { padding: 8px; font-size: 13.5px; }
+.rd-outline { padding: 6px 8px 16px; font-size: 13.5px; }
 .rd-outline ul { padding-left: 14px; }
 .rd-outline .row { display: flex; align-items: flex-start; gap: 2px; }
-.rd-outline .twisty { width: 20px; height: 26px; border: 0; background: none; cursor: pointer; color: var(--muted); flex: none; padding: 0; }
-.rd-outline .twisty svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; transition: transform .15s; }
+.rd-outline .twisty { width: 20px; height: 26px; border: 0; background: none; cursor: pointer; color: var(--muted); flex: none; padding: 0; border-radius: 5px; }
+.rd-outline .twisty:hover { background: var(--surface-3); color: var(--text); }
+.rd-outline .twisty svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; transition: transform var(--t) var(--ease); }
 .rd-outline .twisty[aria-expanded="true"] svg { transform: rotate(90deg); }
 .rd-outline .spacer { width: 20px; flex: none; }
 .rd-outline a {
-  flex: 1; display: block; padding: 4px 6px; border-radius: 6px; color: var(--text); text-decoration: none; cursor: pointer; line-height: 1.35;
+  flex: 1; display: block; padding: 4px 7px; border-radius: var(--radius-xs); color: var(--text-2); text-decoration: none; cursor: pointer; line-height: 1.35;
+  transition: background var(--t), color var(--t);
 }
-.rd-outline a:hover { background: var(--surface-3); }
+.rd-outline a:hover { background: var(--surface-3); color: var(--text); }
 .rd-outline .bold > .row a { font-weight: 650; }
 .rd-outline .italic > .row a { font-style: italic; }
 .rd-empty-note { color: var(--muted); font-size: 13px; padding: 14px; }
 
 .rd-main { position: relative; flex: 1; min-width: 0; }
-.rd-container { position: absolute; inset: 0; overflow: auto; outline: none; }
+.rd-container { position: absolute; inset: 0; overflow: auto; outline: none; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 .rd-container:focus-visible { outline: none; }  /* the page view itself needs no focus ring */
-.rd-container .pdfViewer { padding: 16px 0 32px; }
-.rd-container .pdfViewer .page { box-shadow: 0 1px 3px rgb(0 0 0 / .18), 0 8px 24px rgb(0 0 0 / .08); border: 0; margin: 12px auto; }
+.rd-container .pdfViewer { padding: 18px 0 40px; }
+.rd-container .pdfViewer .page {
+  box-shadow: 0 0 0 1px rgb(0 0 0 / .05), 0 1px 3px rgb(0 0 0 / .14), 0 10px 28px rgb(0 0 0 / .08);
+  border: 0; margin: 14px auto;
+}
 .rd-container.hand { cursor: grab; }
 .rd-container.hand.grabbing { cursor: grabbing; }
 .rd-container.hand .textLayer { pointer-events: none; }
 .rd-edittext .rd-container.hand .textLayer { pointer-events: auto; }  /* Edit text still needs the lines */
 .rd-container.dark .page .canvasWrapper { filter: invert(1) hue-rotate(180deg); }
 
-/* ---- Empty state ---- */
+/* ---- Start screen (no document open) ---- */
 .rd-empty {
-  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px;
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px;
   padding: 24px; background: var(--bg); overflow-y: auto;
 }
+.rd-empty::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(640px 260px at 85% -10%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 70%);
+}
+.rd-empty > * { position: relative; }
 .rd-empty:has(.rd-recent:not([hidden])) { justify-content: flex-start; padding-top: 6vh; }
 .rd-empty-card {
-  max-width: 460px; width: 100%; text-align: center; padding: 40px 28px; border: 1.5px dashed var(--border-strong);
-  border-radius: 16px; background: var(--surface); transition: border-color .15s, background .15s;
+  max-width: 480px; width: 100%; text-align: center; padding: 42px 28px 32px; border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow);
+  transition: border-color var(--t) var(--ease), background var(--t) var(--ease), transform var(--t) var(--ease), box-shadow var(--t);
 }
-.rd-empty.over .rd-empty-card { border-color: var(--accent); background: var(--accent-soft); }
-.rd-empty-icon { width: 56px; height: 56px; border-radius: 16px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; margin: 0 auto 14px; }
-.rd-empty-icon svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.rd-empty h2 { margin: 0 0 6px; font-size: 20px; letter-spacing: -0.01em; }
-.rd-empty p { margin: 0 0 18px; color: var(--muted); }
-.rd-empty .keys { margin: 18px 0 0; font-size: 12.5px; color: var(--faint); }
+.rd-empty.over .rd-empty-card { border-color: var(--accent); background: var(--accent-soft); transform: scale(1.01); box-shadow: var(--shadow-lift); }
+.rd-empty-icon {
+  width: 60px; height: 60px; border-radius: 18px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; margin: 0 auto 16px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.rd-empty-icon svg { width: 30px; height: 30px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.rd-empty h2 { margin: 0 0 6px; font-size: 22px; font-weight: 650; letter-spacing: -0.02em; }
+.rd-empty p { margin: 0 0 20px; color: var(--muted); }
+.rd-empty .rd-btn.primary { height: 40px; padding: 0 18px; }
+.rd-empty .keys { margin: 22px 0 0; font-size: 12.5px; color: var(--faint); }
 
 /* ---- Overlays: menu, dialogs, toasts, loading ---- */
 .rd-menu {
-  position: absolute; right: 12px; top: 50px; z-index: 20; min-width: 240px; padding: 6px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lift);
+  position: absolute; right: 12px; top: 50px; z-index: 20; min-width: 248px; padding: 6px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop);
+  animation: rd-pop var(--t) var(--ease);
 }
 .rd-menu button {
-  display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 7px;
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--radius-xs);
   background: none; cursor: pointer; text-align: left; font-size: 14px; color: var(--text);
 }
-.rd-menu button:hover, .rd-menu button:focus-visible { background: var(--surface-2); }
+.rd-menu button:hover, .rd-menu button:focus-visible { background: var(--surface-2); outline: none; }
 .rd-menu button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; color: var(--muted); flex: none; }
 .rd-menu button .check { margin-left: auto; color: var(--accent); visibility: hidden; }
 .rd-menu button[aria-checked="true"] .check { visibility: visible; }
 .rd-menu hr { border: 0; border-top: 1px solid var(--border); margin: 6px 4px; }
-.rd-menu .label { font-size: 11px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); padding: 6px 10px 2px; }
+.rd-menu .label { font-size: 11px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); padding: 8px 10px 3px; }
+@keyframes rd-pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
 
 .rd-dialog {
-  border: 1px solid var(--border); border-radius: 14px; padding: 0; background: var(--surface); color: var(--text);
-  box-shadow: var(--shadow-lift); width: min(480px, calc(100vw - 32px));
+  border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 0; background: var(--surface); color: var(--text);
+  box-shadow: var(--shadow-pop); width: min(480px, calc(100vw - 32px));
 }
-.rd-dialog::backdrop { background: rgb(0 0 0 / .35); }
-.rd-dialog form { padding: 22px; }
-.rd-dialog h3 { margin: 0 0 14px; font-size: 17px; }
-.rd-dialog p { margin: 0 0 12px; color: var(--muted); }
+.rd-dialog::backdrop { background: rgb(20 20 18 / .36); backdrop-filter: blur(3px); }
+.rd-dialog form { padding: 24px 26px 22px; }
+.rd-dialog h3 { margin: 0 0 12px; font-size: 18px; font-weight: 650; letter-spacing: -0.01em; }
+.rd-dialog p { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
 .rd-dialog input[type=password] {
-  width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit;
+  width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit;
+  transition: border-color var(--t), box-shadow var(--t);
 }
+.rd-dialog input[type=password]:focus, .rd-sigtext:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
 .rd-dialog .err { color: var(--err); font-size: 13.5px; margin-top: 8px; }
-.rd-dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-.rd-dialog .actions button { height: 36px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); cursor: pointer; font-weight: 600; color: var(--text); }
-.rd-dialog .actions button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.rd-props { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 14px; margin: 0; }
+.rd-dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.rd-dialog .actions button {
+  height: 38px; padding: 0 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface); cursor: pointer; font-weight: 600; color: var(--text);
+  box-shadow: var(--shadow); transition: background var(--t), transform var(--t), filter var(--t);
+}
+.rd-dialog .actions button:hover { background: var(--surface-2); }
+.rd-dialog .actions button:active { transform: translateY(1px); }
+.rd-dialog .actions button.primary {
+  color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 85%, black 10%);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, white) 0%, var(--accent) 100%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .18), 0 1px 2px rgb(27 27 25 / .12);
+}
+.rd-dialog .actions button.primary:hover { filter: brightness(1.06); }
+.rd-props { display: grid; grid-template-columns: max-content 1fr; gap: 7px 18px; font-size: 14px; margin: 0; }
 .rd-props dt { color: var(--muted); }
 .rd-props dd { margin: 0; word-break: break-word; }
 
 .rd-toast {
   position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 30; max-width: calc(100% - 32px);
-  padding: 10px 14px; border-radius: 10px; background: var(--text); color: var(--bg); font-size: 14px; box-shadow: var(--shadow-lift);
-  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px; border-radius: 999px; background: var(--text); color: var(--bg); font-size: 14px; box-shadow: var(--shadow-pop);
+  display: flex; align-items: center; gap: 14px; animation: rd-rise calc(var(--t) * 1.5) var(--ease);
 }
-.rd-toast button { border: 0; background: none; color: inherit; font-weight: 650; text-decoration: underline; cursor: pointer; padding: 0; }
-.rd-loading { position: absolute; inset: 0; display: grid; place-items: center; z-index: 5; background: color-mix(in srgb, var(--surface-3) 70%, transparent); }
+.rd-toast button { border: 0; background: none; color: inherit; font-weight: 650; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0; }
+@keyframes rd-rise { from { opacity: 0; transform: translate(-50%, 8px); } }
+.rd-loading { position: absolute; inset: 0; display: grid; place-items: center; z-index: 5; background: color-mix(in srgb, var(--surface-3) 60%, transparent); backdrop-filter: blur(2px); }
 .rd-spinner { width: 34px; height: 34px; border: 3px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: rd-spin .8s linear infinite; }
 @keyframes rd-spin { to { transform: rotate(360deg); } }
 
 /* Full screen: the reader fills the screen. */
-.rd:fullscreen { background: #2a2a28; }
+.rd:fullscreen { background: #232321; }
 .rd:fullscreen .rd-sidebar { display: none; }
 
 /* Printing: only the rendered pages. */
@@ -173,50 +218,61 @@
 }
 
 @media (max-width: 760px) {
-  .rd-toolbar { padding: 6px 8px; gap: 2px; overflow-x: auto; }
+  .rd-toolbar { padding: 6px 8px; gap: 2px; overflow-x: auto; scrollbar-width: none; }
   .rd-title, .rd-hide-narrow { display: none; }
-  .rd-sep { margin: 0 2px; }
-  .rd-sidebar { position: absolute; inset: 0 auto 0 0; z-index: 10; box-shadow: var(--shadow-lift); }
+  .rd-sep { margin: 0 3px; }
+  .rd-sidebar { position: absolute; inset: 0 auto 0 0; z-index: 10; box-shadow: var(--shadow-pop); }
   .rd-zoom { max-width: 96px; }
+  .rd-empty { padding: 16px; }
+  .rd-empty-card { padding: 30px 20px 24px; }
+  .rd-menu { right: 8px; left: 8px; min-width: 0; }
+}
+@media (max-width: 480px) {
+  /* Phones: every control of the toolbar fits without scrolling. */
+  .rd-toolbar { gap: 0; }
+  .rd-toolbar .rd-btn { min-width: 32px; padding: 0 6px; }
+  .rd-toolbar .rd-zoom, .rd-page span { display: none; }
+  .rd-page input { width: 46px; }
 }
 
 /* ---- Annotation bar ---- */
 .rd-annotbar { gap: 4px; }
 .rd-tool span { font-size: 13.5px; }
-.rd-swatches { display: flex; gap: 4px; padding: 0 4px; }
+.rd-swatches { display: flex; gap: 5px; padding: 0 6px; }
 .rd-swatch {
   width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--surface); background: var(--ink); cursor: pointer; padding: 0;
-  box-shadow: 0 0 0 1px var(--border-strong);
+  box-shadow: 0 0 0 1px var(--border-strong); transition: transform var(--t) var(--ease), box-shadow var(--t);
 }
-.rd-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); }
+.rd-swatch:hover { transform: scale(1.1); }
+.rd-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); transform: scale(1.08); }
 .rd-annotbar .rd-zoom { height: 32px; }
 @container (max-width: 1080px) { .rd-tool span { display: none; } .rd-annotbar .rd-btn.primary span { display: none; } }
 
 /* ---- Signature dialog ---- */
 .rd-dialog:has(.rd-sigpad) { width: min(580px, calc(100vw - 32px)); }
 .rd-sigpad {
-  display: block; width: 100%; aspect-ratio: 520 / 180; border: 1px dashed var(--border-strong); border-radius: 10px;
+  display: block; width: 100%; aspect-ratio: 520 / 180; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm);
   background: #fff linear-gradient(transparent calc(100% - 46px), #d8d6cf calc(100% - 46px), #d8d6cf calc(100% - 45px), transparent calc(100% - 45px));
   touch-action: none; cursor: crosshair;
 }
 .rd-sigrow { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
-.rd-sigtext { flex: 1; min-width: 0; height: 36px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
+.rd-sigtext { flex: 1; min-width: 0; height: 36px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; transition: border-color var(--t), box-shadow var(--t); }
 .rd-sigrow .rd-btn { border-color: var(--border-strong); }
-.rd-sigremember { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 13.5px; color: var(--muted); }
+.rd-sigremember { display: flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 13.5px; color: var(--muted); }
 .rd-sigremember input { accent-color: var(--accent); }
 
 /* ---- Recent files (start screen) ---- */
 .rd-recent { width: min(560px, 100%); }
-.rd-recent h3 { font-size: 11px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); margin: 0 0 6px 4px; }
-.rd-recent ul { list-style: none; margin: 0; padding: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.rd-recent h3 { font-size: 11.5px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin: 0 0 8px 4px; }
+.rd-recent ul { list-style: none; margin: 0; padding: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
 .rd-recent li { display: flex; align-items: center; border-top: 1px solid var(--border); }
 .rd-recent li:first-child { border-top: 0; }
 .rd-recent-open {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 0; background: none;
-  text-align: left; cursor: pointer; color: var(--text);
+  text-align: left; cursor: pointer; color: var(--text); transition: background var(--t);
 }
 .rd-recent-open:hover { background: var(--surface-2); }
-.rd-recent-icon { width: 32px; height: 32px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; flex: none; }
+.rd-recent-icon { width: 34px; height: 34px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; flex: none; }
 .rd-recent-icon svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .rd-recent-text { min-width: 0; display: flex; flex-direction: column; }
 .rd-recent-text strong { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -225,16 +281,19 @@
 .rd-recent li:hover .rd-recent-x, .rd-recent-x:focus-visible { opacity: 1; }
 
 /* ---- Document tabs ---- */
-.rd-tabbar { display: flex; align-items: flex-end; gap: 2px; padding: 6px 10px 0; background: var(--surface-2); border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: thin; }
-.rd-doctab { display: flex; align-items: center; max-width: 220px; min-width: 110px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); }
-.rd-doctab:hover { background: var(--surface-3); }
+.rd-tabbar { display: flex; align-items: flex-end; gap: 3px; padding: 8px 10px 0; background: var(--surface-2); border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: thin; }
+.rd-doctab {
+  display: flex; align-items: center; max-width: 220px; min-width: 110px; border: 1px solid transparent; border-bottom: 0; border-radius: 10px 10px 0 0; color: var(--muted);
+  transition: background var(--t) var(--ease), color var(--t) var(--ease);
+}
+.rd-doctab:hover { background: color-mix(in srgb, var(--surface) 55%, transparent); color: var(--text); }
 .rd-doctab.active { background: var(--surface); border-color: var(--border); color: var(--text); margin-bottom: -1px; padding-bottom: 1px; }
-.rd-doctab-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 7px 4px 7px 12px; border: 0; background: none; cursor: pointer; font-size: 13px; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; color: inherit; }
-.rd-doctab-x { width: 24px; height: 24px; margin-right: 4px; border: 0; border-radius: 6px; background: none; cursor: pointer; display: grid; place-items: center; color: var(--muted); padding: 0; flex: none; }
+.rd-doctab-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 8px 4px 8px 12px; border: 0; background: none; cursor: pointer; font-size: 13px; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; color: inherit; }
+.rd-doctab-x { width: 24px; height: 24px; margin-right: 4px; border: 0; border-radius: var(--radius-xs); background: none; cursor: pointer; display: grid; place-items: center; color: var(--muted); padding: 0; flex: none; transition: background var(--t), color var(--t); }
 .rd-doctab-x:hover { background: var(--surface-3); color: var(--text); }
 .rd-doctab-x svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
-.rd-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
-.rd-doctab-add { height: 30px; min-width: 30px; margin-bottom: 3px; }
+.rd-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); flex: none; }
+.rd-doctab-add { height: 30px; min-width: 30px; margin-bottom: 4px; }
 .rd-doctab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* Edit text: lines of text show where a click changes them. */
@@ -247,5 +306,5 @@
 .rd-textedit {
   position: absolute; z-index: 30; box-sizing: border-box; padding: 0 2px; margin: 0;
   border: 1.5px solid var(--accent); border-radius: 3px; background: #fff; color: #111;
-  box-shadow: 0 2px 10px rgb(0 0 0 / .2); line-height: 1; outline: none;
+  box-shadow: 0 0 0 3px var(--accent-ring), 0 4px 14px rgb(0 0 0 / .18); line-height: 1; outline: none;
 }
