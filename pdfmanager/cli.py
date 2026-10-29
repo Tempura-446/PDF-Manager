@@ -12,7 +12,7 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
-                        recipes, redact, scan, search)
+                        forms, recipes, redact, scan, search)
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -242,6 +242,26 @@ def run_bookmarks(a, src, out, pw):
     return f"{out}  ({len(items)} bookmark{'s' if len(items) != 1 else ''})"
 
 
+def run_form(a, src, out, pw):
+    fields = [forms.parse_field(spec) for spec in a.field or []]
+    if a.fields:
+        data = json.loads(Path(a.fields).read_text(encoding="utf-8-sig"))
+        fields += data if isinstance(data, list) else [
+            {**f, "page": int(page)} for page, items in data.items() for f in items]
+    if not fields:
+        found = forms.existing_fields(src, pw)
+        for page, items in found.items():
+            for f in items:
+                x0, y0, x1, y1 = f["rect"]
+                print(f"{f['type']}:{page}:{x0:g},{y0:g},{x1:g},{y1:g}:{f['name']}")
+        if not found:
+            print("no form fields")
+        return None
+    names = forms.add_fields(src, out, fields, border=not a.no_border, font_size=a.font_size,
+                             password=pw)
+    return f"{out}  ({len(names)} field{'s' if len(names) != 1 else ''}: {', '.join(names)})"
+
+
 def run_to_word(a, src, out, pw):
     result, engine = office.pdf_to_word(src, out, engine=a.engine, password=pw)
     how = {"word": "Microsoft Word", "basic": "built-in converter",
@@ -354,7 +374,7 @@ OUTPUTS = {
     "nup": ("nup", "pdf"), "compress": ("compressed", "pdf"), "color": ("color", "pdf"),
     "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
     "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
-    "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "headers": ("headers", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
+    "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "headers": ("headers", "pdf"), "form": ("form", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
     "split": ("split", "dir"), "to-images": ("images", "dir"), "extract-media": ("media", "dir"),
 }
 
@@ -835,6 +855,18 @@ def build_parser():
     sp.add_argument("--case-sensitive", action="store_true")
     sp.add_argument("--whole-words", action="store_true")
     sp.add_argument("--dpi", type=int, default=200, help="resolution of redacted pages")
+
+    sp = per_file("form", run_form,
+                  "add fillable form fields (without --field: list the fields already there)")
+    sp.add_argument("-f", "--field", action="append", metavar="TYPE:PAGE:X0,Y0,X1,Y1[:NAME]",
+                    help=f"add a field ({', '.join(forms.TYPES)}), in points from the bottom-left "
+                         "corner, e.g. text:1:72,700,300,720:Name (repeat for more)")
+    sp.add_argument("--fields", metavar="FILE",
+                    help='fields from a JSON file: [{"type", "page", "rect": [x0, y0, x1, y1], '
+                         '"name"}]')
+    sp.add_argument("--font-size", type=float, default=0,
+                    help="text size in the fields (default: fit single-line fields to the box)")
+    sp.add_argument("--no-border", action="store_true", help="don't draw a border around fields")
 
     sp = per_file("pdfa", run_pdfa, "convert to PDF/A for long-term archiving (needs Ghostscript)")
     sp.add_argument("--level", choices=archive.PDFA_LEVELS, default="2",

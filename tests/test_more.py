@@ -2,6 +2,7 @@
 and footers, extracting pictures and attachments, folder search, form
 fields, text edits, Windows set-up and updates."""
 
+import io
 import json
 import threading
 from pathlib import Path
@@ -383,3 +384,102 @@ def test_cli_search_and_app(tmp_path, monkeypatch, capsys, app):
     match = json.loads(body)["matches"][0]
     assert status == 200 and match["page"] == 1
     assert call(base, token, f"/api/file/{match['id']}")[2].startswith(b"%PDF")
+
+
+# -- form fields ----------------------------------------------------------------------------------
+
+def test_add_form_fields(tmp_path):
+    from pypdf import PdfWriter
+    from pdfmanager import forms
+
+    src = text_pdf(tmp_path / "blank.pdf", ["Name:", "Sideways"])
+    w = PdfWriter(clone_from=src)
+    w.pages[1].rotate(90)
+    w.write(src)
+    out = tmp_path / "form.pdf"
+    names = forms.add_fields(src, out, [
+        {"page": 1, "rect": [120, 756, 400, 776], "type": "text", "name": "Name"},
+        {"page": 1, "rect": [140, 716, 152, 728], "type": "checkbox"},
+        {"page": 1, "rect": [72, 500, 400, 600], "type": "multiline", "required": True},
+        {"page": 1, "rect": [272, 450, 72, 400], "type": "signature"},  # corners in any order
+        {"page": 2, "rect": [72, 700, 300, 720], "type": "text", "name": "Na.me"},
+    ])
+    assert names == ["Name", "Checkbox 1", "Text 1", "Signature 1", "Na me"]
+    reader = PdfReader(out)
+    fields = reader.get_fields()
+    assert {k: v["/FT"] for k, v in fields.items()} == {
+        "Name": "/Tx", "Checkbox 1": "/Btn", "Text 1": "/Tx", "Signature 1": "/Sig", "Na me": "/Tx"}
+    assert fields["Text 1"]["/Ff"] == forms.MULTILINE | forms.REQUIRED
+    assert reader.trailer["/Root"]["/AcroForm"]["/SigFlags"] == 1
+    box = [a.get_object() for a in reader.pages[0]["/Annots"]][1]
+    assert set(box["/AP"]["/N"]) == {"/Yes", "/Off"} and box["/AS"] == "/Off"
+    sideways = reader.pages[1]["/Annots"][0].get_object()
+    assert sideways["/MK"]["/R"] == 90 and list(sideways["/AP"]["/N"]["/BBox"]) == [0, 0, 20, 228]
+    assert reader.pages[0]["/Tabs"] == "/R"
+    found = forms.existing_fields(out)
+    assert [f["name"] for f in found[1]] == ["Name", "Checkbox 1", "Text 1", "Signature 1"]
+    assert found[1][3] == {"rect": [72.0, 400.0, 272.0, 450.0], "name": "Signature 1",
+                           "type": "signature"}
+    # adding more keeps the names unique
+    again = forms.add_fields(out, tmp_path / "more.pdf", [
+        {"page": 1, "rect": [10, 10, 100, 30], "type": "text"},
+        {"page": 1, "rect": [10, 40, 100, 60], "type": "text", "name": "Name"}])
+    assert again == ["Name 2", "Text 2"] or again == ["Text 2", "Name 2"]
+    assert len(PdfReader(tmp_path / "more.pdf").get_fields()) == 7
+    # filling in works
+    filled = PdfWriter(clone_from=out)
+    filled.update_page_form_field_values(filled.pages[0], {"Name": "Ada", "Checkbox 1": "/Yes"},
+                                         auto_regenerate=False)
+    filled.write(tmp_path / "filled.pdf")
+    values = PdfReader(tmp_path / "filled.pdf").get_fields()
+    assert values["Name"]["/V"] == "Ada" and values["Checkbox 1"]["/V"] == "/Yes"
+
+
+def test_form_field_mistakes(tmp_path):
+    from pdfmanager import forms
+
+    src = text_pdf(tmp_path / "blank.pdf")
+    with pytest.raises(core.PdfManagerError, match="unknown field type"):
+        forms.add_fields(src, tmp_path / "o.pdf", [{"page": 1, "rect": [0, 0, 50, 50], "type": "radio"}])
+    with pytest.raises(core.PdfManagerError, match="page 3 doesn't exist"):
+        forms.add_fields(src, tmp_path / "o.pdf", [{"page": 3, "rect": [0, 0, 50, 50]}])
+    with pytest.raises(core.PdfManagerError, match="too small"):
+        forms.add_fields(src, tmp_path / "o.pdf", [{"page": 1, "rect": [0, 0, 2, 50]}])
+    with pytest.raises(core.PdfManagerError, match="no fields"):
+        forms.add_fields(src, tmp_path / "o.pdf", [])
+    with pytest.raises(core.PdfManagerError, match="invalid field"):
+        forms.parse_field("text:1:1,2,3")
+    assert forms.parse_field("checkbox:2:1,2,3,4:I: agree") == {
+        "type": "checkbox", "page": 2, "rect": [1, 2, 3, 4], "name": "I: agree"}
+
+
+def test_cli_and_app_form_fields(tmp_path, capsys, app):
+    src = text_pdf(tmp_path / "blank.pdf")
+    assert main(["form", str(src), "-f", "text:1:72,700,300,720:Name", "-f",
+                 "checkbox:1:72,650,84,662", "--no-border"]) == 0
+    assert "2 fields: Name, Checkbox 1" in capsys.readouterr().out
+    out = tmp_path / "blank_form.pdf"
+    assert main(["form", str(out)]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "text:1:72,700,300,720:Name", "checkbox:1:72,650,84,662:Checkbox 1"]
+    assert "/BS" not in PdfReader(out).pages[0]["/Annots"][0].get_object()
+
+    work = tmp_path / "work"
+    work.mkdir()
+    notes = []
+    fields = {"1": [{"rect": [72, 600, 300, 620], "type": "text", "name": "Email"},
+                    {"rect": [72, 500, 300, 560], "type": "multiline", "name": "Notes"}]}
+    name, data, _ = gui.run_operation("form", [src], {"fields": json.dumps(fields), "border": "true",
+                                                      "required": "true", "font_size": "12"},
+                                      work=work, notes=notes)
+    assert name == "blank_form.pdf" and notes == ["blank.pdf: added 2 fields (Email, Notes)"]
+    email = PdfReader(io.BytesIO(data)).pages[0]["/Annots"][0].get_object()
+    assert email["/T"] == "Email" and email["/DA"] == "/Helv 12 Tf 0 g" and email["/Ff"] == 2
+    with pytest.raises(gui.UserError, match="draw the fields"):
+        gui.run_operation("form", [src], {"fields": "{}"}, work=tmp_path)
+
+    base, token, _ = app
+    body, headers = multipart({"password": ""}, [("file", out)])
+    status, _, res = call(base, token, "/api/form/fields", body, headers)
+    assert status == 200
+    assert [f["name"] for f in json.loads(res)["fields"]["1"]] == ["Name", "Checkbox 1"]

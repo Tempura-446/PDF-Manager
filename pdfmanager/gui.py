@@ -39,7 +39,7 @@ from importlib import resources
 from pathlib import Path
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
-                        recipes, redact, scan, search)
+                        forms, recipes, redact, scan, search)
 from pdfmanager.appdata import data_dir
 from pdfmanager.pageranges import PageRangeError
 
@@ -181,6 +181,15 @@ OPERATIONS = [
              "everywhere and can't be changed. Links keep working.",
      "fields": [_f("forms", "Form fields", "check", True),
                 _f("comments", "Comments, highlights, drawings and signatures", "check", True)]},
+    {"id": "form", "group": "Stamp", "label": "Add form fields", "files": "pdf", "panel": "form",
+     "help": "Draw boxes where people should type, tick or sign. The PDF can then be filled "
+             "in with any PDF reader, including the reader here.",
+     "fields": [_f("font_size", "Text size", "select", "0",
+                   choices=[["0", "Fit the box"], ["8", "8 pt"], ["10", "10 pt"], ["12", "12 pt"],
+                            ["14", "14 pt"]]),
+                _f("border", "Draw a border around each field", "check", True),
+                _f("required", "Make text fields required", "check", False),
+                _f("fields", "", "hidden", "")]},
     {"id": "headers", "group": "Stamp", "label": "Headers & footers", "files": "pdf",
      "help": "Add text at the top or bottom of every page: a title, the date, page numbers or "
              "Bates numbers (which continue from one file to the next).",
@@ -293,7 +302,7 @@ OPERATIONS = [
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
-SUFFIX = {"media": "media", "headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
+SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
@@ -420,6 +429,22 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         if name:
             out = out_dir / f"{src.stem}_{name}.pdf"
         recipes.run(steps, src, out, password, notes)
+    elif op == "form":
+        try:
+            raw = json.loads(opts.get("fields") or "{}")
+            fields = [{**f, "page": int(page)} for page, found in raw.items() for f in found]
+        except (ValueError, TypeError, AttributeError):
+            raise UserError("the fields drawn on the pages are damaged; draw them again") from None
+        if not fields:
+            raise UserError("draw the fields on the page first: drag where people should type, "
+                            "tick or sign")
+        if _bool(opts.get("required")):
+            fields = [{**f, "required": f.get("type") in ("text", "multiline")} for f in fields]
+        names = forms.add_fields(src, out, fields, border=_bool(opts.get("border")),
+                                 font_size=_num(opts.get("font_size"), float, 0),
+                                 password=password)
+        notes.append(f"{src.name}: added {len(names)} field{'s' if len(names) != 1 else ''} "
+                     f"({', '.join(names[:8])}{'…' if len(names) > 8 else ''})")
     elif op == "headers":
         # Bates numbers continue from file to file: the next number is kept
         # in the options between files.
@@ -433,10 +458,10 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             bates_prefix=opts.get("bates_prefix") or "", bates_start=first,
             bates_digits=_num(opts.get("bates_digits"), int, 6), password=password)
     elif op == "flatten":
-        forms, comments = _bool(opts.get("forms", True)), _bool(opts.get("comments", True))
-        if not forms and not comments:
+        fields, comments = _bool(opts.get("forms", True)), _bool(opts.get("comments", True))
+        if not fields and not comments:
             raise UserError("choose form fields, comments or both")
-        archive.flatten(src, out, forms=forms, comments=comments, password=password)
+        archive.flatten(src, out, forms=fields, comments=comments, password=password)
     elif op == "sanitize":
         counts = archive.sanitize(
             src, out, **{k: _bool(opts.get(k, d)) for k, d in
@@ -1017,6 +1042,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._outline(body)
             if path == "/api/redact/find":
                 return self._redact_find(body)
+            if path == "/api/form/fields":
+                return self._form_fields(body)
             if path == "/api/recipes/save":
                 data = json.loads(body or b"{}")
                 saved = recipes.save(data.get("name"), data.get("steps"))
@@ -1213,6 +1240,17 @@ class Handler(BaseHTTPRequestHandler):
                                      password=fields.get("password") or None)
         return self._send(HTTPStatus.OK, {"boxes": {str(p + 1): [list(b) for b in boxes]
                                                     for p, boxes in found.items()}})
+
+    def _form_fields(self, body):
+        """The form fields already in a PDF, for the Add form fields editor."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            found = forms.existing_fields(path, fields.get("password") or None)
+        return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})
 
     def _inspect(self, body):
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
