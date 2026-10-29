@@ -157,6 +157,26 @@ nav {
 
 /* ---- Dialogs ------------------------------------------------------------------------- */
 .app-dialog { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); padding: 0; width: min(520px, calc(100vw - 32px)); box-shadow: var(--shadow-pop); }
+/* Command palette (Ctrl+K) */
+.palette { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); padding: 0;
+  width: min(620px, calc(100vw - 32px)); margin: 12vh auto auto; box-shadow: var(--shadow-pop); overflow: hidden; }
+.palette::backdrop { background: rgb(20 20 18 / .3); backdrop-filter: blur(2px); }
+.palette-search { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.palette-search svg { color: var(--muted); }
+.palette-search input { flex: 1; border: 0; outline: none; background: none; color: var(--text); font: inherit; font-size: 16px; }
+.palette-search kbd, .palette-item kbd { font: 11px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--muted);
+  border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 3px 5px; background: var(--surface-2); white-space: nowrap; }
+.palette-list { list-style: none; margin: 0; padding: 6px; max-height: min(420px, 60vh); overflow-y: auto; scrollbar-width: thin; }
+.palette-group { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); padding: 10px 10px 4px; }
+.palette-item { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer; font-size: 14px; }
+.palette-item svg { color: var(--muted); }
+.palette-icon { display: inline-flex; }
+.palette-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.palette-item .label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.palette-item .sub { color: var(--muted); font-size: 12px; }
+.palette-item[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); }
+.palette-item[aria-selected="true"] svg { color: var(--accent); }
+.palette-empty { color: var(--muted); padding: 18px 12px; font-size: 14px; }
 .app-dialog::backdrop { background: rgb(20 20 18 / .36); backdrop-filter: blur(3px); }
 .app-dialog form { padding: 24px 26px 22px; display: flex; flex-direction: column; gap: 10px; }
 .app-dialog h2 { margin: 0 0 2px; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
@@ -701,6 +721,15 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
   </main>
 </div>
 
+<dialog class="palette" id="palette" aria-label="Commands">
+  <div class="palette-search">
+    <svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input id="palette-input" type="text" placeholder="Type a command, a tool or a page number" aria-label="Command" autocomplete="off" spellcheck="false"
+      role="combobox" aria-expanded="true" aria-controls="palette-list">
+    <kbd>Esc</kbd>
+  </div>
+  <ul class="palette-list" id="palette-list" role="listbox"></ul>
+</dialog>
 <dialog class="app-dialog" id="settings-dialog" aria-labelledby="settings-title">
   <form method="dialog" id="settings-form">
     <h2 id="settings-title">Settings</h2>
@@ -889,6 +918,7 @@ async function ensureReader() {
       addFiles([file]);
     },
     onAllTools: () => setNavDrawer(!document.body.classList.contains("nav-drawer")),
+    onCommands: () => openPalette(),
   });
   return reader;
 }
@@ -908,6 +938,95 @@ async function openInReader(file) {
   await select("reader");
   reader.openFile(file, $("pw").value || null);  // the password typed for the tools, if any
 }
+
+// ---- command palette (Ctrl+K) -------------------------------------------------
+// Every tool, and what the reader can do with the open document, one search away.
+const palette = { items: [], shown: [], at: 0 };
+function paletteCommands() {
+  const list = [];
+  const doc = inReader() && reader && reader.doc;
+  if (inReader() && reader) for (const c of reader.commands()) list.push({ ...c, group: doc ? "This document" : "Reader", icon: "reader" });
+  for (const op of ops) {
+    if (op.id === current?.id && op.id !== "home") continue;
+    list.push({ label: op.label, words: `${op.group} ${op.help || ""} ${TAGLINES[op.id] || ""}`, group: "Tools", icon: op.id,
+      sub: TAGLINES[op.id] || "", run: () => select(op.id) });
+    if (doc && op.files === "pdf") {
+      list.push({ label: `${op.label}: this document`, words: `${op.group} ${TAGLINES[op.id] || ""}`, group: "This document", icon: op.id,
+        run: () => reader.editWith(op.id), later: true });
+    }
+  }
+  return list;
+}
+function paletteMatch(query) {
+  const q = query.trim().toLowerCase();
+  const doc = inReader() && reader && reader.doc;
+  const page = doc && q.match(/^(?:page\s*|p\s*|go to\s*)?(\d+)$/);
+  const found = [];
+  if (page) {
+    const n = Number(page[1]);
+    if (n >= 1 && n <= reader.doc.numPages) found.push({ label: `Go to page ${n}`, group: "This document", icon: "reader", run: () => reader.goToPage(n), score: -1 });
+  }
+  if (!q) return palette.items.filter((c) => !c.later).slice(0, 40);
+  const words = q.split(/\s+/);
+  for (const c of palette.items) {
+    const label = c.label.toLowerCase(), hay = (label + " " + (c.words || "")).toLowerCase();
+    const parts = hay.split(/[^a-z0-9%]+/);
+    if (!words.every((w) => parts.some((p) => p.startsWith(w)) || hay.includes(w))) continue;
+    const score = label.startsWith(q) ? 0 : label.split(/\s+/).some((p) => p.startsWith(words[0])) ? 1 : 2;
+    found.push({ ...c, score: score + (c.later ? 0.5 : 0) });
+  }
+  return found.sort((a, b) => a.score - b.score).slice(0, 40);
+}
+function renderPalette() {
+  const list = $("palette-list");
+  list.replaceChildren();
+  palette.shown = paletteMatch($("palette-input").value);
+  palette.at = Math.min(palette.at, Math.max(0, palette.shown.length - 1));
+  if (!palette.shown.length) { list.append(el("li", { class: "palette-empty" }, "Nothing matches. Try another word.")); return; }
+  const grouped = !$("palette-input").value.trim();
+  let group = null;
+  palette.shown.forEach((c, i) => {
+    if (grouped && c.group !== group) { group = c.group; list.append(el("li", { class: "palette-group", role: "presentation" }, group)); }
+    const row = el("li", { class: "palette-item", role: "option", id: `palette-${i}`, "aria-selected": String(i === palette.at),
+      onclick: () => runPalette(i), onpointermove: () => { if (palette.at !== i) { palette.at = i; markPalette(); } } },
+      c.svg ? Object.assign(el("span", { class: "palette-icon" }), { innerHTML: c.svg }) : icon(ICONS[c.icon] ? c.icon : "file"), el("span", { class: "label" }, c.label, c.sub ? el("span", { class: "sub" }, " — " + c.sub) : ""),
+      c.keys ? el("kbd", {}, c.keys) : "");
+    list.append(row);
+  });
+  markPalette();
+}
+function markPalette() {
+  document.querySelectorAll(".palette-item").forEach((row) => row.setAttribute("aria-selected", String(row.id === `palette-${palette.at}`)));
+  const row = $(`palette-${palette.at}`);
+  if (row) { row.scrollIntoView({ block: "nearest" }); $("palette-input").setAttribute("aria-activedescendant", row.id); }
+}
+function openPalette() {
+  if ($("palette").open) return;
+  palette.items = paletteCommands();
+  palette.at = 0;
+  $("palette-input").value = "";
+  renderPalette();
+  $("palette").showModal();
+  $("palette-input").focus();
+}
+function runPalette(i) {
+  const c = palette.shown[i];
+  $("palette").close();
+  if (c) Promise.resolve(c.run()).catch((e) => console.error(e));
+}
+$("palette-input").addEventListener("input", () => { palette.at = 0; renderPalette(); });
+$("palette-input").addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown") { e.preventDefault(); palette.at = Math.min(palette.at + 1, palette.shown.length - 1); markPalette(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); palette.at = Math.max(palette.at - 1, 0); markPalette(); }
+  else if (e.key === "Enter") { e.preventDefault(); runPalette(palette.at); }
+});
+$("palette").addEventListener("click", (e) => { if (e.target === $("palette")) $("palette").close(); });  // the backdrop
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k") {
+    e.preventDefault(); e.stopPropagation();
+    if ($("palette").open) $("palette").close(); else if (!document.querySelector("dialog[open]")) openPalette();
+  }
+}, { capture: true });
 
 function renderTools(query) {
   const q = query.trim().toLowerCase();

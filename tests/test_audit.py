@@ -2,6 +2,7 @@
 stamps on shared pages, output files."""
 
 import re
+from pathlib import Path
 
 import pytest
 from pypdf import PdfReader, PdfWriter
@@ -696,6 +697,109 @@ def test_editing_text_on_a_shared_page_changes_that_page_only(tmp_path):
     assert abs(old[0] - new[0]) < 1.5 and abs(old[1] - new[1]) < 1.5  # in the old words' place
 
 
+def font_at(path, page, word):
+    """The font pdfium says ``word`` is drawn with."""
+    import ctypes
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as raw
+
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        textpage = doc[page].get_textpage()
+        start = textpage.get_text_range().find(word)
+        buf, flags = ctypes.create_string_buffer(256), ctypes.c_int()
+        raw.FPDFText_GetFontInfo(textpage.raw, start, buf, 256, ctypes.byref(flags))
+        return buf.value.decode()
+    finally:
+        doc.close()
+
+
+def vera_pdf(path):
+    import reportlab
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    pdfmetrics.registerFont(TTFont("Vera", str(Path(reportlab.__file__).parent / "fonts" / "Vera.ttf")))
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont("Vera", 14)
+    c.drawString(72, 700, "Café menu for today")
+    c.save()
+    return path
+
+
+def test_edited_words_keep_the_documents_own_font(tmp_path):
+    from pdfmanager import fonts, textedit
+
+    src = vera_pdf(tmp_path / "vera.pdf")
+    report = []
+    out = tmp_path / "out.pdf"
+    textedit.edit_text(src, out, [{"page": 1, "rect": word_box(src, 0, "today"), "text": "Friday"}], report=report)
+    vera = font_at(src, 0, "today")
+    assert report == [{"font": fonts.display_name(vera), "kind": "same"}]
+    assert font_at(out, 0, "Friday") == vera
+    # The file's copy of the font only has the letters the page used (and
+    # plain ASCII): a letter it lacks comes from elsewhere, never as a blank.
+    report = []
+    textedit.edit_text(src, out, [{"page": 1, "rect": word_box(src, 0, "today"), "text": "Straße"}], report=report)
+    assert report[0]["kind"] in ("installed", "similar") and font_at(out, 0, "Straße") != vera
+    report = []
+    textedit.edit_text(src, out, [{"page": 1, "rect": word_box(src, 0, "Café"), "text": "Déjà"}], report=report)
+    assert report[0]["kind"] != "same"  # no à in the file's copy
+
+
+def test_a_paragraph_rewraps_in_its_width(tmp_path):
+    from pdfmanager import textedit
+
+    c = canvas.Canvas(str(tmp_path / "para.pdf"), pagesize=letter)
+    c.setFont("Helvetica", 11)
+    for n, line in enumerate(["The first line of a paragraph that", "goes on to a second line and", "ends on the third."]):
+        c.drawString(72, 700 - 14 * n, line)
+    c.drawString(72, 600, "Untouched line below.")
+    c.save()
+    src = tmp_path / "para.pdf"
+    out = tmp_path / "out.pdf"
+    top, bottom = word_box(src, 0, "The first"), word_box(src, 0, "third.")
+    rect = [72, bottom[1], 300, top[3]]
+    words = "A much longer paragraph now, written again from the start, so that it needs more lines than before."
+    report = []
+    textedit.edit_text(src, out, [{"page": 1, "rect": rect, "text": words, "paragraph": True}], report=report)
+    assert report[0]["kind"] == "same"
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(str(out))
+    textpage = doc[0].get_textpage()
+    text = textpage.get_text_range()
+    doc.close()
+    assert " ".join(text.split()).count("A much longer paragraph now") == 1
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    new_lines = [ln for ln in lines if any(w in ln for w in ("much", "start", "lines", "before"))]
+    assert len(new_lines) >= 3  # wrapped
+    first, again = word_box(out, 0, "A much"), word_box(out, 0, "before.")
+    assert abs(first[0] - 72) < 1.5 and again[2] <= 300 + 1  # inside the old lines' width
+    assert word_box(out, 0, "Untouched line below.") is not None
+
+
+def test_new_words_take_the_look_of_the_nearest_text(tmp_path):
+    from pdfmanager import textedit
+
+    src = edit_pdf_times(tmp_path / "t.pdf")
+    out = tmp_path / "out.pdf"
+    report = []
+    textedit.edit_text(src, out, [{"page": 1, "at": [72, 650], "text": "Added later"}], report=report)
+    assert report == [{"font": "Times Roman", "kind": "same"}]
+    box = word_box(out, 0, "Added later")
+    assert abs(box[0] - 72) < 1.5 and 630 < box[1] < 650 and box[3] <= 651  # its top left at the click
+    assert font_at(out, 0, "Added") == "Times-Roman"
+
+
+def edit_pdf_times(path):
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont("Times-Roman", 13)
+    c.drawString(72, 700, "Some text in Times")
+    c.save()
+    return path
+
+
 @pytest.mark.parametrize("edits", [
     [{"page": 1, "rect": "abc", "text": "x"}], [{"page": 1, "text": "x"}], [{"page": "one", "rect": [1, 2, 3, 4]}],
     [{"page": 1, "rect": [1, 2], "text": "x"}], [{"page": 1, "rect": [1, 2, 3, float("nan")]}], "not a list", [5],
@@ -803,3 +907,41 @@ def test_encrypt_works_without_pikepdf(tmp_path, monkeypatch):
     src = many_pages(tmp_path / "long.pdf", pages=5)
     locked = core.encrypt(src, tmp_path / "locked.pdf", "pw")
     assert PdfReader(str(locked)).is_encrypted and len(PdfReader(str(locked), password="pw").pages) == 5
+
+
+# -- arranging the reader's pages ------------------------------------------------------------------
+
+def test_arrange_reorders_turns_copies_and_deletes(tmp_path):
+    src = toc_pdf(tmp_path / "toc.pdf", chapters=4)  # pages: contents, chapters 1-4
+    out = tmp_path / "out.pdf"
+    core.arrange(src, out, [{"page": 3}, {"page": 1, "rotate": 90}, {"page": 3, "rotate": -90}, {"page": 5}])
+    reader = PdfReader(str(out))
+    assert texts(out)[0].startswith("Chapter 2") and texts(out)[1].startswith("Chapter 1")  # 2, contents, 2, 4
+    assert [p.rotation for p in reader.pages] == [0, 90, 270, 0]  # the copy turns on its own
+    assert texts(out)[3] == "Chapter 4 body"
+    assert page_objects(out) == 4  # deleted pages don't linger
+    assert {o.title for o in reader.outline} >= {"Chapter 2", "Chapter 4"}
+    assert "Chapter 3" not in {o.title for o in reader.outline}  # its page is gone
+
+
+def test_arrange_inserts_pages_of_another_pdf(tmp_path):
+    src = toc_pdf(tmp_path / "toc.pdf", chapters=2)
+    extra = tmp_path / "extra.pdf"
+    c = canvas.Canvas(str(extra), pagesize=letter)
+    for n in (1, 2):
+        c.drawString(72, 700, f"Inserted {n}")
+        c.showPage()
+    c.save()
+    out = tmp_path / "out.pdf"
+    core.arrange(src, out, [{"page": 1}, {"file": 1, "page": 2}, {"file": 1, "page": 1}, {"page": 2}, {"page": 3}],
+                 inserts=[extra])
+    assert texts(out) == [texts(src)[0], "Inserted 2", "Inserted 1", "Chapter 1 body", "Chapter 2 body"]
+    assert [o.title for o in PdfReader(str(out)).outline] == ["Chapter 1", "Chapter 2"]
+    core.arrange(src, out, [{"page": 1}, {"file": 1}, {"page": 3}], inserts=[extra])  # a whole file
+    assert texts(out) == [texts(src)[0], "Inserted 1", "Inserted 2", "Chapter 2 body"]
+
+
+@pytest.mark.parametrize("plan", [[], "x", [{"page": 9}], [{"page": 1, "rotate": 45}], [{"file": 3, "page": 1}], [{"rotate": 90}]])
+def test_arrange_refuses_a_bad_plan(tmp_path, plan):
+    with pytest.raises(core.PdfManagerError):
+        core.arrange(toc_pdf(tmp_path / "toc.pdf", chapters=1), tmp_path / "out.pdf", plan)

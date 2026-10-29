@@ -188,10 +188,26 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   your signature (remembered on this computer if you like). Colours and
   sizes, undo/redo, and **Save a copy** with your changes. Use *Flatten
   forms & comments* afterwards to make them part of the page.
-- **Edit text** (in the pen bar): click a line of text and retype it. The
-  new words are written in a matching font, size and colour; the old ones
-  are covered with the colour around them (they're still in the file
-  underneath, so use **Redact** to remove text for good). Undo with Ctrl+Z.
+- **Edit text** (E, or Tools → Annotate & sign → Edit text): click a line
+  and retype it, **Shift+click** to rewrite its whole paragraph (it rewraps
+  to the same width and line spacing), or click an empty spot to add words
+  that take the look of the text nearest to them. The new words keep the
+  **document's own font** when its copy has every letter needed; otherwise
+  the same font installed on your computer (found by name, e.g. Calibri),
+  and only then a similar standard font; the reader tells you when it
+  couldn't use the original. The old words are covered with the colour
+  around them (they're still in the file underneath, so use **Redact** to
+  remove text for good). Undo with Ctrl+Z.
+- **Pages:** in the thumbnails, drag pages to reorder them, click with
+  Ctrl or Shift to pick several, and turn, duplicate, delete or extract
+  them (the buttons on a thumbnail, the bar above them, or right-click).
+  **Insert PDF**, or drop a PDF between the thumbnails, puts its pages in.
+  Every change can be undone (Ctrl+Z) and is kept with **Save a copy**.
+- **Right-click a page** for what you can do there: copy the selected
+  words, edit this text, rewrite this paragraph, add text here, turn,
+  duplicate, delete or extract the page, or insert a PDF after it.
+- **Command palette (Ctrl+K):** type what you want (a tool, an action like
+  "fit width" or "delete this page", or a page number) and press Enter.
 - Rotate the view, hand tool (drag to scroll), dark pages for night
   reading, full screen, print, document properties.
 - Password-protected PDFs ask for their password.
@@ -205,7 +221,11 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
 | Ctrl/⌘+F, Enter / Shift+Enter, Esc | find, next / previous match, close |
 | Ctrl/⌘ + / − / 0 | zoom in / out / automatic |
 | N or J, P or K, Home, End | next, previous, first, last page |
-| R, Shift+R | rotate clockwise, counter-clockwise |
+| R, Shift+R | rotate the view clockwise, counter-clockwise |
+| Ctrl/⌘+K | command palette |
+| E | Edit text on / off |
+| T | show / hide the tools |
+| Ctrl/⌘+Z | undo a text or page change |
 | Ctrl/⌘+P, Ctrl/⌘+S | print, save a copy |
 
 The bundled pdf.js (Apache-2.0, see `pdfmanager/static/pdfjs/LICENSE`) is
