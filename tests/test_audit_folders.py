@@ -101,7 +101,8 @@ def test_duplicates_do_not_count_links(tmp_path):
         pytest.skip("symbolic links not available")
     assert organize.find_duplicates(lib) == []
     shutil.copy(lib / "report.pdf", lib / "copy.pdf")
-    assert organize.find_duplicates(lib) == [[lib / "report.pdf", lib / "copy.pdf"]]
+    groups = organize.find_duplicates(lib)  # the copy may share its time stamp on Windows
+    assert len(groups) == 1 and sorted(groups[0]) == sorted([lib / "report.pdf", lib / "copy.pdf"])
 
 
 def test_folder_tools_skip_files_removed_mid_run(tmp_path, monkeypatch):
