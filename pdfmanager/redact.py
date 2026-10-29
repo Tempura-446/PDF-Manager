@@ -14,7 +14,7 @@ import re
 from pypdf import PdfReader, PdfWriter, Transformation
 from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject
 
-from pdfmanager import core
+from pdfmanager import core, progress
 
 PAD = 1.5  # points added around found text
 
@@ -53,6 +53,7 @@ def find_text(path, terms=(), patterns=(), case_sensitive=False, whole_words=Fal
         doc = pdfium.PdfDocument(str(path), password=password)
         try:
             for number, page in enumerate(doc):
+                progress.report(number, len(doc), "searching page")
                 textpage = page.get_textpage()
                 text = textpage.get_text_range()
                 boxes = []
@@ -149,7 +150,8 @@ def _render_redacted(path, areas, dpi, password):
     with core.PDFIUM_LOCK:
         doc = pdfium.PdfDocument(str(path), password=password)
         try:
-            for number, boxes in areas.items():
+            for n, (number, boxes) in enumerate(areas.items()):
+                progress.report(n, len(areas), "blacking out page")
                 page = doc[number]
                 page.set_rotation(0)  # draw in the page's own coordinates
                 left, bottom, right, top = page.get_cropbox()

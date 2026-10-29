@@ -17,7 +17,7 @@ from pathlib import Path
 
 from pypdf import PdfWriter
 
-from pdfmanager import core
+from pdfmanager import core, progress
 
 # Fraction of dark pixels below which a page counts as blank.
 BLANK_THRESHOLDS = {"low": 0.000005, "medium": 0.001, "high": 0.004}
@@ -34,7 +34,8 @@ def ink_coverage(path, password=None, dpi=40):
     with core.PDFIUM_LOCK:
         doc = pdfium.PdfDocument(str(path), password=password)
         try:
-            for page in doc:
+            for number, page in enumerate(doc):
+                progress.report(number, len(doc), "page")
                 image = page.render(scale=dpi / 72, may_draw_forms=True).to_pil().convert("L")
                 w, h = image.size
                 bx, by = int(w * BORDER), int(h * BORDER)
@@ -97,7 +98,8 @@ def detect_rotation(path, password=None, pages=None, dpi=150):
                     images.append((i, target))
             finally:
                 doc.close()
-        for i, image in images:
+        for n, (i, image) in enumerate(images):
+            progress.report(n, len(images), "checking which way up, page")
             angle, confidence = _osd(tesseract, image)
             if angle and confidence >= MIN_CONFIDENCE:
                 turns[i] = angle
@@ -127,11 +129,15 @@ def clean(path, output, remove_blank=True, sensitivity="medium", auto_rotate=Fal
     if not remove_blank and not auto_rotate:
         raise core.PdfManagerError("choose at least one of: remove blank pages, auto-rotate")
     reader = core.open_pdf(path, password)
-    blank = set(find_blank_pages(path, password, sensitivity)) if remove_blank else set()
+    with progress.section(0, 2 if auto_rotate else 1):
+        blank = set(find_blank_pages(path, password, sensitivity)) if remove_blank else set()
     if blank and len(blank) == len(reader.pages):
         raise core.PdfManagerError("every page looks blank; nothing would be left")
     keep = [i for i in range(len(reader.pages)) if i not in blank]
-    turns = detect_rotation(path, password, set(keep)) if auto_rotate else {}
+    turns = {}
+    if auto_rotate:
+        with progress.section(1, 2):
+            turns = detect_rotation(path, password, set(keep))
     writer = PdfWriter(clone_from=reader)
     for i, page in enumerate(writer.pages):
         if i in turns:

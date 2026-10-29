@@ -1,0 +1,146 @@
+"""Tests for progress and cancelling, recent files, single instance, headers
+and footers, extracting pictures and attachments, folder search, form
+fields, text edits, Windows set-up and updates."""
+
+import json
+import threading
+import time
+import urllib.error
+import urllib.request
+
+import pytest
+from pypdf import PdfReader
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+
+from pdfmanager import core, gui, progress
+from pdfmanager.cli import main
+
+
+def text_pdf(path, pages=("Hello world",)):
+    c = canvas.Canvas(str(path), pagesize=A4)
+    for text in pages:
+        c.setFont("Helvetica", 14)
+        c.drawString(72, 760, text)
+        c.showPage()
+    c.save()
+    return path
+
+
+@pytest.fixture
+def app(tmp_path, monkeypatch):
+    """A running server whose app data lives in tmp_path."""
+    from pdfmanager import appdata, recipes
+
+    monkeypatch.setattr(appdata, "data_dir", lambda: tmp_path / "appdata")
+    monkeypatch.setattr(gui, "data_dir", lambda: tmp_path / "appdata")
+    monkeypatch.setattr(recipes, "data_dir", lambda: tmp_path / "appdata")
+    srv, url = gui.make_server()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base, token = url.split("/#token=")
+    yield base, token, srv
+    srv.shutdown()
+    srv.server_close()
+
+
+def call(base, token, path, data=None, headers=None, method=None):
+    headers = {"X-Pdfm-Token": token, **(headers or {})}
+    if isinstance(data, (dict, list)):
+        data, headers["Content-Type"] = json.dumps(data).encode(), "application/json"
+    request = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request) as res:
+            return res.status, dict(res.headers), res.read()
+    except urllib.error.HTTPError as err:
+        return err.code, dict(err.headers), err.read()
+
+
+def multipart(fields, files):
+    boundary = "pdfmtestboundary"
+    parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+             for k, v in fields.items()]
+    for name, path in files:
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; '
+                     f'filename="{path.name}"\r\nContent-Type: application/pdf\r\n\r\n'.encode()
+                     + path.read_bytes() + b"\r\n")
+    return (b"".join(parts) + f"--{boundary}--\r\n".encode(),
+            {"Content-Type": f"multipart/form-data; boundary={boundary}"})
+
+
+# -- progress and cancelling ----------------------------------------------------------
+
+def test_progress_sections_and_pages():
+    seen = []
+
+    def work():
+        for i in range(2):
+            with progress.section(i, 2, f"file{i}"):
+                for n in range(4):
+                    progress.report(n, 4, "page")
+                    seen.append((round(job.fraction, 3), job.message))
+        return "ok"
+
+    job = progress.Job()
+    job.run(work)
+    assert job.state == "done" and job.result == "ok" and job.fraction == 1.0
+    assert seen[0] == (0.0, "file0 — page 1 of 4")
+    assert seen[5] == (0.625, "file1 — page 2 of 4")
+    progress.report(1, 2, "page")  # outside a job: nothing happens
+
+
+def test_cancelled_job_stops_at_the_next_report():
+    reached = []
+
+    def work():
+        for n in range(1000):
+            progress.report(n, 1000)
+            reached.append(n)
+            time.sleep(0.002)
+
+    job = progress.Job().start(work)
+    time.sleep(0.1)
+    job.cancel()
+    time.sleep(0.1)
+    assert job.state == "cancelled" and len(reached) < 1000
+
+
+def test_failed_job_reports_the_error():
+    job = progress.Job()
+    job.expected = (core.PdfManagerError,)
+    job.run(lambda: (_ for _ in ()).throw(core.PdfManagerError("no good")))
+    assert job.snapshot()["error"] == "no good"
+    job = progress.Job()
+    job.run(lambda: 1 / 0)
+    assert job.snapshot()["error"].startswith("ZeroDivisionError")
+
+
+def test_tools_run_as_jobs(app, tmp_path):
+    base, token, _ = app
+    src = text_pdf(tmp_path / "a.pdf", ["One", "Two", "Three"])
+    body, headers = multipart({"op": "reverse"}, [("files", src)])
+    status, _, out = call(base, token, "/api/run", body, {**headers, "X-Pdfm-Async": "1"})
+    assert status == 200
+    job = json.loads(out)["job"]
+    for _ in range(100):
+        state = json.loads(call(base, token, f"/api/job/{job}")[2])
+        if state["state"] != "running":
+            break
+        time.sleep(0.05)
+    assert state["state"] == "done" and state["fraction"] == 1.0
+    status, headers, data = call(base, token, f"/api/job/{job}/result")
+    assert status == 200 and headers["X-Pdfm-Filename"] == "a_reversed.pdf"
+    assert data.startswith(b"%PDF")
+    assert call(base, token, f"/api/job/{job}")[0] == 404  # collected
+    assert call(base, "wrong", f"/api/job/{job}")[0] == 403
+
+
+def test_failed_job_result_is_an_error(app, tmp_path):
+    base, token, _ = app
+    body, headers = multipart({"op": "extract", "pages": "9"}, [("files", text_pdf(tmp_path / "a.pdf"))])
+    job = json.loads(call(base, token, "/api/run", body, {**headers, "X-Pdfm-Async": "1"})[2])["job"]
+    for _ in range(100):
+        if json.loads(call(base, token, f"/api/job/{job}")[2])["state"] != "running":
+            break
+        time.sleep(0.05)
+    status, _, out = call(base, token, f"/api/job/{job}/result")
+    assert status == 400 and "out of range" in json.loads(out)["error"]

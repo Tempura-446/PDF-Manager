@@ -37,8 +37,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
-from pdfmanager import (__version__, archive, compare, core, office, organize, outline, recipes,
-                        redact, scan)
+from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
+                        recipes, redact, scan)
 from pdfmanager.appdata import data_dir
 from pdfmanager.pageranges import PageRangeError
 
@@ -270,6 +270,11 @@ SUFFIX = {"recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "f
 
 class UserError(Exception):
     pass
+
+
+# Errors whose message is shown to the user as it is.
+EXPECTED_ERRORS = (UserError, core.PdfManagerError, PageRangeError, ValueError,
+                   FileNotFoundError, NotADirectoryError)
 
 
 # --------------------------------------------------------------------------
@@ -548,8 +553,10 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
             # Each input gets its own output folder; flatten afterwards.
             sub = out_dir / f"{index:03d}"
             sub.mkdir()
-            outputs.extend((sub, p) for p in _run_file_op(op, src, sub, opts, password,
-                                                           extra_files, notes))
+            label = f"{src.name} ({index + 1} of {len(files)})" if len(files) > 1 else src.name
+            with progress.section(index, len(files), label):
+                outputs.extend((sub, p) for p in _run_file_op(op, src, sub, opts, password,
+                                                               extra_files, notes))
         outputs = _flatten_outputs(outputs, out_dir)
 
     _protect(outputs, password, op)
@@ -730,6 +737,7 @@ class Handler(BaseHTTPRequestHandler):
     token = ""
     allowed_hosts = set()
     results = None  # ResultCache
+    jobs = None  # progress.JobStore
     opened = None  # OpenFiles
     # pywebview's JavaScript bridge needs eval(); only allowed in the desktop window.
     allow_eval = False
@@ -792,6 +800,8 @@ class Handler(BaseHTTPRequestHandler):
                                               "step_ops": list(recipes.STEP_OPS)})
         if path.startswith("/api/file/"):
             return self._open_file(path[len("/api/file/"):])
+        if path.startswith("/api/job/"):
+            return self._job(path, "GET")
         self._error(HTTPStatus.NOT_FOUND, "not found")
 
     def _static(self, rel):
@@ -859,46 +869,89 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(HTTPStatus.OK, {"recipes": list(recipes.load_all().values())})
             if path == "/api/folder":
                 data = json.loads(body or b"{}")
-                result = run_folder_operation(data.get("op"), data.get("options") or {},
-                                              bool(data.get("apply")))
-                return self._send(HTTPStatus.OK, result)
+                return self._job_or_now(lambda: {"json": run_folder_operation(
+                    data.get("op"), data.get("options") or {}, bool(data.get("apply")))})
+            if path.startswith("/api/job/"):
+                return self._job(path, "POST")
             return self._error(HTTPStatus.NOT_FOUND, "not found")
-        except (UserError, core.PdfManagerError, PageRangeError, ValueError,
-                FileNotFoundError, NotADirectoryError) as exc:
+        except EXPECTED_ERRORS as exc:
             return self._error(HTTPStatus.BAD_REQUEST, str(exc))
         except Exception as exc:  # report, don't kill the server
             return self._error(HTTPStatus.INTERNAL_SERVER_ERROR,
                                f"{type(exc).__name__}: {exc}")
 
     def _run(self, body):
+        """Run a tool. With "X-Pdfm-Async: 1" the tool runs as a background
+        job: the answer is {"job": id}; /api/job/<id> tells how far it is,
+        /api/job/<id>/result gives the file and /api/job/<id>/cancel stops it."""
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
         op = fields.pop("op", "")
         password = fields.pop("password", "") or None
-        work = Path(tempfile.mkdtemp(prefix="pdfm-"))
-        try:
-            files, extra = [], {}
-            for index, (name, filename, data) in enumerate(uploads):
-                # One folder per upload keeps original names without clashes.
-                folder = work / "in" / f"{index:03d}"
-                folder.mkdir(parents=True)
-                path = folder / _safe_name(filename)
-                path.write_bytes(data)
-                if name == "files":
-                    files.append(path)
-                elif data:  # extra file field, e.g. an ICC profile
-                    extra[name] = path
-            notes = []
-            name, data, ctype = run_operation(op, files, fields, password, extra, work, notes)
-            quoted = name.replace('"', "")
-            headers = {"Content-Disposition": f'attachment; filename="{quoted}"',
-                       "X-Pdfm-Filename": quoted}
-            if notes:
-                headers["X-Pdfm-Note"] = urllib.parse.quote("\n".join(notes))
-            if self.headers.get("X-Pdfm-Keep") == "1" and self.results is not None:
-                headers["X-Pdfm-Result-Id"] = self.results.add(name, data)
-            return self._send(HTTPStatus.OK, data, ctype, headers)
-        finally:
-            shutil.rmtree(work, ignore_errors=True)
+        keep = self.headers.get("X-Pdfm-Keep") == "1"
+
+        def work_on():
+            work = Path(tempfile.mkdtemp(prefix="pdfm-"))
+            try:
+                files, extra = [], {}
+                for index, (name, filename, data) in enumerate(uploads):
+                    # One folder per upload keeps original names without clashes.
+                    folder = work / "in" / f"{index:03d}"
+                    folder.mkdir(parents=True)
+                    path = folder / _safe_name(filename)
+                    path.write_bytes(data)
+                    if name == "files":
+                        files.append(path)
+                    elif data:  # extra file field, e.g. an ICC profile
+                        extra[name] = path
+                notes = []
+                name, data, ctype = run_operation(op, files, fields, password, extra, work, notes)
+                return {"file": (name, data, ctype, notes, keep)}
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+
+        return self._job_or_now(work_on)
+
+    def _job_or_now(self, func):
+        if self.headers.get("X-Pdfm-Async") == "1":
+            job = progress.Job()
+            job.expected = EXPECTED_ERRORS
+            self.jobs.add(job).start(func)
+            return self._send(HTTPStatus.OK, {"job": job.id})
+        return self._send_result(func())
+
+    def _send_result(self, result):
+        if "json" in result:
+            return self._send(HTTPStatus.OK, result["json"])
+        name, data, ctype, notes, keep = result["file"]
+        quoted = name.replace('"', "")
+        headers = {"Content-Disposition": f'attachment; filename="{quoted}"',
+                   "X-Pdfm-Filename": quoted}
+        if notes:
+            headers["X-Pdfm-Note"] = urllib.parse.quote("\n".join(notes))
+        if keep and self.results is not None:
+            headers["X-Pdfm-Result-Id"] = self.results.add(name, data)
+        return self._send(HTTPStatus.OK, data, ctype, headers)
+
+    def _job(self, path, method):
+        """GET /api/job/<id>, GET /api/job/<id>/result, POST /api/job/<id>/cancel."""
+        job_id, _, action = path[len("/api/job/"):].partition("/")
+        job = self.jobs.get(job_id)
+        if job is None:
+            return self._error(HTTPStatus.NOT_FOUND, "that job is no longer available")
+        if method == "POST" and action == "cancel":
+            job.cancel()
+            return self._send(HTTPStatus.OK, job.snapshot())
+        if method == "GET" and action == "result":
+            if job.state == "failed":
+                self.jobs.pop(job_id)
+                return self._error(HTTPStatus.BAD_REQUEST, job.error)
+            if job.state != "done":
+                return self._error(HTTPStatus.CONFLICT, f"the job is {job.state}")
+            self.jobs.pop(job_id)
+            return self._send_result(job.result)
+        if method == "GET" and not action:
+            return self._send(HTTPStatus.OK, job.snapshot())
+        return self._error(HTTPStatus.NOT_FOUND, "not found")
 
     def _keep(self, body):
         """Hold a file (e.g. the reader's copy with filled-in forms) so the
@@ -1000,7 +1053,7 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None):
     handler = type("PdfmHandler", (Handler,), {"token": token, "results": ResultCache(),
                                                "opened": opened, "allow_eval": desktop,
                                                "last_seen": time.monotonic(),
-                                               "closed_at": None})
+                                               "closed_at": None, "jobs": progress.JobStore()})
     server = None
     if not port and prefer:
         try:

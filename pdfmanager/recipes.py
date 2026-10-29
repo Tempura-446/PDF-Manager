@@ -13,7 +13,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from pdfmanager import core
+from pdfmanager import core, progress
 from pdfmanager.appdata import data_dir
 
 # Tools that take one PDF and give one PDF back, and need no extra files.
@@ -108,22 +108,23 @@ def run(steps, src, output, password=None, notes=None):
             shutil.copyfile(src, current)
         for n, step in enumerate(steps, 1):
             spec = gui.OPS[step["op"]]
-            for field in spec["fields"]:
-                if field.get("required") and not step["options"].get(field["key"], "").strip():
-                    raise core.PdfManagerError(
-                        f"step {n} ({spec['label']}): fill in “{field['label']}”")
-            out_dir = Path(tmp) / f"step{n}"
-            out_dir.mkdir()
-            try:
-                outputs = gui._run_file_op(step["op"], current, out_dir, step["options"],
-                                           None, {}, notes)
-            except gui.UserError as exc:
-                raise core.PdfManagerError(f"step {n} ({spec['label']}): {exc}") from None
-            pdfs = [p for p in outputs if p.suffix.lower() == ".pdf"]
-            if len(pdfs) != 1:
-                raise core.PdfManagerError(f"step {n} ({spec['label']}) didn't give one PDF")
-            # Steps work on unprotected copies; the caller re-protects the result.
-            current = pdfs[0]
+            with progress.section(n - 1, len(steps), f"step {n} of {len(steps)}: {spec['label']}"):
+                for field in spec["fields"]:
+                    if field.get("required") and not step["options"].get(field["key"], "").strip():
+                        raise core.PdfManagerError(
+                            f"step {n} ({spec['label']}): fill in “{field['label']}”")
+                out_dir = Path(tmp) / f"step{n}"
+                out_dir.mkdir()
+                try:
+                    outputs = gui._run_file_op(step["op"], current, out_dir, step["options"],
+                                               None, {}, notes)
+                except gui.UserError as exc:
+                    raise core.PdfManagerError(f"step {n} ({spec['label']}): {exc}") from None
+                pdfs = [p for p in outputs if p.suffix.lower() == ".pdf"]
+                if len(pdfs) != 1:
+                    raise core.PdfManagerError(f"step {n} ({spec['label']}) didn't give one PDF")
+                # Steps work on unprotected copies; the caller re-protects the result.
+                current = pdfs[0]
         Path(output).parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(current), str(output))
     return output

@@ -367,7 +367,9 @@ details.pw summary svg { width: 15px; height: 15px; }
   border-top: 1px solid var(--border);
 }
 .action-inner { max-width: 900px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.action-bar .summary { color: var(--muted); font-size: 14px; }
+.action-bar .summary { color: var(--muted); font-size: 14px; display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.job-progress { display: block; height: 6px; width: min(420px, 100%); border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.job-progress > span { display: block; height: 100%; width: 0; background: var(--accent); border-radius: inherit; transition: width .25s ease; }
 .action-bar .buttons { display: flex; gap: 10px; margin-left: auto; }
 .spacer { flex: 1; min-height: 24px; }
 
@@ -496,8 +498,10 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
     <div id="reader-host"></div>
 
     <div class="action-bar"><div class="action-inner">
-      <span class="summary"><span id="summary"></span><span class="kbd-hint" id="kbd-hint"></span></span>
+      <span class="summary"><span><span id="summary"></span><span class="kbd-hint" id="kbd-hint"></span></span>
+        <span class="job-progress" id="job-progress" hidden role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100"><span id="job-bar"></span></span></span>
       <div class="buttons">
+        <button class="btn secondary" id="cancel" type="button" hidden>Cancel</button>
         <button class="btn secondary" id="preview" type="button" hidden><span class="spinner"></span>Preview</button>
         <button class="btn" id="run" type="button">
           <span class="spinner"></span>
@@ -1162,7 +1166,8 @@ async function run(preview) {
   for (const it of items) body.append("files", it.file, it.file.name);
   busy(true, current.id === "ocr" ? "Recognising text — this can take a while…" : "Working…");
   try {
-    const res = await api("/api/run", { method: "POST", body, headers: isDesktop() ? { "X-Pdfm-Keep": "1" } : {} });
+    const res = await runJob("/api/run", { method: "POST", body, headers: isDesktop() ? { "X-Pdfm-Keep": "1" } : {} });
+    if (!res) return;  // cancelled
     const name = res.headers.get("X-Pdfm-Filename") || "result.pdf";
     const resultId = res.headers.get("X-Pdfm-Result-Id");
     const note = decodeURIComponent(res.headers.get("X-Pdfm-Note") || "");
@@ -1232,8 +1237,10 @@ async function runFolder(apply) {
   }
   busy(true, apply ? "Applying…" : "Previewing…", apply ? "run" : "preview");
   try {
-    const data = await (await api("/api/folder", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ op: current.id, options: opts, apply }) })).json();
+    const res = await runJob("/api/folder", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op: current.id, options: opts, apply }) });
+    if (!res) return;  // cancelled
+    const data = await res.json();
     const n = data.rows.length;
     const msg = n === 0 ? "Nothing to do — everything is already in order."
       : apply ? `${plural(n, "file")} handled.` : `${plural(n, "file")} would change. Nothing has changed yet — click Apply to do it.`;
@@ -1253,7 +1260,40 @@ async function runFolder(apply) {
 function busy(on, text, which = "run") {
   for (const id of ["run", "preview"]) { $(id).disabled = on; $(id).classList.toggle("busy", on && id === which); }
   if (on) { $("summary").textContent = text; $("kbd-hint").textContent = ""; } else updateSummary();
+  if (!on) { $("job-progress").hidden = true; $("cancel").hidden = true; }
+  if (!on && jobCancelled) { $("summary").textContent = "Cancelled — nothing was changed."; jobCancelled = false; }
 }
+
+// Tools run as background jobs: the bar shows how far they are, and Cancel
+// stops them. Resolves with the result's response, or null if cancelled.
+let jobId = null, jobCancelled = false;
+async function runJob(path, options) {
+  const start = await (await api(path, { ...options, headers: { ...(options.headers || {}), "X-Pdfm-Async": "1" } })).json();
+  jobId = start.job;
+  const cancel = $("cancel"), bar = $("job-bar"), box = $("job-progress");
+  cancel.hidden = false; cancel.disabled = false; cancel.textContent = "Cancel";
+  const shown = Date.now();
+  try {
+    for (let wait = 150; ; wait = Math.min(wait * 1.5, 600)) {
+      await new Promise((r) => setTimeout(r, wait));
+      const s = await (await api(`/api/job/${start.job}`)).json();
+      if (s.message) $("summary").textContent = s.message;
+      if (Date.now() - shown > 400) {  // quick jobs don't need a bar
+        box.hidden = false;
+        bar.style.width = `${Math.round(s.fraction * 100)}%`;
+        box.setAttribute("aria-valuenow", String(Math.round(s.fraction * 100)));
+      }
+      if (s.state === "cancelled") { jobCancelled = true; return null; }
+      if (s.state === "done" || s.state === "failed") break;
+    }
+    return await api(`/api/job/${start.job}/result`);
+  } finally { jobId = null; }
+}
+$("cancel").addEventListener("click", async () => {
+  if (!jobId) return;
+  $("cancel").disabled = true; $("cancel").textContent = "Cancelling…";
+  try { await api(`/api/job/${jobId}/cancel`, { method: "POST" }); } catch (e) { /* it may just have finished */ }
+});
 $("run").addEventListener("click", () => run(false));
 $("preview").addEventListener("click", () => run(true));
 

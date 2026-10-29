@@ -10,7 +10,7 @@ from pypdf import PdfReader, PdfWriter, Transformation
 from pypdf.errors import PyPdfError
 from pypdf.generic import ArrayObject, FloatObject, NameObject, NumberObject, RectangleObject
 
-from pdfmanager import imaging
+from pdfmanager import imaging, progress
 from pdfmanager.pageranges import parse_page_ranges
 
 POINTS_PER_INCH = 72
@@ -723,6 +723,7 @@ def ocr(path, output, language="eng", force=False, deskew=False, password=None):
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp_out = output.with_name(output.name + ".tmp.pdf")
+    progress.say("recognising text (this can take a while)")
     try:
         ocrmypdf.ocr(str(source), str(tmp_out), language=language.split("+"),
                      skip_text=not force, force_ocr=force, deskew=deskew,
@@ -757,7 +758,8 @@ def pdf_to_images(path, outdir, dpi=150, fmt="png", pages=None, password=None):
             outdir.mkdir(parents=True, exist_ok=True)
             width = len(str(total))
             written = []
-            for i in indices:
+            for n, i in enumerate(indices):
+                progress.report(n, len(indices), "page")
                 image = doc[i].render(scale=dpi / 72).to_pil()
                 if fmt.lower() in ("jpg", "jpeg") and image.mode != "RGB":
                     image = image.convert("RGB")
