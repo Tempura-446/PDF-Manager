@@ -703,6 +703,7 @@ def test_reader_static_files_are_served(server):
                         ("/static/regions.js", "text/javascript"),
                         ("/static/bookmarks.js", "text/javascript"),
                         ("/static/recipes.js", "text/javascript"),
+                        ("/static/pdfjs.js", "text/javascript"),
                         ("/static/reader.css", "text/css"),
                         ("/static/pdfjs/build/pdf.min.mjs", "text/javascript"),
                         ("/static/pdfjs/build/pdf.worker.min.mjs", "text/javascript"),
@@ -711,7 +712,7 @@ def test_reader_static_files_are_served(server):
                         ("/static/pdfjs/cmaps/UniJIS-UCS2-H.bcmap", "application/octet-stream")):
         status, headers, body = raw_get(base, path)
         assert status == 200 and headers["Content-Type"] == ctype and body, path
-        assert headers["Cache-Control"] == "max-age=3600"
+        assert headers["Cache-Control"] == "no-cache" and headers["ETag"]
 
 
 @pytest.mark.parametrize("path", [
@@ -837,3 +838,41 @@ def test_page_tools_have_page_previews():
         for ref in ("field", "degrees"):
             if ref in board:
                 assert board[ref] in keys, (op["id"], ref)
+
+
+def test_static_files_are_revalidated_by_etag(server):
+    import http.client
+
+    base, _ = server
+    host = base.split("//")[1]
+    conn = http.client.HTTPConnection(host)
+    conn.request("GET", "/static/pdfjs/build/pdf.worker.min.mjs")
+    first = conn.getresponse()
+    first.read()
+    etag = first.getheader("ETag")
+    # Same connection (keep-alive): the browser asks whether its copy is current.
+    conn.request("GET", "/static/pdfjs/build/pdf.worker.min.mjs", headers={"If-None-Match": etag})
+    again = conn.getresponse()
+    assert again.status == 304 and again.read() == b""
+    conn.close()
+
+
+def test_preferred_port():
+    import socket
+
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    free = probe.getsockname()[1]
+    probe.close()
+    # The preferred port is used when it's free...
+    srv, url = gui.make_server(prefer=free)
+    port = srv.server_address[1]
+    try:
+        assert port == free and url.startswith(f"http://127.0.0.1:{free}/#token=")
+        # ...and any free port when it's taken (e.g. by a second copy of the app).
+        taken, taken_url = gui.make_server(prefer=port)
+        assert taken.server_address[1] != port
+        assert f"127.0.0.1:{taken.server_address[1]}" in taken.RequestHandlerClass.allowed_hosts
+        taken.server_close()
+    finally:
+        srv.server_close()

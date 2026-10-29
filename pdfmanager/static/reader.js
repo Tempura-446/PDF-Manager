@@ -12,16 +12,18 @@
 // hand tool, dark pages, full screen, printing, saving a copy and handing the
 // document to one of the app's tools.
 
-const BASE = new URL("/static/pdfjs/", location.href).href;
+import { BASE, DOC_OPTIONS, loadPdfjs as loadLibrary } from "./pdfjs.js";
+
 let pdfjs = null;   // pdf.js display API
 let viewer = null;  // pdf.js viewer components
 
-async function loadPdfjs() {
-  if (pdfjs) return;
-  pdfjs = await import(BASE + "build/pdf.min.mjs");
-  pdfjs.GlobalWorkerOptions.workerSrc = BASE + "build/pdf.worker.min.mjs";
+/** pdf.js and its viewer components. Called early (see gui.html) so the
+ *  reader is ready by the time it's opened. */
+export async function loadPdfjs() {
+  if (viewer) return;
+  pdfjs = await loadLibrary();
   globalThis.pdfjsLib = pdfjs;  // the viewer components read the API from here
-  viewer = await import(BASE + "web/pdf_viewer.mjs");
+  viewer ||= await import(BASE + "web/pdf_viewer.mjs");
   if (!document.querySelector("link[data-pdfjs]")) {
     const link = document.createElement("link");
     link.rel = "stylesheet"; link.href = BASE + "web/pdf_viewer.css"; link.dataset.pdfjs = "";
@@ -416,11 +418,10 @@ export class Reader {
       this.name = name;
       this.password = password;
       const task = pdfjs.getDocument({
+        ...DOC_OPTIONS,
         data: bytes.slice(),  // pdf.js takes ownership of the buffer; keep our copy intact
         password: password || undefined,
-        cMapUrl: BASE + "cmaps/", cMapPacked: true,
-        standardFontDataUrl: BASE + "standard_fonts/", wasmUrl: BASE + "wasm/", iccUrl: BASE + "iccs/",
-        isEvalSupported: false, enableXfa: true,
+        enableXfa: true,
       });
       task.onPassword = (update, reason) => {
         this.#busy(false);

@@ -15,15 +15,7 @@
 // crop margins {left, bottom, right, top}; redact boxes {"1": [[x0, y0, x1, y1]]}
 // with 1-based page numbers.
 
-const BASE = new URL("/static/pdfjs/", location.href).href;
-let pdfjs = null;
-async function loadPdfjs() {
-  if (!pdfjs) {
-    pdfjs = await import(BASE + "build/pdf.min.mjs");
-    pdfjs.GlobalWorkerOptions.workerSrc = BASE + "build/pdf.worker.min.mjs";
-  }
-  return pdfjs;
-}
+import { DOC_OPTIONS, loadPdfjs } from "./pdfjs.js";
 
 const ICON = {
   prev: '<path d="m15 18-6-6 6-6"/>', next: '<path d="m9 18 6-6-6-6"/>',
@@ -98,9 +90,7 @@ export class RegionEditor {
     const lib = await loadPdfjs();
     const data = new Uint8Array(await file.arrayBuffer());
     if (gen !== this.gen) return "stale";
-    const task = lib.getDocument({ data, password: password || undefined, isEvalSupported: false,
-      cMapUrl: BASE + "cmaps/", cMapPacked: true, standardFontDataUrl: BASE + "standard_fonts/",
-      wasmUrl: BASE + "wasm/", iccUrl: BASE + "iccs/" });
+    const task = lib.getDocument({ ...DOC_OPTIONS, data, password: password || undefined });
     let locked = null;
     task.onPassword = (update, reason) => {
       locked = reason === lib.PasswordResponses.INCORRECT_PASSWORD ? "wrong-password" : "password";

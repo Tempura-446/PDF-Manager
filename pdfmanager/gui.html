@@ -626,6 +626,10 @@ async function load() {
   let start = "merge";
   try { start = localStorage.getItem("pdfm-op") || start; } catch (e) {}
   select(ops.some((o) => o.id === start) ? start : ops[0].id);
+  // Load the reader and the PDF engine in the background once the app is
+  // idle, so opening a PDF later doesn't wait for them.
+  const warmUp = () => import("/static/reader.js").then((m) => m.loadPdfjs()).catch(() => {});
+  if (window.requestIdleCallback) requestIdleCallback(warmUp, { timeout: 2000 }); else setTimeout(warmUp, 1000);
 }
 
 // ---- reader -----------------------------------------------------------------

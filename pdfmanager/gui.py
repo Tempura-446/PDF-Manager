@@ -12,13 +12,17 @@ and other machines can't drive the server.
 import base64
 import email.parser
 import email.policy
+import hashlib
 import importlib.util
+import inspect
 import io
 import json
 import os
 import re
 import secrets
 import shutil
+import socket
+import socketserver
 import subprocess
 import sys
 import tempfile
@@ -721,6 +725,7 @@ def _safe_name(name):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = f"pdfm/{__version__}"
+    protocol_version = "HTTP/1.1"  # keep connections open between requests
     token = ""
     allowed_hosts = set()
     results = None  # ResultCache
@@ -741,7 +746,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "max-age=3600" if cache else "no-store")
+        # Static files may be cached but are checked (cheaply, by ETag) on every
+        # load, so an updated app never runs old code.
+        self.send_header("Cache-Control", "no-cache" if cache else "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         for k, v in (headers or {}).items():
@@ -750,6 +757,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _error(self, status, message):
+        # The request body may not have been read; don't reuse the connection.
+        self.close_connection = True
         self._send(status, {"error": message})
 
     def _host_ok(self):
@@ -789,11 +798,22 @@ class Handler(BaseHTTPRequestHandler):
         parts = rel.split("/")
         if any(p in ("", ".", "..") or "\\" in p or ":" in p for p in parts):
             return self._error(HTTPStatus.NOT_FOUND, "not found")
-        target = resources.files("pdfmanager").joinpath("static", *parts)
-        if not target.is_file():
-            return self._error(HTTPStatus.NOT_FOUND, "not found")
+        cached = _STATIC_CACHE.get(rel)
+        if cached is None:
+            target = resources.files("pdfmanager").joinpath("static", *parts)
+            if not target.is_file():
+                return self._error(HTTPStatus.NOT_FOUND, "not found")
+            data = target.read_bytes()
+            cached = _STATIC_CACHE[rel] = (data, '"%s"' % hashlib.blake2b(data, digest_size=8).hexdigest())
+        data, etag = cached
+        if etag in self.headers.get("If-None-Match", ""):
+            self.send_response(HTTPStatus.NOT_MODIFIED)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            return None
         ctype = STATIC_TYPES.get(Path(rel).suffix.lower(), "application/octet-stream")
-        return self._send(HTTPStatus.OK, target.read_bytes(), ctype, cache=True)
+        return self._send(HTTPStatus.OK, data, ctype, {"ETag": etag}, cache=True)
 
     def _open_file(self, key):
         path = self.opened.get(key) if self.opened is not None else None
@@ -929,18 +949,51 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(HTTPStatus.OK, info)
 
 
-def make_server(port=0, desktop=False, open_paths=()):
+# Static files (the reader and pdf.js), read once: rel path -> (bytes, ETag).
+_STATIC_CACHE = {}
+
+# The app uses this port when it's free, so the page keeps the same address
+# between launches and the window's cache and settings (theme, reading
+# positions, a saved signature) carry over. Another free port is used if
+# it's taken, e.g. by a second copy of the app.
+APP_PORT = 47821
+
+
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # On Windows SO_REUSEADDR would let a second copy of the app take the same
+    # port; ask for the port exclusively there instead.
+    allow_reuse_address = sys.platform != "win32"
+
+    def server_bind(self):
+        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        # HTTPServer.server_bind looks up the computer's full name, which can
+        # take seconds on some Windows networks; it isn't needed here.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+def make_server(port=0, desktop=False, open_paths=(), prefer=None):
     """Create (but don't start) the server. Returns (server, url). The
     server's result cache is ``server.RequestHandlerClass.results`` and its
     openable files ``server.RequestHandlerClass.opened``. ``open_paths``
-    are PDFs to show in the reader straight away."""
+    are PDFs to show in the reader straight away. With ``port`` 0, the
+    ``prefer``red port is tried first, then any free port."""
     token = secrets.token_urlsafe(24)
     opened = OpenFiles()
     open_ids = [opened.add(p) for p in open_paths]
     handler = type("PdfmHandler", (Handler,), {"token": token, "results": ResultCache(),
                                                "opened": opened, "allow_eval": desktop,
                                                "last_seen": time.monotonic()})
-    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    server = None
+    if not port and prefer:
+        try:
+            server = _Server(("127.0.0.1", prefer), handler)
+        except OSError:
+            server = None  # in use
+    if server is None:
+        server = _Server(("127.0.0.1", port), handler)
     real_port = server.server_address[1]
     handler.allowed_hosts = {f"127.0.0.1:{real_port}", f"localhost:{real_port}"}
     url = f"http://127.0.0.1:{real_port}/#token={token}"
@@ -952,7 +1005,7 @@ def make_server(port=0, desktop=False, open_paths=()):
 def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False):
     """Run in the browser: print the link, open it, serve until Ctrl+C (or,
     with ``exit_when_closed``, until the page has been closed)."""
-    server, url = make_server(port, open_paths=open_paths)
+    server, url = make_server(port, open_paths=open_paths, prefer=APP_PORT)
     print(f"PDF Manager is running at {url}")
     print("Keep this window open while you use it; press Ctrl+C to stop.")
     if open_browser:
@@ -1088,7 +1141,7 @@ def run_desktop(port=0, open_paths=()):
             return False
     except (OSError, IndexError):
         pass
-    server, url = make_server(port, desktop=True, open_paths=open_paths)
+    server, url = make_server(port, desktop=True, open_paths=open_paths, prefer=APP_PORT)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     handler = server.RequestHandlerClass
@@ -1099,7 +1152,14 @@ def run_desktop(port=0, open_paths=()):
         window = webview.create_window("PDF Manager", url, js_api=api, width=1180, height=820,
                                        min_size=(400, 560), background_color="#f6f6f3")
         api._window = window
-        webview.start()
+        # Keep the window's cache and settings between launches (pywebview
+        # otherwise starts every time like a private browser window).
+        options = {}
+        if "storage_path" in inspect.signature(webview.start).parameters:
+            storage = data_dir() / "webview"
+            storage.mkdir(parents=True, exist_ok=True)
+            options = {"private_mode": False, "storage_path": str(storage)}
+        webview.start(**options)
     except Exception as exc:  # e.g. a missing or blocked web engine
         print(f"Could not open the app window ({exc}); trying another way.")
         try:
@@ -1148,7 +1208,7 @@ def run_app_window(port=0, open_paths=()):
     browser = find_app_browser()
     if not browser:
         return False
-    server, url = make_server(port, open_paths=open_paths)
+    server, url = make_server(port, open_paths=open_paths, prefer=APP_PORT)
     profile = data_dir() / "window"
     try:
         profile.mkdir(parents=True, exist_ok=True)
