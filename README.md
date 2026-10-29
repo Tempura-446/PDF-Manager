@@ -169,6 +169,10 @@ or open a PDF with the standalone app ("Open with…" → PDF Manager, or drop
 the file on the app). It is built on [pdf.js](https://mozilla.github.io/pdf.js/),
 the engine behind Firefox's PDF viewer, bundled with the app so it works offline.
 
+- **Distraction-free:** an open document gets the whole window. The toolbar
+  keeps only the page number, zoom and the thumbnails button; **Tools** (or
+  the T key) pulls out the rest (open, find, annotate and sign, rotate,
+  print, save, more), and **All tools** in it slides out the app's tool list.
 - **Tabs:** open several PDFs at once (the + button, or drop more files),
   each with its own unsaved changes; a dot marks tabs with changes.
 - **Recent files** on the start screen, to open them again with one click.
@@ -179,7 +183,7 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
 - **Find** (Ctrl+F) with highlighting, match case and whole words.
 - **Select and copy text**; links work (web links open in your browser).
 - **Fill in forms** and save a copy with your entries.
-- **Annotate and sign** (the pen button): highlight text, add text, draw,
+- **Annotate and sign** (Tools → Annotate & sign): highlight text, add text, draw,
   add pictures, and sign by drawing, typing your name or using a picture of
   your signature (remembered on this computer if you like). Colours and
   sizes, undo/redo, and **Save a copy** with your changes. Use *Flatten
@@ -272,7 +276,7 @@ Run `pdfm <command> -h` for all options.
 
 | Level | What it does | Use for |
 |---|---|---|
-| `low` | lossless: recompresses page content and removes duplicate objects; images untouched | archiving, print masters |
+| `low` | lossless: recompresses page content, packs uncompressed fonts and pictures, drops the ASCII85/hex text wrapping some programs put around them (often 20% of the file), removes duplicate objects; images untouched | archiving, print masters |
 | `medium` (default) | also reduces images above **150 DPI** and re-encodes them as JPEG quality 75 | everyday sharing, office printing |
 | `high` (alias `large`) | images reduced to **96 DPI**, JPEG quality 50 | email, web, smallest files |
 
@@ -280,6 +284,12 @@ Image resolution is measured as each image is actually drawn on the page,
 so a large photo shown small is reduced while small images are left alone.
 An image is only replaced if the new version is smaller. `--image-quality`
 and `--max-dpi` override a level's settings.
+
+At every level the result is then repacked with [qpdf](https://qpdf.readthedocs.io)
+(through pikepdf, installed with PDF Manager): the many small objects a PDF
+is made of go into compressed object streams. It's lossless and takes a
+third or more off text-heavy documents; files that are mostly pictures
+barely change.
 
 ### Colour conversion
 

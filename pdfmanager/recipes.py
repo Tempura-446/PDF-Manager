@@ -133,6 +133,9 @@ def run(steps, src, output, password=None, notes=None, state=None):
                     raise core.PdfManagerError(f"step {n} ({spec['label']}) didn't give one PDF")
                 # Steps work on unprotected copies; the caller re-protects the result.
                 current = pdfs[0]
+        if any(s["op"] == "compress" for s in steps) and steps[-1]["op"] != "compress":
+            # Steps after Compress rewrite the file without its packing.
+            core.pack(current)
         Path(output).parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(current), str(output))
     return output

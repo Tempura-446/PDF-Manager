@@ -552,7 +552,28 @@ body.reader-mode main { padding: 0; min-height: 0; height: 100%; overflow: hidde
 body.reader-mode main > :not(#reader-host) { display: none !important; }
 body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-width: none; }
 .reader-loading { display: grid; place-items: center; height: 100%; color: var(--muted); }
+/* Reading a document: the tool list steps aside for the page. The reader's
+   Tools ▸ All tools slides it back over the page (body.nav-drawer). */
+body.reader-mode:has(.rd.reading) .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+body.reader-mode:has(.rd.reading) nav {
+  position: fixed; inset: 0 auto 0 0; z-index: 60; width: 268px; height: 100%;
+  border-right: 1px solid var(--border); border-bottom: 0; padding-bottom: 0; box-shadow: var(--shadow-pop);
+  transform: translateX(-102%); visibility: hidden;
+  transition: transform calc(var(--t) * 1.5) var(--ease), visibility 0s linear calc(var(--t) * 1.5);
+}
+body.nav-drawer.reader-mode:has(.rd.reading) nav { transform: none; visibility: visible; transition: transform calc(var(--t) * 1.5) var(--ease); }
+body.nav-drawer.reader-mode:has(.rd.reading)::after {
+  content: ""; position: fixed; inset: 0; z-index: 59; background: rgb(20 20 18 / .28); animation: fade-in var(--t) var(--ease);
+}
+@keyframes fade-in { from { opacity: 0; } }
 
+@media (min-width: 761px) and (max-width: 1120px) { body.reader-mode:has(.rd.reading) nav { width: 72px; } }
+@media (max-width: 760px) {
+  body.reader-mode:has(.rd.reading) nav { width: min(300px, 86vw); }
+  body.reader-mode:has(.rd.reading) nav .tools, body.reader-mode:has(.rd.reading) nav .search { display: block; }
+  body.reader-mode:has(.rd.reading) nav .nav-foot { display: flex; }
+  body.reader-mode:has(.rd.reading) nav .mobile-picker { display: none; }
+}
 @media (max-width: 760px) and (pointer: coarse) { .home-drop { display: none; } }
 @media (max-width: 760px) {
   .app { grid-template-columns: 1fr; align-content: start; }
@@ -865,10 +886,22 @@ async function ensureReader() {
       if (password) { $("pw").value = password; $("pw-box").open = true; }
       addFiles([file]);
     },
+    onAllTools: () => setNavDrawer(!document.body.classList.contains("nav-drawer")),
   });
   return reader;
 }
 const inReader = () => current && current.files === "reader";
+// While a document is read the tool list is tucked away; this slides it out.
+function setNavDrawer(open) {
+  document.body.classList.toggle("nav-drawer", open);
+  if (open) { const here = document.querySelector(".tools button[aria-current=true]") || document.querySelector(".tools button"); if (here) here.focus(); }
+}
+document.addEventListener("pointerdown", (e) => {
+  if (document.body.classList.contains("nav-drawer") && !e.target.closest("nav, .rd-tray")) setNavDrawer(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.body.classList.contains("nav-drawer")) { e.stopImmediatePropagation(); setNavDrawer(false); }
+}, { capture: true });
 async function openInReader(file) {
   await select("reader");
   reader.openFile(file, $("pw").value || null);  // the password typed for the tools, if any
@@ -896,12 +929,17 @@ $("search").addEventListener("keydown", (e) => {
   if (e.key === "Escape") { e.target.value = ""; renderTools(""); e.target.blur(); }
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "/" && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); $("search").focus(); }
+  if (e.key === "/" && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) {
+    e.preventDefault();
+    if (document.querySelector(".rd.reading") && inReader()) setNavDrawer(true);
+    $("search").focus();
+  }
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !inReader()) { e.preventDefault(); $("run").click(); }
 });
 
 async function select(id) {
   current = ops.find((o) => o.id === id);
+  setNavDrawer(false);
   if ($("search").value) { $("search").value = ""; renderTools(""); }
   const readerMode = current.files === "reader", homeMode = current.files === "home";
   document.body.classList.toggle("reader-mode", readerMode);

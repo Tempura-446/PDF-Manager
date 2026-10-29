@@ -51,6 +51,8 @@ const ICON = {
   save: '<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>', info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
   tool: '<path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3-3 8-8-1.3-1.3a4 4 0 0 0-5-5z"/><path d="m4 20 4-4"/>',
   twisty: '<path d="m9 6 6 6-6 6"/>',
+  sliders: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   pen: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
   pointer: '<path d="m4 4 7 17 2.5-7.5L21 11z"/>',
   highlight: '<path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/>',
@@ -100,13 +102,14 @@ const store = {
 };
 
 export class Reader {
-  constructor(host, { token, isDesktop, api, tools = [], onEdit } = {}) {
+  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools } = {}) {
     this.host = host;
     this.token = token;
     this.isDesktop = isDesktop || (() => false);
     this.api = api || (() => null);
     this.tools = tools;
     this.onEdit = onEdit;
+    this.onAllTools = onAllTools;
     // Everything that changes which document is shown runs one after the
     // other (see #serial): two loads at once would show the wrong tab or
     // trip over the shared worker.
@@ -129,7 +132,6 @@ export class Reader {
 
     // Toolbar
     this.sidebarBtn = b("sidebar", "Show or hide the sidebar", { "aria-pressed": "true", disabled: true });
-    this.openBtn = b("open", "Open a PDF (Ctrl+O)");
     this.titleEl = el("div", { class: "rd-title" });
     this.prevBtn = b("up", "Previous page", { disabled: true });
     this.nextBtn = b("down", "Next page", { disabled: true });
@@ -141,21 +143,37 @@ export class Reader {
     for (const [v, label] of ZOOM_PRESETS) this.zoomSelect.append(el("option", { value: v }, label));
     this.zoomCustom = el("option", { value: "custom", hidden: true, disabled: true });
     this.zoomSelect.append(this.zoomCustom);
-    this.rotCcwBtn = b("ccw", "Rotate counter-clockwise", { disabled: true, class: "rd-btn rd-hide-narrow" });
-    this.rotCwBtn = b("cw", "Rotate clockwise (R)", { disabled: true, class: "rd-btn rd-hide-narrow" });
-    this.findBtn = b("search", "Find in document (Ctrl+F)", { disabled: true, "aria-pressed": "false" });
-    this.annotateBtn = b("pen", "Annotate and sign", { disabled: true, "aria-pressed": "false" });
-    this.moreBtn = b("more", "More", { "aria-haspopup": "menu", "aria-expanded": "false" });
+    this.toolsBtn = el("button", { class: "rd-btn rd-tools-btn", type: "button", title: "Show the tools (T)", "aria-expanded": "false",
+      html: svg("sliders") + "<span>Tools</span>" + svg("down") });
 
+    // The toolbar keeps what reading needs; everything else waits in the
+    // tray under it until Tools pulls it out.
     const toolbar = el("div", { class: "rd-toolbar", role: "toolbar", "aria-label": "Reader" },
-      el("div", { class: "rd-group" }, this.sidebarBtn, this.openBtn),
+      el("div", { class: "rd-group" }, this.sidebarBtn),
       this.titleEl,
       el("div", { class: "rd-group" }, this.prevBtn, this.nextBtn,
         el("label", { class: "rd-page" }, this.pageInput, this.pageCount)),
       el("span", { class: "rd-sep" }),
       el("div", { class: "rd-group" }, this.zoomOutBtn, this.zoomSelect, this.zoomInBtn),
-      el("span", { class: "rd-sep rd-hide-narrow" }),
-      el("div", { class: "rd-group" }, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.annotateBtn, this.moreBtn));
+      el("span", { class: "rd-sep" }),
+      this.toolsBtn);
+
+    // Tools tray
+    const t = (name, label, title, attrs = {}) => el("button", { class: "rd-btn rd-tray-btn", type: "button", title, html: svg(name) + `<span>${label}</span>`, ...attrs });
+    this.openBtn = t("open", "Open", "Open a PDF (Ctrl+O)");
+    this.findBtn = t("search", "Find", "Find in document (Ctrl+F)", { "aria-pressed": "false" });
+    this.annotateBtn = t("pen", "Annotate & sign", "Annotate and sign", { "aria-pressed": "false" });
+    this.rotCcwBtn = b("ccw", "Rotate counter-clockwise (Shift+R)");
+    this.rotCwBtn = b("cw", "Rotate clockwise (R)");
+    this.printBtn = t("print", "Print", "Print (Ctrl+P)");
+    this.saveBtn = t("save", "Save a copy", "Save a copy (Ctrl+S)");
+    this.moreBtn = b("more", "More", { "aria-haspopup": "menu", "aria-expanded": "false" });
+    this.appToolsBtn = this.onAllTools ? t("grid", "All tools", "Show every PDF Manager tool") : null;
+    this.tray = el("div", { class: "rd-tray", role: "toolbar", "aria-label": "Tools", hidden: true },
+      this.openBtn, this.findBtn, this.annotateBtn,
+      el("span", { class: "rd-sep" }), this.rotCcwBtn, this.rotCwBtn,
+      el("span", { class: "rd-sep" }), this.printBtn, this.saveBtn, this.moreBtn,
+      el("span", { style: "flex:1" }), this.appToolsBtn);
 
     // Find bar
     this.findInput = el("input", { type: "search", placeholder: "Find in document", "aria-label": "Find in document", autocomplete: "off", spellcheck: "false" });
@@ -218,7 +236,7 @@ export class Reader {
         el("h2", {}, "Read a PDF"),
         el("p", {}, "Drop a PDF here, or open one from your computer."),
         this.emptyOpenBtn,
-        el("p", { class: "keys" }, "Ctrl+F find · Ctrl +/− zoom · R rotate · N / P next / previous page")),
+        el("p", { class: "keys" }, "T tools · Ctrl+F find · Ctrl +/− zoom · N / P next / previous page")),
       this.recentBox = el("section", { class: "rd-recent", hidden: true, "aria-label": "Recent files" },
         el("h3", {}, "Recent"), this.recentList = el("ul", {})));
     this.main = el("div", { class: "rd-main" }, this.container, this.loading, this.empty);
@@ -226,11 +244,11 @@ export class Reader {
 
     this.menu = el("div", { class: "rd-menu", role: "menu", hidden: true });
     this.tabbar = el("div", { class: "rd-tabbar", role: "tablist", "aria-label": "Open documents", hidden: true });
-    this.root.append(toolbar, this.tabbar, this.findbar, this.annotbar, this.body, this.menu, this.fileInput);
+    this.root.append(toolbar, this.tray, this.tabbar, this.findbar, this.annotbar, this.body, this.menu, this.fileInput);
     // A drawing in progress takes every click in the window as the next
     // stroke; end it first when the tabs, toolbar or menu are used. This
     // listens on the window before pdf.js does, so it runs first.
-    const outside = [this.tabbar, toolbar, this.menu];
+    const outside = [this.tabbar, toolbar, this.tray, this.menu];
     window.addEventListener("pointerdown", (e) => {
       if (!outside.some((area) => area.contains(e.target))) return;
       this.#finishEditing();
@@ -275,6 +293,9 @@ export class Reader {
   #toggleMenu() {
     if (!this.menu.hidden) return this.#closeMenu();
     this.#renderMenu();
+    // Open under the More button, wherever the tray put it.
+    const at = this.moreBtn.getBoundingClientRect(), box = this.root.getBoundingClientRect();
+    this.menu.style.top = `${at.bottom - box.top + 6}px`;
     this.menu.hidden = false;
     this.moreBtn.setAttribute("aria-expanded", "true");
     const first = this.menu.querySelector("button:not(:disabled)");
@@ -300,6 +321,10 @@ export class Reader {
     this.rotCcwBtn.addEventListener("click", () => this.rotate(-90));
     this.findBtn.addEventListener("click", () => (this.findbar.hidden ? this.openFind() : this.closeFind()));
     this.moreBtn.addEventListener("click", () => this.#toggleMenu());
+    this.toolsBtn.addEventListener("click", () => this.toggleTray());
+    this.printBtn.addEventListener("click", () => this.print());
+    this.saveBtn.addEventListener("click", () => this.saveCopy());
+    if (this.appToolsBtn) this.appToolsBtn.addEventListener("click", () => this.onAllTools());
     document.addEventListener("pointerdown", (e) => { if (!this.menu.hidden && !this.menu.contains(e.target) && e.target !== this.moreBtn && !this.moreBtn.contains(e.target)) this.#closeMenu(); });
     this.thumbsTab.addEventListener("click", () => this.#showTab("thumbs"));
     this.outlineTab.addEventListener("click", () => this.#showTab("outline"));
@@ -396,12 +421,14 @@ export class Reader {
     if (mod || e.altKey || isTyping(e)) return;
     if (e.key === "Escape" && !this.findbar.hidden) { this.closeFind(); return; }
     if (e.key === "Escape" && this.editMode && this.editMode !== "NONE") { this.#setEditMode("NONE"); return; }
+    if (e.key === "Escape" && !this.tray.hidden) { this.toggleTray(false); return; }
     const v = this.pdfViewer;
     switch (e.key) {
       case "n": case "j": v.nextPage(); break;
       case "p": case "k": v.previousPage(); break;
       case "r": this.rotate(90); break;
       case "R": this.rotate(-90); break;
+      case "t": this.toggleTray(); break;
       case "Home": v.currentPageNumber = 1; break;
       case "End": v.currentPageNumber = v.pagesCount; break;
       case "ArrowLeft": if (this.container.scrollWidth <= this.container.clientWidth) v.previousPage(); else return; break;
@@ -627,6 +654,7 @@ export class Reader {
     for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
       this.zoomSelect, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.annotateBtn]) c.disabled = true;
     this.sidebar.hidden = true;
+    this.root.classList.remove("reading");
     if (this.active) document.title = "PDF reader — PDF Manager";
     this.refreshRecent();
   }
@@ -677,7 +705,9 @@ export class Reader {
       for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
         this.zoomSelect, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.annotateBtn]) c.disabled = false;
       this.pageCount.textContent = `of ${doc.numPages}`;
-      this.#setSidebar(store.get("pdfm-reader-sidebar", window.innerWidth > 760));
+      this.root.classList.add("reading");
+      this.toggleTray(store.get("pdfm-reader-tray", false), false);
+      this.#setSidebar(store.get("pdfm-reader-sidebar", false));
       this.#buildThumbs();
       this.#buildOutline();
       doc.getPageLabels().then((labels) => {
@@ -816,6 +846,15 @@ export class Reader {
     if (document.fullscreenElement) document.exitFullscreen();
     else if (this.root.requestFullscreen) this.root.requestFullscreen().catch(() => this.toast("Full screen isn't available here."));
     else this.toast("Full screen isn't available here.");
+  }
+
+  /** Pull the tools tray out (or put it away); ``open`` defaults to the other way. */
+  toggleTray(open = this.tray.hidden, remember = true) {
+    if (!open) this.#closeMenu();
+    this.tray.hidden = !open;
+    this.toolsBtn.setAttribute("aria-expanded", String(open));
+    this.toolsBtn.title = open ? "Hide the tools (T)" : "Show the tools (T)";
+    if (remember) store.set("pdfm-reader-tray", open);
   }
 
   // ---- sidebar: thumbnails and bookmarks ----------------------------------------

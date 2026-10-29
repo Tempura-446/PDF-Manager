@@ -541,3 +541,265 @@ def test_extracted_pictures_and_attachments_have_usable_names(tmp_path):
     assert saved["images"] and all(p.suffix in (".png", ".jpg", ".jpeg") for p in saved["images"])
     assert len(saved["attachments"]) == 1 and len(saved["attachments"][0].name) <= 120
     assert saved["attachments"][0].suffix == ".txt" and saved["attachments"][0].read_bytes() == b"a very long name"
+
+
+# -- compression: speed without changing the result ------------------------------------------------
+
+def test_ascii85_decoder_matches_the_standard_one():
+    import base64
+    import random
+
+    from pdfmanager import imaging
+
+    rng = random.Random(7)
+    for size in [0, 1, 2, 3, 4, 5, 6, 9, 64, 1001]:
+        for _ in range(20):
+            raw = bytes(rng.choice([0, 0, rng.randrange(256)]) for _ in range(size))
+            for encoded in (base64.a85encode(raw, adobe=True, wrapcol=rng.choice([0, 76])),
+                            base64.a85encode(raw) + b"~>"):
+                assert imaging.ascii85_decode(encoded) == raw
+    with pytest.raises(ValueError):
+        imaging.ascii85_decode(b"ab{cd~>")
+    with pytest.raises(ValueError):
+        imaging.ascii85_decode(b"uuuuu~>")  # more than 32 bits
+
+
+def ascii_wrapped_pdf(path):
+    """Pictures and page content the way reportlab writes them: ASCII85 over
+    Flate or JPEG, and a font program with no compression at all."""
+    import base64
+    import io
+    import zlib
+    from PIL import Image
+    from pypdf.generic import DecodedStreamObject, EncodedStreamObject
+
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=600, height=400)
+    photo = io.BytesIO()
+    Image.effect_noise((300, 200), 60).convert("RGB").save(photo, "JPEG", quality=90)
+    jpeg = EncodedStreamObject()
+    jpeg.update({NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Image"),
+                 NameObject("/Width"): NumberObject(300), NameObject("/Height"): NumberObject(200),
+                 NameObject("/ColorSpace"): NameObject("/DeviceRGB"), NameObject("/BitsPerComponent"): NumberObject(8),
+                 NameObject("/Filter"): ArrayObject([NameObject("/ASCII85Decode"), NameObject("/DCTDecode")])})
+    jpeg._data = base64.a85encode(photo.getvalue(), wrapcol=72) + b"~>"  # as PDF writes it: no <~
+    gray = EncodedStreamObject()
+    gray.update({NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Image"),
+                 NameObject("/Width"): NumberObject(64), NameObject("/Height"): NumberObject(32),
+                 NameObject("/ColorSpace"): NameObject("/DeviceGray"), NameObject("/BitsPerComponent"): NumberObject(8),
+                 NameObject("/Filter"): ArrayObject([NameObject("/ASCIIHexDecode"), NameObject("/FlateDecode")])})
+    gray._data = zlib.compress(bytes(range(256)) * 8).hex().encode() + b">"
+    font = DecodedStreamObject()
+    font.set_data(b"%!FontType1 fake font program " * 200)
+    content = DecodedStreamObject()
+    content.set_data(b"q 300 0 0 200 0 0 cm /Im1 Do Q q 64 0 0 32 400 300 cm /Im2 Do Q")
+    page[NameObject("/Contents")] = writer._add_object(content)
+    page[NameObject("/Resources")] = DictionaryObject({NameObject("/XObject"): DictionaryObject({
+        NameObject("/Im1"): writer._add_object(jpeg), NameObject("/Im2"): writer._add_object(gray)})})
+    page[NameObject("/PieceInfo")] = writer._add_object(font)
+    writer.write(str(path))
+    return path
+
+
+def test_lossless_compression_drops_text_wrappers_and_packs_plain_streams(tmp_path):
+    from PIL import ImageChops
+
+    src = ascii_wrapped_pdf(tmp_path / "wrapped.pdf")
+    out = core.compress(src, tmp_path / "low.pdf", "low")
+    assert out.stat().st_size < 0.85 * src.stat().st_size
+    reader = PdfReader(str(out))
+    xobjects = reader.pages[0]["/Resources"]["/XObject"]
+    assert xobjects["/Im1"].get_object()["/Filter"] == "/DCTDecode"
+    assert xobjects["/Im2"].get_object()["/Filter"] == "/FlateDecode"
+    assert reader.pages[0]["/PieceInfo"].get_object()["/Filter"] == "/FlateDecode"
+    before, after = PdfReader(str(src)), reader
+    for a, b in zip(before.pages[0].images, after.pages[0].images):
+        assert ImageChops.difference(a.image.convert("RGB"), b.image.convert("RGB")).getbbox() is None
+    assert render(out).tobytes() == render(src).tobytes()
+
+
+def test_pictures_are_read_the_same_way_pypdf_reads_them(tmp_path):
+    import io
+    from PIL import Image, ImageChops
+    from pypdf.generic import DecodedStreamObject, EncodedStreamObject
+    from pypdf.generic._image_xobject import _xobj_to_image
+
+    from pdfmanager import imaging
+
+    writer = PdfWriter()
+    icc = DecodedStreamObject()
+    icc.set_data(b"not really a profile")
+    icc[NameObject("/N")] = NumberObject(3)
+    cases = []
+    for mode, space in (("L", NameObject("/DeviceGray")), ("RGB", NameObject("/DeviceRGB")),
+                        ("CMYK", NameObject("/DeviceCMYK")),
+                        ("RGB", ArrayObject([NameObject("/ICCBased"), writer._add_object(icc)]))):
+        picture = Image.effect_noise((40, 30), 50).convert(mode)
+        obj = DecodedStreamObject()
+        obj.set_data(picture.tobytes())
+        obj.update({NameObject("/Subtype"): NameObject("/Image"), NameObject("/Width"): NumberObject(40),
+                    NameObject("/Height"): NumberObject(30), NameObject("/ColorSpace"): space,
+                    NameObject("/BitsPerComponent"): NumberObject(8)})
+        cases.append(obj.flate_encode())
+    photo = io.BytesIO()
+    Image.effect_noise((80, 60), 50).convert("RGB").save(photo, "JPEG")
+    jpeg = EncodedStreamObject()
+    jpeg.update({NameObject("/Subtype"): NameObject("/Image"), NameObject("/Width"): NumberObject(80),
+                 NameObject("/Height"): NumberObject(60), NameObject("/ColorSpace"): NameObject("/DeviceRGB"),
+                 NameObject("/BitsPerComponent"): NumberObject(8), NameObject("/Filter"): NameObject("/DCTDecode")})
+    jpeg._data = photo.getvalue()
+    for obj in cases:
+        ours, theirs = imaging._decode(obj), _xobj_to_image(obj)[2]
+        assert ours.mode == theirs.mode and ours.size == theirs.size
+        assert ImageChops.difference(ours, theirs).getbbox() is None
+    # The JPEG is the original one, decoded once (pypdf's reader saves it
+    # again as a JPEG first, losing a little more of the picture).
+    original = Image.open(io.BytesIO(photo.getvalue()))
+    assert ImageChops.difference(imaging._decode(jpeg), original.convert("RGB")).getbbox() is None
+    # A JPEG shrunk anyway is decoded at a smaller scale.
+    assert imaging._decode(jpeg, (20, 15)).size == (20, 15)
+
+
+# -- edit text ----------------------------------------------------------------------------------------
+
+def word_box(path, page, word):
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        textpage = doc[page].get_textpage()
+        start = textpage.get_text_range().find(word)
+        if start < 0:
+            return None
+        boxes = [textpage.get_charbox(start + k) for k in range(len(word))]
+        return [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)]
+    finally:
+        doc.close()
+
+
+def test_editing_text_on_a_shared_page_changes_that_page_only(tmp_path):
+    from pdfmanager import textedit
+
+    c = canvas.Canvas(str(tmp_path / "same.pdf"), pagesize=letter)
+    for _ in range(3):
+        c.setFont("Helvetica", 12)
+        c.drawString(72, 700, "Identical page text 1234")
+        c.showPage()
+    c.save()
+    small = core.compress(tmp_path / "same.pdf", tmp_path / "small.pdf", "low")
+    pages = PdfReader(str(small)).pages
+    assert pages[0]["/Contents"].indirect_reference == pages[1]["/Contents"].indirect_reference
+    out = tmp_path / "edited.pdf"
+    assert textedit.edit_text(small, out, [{"page": 2, "rect": word_box(small, 1, "1234"), "text": "9999"}]) == 1
+    assert [word_box(out, p, "9999") is not None for p in range(3)] == [False, True, False]
+    old, new = word_box(small, 1, "1234"), word_box(out, 1, "9999")
+    assert abs(old[0] - new[0]) < 1.5 and abs(old[1] - new[1]) < 1.5  # in the old words' place
+
+
+@pytest.mark.parametrize("edits", [
+    [{"page": 1, "rect": "abc", "text": "x"}], [{"page": 1, "text": "x"}], [{"page": "one", "rect": [1, 2, 3, 4]}],
+    [{"page": 1, "rect": [1, 2], "text": "x"}], [{"page": 1, "rect": [1, 2, 3, float("nan")]}], "not a list", [5],
+    [{"page": 9, "rect": [1, 2, 3, 4], "text": "x"}], [],
+])
+def test_a_malformed_text_change_is_a_plain_error(tmp_path, edits):
+    from pdfmanager import textedit
+
+    src = toc_pdf(tmp_path / "toc.pdf", chapters=1)
+    with pytest.raises(core.PdfManagerError):
+        textedit.edit_text(src, tmp_path / "out.pdf", edits)
+
+
+# -- compression: object streams through qpdf ----------------------------------------------------------
+
+def many_pages(path, pages=120):
+    c = canvas.Canvas(str(path), pagesize=letter)
+    for i in range(pages):
+        c.bookmarkPage(f"p{i}")
+        c.addOutlineEntry(f"Page {i + 1}", f"p{i}")
+        c.drawString(72, 700, f"Page {i + 1} of a long text document")
+        c.showPage()
+    c.save()
+    return path
+
+
+def test_compress_packs_objects_into_object_streams(tmp_path):
+    pytest.importorskip("pikepdf")
+    src = many_pages(tmp_path / "long.pdf")
+    out = core.compress(src, tmp_path / "small.pdf", "low")
+    data = out.read_bytes()
+    assert b"/ObjStm" in data
+    plain = core.clone_document(PdfReader(str(src)))
+    core._write(plain, tmp_path / "unpacked.pdf")
+    assert len(data) < 0.8 * (tmp_path / "unpacked.pdf").stat().st_size
+    # Lossless, and every other tool (pypdf, pdfium) still reads it.
+    reader = PdfReader(str(out))
+    assert len(reader.pages) == 120 and len(reader.outline) == 120
+    assert texts(out) == texts(src)
+    assert render(out, 7).tobytes() == render(src, 7).tobytes()
+    assert len(PdfReader(str(core.encrypt(out, tmp_path / "locked.pdf", "pw")), password="pw").pages) == 120
+
+
+def test_compress_works_without_pikepdf(tmp_path, monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_pikepdf(name, *args, **kwargs):
+        if name == "pikepdf":
+            raise ImportError("not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_pikepdf)
+    src = many_pages(tmp_path / "long.pdf", pages=10)
+    out = core.compress(src, tmp_path / "small.pdf", "low")
+    assert b"/ObjStm" not in out.read_bytes() and texts(out) == texts(src)
+    assert core.pack(out) is False
+
+
+def test_a_recipe_repacks_after_steps_that_follow_compress(tmp_path):
+    pytest.importorskip("pikepdf")
+    from pdfmanager import recipes
+
+    src = many_pages(tmp_path / "long.pdf")
+    out = recipes.run([{"op": "compress", "options": {"level": "low"}},
+                       {"op": "number", "options": {}}], src, tmp_path / "out.pdf")
+    assert b"/ObjStm" in out.read_bytes()
+    assert texts(out)[0].endswith("1 / 120")
+
+
+def test_a_protected_file_keeps_its_packing(tmp_path, monkeypatch):
+    pytest.importorskip("pikepdf")
+    from pdfmanager.cli import main
+
+    src = many_pages(tmp_path / "long.pdf")
+    locked = core.encrypt(src, tmp_path / "locked.pdf", "pässwörd", owner_password="owner")
+    reader = PdfReader(str(locked))
+    assert reader.is_encrypted and reader.decrypt("pässwörd") and len(reader.pages) == 120
+    assert PdfReader(str(locked), password="owner").pages[5].extract_text().strip() == texts(src)[5]
+    with pytest.raises(core.PdfManagerError, match="wrong password"):
+        core.open_pdf(locked, "nope")
+    # Compressing it on the command line: the result is protected again, and packed.
+    monkeypatch.setenv("PDFM_PASSWORD", "pässwörd")
+    assert main(["compress", str(locked), "-l", "low", "-o", str(tmp_path / "small.pdf")]) == 0
+    small = tmp_path / "small.pdf"
+    assert PdfReader(str(small)).is_encrypted and b"/ObjStm" in small.read_bytes()
+    unprotected = core.compress(locked, tmp_path / "plain.pdf", "low", password="pässwörd")
+    # Smaller than protecting it the old way (pypdf, which writes no object streams).
+    old_way = core.clone_document(PdfReader(str(unprotected)))
+    old_way.encrypt(user_password="pässwörd", algorithm="AES-256")
+    core._write(old_way, tmp_path / "old_way.pdf")
+    assert small.stat().st_size < 0.85 * (tmp_path / "old_way.pdf").stat().st_size
+    assert texts(core.decrypt(small, tmp_path / "back.pdf", "pässwörd")) == texts(src)
+    import pypdfium2 as pdfium
+    pdfium.PdfDocument(str(small), password="pässwörd").close()  # the app's other reader opens it too
+
+
+def test_encrypt_works_without_pikepdf(tmp_path, monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+    monkeypatch.setattr(builtins, "__import__", lambda name, *a, **k: (_ for _ in ()).throw(ImportError(name))
+                        if name == "pikepdf" else real_import(name, *a, **k))
+    src = many_pages(tmp_path / "long.pdf", pages=5)
+    locked = core.encrypt(src, tmp_path / "locked.pdf", "pw")
+    assert PdfReader(str(locked)).is_encrypted and len(PdfReader(str(locked), password="pw").pages) == 5

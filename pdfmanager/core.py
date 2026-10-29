@@ -694,8 +694,10 @@ def _resolve_links(writer, per_sheet):
 # --------------------------------------------------------------------------
 
 def _finish_compression(writer):
+    imaging.unwrap_ascii(writer)
     for page in writer.pages:
         page.compress_content_streams()
+    imaging.deflate_plain_streams(writer)
     try:
         writer.compress_identical_objects(remove_duplicates=True, remove_unreferenced=True)
     except TypeError:  # pypdf < 6
@@ -706,7 +708,9 @@ def compress(path, output, level="medium", image_quality=None, max_dpi=None, pas
     """Reduce file size.
 
     ``level`` is a preset:
-      - "low":    lossless only (compress streams, remove duplicate objects)
+      - "low":    lossless only (compress streams, drop ASCII85/hex wrappers,
+                  remove duplicate objects, pack objects into object
+                  streams when pikepdf is installed)
       - "medium": also downsample images above 150 DPI, JPEG quality 75
       - "high":   also downsample images above 96 DPI, JPEG quality 50
                   ("large" is accepted as an alias)
@@ -728,12 +732,48 @@ def compress(path, output, level="medium", image_quality=None, max_dpi=None, pas
     reader = open_pdf(path, password)
     writer = clone_document(reader)
     try:
+        imaging.unwrap_ascii(writer)  # first: everything after reads the streams
         if max_dpi or image_quality:
             imaging.downsample_images(writer, max_dpi, image_quality or 85)
         _finish_compression(writer)
     except PyPdfError as exc:  # a stream pypdf can't rewrite
         raise PdfManagerError(f"can't rewrite {path} ({exc})") from None
-    return _write(writer, output)
+    _write(writer, output)
+    pack(output)
+    return Path(output)
+
+
+def pack(path):
+    """Repack the PDF at ``path`` with qpdf (through pikepdf), in place: its
+    many small objects (page dictionaries, fonts' descriptions, outlines)
+    go into compressed object streams, which pypdf can't write. Nothing is
+    decoded or re-encoded, so it is lossless; text-heavy files lose a
+    third or more. Skipped, leaving the file as it is, when pikepdf isn't
+    installed, can't read the file, or the result isn't smaller. Returns
+    whether the file was repacked."""
+    try:
+        import pikepdf
+    except ImportError:
+        return False
+    path = Path(path)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    os.close(fd)
+    try:
+        try:
+            with pikepdf.open(path) as pdf:
+                pdf.save(tmp, object_stream_mode=pikepdf.ObjectStreamMode.generate,
+                         compress_streams=True, recompress_flate=False)
+        except (pikepdf.PdfError, OSError, RuntimeError):
+            return False  # pypdf's file is still there, as good as before
+        if os.path.getsize(tmp) >= path.stat().st_size:
+            return False
+        os.replace(tmp, path)
+        return True
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def convert_color(path, output, target, icc_profile=None, password=None):
@@ -762,11 +802,43 @@ def convert_color(path, output, target, icc_profile=None, password=None):
     return _write(writer, output)
 
 
+class _Bytes:
+    """Written data that ``_write`` can save like a writer."""
+
+    def __init__(self, data):
+        self.data = data
+
+    def write(self, stream):
+        stream.write(self.data)
+
+
 def encrypt(path, output, user_password, owner_password=None, password=None):
+    """Protect with AES-256. With pikepdf installed, qpdf does the protecting
+    and packs the file into object streams on the way (see ``pack``), so a
+    compressed file that is protected again keeps its packing; the
+    unprotected document only passes through memory."""
     reader = open_pdf(path, password)
+    owner_password = owner_password or user_password
+    try:
+        import pikepdf
+    except ImportError:
+        pikepdf = None
+    if pikepdf is not None:
+        plain = io.BytesIO()
+        clone_document(reader).write(plain)
+        plain.seek(0)
+        try:
+            with pikepdf.open(plain) as pdf:
+                protected = io.BytesIO()
+                pdf.save(protected, encryption=pikepdf.Encryption(
+                             user=user_password, owner=owner_password, aes=True, R=6),
+                         object_stream_mode=pikepdf.ObjectStreamMode.generate,
+                         compress_streams=True, recompress_flate=False)
+            return _write(_Bytes(protected.getvalue()), output)
+        except (pikepdf.PdfError, RuntimeError):
+            pass  # qpdf can't read pypdf's copy: protect it the pypdf way
     writer = clone_document(reader)
-    writer.encrypt(user_password=user_password,
-                   owner_password=owner_password or user_password,
+    writer.encrypt(user_password=user_password, owner_password=owner_password,
                    algorithm="AES-256")
     return _write(writer, output)
 
