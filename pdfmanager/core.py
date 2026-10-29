@@ -802,11 +802,43 @@ def convert_color(path, output, target, icc_profile=None, password=None):
     return _write(writer, output)
 
 
+class _Bytes:
+    """Written data that ``_write`` can save like a writer."""
+
+    def __init__(self, data):
+        self.data = data
+
+    def write(self, stream):
+        stream.write(self.data)
+
+
 def encrypt(path, output, user_password, owner_password=None, password=None):
+    """Protect with AES-256. With pikepdf installed, qpdf does the protecting
+    and packs the file into object streams on the way (see ``pack``), so a
+    compressed file that is protected again keeps its packing; the
+    unprotected document only passes through memory."""
     reader = open_pdf(path, password)
+    owner_password = owner_password or user_password
+    try:
+        import pikepdf
+    except ImportError:
+        pikepdf = None
+    if pikepdf is not None:
+        plain = io.BytesIO()
+        clone_document(reader).write(plain)
+        plain.seek(0)
+        try:
+            with pikepdf.open(plain) as pdf:
+                protected = io.BytesIO()
+                pdf.save(protected, encryption=pikepdf.Encryption(
+                             user=user_password, owner=owner_password, aes=True, R=6),
+                         object_stream_mode=pikepdf.ObjectStreamMode.generate,
+                         compress_streams=True, recompress_flate=False)
+            return _write(_Bytes(protected.getvalue()), output)
+        except (pikepdf.PdfError, RuntimeError):
+            pass  # qpdf can't read pypdf's copy: protect it the pypdf way
     writer = clone_document(reader)
-    writer.encrypt(user_password=user_password,
-                   owner_password=owner_password or user_password,
+    writer.encrypt(user_password=user_password, owner_password=owner_password,
                    algorithm="AES-256")
     return _write(writer, output)
 

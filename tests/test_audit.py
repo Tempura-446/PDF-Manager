@@ -765,3 +765,41 @@ def test_a_recipe_repacks_after_steps_that_follow_compress(tmp_path):
                        {"op": "number", "options": {}}], src, tmp_path / "out.pdf")
     assert b"/ObjStm" in out.read_bytes()
     assert texts(out)[0].endswith("1 / 120")
+
+
+def test_a_protected_file_keeps_its_packing(tmp_path, monkeypatch):
+    pytest.importorskip("pikepdf")
+    from pdfmanager.cli import main
+
+    src = many_pages(tmp_path / "long.pdf")
+    locked = core.encrypt(src, tmp_path / "locked.pdf", "pässwörd", owner_password="owner")
+    reader = PdfReader(str(locked))
+    assert reader.is_encrypted and reader.decrypt("pässwörd") and len(reader.pages) == 120
+    assert PdfReader(str(locked), password="owner").pages[5].extract_text().strip() == texts(src)[5]
+    with pytest.raises(core.PdfManagerError, match="wrong password"):
+        core.open_pdf(locked, "nope")
+    # Compressing it on the command line: the result is protected again, and packed.
+    monkeypatch.setenv("PDFM_PASSWORD", "pässwörd")
+    assert main(["compress", str(locked), "-l", "low", "-o", str(tmp_path / "small.pdf")]) == 0
+    small = tmp_path / "small.pdf"
+    assert PdfReader(str(small)).is_encrypted and b"/ObjStm" in small.read_bytes()
+    unprotected = core.compress(locked, tmp_path / "plain.pdf", "low", password="pässwörd")
+    # Smaller than protecting it the old way (pypdf, which writes no object streams).
+    old_way = core.clone_document(PdfReader(str(unprotected)))
+    old_way.encrypt(user_password="pässwörd", algorithm="AES-256")
+    core._write(old_way, tmp_path / "old_way.pdf")
+    assert small.stat().st_size < 0.85 * (tmp_path / "old_way.pdf").stat().st_size
+    assert texts(core.decrypt(small, tmp_path / "back.pdf", "pässwörd")) == texts(src)
+    import pypdfium2 as pdfium
+    pdfium.PdfDocument(str(small), password="pässwörd").close()  # the app's other reader opens it too
+
+
+def test_encrypt_works_without_pikepdf(tmp_path, monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+    monkeypatch.setattr(builtins, "__import__", lambda name, *a, **k: (_ for _ in ()).throw(ImportError(name))
+                        if name == "pikepdf" else real_import(name, *a, **k))
+    src = many_pages(tmp_path / "long.pdf", pages=5)
+    locked = core.encrypt(src, tmp_path / "locked.pdf", "pw")
+    assert PdfReader(str(locked)).is_encrypted and len(PdfReader(str(locked), password="pw").pages) == 5
