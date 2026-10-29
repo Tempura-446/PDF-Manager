@@ -49,6 +49,18 @@ function el(tag, attrs = {}, ...children) {
 }
 
 const HANDLES = { crop: ["n", "e", "s", "w", "ne", "nw", "se", "sw"], redact: ["ne", "nw", "se", "sw"], form: ["ne", "nw", "se", "sw"] };
+
+/** Crop margins {left, bottom, right, top} of a page turned by ``degrees``
+ * (its /Rotate) -> the same edges as the page is shown; a negative angle
+ * goes back from shown edges to the page's own. */
+function turnMargins({ left, bottom, right, top }, degrees) {
+  switch (((degrees % 360) + 360) % 360) {
+    case 90: return { left: bottom, bottom: right, right: top, top: left };
+    case 180: return { left: right, bottom: top, right: left, top: bottom };
+    case 270: return { left: top, bottom: left, right: bottom, top: right };
+    default: return { left, bottom, right, top };
+  }
+}
 const MIN = 6;  // smallest box, in screen pixels
 
 // Form fields: label, and the size (points) of one added with a click.
@@ -64,7 +76,8 @@ export class RegionEditor {
     this.onChange = onChange || (() => {});
     this.doc = null; this.task = null; this.file = null; this.password = null;
     this.pageIndex = 0; this.total = 0;
-    this.crop = { left: 0, bottom: 0, right: 0, top: 0 };  // margins, points
+    this.crop = { left: 0, bottom: 0, right: 0, top: 0 };  // margins, points, in the page's own coordinates
+    this.rotation = 0;  // the shown page's /Rotate
     this.boxes = {};     // redact: page index -> [[x0, y0, x1, y1]] in PDF points
     this.matches = {};   // redact: page index -> boxes found by text search
     this.kinds = {};     // form: page index -> [{type, name}], one per box
@@ -144,9 +157,10 @@ export class RegionEditor {
     this.#state("empty");
   }
 
-  /** Margins in points (from the tool's mm fields). */
+  /** Margins in points (from the tool's mm fields), as the page is shown:
+   * "top" is the top of the page as it's turned by its /Rotate. */
   setCrop(margins) {
-    this.crop = { ...margins };
+    this.crop = turnMargins(margins, -this.rotation);  // into the page's own coordinates
     this.#draw();
   }
 
@@ -200,6 +214,11 @@ export class RegionEditor {
     const scale = Math.min(width / base.width, maxHeight / base.height);
     this.viewport = page.getViewport({ scale });
     this.view = page.view;  // [x0, y0, x1, y1] of the crop box, PDF points
+    if (this.mode === "crop" && this.rotation !== page.rotate) {
+      // The margins were set for the previous page's turn.
+      this.crop = turnMargins(turnMargins(this.crop, this.rotation), -page.rotate);
+    }
+    this.rotation = page.rotate;
     const ratio = Math.min(window.devicePixelRatio || 1, 2);
     const canvas = this.canvas;
     canvas.width = Math.floor(this.viewport.width * ratio);
@@ -407,7 +426,7 @@ export class RegionEditor {
   }
 
   #emit() {
-    if (this.mode === "crop") { this.onChange({ ...this.crop }); return; }
+    if (this.mode === "crop") { this.onChange(turnMargins(this.crop, this.rotation)); return; }
     const out = {};
     for (const [page, list] of Object.entries(this.boxes)) {
       if (!list.length) continue;
