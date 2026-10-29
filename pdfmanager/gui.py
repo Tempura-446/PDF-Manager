@@ -1155,6 +1155,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._form_fields(body)
             if path == "/api/text/edit":
                 return self._text_edit(body)
+            if path == "/api/pages/arrange":
+                return self._arrange(body)
             if path == "/api/settings":
                 return self._save_settings(body)
             if path == "/api/update/check":
@@ -1438,6 +1440,31 @@ class Handler(BaseHTTPRequestHandler):
         # Which font each change got, for the reader to say so.
         return self._send(HTTPStatus.OK, data, "application/pdf",
                           {"X-Pdfm-Fonts": json.dumps(report, ensure_ascii=True)})
+
+    def _arrange(self, body):
+        """Reorder, turn, delete, copy or insert the reader's pages; sends back
+        the new PDF. The first upload is the document, the others are PDFs
+        whose pages go in."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        try:
+            plan = json.loads(fields.get("plan") or "[]")
+        except ValueError:
+            raise UserError("the page order is damaged; try again") from None
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            paths = []
+            for n, (_, _, data) in enumerate(uploads):
+                path = Path(tmp) / f"{n}.pdf"
+                path.write_bytes(data)
+                paths.append(path)
+            out = Path(tmp) / "arranged.pdf"
+            core.arrange(paths[0], out, plan, inserts=paths[1:], password=password)
+            if password and core.open_pdf(paths[0], password).is_encrypted:
+                core.encrypt(out, out, password)  # stays protected
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf")
 
     def _inspect(self, body):
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)

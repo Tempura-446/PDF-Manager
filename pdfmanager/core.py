@@ -493,6 +493,56 @@ def interleave(front, back, output, reverse_back=True, password=None):
 # Page geometry
 # --------------------------------------------------------------------------
 
+def arrange(path, output, plan, inserts=(), password=None):
+    """Rebuild a document page by page, as the reader's page tools do.
+    ``plan`` lists the new document's pages in order: {"page": 1-based page
+    of ``path``, or "file": n (1-based, of ``inserts``) and "page", and
+    "rotate": extra degrees; a "file" without "page" goes in whole}. Pages
+    left out are deleted, a page listed
+    twice is copied. Bookmarks, form fields and links between kept pages
+    come along."""
+    if not isinstance(plan, (list, tuple)) or not plan:
+        raise PdfManagerError("a document needs at least one page")
+    readers = [open_pdf(path, password)] + [open_pdf(p) for p in inserts]
+    wanted = []
+    for entry in plan:
+        try:
+            source = int(entry.get("file", 0))
+            turn = int(entry.get("rotate", 0))
+            # An inserted file without a page number goes in whole.
+            pages = [int(entry["page"]) - 1] if "page" in entry or source == 0 else None
+        except (AttributeError, KeyError, TypeError, ValueError):
+            raise PdfManagerError("each page needs its page number") from None
+        if not 0 <= source < len(readers):
+            raise PdfManagerError(f"there's no file {source} to take pages from")
+        for page in range(len(readers[source].pages)) if pages is None else pages:
+            if not 0 <= page < len(readers[source].pages):
+                raise PdfManagerError(f"page {page + 1} doesn't exist")
+            if turn % 90:
+                raise PdfManagerError("rotation must be a multiple of 90 degrees")
+            wanted.append((source, page, turn % 360))
+    if all(source == 0 for source, _, _ in wanted):
+        writer = _writer_from_pages(readers[0], [page for _, page, _ in wanted])
+    else:
+        writer = PdfWriter()
+        where = {}  # (file, page) -> index among the pages appended
+        for source, reader in enumerate(readers):
+            pages = list(dict.fromkeys(page for s, page, _ in wanted if s == source))
+            if not pages:
+                continue
+            writer.append(reader, pages=pages, import_outline=source == 0)
+            for page in pages:
+                where[(source, page)] = len(where)
+        _reorder_pages(writer, [where[(source, page)] for source, page, _ in wanted])
+        if readers[0].metadata:
+            writer.add_metadata({k: v for k, v in readers[0].metadata.items() if isinstance(v, str)})
+    # A copied page is its own page dictionary: turning it leaves the other alone.
+    for page, (_, _, turn) in zip(writer.pages, wanted):
+        if turn:
+            page.rotate(turn)
+    return _write(writer, output)
+
+
 def rotate(path, output, degrees, pages=None, password=None):
     if degrees % 90:
         raise PdfManagerError("rotation must be a multiple of 90 degrees")

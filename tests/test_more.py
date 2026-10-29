@@ -645,6 +645,22 @@ def test_edit_text(tmp_path):
         textedit.edit_text(src, out, [])
 
 
+def test_arrange_endpoint_inserts_and_keeps_the_password(app, tmp_path):
+    base, token, _ = app
+    src = edit_pdf(tmp_path / "invoice.pdf")
+    core.encrypt(src, tmp_path / "locked.pdf", "secret")
+    plan = json.dumps([{"file": 1, "page": 1, "rotate": 90}, {"page": 1}])
+    body, headers = multipart({"password": "secret", "plan": plan},
+                              [("file", tmp_path / "locked.pdf"), ("insert", src)])
+    status, _, data = call(base, token, "/api/pages/arrange", body, headers)
+    assert status == 200
+    reader = PdfReader(io.BytesIO(data))
+    assert reader.is_encrypted and reader.decrypt("secret")
+    assert len(reader.pages) == 2 and reader.pages[0].rotation == 90
+    body, headers = multipart({"password": "secret", "plan": "[]"}, [("file", tmp_path / "locked.pdf")])
+    assert call(base, token, "/api/pages/arrange", body, headers)[0] == 400
+
+
 def test_edit_text_endpoint_keeps_the_password(app, tmp_path):
     base, token, _ = app
     src = edit_pdf(tmp_path / "invoice.pdf")

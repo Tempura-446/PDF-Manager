@@ -907,3 +907,41 @@ def test_encrypt_works_without_pikepdf(tmp_path, monkeypatch):
     src = many_pages(tmp_path / "long.pdf", pages=5)
     locked = core.encrypt(src, tmp_path / "locked.pdf", "pw")
     assert PdfReader(str(locked)).is_encrypted and len(PdfReader(str(locked), password="pw").pages) == 5
+
+
+# -- arranging the reader's pages ------------------------------------------------------------------
+
+def test_arrange_reorders_turns_copies_and_deletes(tmp_path):
+    src = toc_pdf(tmp_path / "toc.pdf", chapters=4)  # pages: contents, chapters 1-4
+    out = tmp_path / "out.pdf"
+    core.arrange(src, out, [{"page": 3}, {"page": 1, "rotate": 90}, {"page": 3, "rotate": -90}, {"page": 5}])
+    reader = PdfReader(str(out))
+    assert texts(out)[0].startswith("Chapter 2") and texts(out)[1].startswith("Chapter 1")  # 2, contents, 2, 4
+    assert [p.rotation for p in reader.pages] == [0, 90, 270, 0]  # the copy turns on its own
+    assert texts(out)[3] == "Chapter 4 body"
+    assert page_objects(out) == 4  # deleted pages don't linger
+    assert {o.title for o in reader.outline} >= {"Chapter 2", "Chapter 4"}
+    assert "Chapter 3" not in {o.title for o in reader.outline}  # its page is gone
+
+
+def test_arrange_inserts_pages_of_another_pdf(tmp_path):
+    src = toc_pdf(tmp_path / "toc.pdf", chapters=2)
+    extra = tmp_path / "extra.pdf"
+    c = canvas.Canvas(str(extra), pagesize=letter)
+    for n in (1, 2):
+        c.drawString(72, 700, f"Inserted {n}")
+        c.showPage()
+    c.save()
+    out = tmp_path / "out.pdf"
+    core.arrange(src, out, [{"page": 1}, {"file": 1, "page": 2}, {"file": 1, "page": 1}, {"page": 2}, {"page": 3}],
+                 inserts=[extra])
+    assert texts(out) == [texts(src)[0], "Inserted 2", "Inserted 1", "Chapter 1 body", "Chapter 2 body"]
+    assert [o.title for o in PdfReader(str(out)).outline] == ["Chapter 1", "Chapter 2"]
+    core.arrange(src, out, [{"page": 1}, {"file": 1}, {"page": 3}], inserts=[extra])  # a whole file
+    assert texts(out) == [texts(src)[0], "Inserted 1", "Inserted 2", "Chapter 2 body"]
+
+
+@pytest.mark.parametrize("plan", [[], "x", [{"page": 9}], [{"page": 1, "rotate": 45}], [{"file": 3, "page": 1}], [{"rotate": 90}]])
+def test_arrange_refuses_a_bad_plan(tmp_path, plan):
+    with pytest.raises(core.PdfManagerError):
+        core.arrange(toc_pdf(tmp_path / "toc.pdf", chapters=1), tmp_path / "out.pdf", plan)

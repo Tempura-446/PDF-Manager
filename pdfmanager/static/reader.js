@@ -51,6 +51,8 @@ const ICON = {
   save: '<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>', info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
   tool: '<path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3-3 8-8-1.3-1.3a4 4 0 0 0-5-5z"/><path d="m4 20 4-4"/>',
   twisty: '<path d="m9 6 6 6-6 6"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  copypage: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2"/><path d="M14 12v5M11.5 14.5h5"/>',
   command: '<path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z"/>',
   sliders: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
@@ -220,9 +222,11 @@ export class Reader {
     // Sidebar
     this.thumbsTab = el("button", { class: "rd-tab", type: "button", role: "tab", "aria-selected": "true" }, "Pages");
     this.outlineTab = el("button", { class: "rd-tab", type: "button", role: "tab", "aria-selected": "false", disabled: true }, "Bookmarks");
-    this.thumbsList = el("ol", { class: "rd-thumbs" });
+    this.thumbsList = el("ol", { class: "rd-thumbs", role: "listbox", "aria-multiselectable": "true", "aria-label": "Pages" });
+    this.selected = new Set();
     this.outlineList = el("ul", { class: "rd-outline" });
-    this.thumbsPanel = el("div", { class: "rd-panel", role: "tabpanel" }, this.thumbsList);
+    this.pageBar = el("div", { class: "rd-pagebar" });
+    this.thumbsPanel = el("div", { class: "rd-panel", role: "tabpanel" }, this.pageBar, this.thumbsList);
     this.outlinePanel = el("div", { class: "rd-panel", role: "tabpanel", hidden: true }, this.outlineList);
     this.sidebar = el("aside", { class: "rd-sidebar", hidden: true, "aria-label": "Pages and bookmarks" },
       el("div", { class: "rd-tabs", role: "tablist" }, this.thumbsTab, this.outlineTab), this.thumbsPanel, this.outlinePanel);
@@ -246,12 +250,13 @@ export class Reader {
     this.body = el("div", { class: "rd-body" }, this.sidebar, this.main);
 
     this.menu = el("div", { class: "rd-menu", role: "menu", hidden: true });
+    this.ctxMenu = el("div", { class: "rd-menu rd-ctxmenu", role: "menu", hidden: true, "aria-label": "Page" });
     this.tabbar = el("div", { class: "rd-tabbar", role: "tablist", "aria-label": "Open documents", hidden: true });
-    this.root.append(toolbar, this.tray, this.tabbar, this.findbar, this.annotbar, this.body, this.menu, this.fileInput);
+    this.root.append(toolbar, this.tray, this.tabbar, this.findbar, this.annotbar, this.body, this.menu, this.ctxMenu, this.fileInput);
     // A drawing in progress takes every click in the window as the next
     // stroke; end it first when the tabs, toolbar or menu are used. This
     // listens on the window before pdf.js does, so it runs first.
-    const outside = [this.tabbar, toolbar, this.tray, this.menu];
+    const outside = [this.tabbar, toolbar, this.tray, this.menu, this.ctxMenu];
     window.addEventListener("pointerdown", (e) => {
       if (!outside.some((area) => area.contains(e.target))) return;
       this.#finishEditing();
@@ -403,6 +408,13 @@ export class Reader {
     this.container.addEventListener("pointerup", endDrag);
     this.container.addEventListener("pointercancel", endDrag);
 
+    // Right-click a page (or its thumbnail) for what can be done with it.
+    this.container.addEventListener("contextmenu", (e) => this.#pageMenu(e));
+    this.thumbsList.addEventListener("contextmenu", (e) => this.#pageMenu(e));
+    document.addEventListener("pointerdown", (e) => { if (!this.ctxMenu.hidden && !this.ctxMenu.contains(e.target)) this.#closeContextMenu(); }, true);
+    this.container.addEventListener("scroll", () => this.#closeContextMenu(), { passive: true });
+    this.#wireThumbs();
+
     // Edit text tool: click a line of text to change it.
     this.container.addEventListener("click", (e) => this.#textClick(e), true);
 
@@ -418,7 +430,9 @@ export class Reader {
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
     if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); this.print(); return; }
     if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); this.saveCopy(); return; }
-    if (mod && e.key.toLowerCase() === "z" && this.textEditMode && !isTyping(e)) { e.preventDefault(); this.#undoTextEdit(); return; }
+    if (mod && e.key.toLowerCase() === "z" && !e.shiftKey && !isTyping(e) && this.activeTab?.undo?.length
+        && (this.textEditMode || this.annotbar.hidden)) { e.preventDefault(); this.#undoTextEdit(); return; }
+    if (e.key === "Escape" && !this.ctxMenu.hidden) { this.#closeContextMenu(); return; }
     if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); this.pdfViewer.increaseScale(); return; }
     if (mod && e.key === "-") { e.preventDefault(); this.pdfViewer.decreaseScale(); return; }
     if (mod && e.key === "0") { e.preventDefault(); this.pdfViewer.currentScaleValue = "auto"; return; }
@@ -890,14 +904,133 @@ export class Reader {
     const items = [];
     for (let n = 1; n <= doc.numPages; n++) {
       const box = el("div", { class: "rd-thumb-img", style: `height:${Math.round(128 * ratio)}px` });
-      const li = el("li", { class: "rd-thumb", "data-page": n, tabindex: "0", role: "button", "aria-label": `Page ${n}` }, box, el("span", {}, String(n)));
-      li.addEventListener("click", () => { this.pdfViewer.currentPageNumber = n; });
-      li.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.pdfViewer.currentPageNumber = n; } });
+      const actions = el("div", { class: "rd-thumb-actions" },
+        el("button", { type: "button", class: "rd-thumb-act", "data-act": "rotate", title: "Turn clockwise", "aria-label": `Turn page ${n} clockwise`, html: svg("cw") }),
+        el("button", { type: "button", class: "rd-thumb-act", "data-act": "delete", title: "Delete page", "aria-label": `Delete page ${n}`, html: svg("trash") }));
+      const li = el("li", { class: "rd-thumb", "data-page": n, tabindex: "0", role: "option", draggable: "true",
+        "aria-selected": "false", "aria-label": `Page ${n}` }, box, actions, el("span", {}, String(n)));
       items.push(li);
     }
+    this.selected = new Set();
     this.thumbsList.replaceChildren(...items);
+    this.#renderPageBar();
     for (const li of items) this.thumbObserver.observe(li);
     this.#updatePage();
+  }
+
+  // ---- thumbnails: pick, drag to move, drop a PDF to insert ---------------------------------
+  #select(pages, anchor = pages.at(-1)) {
+    this.selected = new Set(pages);
+    this.selectAnchor = anchor;
+    for (const li of this.thumbsList.children) li.setAttribute("aria-selected", String(this.selected.has(+li.dataset.page)));
+    this.#renderPageBar();
+  }
+
+  #renderPageBar() {
+    const pages = [...this.selected].sort((a, b) => a - b);
+    const b = (icon, label, run, title = label) => {
+      const btn = el("button", { type: "button", class: "rd-btn", title, "aria-label": title });
+      btn.innerHTML = svg(icon) + (label ? `<span>${label}</span>` : "");
+      btn.addEventListener("click", run);
+      return btn;
+    };
+    if (pages.length > 1) {
+      this.pageBar.replaceChildren(
+        el("span", { class: "rd-pagebar-count" }, `${pages.length} pages`),
+        b("cw", "", () => this.rotatePages(pages, 90), "Turn them clockwise"),
+        b("copypage", "", () => this.duplicatePages(pages), "Duplicate them"),
+        b("save", "", () => this.extractPages(pages), "Extract them as a new PDF"),
+        b("trash", "", () => this.deletePages(pages), "Delete them"),
+        b("x", "", () => this.#select([]), "Clear the selection"));
+    } else {
+      const after = pages[0] || this.pdfViewer?.currentPageNumber || 0;
+      this.pageBar.replaceChildren(b("plus", "Insert PDF", () => this.insertPdf(after), "Insert a PDF's pages after the selected page"),
+        el("span", { class: "rd-pagebar-hint" }, "Drag to reorder"));
+    }
+  }
+
+  #wireThumbs() {
+    const list = this.thumbsList;
+    const pageOf = (e) => Number(e.target.closest?.(".rd-thumb")?.dataset.page) || 0;
+    list.addEventListener("click", (e) => {
+      const n = pageOf(e);
+      if (!n) return;
+      const act = e.target.closest(".rd-thumb-act")?.dataset.act;
+      if (act === "rotate") return this.rotatePages(this.selected.has(n) ? [...this.selected] : [n], 90);
+      if (act === "delete") return this.deletePages(this.selected.has(n) && this.selected.size > 1 ? [...this.selected] : [n]);
+      if (e.shiftKey && this.selectAnchor) {
+        const [a, z] = [Math.min(this.selectAnchor, n), Math.max(this.selectAnchor, n)];
+        this.#select(Array.from({ length: z - a + 1 }, (_, i) => a + i), this.selectAnchor);
+      } else if (e.ctrlKey || e.metaKey) {
+        const next = new Set(this.selected);
+        if (next.has(n)) next.delete(n); else next.add(n);
+        this.#select([...next], n);
+      } else {
+        this.#select([n]);
+        this.pdfViewer.currentPageNumber = n;
+      }
+    });
+    list.addEventListener("keydown", (e) => {
+      const n = pageOf(e);
+      if (!n) return;
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.#select([n]); this.pdfViewer.currentPageNumber = n; }
+      if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); this.deletePages(this.selected.has(n) ? [...this.selected] : [n]); }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const next = list.children[n - 1 + (e.key === "ArrowDown" ? 1 : -1)];
+        next?.focus();
+      }
+    });
+    // Dragging pages: a line shows where they'll go.
+    let marker = null;
+    const clear = () => { if (marker) marker.classList.remove("drop-before", "drop-after"); marker = null; };
+    const spot = (e) => {
+      const li = e.target.closest?.(".rd-thumb");
+      if (!li) {
+        const last = list.lastElementChild;
+        return last ? { li: last, before: Number(last.dataset.page) + 1, after: true } : null;
+      }
+      const r = li.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
+      return { li, before: Number(li.dataset.page) + (after ? 1 : 0), after };
+    };
+    const isFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+    list.addEventListener("dragstart", (e) => {
+      const n = pageOf(e);
+      if (!n) return;
+      if (!this.selected.has(n)) this.#select([n]);
+      e.dataTransfer.setData("application/x-zpdf-pages", JSON.stringify([...this.selected]));
+      e.dataTransfer.effectAllowed = "move";
+    });
+    list.addEventListener("dragover", (e) => {
+      const ours = [...(e.dataTransfer?.types || [])].includes("application/x-zpdf-pages");
+      if (!ours && !isFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = ours ? "move" : "copy";
+      const where = spot(e);
+      if (!where) return;
+      if (marker !== where.li) clear();
+      marker = where.li;
+      marker.classList.toggle("drop-after", where.after);
+      marker.classList.toggle("drop-before", !where.after);
+    });
+    list.addEventListener("dragleave", (e) => { if (!list.contains(e.relatedTarget)) clear(); });
+    list.addEventListener("dragend", clear);
+    list.addEventListener("drop", (e) => {
+      const where = spot(e);
+      clear();
+      const moving = e.dataTransfer.getData("application/x-zpdf-pages");
+      if (moving) {
+        e.preventDefault(); e.stopPropagation();
+        if (where) this.movePages(JSON.parse(moving), where.before);
+        return;
+      }
+      const pdf = [...(e.dataTransfer.files || [])].find((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
+      if (pdf && where) {  // a PDF dropped among the pages goes in there
+        e.preventDefault(); e.stopPropagation();
+        this.insertPdf(where.before - 1, pdf);
+      }
+    });
   }
 
   #queueThumb(li) {
@@ -1456,42 +1589,58 @@ export class Reader {
       top: this.container.scrollTop, left: this.container.scrollLeft };
   }
 
-  #applyTextEdit(edit) {
-    // In the queue: a save or a tab switch asked for meanwhile waits for it.
+  #post(url, bytes, tab, fields = {}, files = []) {
+    const body = new FormData();
+    body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
+    body.append("password", tab.password || "");
+    for (const [k, v] of Object.entries(fields)) body.append(k, v);
+    for (const f of files) body.append("insert", f, f.name || "insert.pdf");
+    return fetch(url, { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
+  }
+
+  /** Replace the open document with what ``make(bytes, tab)`` gets back from
+   *  the server, keeping the old bytes for Undo. In the queue: a save or a tab
+   *  switch asked for meanwhile waits for it. */
+  #changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null } = {}) {
     return this.#serial(async () => {
       const tab = this.activeTab;
       if (!tab || !this.doc) return;
       this.#busy(true);
       try {
         const bytes = await this.#currentBytes();
-        const body = new FormData();
-        body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
-        body.append("password", tab.password || "");
-        body.append("edits", JSON.stringify([edit]));
-        const res = await fetch("/api/text/edit", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
+        const res = await make(bytes, tab);
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
         const changed = new Uint8Array(await res.arrayBuffer());
-        let used = [];
-        try { used = JSON.parse(res.headers.get("X-Pdfm-Fonts") || "[]"); } catch (e) {}
         if (!this.tabs.includes(tab)) return;
         (tab.undo ||= []).push(bytes);
         if (tab.undo.length > 30) tab.undo.shift();
         Object.assign(tab, { bytes: changed, afterEdit: changed, edited: true, dirty: true,
           version: (tab.version || 0) + 1 });
-        if (tab === this.activeTab) { tab.goto = this.#view(); await this.#reloadEditing(tab); }
+        if (tab === this.activeTab) { tab.goto = goto ? goto(this.#view()) : this.#view(); await this.#reloadEditing(tab); }
         else this.#renderTabs();
+        after?.(res);
+      } catch (e) {
+        this.toast(failure + (e.message || e));
+      } finally {
+        this.#busy(false);
+      }
+    });
+  }
+
+  #applyTextEdit(edit) {
+    return this.#changeDocument((bytes, tab) => this.#post("/api/text/edit", bytes, tab, { edits: JSON.stringify([edit]) }), {
+      failure: "Could not change the text: ",
+      after: (res) => {
         // Say when the words couldn't get the document's own font.
+        let used = [];
+        try { used = JSON.parse(res.headers.get("X-Pdfm-Fonts") || "[]"); } catch (e) {}
         const other = used.find((u) => u.kind !== "same");
         if (other) {
           this.toast(other.kind === "installed"
             ? `This PDF's copy of the font lacks some of those letters, so ${other.font} from this computer was used.`
             : `This PDF's copy of the font lacks some of those letters, so a similar font (${other.font}) was used.`, 7000);
         }
-      } catch (e) {
-        this.toast("Could not change the text: " + (e.message || e));
-      } finally {
-        this.#busy(false);
-      }
+      },
     });
   }
 
@@ -1502,23 +1651,26 @@ export class Reader {
       // Undoing goes back to the bytes before the change; anything added
       // since (drawings, form entries) would go with it.
       if ((this.#changed() || tab.bytes !== tab.afterEdit)
-          && !confirm("Undoing the text change also takes away the annotations and form entries made since it. Continue?")) return;
+          && !confirm("Undoing the change also takes away the annotations and form entries made since it. Continue?")) return;
       const previous = tab.undo.pop();
       const back = previous === tab.original;
       Object.assign(tab, { bytes: previous, afterEdit: previous, edited: !back, dirty: !back, goto: this.#view(),
         version: (tab.version || 0) + 1 });
       await this.#reloadEditing(tab);
-      this.toast("Text change undone", 1500);
+      this.toast("Change undone", 1500);
     });
   }
 
-  /** Show the tab's changed bytes, staying in the Edit text tool. */
+  /** Show the tab's changed bytes, staying in the Edit text tool if it was on. */
   async #reloadEditing(tab) {
+    const editing = this.textEditMode;
     await this.#load(tab);
     this.#renderTabs();
     if (tab !== this.activeTab) return;
-    this.openAnnotate();
-    this.#setEditMode("EDITTEXT");
+    if (editing) {
+      this.openAnnotate();
+      this.#setEditMode("EDITTEXT");
+    }
     this.undoBtn.disabled = !tab.undo?.length;
   }
 
@@ -1543,7 +1695,11 @@ export class Reader {
     if (!this.doc) return;
     const tab = this.activeTab, version = tab.version || 0;
     const bytes = await this.#currentBytes();
-    const name = this.#copyName();
+    await this.#saveBytes(bytes, this.#copyName(), () => this.#markSaved(tab, version));
+  }
+
+  /** Save ``bytes`` as a file the person picks (or download it). */
+  async #saveBytes(bytes, name, saved = () => {}) {
     const api = this.api();
     if (this.isDesktop() && api && api.save_result) {
       const body = new FormData();
@@ -1552,15 +1708,15 @@ export class Reader {
         const res = await fetch("/api/keep", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
         const { id } = await res.json();
         const path = await api.save_result(id, name);
-        if (path) { this.#markSaved(tab, version); this.toast("Saved to " + path, 5000, ["Show in folder", () => api.reveal(path)]); }
+        if (path) { saved(); this.toast("Saved to " + path, 5000, ["Show in folder", () => api.reveal(path)]); }
       } catch (e) { this.toast("Could not save: " + (e.message || e)); }
       return;
     }
     const blob = new Blob([bytes], { type: "application/pdf" });
     if (files.canSave) {
       try {
-        const saved = await files.saveAs(blob, name);
-        if (saved) { this.#markSaved(tab, version); this.toast("Saved as " + saved); }
+        const where = await files.saveAs(blob, name);
+        if (where) { saved(); this.toast("Saved as " + where); }
         return;
       } catch (e) {
         if (e.name !== "SecurityError") { this.toast("Could not save: " + (e.message || e)); return; }
@@ -1571,7 +1727,141 @@ export class Reader {
     const a = el("a", { href: url, download: name });
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
-    this.#markSaved(tab, version);
+    saved();
+  }
+
+  // ---- the page menu (right-click) ---------------------------------------------------------
+  #pageMenu(e) {
+    if (!this.doc || e.target.closest?.(".rd-textedit-box, input, textarea")) return;
+    const thumb = e.target.closest?.(".rd-thumb");
+    const pageEl = e.target.closest?.(".page");
+    const page = Number(thumb?.dataset.page || pageEl?.dataset.pageNumber);
+    if (!page) return;
+    e.preventDefault();
+    // On a thumbnail, the menu acts on the selected pages if it's one of them.
+    const pages = thumb && this.selected.has(page) ? [...this.selected].sort((a, b) => a - b) : [page];
+    if (thumb && !this.selected.has(page)) this.#select([page]);
+    const what = Reader.#pagesText(pages).replace(/^Page \d+$/, "this page");
+    const item = (icon, label, run, keys = "") => {
+      const b = el("button", { type: "button", role: "menuitem" });
+      b.innerHTML = svg(icon);
+      b.append(el("span", {}, label));
+      if (keys) b.append(el("kbd", {}, keys));
+      b.addEventListener("click", () => { this.#closeContextMenu(); run(); });
+      return b;
+    };
+    const items = [];
+    const selection = String(window.getSelection() || "").trim();
+    if (!thumb) {
+      if (selection) items.push(item("copy", "Copy", () => navigator.clipboard?.writeText(selection).then(() => this.toast("Copied", 1200), () => {}), "Ctrl+C"));
+      const span = e.target.closest?.(".textLayer span");
+      if (span && !span.classList.contains("markedContent") && span.textContent.trim()) {
+        items.push(item("edittext", "Edit this text", () => { this.useTool("EDITTEXT"); this.#openTextEditor(span, pageEl, page, "line"); }));
+        items.push(item("edittext", "Rewrite this paragraph", () => { this.useTool("EDITTEXT"); this.#openTextEditor(span, pageEl, page, "paragraph"); }));
+      }
+      const at = { clientX: e.clientX, clientY: e.clientY };
+      items.push(item("text", "Add text here", () => { this.useTool("EDITTEXT"); this.#openNewText(at, pageEl, page); }));
+      items.push(el("hr"));
+    }
+    items.push(
+      item("cw", `Turn ${what} clockwise`, () => this.rotatePages(pages, 90)),
+      item("ccw", `Turn ${what} counter-clockwise`, () => this.rotatePages(pages, -90)),
+      item("copypage", `Duplicate ${what}`, () => this.duplicatePages(pages)),
+      item("trash", `Delete ${what}`, () => this.deletePages(pages), thumb ? "Del" : ""),
+      el("hr"),
+      item("save", `Extract ${what} as a new PDF…`, () => this.extractPages(pages)),
+      item("open", "Insert a PDF after it…", () => this.insertPdf(Math.max(...pages))),
+    );
+    if (this.onCommands) items.push(el("hr"), item("command", "All commands…", () => this.onCommands(), "Ctrl+K"));
+    this.ctxMenu.replaceChildren(...items);
+    this.ctxMenu.hidden = false;
+    // Where the click was, kept inside the reader.
+    const box = this.root.getBoundingClientRect(), menu = this.ctxMenu.getBoundingClientRect();
+    const x = Math.min(e.clientX - box.left, box.width - menu.width - 8);
+    const y = Math.min(e.clientY - box.top, box.height - menu.height - 8);
+    Object.assign(this.ctxMenu.style, { left: `${Math.max(8, x)}px`, top: `${Math.max(8, y)}px`, right: "auto" });
+    this.ctxMenu.querySelector("button")?.focus({ preventScroll: true });
+  }
+  #closeContextMenu() { if (!this.ctxMenu.hidden) this.ctxMenu.hidden = true; }
+
+  // ---- pages: turn, delete, copy, move, insert, extract -------------------------------------
+  #pagePlan() { return Array.from({ length: this.doc.numPages }, (_, i) => ({ page: i + 1 })); }
+  static #pagesText(pages) { return pages.length === 1 ? `Page ${pages[0]}` : `${pages.length} pages`; }
+
+  #arrange(plan, { inserts = [], message = "", page = null } = {}) {
+    return this.#changeDocument((bytes, tab) => this.#post("/api/pages/arrange", bytes, tab, { plan: JSON.stringify(plan) }, inserts), {
+      failure: "Could not change the pages: ",
+      goto: (view) => ({ page: page || view.page, scale: view.scale }),
+      after: () => { if (message) this.toast(message, 5000, ["Undo", () => this.#undoTextEdit()]); },
+    });
+  }
+  rotatePages(pages, delta) {
+    if (!this.doc || !pages.length) return;
+    const plan = this.#pagePlan().map((e) => (pages.includes(e.page) ? { ...e, rotate: delta } : e));
+    return this.#arrange(plan, { page: pages[0], message: `${Reader.#pagesText(pages)} turned` });
+  }
+  deletePages(pages) {
+    if (!this.doc || !pages.length) return;
+    if (pages.length >= this.doc.numPages) { this.toast("A PDF needs at least one page: keep one, or close the document."); return; }
+    const plan = this.#pagePlan().filter((e) => !pages.includes(e.page));
+    return this.#arrange(plan, { page: Math.min(Math.min(...pages), plan.length), message: `${Reader.#pagesText(pages)} deleted` });
+  }
+  duplicatePages(pages) {
+    if (!this.doc || !pages.length) return;
+    const last = Math.max(...pages), plan = this.#pagePlan();
+    plan.splice(last, 0, ...[...pages].sort((a, b) => a - b).map((page) => ({ page })));
+    return this.#arrange(plan, { page: last + 1, message: `${Reader.#pagesText(pages)} copied` });
+  }
+  /** Move ``pages`` so they come before page ``before`` (pages + 1 = the end). */
+  movePages(pages, before) {
+    if (!this.doc || !pages.length) return;
+    const moving = [...pages].sort((a, b) => a - b).map((page) => ({ page }));
+    const rest = this.#pagePlan().filter((e) => !pages.includes(e.page));
+    let at = rest.findIndex((e) => e.page >= before);
+    if (at < 0) at = rest.length;
+    rest.splice(at, 0, ...moving);
+    if (rest.every((e, i) => e.page === i + 1)) return;  // nothing moved
+    return this.#arrange(rest, { page: at + 1, message: `${Reader.#pagesText(pages)} moved` });
+  }
+  /** Put a PDF's pages after page ``after`` (0 = at the start). */
+  async insertPdf(after, file = null) {
+    if (!this.doc) return;
+    file = file || await this.#pickPdf();
+    if (!file) return;
+    const plan = this.#pagePlan();
+    plan.splice(after, 0, { file: 1 });
+    return this.#arrange(plan, { inserts: [file], page: after + 1, message: `${file.name} inserted` });
+  }
+  #pickPdf() {
+    return new Promise((resolve) => {
+      const input = el("input", { type: "file", accept: ".pdf,application/pdf", hidden: true });
+      input.addEventListener("change", () => { resolve(input.files[0] || null); input.remove(); });
+      input.addEventListener("cancel", () => { resolve(null); input.remove(); });
+      this.root.append(input);
+      input.click();
+    });
+  }
+  /** Save the pages as a PDF of their own; the document stays as it is. */
+  async extractPages(pages) {
+    await this.chain;
+    if (!this.doc || !pages.length) return;
+    const tab = this.activeTab;
+    this.#busy(true);
+    try {
+      const bytes = await this.#currentBytes();
+      const plan = [...pages].sort((a, b) => a - b).map((page) => ({ page }));
+      const res = await this.#post("/api/pages/arrange", bytes, tab, { plan: JSON.stringify(plan) });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+      const out = new Uint8Array(await res.arrayBuffer());
+      const stem = this.name.replace(/\.pdf$/i, "");
+      const label = pages.length === 1 ? `page ${pages[0]}` : `${pages.length} pages`;
+      this.#busy(false);
+      await this.#saveBytes(out, `${stem} (${label}).pdf`);
+    } catch (e) {
+      this.toast("Could not extract the pages: " + (e.message || e));
+    } finally {
+      this.#busy(false);
+    }
   }
 
   /** Commit the annotation being drawn or typed. */
@@ -1644,8 +1934,14 @@ export class Reader {
       tool("Highlight text", "HIGHLIGHT", "mark marker", "highlight"), tool("Add a text box", "FREETEXT", "note comment type", "text"),
       tool("Draw", "INK", "pen ink freehand", "draw"), tool("Add a picture", "STAMP", "image photo stamp", "image"),
       { icon: "sign", label: "Sign", words: "signature autograph", run: () => this.sign() },
-      { icon: "cw", label: "Rotate clockwise", keys: "R", words: "turn right", run: () => this.rotate(90) },
-      { icon: "ccw", label: "Rotate counter-clockwise", keys: "Shift+R", words: "turn left anticlockwise", run: () => this.rotate(-90) },
+      { icon: "cw", label: "Rotate the view clockwise", keys: "R", words: "turn right", run: () => this.rotate(90) },
+      { icon: "ccw", label: "Rotate the view counter-clockwise", keys: "Shift+R", words: "turn left anticlockwise", run: () => this.rotate(-90) },
+      { icon: "cw", label: "Turn this page clockwise (in the file)", words: "rotate page save", run: () => this.rotatePages([v.currentPageNumber], 90) },
+      { icon: "ccw", label: "Turn this page counter-clockwise (in the file)", words: "rotate page save", run: () => this.rotatePages([v.currentPageNumber], -90) },
+      { icon: "trash", label: "Delete this page", words: "remove page", run: () => this.deletePages([v.currentPageNumber]) },
+      { icon: "copypage", label: "Duplicate this page", words: "copy page", run: () => this.duplicatePages([v.currentPageNumber]) },
+      { icon: "save", label: "Extract this page as a new PDF", words: "split save page", run: () => this.extractPages([v.currentPageNumber]) },
+      { icon: "open", label: "Insert a PDF after this page", words: "add merge combine pages", run: () => this.insertPdf(v.currentPageNumber) },
       { icon: "sidebar", label: this.sidebar.hidden ? "Show thumbnails" : "Hide thumbnails", words: "sidebar pages", run: () => this.toggleSidebar() },
       { icon: "book", label: "Show bookmarks", words: "outline contents chapters sidebar", run: () => this.showBookmarks() },
       { icon: "full", label: "Fit page", words: "zoom whole", run: () => { v.currentScaleValue = "page-fit"; } },

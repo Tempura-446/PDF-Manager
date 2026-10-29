@@ -341,3 +341,42 @@ textarea.rd-textedit { line-height: 1.25; padding: 2px 3px; resize: both; min-he
 }
 .rd-textedit-mode:hover { background: color-mix(in srgb, var(--bg) 30%, transparent); }
 .rd-textedit-mode:disabled { display: none; }
+
+/* ---- Pages panel: pick, turn, delete, drag to move ---- */
+.rd-pagebar {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 2px; min-height: 40px;
+  padding: 4px 8px; background: var(--sidebar); border-bottom: 1px solid var(--border);
+}
+.rd-pagebar .rd-btn { height: 30px; min-width: 30px; padding: 0 7px; font-size: 13px; }
+.rd-pagebar-count { font-size: 13px; font-weight: 600; margin-right: auto; padding-left: 4px; white-space: nowrap; }
+.rd-pagebar-hint { margin-left: auto; font-size: 12px; color: var(--muted); padding-right: 4px; }
+.rd-thumb { position: relative; }
+.rd-thumb[aria-selected="true"] .rd-thumb-img { box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px var(--accent-ring); }
+.rd-thumb[aria-selected="true"] span { color: var(--accent); font-weight: 700; }
+.rd-thumb.current[aria-selected="true"] span { color: var(--accent-text); }
+.rd-thumb:focus-visible { outline: none; }
+.rd-thumb:focus-visible .rd-thumb-img { box-shadow: 0 0 0 2px var(--focus); }
+.rd-thumb-actions {
+  position: absolute; top: 14px; right: calc(50% - 60px); display: flex; gap: 3px; opacity: 0; transform: translateY(-2px);
+  transition: opacity var(--t) var(--ease), transform var(--t) var(--ease);
+}
+.rd-thumb:hover .rd-thumb-actions, .rd-thumb:focus-within .rd-thumb-actions { opacity: 1; transform: none; }
+.rd .rd-thumb-act {
+  width: 26px; height: 26px; border: 0; border-radius: 7px; display: grid; place-items: center; cursor: pointer; padding: 0;
+  background: color-mix(in srgb, var(--text) 82%, transparent); color: var(--bg); box-shadow: var(--shadow);
+}
+.rd .rd-thumb-act:hover { background: var(--accent); color: var(--accent-text); }
+.rd .rd-thumb-act[data-act="delete"]:hover { background: var(--err); color: #fff; }
+.rd-thumb-act svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.rd-thumb.drop-before::before, .rd-thumb.drop-after::after {
+  content: ""; position: absolute; left: 24px; right: 24px; height: 3px; border-radius: 3px; background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.rd-thumb.drop-before::before { top: -2px; }
+.rd-thumb.drop-after::after { bottom: -2px; }
+.rd-thumb[draggable="true"] { cursor: grab; }
+
+/* ---- Page menu (right-click) ---- */
+.rd-ctxmenu { top: 0; left: 0; right: auto; min-width: 264px; }
+.rd-ctxmenu kbd { margin-left: auto; font: 11px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--muted);
+  border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 3px 5px; background: var(--surface-2); }
