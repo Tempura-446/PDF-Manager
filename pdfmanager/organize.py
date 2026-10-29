@@ -2,6 +2,7 @@
 
 import csv
 import hashlib
+import os
 import re
 import shutil
 from datetime import datetime
@@ -69,8 +70,13 @@ def describe(path):
     return record
 
 
+# Names Windows treats as devices whatever the extension (CON.pdf included).
+_RESERVED = re.compile(r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?=\.|$)", re.IGNORECASE)
+
+
 def _safe(name):
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", name).strip(" .")
+    name = _RESERVED.sub(r"\1_", name)
     return re.sub(r"\s+", " ", name)[:120] or "Untitled"
 
 
@@ -108,14 +114,25 @@ def group_name(record, by):
     raise PdfManagerError(f"unknown grouping {by!r}; use one of {', '.join(GROUPINGS)}")
 
 
-def _unique(target, taken):
+def _same_file(a, b):
+    try:
+        return b is not None and a.samefile(b)
+    except OSError:
+        return False
+
+
+def _unique(target, taken, source=None):
     """Return ``target`` or "name (2).pdf", "name (3).pdf", ... so that it
-    neither exists on disk nor is already in ``taken``; then reserve it."""
+    neither exists on disk nor is already in ``taken``; then reserve it.
+    ``taken`` is compared the way the file system compares names, so on
+    Windows two names differing only in case count as one. A candidate that
+    is ``source`` itself (the file being renamed) is free to use."""
     candidate, i = target, 2
-    while candidate.exists() or candidate in taken:
+    while ((candidate.exists() and not _same_file(candidate, source))
+           or os.path.normcase(str(candidate)) in taken):
         candidate = target.with_name(f"{target.stem} ({i}){target.suffix}")
         i += 1
-    taken.add(candidate)
+    taken.add(os.path.normcase(str(candidate)))
     return candidate
 
 
@@ -135,13 +152,21 @@ def find_duplicates(directory, recursive=False):
     sorted so the oldest file comes first."""
     by_size = {}
     for path in find_pdfs(directory, recursive):
-        by_size.setdefault(path.stat().st_size, []).append(path)
+        if path.is_symlink():
+            continue  # a link is not a copy; deleting its target would lose the data
+        try:
+            by_size.setdefault(path.stat().st_size, []).append(path)
+        except FileNotFoundError:
+            pass  # removed while we were listing
     groups = {}
     for paths in by_size.values():
         if len(paths) < 2:
             continue  # a file with a unique size can't have a duplicate
         for path in paths:
-            groups.setdefault(file_hash(path), []).append(path)
+            try:
+                groups.setdefault(file_hash(path), []).append(path)
+            except FileNotFoundError:
+                pass
     return [sorted(g, key=lambda p: (p.stat().st_mtime, str(p)))
             for g in groups.values() if len(g) > 1]
 
@@ -160,8 +185,13 @@ def organize(directory, by="year", dest=None, move=False, recursive=False, dry_r
         raise PdfManagerError(f"duplicates must be one of {', '.join(DUPLICATE_MODES)}")
     directory = Path(directory)
     dest = Path(dest) if dest else directory
-    sources = [p for p in find_pdfs(directory, recursive)
-               if not (dest in p.parents and p.parent != directory)]  # organized earlier
+    if dest == directory:
+        # Organizing in place: files already in their group folder are
+        # recognised below, so only the review folder is left alone.
+        sources = [p for p in find_pdfs(directory, recursive) if p.parent != dest / "Duplicates"]
+    else:
+        sources = [p for p in find_pdfs(directory, recursive)
+                   if not (dest in p.parents and p.parent != directory)]  # organized earlier
 
     seen = set()
     if duplicates != "keep":
@@ -174,16 +204,19 @@ def organize(directory, by="year", dest=None, move=False, recursive=False, dry_r
     planned = set()
     for path in sources:
         folder = None
-        if duplicates != "keep":
-            digest = file_hash(path)
-            if digest in seen:
-                if duplicates == "skip":
-                    plan.append((path, None))
-                    continue
-                folder = dest / "Duplicates"
-            seen.add(digest)
-        if folder is None:
-            folder = dest / group_name(describe(path), by)
+        try:
+            if duplicates != "keep":
+                digest = file_hash(path)
+                if digest in seen:
+                    if duplicates == "skip":
+                        plan.append((path, None))
+                        continue
+                    folder = dest / "Duplicates"
+                seen.add(digest)
+            if folder is None:
+                folder = dest / group_name(describe(path), by)
+        except FileNotFoundError:
+            continue  # removed while we were working; nothing to organize
         target = folder / path.name
         if target.resolve() == path.resolve():
             continue
@@ -220,10 +253,17 @@ def rename(directory, pattern="{date:%Y-%m-%d} {title}", recursive=False, dry_ru
     plan = []
     planned = set()
     for path in find_pdfs(directory, recursive):
-        target = path.with_name(format_name(describe(path), pattern) + ".pdf")
-        if target == path:
+        try:
+            target = path.with_name(format_name(describe(path), pattern) + ".pdf")
+        except FileNotFoundError:
+            continue  # removed while we were working
+        # A file that already carries the name (or a "(2)" variant of it) stays
+        # put; a change of letter case only is a plain rename of the file itself
+        # (Windows paths compare equal regardless of case, hence the strings).
+        target = _unique(target, planned, source=path)
+        if str(target) == str(path):
             continue
-        plan.append((path, _unique(target, planned)))
+        plan.append((path, target))
     if not dry_run:
         for src, dst in plan:
             src.rename(dst)
@@ -234,7 +274,8 @@ def catalog(directory, output, recursive=False):
     """Write a CSV inventory of the PDFs in ``directory``."""
     output = Path(output)
     rows = [describe(p) for p in find_pdfs(directory, recursive)]
-    with open(output, "w", newline="", encoding="utf-8") as fh:
+    # With a byte-order mark, so Excel reads accented names right.
+    with open(output, "w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.writer(fh)
         writer.writerow(["file", "pages", "size_bytes", "title", "author", "date", "error"])
         for r in rows:

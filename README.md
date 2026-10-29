@@ -91,6 +91,10 @@ on Linux) and the app uses the Edge window from then on. Delete that file
 to try the native window again. The app stops by itself when its window is
 closed.
 
+- The app opens on a **Home** screen: open or drop PDFs to read them, go
+  back to the tools you used recently, reopen a recent file, or pick any
+  tool from the list with a line about each. In a narrower window the
+  sidebar becomes a rail of icons; on a phone it's a menu.
 - Drop files anywhere on the window. Each file shows a **preview of its
   first page**, its page count and size; drag the cards to change the
   order (for merging, interleaving and images).
@@ -110,7 +114,8 @@ closed.
 
   The page box under Options updates as you go, and typing pages there
   updates the previews.
-- **Crop margins** shows the page with a box to drag. **Redact** lets you
+- **Crop margins** shows the page with a box to drag (the margins are as
+  the page is shown, also for turned pages). **Redact** lets you
   draw boxes to black out, and shows where the words you typed are found.
 - **Bookmarks** has an editor: rename, indent and reorder bookmarks, or
   detect them from the document's headings.
@@ -206,7 +211,8 @@ updated with `python packaging/update_pdfjs.py <version>`.
 
 Every command that works on PDFs accepts **several files or wildcards**
 (`pdfm compress *.pdf`). With one input, `-o` names the output file; with
-several, `-o` is a folder and the original file names are kept. Without
+several, `-o` is a folder and the original file names are kept (so is an
+`-o` that ends with a slash or names an existing folder). Without
 `-o`, results are written next to each input as `<name>_<command>.pdf`.
 If one file in a batch fails, the rest are still processed.
 
@@ -227,7 +233,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `interleave` | merge separately scanned fronts and backs | `pdfm interleave fronts.pdf backs.pdf -o book.pdf` |
 | `rotate` | rotate all or some pages | `pdfm rotate *.pdf -d 90 -p 2-3` |
 | `resize` | change paper size or scale pages | `pdfm resize doc.pdf -s a4` · `--scale 0.5` |
-| `crop` | trim margins (mm, CSS-style order) | `pdfm crop doc.pdf -m 10` · `-m 10 5 10 5` |
+| `crop` | trim margins (mm, CSS-style order, as the page is shown) | `pdfm crop doc.pdf -m 10` · `-m 10 5 10 5` |
 | `nup` | 2/4/6/8/9 pages per sheet | `pdfm nup slides.pdf -n 4` |
 | `compress` | shrink files: `low`, `medium`, `high` | `pdfm compress *.pdf -l high -o small/` |
 | `color` | convert to grayscale, RGB or CMYK | `pdfm color doc.pdf --to cmyk --icc printer.icc` |
@@ -250,7 +256,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `to-word` | convert to an editable Word document | `pdfm to-word doc.pdf` |
 | `from-office` | convert Word, Excel, PowerPoint, … to PDF | `pdfm from-office report.docx` |
 | `recipe` | save and run recipes (several tools in a row) | `pdfm recipe run "Scans" *.pdf` |
-| `from-images` | save images as a PDF | `pdfm from-images *.jpg -o photos.pdf -s a4 --margin 10` |
+| `from-images` | save pictures as a PDF (photos the right way up, scanners' multi-page TIFFs) | `pdfm from-images *.jpg -o photos.pdf -s a4 --margin 10` |
 | `to-images` | render pages to PNG/JPG | `pdfm to-images doc.pdf --dpi 200 -p 1` |
 | `organize` | sort a folder of PDFs into sub-folders | `pdfm organize ~/Downloads --by year --dest ~/PDFs --move` |
 | `rename` | rename PDFs from their metadata | `pdfm rename ~/PDFs --pattern "{date:%Y-%m-%d} {title}" -n` |
@@ -321,8 +327,9 @@ detection.
 
 ### Comparing
 
-`compare old.pdf new.pdf` matches pages by their text, so an inserted or
-removed page doesn't make every later page look different. The report PDF
+`compare old.pdf new.pdf` matches pages by their text (form answers
+included), so an inserted or removed page doesn't make every later page
+look different. The report PDF
 starts with a summary, then shows each changed page side by side with the
 changed areas outlined in red and the removed (−) and added (+) words.
 
@@ -354,7 +361,8 @@ pages searchable again; metadata isn't changed, so use `sanitize` too.
 ### Archiving and privacy
 
 - `flatten` draws filled-in form fields and comments (highlights, notes,
-  drawings, signatures) into the page. Links keep working.
+  drawings, signatures) into the page. Links keep working, and so do
+  comments that have no drawing of their own (readers draw those themselves).
 - `sanitize` removes the document details (author, title, dates, XMP),
   JavaScript and actions that launch programs, and attached files;
   `--comments` also removes comments. Form fields are kept.

@@ -8,7 +8,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-from pypdf import PdfWriter
 from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject
 
 from pdfmanager import core
@@ -52,6 +51,23 @@ def _placement(form, rect):
     return sx, 0, 0, sy, rx0 - bx0 * sx, ry0 - by0 * sy
 
 
+def _text_values(reader, all_fields):
+    """{field name: value} of the filled-in text fields, or with
+    ``all_fields`` False only of those whose widget has nothing to draw."""
+    from pdfmanager.forms import _field_of, _inherited, _qualified_name
+
+    values = {}
+    for page in reader.pages:
+        for ref in page.get("/Annots") or []:
+            annot = ref.get_object()
+            if not isinstance(annot, DictionaryObject) or annot.get("/Subtype") != "/Widget":
+                continue
+            value = _inherited(annot, "/V")
+            if _inherited(annot, "/FT") == "/Tx" and value and (all_fields or _appearance(annot) is None):
+                values[_qualified_name(_field_of(annot))] = value
+    return values
+
+
 def _flatten_page(writer, page, forms, comments, number):
     """Draw the chosen annotations into the page content and remove them.
     Returns the ids of removed widget annotations."""
@@ -61,6 +77,8 @@ def _flatten_page(writer, page, forms, comments, number):
     keep, drawn, removed_widgets = ArrayObject(), [], set()
     for ref in annots.get_object():
         annot = ref.get_object()
+        if not isinstance(annot, DictionaryObject):
+            continue  # a null or missing annotation: viewers skip it too
         subtype = annot.get("/Subtype")
         if subtype == "/Widget":
             if not forms:
@@ -73,8 +91,14 @@ def _flatten_page(writer, page, forms, comments, number):
         if subtype == "/Popup":
             continue  # the pop-up note window of a comment; nothing to draw
         flags = int(annot.get("/F", 0))
+        if flags & (HIDDEN | NO_VIEW):
+            continue
         form = _appearance(annot)
-        if form is None or flags & (HIDDEN | NO_VIEW) or "/Rect" not in annot:
+        if form is None or "/Rect" not in annot:
+            # Readers draw notes, shapes and highlights without an appearance
+            # stream themselves; there is nothing to burn in, so keep them.
+            if subtype != "/Widget":
+                keep.append(ref)
             continue
         drawn.append((form, _placement(form, annot["/Rect"])))
     if not drawn and len(keep) == len(annots.get_object()):
@@ -113,14 +137,17 @@ def flatten(path, output, forms=True, comments=True, password=None):
     stamps) part of the page, so they look the same everywhere and can no
     longer be changed. Links keep working."""
     reader = core.open_pdf(path, password)
-    writer = PdfWriter(clone_from=reader)
+    writer = core.clone_document(reader)
     if forms and "/AcroForm" in writer._root_object:
         # Give filled-in text fields an appearance first; some programs only
-        # store the value and leave drawing it to the viewer.
+        # store the value and leave drawing it to the viewer. Fields that
+        # have one keep it: pypdf's replacement would lose the border,
+        # background and text placement the file's producer drew.
         try:
+            acroform = writer._root_object["/AcroForm"].get_object()
+            stale = bool(acroform.get("/NeedAppearances"))  # the viewer was to redraw them all
             writer.set_need_appearances_writer(False)
-            values = {name: field.get("/V") for name, field in (reader.get_fields() or {}).items()
-                      if field.get("/FT") == "/Tx" and field.get("/V")}
+            values = _text_values(reader, all_fields=stale)
             if values:
                 writer.update_page_form_field_values(None, values, auto_regenerate=False)
         except Exception:
@@ -147,9 +174,46 @@ def _drop(obj, *keys):
     return removed
 
 
-def _is_javascript(action):
+SCRIPT_ACTIONS = ("/JavaScript", "/Launch")
+
+
+def _drop_scripts(holder, key, seen=None):
+    """Remove the action at ``holder[key]`` if it runs a script or a
+    program, or any such action chained to a harmless one there through
+    /Next. Returns how many were removed."""
+    action = holder[key] if isinstance(holder, ArrayObject) else holder.get(key)
     action = action.get_object() if action is not None else None
-    return isinstance(action, DictionaryObject) and action.get("/S") in ("/JavaScript", "/Launch")
+    if not isinstance(action, DictionaryObject):
+        return 0
+    if action.get("/S") in SCRIPT_ACTIONS:
+        del holder[key]
+        return 1
+    seen = set() if seen is None else seen
+    if id(action) in seen:  # a chain that loops back on itself
+        return 0
+    seen.add(id(action))
+    chained = action.get("/Next")
+    chained = chained.get_object() if chained is not None else None
+    if isinstance(chained, ArrayObject):
+        return sum(_drop_scripts(chained, i, seen) for i in range(len(chained) - 1, -1, -1))
+    return _drop_scripts(action, "/Next", seen)
+
+
+def _walk(start, *keys):
+    """Every dictionary in a tree of bookmarks or form fields, once each,
+    from ``start`` (a dictionary or an array of them) along ``keys``."""
+    pending, seen = [start], set()
+    while pending:
+        item = pending.pop()
+        item = item.get_object() if item is not None else None
+        if isinstance(item, ArrayObject):
+            pending.extend(item)
+            continue
+        if not isinstance(item, DictionaryObject) or id(item) in seen:
+            continue
+        seen.add(id(item))
+        yield item
+        pending.extend(item.get(key) for key in keys)
 
 
 def sanitize(path, output, metadata=True, javascript=True, attachments=True, comments=False,
@@ -159,7 +223,7 @@ def sanitize(path, output, metadata=True, javascript=True, attachments=True, com
     embedded files, and optionally comments (annotations other than links
     and form fields)."""
     reader = core.open_pdf(path, password)
-    writer = PdfWriter(clone_from=reader)
+    writer = core.clone_document(reader)
     root = writer._root_object
     counts = {"metadata": 0, "javascript": 0, "attachments": 0, "comments": 0}
 
@@ -178,12 +242,18 @@ def sanitize(path, output, metadata=True, javascript=True, attachments=True, com
     if javascript:
         if names is not None:
             counts["javascript"] += _drop(names, "/JavaScript")
-        if _is_javascript(root.get("/OpenAction")):
-            counts["javascript"] += _drop(root, "/OpenAction")
+        counts["javascript"] += _drop_scripts(root, "/OpenAction")
         counts["javascript"] += _drop(root, "/AA")
         acroform = root.get("/AcroForm")
         if acroform is not None:
-            _drop(acroform.get_object(), "/XFA")  # XFA forms can carry scripts
+            acroform = acroform.get_object()
+            _drop(acroform, "/XFA", "/CO")  # XFA forms can carry scripts; /CO orders calculations
+            # Calculate, format and validate scripts sit on the fields, not
+            # on their widgets on the pages.
+            for field in _walk(acroform.get("/Fields"), "/Kids"):
+                counts["javascript"] += _drop(field, "/AA")
+        for item in _walk(root.get("/Outlines"), "/First", "/Next"):
+            counts["javascript"] += _drop_scripts(item, "/A")
     if attachments:
         if names is not None:
             counts["attachments"] += _drop(names, "/EmbeddedFiles")
@@ -198,6 +268,8 @@ def sanitize(path, output, metadata=True, javascript=True, attachments=True, com
         keep = ArrayObject()
         for ref in annots.get_object():
             annot = ref.get_object()
+            if not isinstance(annot, DictionaryObject):
+                continue  # a null or missing annotation: viewers skip it too
             subtype = annot.get("/Subtype")
             if attachments and subtype == "/FileAttachment":
                 counts["attachments"] += 1
@@ -206,9 +278,7 @@ def sanitize(path, output, metadata=True, javascript=True, attachments=True, com
                 counts["comments"] += 1
                 continue
             if javascript:
-                if _is_javascript(annot.get("/A")):
-                    del annot["/A"]
-                    counts["javascript"] += 1
+                counts["javascript"] += _drop_scripts(annot, "/A")
                 counts["javascript"] += _drop(annot, "/AA")
             keep.append(ref)
         if keep:
@@ -244,8 +314,10 @@ def find_ghostscript():
     return None
 
 
-def _ps_string(text):
-    return "(" + text.replace("\\", "/").replace("(", "\\(").replace(")", "\\)") + ")"
+def _ps_text(text):
+    """``text`` as a PostScript hex string holding a PDF text string
+    (UTF-16 with a byte-order mark), so any character survives."""
+    return "<" + ("\ufeff" + text).encode("utf-16-be").hex() + ">"
 
 
 def to_pdfa(path, output, level="2", password=None):
@@ -272,22 +344,25 @@ def to_pdfa(path, output, level="2", password=None):
         # Scripts and attachments aren't allowed in PDF/A-1 and -2.
         sanitize(source, source, metadata=False, javascript=True,
                  attachments=str(level) != "3")
-        icc = tmp / "srgb.icc"
-        icc.write_bytes(ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+        # The sRGB profile goes into the PostScript as hex strings (a string
+        # holds at most 64 KB) rather than by file name: Ghostscript reads
+        # names as UTF-8, and the temp folder is under the user's name,
+        # which can be in any alphabet.
+        icc = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes().hex()
+        chunks = [icc[i:i + 60000] for i in range(0, len(icc), 60000)]
         title = (reader.metadata or {}).get("/Title") or output.stem
         definition = tmp / "pdfa_def.ps"
         definition.write_text(
             "%!\n"
-            f"[ /Title {_ps_string(str(title))} /DOCINFO pdfmark\n"
-            f"/ICCProfile {_ps_string(str(icc))} def\n"
+            f"[ /Title {_ps_text(str(title))} /DOCINFO pdfmark\n"
             "[/_objdef {icc_PDFA} /type /stream /OBJ pdfmark\n"
             "[{icc_PDFA} <</N 3>> /PUT pdfmark\n"
-            "[{icc_PDFA} ICCProfile (r) file /PUT pdfmark\n"
-            "[/_objdef {OutputIntent_PDFA} /type /dict /OBJ pdfmark\n"
+            + "".join(f"[{{icc_PDFA}} <{chunk}> /PUT pdfmark\n" for chunk in chunks)
+            + "[/_objdef {OutputIntent_PDFA} /type /dict /OBJ pdfmark\n"
             "[{OutputIntent_PDFA} <</Type /OutputIntent /S /GTS_PDFA1 "
             "/DestOutputProfile {icc_PDFA} /OutputConditionIdentifier (sRGB)>> /PUT pdfmark\n"
             "[{Catalog} <</OutputIntents [ {OutputIntent_PDFA} ]>> /PUT pdfmark\n",
-            encoding="latin-1", errors="replace")
+            encoding="ascii")
         result = tmp / "out.pdf"
         command = [gs, f"-dPDFA={level}", "-dBATCH", "-dNOPAUSE", "-dQUIET", "-dNOOUTERSAVE",
                    "-dPDFACompatibilityPolicy=1", "-sColorConversionStrategy=RGB",

@@ -60,7 +60,13 @@ def _pages(conn, path):
         texts = _extract(path)
     except Exception as exc:  # unreadable or password-protected
         texts = []
-        error = "password protected" if "password" in str(exc).lower() else "can't be read"
+        message = str(exc).lower()
+        error = "password protected" if "password" in message else "can't be read"
+        # Only a fault in the file itself is worth remembering; a file that is
+        # locked, on a share that dropped out or failed to read may well open
+        # next time.
+        if not isinstance(exc, RuntimeError) or "file access" in message:
+            return texts, error
     with conn:
         conn.execute("DELETE FROM pages WHERE path = ?", (key,))
         conn.executemany("INSERT INTO pages VALUES (?, ?, ?)", [(key, n, t) for n, t in texts])
@@ -103,7 +109,12 @@ def search(directory, query, recursive=False, case_sensitive=False, whole_words=
             for i, path in enumerate(files):
                 progress.report(i, len(files), message=f"searching {path.name} "
                                                        f"({i + 1} of {len(files)})")
-                texts, error = _pages(conn, path)
+                try:
+                    texts, error = _pages(conn, path)
+                except FileNotFoundError:
+                    error = "removed while searching"
+                except OSError:
+                    error = "can't be read"
                 if error:
                     skipped.append((str(path), error))
                     continue

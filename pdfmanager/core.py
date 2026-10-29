@@ -2,15 +2,22 @@
 can be used from the CLI or imported as a library."""
 
 import io
+import logging
 import os
 import re
+import tempfile
 import threading
 from pathlib import Path
 
-from pypdf import PdfReader, PdfWriter, Transformation
+from pypdf import PageObject, PdfReader, PdfWriter, Transformation
 from pypdf.errors import PyPdfError
-from pypdf.generic import (ArrayObject, DictionaryObject, FloatObject, NameObject, NumberObject,
-                           RectangleObject)
+from pypdf.generic import (ArrayObject, ContentStream, DictionaryObject, FloatObject, IndirectObject,
+                           NameObject, NumberObject, RectangleObject, StreamObject)
+
+# pypdf notes that a page copied without its annotations has fewer links than
+# the original; that's what _writer_from_pages asks for (see there).
+logging.getLogger("pypdf.generic._link").addFilter(
+    lambda record: "Annotation sizes differ" not in record.getMessage())
 
 from pdfmanager import fonts, imaging, progress
 from pdfmanager.pageranges import parse_page_ranges
@@ -51,8 +58,12 @@ def open_pdf(path, password=None):
     except PyPdfError as exc:
         raise PdfManagerError(f"{path} is not a readable PDF ({exc})") from None
     if reader.is_encrypted:
-        if reader.decrypt(password or ""):
-            return reader  # owner-password-only files open with an empty password
+        # A file with only an owner password (printing or copying restricted)
+        # opens with an empty password, also when a password meant for another
+        # file of the batch was given.
+        for candidate in dict.fromkeys([password or "", ""]):
+            if reader.decrypt(candidate):
+                return reader
         if password is None:
             raise PdfManagerError(f"{path} is encrypted; supply a password")
         raise PdfManagerError(f"wrong password for {path}")
@@ -61,23 +72,144 @@ def open_pdf(path, password=None):
 
 def _write(writer, output):
     output = Path(output)
+    if output.is_dir():
+        raise PdfManagerError(f"{output} is a folder; give the name of the PDF to write")
     if output.parent and not output.parent.exists():
         output.parent.mkdir(parents=True, exist_ok=True)
-    # Write to a temporary file first so an input can safely be overwritten.
-    tmp = output.with_name(output.name + ".tmp")
-    with open(tmp, "wb") as fh:
-        writer.write(fh)
-    os.replace(tmp, output)
+    # Write to a temporary file first so an input can safely be overwritten,
+    # and nothing is left behind when writing fails.
+    fd, tmp = tempfile.mkstemp(prefix=output.name + ".", suffix=".tmp", dir=output.parent)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            writer.write(fh)
+        os.replace(tmp, output)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return output
 
 
 def _writer_from_pages(reader, indices):
+    """A writer with the reader's pages ``indices``, in that order.
+
+    Bookmarks, form fields and links between the kept pages come along;
+    links to pages left out are dropped. (pypdf's add_page would copy a
+    page's links as they are, and with them, unseen, every page they point
+    to: "Delete pages" would then leave the deleted page in the file.)"""
     writer = PdfWriter()
-    for i in indices:
-        writer.add_page(reader.pages[i])
+    indices = list(indices)
+    unique = list(dict.fromkeys(indices))  # each page once, in order of first use
+    writer.append(reader, pages=unique)
+    if len(unique) < len(indices):
+        _reorder_pages(writer, [unique.index(i) for i in indices])  # the copies
     if reader.metadata:
         writer.add_metadata({k: v for k, v in reader.metadata.items() if isinstance(v, str)})
     return writer
+
+
+def _reorder_pages(writer, order):
+    """Put the writer's pages in ``order`` (indices as they are now); an
+    index listed twice makes a copy of that page."""
+    pages = list(writer.flattened_pages)
+    kids, flat, seen = ArrayObject(), [], set()
+    for i in order:
+        page = pages[i]
+        if i in seen:
+            # Viewers reject a page listed twice: a copy is a new page
+            # dictionary, sharing the content and annotations below it
+            # (see _own_contents for when they're changed).
+            copy = PageObject(writer)
+            for key in page:
+                if key != "/Parent":
+                    copy[NameObject(key)] = page.raw_get(key)
+            copy[NameObject("/Parent")] = writer._pages
+            writer._add_object(copy)
+            page = copy
+        seen.add(i)
+        kids.append(page.indirect_reference)
+        flat.append(page)
+    node = writer._pages.get_object()
+    node[NameObject("/Kids")] = kids
+    node[NameObject("/Count")] = NumberObject(len(flat))
+    writer.flattened_pages = flat
+
+
+def clone_document(reader):
+    """A writer with everything in ``reader``, like ``PdfWriter(clone_from=
+    reader)``, also for long documents whose pages link to each other:
+    pypdf copies objects recursively, and a chain of "next page" links
+    through hundreds of pages is deeper than Python allows. The pages'
+    annotations are copied after the rest, when their target pages are
+    already known."""
+    detached = []
+    for i, page in enumerate(reader.pages):
+        stored = reader.get_object(page.indirect_reference)  # the object pypdf copies from
+        if isinstance(stored, DictionaryObject) and "/Annots" in stored:
+            detached.append((i, stored, stored.raw_get("/Annots")))
+            del stored["/Annots"]
+    try:
+        writer = PdfWriter(clone_from=reader)
+    finally:
+        for _, stored, annots in detached:
+            stored[NameObject("/Annots")] = annots
+    for i, _, annots in detached:
+        writer.pages[i][NameObject("/Annots")] = annots.clone(writer)
+    return writer
+
+
+def _content_refs(page):
+    """References to the page's content stream(s)."""
+    contents = page.get("/Contents")
+    refs = [contents] if isinstance(contents, IndirectObject) else []
+    array = contents.get_object() if contents is not None else None
+    if isinstance(array, ArrayObject):
+        refs.extend(c for c in array if isinstance(c, IndirectObject))
+    return refs
+
+
+def _annot_refs(page):
+    annots = page.get("/Annots")
+    refs = [annots] if isinstance(annots, IndirectObject) else []
+    array = annots.get_object() if annots is not None else None
+    if isinstance(array, ArrayObject):
+        refs.extend(a for a in array if isinstance(a, IndirectObject))
+    return refs
+
+
+def _shared_objects(writer):
+    """Ids of the content streams and annotations that two or more pages
+    share: a duplicated page, or identical pages after Compress."""
+    counts = {}
+    for page in writer.pages:
+        for ref in _content_refs(page) + _annot_refs(page):
+            counts[ref.idnum] = counts.get(ref.idnum, 0) + 1
+    return {idnum for idnum, n in counts.items() if n > 1}
+
+
+def _own_contents(page, shared):
+    """Before a page is changed: give it its own content stream and
+    annotations if another page shares them (see ``_shared_objects``), so
+    the change doesn't land on that page too."""
+    if not shared:
+        return
+    pdf = page.indirect_reference.pdf
+    if any(ref.idnum in shared for ref in _content_refs(page)):
+        own = ContentStream(page["/Contents"], pdf)
+        page[NameObject("/Contents")] = pdf._add_object(own)
+    if any(ref.idnum in shared for ref in _annot_refs(page)):
+        fresh = ArrayObject()
+        for ref in page["/Annots"]:
+            annot = ref.get_object()
+            if isinstance(annot, DictionaryObject) and getattr(ref, "idnum", None) in shared:
+                copy = DictionaryObject()
+                for key, value in annot.items():
+                    copy[NameObject(key)] = value
+                ref = pdf._add_object(copy)
+            fresh.append(ref)
+        page[NameObject("/Annots")] = fresh
 
 
 def parse_paper_size(spec):
@@ -113,39 +245,88 @@ def parse_paper_size(spec):
     return float(w), float(h)
 
 
+def _visible_box(page):
+    """The part of the page viewers show: its crop box, within the media box."""
+    media, crop = page.mediabox, page.cropbox
+    left, bottom = max(float(media.left), float(crop.left)), max(float(media.bottom), float(crop.bottom))
+    right, top = min(float(media.right), float(crop.right)), min(float(media.top), float(crop.top))
+    if right <= left or top <= bottom:  # a crop box outside the page: ignore it
+        left, bottom, right, top = (float(v) for v in (media.left, media.bottom, media.right, media.top))
+    return RectangleObject([left, bottom, right, top])
+
+
 def _page_size(page):
-    box = page.mediabox
+    box = _visible_box(page)
     w, h = float(box.width), float(box.height)
     if (page.rotation or 0) % 180 == 90:
         w, h = h, w
     return w, h
 
 
-def _transform_annotations(page, op):
-    """Move and resize the page's annotations (links, form fields, comments)
-    by ``op`` so they stay on top of the content they belong to."""
+def _moved_points(values, op):
+    points = []
+    for i in range(0, len(values) - 1, 2):
+        points.extend(op.apply_on((float(values[i]), float(values[i + 1]))))
+    return ArrayObject(FloatObject(v) for v in points)
+
+
+def _turn_appearances(annot, rotation):
+    """Turn an annotation's appearance streams by ``rotation`` degrees.
+    Viewers fit an appearance's box into /Rect without turning it, so a
+    turned /Rect alone shows stamps, signatures and notes sideways."""
+    ap = annot.get("/AP")
+    ap = ap.get_object() if ap is not None else None
+    if not isinstance(ap, DictionaryObject):
+        return
+    for kind in ("/N", "/R", "/D"):
+        normal = ap.get(kind)
+        normal = normal.get_object() if normal is not None else None
+        if normal is None:
+            continue
+        states = [normal]
+        if isinstance(normal, DictionaryObject) and not isinstance(normal, StreamObject):
+            states = [s.get_object() for s in normal.values()]  # one per state (checkboxes)
+        for stream in states:
+            if not isinstance(stream, StreamObject):
+                continue
+            old = Transformation(tuple(float(v) for v in stream.get("/Matrix", (1, 0, 0, 1, 0, 0))))
+            new = old.transform(Transformation().rotate(rotation))
+            stream[NameObject("/Matrix")] = ArrayObject(FloatObject(v) for v in new.ctm)
+
+
+def _transform_annotations(page, op, turn=0):
+    """Move and resize the page's annotations (links, form fields, comments,
+    drawings) by ``op`` so they stay on top of the content they belong to.
+    With ``turn`` (degrees) their appearances are turned as well."""
     annots = page.get("/Annots")
     if annots is None:
         return
     for ref in annots.get_object():
         annot = ref.get_object()
+        if not isinstance(annot, DictionaryObject):
+            continue  # a null or missing annotation: viewers skip it too
         rect = annot.get("/Rect")
         if rect is not None and len(rect) == 4:
             x1, y1 = op.apply_on((float(rect[0]), float(rect[1])))
             x2, y2 = op.apply_on((float(rect[2]), float(rect[3])))
             annot[NameObject("/Rect")] = RectangleObject(
                 [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)])
-        quads = annot.get("/QuadPoints")
-        if quads is not None:
-            points = []
-            for i in range(0, len(quads) - 1, 2):
-                points.extend(op.apply_on((float(quads[i]), float(quads[i + 1]))))
-            annot[NameObject("/QuadPoints")] = ArrayObject(FloatObject(v) for v in points)
+        # Highlights, lines, polygons and callout arrows keep their own points.
+        for key in ("/QuadPoints", "/L", "/Vertices", "/CL"):
+            points = annot.get(key)
+            if points is not None:
+                annot[NameObject(key)] = _moved_points(points.get_object(), op)
+        ink = annot.get("/InkList")
+        if ink is not None:
+            annot[NameObject("/InkList")] = ArrayObject(
+                _moved_points(path.get_object(), op) for path in ink.get_object())
+        if turn:
+            _turn_appearances(annot, turn)
 
 
 def _transfer_rotation(page):
-    """Like ``page.transfer_rotation_to_content()`` but also rotates the
-    page's annotations."""
+    """Like ``page.transfer_rotation_to_content()`` but also turns the
+    page's annotations, appearances included."""
     rotation = (page.rotation or 0) % 360
     if not rotation:
         return
@@ -157,7 +338,7 @@ def _transfer_rotation(page):
     new = page.mediabox
     dx = float(new.left) - min(x for x, _ in turned)
     dy = float(new.bottom) - min(y for _, y in turned)
-    _transform_annotations(page, rotate.translate(dx, dy))
+    _transform_annotations(page, rotate.translate(dx, dy), turn=-rotation)
 
 
 def _describe_size(w, h):
@@ -219,12 +400,13 @@ def merge(inputs, output, bookmarks=True, password=None):
     for item in inputs:
         path, spec = item if isinstance(item, tuple) else (item, None)
         reader = open_pdf(path, password)
-        indices = parse_page_ranges(spec, len(reader.pages)) if spec else range(len(reader.pages))
-        first = len(writer.pages)
-        for i in indices:
-            writer.add_page(reader.pages[i])
-        if bookmarks and len(writer.pages) > first:
-            writer.add_outline_item(Path(path).stem, first)
+        indices = parse_page_ranges(spec, len(reader.pages)) if spec else list(range(len(reader.pages)))
+        if not indices:
+            continue
+        # With bookmarks, each file gets one, and its own bookmarks under it;
+        # form fields and links between its kept pages come along too.
+        writer.append(reader, outline_item=Path(path).stem if bookmarks else None, pages=indices,
+                      import_outline=bookmarks)
     return _write(writer, output)
 
 
@@ -290,15 +472,20 @@ def interleave(front, back, output, reverse_back=True, password=None):
     """Combine separately scanned front and back sides into one document.
     Back sides are reversed by default, as produced by a single-sided feeder."""
     fr, br = open_pdf(front, password), open_pdf(back, password)
-    backs = list(br.pages)
+    backs = list(range(len(br.pages)))
     if reverse_back:
         backs.reverse()
     writer = PdfWriter()
-    for i in range(max(len(fr.pages), len(backs))):
-        if i < len(fr.pages):
-            writer.add_page(fr.pages[i])
+    writer.append(fr)  # whole files, so links and bookmarks within each stay
+    writer.append(br)
+    fronts = len(fr.pages)
+    order = []
+    for i in range(max(fronts, len(backs))):
+        if i < fronts:
+            order.append(i)
         if i < len(backs):
-            writer.add_page(backs[i])
+            order.append(fronts + backs[i])
+    _reorder_pages(writer, order)
     return _write(writer, output)
 
 
@@ -311,7 +498,7 @@ def rotate(path, output, degrees, pages=None, password=None):
         raise PdfManagerError("rotation must be a multiple of 90 degrees")
     reader = open_pdf(path, password)
     targets = set(parse_page_ranges(pages, len(reader.pages))) if pages else None
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     for i, page in enumerate(writer.pages):
         if targets is None or i in targets:
             page.rotate(degrees)
@@ -340,14 +527,17 @@ def resize(path, output, size=None, scale=None, fit="fit", pages=None,
     reader = open_pdf(path, password)
     targets = set(parse_page_ranges(pages, len(reader.pages))) if pages else None
     target = parse_paper_size(size) if size else None
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
+    shared = _shared_objects(writer)
 
     for i, page in enumerate(writer.pages):
         if targets is not None and i not in targets:
             continue
+        _own_contents(page, shared)
         # Bake any /Rotate into the content so the geometry below is simple.
         _transfer_rotation(page)
-        box = page.mediabox
+        # The new page holds what the old one showed (its crop box).
+        box = _visible_box(page)
         sw, sh = float(box.width), float(box.height)
         left, bottom = float(box.left), float(box.bottom)
 
@@ -380,22 +570,36 @@ def resize(path, output, size=None, scale=None, fit="fit", pages=None,
     return _write(writer, output)
 
 
-def crop(path, output, margins, pages=None, password=None):
-    """Trim ``margins`` (left, bottom, right, top) in points from each page."""
+def _unturned(margins, rotation):
+    """Margins as a page is shown (left, bottom, right, top) -> the same
+    edges in the page's own coordinates, before its /Rotate."""
     left, bottom, right, top = margins
+    return {0: (left, bottom, right, top), 90: (top, left, bottom, right),
+            180: (right, top, left, bottom), 270: (bottom, right, top, left)}[rotation % 360]
+
+
+def crop(path, output, margins, pages=None, visual=True, password=None):
+    """Trim ``margins`` (left, bottom, right, top) in points from what each
+    page shows (its crop box). ``visual`` margins are as the page is shown,
+    so "top" is the top of a page that is turned by /Rotate; otherwise they
+    are in the page's own coordinates (what the page editor measures)."""
     reader = open_pdf(path, password)
     targets = set(parse_page_ranges(pages, len(reader.pages))) if pages else None
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     for i, page in enumerate(writer.pages):
         if targets is not None and i not in targets:
             continue
-        box = page.mediabox
+        left, bottom, right, top = _unturned(margins, page.rotation or 0) if visual else margins
+        box = _visible_box(page)
         new = [float(box.left) + left, float(box.bottom) + bottom,
                float(box.right) - right, float(box.top) - top]
         if new[2] <= new[0] or new[3] <= new[1]:
             raise PdfManagerError(f"margins are larger than page {i + 1}")
         page.mediabox = RectangleObject(new)
         page.cropbox = RectangleObject(new)
+        for name in ("/TrimBox", "/BleedBox", "/ArtBox"):
+            if name in page:
+                del page[name]
     return _write(writer, output)
 
 
@@ -414,9 +618,11 @@ def n_up(path, output, per_sheet=2, size="a4", password=None):
     cell_w, cell_h = sw / cols, sh / rows
 
     # Work on a copy so pages can be normalised without touching the reader.
-    source = PdfWriter(clone_from=open_pdf(path, password))
+    source = clone_document(open_pdf(path, password))
+    shared = _shared_objects(source)
     page_numbers = {p.indirect_reference.idnum: i for i, p in enumerate(source.pages)}
     for page in source.pages:
+        _own_contents(page, shared)
         _retarget_links(page, page_numbers)
     writer = PdfWriter()
     sheet = None
@@ -425,7 +631,7 @@ def n_up(path, output, per_sheet=2, size="a4", password=None):
         if slot == 0:
             sheet = writer.add_blank_page(width=sw, height=sh)
         _transfer_rotation(src)
-        box = src.mediabox
+        box = _visible_box(src)  # what the page shows goes in the cell
         pw, ph = float(box.width), float(box.height)
         s = min(cell_w / pw, cell_h / ph) * 0.95
         col, row = slot % cols, slot // cols
@@ -450,6 +656,8 @@ def _retarget_links(page, page_numbers):
     keep = ArrayObject()
     for ref in annots.get_object():
         annot = ref.get_object()
+        if not isinstance(annot, DictionaryObject):
+            continue  # a null or missing annotation
         if annot.get("/Subtype") == "/Link":
             dest = annot.get("/Dest")
             action = annot.get("/A")
@@ -474,7 +682,7 @@ def _resolve_links(writer, per_sheet):
     for sheet in writer.pages:
         for ref in sheet.get("/Annots", ArrayObject()):
             annot = ref.get_object()
-            if _LINK_TARGET in annot:
+            if isinstance(annot, DictionaryObject) and _LINK_TARGET in annot:
                 target = writer.pages[int(annot[_LINK_TARGET]) // per_sheet]
                 annot[NameObject("/Dest")] = ArrayObject(
                     [target.indirect_reference, NameObject("/Fit")])
@@ -518,10 +726,13 @@ def compress(path, output, level="medium", image_quality=None, max_dpi=None, pas
         raise PdfManagerError("maximum DPI must be at least 1")
 
     reader = open_pdf(path, password)
-    writer = PdfWriter(clone_from=reader)
-    if max_dpi or image_quality:
-        imaging.downsample_images(writer, max_dpi, image_quality or 85)
-    _finish_compression(writer)
+    writer = clone_document(reader)
+    try:
+        if max_dpi or image_quality:
+            imaging.downsample_images(writer, max_dpi, image_quality or 85)
+        _finish_compression(writer)
+    except PyPdfError as exc:  # a stream pypdf can't rewrite
+        raise PdfManagerError(f"can't rewrite {path} ({exc})") from None
     return _write(writer, output)
 
 
@@ -538,20 +749,22 @@ def convert_color(path, output, target, icc_profile=None, password=None):
     if icc_profile and not Path(icc_profile).is_file():
         raise PdfManagerError(f"ICC profile not found: {icc_profile}")
     reader = open_pdf(path, password)
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     from PIL import ImageCms
 
     try:
         imaging.convert_colors(writer, target, icc_profile)
+        _finish_compression(writer)
     except (OSError, ImageCms.PyCMSError) as exc:  # unreadable or wrong-type ICC profile
         raise PdfManagerError(f"cannot use ICC profile {icc_profile}: {exc}") from None
-    _finish_compression(writer)
+    except PyPdfError as exc:  # a stream pypdf can't rewrite
+        raise PdfManagerError(f"can't rewrite {path} ({exc})") from None
     return _write(writer, output)
 
 
 def encrypt(path, output, user_password, owner_password=None, password=None):
     reader = open_pdf(path, password)
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     writer.encrypt(user_password=user_password,
                    owner_password=owner_password or user_password,
                    algorithm="AES-256")
@@ -560,17 +773,69 @@ def encrypt(path, output, user_password, owner_password=None, password=None):
 
 def decrypt(path, output, password):
     reader = open_pdf(path, password)
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     return _write(writer, output)
 
 
 def set_metadata(path, output, password=None, **fields):
     reader = open_pdf(path, password)
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
     updates = {f"/{k.capitalize()}": v for k, v in fields.items() if v is not None}
     if updates:
         writer.add_metadata(updates)
+        _update_xmp(writer, updates)
     return _write(writer, output)
+
+
+# Where viewers look first for the title and author: the XMP metadata, when
+# a file has it (Word, LibreOffice, InDesign and Ghostscript all write it).
+_XMP_FIELDS = {
+    "/Title": ("dc:title", "http://purl.org/dc/elements/1.1/", "Alt"),
+    "/Author": ("dc:creator", "http://purl.org/dc/elements/1.1/", "Seq"),
+    "/Subject": ("dc:description", "http://purl.org/dc/elements/1.1/", "Alt"),
+    "/Keywords": ("pdf:Keywords", "http://ns.adobe.com/pdf/1.3/", None),
+}
+
+
+def _update_xmp(writer, updates):
+    """Keep the XMP metadata in step with the Info fields, so readers that
+    prefer it (this app's own, Acrobat) show the new title and author."""
+    from xml.sax.saxutils import escape
+
+    ref = writer._root_object.get("/Metadata")
+    stream = ref.get_object() if ref is not None else None
+    if not isinstance(stream, StreamObject):
+        return
+    try:
+        xml = stream.get_data().decode("utf-8")
+    except (UnicodeDecodeError, PyPdfError):
+        return
+    for key, value in updates.items():
+        if key not in _XMP_FIELDS:
+            continue
+        tag, namespace, kind = _XMP_FIELDS[key]
+        prefix = tag.split(":")[0]
+        text = escape(str(value))
+        if kind == "Alt":
+            inner = f'<rdf:Alt><rdf:li xml:lang="x-default">{text}</rdf:li></rdf:Alt>'
+        elif kind == "Seq":
+            inner = f"<rdf:Seq><rdf:li>{text}</rdf:li></rdf:Seq>"
+        else:
+            inner = text
+        element = f'<{tag} xmlns:{prefix}="{namespace}">{inner}</{tag}>' if text else ""
+        pattern = re.compile(rf"<{tag}\b[^>]*?(?:/>|>.*?</{tag}>)", re.DOTALL)
+        if pattern.search(xml):
+            xml = pattern.sub(lambda m: element, xml, count=1)
+        elif element and "</rdf:Description>" in xml:
+            xml = xml.replace("</rdf:Description>", element + "</rdf:Description>", 1)
+    data = xml.encode("utf-8")
+    for key in ("/Filter", "/DecodeParms"):
+        if key in stream:
+            del stream[key]
+    stream._data = data
+    stream[NameObject("/Length")] = NumberObject(len(data))
+    if hasattr(stream, "decoded_self"):
+        stream.decoded_self = None
 
 
 # --------------------------------------------------------------------------
@@ -597,13 +862,14 @@ def watermark(path, output, text=None, stamp_pdf=None, opacity=0.15,
     reader = open_pdf(path, password)
     targets = set(parse_page_ranges(pages, len(reader.pages))) if pages else None
     stamp_page = open_pdf(stamp_pdf).pages[0] if stamp_pdf else None
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
+    shared = _shared_objects(writer)
 
     for i, page in enumerate(writer.pages):
         if targets is not None and i not in targets:
             continue
-        box = page.mediabox
-        w, h = float(box.width), float(box.height)
+        _own_contents(page, shared)
+        w, h, matrix = _upright(page)  # across what the page shows, the right way up
         if stamp_page is None:
             def draw(c, w, h):
                 c.setFillAlpha(opacity)
@@ -614,8 +880,7 @@ def watermark(path, output, text=None, stamp_pdf=None, opacity=0.15,
             stamp = _overlay_page(w, h, draw)
         else:
             stamp = stamp_page
-        op = Transformation().translate(float(box.left), float(box.bottom))
-        page.merge_transformed_page(stamp, op, over=not below)
+        page.merge_transformed_page(stamp, matrix, over=not below)
     return _write(writer, output)
 
 
@@ -629,9 +894,12 @@ def number_pages(path, output, fmt="{n} / {total}", position="bottom-center",
     reader = open_pdf(path, password)
     total = len(reader.pages)
     targets = set(parse_page_ranges(pages, total)) if pages else None
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
+    shared = _shared_objects(writer)
     vert, horiz = position.split("-")
     margin = 28
+    if not _NUMBER_FORMAT.fullmatch(fmt):
+        raise PdfManagerError("the format may use {n} and {total}, with other braces as {{ and }}")
 
     n = start
     for i, page in enumerate(writer.pages):
@@ -639,8 +907,8 @@ def number_pages(path, output, fmt="{n} / {total}", position="bottom-center",
             continue
         label = fmt.format(n=n, total=total)
         n += 1
-        box = page.mediabox
-        w, h = float(box.width), float(box.height)
+        _own_contents(page, shared)
+        w, h, matrix = _upright(page)  # inside what the page shows, the right way up
 
         def draw(c, w, h, label=label):
             c.setFont(fonts.font_for(label), font_size)
@@ -652,15 +920,22 @@ def number_pages(path, output, fmt="{n} / {total}", position="bottom-center",
             else:
                 c.drawString(margin, y, label)
 
-        op = Transformation().translate(float(box.left), float(box.bottom))
-        page.merge_transformed_page(_overlay_page(w, h, draw), op)
+        page.merge_transformed_page(_overlay_page(w, h, draw), matrix)
     return _write(writer, output)
 
 
-def _safe_filename(name, fallback):
+# {n}, {total}, {{ and }} are fine in a page number format; anything else in
+# braces would be a KeyError from str.format.
+_NUMBER_FORMAT = re.compile(r"(?:[^{}]|\{\{|\}\}|\{(?:n|total)(?::[^{}]*)?\})*")
+
+
+def _safe_filename(name, fallback, limit=120):
     name = Path(str(name).replace("\\", "/")).name
     name = "".join("_" if c in '<>:"|?*' or ord(c) < 32 else c for c in name).strip(" .")
-    return name or fallback
+    stem, suffix = Path(name).stem, Path(name).suffix[:16]
+    while len((stem + suffix).encode("utf-8")) > limit and stem:  # file systems stop at 255 bytes
+        stem = stem[:-1]
+    return (stem + suffix).strip(" .") or fallback
 
 
 def extract_media(path, outdir, images=True, attachments=True, min_size=16, password=None):
@@ -707,8 +982,18 @@ def extract_media(path, outdir, images=True, attachments=True, min_size=16, pass
                     continue
                 seen.add(digest)
                 ext = Path(image.name).suffix.lower() or ".png"
+                if ext in (".jp2", ".jpx") and image.image is not None:
+                    # A photo with a soft mask comes back as JPEG 2000, which
+                    # few programs open; PNG keeps the transparency too.
+                    buf = io.BytesIO()
+                    image.image.save(buf, "PNG")
+                    data, ext = buf.getvalue(), ".png"
                 out = target(outdir, f"{stem}_page{number}_{k}{ext}")
-                out.write_bytes(data)
+                try:
+                    out.write_bytes(data)
+                except OSError:
+                    saved.setdefault("skipped", []).append(out.name)
+                    continue
                 saved["images"].append(out)
     if attachments:
         files = []
@@ -725,6 +1010,8 @@ def extract_media(path, outdir, images=True, attachments=True, min_size=16, pass
         for page in reader.pages:
             for ref in page.get("/Annots") or []:
                 annot = ref.get_object()
+                if not isinstance(annot, DictionaryObject):
+                    continue
                 if annot.get("/Subtype") != "/FileAttachment" or "/FS" not in annot:
                     continue
                 spec = annot["/FS"].get_object()
@@ -742,7 +1029,11 @@ def extract_media(path, outdir, images=True, attachments=True, min_size=16, pass
                 continue
             seen.add(digest)
             out = target(outdir / "attachments", _safe_filename(str(name), "attachment"))
-            out.write_bytes(data)
+            try:
+                out.write_bytes(data)
+            except OSError:  # a name the file system won't take: the rest is still saved
+                saved.setdefault("skipped", []).append(out.name)
+                continue
             saved["attachments"].append(out)
     return saved
 
@@ -789,7 +1080,8 @@ def headers_footers(path, output, texts, font_size=9, margin_mm=10, pages=None, 
     total = len(reader.pages)
     targets = set(parse_page_ranges(pages, total)) if pages else None
     title = (reader.metadata or {}).get("/Title") or ""
-    writer = PdfWriter(clone_from=reader)
+    writer = clone_document(reader)
+    shared = _shared_objects(writer)
     margin = margin_mm * POINTS_PER_MM
     fields = {"total": total, "file": Path(path).stem, "title": str(title),
               "date": datetime.date.today().strftime(date_format)}
@@ -798,6 +1090,7 @@ def headers_footers(path, output, texts, font_size=9, margin_mm=10, pages=None, 
         progress.report(i, total, "page")
         if targets is not None and i not in targets:
             continue
+        _own_contents(page, shared)
         fields.update(n=n, bates=f"{bates_prefix}{bates:0{bates_digits}d}")
         # Only the known {names} are filled in; other braces stay as typed.
         lines = {spot: _HEADER_TOKEN.sub(lambda m: str(fields[m.group(1)]), text)
@@ -843,27 +1136,54 @@ def images_to_pdf(images, output, size=None, margin=0):
     output.parent.mkdir(parents=True, exist_ok=True)
     c = canvas.Canvas(str(output))
     for img_path in images:
-        with Image.open(img_path) as im:
-            im.load()
-            dpi = im.info.get("dpi", (72, 72))[0] or 72
-            iw, ih = im.size[0] * 72 / dpi, im.size[1] * 72 / dpi
-            if im.mode not in ("RGB", "L", "CMYK"):
-                im = im.convert("RGB")
-            if size:
-                pw, ph = parse_paper_size(size)
-                if (iw > ih) != (pw > ph):
-                    pw, ph = ph, pw
-                s = min((pw - 2 * margin) / iw, (ph - 2 * margin) / ih)
-                dw, dh = iw * s, ih * s
-                x, y = (pw - dw) / 2, (ph - dh) / 2
-            else:
-                pw, ph = iw + 2 * margin, ih + 2 * margin
-                dw, dh, x, y = iw, ih, margin, margin
-            c.setPageSize((pw, ph))
-            c.drawImage(ImageReader(im), x, y, width=dw, height=dh)
-            c.showPage()
+        try:
+            opened = Image.open(img_path)
+        except (OSError, ValueError) as exc:  # not a picture, or a damaged one
+            raise PdfManagerError(f"{img_path} is not a picture ({exc})") from None
+        with opened as source:
+            # A scanner's TIFF holds a page per frame.
+            for frame in range(getattr(source, "n_frames", 1)):
+                if frame:
+                    source.seek(frame)
+                source.load()
+                # Pillow gives TIFF resolutions as fractions; the page size must be plain numbers.
+                dpi_x, dpi_y = (float(v) if v and float(v) >= 1 else 72.0
+                                for v in (source.info.get("dpi") or (72, 72))[:2])
+                im = _page_image(source)
+                iw, ih = im.width * 72 / dpi_x, im.height * 72 / dpi_y
+                if size:
+                    pw, ph = parse_paper_size(size)
+                    if (iw > ih) != (pw > ph):
+                        pw, ph = ph, pw
+                    s = min((pw - 2 * margin) / iw, (ph - 2 * margin) / ih)
+                    dw, dh = iw * s, ih * s
+                    x, y = (pw - dw) / 2, (ph - dh) / 2
+                else:
+                    pw, ph = iw + 2 * margin, ih + 2 * margin
+                    dw, dh, x, y = iw, ih, margin, margin
+                c.setPageSize((pw, ph))
+                c.drawImage(ImageReader(im), x, y, width=dw, height=dh)
+                c.showPage()
     c.save()
     return output
+
+
+def _page_image(im):
+    """The picture as it should appear on the page: turned the way the
+    camera recorded it, transparent parts on white, and 16-bit scans and
+    palettes brought to 8 bits."""
+    from PIL import Image, ImageOps
+
+    im = ImageOps.exif_transpose(im) or im
+    if im.mode.startswith("I"):  # 16-bit (or wider) grayscale: scale, don't clip
+        im = im.convert("I").point(lambda v: v / 256).convert("L")
+    elif im.mode in ("RGBA", "LA", "PA") or "transparency" in im.info:
+        rgba = im.convert("RGBA")
+        im = Image.new("RGB", rgba.size, "white")
+        im.paste(rgba, mask=rgba.getchannel("A"))
+    if im.mode not in ("RGB", "L", "CMYK"):
+        im = im.convert("RGB")
+    return im
 
 
 def ocr(path, output, language="eng", force=False, deskew=False, password=None):
@@ -883,7 +1203,7 @@ def ocr(path, output, language="eng", force=False, deskew=False, password=None):
         ) from None
     source = Path(path)
     tmp_in = None
-    if password is not None or PdfReader(str(path)).is_encrypted:
+    if open_pdf(path, password).is_encrypted:  # also a plain error for a damaged file
         # OCRmyPDF can't open encrypted files; give it a decrypted copy.
         tmp_in = Path(output).with_name(Path(output).name + ".src.tmp.pdf")
         decrypt(path, tmp_in, password or "")
@@ -919,7 +1239,11 @@ def pdf_to_images(path, outdir, dpi=150, fmt="png", pages=None, password=None):
 
     outdir = Path(outdir)
     with PDFIUM_LOCK:
-        doc = pdfium.PdfDocument(str(path), password=password)
+        open_pdf(path, password)  # a plain error for a damaged file or a wrong password
+        try:
+            doc = pdfium.PdfDocument(str(path), password=password)
+        except pdfium.PdfiumError as exc:
+            raise PdfManagerError(f"{path} can't be rendered ({exc})") from None
         try:
             total = len(doc)
             indices = parse_page_ranges(pages, total) if pages else range(total)
@@ -932,7 +1256,7 @@ def pdf_to_images(path, outdir, dpi=150, fmt="png", pages=None, password=None):
                 if fmt.lower() in ("jpg", "jpeg") and image.mode != "RGB":
                     image = image.convert("RGB")
                 target = outdir / f"{Path(path).stem}_{i + 1:0{width}d}.{fmt}"
-                image.save(target)
+                image.save(target, dpi=(dpi, dpi))  # so the pictures keep their size
                 written.append(target)
             return written
         finally:

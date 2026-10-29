@@ -143,7 +143,7 @@ def edit_text(path, output, edits, password=None):
         finally:
             doc.close()
 
-    writer = PdfWriter(clone_from=reader)
+    writer = core.clone_document(reader)
     for number, plan in plans.items():
         page = writer.pages[number - 1]
         box = page.mediabox

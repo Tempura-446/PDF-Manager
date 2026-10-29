@@ -33,8 +33,9 @@ def load_all():
     except (OSError, ValueError):
         return {}
     recipes = data.get("recipes", []) if isinstance(data, dict) else []
-    return {r["name"]: r for r in sorted(recipes, key=lambda r: r["name"].lower())
-            if isinstance(r, dict) and r.get("name")}
+    # The file is shared and hand-editable: an entry without a name is skipped, not fatal.
+    valid = [r for r in recipes if isinstance(r, dict) and isinstance(r.get("name"), str) and r["name"]]
+    return {r["name"]: r for r in sorted(valid, key=lambda r: r["name"].lower())}
 
 
 def get(name):

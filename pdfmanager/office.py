@@ -27,7 +27,7 @@ import zipfile
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from pdfmanager import core, progress
+from pdfmanager import core, fonts, progress
 
 WORD_TYPES = {".doc", ".docx", ".docm", ".dot", ".dotx", ".rtf", ".odt", ".wpd", ".txt"}
 EXCEL_TYPES = {".xls", ".xlsx", ".xlsm", ".xlsb", ".ods", ".csv"}
@@ -448,13 +448,32 @@ def _app_for(suffix):
     return "powerpoint", "PowerPoint.Application"
 
 
+def _wrap(line, font, size, room):
+    """Pieces of ``line`` that each fit in ``room`` points."""
+    from reportlab.pdfbase import pdfmetrics
+
+    if font.startswith("Courier"):  # every character is 0.6 em wide
+        chars = int(room / (size * 0.6))
+        return [line[i:i + chars] for i in range(0, max(len(line), 1), chars)]
+    pieces, start, width = [], 0, 0.0
+    for i, char in enumerate(line):
+        w = pdfmetrics.stringWidth(char, font, size)
+        if width + w > room and i > start:
+            pieces.append(line[start:i])
+            start, width = i, 0.0
+        width += w
+    pieces.append(line[start:])
+    return pieces
+
+
 def text_to_pdf(path, output):
     """Plain text to PDF (A4, 10 pt monospace), no other program needed."""
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
 
     raw = Path(path).read_bytes()
-    for encoding in ("utf-8-sig", "cp1252", "latin-1"):
+    encodings = ("utf-16",) if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else ()
+    for encoding in encodings + ("utf-8-sig", "cp1252", "latin-1"):
         try:
             text = raw.decode(encoding)
             break
@@ -464,15 +483,16 @@ def text_to_pdf(path, output):
     c.setTitle(Path(path).stem)
     width, height = A4
     margin, size = 56, 10
-    chars = int((width - 2 * margin) / (size * 0.6))
     y = height - margin
     for line in text.expandtabs(4).splitlines() or [""]:
-        for start in range(0, max(len(line), 1), chars):
+        # Courier only has Western letters; other alphabets need an installed font.
+        font = fonts.font_for(line, "mono")
+        for piece in _wrap(line, font, size, width - 2 * margin):
             if y < margin:
                 c.showPage()
                 y = height - margin
-            c.setFont("Courier", size)
-            c.drawString(margin, y, line[start:start + chars])
+            c.setFont(font, size)
+            c.drawString(margin, y, piece)
             y -= size * 1.3
     c.save()
     return output
