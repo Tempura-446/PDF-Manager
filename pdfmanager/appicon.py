@@ -4,8 +4,8 @@ mark as in the app's sidebar, whose SVG is ``Z_PATH`` and ``SPARK``)."""
 from PIL import Image, ImageDraw
 
 ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
-TOP_LEFT, BOTTOM_RIGHT = (92, 108, 255), (42, 40, 160)  # the tile's gradient
-SPARK_COLOR = (255, 196, 92)
+TOP_LEFT, BOTTOM_RIGHT = (226, 94, 66), (158, 42, 28)  # the tile's gradient: the app's red, as before ZPDF
+SPARK_COLOR = (255, 214, 138)
 
 # On a 100-unit grid: hairline top stroke, heavy diagonal, a bottom stroke
 # that ends in an upturned swash. ("M"/"L", point) or ("C", c1, c2, point).
