@@ -1642,8 +1642,11 @@ def run_desktop(port=0, open_paths=()):
         # otherwise starts every time like a private browser window).
         options = {}
         debug_port = _debug_port()
-        if debug_port and isinstance(getattr(webview, "settings", None), dict):
-            webview.settings["REMOTE_DEBUGGING_PORT"] = debug_port  # for tests
+        if debug_port:  # for tests (pywebview 5.3+; its settings aren't a plain dict)
+            try:
+                webview.settings["REMOTE_DEBUGGING_PORT"] = debug_port
+            except (AttributeError, KeyError, TypeError):
+                pass
         if "storage_path" in inspect.signature(webview.start).parameters:
             storage = data_dir() / "webview"
             storage.mkdir(parents=True, exist_ok=True)
