@@ -169,6 +169,10 @@ or open a PDF with the standalone app ("Open with…" → PDF Manager, or drop
 the file on the app). It is built on [pdf.js](https://mozilla.github.io/pdf.js/),
 the engine behind Firefox's PDF viewer, bundled with the app so it works offline.
 
+- **Distraction-free:** an open document gets the whole window. The toolbar
+  keeps only the page number, zoom and the thumbnails button; **Tools** (or
+  the T key) pulls out the rest (open, find, annotate and sign, rotate,
+  print, save, more), and **All tools** in it slides out the app's tool list.
 - **Tabs:** open several PDFs at once (the + button, or drop more files),
   each with its own unsaved changes; a dot marks tabs with changes.
 - **Recent files** on the start screen, to open them again with one click.
@@ -179,7 +183,7 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
 - **Find** (Ctrl+F) with highlighting, match case and whole words.
 - **Select and copy text**; links work (web links open in your browser).
 - **Fill in forms** and save a copy with your entries.
-- **Annotate and sign** (the pen button): highlight text, add text, draw,
+- **Annotate and sign** (Tools → Annotate & sign): highlight text, add text, draw,
   add pictures, and sign by drawing, typing your name or using a picture of
   your signature (remembered on this computer if you like). Colours and
   sizes, undo/redo, and **Save a copy** with your changes. Use *Flatten
