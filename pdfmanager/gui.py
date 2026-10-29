@@ -1641,6 +1641,9 @@ def run_desktop(port=0, open_paths=()):
         # Keep the window's cache and settings between launches (pywebview
         # otherwise starts every time like a private browser window).
         options = {}
+        debug_port = _debug_port()
+        if debug_port and isinstance(getattr(webview, "settings", None), dict):
+            webview.settings["REMOTE_DEBUGGING_PORT"] = debug_port  # for tests
         if "storage_path" in inspect.signature(webview.start).parameters:
             storage = data_dir() / "webview"
             storage.mkdir(parents=True, exist_ok=True)
@@ -1661,6 +1664,14 @@ def run_desktop(port=0, open_paths=()):
     server.shutdown()
     server.server_close()
     return True
+
+
+def _debug_port():
+    """PDFM_DEBUG_PORT: let tests drive the window over the DevTools protocol."""
+    try:
+        return int(os.environ.get("PDFM_DEBUG_PORT", "")) or None
+    except ValueError:
+        return None
 
 
 def find_app_browser():
@@ -1705,9 +1716,11 @@ def run_app_window(port=0, open_paths=()):
     profile = data_dir() / ("window" if primary else f"window-{server.server_address[1]}")
     try:
         profile.mkdir(parents=True, exist_ok=True)
-        # PDFM_BROWSER_ARGS: more options for the browser, e.g. a remote
-        # debugging port for tests.
+        # PDFM_BROWSER_ARGS: more options for the browser (for tests and
+        # troubleshooting), and PDFM_DEBUG_PORT a remote debugging port.
         extra = os.environ.get("PDFM_BROWSER_ARGS", "").split()
+        if _debug_port():
+            extra.append(f"--remote-debugging-port={_debug_port()}")
         proc = subprocess.Popen(
             [browser, f"--app={url}", f"--user-data-dir={profile}", "--no-first-run",
              "--no-default-browser-check", "--window-size=1180,820", *extra],

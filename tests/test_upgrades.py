@@ -733,6 +733,11 @@ def test_app_window_uses_edge_or_chrome(tmp_path, monkeypatch):
     assert gui.run_app_window() is True
     assert launched[0][-2:] == ["--remote-debugging-port=9333", "--mute-audio"]
     monkeypatch.delenv("PDFM_BROWSER_ARGS")
+    monkeypatch.setenv("PDFM_DEBUG_PORT", "9444")
+    launched.clear()
+    assert gui.run_app_window() is True
+    assert launched[0][-1] == "--remote-debugging-port=9444"
+    monkeypatch.delenv("PDFM_DEBUG_PORT")
     # A second copy of the app (the app's port is taken) gets a profile of its own.
     blocker, _ = gui.make_server(prefer=gui.APP_PORT)
     try:

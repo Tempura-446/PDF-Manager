@@ -75,14 +75,7 @@ def make_pdf(path, pages=3):
 
 
 def start(mode, *files):
-    env = dict(os.environ)
-    env.pop("PDFM_WINDOW", None)
-    if mode == "app-window":
-        env["PDFM_WINDOW"] = "app-window"
-        env["PDFM_BROWSER_ARGS"] = f"--remote-debugging-port={PORT}"
-    else:
-        env["PDFM_WINDOW"] = "desktop"
-        env["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = f"--remote-debugging-port={PORT}"
+    env = dict(os.environ, PDFM_WINDOW=mode, PDFM_DEBUG_PORT=str(PORT))
     # What the Start menu shortcut runs:
     return subprocess.Popen([str(VENV / "pythonw.exe"), "-m", "pdfmanager", "gui", *map(str, files)],
                             env=env, cwd=str(Path.home()))
@@ -163,6 +156,7 @@ def run(mode):
         note = DATA / "window-error.txt"
         if note.exists():
             log("window-error.txt:", note.read_text(encoding="utf-8"))
+        log("windows:", window_handles(), "app processes:", ours())
         raise
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{PORT}")
