@@ -89,7 +89,7 @@ def debugging_ready():
         return None
 
 
-def app_page(browser):
+def app_page(browser, not_token=None):
     pages = [page for context in browser.contexts for page in context.pages]
     for page in pages:
         # Ask the page: in WebView2, Playwright may still report the
@@ -98,7 +98,7 @@ def app_page(browser):
             href = page.evaluate("() => location.href")
         except Exception:
             continue
-        if "#token=" in href:
+        if "#token=" in href and not (not_token and not_token in href):
             return page
     return None
 
@@ -232,8 +232,15 @@ def run(mode):
                 "async (t) => (await fetch('/api/update/restart', {method: 'POST', headers: {'X-Pdfm-Token': t}})).status",
                 token)
             assert status == 200, f"restart answered {status}"
+
+            def old_copy_gone():
+                # Its window closes with it. (Not "the debugging port stops
+                # answering": the new copy's window takes it over within a
+                # second, which a poll can miss.)
+                return old_pid not in [pid for pid, _, _ in ours()] or None
+
             try:
-                wait_for(lambda: not debugging_ready() or None, 60, "the old window to close")
+                wait_for(old_copy_gone, 60, "the old copy to end")
             except AssertionError:
                 log("app.log:\n" + app_log())
                 log("old app's threads:\n" + stacks(token))
@@ -247,10 +254,16 @@ def run(mode):
                     return None
                 return record if record["pid"] != old_pid and debugging_ready() else None
 
-            wait_for(new_instance, 90, "the app to start again")
-            log("restarted:", old_pid, "->", new_instance()["pid"])
+            try:
+                new_pid = wait_for(new_instance, 90, "the app to start again")["pid"]
+            except AssertionError:
+                log("app.log:\n" + app_log())
+                log("processes:", ours())
+                raise
+            log("restarted:", old_pid, "->", new_pid)
             browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{PORT}")
-            page = wait_for(lambda: app_page(browser), 30, "the restarted app page")
+            # The new copy's page has a new token.
+            page = wait_for(lambda: app_page(browser, not_token=token), 30, "the restarted app page")
             page.wait_for_selector('.tools button[data-op="rotate"]', timeout=30000)
             # Close the window like a person would (the app window's only page).
             page.close()
