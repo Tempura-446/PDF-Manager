@@ -694,8 +694,10 @@ def _resolve_links(writer, per_sheet):
 # --------------------------------------------------------------------------
 
 def _finish_compression(writer):
+    imaging.unwrap_ascii(writer)
     for page in writer.pages:
         page.compress_content_streams()
+    imaging.deflate_plain_streams(writer)
     try:
         writer.compress_identical_objects(remove_duplicates=True, remove_unreferenced=True)
     except TypeError:  # pypdf < 6
@@ -706,7 +708,8 @@ def compress(path, output, level="medium", image_quality=None, max_dpi=None, pas
     """Reduce file size.
 
     ``level`` is a preset:
-      - "low":    lossless only (compress streams, remove duplicate objects)
+      - "low":    lossless only (compress streams, drop ASCII85/hex wrappers,
+                  remove duplicate objects)
       - "medium": also downsample images above 150 DPI, JPEG quality 75
       - "high":   also downsample images above 96 DPI, JPEG quality 50
                   ("large" is accepted as an alias)
@@ -728,6 +731,7 @@ def compress(path, output, level="medium", image_quality=None, max_dpi=None, pas
     reader = open_pdf(path, password)
     writer = clone_document(reader)
     try:
+        imaging.unwrap_ascii(writer)  # first: everything after reads the streams
         if max_dpi or image_quality:
             imaging.downsample_images(writer, max_dpi, image_quality or 85)
         _finish_compression(writer)

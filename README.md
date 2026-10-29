@@ -272,7 +272,7 @@ Run `pdfm <command> -h` for all options.
 
 | Level | What it does | Use for |
 |---|---|---|
-| `low` | lossless: recompresses page content and removes duplicate objects; images untouched | archiving, print masters |
+| `low` | lossless: recompresses page content, packs uncompressed fonts and pictures, drops the ASCII85/hex text wrapping some programs put around them (often 20% of the file), removes duplicate objects; images untouched | archiving, print masters |
 | `medium` (default) | also reduces images above **150 DPI** and re-encodes them as JPEG quality 75 | everyday sharing, office printing |
 | `high` (alias `large`) | images reduced to **96 DPI**, JPEG quality 50 | email, web, smallest files |
 

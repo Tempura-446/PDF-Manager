@@ -541,3 +541,120 @@ def test_extracted_pictures_and_attachments_have_usable_names(tmp_path):
     assert saved["images"] and all(p.suffix in (".png", ".jpg", ".jpeg") for p in saved["images"])
     assert len(saved["attachments"]) == 1 and len(saved["attachments"][0].name) <= 120
     assert saved["attachments"][0].suffix == ".txt" and saved["attachments"][0].read_bytes() == b"a very long name"
+
+
+# -- compression: speed without changing the result ------------------------------------------------
+
+def test_ascii85_decoder_matches_the_standard_one():
+    import base64
+    import random
+
+    from pdfmanager import imaging
+
+    rng = random.Random(7)
+    for size in [0, 1, 2, 3, 4, 5, 6, 9, 64, 1001]:
+        for _ in range(20):
+            raw = bytes(rng.choice([0, 0, rng.randrange(256)]) for _ in range(size))
+            for encoded in (base64.a85encode(raw, adobe=True, wrapcol=rng.choice([0, 76])),
+                            base64.a85encode(raw) + b"~>"):
+                assert imaging.ascii85_decode(encoded) == raw
+    with pytest.raises(ValueError):
+        imaging.ascii85_decode(b"ab{cd~>")
+    with pytest.raises(ValueError):
+        imaging.ascii85_decode(b"uuuuu~>")  # more than 32 bits
+
+
+def ascii_wrapped_pdf(path):
+    """Pictures and page content the way reportlab writes them: ASCII85 over
+    Flate or JPEG, and a font program with no compression at all."""
+    import base64
+    import io
+    import zlib
+    from PIL import Image
+    from pypdf.generic import DecodedStreamObject, EncodedStreamObject
+
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=600, height=400)
+    photo = io.BytesIO()
+    Image.effect_noise((300, 200), 60).convert("RGB").save(photo, "JPEG", quality=90)
+    jpeg = EncodedStreamObject()
+    jpeg.update({NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Image"),
+                 NameObject("/Width"): NumberObject(300), NameObject("/Height"): NumberObject(200),
+                 NameObject("/ColorSpace"): NameObject("/DeviceRGB"), NameObject("/BitsPerComponent"): NumberObject(8),
+                 NameObject("/Filter"): ArrayObject([NameObject("/ASCII85Decode"), NameObject("/DCTDecode")])})
+    jpeg._data = base64.a85encode(photo.getvalue(), wrapcol=72) + b"~>"  # as PDF writes it: no <~
+    gray = EncodedStreamObject()
+    gray.update({NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Image"),
+                 NameObject("/Width"): NumberObject(64), NameObject("/Height"): NumberObject(32),
+                 NameObject("/ColorSpace"): NameObject("/DeviceGray"), NameObject("/BitsPerComponent"): NumberObject(8),
+                 NameObject("/Filter"): ArrayObject([NameObject("/ASCIIHexDecode"), NameObject("/FlateDecode")])})
+    gray._data = zlib.compress(bytes(range(256)) * 8).hex().encode() + b">"
+    font = DecodedStreamObject()
+    font.set_data(b"%!FontType1 fake font program " * 200)
+    content = DecodedStreamObject()
+    content.set_data(b"q 300 0 0 200 0 0 cm /Im1 Do Q q 64 0 0 32 400 300 cm /Im2 Do Q")
+    page[NameObject("/Contents")] = writer._add_object(content)
+    page[NameObject("/Resources")] = DictionaryObject({NameObject("/XObject"): DictionaryObject({
+        NameObject("/Im1"): writer._add_object(jpeg), NameObject("/Im2"): writer._add_object(gray)})})
+    page[NameObject("/PieceInfo")] = writer._add_object(font)
+    writer.write(str(path))
+    return path
+
+
+def test_lossless_compression_drops_text_wrappers_and_packs_plain_streams(tmp_path):
+    from PIL import ImageChops
+
+    src = ascii_wrapped_pdf(tmp_path / "wrapped.pdf")
+    out = core.compress(src, tmp_path / "low.pdf", "low")
+    assert out.stat().st_size < 0.85 * src.stat().st_size
+    reader = PdfReader(str(out))
+    xobjects = reader.pages[0]["/Resources"]["/XObject"]
+    assert xobjects["/Im1"].get_object()["/Filter"] == "/DCTDecode"
+    assert xobjects["/Im2"].get_object()["/Filter"] == "/FlateDecode"
+    assert reader.pages[0]["/PieceInfo"].get_object()["/Filter"] == "/FlateDecode"
+    before, after = PdfReader(str(src)), reader
+    for a, b in zip(before.pages[0].images, after.pages[0].images):
+        assert ImageChops.difference(a.image.convert("RGB"), b.image.convert("RGB")).getbbox() is None
+    assert render(out).tobytes() == render(src).tobytes()
+
+
+def test_pictures_are_read_the_same_way_pypdf_reads_them(tmp_path):
+    import io
+    from PIL import Image, ImageChops
+    from pypdf.generic import DecodedStreamObject, EncodedStreamObject
+    from pypdf.generic._image_xobject import _xobj_to_image
+
+    from pdfmanager import imaging
+
+    writer = PdfWriter()
+    icc = DecodedStreamObject()
+    icc.set_data(b"not really a profile")
+    icc[NameObject("/N")] = NumberObject(3)
+    cases = []
+    for mode, space in (("L", NameObject("/DeviceGray")), ("RGB", NameObject("/DeviceRGB")),
+                        ("CMYK", NameObject("/DeviceCMYK")),
+                        ("RGB", ArrayObject([NameObject("/ICCBased"), writer._add_object(icc)]))):
+        picture = Image.effect_noise((40, 30), 50).convert(mode)
+        obj = DecodedStreamObject()
+        obj.set_data(picture.tobytes())
+        obj.update({NameObject("/Subtype"): NameObject("/Image"), NameObject("/Width"): NumberObject(40),
+                    NameObject("/Height"): NumberObject(30), NameObject("/ColorSpace"): space,
+                    NameObject("/BitsPerComponent"): NumberObject(8)})
+        cases.append(obj.flate_encode())
+    photo = io.BytesIO()
+    Image.effect_noise((80, 60), 50).convert("RGB").save(photo, "JPEG")
+    jpeg = EncodedStreamObject()
+    jpeg.update({NameObject("/Subtype"): NameObject("/Image"), NameObject("/Width"): NumberObject(80),
+                 NameObject("/Height"): NumberObject(60), NameObject("/ColorSpace"): NameObject("/DeviceRGB"),
+                 NameObject("/BitsPerComponent"): NumberObject(8), NameObject("/Filter"): NameObject("/DCTDecode")})
+    jpeg._data = photo.getvalue()
+    for obj in cases:
+        ours, theirs = imaging._decode(obj), _xobj_to_image(obj)[2]
+        assert ours.mode == theirs.mode and ours.size == theirs.size
+        assert ImageChops.difference(ours, theirs).getbbox() is None
+    # The JPEG is the original one, decoded once (pypdf's reader saves it
+    # again as a JPEG first, losing a little more of the picture).
+    original = Image.open(io.BytesIO(photo.getvalue()))
+    assert ImageChops.difference(imaging._decode(jpeg), original.convert("RGB")).getbbox() is None
+    # A JPEG shrunk anyway is decoded at a smaller scale.
+    assert imaging._decode(jpeg, (20, 15)).size == (20, 15)

@@ -19,6 +19,7 @@ from pypdf.generic import (
     ContentStream,
     DictionaryObject,
     FloatObject,
+    IndirectObject,
     NameObject,
     NumberObject,
     StreamObject,
@@ -138,7 +139,48 @@ def _page_images(page):
 # Image re-encoding
 # --------------------------------------------------------------------------
 
-def _decode(obj):
+_RAW_MODES = {1: "L", 3: "RGB", 4: "CMYK"}
+_SPACE_COMPONENTS = {"/DeviceGray": 1, "/CalGray": 1, "/DeviceRGB": 3, "/CalRGB": 3, "/DeviceCMYK": 4}
+
+
+def _plain_components(obj):
+    """Components per pixel of an image whose samples can be read as they
+    are (8 bits, a device, calibrated or ICC colour space, no /Decode), or
+    None."""
+    if obj.get("/BitsPerComponent", 8) != 8 or "/Decode" in obj:
+        return None
+    space = obj.get("/ColorSpace")
+    space = space.get_object() if space is not None else None
+    if isinstance(space, ArrayObject) and space:
+        if space[0] == "/ICCBased":
+            n = int(space[1].get_object().get("/N", 0))
+            return n if n in _RAW_MODES else None
+        space = space[0] if space[0] in ("/CalGray", "/CalRGB") else None
+    return _SPACE_COMPONENTS.get(space)
+
+
+def _decode(obj, size=None):
+    """The image as Pillow sees it. Plain 8-bit samples and JPEGs are read
+    directly; pypdf's general reader also re-encodes the picture as a PNG,
+    which takes longer than everything else compress does. A JPEG that is
+    going to be shrunk to ``size`` is decoded at the nearest scale above it
+    (1/2, 1/4 or 1/8), which the decoder does far faster."""
+    filters = [f for f in _filters(obj) if f is not None]
+    n = _plain_components(obj)
+    if n is not None:
+        if filters == ["/DCTDecode"]:
+            image = Image.open(io.BytesIO(obj._data))
+            # Adobe CMYK JPEGs are stored inverted; leave those to pypdf.
+            if image.mode == _RAW_MODES[n] and image.mode != "CMYK":
+                if size:
+                    image.draft(image.mode, size)
+                image.load()
+                return image
+        elif all(f in ("/FlateDecode", "/Fl") for f in filters):
+            width, height = int(obj["/Width"]), int(obj["/Height"])
+            data = obj.get_data()
+            if len(data) >= width * height * n:
+                return Image.frombytes(_RAW_MODES[n], (width, height), data[:width * height * n])
     from pypdf.generic._image_xobject import _xobj_to_image
 
     _, _, image = _xobj_to_image(obj)
@@ -227,6 +269,114 @@ def _resize_smask(obj, size):
         _store(smask, mask, zlib.compress(mask.tobytes(), 9), "/FlateDecode", "/DeviceGray", {})
 
 
+# --------------------------------------------------------------------------
+# Lossless clean-up of streams
+# --------------------------------------------------------------------------
+
+_ASCII_FILTERS = ("/ASCII85Decode", "/A85", "/ASCIIHexDecode", "/AHx")
+_WHITESPACE = b" \t\r\n\x0c\x00"
+_A85_DIGITS = bytes((c - 33) % 256 for c in range(256))
+_A85_CHARS = bytes(range(33, 118))
+
+
+def ascii85_decode(data):
+    """Decode ASCII85 at C speed (the standard library's decoder loops in
+    Python, a second or more per megabyte). Each group of five digits is
+    laid in a 5-byte field of five big integers, one per digit position;
+    multiplying them by powers of 85 and adding never carries from one
+    field into the next, since a group is at most 85**5 - 1 < 2**40."""
+    data = bytes(data).translate(None, _WHITESPACE)
+    if data.startswith(b"<~"):
+        data = data[2:]
+    end = data.find(b"~>")
+    if end >= 0:
+        data = data[:end]
+    data = data.replace(b"z", b"!!!!!")
+    if not data:
+        return b""
+    if data.translate(None, _A85_CHARS):
+        raise ValueError("not ASCII85 data")
+    tail = -len(data) % 5  # a short last group is padded with the highest digit
+    data += b"u" * tail
+    groups = len(data) // 5
+    digits = data.translate(_A85_DIGITS)
+    total = 0
+    for k in range(5):
+        field = bytearray(5 * groups)
+        field[4::5] = digits[k::5]
+        total += int.from_bytes(field, "big") * 85 ** (4 - k)
+    fields = total.to_bytes(5 * groups, "big")
+    if any(fields[0::5]):
+        raise ValueError("ASCII85 group out of range")
+    out = bytearray(4 * groups)
+    for k in range(4):
+        out[k::4] = fields[k + 1::5]
+    return bytes(out[:len(out) - tail])
+
+
+def _ascii_decode(name, data):
+    if name in ("/ASCIIHexDecode", "/AHx"):
+        data = bytes(data).translate(None, _WHITESPACE)
+        end = data.find(b">")
+        data = data[:end] if end >= 0 else data
+        return bytes.fromhex((data + b"0" * (len(data) % 2)).decode("ascii"))
+    return ascii85_decode(data)
+
+
+def unwrap_ascii(writer):
+    """Remove the ASCII85/ASCIIHex layer from every stream. It only makes
+    binary data safe to send as text, at 25% (ASCII85) or 100% (hex) more
+    bytes, and decoding it is slow; the layers under it stay as they are.
+    Returns the number of streams changed."""
+    changed = 0
+    for obj in writer._objects:
+        if not isinstance(obj, StreamObject) or "/Filter" not in obj:
+            continue
+        filters = _filters(obj)
+        if filters[0] not in _ASCII_FILTERS:
+            continue
+        try:
+            data = _ascii_decode(filters[0], obj._data)
+        except ValueError:
+            continue  # damaged: leave it for the viewer to cope with
+        rest = filters[1:]
+        params = obj.get("/DecodeParms")
+        params = params.get_object() if params is not None else None
+        rest_params = list(params[1:]) if isinstance(params, ArrayObject) else []
+        for key in ("/Filter", "/DecodeParms"):
+            if key in obj:
+                del obj[key]
+        if rest:
+            obj[NameObject("/Filter")] = rest[0] if len(rest) == 1 else ArrayObject(rest)
+            if any(p is not None and p.get_object() is not None for p in rest_params):
+                obj[NameObject("/DecodeParms")] = (
+                    rest_params[0] if len(rest) == 1 else ArrayObject(rest_params))
+        obj._data = data
+        obj[NameObject("/Length")] = NumberObject(len(data))
+        if hasattr(obj, "decoded_self"):
+            obj.decoded_self = None
+        changed += 1
+    return changed
+
+
+def deflate_plain_streams(writer, min_size=64):
+    """Flate-compress streams stored with no compression at all (fonts,
+    form XObjects, pictures), keeping the result only when it is smaller.
+    XMP metadata stays readable as text, as PDF/A asks."""
+    changed = 0
+    for i, obj in enumerate(writer._objects):
+        if (not isinstance(obj, StreamObject) or "/Filter" in obj or "/DecodeParms" in obj
+                or obj.get("/Type") == "/Metadata" or len(obj._data) < min_size):
+            continue
+        packed = obj.flate_encode()
+        if len(packed._data) >= len(obj._data):
+            continue
+        packed.indirect_reference = IndirectObject(i + 1, 0, writer)
+        writer._objects[i] = packed
+        changed += 1
+    return changed
+
+
 def downsample_images(writer, max_dpi, jpeg_quality):
     """Downsample/re-encode images. Returns (images changed, bytes saved)."""
     changed = saved = 0
@@ -243,18 +393,23 @@ def downsample_images(writer, max_dpi, jpeg_quality):
             if key in done or _skip(obj):
                 continue
             done.add(key)
+            width, height = int(obj.get("/Width", 0)), int(obj.get("/Height", 0))
+            target = None
+            drawn_w, drawn_h = sizes.get(key, (0, 0))
+            if max_dpi and drawn_w > 0 and drawn_h > 0 and width > 0 and height > 0:
+                dpi = max(width / (drawn_w / 72), height / (drawn_h / 72))
+                if dpi > max_dpi * 1.1:
+                    factor = max_dpi / dpi
+                    target = (max(1, round(width * factor)), max(1, round(height * factor)))
             try:
-                image = _flatten(_decode(obj))
+                image = _flatten(_decode(obj, target))
             except Exception:
                 continue
             original = len(obj._data)
-            drawn_w, drawn_h = sizes.get(key, (0, 0))
-            if max_dpi and drawn_w > 0 and drawn_h > 0:
-                dpi = max(image.width / (drawn_w / 72), image.height / (drawn_h / 72))
-                if dpi > max_dpi * 1.1:
-                    factor = max_dpi / dpi
-                    image = image.resize((max(1, round(image.width * factor)),
-                                          max(1, round(image.height * factor))), Image.LANCZOS)
+            if target and image.size != target:
+                # Halving first, then Lanczos for the rest: Pillow's own
+                # shortcut, indistinguishable from Lanczos all the way.
+                image = image.resize(target, Image.LANCZOS, reducing_gap=3.0)
             data, filt, space, extra = _encode(image, jpeg_quality)
             if len(data) >= original:
                 continue
