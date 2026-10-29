@@ -11,8 +11,9 @@ blacked-out parts stay black).
 import io
 import re
 
-from pypdf import PdfReader, PdfWriter, Transformation
-from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject
+from pypdf import PdfReader, Transformation
+from pypdf.generic import (ArrayObject, DecodedStreamObject, DictionaryObject, NameObject,
+                           RectangleObject)
 
 from pdfmanager import core, progress
 
@@ -129,19 +130,37 @@ def redact(path, output, terms=(), patterns=(), boxes=None, case_sensitive=False
         if not 0 <= int(page) < len(reader.pages):
             raise core.PdfManagerError(f"page {int(page) + 1} doesn't exist")
         areas.setdefault(int(page), []).extend(tuple(map(float, b)) for b in page_boxes)
-    writer = PdfWriter(clone_from=reader)
+    writer = core.clone_document(reader)
     if areas:
         images = _render_redacted(path, areas, dpi, password)
         removed_widgets = set()
         for number, (image, box) in images.items():
             removed_widgets |= _replace_page(writer, writer.pages[number], image, box)
         _prune_fields(writer, removed_widgets)
+        _prune_structure(writer, [writer.pages[n] for n in images])
+        # pypdf writes every object it holds, unlinked or not, so the old
+        # content, pictures and fields would still sit in the file. A copy
+        # made from the written result carries only what is reachable.
+        buf = io.BytesIO()
+        writer.write(buf)
+        buf.seek(0)
+        writer = core.clone_document(PdfReader(buf))
     core._write(writer, output)
     return {number + 1: len(found) for number, found in sorted(areas.items())}
 
 
+def _visible_box(page):
+    """The part of the page a reader shows and pdfium renders: the crop box
+    within the media box (a crop box reaching outside it is cut off)."""
+    media = page.get_mediabox()
+    crop = page.get_cropbox()
+    box = (max(media[0], crop[0]), max(media[1], crop[1]), min(media[2], crop[2]),
+           min(media[3], crop[3]))
+    return box if box[2] > box[0] and box[3] > box[1] else media
+
+
 def _render_redacted(path, areas, dpi, password):
-    """{page: (PIL image with black boxes, crop box)} at ``dpi``."""
+    """{page: (PIL image with black boxes, visible box)} at ``dpi``."""
     import pypdfium2 as pdfium
     from PIL import ImageDraw
 
@@ -149,12 +168,13 @@ def _render_redacted(path, areas, dpi, password):
     images = {}
     with core.PDFIUM_LOCK:
         doc = pdfium.PdfDocument(str(path), password=password)
+        doc.init_forms()  # without this, filled-in fields are left out of the picture
         try:
             for n, (number, boxes) in enumerate(areas.items()):
                 progress.report(n, len(areas), "blacking out page")
                 page = doc[number]
                 page.set_rotation(0)  # draw in the page's own coordinates
-                left, bottom, right, top = page.get_cropbox()
+                left, bottom, right, top = _visible_box(page)
                 image = page.render(scale=scale, may_draw_forms=True).to_pil().convert("RGB")
                 draw = ImageDraw.Draw(image)
                 for x0, y0, x1, y1 in boxes:
@@ -187,20 +207,81 @@ def _replace_page(writer, page, image, box):
     left, bottom, right, top = box
     removed = set()
     for ref in page.get("/Annots") or []:
-        if ref.get_object().get("/Subtype") == "/Widget":
+        annot = ref.get_object()
+        if isinstance(annot, DictionaryObject) and annot.get("/Subtype") == "/Widget":
             removed.add(getattr(ref, "idnum", None))
     for key in ("/Annots", "/Contents", "/Resources", "/Group", "/Thumb", "/PieceInfo",
-                "/Metadata", "/AA"):
+                "/Metadata", "/AA", "/StructParents"):
         if key in page:
             del page[key]
     empty = DecodedStreamObject()
     empty.set_data(b"")
     page[NameObject("/Contents")] = writer._add_object(empty)
     page[NameObject("/Resources")] = DictionaryObject()
-    page.mediabox = page.cropbox  # nothing is left outside the visible area
+    # Nothing is left outside the visible area, which is what the picture shows.
+    page.mediabox = page.cropbox = RectangleObject(box)
     page.merge_transformed_page(_image_page(image, right - left, top - bottom),
                                 Transformation().translate(left, bottom))
     return removed - {None}
+
+
+def _prune_structure(writer, pages):
+    """Drop the structure tree's entries for the redacted ``pages``: a
+    tagged PDF repeats their words there (/ActualText, /Alt)."""
+    root = writer._root_object
+    tree = root.get("/StructTreeRoot")
+    if tree is None:
+        return
+    tree = tree.get_object()
+    gone = {page.indirect_reference.idnum for page in pages}
+
+    def on_page(obj):
+        return getattr(obj.get("/Pg"), "idnum", None) in gone
+
+    def prune(items):
+        kept = ArrayObject()
+        for item in items:
+            obj = item.get_object()
+            if isinstance(obj, DictionaryObject):
+                if on_page(obj):
+                    continue
+                kids = obj.get("/K")
+                if kids is not None:
+                    kids = kids.get_object()
+                    obj[NameObject("/K")] = prune(
+                        kids if isinstance(kids, ArrayObject) else ArrayObject([obj.raw_get("/K")]))
+            kept.append(item)
+        return kept
+
+    kids = tree.get("/K")
+    if kids is not None:
+        kids = kids.get_object()
+        tree[NameObject("/K")] = prune(kids if isinstance(kids, ArrayObject)
+                                       else ArrayObject([tree.raw_get("/K")]))
+    # The parent tree points at the same elements, by page.
+    pending = [tree.get("/ParentTree")]
+    while pending:
+        node = pending.pop()
+        node = node.get_object() if node is not None else None
+        if not isinstance(node, DictionaryObject):
+            continue
+        pending.extend(node.get("/Kids", []))
+        nums = node.get("/Nums")
+        if nums is None:
+            continue
+        nums = nums.get_object()
+        kept = ArrayObject()
+        for key, value in zip(nums[0::2], nums[1::2]):
+            entry = value.get_object()
+            if isinstance(entry, ArrayObject):
+                entry = prune(entry)
+                if not entry:
+                    continue
+                value = entry
+            elif isinstance(entry, DictionaryObject) and on_page(entry):
+                continue
+            kept.extend([key, value])
+        node[NameObject("/Nums")] = kept
 
 
 def _prune_fields(writer, widget_ids):

@@ -326,8 +326,9 @@ detection.
 
 ### Comparing
 
-`compare old.pdf new.pdf` matches pages by their text, so an inserted or
-removed page doesn't make every later page look different. The report PDF
+`compare old.pdf new.pdf` matches pages by their text (form answers
+included), so an inserted or removed page doesn't make every later page
+look different. The report PDF
 starts with a summary, then shows each changed page side by side with the
 changed areas outlined in red and the removed (−) and added (+) words.
 
@@ -359,7 +360,8 @@ pages searchable again; metadata isn't changed, so use `sanitize` too.
 ### Archiving and privacy
 
 - `flatten` draws filled-in form fields and comments (highlights, notes,
-  drawings, signatures) into the page. Links keep working.
+  drawings, signatures) into the page. Links keep working, and so do
+  comments that have no drawing of their own (readers draw those themselves).
 - `sanitize` removes the document details (author, title, dates, XMP),
   JavaScript and actions that launch programs, and attached files;
   `--comments` also removes comments. Form fields are kept.
