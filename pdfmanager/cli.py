@@ -6,7 +6,9 @@ import glob
 import json
 import logging
 import os
+import re
 import sys
+import time
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -66,7 +68,9 @@ class _Passwords:
     line end up in shell history, so prompting is preferred."""
 
     def __init__(self, given):
-        self.known = [p for p in (given, os.environ.get(PASSWORD_ENV)) if p]
+        found = (("--password", given), (PASSWORD_ENV, os.environ.get(PASSWORD_ENV)))
+        self.known = [p for _, p in found if p]
+        self.sources = [name for name, p in found if p]
 
     def for_file(self, path):
         try:
@@ -79,6 +83,9 @@ class _Passwords:
             if reader.decrypt(candidate):
                 return candidate
         if not sys.stdin.isatty():
+            if self.sources:  # a password was supplied; it's simply wrong
+                raise core.PdfManagerError(
+                    f"wrong password for {path} (tried {' and '.join(self.sources)})")
             raise core.PdfManagerError(
                 f"{path} is encrypted; pass --password or set {PASSWORD_ENV}")
         for _ in range(3):
@@ -91,6 +98,8 @@ class _Passwords:
 
 
 def _ask_new_password():
+    if not sys.stdin.isatty():
+        raise core.PdfManagerError("no terminal to ask for a password; pass --user-password")
     pw = getpass.getpass("New password: ")
     if getpass.getpass("Repeat password: ") != pw:
         raise core.PdfManagerError("passwords do not match")
@@ -149,9 +158,10 @@ def run_nup(a, src, out, pw):
 
 
 def run_compress(a, src, out, pw):
+    before = Path(src).stat().st_size  # before: the output may replace the input
     result = core.compress(src, out, level=a.level, image_quality=a.image_quality,
                            max_dpi=a.max_dpi, password=pw)
-    before, after = Path(src).stat().st_size, Path(result).stat().st_size
+    after = Path(result).stat().st_size
     pct = (1 - after / before) * 100 if before else 0
     return f"{result}  ({_human_size(before)} -> {_human_size(after)}, {pct:.1f}% smaller)"
 
@@ -185,6 +195,11 @@ def run_watermark(a, src, out, pw):
 
 
 def run_number(a, src, out, pw):
+    try:
+        a.format.format(n=1, total=1)
+    except (KeyError, IndexError, ValueError):
+        raise core.PdfManagerError(
+            f"--format {a.format!r} can only use {{n}} and {{total}}") from None
     return core.number_pages(src, out, fmt=a.format, position=a.position,
                              font_size=a.font_size, start=a.start, pages=a.pages, password=pw)
 
@@ -275,6 +290,7 @@ def run_to_word(a, src, out, pw):
 def cmd_from_office(a):
     failures = 0
     files = _expand(a.inputs)
+    plan = []
     for src in files:
         if len(files) == 1 and a.output:
             out = Path(a.output)
@@ -282,6 +298,9 @@ def cmd_from_office(a):
             folder = Path(a.output) if a.output else Path(src).parent
             folder.mkdir(parents=True, exist_ok=True)
             out = folder / (Path(src).stem + ".pdf")
+        plan.append((src, out))
+    _check_outputs(plan)
+    for src, out in plan:
         try:
             result, program = office.office_to_pdf(src, out)
             print(f"{src} -> {result}  ({program})")
@@ -343,6 +362,10 @@ def run_split(a, src, out, pw):
 
 
 def run_to_images(a, src, out, pw):
+    from PIL import Image
+
+    if Image.registered_extensions().get("." + a.format.lower()) not in Image.SAVE:
+        raise core.PdfManagerError(f"unknown image format {a.format!r}; use png, jpg, tiff, ...")
     files = core.pdf_to_images(src, out, a.dpi, a.format, a.pages, pw)
     return f"{len(files)} image(s) in {out}"
 
@@ -361,7 +384,9 @@ def _print_info(data):
 
 def run_info(a, src, out, pw):
     data = core.info(src, pw)
-    if a.json:
+    if a.json and getattr(a, "json_records", None) is not None:
+        a.json_records.append(data)  # a batch prints one JSON array at the end
+    elif a.json:
         print(json.dumps(data, default=str, indent=2))
     else:
         _print_info(data)
@@ -370,7 +395,7 @@ def run_info(a, src, out, pw):
 # How each per-file command names its output when -o is not given:
 # (suffix, kind) where kind is "pdf", "dir", "txt" or None (no output).
 OUTPUTS = {
-    "info": (None, None), "metadata": ("edited", "pdf"), "text": (None, "txt"),
+    "info": (None, None), "metadata": ("edited", "pdf"), "text": ("text", "txt"),
     "extract": ("extract", "pdf"), "delete": ("edited", "pdf"),
     "reorder": ("reordered", "pdf"), "reverse": ("reversed", "pdf"),
     "rotate": ("rotated", "pdf"), "resize": ("resized", "pdf"), "crop": ("cropped", "pdf"),
@@ -382,6 +407,17 @@ OUTPUTS = {
 }
 
 
+def _is_batch(patterns, inputs):
+    """Several inputs, or a wildcard: a script's `*.pdf -o folder/` keeps
+    writing into the folder even on a day when only one file matches."""
+    return len(inputs) > 1 or any(glob.has_magic(p) and not os.path.exists(p) for p in patterns)
+
+
+def _is_folder(output):
+    """-o names a folder when it ends with a separator or is one already."""
+    return bool(output) and (output.endswith(("/", os.sep)) or Path(output).is_dir())
+
+
 def _output_for(a, src, batch):
     suffix, kind = OUTPUTS[a.command]
     if kind is None:
@@ -391,25 +427,42 @@ def _output_for(a, src, batch):
     if a.command == "text" and a.output is None:
         return None  # print to the terminal
     src = Path(src)
-    if kind == "docx":
-        if not batch:
-            return Path(a.output) if a.output else src.with_suffix(".docx")
-        folder = Path(a.output) if a.output else src.parent
-        folder.mkdir(parents=True, exist_ok=True)
-        return folder / (src.stem + ".docx")
+    ext = {"docx": ".docx", "txt": ".txt"}.get(kind, ".pdf")
     if kind == "dir":
         base = Path(a.output) if a.output else src.parent
         return base / f"{src.stem}_{suffix}" if (batch or not a.output) else base
-    if not batch:
-        return Path(a.output) if a.output else _default_output(src, suffix)
-    if a.output:  # batch: -o is a folder; keep the original file names
+    if not batch and not _is_folder(a.output):
+        if a.output:
+            return Path(a.output)
+        return src.with_suffix(ext) if kind == "docx" else _default_output(src, suffix)
+    if a.output:  # -o is a folder; keep the original file names
         folder = Path(a.output)
         if folder.exists() and not folder.is_dir():
             raise core.PdfManagerError("with several input files, -o must be a folder")
         folder.mkdir(parents=True, exist_ok=True)
         if folder.resolve() != src.parent.resolve():
-            return folder / (src.stem + (".txt" if kind == "txt" else ".pdf"))
-    return _default_output(src, suffix, ".txt" if kind == "txt" else ".pdf")
+            return folder / (src.stem + ext)
+    return src.with_suffix(ext) if kind == "docx" else _default_output(src, suffix, ext)
+
+
+def _check_outputs(plan):
+    """Refuse before anything is written when two inputs would end up in the
+    same file (report.pdf from two folders), or an output would replace
+    another input (x.pdf -> x_edited.pdf, itself an input)."""
+    inputs = {Path(src).resolve(): src for src, _ in plan}
+    outputs = {}
+    for src, out in plan:
+        if out is None or Path(out) == Path(src):
+            continue  # nothing written, or deliberately in place
+        key = Path(out).resolve()
+        if key in outputs:
+            raise core.PdfManagerError(
+                f"{outputs[key]} and {src} would both be written to {out}; "
+                "use -o with another folder or rename one of them")
+        outputs[key] = src
+        if key in inputs and inputs[key] != src:
+            raise core.PdfManagerError(
+                f"{src} would be written to {out}, which is also an input; use -o FOLDER")
 
 
 # Commands whose output should not inherit the input's password.
@@ -427,14 +480,17 @@ def _reencrypt(out, password):
 
 def run_per_file(a):
     inputs = _expand(a.inputs)
-    batch = len(inputs) > 1
+    batch = _is_batch(a.inputs, inputs)
     passwords = _Passwords(a.password)
     if a.command == "encrypt" and not a.user_password:
         a.user_password = _ask_new_password()
+    plan = [(src, _output_for(a, src, batch)) for src in inputs]
+    _check_outputs(plan)
+    if batch and a.command == "info" and a.json:
+        a.json_records = []
     failures = 0
-    for src in inputs:
+    for src, out in plan:
         try:
-            out = _output_for(a, src, batch)
             pw = passwords.for_file(src)
             result = a.run(a, src, out, pw)
             if pw and a.command not in KEEP_UNENCRYPTED and result is not None:
@@ -448,8 +504,12 @@ def run_per_file(a):
             message = str(exc)
             print(f"error: {message if str(src) in message else f'{src}: {message}'}",
                   file=sys.stderr)
+    if getattr(a, "json_records", None) is not None:
+        print(json.dumps(a.json_records, default=str, indent=2))
     if batch:
-        print(f"{len(inputs) - failures} of {len(inputs)} file(s) done")
+        # text and info print their results; the count is status, not data.
+        print(f"{len(inputs) - failures} of {len(inputs)} file(s) done",
+              file=sys.stderr if a.command in ("text", "info") else sys.stdout)
     return 1 if failures else 0
 
 
@@ -473,7 +533,9 @@ def cmd_merge(a):
     inputs = _merge_inputs(a.inputs)
     passwords = _Passwords(a.password)
     # All inputs share one password argument in core.merge; check each up front.
-    pws = {passwords.for_file(i[0] if isinstance(i, tuple) else i) for i in inputs} - {None}
+    # Files with only an owner password open with the empty password, which
+    # core.open_pdf always tries, so they can go with any password.
+    pws = {passwords.for_file(i[0] if isinstance(i, tuple) else i) for i in inputs} - {None, ""}
     if len(pws) > 1:
         raise core.PdfManagerError("encrypted inputs use different passwords; decrypt them first")
     pw = pws.pop() if pws else None
@@ -553,16 +615,21 @@ def cmd_recipe(a):
             raise core.PdfManagerError("name the PDF(s) to run the recipe on")
         passwords = _Passwords(a.password)
         slug = "".join(c if c.isalnum() else "-" for c in a.name.lower()).strip("-") or "recipe"
-        failures = 0
+        plan = []
         for src in files:
+            if a.output and (_is_batch(a.args, files) or _is_folder(a.output)):
+                folder = Path(a.output)
+                folder.mkdir(parents=True, exist_ok=True)
+                # Never replace the inputs: in their own folder, use the default name.
+                out = (folder / Path(src).name if folder.resolve() != Path(src).parent.resolve()
+                       else _default_output(src, slug))
+            else:
+                out = Path(a.output) if a.output else _default_output(src, slug)
+            plan.append((src, out))
+        _check_outputs(plan)
+        failures = 0
+        for src, out in plan:
             try:
-                if len(files) == 1 and a.output:
-                    out = Path(a.output)
-                elif a.output:
-                    Path(a.output).mkdir(parents=True, exist_ok=True)
-                    out = Path(a.output) / Path(src).name
-                else:
-                    out = _default_output(src, slug)
                 pw = passwords.for_file(src)
                 notes = []
                 recipes.run(steps, src, out, pw, notes, state=state)
@@ -644,10 +711,15 @@ def cmd_watch(a):
         ocr=a.ocr, ocr_language=a.language, skip_duplicates=a.skip_duplicates,
         keep_originals=not a.delete_originals)
     if a.once:
+        settings.dest.mkdir(parents=True, exist_ok=True)
+        known = ({organize.file_hash(p) for p in organize.find_pdfs(settings.dest, recursive=True)}
+                 if a.skip_duplicates else None)
         state = watch._State()
-        watch.poll(settings, state)  # first poll only records sizes
-        watch.poll(settings, state)
-        return
+        watch.poll(settings, state, known)  # first poll only records sizes
+        if state.sizes:  # give a file still being copied in time to change
+            time.sleep(min(a.interval, 2))
+        watch.poll(settings, state, known)
+        return 1 if state.failed else 0
     watch.watch(settings, interval=a.interval)
 
 
@@ -679,6 +751,15 @@ def cmd_gui(a):
 # --------------------------------------------------------------------------
 # Parser
 # --------------------------------------------------------------------------
+
+def _positive(kind):
+    def check(value):
+        number = kind(value)
+        if number <= 0:
+            raise argparse.ArgumentTypeError("must be greater than 0")
+        return number
+    return check
+
 
 def build_parser():
     p = argparse.ArgumentParser(
@@ -761,7 +842,7 @@ def build_parser():
     sp.add_argument("-p", "--pages", help=PAGES_HELP + " (default: all)")
 
     sp = per_file("crop", run_crop, "trim page margins")
-    sp.add_argument("-m", "--margins", nargs="+", required=True, metavar="MM",
+    sp.add_argument("-m", "--margins", nargs="+", required=True, metavar="MM", type=float,
                     help="margins in mm: ALL | VERTICAL HORIZONTAL | TOP RIGHT BOTTOM LEFT")
     sp.add_argument("-p", "--pages", help=PAGES_HELP + " (default: all)")
 
@@ -870,7 +951,7 @@ def build_parser():
                     help="black out an area, in points from the bottom-left corner")
     sp.add_argument("--case-sensitive", action="store_true")
     sp.add_argument("--whole-words", action="store_true")
-    sp.add_argument("--dpi", type=int, default=200, help="resolution of redacted pages")
+    sp.add_argument("--dpi", type=_positive(int), default=200, help="resolution of redacted pages")
 
     sp = per_file("form", run_form,
                   "add fillable form fields (without --field: list the fields already there)")
@@ -951,7 +1032,7 @@ def build_parser():
 
     sp = per_file("to-images", run_to_images, "render pages to image files",
                   out_help="output folder (default: <input>_images)")
-    sp.add_argument("--dpi", type=int, default=150)
+    sp.add_argument("--dpi", type=_positive(int), default=150)
     sp.add_argument("-f", "--format", default="png", help="png, jpg, ... (default: png)")
     sp.add_argument("-p", "--pages", help=PAGES_HELP)
 
@@ -1008,7 +1089,7 @@ def build_parser():
                     help="don't process files identical to one already in --dest")
     sp.add_argument("--delete-originals", action="store_true",
                     help="delete originals instead of moving them to <inbox>/originals")
-    sp.add_argument("--interval", type=float, default=5, help="seconds between checks")
+    sp.add_argument("--interval", type=_positive(float), default=5, help="seconds between checks")
     sp.add_argument("--once", action="store_true", help="process what's there now and exit")
 
     sp = other("setup-windows", cmd_setup_windows,
@@ -1034,13 +1115,27 @@ def build_parser():
     return p
 
 
+def _leading_dash_ranges(argv):
+    """argparse takes '-3,5' for an option name, but '-3' is the page range
+    1 to 3; spell such a value out as '1-3,5' so `-p -3,5` works."""
+    return ["1" + arg if re.match(r"-\d", arg) and not re.fullmatch(r"-\d*\.?\d+", arg) else arg
+            for arg in argv]
+
+
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    # Windows encodes a redirected stdout in the ANSI code page, which can't
+    # hold every character a PDF or a file name has; print those escaped
+    # instead of stopping the command.
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
+    argv = sys.argv[1:] if argv is None else list(argv)
+    args = build_parser().parse_args(_leading_dash_ranges(argv))
     # pypdf logs a warning for every small defect it repairs; only show errors.
     logging.getLogger("pypdf").setLevel(logging.ERROR)
     try:
         return args.func(args) or 0
-    except (core.PdfManagerError, PageRangeError, FileNotFoundError) as exc:
+    except (core.PdfManagerError, PageRangeError, OSError, ValueError, KeyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

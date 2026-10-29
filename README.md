@@ -206,7 +206,8 @@ updated with `python packaging/update_pdfjs.py <version>`.
 
 Every command that works on PDFs accepts **several files or wildcards**
 (`pdfm compress *.pdf`). With one input, `-o` names the output file; with
-several, `-o` is a folder and the original file names are kept. Without
+several, `-o` is a folder and the original file names are kept (so is an
+`-o` that ends with a slash or names an existing folder). Without
 `-o`, results are written next to each input as `<name>_<command>.pdf`.
 If one file in a batch fails, the rest are still processed.
 
