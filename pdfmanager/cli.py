@@ -12,7 +12,7 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
-                        recipes, redact, scan)
+                        recipes, redact, scan, search)
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -574,6 +574,20 @@ def cmd_catalog(a):
     print(f"catalogued {count} PDF(s) -> {out}")
 
 
+def cmd_search(a):
+    result = search.search(a.directory, a.query, a.recursive, a.case_sensitive, a.whole_words,
+                           limit=a.limit)
+    for m in result["matches"]:
+        more = f" (+{m['count'] - 1} more)" if m["count"] > 1 else ""
+        print(f"{m['path']}, page {m['page']}: {m['before']}[{m['match']}]{m['after']}{more}")
+    for path, reason in result["skipped"]:
+        print(f"skipped {path}: {reason}", file=sys.stderr)
+    files = len({m["path"] for m in result["matches"]})
+    print(f"{len(result['matches'])} page(s) in {files} of {result['files']} file(s)"
+          + (" (stopped at the limit)" if result["limited"] else ""))
+    return 0 if result["matches"] else 1
+
+
 def cmd_duplicates(a):
     groups = organize.find_duplicates(a.directory, a.recursive)
     removed = 0
@@ -920,6 +934,14 @@ def build_parser():
     sp.add_argument("directory")
     sp.add_argument("-R", "--recursive", action="store_true")
     sp.add_argument("--delete", action="store_true", help="delete all but the oldest copy")
+
+    sp = other("search", cmd_search, "find text in all the PDFs in a folder")
+    sp.add_argument("directory")
+    sp.add_argument("query")
+    sp.add_argument("-R", "--recursive", action="store_true")
+    sp.add_argument("--case-sensitive", action="store_true")
+    sp.add_argument("--whole-words", action="store_true")
+    sp.add_argument("--limit", type=int, default=500, help="most pages to list (default: 500)")
 
     sp = other("watch", cmd_watch,
                "watch an inbox folder and process new PDFs automatically")

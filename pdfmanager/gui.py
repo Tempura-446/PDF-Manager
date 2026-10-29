@@ -39,7 +39,7 @@ from importlib import resources
 from pathlib import Path
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
-                        recipes, redact, scan)
+                        recipes, redact, scan, search)
 from pdfmanager.appdata import data_dir
 from pdfmanager.pageranges import PageRangeError
 
@@ -281,6 +281,15 @@ OPERATIONS = [
      "fields": [_f("directory", "Folder", "text", "", required=True),
                 _f("recursive", "Include sub-folders", "check", False),
                 _f("delete", "Delete duplicates (keeps the oldest copy)", "check", False)]},
+    {"id": "search", "group": "Folders", "label": "Search PDFs", "files": None,
+     "action": "Search", "preview": False,
+     "help": "Find text in every PDF in a folder. Click a result to open the page in the "
+             "reader. Nothing is changed.",
+     "fields": [_f("directory", "Folder", "text", "", required=True),
+                _f("query", "Search for", "text", "", required=True),
+                _f("recursive", "Include sub-folders", "check", True),
+                _f("case_sensitive", "Match upper/lower case", "check", False),
+                _f("whole_words", "Whole words only", "check", False)]},
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
@@ -638,6 +647,9 @@ def run_folder_operation(op, opts, apply):
         plan = organize.rename(directory, opts.get("pattern") or "{date:%Y-%m-%d} {title}",
                                recursive, dry_run=not apply)
         rows = [[str(s), str(d)] for s, d in plan]
+    elif op == "search":
+        return search.search(directory, opts.get("query") or "", recursive,
+                             _bool(opts.get("case_sensitive")), _bool(opts.get("whole_words")))
     elif op == "duplicates":
         rows = []
         for keep, *extra in organize.find_duplicates(directory, recursive):
@@ -1015,8 +1027,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(HTTPStatus.OK, {"recipes": list(recipes.load_all().values())})
             if path == "/api/folder":
                 data = json.loads(body or b"{}")
-                return self._job_or_now(lambda: {"json": run_folder_operation(
-                    data.get("op"), data.get("options") or {}, bool(data.get("apply")))})
+
+                def folder_job():
+                    result = run_folder_operation(data.get("op"), data.get("options") or {},
+                                                  bool(data.get("apply")))
+                    # Search results can be opened in the reader.
+                    for match in result.get("matches", []):
+                        match["id"] = self.opened.add(match["path"])
+                    return {"json": result}
+
+                return self._job_or_now(folder_job)
             if path.startswith("/api/job/"):
                 return self._job(path, "POST")
             if path == "/api/recent/forget":

@@ -392,6 +392,13 @@ table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
 th { color: var(--muted); font-weight: 600; }
 td { word-break: break-all; }
+.search-results td { word-break: normal; overflow-wrap: anywhere; }
+.search-row { cursor: pointer; }
+.search-row:hover, .search-row:focus-visible { background: var(--surface-2); outline: none; }
+.search-folder { color: var(--muted); font-size: 12px; }
+.search-page { white-space: nowrap; color: var(--muted); }
+.search-results mark { background: color-mix(in srgb, #ffd54a 70%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+.search-more { color: var(--muted); font-size: 12px; }
 
 /* Reader mode: the reader fills the main area. */
 #reader-host { display: none; }
@@ -518,6 +525,7 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
 const token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
 const $ = (id) => document.getElementById(id);
 let ops = [], current = null, items = [], lastUrl = null;
+let formOp = null;  // the tool whose form (and result) is on screen under the reader
 const isDesktop = () => !!(window.pywebview && window.pywebview.api);
 const isMac = /Mac/.test(navigator.platform);
 
@@ -713,19 +721,25 @@ async function select(id) {
     if (reader.doc) document.title = reader.name + " — PDF Manager";
     return;
   }
+  // Back from the reader to the same tool (e.g. after opening a search
+  // result): keep what was typed and the result.
+  const keep = id === formOp;
+  formOp = id;
   const folder = current.files === null;
   $("files-card").hidden = folder;
   $("pw-box").hidden = folder || current.files === "images" || current.files === "office";
-  $("preview").hidden = !folder;
-  $("run-label").textContent = folder ? "Apply" : "Run";
-  $("run").classList.toggle("secondary", folder);
-  $("preview").classList.toggle("secondary", !folder);
+  const previews = folder && current.preview !== false;
+  $("preview").hidden = !previews;
+  $("run-label").textContent = current.action || (folder ? "Apply" : "Run");
+  $("run").classList.toggle("secondary", previews);
+  $("preview").classList.toggle("secondary", !previews);
   $("file-input").accept = { images: "image/*", office: OFFICE_ACCEPT }[current.files] || ".pdf,application/pdf";
   $("drop-hint").textContent = {
     images: "JPG, PNG, TIFF… one page per image, in this order",
     office: "Word, Excel, PowerPoint, OpenDocument, RTF or text files",
     pdf2: current.id === "compare" ? "Two PDFs: the original first, then the changed version" : "Two PDFs: front sides first, then back sides",
   }[current.files] || (current.id === "merge" ? "Add PDFs in the order to combine them" : "One or more PDFs");
+  if (keep) return;
   const want = accepts(current.files);
   items = items.filter((it) => want(it.file));
   renderFiles(); renderForm(); clearMessages();
@@ -825,7 +839,10 @@ function move(from, to) {
 function updateSummary() {
   if (!current) return;
   $("kbd-hint").textContent = "";
-  if (current.files === null) { $("summary").textContent = "Preview first — nothing changes until you click Apply."; return; }
+  if (current.files === null) {
+    $("summary").textContent = current.preview === false ? "Nothing on your computer is changed." : "Preview first — nothing changes until you click Apply.";
+    return;
+  }
   const need = current.files === "pdf2" ? 2 : current.min || 1;
   const ready = items.length >= need;
   $("summary").textContent = ready ? `Ready · ${plural(items.length, "file")}`
@@ -1259,6 +1276,7 @@ async function runFolder(apply) {
       body: JSON.stringify({ op: current.id, options: opts, apply }) });
     if (!res) return;  // cancelled
     const data = await res.json();
+    if (data.matches) { showSearchResults(data, opts.query); return; }
     const n = data.rows.length;
     const msg = n === 0 ? "Nothing to do — everything is already in order."
       : apply ? `${plural(n, "file")} handled.` : `${plural(n, "file")} would change. Nothing has changed yet — click Apply to do it.`;
@@ -1273,6 +1291,31 @@ async function runFolder(apply) {
       $("result-table").hidden = false;
     }
   } catch (err) { showError(err.message); } finally { busy(false); }
+}
+
+function showSearchResults(data, query) {
+  const pages = data.matches.length, files = new Set(data.matches.map((m) => m.path)).size;
+  const msg = pages ? `Found on ${plural(pages, "page")} in ${plural(files, "file")} (${plural(data.files, "PDF")} searched)${data.limited ? " — showing the first " + pages : ""}.`
+    : `Not found in the ${plural(data.files, "PDF")} searched.`;
+  const extra = data.skipped.length ? ` ${plural(data.skipped.length, "file")} couldn't be searched (password protected or unreadable).` : "";
+  $("result").replaceChildren(el("div", { class: "result-body" },
+    el("div", { class: "result-title" }, icon(pages ? "check" : "alert"), "Search"), el("div", { class: "result-sub" }, msg + extra)));
+  $("result").hidden = false;
+  if (!pages) return;
+  const tbody = el("tbody");
+  for (const m of data.matches) {
+    const name = m.path.split(/[\\/]/).pop(), folder = m.path.slice(0, m.path.length - name.length - 1);
+    const open = () => openInReaderById([m.id], { page: m.page, find: query });
+    const row = el("tr", { class: "search-row", tabindex: "0", title: "Open this page in the reader",
+      onclick: open, onkeydown: (e) => { if (e.key === "Enter") open(); } },
+      el("td", {}, el("strong", {}, name), el("div", { class: "search-folder" }, folder)),
+      el("td", { class: "search-page" }, `p. ${m.page}`),
+      el("td", {}, m.before, el("mark", {}, m.match), m.after, m.count > 1 ? el("span", { class: "search-more" }, ` +${m.count - 1} more`) : null));
+    tbody.append(row);
+  }
+  $("result-table").replaceChildren(el("table", { class: "search-results" },
+    el("thead", {}, el("tr", {}, el("th", {}, "File"), el("th", {}, "Page"), el("th", {}, "Text"))), tbody));
+  $("result-table").hidden = false;
 }
 
 function busy(on, text, which = "run") {
@@ -1336,9 +1379,9 @@ async function listen() {
     } catch (e) { await new Promise((r) => setTimeout(r, 3000)); }
   }
 }
-async function openInReaderById(ids) {
+async function openInReaderById(ids, goto = null) {
   await select("reader");
-  for (const id of ids) await reader.openById(id);  // each in its own tab
+  for (const id of ids) await reader.openById(id, goto);  // each in its own tab
 }
 setInterval(ping, 15000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) ping(); });

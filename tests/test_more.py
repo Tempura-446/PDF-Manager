@@ -4,6 +4,7 @@ fields, text edits, Windows set-up and updates."""
 
 import json
 import threading
+from pathlib import Path
 import time
 import urllib.error
 import urllib.request
@@ -336,3 +337,49 @@ def test_cli_and_app_extract_media(tmp_path, capsys):
     work2.mkdir()
     with pytest.raises(gui.UserError, match="nothing was found"):
         gui.run_operation("media", [text_pdf(tmp_path / "plain.pdf")], {}, work=work2)
+
+
+# -- folder search ------------------------------------------------------------------------------
+
+def test_search_a_folder(tmp_path, monkeypatch):
+    from pdfmanager import search
+
+    monkeypatch.setattr(search, "data_dir", lambda: tmp_path / "appdata")
+    folder = tmp_path / "docs"
+    (folder / "sub").mkdir(parents=True)
+    text_pdf(folder / "a.pdf", ["The invoice total", "nothing here", "Invoice again, invoice"])
+    text_pdf(folder / "sub" / "b.pdf", ["Old INVOICE"])
+    core.encrypt(text_pdf(folder / "c.pdf", ["invoice"]), folder / "locked.pdf", "pw")
+    found = search.search(folder, "invoice")
+    by_file = {(Path(m["path"]).name, m["page"]): m for m in found["matches"]}
+    assert set(by_file) == {("a.pdf", 1), ("a.pdf", 3), ("c.pdf", 1)}  # not in sub/ without -R
+    assert by_file[("a.pdf", 3)]["count"] == 2 and by_file[("a.pdf", 1)]["match"] == "invoice"
+    assert [s[1] for s in found["skipped"]] == ["password protected"]
+    deep = search.search(folder, "old invoice", recursive=True)
+    assert [m["page"] for m in deep["matches"]] == [1]
+    assert search.search(folder, "INVOICE", case_sensitive=True)["files"] == 3
+    assert len(search.search(folder, "INVOICE", case_sensitive=True, recursive=True)["matches"]) == 1
+    # The text is cached: a second search doesn't read the files again.
+    calls = []
+    monkeypatch.setattr(search, "_extract", lambda p: calls.append(p) or [])
+    search.search(folder, "invoice")
+    assert calls == []
+    text_pdf(folder / "a.pdf", ["changed"])  # a changed file is read again
+    search.search(folder, "invoice")
+    assert [p.name for p in calls] == ["a.pdf"]
+
+
+def test_cli_search_and_app(tmp_path, monkeypatch, capsys, app):
+    from pdfmanager import search
+
+    monkeypatch.setattr(search, "data_dir", lambda: tmp_path / "appdata")
+    text_pdf(tmp_path / "x.pdf", ["Find the needle here"])
+    assert main(["search", str(tmp_path), "needle"]) == 0
+    assert "page 1: Find the [needle] here" in capsys.readouterr().out
+    assert main(["search", str(tmp_path), "haystack"]) == 1
+    base, token, _ = app
+    status, _, body = call(base, token, "/api/folder", {"op": "search", "options": {
+        "directory": str(tmp_path), "query": "needle"}})
+    match = json.loads(body)["matches"][0]
+    assert status == 200 and match["page"] == 1
+    assert call(base, token, f"/api/file/{match['id']}")[2].startswith(b"%PDF")

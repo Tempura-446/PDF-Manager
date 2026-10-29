@@ -472,13 +472,15 @@ export class Reader {
     this.refreshRecent();
   }
 
-  async openById(id) {
+  /** Open a file the server knows by id; ``goto`` = {page, find} shows a
+   *  page and searches for text on it (e.g. from the folder search). */
+  async openById(id, goto = null) {
     this.#busy(true);
     try {
       const res = await fetch("/api/file/" + encodeURIComponent(id), { headers: { "X-Pdfm-Token": this.token } });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
       const name = res.headers.get("X-Pdfm-Filename") || "document.pdf";
-      await this.openBytes(new Uint8Array(await res.arrayBuffer()), name);
+      await this.openBytes(new Uint8Array(await res.arrayBuffer()), name, null, goto);
     } catch (e) {
       this.#busy(false);
       this.toast("Could not open the file: " + (e.message || e));
@@ -490,13 +492,13 @@ export class Reader {
   }
 
   /** Open a PDF in a new tab, or switch to its tab if it's already open. */
-  async openBytes(bytes, name, password = null) {
+  async openBytes(bytes, name, password = null, goto = null) {
     const same = this.tabs.find((t) => t.name === name && sameBytes(t.original, bytes));
-    if (same) { await this.#switchTo(same); return; }
+    if (same) { await this.#switchTo(same); if (goto) this.#goto(goto); return; }
     const previous = this.activeTab;
     await this.#stash();
     // edited: bytes holds changes made here; dirty: changes not saved to a file yet.
-    const tab = { id: ++tabSeq, original: bytes, bytes, name, password, edited: false, dirty: false };
+    const tab = { id: ++tabSeq, original: bytes, bytes, name, password, edited: false, dirty: false, goto };
     this.tabs.push(tab);
     if (!(await this.#load(tab))) {
       this.tabs.splice(this.tabs.indexOf(tab), 1);
@@ -626,7 +628,9 @@ export class Reader {
       };
       this.pdfViewer.setDocument(doc);
       this.linkService.setDocument(doc, null);
-      this.findController.setDocument(doc);
+      // (The viewer hands the document to the find controller itself once the
+      // first page is drawn; doing it here too would reset a search started
+      // when the pages appear, e.g. from the folder search.)
       this.titleEl.textContent = tab.name;
       this.titleEl.title = tab.name;
       document.title = tab.name + " — PDF Manager";
@@ -684,6 +688,8 @@ export class Reader {
       this.pdfViewer.currentScaleValue = saved?.scale || "auto";
       if (saved?.page > 1 && saved.page <= this.doc.numPages) this.pdfViewer.currentPageNumber = saved.page;
       if (saved?.rotation) this.pdfViewer.pagesRotation = saved.rotation;
+      const goto = this.activeTab?.goto;
+      if (goto) { this.activeTab.goto = null; this.#goto(goto); }
       this.#updatePage();
       this.container.focus({ preventScroll: true });
     });
@@ -888,6 +894,16 @@ export class Reader {
     this.outlineList.replaceChildren(...build(outline, 0));
     // Long documents with bookmarks open on the bookmarks tab.
     if (doc.numPages >= 20) this.#showTab("outline");
+  }
+
+  /** Show page ``page`` and search for ``find`` from there. */
+  #goto({ page, find } = {}) {
+    if (page && page <= this.pdfViewer.pagesCount) this.pdfViewer.currentPageNumber = page;
+    if (find) {
+      this.openFind();
+      this.findInput.value = find;
+      this.#find("");
+    }
   }
 
   // ---- find -----------------------------------------------------------------
