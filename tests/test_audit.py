@@ -2,6 +2,7 @@
 stamps on shared pages, output files."""
 
 import re
+from pathlib import Path
 
 import pytest
 from pypdf import PdfReader, PdfWriter
@@ -694,6 +695,109 @@ def test_editing_text_on_a_shared_page_changes_that_page_only(tmp_path):
     assert [word_box(out, p, "9999") is not None for p in range(3)] == [False, True, False]
     old, new = word_box(small, 1, "1234"), word_box(out, 1, "9999")
     assert abs(old[0] - new[0]) < 1.5 and abs(old[1] - new[1]) < 1.5  # in the old words' place
+
+
+def font_at(path, page, word):
+    """The font pdfium says ``word`` is drawn with."""
+    import ctypes
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as raw
+
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        textpage = doc[page].get_textpage()
+        start = textpage.get_text_range().find(word)
+        buf, flags = ctypes.create_string_buffer(256), ctypes.c_int()
+        raw.FPDFText_GetFontInfo(textpage.raw, start, buf, 256, ctypes.byref(flags))
+        return buf.value.decode()
+    finally:
+        doc.close()
+
+
+def vera_pdf(path):
+    import reportlab
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    pdfmetrics.registerFont(TTFont("Vera", str(Path(reportlab.__file__).parent / "fonts" / "Vera.ttf")))
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont("Vera", 14)
+    c.drawString(72, 700, "Café menu for today")
+    c.save()
+    return path
+
+
+def test_edited_words_keep_the_documents_own_font(tmp_path):
+    from pdfmanager import fonts, textedit
+
+    src = vera_pdf(tmp_path / "vera.pdf")
+    report = []
+    out = tmp_path / "out.pdf"
+    textedit.edit_text(src, out, [{"page": 1, "rect": word_box(src, 0, "today"), "text": "Friday"}], report=report)
+    vera = font_at(src, 0, "today")
+    assert report == [{"font": fonts.display_name(vera), "kind": "same"}]
+    assert font_at(out, 0, "Friday") == vera
+    # The file's copy of the font only has the letters the page used (and
+    # plain ASCII): a letter it lacks comes from elsewhere, never as a blank.
+    report = []
+    textedit.edit_text(src, out, [{"page": 1, "rect": word_box(src, 0, "today"), "text": "Straße"}], report=report)
+    assert report[0]["kind"] in ("installed", "similar") and font_at(out, 0, "Straße") != vera
+    report = []
+    textedit.edit_text(src, out, [{"page": 1, "rect": word_box(src, 0, "Café"), "text": "Déjà"}], report=report)
+    assert report[0]["kind"] != "same"  # no à in the file's copy
+
+
+def test_a_paragraph_rewraps_in_its_width(tmp_path):
+    from pdfmanager import textedit
+
+    c = canvas.Canvas(str(tmp_path / "para.pdf"), pagesize=letter)
+    c.setFont("Helvetica", 11)
+    for n, line in enumerate(["The first line of a paragraph that", "goes on to a second line and", "ends on the third."]):
+        c.drawString(72, 700 - 14 * n, line)
+    c.drawString(72, 600, "Untouched line below.")
+    c.save()
+    src = tmp_path / "para.pdf"
+    out = tmp_path / "out.pdf"
+    top, bottom = word_box(src, 0, "The first"), word_box(src, 0, "third.")
+    rect = [72, bottom[1], 300, top[3]]
+    words = "A much longer paragraph now, written again from the start, so that it needs more lines than before."
+    report = []
+    textedit.edit_text(src, out, [{"page": 1, "rect": rect, "text": words, "paragraph": True}], report=report)
+    assert report[0]["kind"] == "same"
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(str(out))
+    textpage = doc[0].get_textpage()
+    text = textpage.get_text_range()
+    doc.close()
+    assert " ".join(text.split()).count("A much longer paragraph now") == 1
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    new_lines = [ln for ln in lines if any(w in ln for w in ("much", "start", "lines", "before"))]
+    assert len(new_lines) >= 3  # wrapped
+    first, again = word_box(out, 0, "A much"), word_box(out, 0, "before.")
+    assert abs(first[0] - 72) < 1.5 and again[2] <= 300 + 1  # inside the old lines' width
+    assert word_box(out, 0, "Untouched line below.") is not None
+
+
+def test_new_words_take_the_look_of_the_nearest_text(tmp_path):
+    from pdfmanager import textedit
+
+    src = edit_pdf_times(tmp_path / "t.pdf")
+    out = tmp_path / "out.pdf"
+    report = []
+    textedit.edit_text(src, out, [{"page": 1, "at": [72, 650], "text": "Added later"}], report=report)
+    assert report == [{"font": "Times Roman", "kind": "same"}]
+    box = word_box(out, 0, "Added later")
+    assert abs(box[0] - 72) < 1.5 and 630 < box[1] < 650 and box[3] <= 651  # its top left at the click
+    assert font_at(out, 0, "Added") == "Times-Roman"
+
+
+def edit_pdf_times(path):
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont("Times-Roman", 13)
+    c.drawString(72, 700, "Some text in Times")
+    c.save()
+    return path
 
 
 @pytest.mark.parametrize("edits", [

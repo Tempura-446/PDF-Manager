@@ -322,8 +322,22 @@
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   outline: 1px dashed var(--accent); outline-offset: 1px;
 }
+.rd-edittext .page { cursor: copy; }  /* an empty spot: new words go there */
+.rd-textedit-box { position: absolute; z-index: 30; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; cursor: auto; }
 .rd-textedit {
-  position: absolute; z-index: 30; box-sizing: border-box; padding: 0 2px; margin: 0;
+  display: block; box-sizing: border-box; padding: 0 2px; margin: 0; resize: none;
   border: 1.5px solid var(--accent); border-radius: 3px; background: #fff; color: #111;
   box-shadow: 0 0 0 3px var(--accent-ring), 0 4px 14px rgb(0 0 0 / .18); line-height: 1; outline: none;
 }
+textarea.rd-textedit { line-height: 1.25; padding: 2px 3px; resize: both; min-height: 3em; }
+.rd-textedit-hint {
+  display: flex; align-items: center; gap: 10px; padding: 4px 6px 4px 10px; border-radius: 999px;
+  background: var(--text); color: var(--bg); font-size: 12px; line-height: 1.2; font-family: system-ui, sans-serif; white-space: nowrap;
+  box-shadow: var(--shadow-pop);
+}
+.rd-textedit-mode {
+  border: 0; border-radius: 999px; padding: 3px 9px; cursor: pointer; font: inherit; font-weight: 600;
+  background: color-mix(in srgb, var(--bg) 18%, transparent); color: inherit !important;
+}
+.rd-textedit-mode:hover { background: color-mix(in srgb, var(--bg) 30%, transparent); }
+.rd-textedit-mode:disabled { display: none; }

@@ -655,6 +655,7 @@ def test_edit_text_endpoint_keeps_the_password(app, tmp_path):
     assert status == 200 and res_headers["Content-Type"] == "application/pdf"
     reader = PdfReader(io.BytesIO(data))
     assert reader.is_encrypted and reader.decrypt("secret")
+    assert json.loads(res_headers["X-Pdfm-Fonts"]) == [{"font": "Times Bold", "kind": "same"}]
     assert "Invoice for May" in reader.pages[0].extract_text()
     body, headers = multipart({"password": "wrong", "edits": edits}, [("file", tmp_path / "locked.pdf")])
     assert call(base, token, "/api/text/edit", body, headers)[0] == 400

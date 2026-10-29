@@ -1430,11 +1430,14 @@ class Handler(BaseHTTPRequestHandler):
         with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
             src, out = Path(tmp) / "file.pdf", Path(tmp) / "edited.pdf"
             src.write_bytes(uploads[0][2])
-            textedit.edit_text(src, out, edits, password)
+            report = []
+            textedit.edit_text(src, out, edits, password, report=report)
             if password and core.open_pdf(src, password).is_encrypted:
                 core.encrypt(out, out, password)  # stays protected
             data = out.read_bytes()
-        return self._send(HTTPStatus.OK, data, "application/pdf")
+        # Which font each change got, for the reader to say so.
+        return self._send(HTTPStatus.OK, data, "application/pdf",
+                          {"X-Pdfm-Fonts": json.dumps(report, ensure_ascii=True)})
 
     def _inspect(self, body):
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
