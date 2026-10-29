@@ -647,6 +647,18 @@ def cmd_watch(a):
     watch.watch(settings, interval=a.interval)
 
 
+def cmd_setup_windows(a):
+    from pdfmanager import winsetup
+
+    if a.remove:
+        winsetup.remove()
+        print("Removed the shortcuts and the Open with and Settings > Apps entries.")
+        return 0
+    for line in winsetup.install(a.app_dir, desktop=not a.no_desktop, open_with=not a.no_open_with):
+        print(f"added {line}")
+    return 0
+
+
 def cmd_gui(a):
     from pdfmanager import gui
 
@@ -994,6 +1006,14 @@ def build_parser():
                     help="delete originals instead of moving them to <inbox>/originals")
     sp.add_argument("--interval", type=float, default=5, help="seconds between checks")
     sp.add_argument("--once", action="store_true", help="process what's there now and exit")
+
+    sp = other("setup-windows", cmd_setup_windows,
+               "Windows: add Start menu and desktop shortcuts, Open with for PDFs and an "
+               "uninstall entry (used by the installer)")
+    sp.add_argument("--remove", action="store_true", help="take them away again")
+    sp.add_argument("--no-desktop", action="store_true", help="no desktop shortcut")
+    sp.add_argument("--no-open-with", action="store_true", help='don\'t add to "Open with"')
+    sp.add_argument("--app-dir", help="the installed app's folder (default: found from Python)")
 
     for name, help_ in (("gui", "open the graphical app in its own window (or your browser "
                                 "if no window can be opened)"),

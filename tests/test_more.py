@@ -548,3 +548,134 @@ def test_edit_text_endpoint_keeps_the_password(app, tmp_path):
     assert "Invoice for May" in reader.pages[0].extract_text()
     body, headers = multipart({"password": "wrong", "edits": edits}, [("file", tmp_path / "locked.pdf")])
     assert call(base, token, "/api/text/edit", body, headers)[0] == 400
+
+
+# -- Windows set-up -------------------------------------------------------------------------------
+
+class FakeRegistry:
+    """Enough of winreg for winsetup, keeping keys in a dict."""
+    HKEY_CURRENT_USER = "HKCU"
+    KEY_SET_VALUE = KEY_READ = KEY_WRITE = 0
+    REG_SZ, REG_DWORD = 1, 4
+
+    def __init__(self):
+        self.keys = {}
+
+    class _Key:
+        def __init__(self, reg, path):
+            self.reg, self.path = reg, path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def CreateKeyEx(self, root, path, reserved=0, access=0):
+        parts = path.lower().split("\\")
+        for n in range(1, len(parts) + 1):  # with the keys above it, like Windows
+            self.keys.setdefault("\\".join(parts[:n]), {})
+        return self._Key(self, path.lower())
+
+    def OpenKey(self, root, path, reserved=0, access=0):
+        if path.lower() not in self.keys:
+            raise FileNotFoundError(path)
+        return self._Key(self, path.lower())
+
+    def SetValueEx(self, key, name, reserved, kind, value):
+        self.keys[key.path][name] = value
+
+    def DeleteValue(self, key, name):
+        self.keys[key.path].pop(name, None)
+
+    def EnumKey(self, key, index):
+        children = sorted({k[len(key.path) + 1:].split("\\")[0] for k in self.keys
+                           if k.startswith(key.path + "\\")})
+        if index >= len(children):
+            raise OSError("no more")
+        return children[index]
+
+    def DeleteKey(self, root, path):
+        if any(k.startswith(path.lower() + "\\") for k in self.keys):
+            raise PermissionError("key has subkeys")  # as winreg does
+        self.keys.pop(path.lower())
+
+
+def test_windows_setup_registers_and_removes(tmp_path, monkeypatch):
+    import sys
+    from pdfmanager import winsetup
+
+    reg = FakeRegistry()
+    monkeypatch.setitem(sys.modules, "winreg", reg)
+    monkeypatch.setattr(winsetup.sys, "platform", "win32")
+    folders = {winsetup.CSIDL_PROGRAMS: tmp_path / "Start", winsetup.CSIDL_DESKTOPDIRECTORY: tmp_path / "Desktop"}
+    monkeypatch.setattr(winsetup, "_folder", folders.get)
+    monkeypatch.setattr(winsetup, "_notify_shell", lambda: None)
+    made = []
+
+    def fake_shortcut(path, target, arguments="", **kw):
+        made.append((Path(path), Path(target).name, arguments))
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text("lnk")
+
+    monkeypatch.setattr(winsetup, "make_shortcut", fake_shortcut)
+    app_dir = tmp_path / "app"
+    done = winsetup.install(app_dir)
+    assert len(done) == 4
+    assert made[0][0] == tmp_path / "Start" / "PDF Manager.lnk"
+    assert made[1][0] == tmp_path / "Desktop" / "PDF Manager.lnk"
+    assert made[0][2] == "-m pdfmanager gui"
+    assert (app_dir / "PDF Manager.ico").stat().st_size > 1000
+    assert str(app_dir) in (app_dir / "uninstall.ps1").read_text(encoding="utf-8-sig")
+    keys = reg.keys
+    command = keys[r"software\classes\pdfmanager.document\shell\open\command"][""]
+    assert command.endswith('-m pdfmanager gui "%1"')
+    assert keys[r"software\classes\.pdf\openwithprogids"] == {"PDFManager.Document": ""}
+    assert keys[r"software\registeredapplications"]["PDF Manager"] == r"Software\PDFManager\Capabilities"
+    uninstall = keys[r"software\microsoft\windows\currentversion\uninstall\pdfmanager"]
+    assert uninstall["DisplayName"] == "PDF Manager" and "uninstall.ps1" in uninstall["UninstallString"]
+    winsetup.remove()
+    assert not (tmp_path / "Start" / "PDF Manager.lnk").exists()
+    assert not (tmp_path / "Desktop" / "PDF Manager.lnk").exists()
+    assert not any(k.startswith(r"software\classes\pdfmanager") or k.startswith(r"software\pdfmanager")
+                   or k.endswith(r"uninstall\pdfmanager") for k in keys)
+    assert keys[r"software\classes\.pdf\openwithprogids"] == {}
+    assert "PDF Manager" not in keys[r"software\registeredapplications"]
+    # without a desktop shortcut or Open with
+    made.clear()
+    reg.keys.clear()
+    winsetup.install(app_dir, desktop=False, open_with=False)
+    assert [m[0].parent.name for m in made] == ["Start"]
+    assert not any("pdfmanager.document" in k for k in reg.keys)
+
+
+def test_windows_setup_needs_windows(monkeypatch, capsys):
+    import sys
+    if sys.platform == "win32":
+        pytest.skip("this is Windows")
+    assert main(["setup-windows"]) == 1
+    assert "only works on Windows" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(__import__("sys").platform != "win32", reason="Windows only")
+def test_windows_shortcuts_and_registry_for_real(tmp_path, monkeypatch):
+    import winreg
+    from pdfmanager import winsetup
+
+    folders = {winsetup.CSIDL_PROGRAMS: tmp_path / "Start", winsetup.CSIDL_DESKTOPDIRECTORY: tmp_path / "Desktop"}
+    monkeypatch.setattr(winsetup, "_folder", folders.get)
+    winsetup.install(tmp_path / "app")
+    try:
+        target, args = winsetup.read_shortcut(tmp_path / "Start" / "PDF Manager.lnk")
+        assert Path(target).name.lower() in ("pythonw.exe", "python.exe") and args == "-m pdfmanager gui"
+        assert (tmp_path / "Desktop" / "PDF Manager.lnk").exists()
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, winsetup.UNINSTALL_KEY) as key:
+            assert winreg.QueryValueEx(key, "DisplayName")[0] == "PDF Manager"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            rf"{winsetup.CLASSES}\{winsetup.PROG_ID}\shell\open\command") as key:
+            assert winreg.QueryValueEx(key, "")[0].endswith('-m pdfmanager gui "%1"')
+    finally:
+        winsetup.remove()
+    assert not (tmp_path / "Start" / "PDF Manager.lnk").exists()
+    with pytest.raises(FileNotFoundError):
+        winreg.OpenKey(winreg.HKEY_CURRENT_USER, winsetup.UNINSTALL_KEY)
