@@ -12,7 +12,7 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
-                        recipes, redact, scan)
+                        forms, recipes, redact, scan, search)
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -45,6 +45,9 @@ def _expand(patterns):
     """Expand wildcards ourselves so `*.pdf` also works on Windows."""
     paths = []
     for pattern in patterns:
+        if os.path.exists(pattern):  # a real name, even with [ ] in it
+            paths.append(pattern)
+            continue
         matches = sorted(glob.glob(pattern)) if glob.has_magic(pattern) else []
         if glob.has_magic(pattern) and not matches:
             raise core.PdfManagerError(f"no files match {pattern!r}")
@@ -242,6 +245,26 @@ def run_bookmarks(a, src, out, pw):
     return f"{out}  ({len(items)} bookmark{'s' if len(items) != 1 else ''})"
 
 
+def run_form(a, src, out, pw):
+    fields = [forms.parse_field(spec) for spec in a.field or []]
+    if a.fields:
+        data = json.loads(Path(a.fields).read_text(encoding="utf-8-sig"))
+        fields += data if isinstance(data, list) else [
+            {**f, "page": int(page)} for page, items in data.items() for f in items]
+    if not fields:
+        found = forms.existing_fields(src, pw)
+        for page, items in found.items():
+            for f in items:
+                x0, y0, x1, y1 = f["rect"]
+                print(f"{f['type']}:{page}:{x0:g},{y0:g},{x1:g},{y1:g}:{f['name']}")
+        if not found:
+            print("no form fields")
+        return None
+    names = forms.add_fields(src, out, fields, border=not a.no_border, font_size=a.font_size,
+                             password=pw)
+    return f"{out}  ({len(names)} field{'s' if len(names) != 1 else ''}: {', '.join(names)})"
+
+
 def run_to_word(a, src, out, pw):
     result, engine = office.pdf_to_word(src, out, engine=a.engine, password=pw)
     how = {"word": "Microsoft Word", "basic": "built-in converter",
@@ -280,6 +303,28 @@ def run_redact(a, src, out, pw):
     if not found:
         return f"{out}  (nothing found to redact)"
     return f"{out}  ({sum(found.values())} area(s) on page(s) {', '.join(map(str, found))})"
+
+
+def run_headers(a, src, out, pw):
+    texts = {spot: getattr(a, spot) for spot in core.HEADER_SPOTS}
+    # Bates numbers continue from file to file in a batch.
+    first = getattr(a, "bates_next", a.bates_start)
+    a.bates_next = core.headers_footers(
+        src, out, texts, font_size=a.font_size, margin_mm=a.margin, pages=a.pages, start=a.start,
+        bates_prefix=a.bates or "", bates_start=first, bates_digits=a.bates_digits, password=pw)
+    if any("{bates}" in (t or "") for t in texts.values()):
+        width = a.bates_digits
+        return f"{out}  (Bates {a.bates or ''}{first:0{width}d}–{a.bates or ''}{a.bates_next - 1:0{width}d})"
+    return out
+
+
+def run_media(a, src, out, pw):
+    if a.no_images and a.no_attachments:
+        raise core.PdfManagerError("--no-images and --no-attachments leave nothing to do")
+    found = core.extract_media(src, out, images=not a.no_images,
+                               attachments=not a.no_attachments, min_size=a.min_size, password=pw)
+    return (f"{len(found['images'])} picture(s), {len(found['attachments'])} attachment(s) "
+            f"in {out}")
 
 
 def run_text(a, src, out, pw):
@@ -332,8 +377,8 @@ OUTPUTS = {
     "nup": ("nup", "pdf"), "compress": ("compressed", "pdf"), "color": ("color", "pdf"),
     "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
     "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
-    "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
-    "split": ("split", "dir"), "to-images": ("images", "dir"),
+    "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "headers": ("headers", "pdf"), "form": ("form", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
+    "split": ("split", "dir"), "to-images": ("images", "dir"), "extract-media": ("media", "dir"),
 }
 
 
@@ -370,6 +415,7 @@ def _output_for(a, src, batch):
 # Commands whose output should not inherit the input's password.
 # (split re-encrypts its own output files.)
 KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split", "to-word",
+                    "extract-media",
                     "pdfa"}  # PDF/A doesn't allow encryption
 
 
@@ -478,6 +524,7 @@ def _parse_steps(tokens):
 
 
 def cmd_recipe(a):
+    state = {}  # carried from file to file (Bates numbers)
     if a.action != "list" and not a.name:
         raise core.PdfManagerError(f"pdfm recipe {a.action} needs a recipe name")
     if a.action == "list":
@@ -518,7 +565,7 @@ def cmd_recipe(a):
                     out = _default_output(src, slug)
                 pw = passwords.for_file(src)
                 notes = []
-                recipes.run(steps, src, out, pw, notes)
+                recipes.run(steps, src, out, pw, notes, state=state)
                 if pw:
                     _reencrypt(out, pw)
                 print(f"{src} -> {out}" + (f"  ({'; '.join(notes)})" if notes else ""))
@@ -549,6 +596,20 @@ def cmd_rename(a):
 def cmd_catalog(a):
     out, count = organize.catalog(a.directory, a.output, a.recursive)
     print(f"catalogued {count} PDF(s) -> {out}")
+
+
+def cmd_search(a):
+    result = search.search(a.directory, a.query, a.recursive, a.case_sensitive, a.whole_words,
+                           limit=a.limit)
+    for m in result["matches"]:
+        more = f" (+{m['count'] - 1} more)" if m["count"] > 1 else ""
+        print(f"{m['path']}, page {m['page']}: {m['before']}[{m['match']}]{m['after']}{more}")
+    for path, reason in result["skipped"]:
+        print(f"skipped {path}: {reason}", file=sys.stderr)
+    files = len({m["path"] for m in result["matches"]})
+    print(f"{len(result['matches'])} page(s) in {files} of {result['files']} file(s)"
+          + (" (stopped at the limit)" if result["limited"] else ""))
+    return 0 if result["matches"] else 1
 
 
 def cmd_duplicates(a):
@@ -588,6 +649,18 @@ def cmd_watch(a):
         watch.poll(settings, state)
         return
     watch.watch(settings, interval=a.interval)
+
+
+def cmd_setup_windows(a):
+    from pdfmanager import winsetup
+
+    if a.remove:
+        winsetup.remove()
+        print("Removed the shortcuts and the Open with and Settings > Apps entries.")
+        return 0
+    for line in winsetup.install(a.app_dir, desktop=not a.no_desktop, open_with=not a.no_open_with):
+        print(f"added {line}")
+    return 0
 
 
 def cmd_gui(a):
@@ -743,6 +816,21 @@ def build_parser():
     sp.add_argument("--start", type=int, default=1, help="first number (default: 1)")
     sp.add_argument("-p", "--pages", help=PAGES_HELP + " (default: all)")
 
+    sp = per_file("headers", run_headers,
+                  "add headers and footers, e.g. a title, the date or Bates numbers")
+    for spot in core.HEADER_SPOTS:
+        sp.add_argument("--" + spot.replace("_", "-"), dest=spot, metavar="TEXT",
+                        help=f"text {spot.replace('_', ' ')}" if spot != "top_left" else
+                        "text top left; any text may use {n} (page), {total}, {file}, {title}, "
+                        "{date} and {bates}")
+    sp.add_argument("--font-size", type=float, default=9)
+    sp.add_argument("--margin", type=float, default=10, help="distance from the edge in mm")
+    sp.add_argument("--start", type=int, default=1, help="first page number (default: 1)")
+    sp.add_argument("--bates", metavar="PREFIX", help="Bates prefix for {bates}, e.g. ABC")
+    sp.add_argument("--bates-start", type=int, default=1, help="first Bates number")
+    sp.add_argument("--bates-digits", type=int, default=6, help="digits (default: 6)")
+    sp.add_argument("-p", "--pages", help=PAGES_HELP + " (default: all)")
+
     sp = per_file("ocr", run_ocr, "make scanned PDFs searchable (needs OCRmyPDF + Tesseract)")
     sp.add_argument("--language", default="eng", help="Tesseract language(s), e.g. eng+deu")
     sp.add_argument("--force", action="store_true", help="redo pages that already have text")
@@ -783,6 +871,18 @@ def build_parser():
     sp.add_argument("--case-sensitive", action="store_true")
     sp.add_argument("--whole-words", action="store_true")
     sp.add_argument("--dpi", type=int, default=200, help="resolution of redacted pages")
+
+    sp = per_file("form", run_form,
+                  "add fillable form fields (without --field: list the fields already there)")
+    sp.add_argument("-f", "--field", action="append", metavar="TYPE:PAGE:X0,Y0,X1,Y1[:NAME]",
+                    help=f"add a field ({', '.join(forms.TYPES)}), in points from the bottom-left "
+                         "corner, e.g. text:1:72,700,300,720:Name (repeat for more)")
+    sp.add_argument("--fields", metavar="FILE",
+                    help='fields from a JSON file: [{"type", "page", "rect": [x0, y0, x1, y1], '
+                         '"name"}]')
+    sp.add_argument("--font-size", type=float, default=0,
+                    help="text size in the fields (default: fit single-line fields to the box)")
+    sp.add_argument("--no-border", action="store_true", help="don't draw a border around fields")
 
     sp = per_file("pdfa", run_pdfa, "convert to PDF/A for long-term archiving (needs Ghostscript)")
     sp.add_argument("--level", choices=archive.PDFA_LEVELS, default="2",
@@ -841,6 +941,14 @@ def build_parser():
     sp.add_argument("-s", "--size", help="fit images onto this paper size (default: image size)")
     sp.add_argument("--margin", type=float, default=0, help="margin in mm")
 
+    sp = per_file("extract-media", run_media,
+                  "save the pictures and attached files inside PDFs",
+                  out_help="output folder (default: <input>_media)")
+    sp.add_argument("--no-images", action="store_true", help="only attached files")
+    sp.add_argument("--no-attachments", action="store_true", help="only pictures")
+    sp.add_argument("--min-size", type=int, default=16,
+                    help="skip pictures smaller than this many pixels (default: 16)")
+
     sp = per_file("to-images", run_to_images, "render pages to image files",
                   out_help="output folder (default: <input>_images)")
     sp.add_argument("--dpi", type=int, default=150)
@@ -875,6 +983,14 @@ def build_parser():
     sp.add_argument("-R", "--recursive", action="store_true")
     sp.add_argument("--delete", action="store_true", help="delete all but the oldest copy")
 
+    sp = other("search", cmd_search, "find text in all the PDFs in a folder")
+    sp.add_argument("directory")
+    sp.add_argument("query")
+    sp.add_argument("-R", "--recursive", action="store_true")
+    sp.add_argument("--case-sensitive", action="store_true")
+    sp.add_argument("--whole-words", action="store_true")
+    sp.add_argument("--limit", type=int, default=500, help="most pages to list (default: 500)")
+
     sp = other("watch", cmd_watch,
                "watch an inbox folder and process new PDFs automatically")
     sp.add_argument("inbox")
@@ -894,6 +1010,14 @@ def build_parser():
                     help="delete originals instead of moving them to <inbox>/originals")
     sp.add_argument("--interval", type=float, default=5, help="seconds between checks")
     sp.add_argument("--once", action="store_true", help="process what's there now and exit")
+
+    sp = other("setup-windows", cmd_setup_windows,
+               "Windows: add Start menu and desktop shortcuts, Open with for PDFs and an "
+               "uninstall entry (used by the installer)")
+    sp.add_argument("--remove", action="store_true", help="take them away again")
+    sp.add_argument("--no-desktop", action="store_true", help="no desktop shortcut")
+    sp.add_argument("--no-open-with", action="store_true", help='don\'t add to "Open with"')
+    sp.add_argument("--app-dir", help="the installed app's folder (default: found from Python)")
 
     for name, help_ in (("gui", "open the graphical app in its own window (or your browser "
                                 "if no window can be opened)"),

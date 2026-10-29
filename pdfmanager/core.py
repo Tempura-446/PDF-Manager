@@ -3,14 +3,16 @@ can be used from the CLI or imported as a library."""
 
 import io
 import os
+import re
 import threading
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter, Transformation
 from pypdf.errors import PyPdfError
-from pypdf.generic import ArrayObject, FloatObject, NameObject, NumberObject, RectangleObject
+from pypdf.generic import (ArrayObject, DictionaryObject, FloatObject, NameObject, NumberObject,
+                           RectangleObject)
 
-from pdfmanager import imaging
+from pdfmanager import fonts, imaging, progress
 from pdfmanager.pageranges import parse_page_ranges
 
 POINTS_PER_INCH = 72
@@ -605,7 +607,7 @@ def watermark(path, output, text=None, stamp_pdf=None, opacity=0.15,
         if stamp_page is None:
             def draw(c, w, h):
                 c.setFillAlpha(opacity)
-                c.setFont("Helvetica-Bold", font_size)
+                c.setFont(fonts.font_for(text, bold=True), font_size)
                 c.translate(w / 2, h / 2)
                 c.rotate(angle)
                 c.drawCentredString(0, -font_size / 3, text)
@@ -641,7 +643,7 @@ def number_pages(path, output, fmt="{n} / {total}", position="bottom-center",
         w, h = float(box.width), float(box.height)
 
         def draw(c, w, h, label=label):
-            c.setFont("Helvetica", font_size)
+            c.setFont(fonts.font_for(label), font_size)
             y = margin if vert == "bottom" else h - margin
             if horiz == "center":
                 c.drawCentredString(w / 2, y, label)
@@ -653,6 +655,172 @@ def number_pages(path, output, fmt="{n} / {total}", position="bottom-center",
         op = Transformation().translate(float(box.left), float(box.bottom))
         page.merge_transformed_page(_overlay_page(w, h, draw), op)
     return _write(writer, output)
+
+
+def _safe_filename(name, fallback):
+    name = Path(str(name).replace("\\", "/")).name
+    name = "".join("_" if c in '<>:"|?*' or ord(c) < 32 else c for c in name).strip(" .")
+    return name or fallback
+
+
+def extract_media(path, outdir, images=True, attachments=True, min_size=16, password=None):
+    """Save the pictures and/or attached files of a PDF into ``outdir``.
+    Pictures are saved in their own format where possible (JPEG stays JPEG),
+    each picture once even if it's used on several pages; pictures smaller
+    than ``min_size`` pixels (lines, dots, tiny icons) are skipped.
+    Returns {"images": [paths], "attachments": [paths]}."""
+    import hashlib
+
+    reader = open_pdf(path, password)
+    outdir = Path(outdir)
+    stem = Path(path).stem
+    saved = {"images": [], "attachments": []}
+    taken = set()
+
+    def target(folder, name):
+        folder.mkdir(parents=True, exist_ok=True)
+        candidate, n = folder / name, 1
+        while candidate.name.lower() in taken or candidate.exists():
+            n += 1
+            candidate = folder / f"{Path(name).stem} ({n}){Path(name).suffix}"
+        taken.add(candidate.name.lower())
+        return candidate
+
+    if images:
+        seen = set()
+        for number, page in enumerate(reader.pages, 1):
+            progress.report(number - 1, len(reader.pages), "page")
+            try:
+                found = list(page.images)
+            except Exception:
+                continue  # a damaged image dictionary: skip the page's pictures
+            for k, image in enumerate(found, 1):
+                try:
+                    data = image.data
+                    width, height = image.image.size if image.image is not None else (0, 0)
+                except Exception:
+                    continue
+                if width < min_size or height < min_size:
+                    continue
+                digest = hashlib.sha1(data).digest()
+                if digest in seen:
+                    continue
+                seen.add(digest)
+                ext = Path(image.name).suffix.lower() or ".png"
+                out = target(outdir, f"{stem}_page{number}_{k}{ext}")
+                out.write_bytes(data)
+                saved["images"].append(out)
+    if attachments:
+        files = []
+        entries = getattr(reader, "attachment_list", None)
+        if entries is not None:  # pypdf 5.4+: one entry per attached file, with its file name
+            for entry in entries:
+                try:
+                    files.append((entry.alternative_name or entry.name, entry.content))
+                except Exception:  # a damaged entry
+                    continue
+        else:
+            for name, contents in (reader.attachments or {}).items():
+                files.extend((name, data) for data in contents)
+        for page in reader.pages:
+            for ref in page.get("/Annots") or []:
+                annot = ref.get_object()
+                if annot.get("/Subtype") != "/FileAttachment" or "/FS" not in annot:
+                    continue
+                spec = annot["/FS"].get_object()
+                if not isinstance(spec, DictionaryObject):  # a bare file name: nothing embedded
+                    continue
+                try:
+                    data = spec["/EF"].get_object()["/F"].get_object().get_data()
+                except (KeyError, AttributeError, TypeError):
+                    continue
+                files.append((spec.get("/UF") or spec.get("/F") or "attachment", data))
+        seen = set()  # the same file listed under two names is saved once
+        for name, data in files:
+            digest = hashlib.sha1(data).digest()
+            if digest in seen:
+                continue
+            seen.add(digest)
+            out = target(outdir / "attachments", _safe_filename(str(name), "attachment"))
+            out.write_bytes(data)
+            saved["attachments"].append(out)
+    return saved
+
+
+HEADER_SPOTS = ("top_left", "top_center", "top_right", "bottom_left", "bottom_center",
+                "bottom_right")
+
+
+_HEADER_TOKEN = re.compile(r"\{(n|total|file|title|date|bates)\}")
+
+
+def _upright(page):
+    """(visual width, visual height, matrix) to draw on ``page`` as it's
+    shown: inside its crop box, and after its /Rotate, so text comes out
+    upright."""
+    box = page.cropbox
+    w, h, left, bottom = float(box.width), float(box.height), float(box.left), float(box.bottom)
+    rotation = page.rotation % 360
+    matrix = {0: (1, 0, 0, 1, 0, 0), 90: (0, 1, -1, 0, w, 0),
+              180: (-1, 0, 0, -1, w, h), 270: (0, -1, 1, 0, 0, h)}[rotation]
+    a, b, c, d, e, f = matrix
+    visual = (h, w) if rotation in (90, 270) else (w, h)
+    return visual[0], visual[1], Transformation((a, b, c, d, e + left, f + bottom))
+
+
+def headers_footers(path, output, texts, font_size=9, margin_mm=10, pages=None, start=1,
+                    bates_prefix="", bates_start=1, bates_digits=6, date_format="%Y-%m-%d",
+                    password=None):
+    """Add headers and footers. ``texts`` maps spots (see HEADER_SPOTS, e.g.
+    "top_right") to text, which may use {n} (page number, counting from
+    ``start``), {total}, {file}, {title}, {date} and {bates} (Bates number:
+    ``bates_prefix`` and a number from ``bates_start`` with ``bates_digits``
+    digits, e.g. ABC000123). Returns the next Bates number, so numbering can
+    continue in the next file."""
+    import datetime
+
+    texts = {k: v for k, v in (texts or {}).items() if v and v.strip()}
+    unknown = set(texts) - set(HEADER_SPOTS)
+    if unknown:
+        raise PdfManagerError(f"unknown position {sorted(unknown)[0]!r}")
+    if not texts:
+        raise PdfManagerError("enter the text for at least one header or footer")
+    reader = open_pdf(path, password)
+    total = len(reader.pages)
+    targets = set(parse_page_ranges(pages, total)) if pages else None
+    title = (reader.metadata or {}).get("/Title") or ""
+    writer = PdfWriter(clone_from=reader)
+    margin = margin_mm * POINTS_PER_MM
+    fields = {"total": total, "file": Path(path).stem, "title": str(title),
+              "date": datetime.date.today().strftime(date_format)}
+    n, bates = start, bates_start
+    for i, page in enumerate(writer.pages):
+        progress.report(i, total, "page")
+        if targets is not None and i not in targets:
+            continue
+        fields.update(n=n, bates=f"{bates_prefix}{bates:0{bates_digits}d}")
+        # Only the known {names} are filled in; other braces stay as typed.
+        lines = {spot: _HEADER_TOKEN.sub(lambda m: str(fields[m.group(1)]), text)
+                 for spot, text in texts.items()}
+        n += 1
+        bates += 1
+        w, h, matrix = _upright(page)
+
+        def draw(c, w, h, lines=lines):
+            for spot, text in lines.items():
+                c.setFont(fonts.font_for(text), font_size)  # a font that has the letters
+                vert, horiz = spot.split("_")
+                y = h - margin - font_size * 0.8 if vert == "top" else margin
+                if horiz == "center":
+                    c.drawCentredString(w / 2, y, text)
+                elif horiz == "right":
+                    c.drawRightString(w - margin, y, text)
+                else:
+                    c.drawString(margin, y, text)
+
+        page.merge_transformed_page(_overlay_page(w, h, draw), matrix)
+    _write(writer, output)
+    return bates
 
 
 # --------------------------------------------------------------------------
@@ -723,6 +891,7 @@ def ocr(path, output, language="eng", force=False, deskew=False, password=None):
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp_out = output.with_name(output.name + ".tmp.pdf")
+    progress.say("recognising text (this can take a while)")
     try:
         ocrmypdf.ocr(str(source), str(tmp_out), language=language.split("+"),
                      skip_text=not force, force_ocr=force, deskew=deskew,
@@ -757,7 +926,8 @@ def pdf_to_images(path, outdir, dpi=150, fmt="png", pages=None, password=None):
             outdir.mkdir(parents=True, exist_ok=True)
             width = len(str(total))
             written = []
-            for i in indices:
+            for n, i in enumerate(indices):
+                progress.report(n, len(indices), "page")
                 image = doc[i].render(scale=dpi / 72).to_pil()
                 if fmt.lower() in ("jpg", "jpeg") and image.mode != "RGB":
                     image = image.convert("RGB")

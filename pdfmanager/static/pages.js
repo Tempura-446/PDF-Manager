@@ -17,18 +17,10 @@
 //   board.setOrder([2, 0, 1]) / board.setSelection([0, 4])   // e.g. from a typed page range
 //   board.splits / board.setSplits([3, 7])   // 0-based pages that start a new file
 
-const BASE = new URL("/static/pdfjs/", location.href).href;
+import { DOC_OPTIONS, destroyTask, loadPdfjs, openDocument } from "./pdfjs.js";
+
 const THUMB = 132;   // CSS pixels for the longest side of a preview
 const RENDERERS = 2; // pages rendered at the same time
-
-let pdfjs = null;
-async function loadPdfjs() {
-  if (!pdfjs) {
-    pdfjs = await import(BASE + "build/pdf.min.mjs");
-    pdfjs.GlobalWorkerOptions.workerSrc = BASE + "build/pdf.worker.min.mjs";
-  }
-  return pdfjs;
-}
 
 const ICON = {
   left: '<path d="m15 18-6-6 6-6"/>', right: '<path d="m9 18 6-6-6-6"/>',
@@ -233,16 +225,11 @@ export class PageBoard {
     const lib = await loadPdfjs();
     const data = new Uint8Array(await file.arrayBuffer());
     if (gen !== this.gen) return "stale";
-    const task = lib.getDocument({
-      data, password: password || undefined,
-      cMapUrl: BASE + "cmaps/", cMapPacked: true,
-      standardFontDataUrl: BASE + "standard_fonts/", wasmUrl: BASE + "wasm/", iccUrl: BASE + "iccs/",
-      isEvalSupported: false,
-    });
+    const task = await openDocument({ ...DOC_OPTIONS, data, password: password || undefined });
     let locked = null;
     task.onPassword = (update, reason) => {
       locked = reason === lib.PasswordResponses.INCORRECT_PASSWORD ? "wrong-password" : "password";
-      task.destroy();
+      destroyTask(task);
     };
     this.task = task;
     try {
@@ -276,7 +263,7 @@ export class PageBoard {
     this.file = null; this.password = null; this.doc = null; this.total = 0;
     const task = this.task;
     this.task = null;
-    if (task) await task.destroy().catch(() => {});
+    await destroyTask(task);
     this.#state("empty");
   }
 

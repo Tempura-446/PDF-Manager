@@ -12,19 +12,26 @@ and other machines can't drive the server.
 import base64
 import email.parser
 import email.policy
+import hashlib
+import hmac
 import importlib.util
+import inspect
 import io
 import json
 import os
 import re
 import secrets
 import shutil
+import signal
+import socket
+import socketserver
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import urllib.parse
+import urllib.request
 import webbrowser
 import zipfile
 from http import HTTPStatus
@@ -32,9 +39,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
-from pdfmanager import (__version__, archive, compare, core, office, organize, outline, recipes,
-                        redact, scan)
-from pdfmanager.appdata import data_dir
+from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
+                        forms, recipes, redact, scan, search, textedit, update)
+from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
 MAX_UPLOAD = 1024 * 1024 * 1024  # 1 GB
@@ -175,6 +182,31 @@ OPERATIONS = [
              "everywhere and can't be changed. Links keep working.",
      "fields": [_f("forms", "Form fields", "check", True),
                 _f("comments", "Comments, highlights, drawings and signatures", "check", True)]},
+    {"id": "form", "group": "Stamp", "label": "Add form fields", "files": "pdf", "panel": "form",
+     "help": "Draw boxes where people should type, tick or sign. The PDF can then be filled "
+             "in with any PDF reader, including the reader here.",
+     "fields": [_f("font_size", "Text size", "select", "0",
+                   choices=[["0", "Fit the box"], ["8", "8 pt"], ["10", "10 pt"], ["12", "12 pt"],
+                            ["14", "14 pt"]]),
+                _f("border", "Draw a border around each field", "check", True),
+                _f("required", "Make text fields required", "check", False),
+                _f("fields", "", "hidden", "")]},
+    {"id": "headers", "group": "Stamp", "label": "Headers & footers", "files": "pdf",
+     "help": "Add text at the top or bottom of every page: a title, the date, page numbers or "
+             "Bates numbers (which continue from one file to the next).",
+     "fields": [_f("top_left", "Top left"), _f("top_center", "Top centre"),
+                _f("top_right", "Top right", "text", "", placeholder="{date}"),
+                _f("bottom_left", "Bottom left", "text", "", placeholder="{file}"),
+                _f("bottom_center", "Bottom centre", "text", "", placeholder="Page {n} of {total}"),
+                _f("bottom_right", "Bottom right", "text", "", placeholder="{bates}",
+                   hint="{n} page · {total} pages · {file} file name · {title} · {date} · "
+                        "{bates} Bates number"),
+                _f("bates_prefix", "Bates prefix", "text", "", placeholder="ABC"),
+                _f("bates_start", "First Bates number", "number", 1, min=0),
+                _f("bates_digits", "Bates digits", "number", 6, min=1, max=12),
+                _f("font_size", "Font size", "number", 9, min=4),
+                _f("margin", "Distance from edge (mm)", "number", 10, min=0),
+                _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
     {"id": "metadata", "group": "Stamp", "label": "Title & author", "files": "pdf",
      "fields": [_f("title", "Title"), _f("author", "Author"), _f("subject", "Subject"),
                 _f("keywords", "Keywords")]},
@@ -215,6 +247,12 @@ OPERATIONS = [
                 _f("dpi", "Resolution (DPI)", "number", 150, min=36, max=600),
                 _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
     {"id": "text", "group": "Convert", "label": "PDF → text", "files": "pdf", "fields": []},
+    {"id": "media", "group": "Convert", "label": "Pictures & attachments", "files": "pdf",
+     "help": "Save the pictures inside PDFs (in their own format, each once) and any files "
+             "attached to them, as a ZIP.",
+     "fields": [_f("images", "Pictures", "check", True),
+                _f("attachments", "Attached files", "check", True),
+                _f("min_size", "Skip pictures smaller than (pixels)", "number", 16, min=1)]},
     {"id": "to-word", "group": "Convert", "label": "PDF → Word", "files": "pdf",
      "help": "Turn PDFs into editable Word documents (.docx).",
      "fields": [_f("engine", "Converter", "select", "auto",
@@ -253,10 +291,19 @@ OPERATIONS = [
      "fields": [_f("directory", "Folder", "text", "", required=True),
                 _f("recursive", "Include sub-folders", "check", False),
                 _f("delete", "Delete duplicates (keeps the oldest copy)", "check", False)]},
+    {"id": "search", "group": "Folders", "label": "Search PDFs", "files": None,
+     "action": "Search", "preview": False,
+     "help": "Find text in every PDF in a folder. Click a result to open the page in the "
+             "reader. Nothing is changed.",
+     "fields": [_f("directory", "Folder", "text", "", required=True),
+                _f("query", "Search for", "text", "", required=True),
+                _f("recursive", "Include sub-folders", "check", True),
+                _f("case_sensitive", "Match upper/lower case", "check", False),
+                _f("whole_words", "Whole words only", "check", False)]},
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
-SUFFIX = {"recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
+SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
@@ -265,6 +312,11 @@ SUFFIX = {"recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "f
 
 class UserError(Exception):
     pass
+
+
+# Errors whose message is shown to the user as it is.
+EXPECTED_ERRORS = (UserError, core.PdfManagerError, PageRangeError, ValueError,
+                   FileNotFoundError, NotADirectoryError)
 
 
 # --------------------------------------------------------------------------
@@ -377,12 +429,40 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         name = re.sub(r"[^\w-]+", "-", (opts.get("recipe_name") or "").strip()).strip("-").lower()
         if name:
             out = out_dir / f"{src.stem}_{name}.pdf"
-        recipes.run(steps, src, out, password, notes)
+        recipes.run(steps, src, out, password, notes, state=opts.setdefault("_state", {}))
+    elif op == "form":
+        try:
+            raw = json.loads(opts.get("fields") or "{}")
+            fields = [{**f, "page": int(page)} for page, found in raw.items() for f in found]
+        except (ValueError, TypeError, AttributeError):
+            raise UserError("the fields drawn on the pages are damaged; draw them again") from None
+        if not fields:
+            raise UserError("draw the fields on the page first: drag where people should type, "
+                            "tick or sign")
+        if _bool(opts.get("required")):
+            fields = [{**f, "required": f.get("type") in ("text", "multiline")} for f in fields]
+        names = forms.add_fields(src, out, fields, border=_bool(opts.get("border")),
+                                 font_size=_num(opts.get("font_size"), float, 0),
+                                 password=password)
+        notes.append(f"{src.name}: added {len(names)} field{'s' if len(names) != 1 else ''} "
+                     f"({', '.join(names[:8])}{'…' if len(names) > 8 else ''})")
+    elif op == "headers":
+        # Bates numbers continue from file to file: the next number is kept
+        # in the options between files.
+        first = _num(opts.get("_bates_next"), int, None)
+        if first is None:
+            first = _num(opts.get("bates_start"), int, 1)
+        opts["_bates_next"] = core.headers_footers(
+            src, out, {spot: opts.get(spot) or "" for spot in core.HEADER_SPOTS},
+            font_size=_num(opts.get("font_size"), float, 9),
+            margin_mm=_num(opts.get("margin"), float, 10), pages=_pages(opts),
+            bates_prefix=opts.get("bates_prefix") or "", bates_start=first,
+            bates_digits=_num(opts.get("bates_digits"), int, 6), password=password)
     elif op == "flatten":
-        forms, comments = _bool(opts.get("forms", True)), _bool(opts.get("comments", True))
-        if not forms and not comments:
+        fields, comments = _bool(opts.get("forms", True)), _bool(opts.get("comments", True))
+        if not fields and not comments:
             raise UserError("choose form fields, comments or both")
-        archive.flatten(src, out, forms=forms, comments=comments, password=password)
+        archive.flatten(src, out, forms=fields, comments=comments, password=password)
     elif op == "sanitize":
         counts = archive.sanitize(
             src, out, **{k: _bool(opts.get(k, d)) for k, d in
@@ -426,6 +506,16 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         folder = out_dir / f"{src.stem}_split"
         return core.split(src, folder, every=None if ranges else _num(opts.get("every"), int, 1),
                           ranges=ranges or None, password=password)
+    elif op == "media":
+        images, attachments = _bool(opts.get("images", True)), _bool(opts.get("attachments", True))
+        if not images and not attachments:
+            raise UserError("choose pictures, attached files or both")
+        found = core.extract_media(src, out_dir / f"{src.stem}_media", images, attachments,
+                                   _num(opts.get("min_size"), int, 16), password)
+        notes.append(f"{src.name}: {len(found['images'])} picture"
+                     f"{'s' if len(found['images']) != 1 else ''}, {len(found['attachments'])} "
+                     f"attached file{'s' if len(found['attachments']) != 1 else ''}")
+        return found["images"] + found["attachments"]
     elif op == "to-images":
         return core.pdf_to_images(src, out_dir / f"{src.stem}_images",
                                   _num(opts.get("dpi"), int, 150), opts.get("format") or "png",
@@ -477,7 +567,7 @@ def _clean_note(name, report):
 
 def _protect(outputs, password, op):
     """PDFs made from a password-protected file get the same password."""
-    if password and op not in ("decrypt", "encrypt", "pdfa"):
+    if password and op not in ("decrypt", "encrypt", "pdfa", "media"):
         for path in outputs:
             if path.suffix.lower() == ".pdf":
                 core.encrypt(path, path, password)
@@ -543,12 +633,16 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
             # Each input gets its own output folder; flatten afterwards.
             sub = out_dir / f"{index:03d}"
             sub.mkdir()
-            outputs.extend((sub, p) for p in _run_file_op(op, src, sub, opts, password,
-                                                           extra_files, notes))
+            label = f"{src.name} ({index + 1} of {len(files)})" if len(files) > 1 else src.name
+            with progress.section(index, len(files), label):
+                outputs.extend((sub, p) for p in _run_file_op(op, src, sub, opts, password,
+                                                               extra_files, notes))
         outputs = _flatten_outputs(outputs, out_dir)
 
+    if not outputs:
+        raise UserError("nothing was found to save" + (f" ({'; '.join(notes)})" if notes else ""))
     _protect(outputs, password, op)
-    if len(outputs) == 1:
+    if len(outputs) == 1 and op != "media":
         path = outputs[0]
         ctype = {".txt": "text/plain; charset=utf-8",
                  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -579,6 +673,9 @@ def run_folder_operation(op, opts, apply):
         plan = organize.rename(directory, opts.get("pattern") or "{date:%Y-%m-%d} {title}",
                                recursive, dry_run=not apply)
         rows = [[str(s), str(d)] for s, d in plan]
+    elif op == "search":
+        return search.search(directory, opts.get("query") or "", recursive,
+                             _bool(opts.get("case_sensitive")), _bool(opts.get("whole_words")))
     elif op == "duplicates":
         rows = []
         for keep, *extra in organize.find_duplicates(directory, recursive):
@@ -673,6 +770,66 @@ class OpenFiles:
             return self.items.get(key)
 
 
+class Events:
+    """Messages for the app's pages, numbered; pages ask for the ones after
+    the last they've seen and wait for new ones."""
+
+    def __init__(self):
+        self.items = []
+        self.cond = threading.Condition()
+
+    def push(self, event):
+        with self.cond:
+            self.items.append(event)
+            self.cond.notify_all()
+
+    def wait(self, after, timeout=20):
+        with self.cond:
+            if len(self.items) <= after:
+                self.cond.wait(timeout)
+            return self.items[after:], len(self.items)
+
+
+class RecentFiles:
+    """PDFs recently opened in the reader from this computer, newest first,
+    kept in recent.json in the app's data folder."""
+
+    LIMIT = 30
+    lock = threading.Lock()
+
+    @staticmethod
+    def _file():
+        return data_dir() / "recent.json"
+
+    @classmethod
+    def load(cls):
+        try:
+            items = json.loads(cls._file().read_text(encoding="utf-8"))
+            return [i for i in items if isinstance(i, dict) and i.get("path")]
+        except (OSError, ValueError):
+            return []
+
+    @classmethod
+    def _save(cls, items):
+        try:
+            write_private(cls._file(), json.dumps(items[:cls.LIMIT], indent=1))
+        except OSError:
+            pass  # a recent-files list isn't worth failing over
+
+    @classmethod
+    def add(cls, path):
+        path = str(Path(path).resolve())
+        with cls.lock:
+            items = [i for i in cls.load() if os.path.normcase(i["path"]) != os.path.normcase(path)]
+            items.insert(0, {"path": path, "opened": time.time()})
+            cls._save(items)
+
+    @classmethod
+    def forget(cls, path=None):
+        with cls.lock:
+            cls._save([] if path is None else [i for i in cls.load() if i["path"] != path])
+
+
 # --------------------------------------------------------------------------
 # HTTP
 # --------------------------------------------------------------------------
@@ -719,11 +876,41 @@ def _safe_name(name):
     return re.sub(r'[<>:"|?*\x00-\x1f]', "_", name).strip(" .") or "file"
 
 
+def _log(message):
+    """Opt-in trail of what the app does (PDFM_LOG=1 writes app.log in the
+    app's data folder), for troubleshooting start-up and shutdown."""
+    if not os.environ.get("PDFM_LOG"):
+        return
+    try:
+        with open(data_dir() / "app.log", "a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%H:%M:%S')} [{os.getpid()}] {message}\n")
+    except OSError:
+        pass
+
+
+def _thread_stacks():
+    import traceback
+
+    names = {t.ident: t.name for t in threading.enumerate()}
+    return "\n".join(f"--- {names.get(ident, ident)}\n" + "".join(traceback.format_stack(frame))
+                     for ident, frame in sys._current_frames().items())
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = f"pdfm/{__version__}"
+    protocol_version = "HTTP/1.1"  # keep connections open between requests
     token = ""
     allowed_hosts = set()
     results = None  # ResultCache
+    jobs = None  # progress.JobStore
+    pages = None  # open pages: id -> when last heard from
+    events = None  # Events for the pages
+    instance_secret = None  # see forward_to_running_app
+    instance_mode = None
+    instance_extra = None
+    bring_to_front = None
+    quit_app = None  # closes the pywebview window (to restart after an update)
+    quit_requested = False  # makes wait_until_closed return
     opened = None  # OpenFiles
     # pywebview's JavaScript bridge needs eval(); only allowed in the desktop window.
     allow_eval = False
@@ -741,7 +928,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "max-age=3600" if cache else "no-store")
+        # Static files may be cached but are checked (cheaply, by ETag) on every
+        # load, so an updated app never runs old code.
+        self.send_header("Cache-Control", "no-cache" if cache else "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         for k, v in (headers or {}).items():
@@ -750,6 +939,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _error(self, status, message):
+        # The request body may not have been read; don't reuse the connection.
+        self.close_connection = True
         self._send(status, {"error": message})
 
     def _host_ok(self):
@@ -758,7 +949,11 @@ class Handler(BaseHTTPRequestHandler):
     def _token_ok(self):
         ok = secrets.compare_digest(self.headers.get("X-Pdfm-Token", ""), self.token)
         if ok:
-            type(self).last_seen = time.monotonic()  # the page is still open
+            now = time.monotonic()
+            type(self).last_seen = now  # a page is still open
+            page = self.headers.get("X-Pdfm-Page", "")[:64]
+            if page and self.pages is not None:
+                self.pages[page] = now
         return ok
 
     # -- routes ------------------------------------------------------------
@@ -782,6 +977,18 @@ class Handler(BaseHTTPRequestHandler):
                                               "step_ops": list(recipes.STEP_OPS)})
         if path.startswith("/api/file/"):
             return self._open_file(path[len("/api/file/"):])
+        if path.startswith("/api/job/"):
+            return self._job(path, "GET")
+        if path == "/api/recent":
+            return self._recent()
+        if path == "/api/events":
+            return self._events()
+        if path == "/api/settings":
+            return self._send(HTTPStatus.OK, update.public_settings())
+        if path == "/api/update":
+            return self._send(HTTPStatus.OK, {**update.check(), "can_restart": self._can_restart()})
+        if path == "/api/debug/stacks" and os.environ.get("PDFM_LOG"):
+            return self._send(HTTPStatus.OK, _thread_stacks(), "text/plain; charset=utf-8")
         self._error(HTTPStatus.NOT_FOUND, "not found")
 
     def _static(self, rel):
@@ -789,23 +996,57 @@ class Handler(BaseHTTPRequestHandler):
         parts = rel.split("/")
         if any(p in ("", ".", "..") or "\\" in p or ":" in p for p in parts):
             return self._error(HTTPStatus.NOT_FOUND, "not found")
-        target = resources.files("pdfmanager").joinpath("static", *parts)
-        if not target.is_file():
-            return self._error(HTTPStatus.NOT_FOUND, "not found")
+        cached = _STATIC_CACHE.get(rel)
+        if cached is None:
+            target = resources.files("pdfmanager").joinpath("static", *parts)
+            if not target.is_file():
+                return self._error(HTTPStatus.NOT_FOUND, "not found")
+            data = target.read_bytes()
+            cached = _STATIC_CACHE[rel] = (data, '"%s"' % hashlib.blake2b(data, digest_size=8).hexdigest())
+        data, etag = cached
+        if etag in self.headers.get("If-None-Match", ""):
+            self.send_response(HTTPStatus.NOT_MODIFIED)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            return None
         ctype = STATIC_TYPES.get(Path(rel).suffix.lower(), "application/octet-stream")
-        return self._send(HTTPStatus.OK, target.read_bytes(), ctype, cache=True)
+        return self._send(HTTPStatus.OK, data, ctype, {"ETag": etag}, cache=True)
 
     def _open_file(self, key):
         path = self.opened.get(key) if self.opened is not None else None
         if path is None or not path.is_file():
             return self._error(HTTPStatus.NOT_FOUND, "that file is no longer available")
         quoted = path.name.replace('"', "")
-        return self._send(HTTPStatus.OK, path.read_bytes(), "application/pdf",
+        data = path.read_bytes()
+        RecentFiles.add(path)
+        return self._send(HTTPStatus.OK, data, "application/pdf",
                           {"X-Pdfm-Filename": quoted, "X-Pdfm-Path": str(path)})
+
+    def _recent(self):
+        """Recently opened files that still exist, each with an id the
+        reader can open."""
+        files = []
+        for item in RecentFiles.load():
+            path = Path(item["path"])
+            if path.is_file() and self.opened is not None:
+                files.append({"id": self.opened.add(path), "name": path.name, "path": str(path),
+                              "folder": str(path.parent), "opened": item.get("opened")})
+        return self._send(HTTPStatus.OK, {"files": files})
 
     def do_POST(self):
         if not self._host_ok():
             return self._error(HTTPStatus.FORBIDDEN, "bad host")
+        if self.path.split("?", 1)[0] == "/api/bye":
+            return self._bye()
+        if self.path.split("?", 1)[0] == "/api/instance":
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 1_000_000:
+                return self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "too large")
+            try:
+                return self._instance(self.rfile.read(length))
+            except ValueError:
+                return self._error(HTTPStatus.BAD_REQUEST, "bad request")
         if not self._token_ok():
             return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
         length = int(self.headers.get("Content-Length") or 0)
@@ -826,6 +1067,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._outline(body)
             if path == "/api/redact/find":
                 return self._redact_find(body)
+            if path == "/api/form/fields":
+                return self._form_fields(body)
+            if path == "/api/text/edit":
+                return self._text_edit(body)
+            if path == "/api/settings":
+                return self._save_settings(body)
+            if path == "/api/update/check":
+                return self._send(HTTPStatus.OK, {**update.check(force=True),
+                                                  "can_restart": self._can_restart()})
+            if path == "/api/update/install":
+                return self._job_or_now(lambda: {"json": {"version": update.install()}})
+            if path == "/api/update/restart":
+                return self._restart()
             if path == "/api/recipes/save":
                 data = json.loads(body or b"{}")
                 saved = recipes.save(data.get("name"), data.get("steps"))
@@ -836,46 +1090,101 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(HTTPStatus.OK, {"recipes": list(recipes.load_all().values())})
             if path == "/api/folder":
                 data = json.loads(body or b"{}")
-                result = run_folder_operation(data.get("op"), data.get("options") or {},
-                                              bool(data.get("apply")))
-                return self._send(HTTPStatus.OK, result)
+
+                def folder_job():
+                    result = run_folder_operation(data.get("op"), data.get("options") or {},
+                                                  bool(data.get("apply")))
+                    # Search results can be opened in the reader.
+                    for match in result.get("matches", []):
+                        match["id"] = self.opened.add(match["path"])
+                    return {"json": result}
+
+                return self._job_or_now(folder_job)
+            if path.startswith("/api/job/"):
+                return self._job(path, "POST")
+            if path == "/api/recent/forget":
+                data = json.loads(body or b"{}")
+                RecentFiles.forget(data.get("path") if not data.get("all") else None)
+                return self._send(HTTPStatus.OK, {"ok": True})
             return self._error(HTTPStatus.NOT_FOUND, "not found")
-        except (UserError, core.PdfManagerError, PageRangeError, ValueError,
-                FileNotFoundError, NotADirectoryError) as exc:
+        except EXPECTED_ERRORS as exc:
             return self._error(HTTPStatus.BAD_REQUEST, str(exc))
         except Exception as exc:  # report, don't kill the server
             return self._error(HTTPStatus.INTERNAL_SERVER_ERROR,
                                f"{type(exc).__name__}: {exc}")
 
     def _run(self, body):
+        """Run a tool. With "X-Pdfm-Async: 1" the tool runs as a background
+        job: the answer is {"job": id}; /api/job/<id> tells how far it is,
+        /api/job/<id>/result gives the file and /api/job/<id>/cancel stops it."""
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
         op = fields.pop("op", "")
         password = fields.pop("password", "") or None
-        work = Path(tempfile.mkdtemp(prefix="pdfm-"))
-        try:
-            files, extra = [], {}
-            for index, (name, filename, data) in enumerate(uploads):
-                # One folder per upload keeps original names without clashes.
-                folder = work / "in" / f"{index:03d}"
-                folder.mkdir(parents=True)
-                path = folder / _safe_name(filename)
-                path.write_bytes(data)
-                if name == "files":
-                    files.append(path)
-                elif data:  # extra file field, e.g. an ICC profile
-                    extra[name] = path
-            notes = []
-            name, data, ctype = run_operation(op, files, fields, password, extra, work, notes)
-            quoted = name.replace('"', "")
-            headers = {"Content-Disposition": f'attachment; filename="{quoted}"',
-                       "X-Pdfm-Filename": quoted}
-            if notes:
-                headers["X-Pdfm-Note"] = urllib.parse.quote("\n".join(notes))
-            if self.headers.get("X-Pdfm-Keep") == "1" and self.results is not None:
-                headers["X-Pdfm-Result-Id"] = self.results.add(name, data)
-            return self._send(HTTPStatus.OK, data, ctype, headers)
-        finally:
-            shutil.rmtree(work, ignore_errors=True)
+        keep = self.headers.get("X-Pdfm-Keep") == "1"
+
+        def work_on():
+            work = Path(tempfile.mkdtemp(prefix="pdfm-"))
+            try:
+                files, extra = [], {}
+                for index, (name, filename, data) in enumerate(uploads):
+                    # One folder per upload keeps original names without clashes.
+                    folder = work / "in" / f"{index:03d}"
+                    folder.mkdir(parents=True)
+                    path = folder / _safe_name(filename)
+                    path.write_bytes(data)
+                    if name == "files":
+                        files.append(path)
+                    elif data:  # extra file field, e.g. an ICC profile
+                        extra[name] = path
+                notes = []
+                name, data, ctype = run_operation(op, files, fields, password, extra, work, notes)
+                return {"file": (name, data, ctype, notes, keep)}
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+
+        return self._job_or_now(work_on)
+
+    def _job_or_now(self, func):
+        if self.headers.get("X-Pdfm-Async") == "1":
+            job = progress.Job()
+            job.expected = EXPECTED_ERRORS
+            self.jobs.add(job).start(func)
+            return self._send(HTTPStatus.OK, {"job": job.id})
+        return self._send_result(func())
+
+    def _send_result(self, result):
+        if "json" in result:
+            return self._send(HTTPStatus.OK, result["json"])
+        name, data, ctype, notes, keep = result["file"]
+        quoted = name.replace('"', "")
+        headers = {"Content-Disposition": f'attachment; filename="{quoted}"',
+                   "X-Pdfm-Filename": quoted}
+        if notes:
+            headers["X-Pdfm-Note"] = urllib.parse.quote("\n".join(notes))
+        if keep and self.results is not None:
+            headers["X-Pdfm-Result-Id"] = self.results.add(name, data)
+        return self._send(HTTPStatus.OK, data, ctype, headers)
+
+    def _job(self, path, method):
+        """GET /api/job/<id>, GET /api/job/<id>/result, POST /api/job/<id>/cancel."""
+        job_id, _, action = path[len("/api/job/"):].partition("/")
+        job = self.jobs.get(job_id)
+        if job is None:
+            return self._error(HTTPStatus.NOT_FOUND, "that job is no longer available")
+        if method == "POST" and action == "cancel":
+            job.cancel()
+            return self._send(HTTPStatus.OK, job.snapshot())
+        if method == "GET" and action == "result":
+            if job.state == "failed":
+                self.jobs.pop(job_id)
+                return self._error(HTTPStatus.BAD_REQUEST, job.error)
+            if job.state != "done":
+                return self._error(HTTPStatus.CONFLICT, f"the job is {job.state}")
+            self.jobs.pop(job_id)
+            return self._send_result(job.result)
+        if method == "GET" and not action:
+            return self._send(HTTPStatus.OK, job.snapshot())
+        return self._error(HTTPStatus.NOT_FOUND, "not found")
 
     def _keep(self, body):
         """Hold a file (e.g. the reader's copy with filled-in forms) so the
@@ -901,6 +1210,66 @@ class Handler(BaseHTTPRequestHandler):
                      else outline.get_outline(path, password))
         return self._send(HTTPStatus.OK, {"items": items, "pages": pages})
 
+    def _bye(self):
+        """The page is being closed (or reloaded). Sent with
+        navigator.sendBeacon, which can't add headers, so the token comes
+        in the query string; this request can do nothing else."""
+        self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 65536))
+        query = urllib.parse.parse_qs(self.path.partition("?")[2])
+        if not secrets.compare_digest(query.get("token", [""])[0], self.token):
+            return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
+        if self.pages is not None:
+            self.pages.pop(query.get("page", [""])[0], None)
+        type(self).closed_at = time.monotonic()
+        return self._send(HTTPStatus.OK, {"ok": True})
+
+    def _instance(self, body):
+        """Another launch of the app hands over the files it was asked to
+        open (see forward_to_running_app). It proves it's the same user
+        with the secret from instance.json in the app's data folder."""
+        data = json.loads(body or b"{}")
+        nonce = str(data.get("nonce", ""))
+        if not self.instance_secret or not nonce or not secrets.compare_digest(
+                str(data.get("proof", "")), _proof(self.instance_secret, "open", nonce)):
+            return self._error(HTTPStatus.FORBIDDEN, "not allowed")
+        proof = _proof(self.instance_secret, "answer", nonce)
+        ids = []
+        for path in data.get("paths") or []:
+            try:
+                ids.append(self.opened.add(path))
+            except (OSError, ValueError):
+                continue
+        if self.instance_mode == "desktop":
+            self.events.push({"open": ids})
+            raise_window = type(self).bring_to_front  # a plain function, not a method
+            if raise_window:
+                # Not before answering: pywebview waits for the window's own
+                # thread, and the other launch only waits a few seconds
+                # before opening a second copy instead.
+                threading.Thread(target=raise_window, daemon=True).start()
+            return self._send(HTTPStatus.OK, {"handled": True, "proof": proof})
+        url = f"http://127.0.0.1:{self.server.server_address[1]}/#token={self.token}"
+        if ids:
+            url += "&open=" + ",".join(ids)
+        return self._send(HTTPStatus.OK, {"url": url, "mode": self.instance_mode, "proof": proof})
+
+    def _events(self):
+        """Long poll: events for the page (files handed over by another
+        launch), after the one numbered ``after``."""
+        query = urllib.parse.parse_qs(self.path.partition("?")[2])
+        try:
+            after = int(query.get("after", ["0"])[0])
+        except ValueError:
+            after = 0
+        mode = type(self).instance_mode
+        if mode is not None and mode != "desktop":
+            # Only the app's own window gets events; other kinds open a new
+            # window instead. Answer at once so the page stops asking (a
+            # browser allows few connections per site).
+            return self._send(HTTPStatus.OK, {"events": [], "last": after, "none": True})
+        events, last = self.events.wait(after, timeout=20)
+        return self._send(HTTPStatus.OK, {"events": events, "last": last})
+
     def _redact_find(self, body):
         """Where the Redact tool's words and kinds of numbers are found, so
         the page editor can show them before anything is blacked out."""
@@ -918,6 +1287,70 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(HTTPStatus.OK, {"boxes": {str(p + 1): [list(b) for b in boxes]
                                                     for p, boxes in found.items()}})
 
+    def _form_fields(self, body):
+        """The form fields already in a PDF, for the Add form fields editor."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            found = forms.existing_fields(path, fields.get("password") or None)
+        return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})
+
+    def _save_settings(self, body):
+        data = json.loads(body or b"{}")
+        changes = {}
+        if "repo" in data:
+            repo = str(data["repo"] or "").strip().strip("/")
+            if repo and not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+                raise UserError("the repository should look like owner/name")
+            changes["update_repo"] = "" if repo == update.REPO else repo
+        if data.get("token"):
+            changes["github_token"] = str(data["token"]).strip()
+        if data.get("clear_token"):
+            changes["github_token"] = ""
+        if "check" in data:
+            changes["check_updates"] = None if data["check"] else False
+        update.save_settings(**changes)
+        return self._send(HTTPStatus.OK, update.public_settings())
+
+    def _can_restart(self):
+        """Can this copy close itself and start again (after an update)?"""
+        mode = type(self).instance_mode
+        return mode in ("app-window", "browser") or (mode == "desktop" and type(self).quit_app is not None)
+
+    def _restart(self):
+        """Start the app again: a helper waits for this copy to end."""
+        cls = type(self)
+        if not self._can_restart():
+            raise UserError("close PDF Manager and open it again to use the new version")
+        update.restart_after(os.getpid())
+        cls.quit_requested = True
+        _log(f"restart asked for; mode {cls.instance_mode}")
+        if cls.instance_mode == "desktop":
+            threading.Timer(0.5, cls.quit_app).start()  # once this answer has been sent
+        return self._send(HTTPStatus.OK, {"restarting": True})
+
+    def _text_edit(self, body):
+        """Change words on the reader's pages; sends back the changed PDF."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        try:
+            edits = json.loads(fields.get("edits") or "[]")
+        except ValueError:
+            raise UserError("the changes are damaged; make them again") from None
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "edited.pdf"
+            src.write_bytes(uploads[0][2])
+            textedit.edit_text(src, out, edits, password)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)  # stays protected
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf")
+
     def _inspect(self, body):
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
         if not uploads:
@@ -929,18 +1362,53 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(HTTPStatus.OK, info)
 
 
-def make_server(port=0, desktop=False, open_paths=()):
+# Static files (the reader and pdf.js), read once: rel path -> (bytes, ETag).
+_STATIC_CACHE = {}
+
+# The app uses this port when it's free, so the page keeps the same address
+# between launches and the window's cache and settings (theme, reading
+# positions, a saved signature) carry over. Another free port is used if
+# it's taken, e.g. by a second copy of the app.
+APP_PORT = 47821
+
+
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # On Windows SO_REUSEADDR would let a second copy of the app take the same
+    # port; ask for the port exclusively there instead.
+    allow_reuse_address = sys.platform != "win32"
+
+    def server_bind(self):
+        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        # HTTPServer.server_bind looks up the computer's full name, which can
+        # take seconds on some Windows networks; it isn't needed here.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+def make_server(port=0, desktop=False, open_paths=(), prefer=None):
     """Create (but don't start) the server. Returns (server, url). The
     server's result cache is ``server.RequestHandlerClass.results`` and its
     openable files ``server.RequestHandlerClass.opened``. ``open_paths``
-    are PDFs to show in the reader straight away."""
+    are PDFs to show in the reader straight away. With ``port`` 0, the
+    ``prefer``red port is tried first, then any free port."""
     token = secrets.token_urlsafe(24)
     opened = OpenFiles()
     open_ids = [opened.add(p) for p in open_paths]
     handler = type("PdfmHandler", (Handler,), {"token": token, "results": ResultCache(),
                                                "opened": opened, "allow_eval": desktop,
-                                               "last_seen": time.monotonic()})
-    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+                                               "last_seen": time.monotonic(),
+                                               "closed_at": None, "jobs": progress.JobStore(),
+                                               "pages": {}, "events": Events()})
+    server = None
+    if not port and prefer:
+        try:
+            server = _Server(("127.0.0.1", prefer), handler)
+        except OSError:
+            server = None  # in use
+    if server is None:
+        server = _Server(("127.0.0.1", port), handler)
     real_port = server.server_address[1]
     handler.allowed_hosts = {f"127.0.0.1:{real_port}", f"localhost:{real_port}"}
     url = f"http://127.0.0.1:{real_port}/#token={token}"
@@ -952,7 +1420,7 @@ def make_server(port=0, desktop=False, open_paths=()):
 def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False):
     """Run in the browser: print the link, open it, serve until Ctrl+C (or,
     with ``exit_when_closed``, until the page has been closed)."""
-    server, url = make_server(port, open_paths=open_paths)
+    server, url = make_server(port, open_paths=open_paths, prefer=APP_PORT)
     print(f"PDF Manager is running at {url}")
     print("Keep this window open while you use it; press Ctrl+C to stop.")
     if open_browser:
@@ -960,9 +1428,12 @@ def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False):
     try:
         if exit_when_closed:
             threading.Thread(target=server.serve_forever, daemon=True).start()
-            wait_until_closed(server.RequestHandlerClass)
+            _register_instance(server, "browser")
+            wait_until_closed(server.RequestHandlerClass, grace=5)
+            _unregister_instance(server)
             server.shutdown()
         else:
+            server.RequestHandlerClass.instance_mode = "browser"  # no events to wait for
             server.serve_forever()
     except KeyboardInterrupt:
         pass
@@ -970,26 +1441,202 @@ def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False):
         server.server_close()
 
 
-def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=2.0):
-    """Block until the page is gone. The page pings the server every 15
-    seconds (less often while hidden), which updates ``handler.last_seen``.
+def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5, grace=2.0,
+                      handoff=5.0):
+    """Block until the app's pages are gone.
 
-    With ``proc`` (the browser started for an app window): return as soon
-    as it exits, the window was closed. If it exits within a few seconds,
-    the browser handed the window to a copy that was already running, so
-    fall back to the pings."""
+    Each page says when its window closes (/api/bye) and otherwise pings the
+    server every 15 seconds (less often while hidden). When the last page
+    has said goodbye and no page has been heard from for ``grace`` seconds
+    (a reload asks for the page again straight away), the app is closed.
+    A page not heard from for ``idle`` seconds counts as gone (e.g. its
+    browser was killed).
+
+    With ``proc`` (the browser started for an app window): if it exits after
+    the first ``handoff`` seconds, the window was closed. If it exits sooner,
+    the browser handed the window to a copy that was already running, so only
+    the pages' signals count. A browser that keeps running in the background
+    after its window is closed (Edge does) doesn't keep the app alive."""
     started = time.monotonic()
+    exited_at = None
+    pages = getattr(handler, "pages", None)
+    if pages is None:
+        pages = {}
     while True:
         time.sleep(poll)
-        quiet = time.monotonic() - handler.last_seen
-        if proc is None:
-            if quiet > idle:
-                return
-            continue
-        if proc.poll() is None:
-            continue
-        if time.monotonic() - started > 5 + poll or quiet > idle_handed_off:
+        if getattr(handler, "quit_requested", False):
+            _log("closing: restart asked for")
             return
+        now = time.monotonic()
+        for page, seen in list(pages.items()):
+            if now - seen > idle:
+                pages.pop(page, None)
+        closed = handler.closed_at
+        if (closed is not None and not pages and handler.last_seen <= closed
+                and now - closed > grace):
+            _log("closing: the last page said goodbye")
+            return
+        quiet = now - handler.last_seen
+        if proc is not None and proc.poll() is not None:
+            if exited_at is None:
+                exited_at = now
+            if exited_at - started > handoff + poll or quiet > idle_handed_off:
+                _log(f"closing: the browser exited (after {exited_at - started:.1f}s; quiet {quiet:.0f}s)")
+                return
+        elif quiet > idle:
+            _log(f"closing: no page heard from for {quiet:.0f}s")
+            return
+
+
+# --------------------------------------------------------------------------
+# One running copy
+# --------------------------------------------------------------------------
+
+def _instance_file():
+    return data_dir() / "instance.json"
+
+
+class _StartupLock:
+    """Only one launch at a time looks for a running copy and registers
+    itself, so files opened together (e.g. selected in Explorer and opened
+    at once) all land in one app rather than each starting its own."""
+
+    def __init__(self):
+        self.fh = None
+
+    def acquire(self, timeout=30):
+        try:
+            path = data_dir() / "launch.lock"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fh = open(path, "a+b")
+        except OSError:
+            return
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.fh = fh
+                return
+            except OSError:
+                if time.monotonic() > deadline:  # carry on without it
+                    fh.close()
+                    return
+                time.sleep(0.1)
+
+    def release(self):
+        fh, self.fh = self.fh, None
+        if fh is None:
+            return
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        fh.close()
+
+
+_startup = _StartupLock()
+
+
+def _register_instance(server, mode, **extra):
+    """Let later launches find this one (see forward_to_running_app)."""
+    handler = server.RequestHandlerClass
+    handler.instance_secret = secrets.token_urlsafe(32)
+    handler.instance_mode = mode
+    handler.instance_extra = {k: str(v) for k, v in extra.items()}
+    _log(f"registered as {mode} on port {server.server_address[1]}")
+    record = {"port": server.server_address[1], "pid": os.getpid(),
+              "secret": handler.instance_secret, "mode": mode}
+    try:
+        write_private(_instance_file(), json.dumps(record))
+    except OSError:
+        pass
+    _startup.release()  # later launches can find this copy now
+
+
+def _unregister_instance(server):
+    target = _instance_file()
+    try:
+        record = json.loads(target.read_text(encoding="utf-8"))
+        if record.get("pid") == os.getpid() and record.get("port") == server.server_address[1]:
+            target.unlink()
+    except (OSError, ValueError):
+        pass
+
+
+def forward_to_running_app(paths=()):
+    """If PDF Manager is already running, hand it ``paths`` to open and
+    return True, so this launch can end: there's only ever one copy.
+
+    The running app either opens them itself (its own window, which comes
+    to the front) or answers with an address to open, as a new window in
+    its Edge/Chrome copy or a new browser tab."""
+    try:
+        record = json.loads(_instance_file().read_text(encoding="utf-8"))
+        port, secret = int(record["port"]), str(record["secret"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    # Neither side sends the secret: each proves it knows it (anything else
+    # could be listening on that port after a crash left instance.json behind).
+    nonce = secrets.token_urlsafe(16)
+    body = json.dumps({"nonce": nonce, "proof": _proof(secret, "open", nonce),
+                       "paths": [str(Path(p).resolve()) for p in paths]}).encode()
+    request = urllib.request.Request(f"http://127.0.0.1:{port}/api/instance", data=body,
+                                     headers={"Content-Type": "application/json",
+                                              "Host": f"127.0.0.1:{port}"})
+    # Straight to this computer: a system or http_proxy proxy must not see it.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=5) as res:
+            answer = json.loads(res.read())
+    except (OSError, ValueError):
+        return False  # not running any more (or something else has the port)
+    if not isinstance(answer, dict) or not secrets.compare_digest(
+            str(answer.get("proof", "")), _proof(secret, "answer", nonce)):
+        return False  # not PDF Manager
+    if answer.get("handled"):
+        return True
+    url = str(answer.get("url") or "")
+    if not url.startswith(f"http://127.0.0.1:{port}/#token="):
+        return False
+    if answer.get("mode") == "app-window":
+        # The same kind of window, with this computer's browser and the
+        # running copy's profile (both found here, not taken from the answer).
+        browser = find_app_browser()
+        if browser:
+            try:
+                subprocess.Popen([browser, f"--app={url}", f"--user-data-dir={_window_profile(port)}",
+                                  "--no-first-run", "--no-default-browser-check"],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+                return True
+            except OSError:
+                pass
+    webbrowser.open(url)
+    return True
+
+
+def _proof(secret, purpose, nonce):
+    """HMAC proof that a side knows the instance secret."""
+    return hmac.new(secret.encode(), f"{purpose} {nonce}".encode(), hashlib.sha256).hexdigest()
+
+
+def _window_profile(port):
+    """The browser profile of the app window served on ``port``."""
+    return data_dir() / ("window" if port == APP_PORT else f"window-{port}")
+
+
 class DesktopApi:
     """Functions the page can call in the desktop window (window.pywebview.api)."""
 
@@ -1088,20 +1735,38 @@ def run_desktop(port=0, open_paths=()):
             return False
     except (OSError, IndexError):
         pass
-    server, url = make_server(port, desktop=True, open_paths=open_paths)
+    server, url = make_server(port, desktop=True, open_paths=open_paths, prefer=APP_PORT)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     handler = server.RequestHandlerClass
     api = DesktopApi(handler.results, handler.opened)
+    _register_instance(server, "desktop")
     try:
         import webview
 
         window = webview.create_window("PDF Manager", url, js_api=api, width=1180, height=820,
                                        min_size=(400, 560), background_color="#f6f6f3")
         api._window = window
-        webview.start()
+        handler.bring_to_front = lambda: _raise_window(window)
+        handler.quit_app = lambda: window.destroy()
+        # Keep the window's cache and settings between launches (pywebview
+        # otherwise starts every time like a private browser window).
+        options = {}
+        debug_port = _debug_port()
+        if debug_port:  # for tests (pywebview 5.3+; its settings aren't a plain dict)
+            try:
+                webview.settings["REMOTE_DEBUGGING_PORT"] = debug_port
+            except (AttributeError, KeyError, TypeError):
+                pass
+        if "storage_path" in inspect.signature(webview.start).parameters:
+            storage = data_dir() / "webview"
+            storage.mkdir(parents=True, exist_ok=True)
+            options = {"private_mode": False, "storage_path": str(storage)}
+        webview.start(**options)
+        _unregister_instance(server)
     except Exception as exc:  # e.g. a missing or blocked web engine
         print(f"Could not open the app window ({exc}); trying another way.")
+        _unregister_instance(server)
         try:
             note.parent.mkdir(parents=True, exist_ok=True)
             note.write_text(f"{version}\n{type(exc).__name__}: {exc}\n", encoding="utf-8")
@@ -1113,6 +1778,14 @@ def run_desktop(port=0, open_paths=()):
     server.shutdown()
     server.server_close()
     return True
+
+
+def _debug_port():
+    """PDFM_DEBUG_PORT: let tests drive the window over the DevTools protocol."""
+    try:
+        return int(os.environ.get("PDFM_DEBUG_PORT", "")) or None
+    except ValueError:
+        return None
 
 
 def find_app_browser():
@@ -1148,37 +1821,135 @@ def run_app_window(port=0, open_paths=()):
     browser = find_app_browser()
     if not browser:
         return False
-    server, url = make_server(port, open_paths=open_paths)
-    profile = data_dir() / "window"
+    server, url = make_server(port, open_paths=open_paths, prefer=APP_PORT)
+    # A browser profile of its own keeps the window separate from the user's
+    # normal browsing, so closing the app never touches their other windows.
+    # A second copy of the app (on another port) gets a temporary profile of
+    # its own, so each copy only ever closes its own browser.
+    primary = server.server_address[1] == APP_PORT
+    profile = _window_profile(server.server_address[1])
     try:
         profile.mkdir(parents=True, exist_ok=True)
-        # A profile of its own keeps the window separate from the user's
-        # normal browsing and lets us tell when it has been closed.
+        # PDFM_BROWSER_ARGS: more options for the browser (for tests and
+        # troubleshooting), and PDFM_DEBUG_PORT a remote debugging port.
+        extra = os.environ.get("PDFM_BROWSER_ARGS", "").split()
+        if _debug_port():
+            extra.append(f"--remote-debugging-port={_debug_port()}")
         proc = subprocess.Popen(
             [browser, f"--app={url}", f"--user-data-dir={profile}", "--no-first-run",
-             "--no-default-browser-check", "--window-size=1180,820"],
+             "--no-default-browser-check", "--window-size=1180,820", *extra],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError:
         server.server_close()
         return False
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    _register_instance(server, "app-window", browser=browser, profile=profile)
+    _log(f"app window: {browser} on port {server.server_address[1]}, profile {profile}")
     try:
         wait_until_closed(server.RequestHandlerClass, proc)
     except KeyboardInterrupt:
         pass
+    _unregister_instance(server)
+    _log("app window: instance file removed")
     server.shutdown()
     server.server_close()
+    _log("app window: server stopped")
+    _close_browser(proc, profile, Path(browser).name)
+    _log("app window: browser closed")
+    if not primary:
+        shutil.rmtree(profile, ignore_errors=True)
     return True
+
+
+def _profile_processes(profile, exe=None):
+    """Ids of browser processes running with this profile (Edge and Chrome
+    may keep running in the background after their last window closes).
+    ``exe`` (e.g. "msedge.exe") narrows the search, which is much quicker
+    on Windows."""
+    marker = f"--user-data-dir={profile}"
+    if sys.platform == "win32":
+        # The whole argument (a prefix would also match "...window-9000").
+        pattern = re.sub(r"([\\.^$|?*+()\[\]{}])", r"\\\1", marker) + '("|\\s|$)'
+        where = f"-Filter \"Name = '{exe}'\" " if exe and re.fullmatch(r"[\w.-]+", exe) else ""
+        script = (f"Get-CimInstance Win32_Process {where}| Where-Object {{ $_.CommandLine -and "
+                  "($_.CommandLine -match $env:PDFM_PROFILE_RE) } | "
+                  "ForEach-Object { $_.ProcessId }")
+        started = time.monotonic()
+        try:
+            out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                                 capture_output=True, text=True, timeout=20,
+                                 env={**os.environ, "PDFM_PROFILE_RE": pattern},
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            _log(f"profile processes: {exc}")
+            return []
+        pids = [int(p) for p in out.stdout.split() if p.isdigit()]
+        _log(f"profile processes ({exe or 'any'}): {pids} in {time.monotonic() - started:.1f}s"
+             + (f"; stderr: {out.stderr.strip()[:200]}" if out.stderr.strip() else ""))
+        return pids
+    pids = []
+    for entry in Path("/proc").glob("[0-9]*/cmdline"):
+        try:
+            args = entry.read_bytes().decode("utf-8", "replace").split("\0")
+            if marker in args:
+                pids.append(int(entry.parent.name))
+        except (OSError, ValueError):
+            continue
+    return pids
+
+
+def _close_browser(proc, profile, exe=None):
+    """Stop the browser that showed the app window once the window is gone."""
+    try:
+        proc.wait(timeout=1.5)  # usually it quits by itself
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    # A browser started earlier with this profile (e.g. kept running in the
+    # background by Edge) may still be there.
+    for pid in _profile_processes(profile, exe):
+        if pid == os.getpid():
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+
+def _raise_window(window):
+    """Bring the pywebview window to the front (a file was handed to it)."""
+    try:
+        window.restore()
+        window.show()
+        window.on_top = True
+        window.on_top = False
+    except Exception:
+        pass
 
 
 def launch(open_paths=(), port=0):
     """Open the app the best way available: its own pywebview window, else
-    an Edge/Chrome app window, else a browser tab. Returns once closed."""
-    if run_desktop(port=port, open_paths=open_paths):
-        return
-    if run_app_window(port=port, open_paths=open_paths):
-        return
-    serve(port=port, open_paths=open_paths, exit_when_closed=True)
+    an Edge/Chrome app window, else a browser tab. Returns once closed. If
+    the app is already running, it gets the files instead."""
+    _startup.acquire()
+    _log(f"launch: {list(map(str, open_paths))} port {port}")
+    try:
+        if not port and forward_to_running_app(open_paths):
+            _log("launch: handed to the running copy")
+            return
+        # PDFM_WINDOW=desktop, app-window or browser uses only that kind of
+        # window (for tests and troubleshooting).
+        choice = os.environ.get("PDFM_WINDOW", "").strip().lower()
+        if choice in ("", "desktop") and run_desktop(port=port, open_paths=open_paths):
+            return
+        if choice in ("", "app-window") and run_app_window(port=port, open_paths=open_paths):
+            return
+        serve(port=port, open_paths=open_paths, exit_when_closed=True)
+    finally:
+        _startup.release()
 
 
 def main_app(argv=None):

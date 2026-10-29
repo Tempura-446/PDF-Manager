@@ -1,2 +1,6 @@
 # Bundled third-party pdf.js (see packaging/update_pdfjs.py)
 pdfmanager/static/pdfjs/** linguist-vendored -diff
+
+# Windows scripts keep Windows line endings
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

@@ -106,6 +106,26 @@ nav {
 .tools .none { color: var(--faint); font-size: 14px; padding: 8px 10px; }
 .nav-foot { border-top: 1px solid var(--border); padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: var(--muted); }
 .nav-foot select { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 2px 4px; font-size: 13px; }
+.nav-foot .chip-btn { box-shadow: none; }
+.update-btn { margin: 0 14px 10px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent)); color: var(--accent); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.update-btn:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.update-btn svg { width: 16px; height: 16px; }
+.app-dialog { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); padding: 0; width: min(520px, calc(100vw - 32px)); box-shadow: 0 20px 60px rgb(0 0 0 / .3); }
+.app-dialog::backdrop { background: rgb(0 0 0 / .35); }
+.app-dialog form { padding: 22px 24px; display: flex; flex-direction: column; gap: 10px; }
+.app-dialog h2 { margin: 0; font-size: 18px; }
+.app-dialog h3 { margin: 8px 0 0; font-size: 14px; }
+.app-dialog p { margin: 0; font-size: 14px; }
+.dlg-version, .dlg-hint { color: var(--muted); font-size: 13px !important; line-height: 1.45; }
+.dlg-check { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.dlg-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.dlg-field em { font-style: normal; color: var(--ok, #15803d); }
+.dlg-field input { padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; }
+.dlg-field input:focus { border-color: var(--focus); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 20%, transparent); }
+.dlg-status { min-height: 1.3em; font-size: 13.5px !important; }
+.dlg-status.err { color: var(--err); }
+.dlg-buttons { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.link-btn { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
 .mobile-picker { display: none; }
 
 /* ---- Main ---- */
@@ -270,6 +290,27 @@ body.pb-dragging, body.pb-dragging * { cursor: grabbing !important; }
 .re-delete { position: absolute; top: -12px; right: -34px; width: 24px; height: 24px; border-radius: 50%; border: 0; background: var(--err); color: #fff; display: grid; place-items: center; cursor: pointer; padding: 0; }
 .re-delete svg { width: 13px; height: 13px; stroke-width: 2.4; }
 #panel-card.muted #panel-host { opacity: .45; pointer-events: none; }
+.region-editor .pb-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.re-fieldbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.re-types { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); overflow: hidden; background: var(--surface); }
+.re-type { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; padding: 6px 11px; font: inherit; font-size: 13px; color: inherit; cursor: pointer; }
+.re-type + .re-type { border-left: 1px solid var(--border); }
+.re-type svg { width: 15px; height: 15px; }
+.re-type[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent-ink, var(--accent)); font-weight: 600; }
+.re-type:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.re-add, .re-name-box, .re-name-box label { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.re-name-box { gap: 14px; flex-wrap: wrap; }
+select.re-name { width: auto; }
+.re-name { width: 200px; padding: 6px 9px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+.re-name:focus { border-color: var(--focus); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 20%, transparent); }
+.re-field { background: rgb(59 130 246 / .14); border: 1.5px solid #2563eb; cursor: move; }
+.re-field[data-type="checkbox"] { background: rgb(22 163 74 / .16); border-color: #16a34a; }
+.re-field[data-type="signature"] { background: rgb(217 119 6 / .14); border-color: #d97706; border-bottom-width: 2.5px; }
+.re-field.selected { outline: 2px solid var(--focus); outline-offset: 1px; }
+.re-field .re-handle { border-color: var(--focus); }
+.re-field-label { position: absolute; inset: 0; padding: 1px 4px; font-size: 11px; line-height: 1.3; color: #1e3a8a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.re-field[data-type="signature"] .re-field-label { color: #7c2d12; }
+.re-existing { position: absolute; background: repeating-linear-gradient(-45deg, rgb(100 116 139 / .28) 0 5px, rgb(100 116 139 / .12) 5px 10px); outline: 1px dashed rgb(71 85 105); pointer-events: none; }
 /* bookmark editor */
 .bm-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: min(60vh, 640px); overflow-y: auto; }
 .bm-row { display: flex; align-items: center; gap: 8px; padding-left: calc(var(--level, 0) * 26px); }
@@ -367,7 +408,9 @@ details.pw summary svg { width: 15px; height: 15px; }
   border-top: 1px solid var(--border);
 }
 .action-inner { max-width: 900px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.action-bar .summary { color: var(--muted); font-size: 14px; }
+.action-bar .summary { color: var(--muted); font-size: 14px; display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.job-progress { display: block; height: 6px; width: min(420px, 100%); border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.job-progress > span { display: block; height: 100%; width: 0; background: var(--accent); border-radius: inherit; transition: width .25s ease; }
 .action-bar .buttons { display: flex; gap: 10px; margin-left: auto; }
 .spacer { flex: 1; min-height: 24px; }
 
@@ -390,6 +433,13 @@ table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
 th { color: var(--muted); font-weight: 600; }
 td { word-break: break-all; }
+.search-results td { word-break: normal; overflow-wrap: anywhere; }
+.search-row { cursor: pointer; }
+.search-row:hover, .search-row:focus-visible { background: var(--surface-2); outline: none; }
+.search-folder { color: var(--muted); font-size: 12px; }
+.search-page { white-space: nowrap; color: var(--muted); }
+.search-results mark { background: color-mix(in srgb, #ffd54a 70%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+.search-more { color: var(--muted); font-size: 12px; }
 
 /* Reader mode: the reader fills the main area. */
 #reader-host { display: none; }
@@ -431,9 +481,15 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
     </div>
     <select class="mobile-picker" id="picker" aria-label="Choose a tool"></select>
     <div class="tools" id="tools"></div>
+    <button class="update-btn" id="update-btn" type="button" hidden>
+      <svg class="i" viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg><span id="update-label">Update available</span>
+    </button>
     <div class="nav-foot">
       <label for="theme">Theme</label>
       <select id="theme"><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+      <button class="chip-btn" id="settings-btn" type="button" title="Settings" aria-label="Settings">
+        <svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
     </div>
   </nav>
 
@@ -496,8 +552,10 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
     <div id="reader-host"></div>
 
     <div class="action-bar"><div class="action-inner">
-      <span class="summary"><span id="summary"></span><span class="kbd-hint" id="kbd-hint"></span></span>
+      <span class="summary"><span><span id="summary"></span><span class="kbd-hint" id="kbd-hint"></span></span>
+        <span class="job-progress" id="job-progress" hidden role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100"><span id="job-bar"></span></span></span>
       <div class="buttons">
+        <button class="btn secondary" id="cancel" type="button" hidden>Cancel</button>
         <button class="btn secondary" id="preview" type="button" hidden><span class="spinner"></span>Preview</button>
         <button class="btn" id="run" type="button">
           <span class="spinner"></span>
@@ -509,11 +567,49 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
   </main>
 </div>
 
+<dialog class="app-dialog" id="settings-dialog" aria-labelledby="settings-title">
+  <form method="dialog" id="settings-form">
+    <h2 id="settings-title">Settings</h2>
+    <p class="dlg-version" id="settings-version"></p>
+    <h3>Updates</h3>
+    <label class="dlg-check"><input type="checkbox" id="set-check"> Check for new versions when PDF Manager starts</label>
+    <label class="dlg-field"><span>GitHub repository</span><input type="text" id="set-repo" spellcheck="false" autocomplete="off" placeholder="owner/name"></label>
+    <label class="dlg-field"><span>GitHub token <em id="set-token-state"></em></span>
+      <input type="password" id="set-token" autocomplete="off" spellcheck="false" placeholder="paste a token to change it"></label>
+    <p class="dlg-hint">The repository is private, so checking for updates needs a token that can read it:
+      on GitHub, <em>Settings → Developer settings → Fine-grained tokens</em>, give it access to this repository
+      with <em>Contents: Read-only</em>. It's kept on this computer only.
+      <button type="button" class="link-btn" id="set-token-clear">Forget the token</button></p>
+    <p class="dlg-status" id="set-status" aria-live="polite"></p>
+    <div class="dlg-buttons">
+      <button type="button" class="btn secondary" id="set-check-now">Check now</button>
+      <span style="flex:1"></span>
+      <button type="button" class="btn secondary" value="cancel" id="set-cancel">Close</button>
+      <button type="submit" class="btn" id="set-save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="app-dialog" id="update-dialog" aria-labelledby="update-title">
+  <form method="dialog">
+    <h2 id="update-title">Update PDF Manager</h2>
+    <p id="update-text"></p>
+    <span class="job-progress" id="update-progress" hidden role="progressbar" aria-label="Progress"><span></span></span>
+    <p class="dlg-status" id="update-status" aria-live="polite"></p>
+    <div class="dlg-buttons">
+      <span style="flex:1"></span>
+      <button type="button" class="btn secondary" id="update-later">Later</button>
+      <button type="button" class="btn" id="update-go">Update now</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 "use strict";
 const token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
 const $ = (id) => document.getElementById(id);
 let ops = [], current = null, items = [], lastUrl = null;
+let formOp = null;  // the tool whose form (and result) is on screen under the reader
 const isDesktop = () => !!(window.pywebview && window.pywebview.api);
 const isMac = /Mac/.test(navigator.platform);
 
@@ -545,6 +641,7 @@ const ICONS = {
   clean: '<path d="m5 19 9-9"/><path d="M14 10 19 5"/><path d="M15 3v2M19 7h2M16.5 3.5l1 1M3 21l2-2"/><path d="M9 4H5a2 2 0 0 0-2 2v4M21 14v4a2 2 0 0 1-2 2h-4"/>',
   bookmarks: '<path d="M6 3h12v18l-6-4-6 4z"/>',
   flatten: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h6"/><path d="M15 17l2 2 3-4"/>',
+  form: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h4M7 14h4"/><rect x="13" y="7.5" width="5" height="3" rx=".5"/><rect x="13" y="12.5" width="3" height="3" rx=".5"/>',
   sanitize: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/>',
   redact: '<path d="M4 6h16M4 18h9"/><rect x="4" y="10" width="13" height="4" rx="1" fill="currentColor"/>',
   pdfa: '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4"/>',
@@ -594,8 +691,11 @@ function humanSize(n) {
 function plural(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
 function showError(text) { const e = $("error"); e.replaceChildren(icon("alert"), el("span", {}, text)); e.hidden = false; }
 function clearMessages() { $("error").hidden = true; $("result").hidden = true; $("result-table").hidden = true; }
+// Each window of the app tells the server it's there, so closing one window
+// doesn't stop the app while another is still open.
+const pageId = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).slice(0, 36);
 async function api(path, options = {}) {
-  const res = await fetch(path, { ...options, headers: { "X-Pdfm-Token": token, ...(options.headers || {}) } });
+  const res = await fetch(path, { ...options, headers: { "X-Pdfm-Token": token, "X-Pdfm-Page": pageId, ...(options.headers || {}) } });
   if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
   return res;
 }
@@ -617,16 +717,25 @@ async function load() {
     $("picker").append(og);
   }
   $("picker").addEventListener("change", (e) => select(e.target.value));
+  listen();
+  setTimeout(checkForUpdates, 4000);
   const openIds = (new URLSearchParams(location.hash.slice(1)).get("open") || "").split(",").filter(Boolean);
   if (openIds.length) {
-    await select("reader");
-    reader.openById(openIds[0]);
+    await openInReaderById(openIds);
     return;
   }
   let start = "merge";
   try { start = localStorage.getItem("pdfm-op") || start; } catch (e) {}
   select(ops.some((o) => o.id === start) ? start : ops[0].id);
+  // Load the reader and the PDF engine in the background once the app is
+  // idle, so opening a PDF later doesn't wait for them.
+  const warmUp = () => import("/static/reader.js").then((m) => m.loadPdfjs()).catch(() => {});
+  if (window.requestIdleCallback) requestIdleCallback(warmUp, { timeout: 2000 }); else setTimeout(warmUp, 1000);
 }
+
+// Saving with the computer's own dialogs in a browser window (static/files.js).
+let filesLib = null;
+import("/static/files.js").then((m) => { filesLib = m; }).catch(() => {});
 
 // ---- reader -----------------------------------------------------------------
 let reader = null;
@@ -698,19 +807,25 @@ async function select(id) {
     if (reader.doc) document.title = reader.name + " — PDF Manager";
     return;
   }
+  // Back from the reader to the same tool (e.g. after opening a search
+  // result): keep what was typed and the result.
+  const keep = id === formOp;
+  formOp = id;
   const folder = current.files === null;
   $("files-card").hidden = folder;
   $("pw-box").hidden = folder || current.files === "images" || current.files === "office";
-  $("preview").hidden = !folder;
-  $("run-label").textContent = folder ? "Apply" : "Run";
-  $("run").classList.toggle("secondary", folder);
-  $("preview").classList.toggle("secondary", !folder);
+  const previews = folder && current.preview !== false;
+  $("preview").hidden = !previews;
+  $("run-label").textContent = current.action || (folder ? "Apply" : "Run");
+  $("run").classList.toggle("secondary", previews);
+  $("preview").classList.toggle("secondary", !previews);
   $("file-input").accept = { images: "image/*", office: OFFICE_ACCEPT }[current.files] || ".pdf,application/pdf";
   $("drop-hint").textContent = {
     images: "JPG, PNG, TIFF… one page per image, in this order",
     office: "Word, Excel, PowerPoint, OpenDocument, RTF or text files",
     pdf2: current.id === "compare" ? "Two PDFs: the original first, then the changed version" : "Two PDFs: front sides first, then back sides",
   }[current.files] || (current.id === "merge" ? "Add PDFs in the order to combine them" : "One or more PDFs");
+  if (keep) return;
   const want = accepts(current.files);
   items = items.filter((it) => want(it.file));
   renderFiles(); renderForm(); clearMessages();
@@ -810,7 +925,10 @@ function move(from, to) {
 function updateSummary() {
   if (!current) return;
   $("kbd-hint").textContent = "";
-  if (current.files === null) { $("summary").textContent = "Preview first — nothing changes until you click Apply."; return; }
+  if (current.files === null) {
+    $("summary").textContent = current.preview === false ? "Nothing on your computer is changed." : "Preview first — nothing changes until you click Apply.";
+    return;
+  }
   const need = current.files === "pdf2" ? 2 : current.min || 1;
   const ready = items.length >= need;
   $("summary").textContent = ready ? `Ready · ${plural(items.length, "file")}`
@@ -1028,6 +1146,34 @@ PANELS.redact = {
     };
   },
 };
+PANELS.form = {
+  title: "Pages", sub: "Drag or click where people should type, tick or sign",
+  async setup(host) {
+    const { RegionEditor } = await import("/static/regions.js");
+    const editor = new RegionEditor(host, { mode: "form", onChange: (fields) => { const f = $("f-fields"); if (f) f.value = JSON.stringify(fields); } });
+    return {
+      async sync() {
+        host.hidden = !items.length;
+        $("panel-hint").textContent = items.length > 1
+          ? "The fields drawn on the first file are added to each file (useful for copies of the same blank form)."
+          : "Choose a field type, then drag a box on the page — or just click for a box of the usual size. Click a field to move, resize, rename or remove it. Striped: fields already in the file.";
+        if (!items.length) { editor.close(); return; }
+        const result = await editor.load(items[0].file, $("pw").value || null);
+        if (result === "password" || result === "wrong-password") $("pw-box").open = true;
+        if (result !== "ok") return;
+        const f = $("f-fields");
+        if (f && f.value) editor.setBoxes(JSON.parse(f.value));
+        else editor.onChange({});
+        try {
+          const body = new FormData();
+          body.append("file", items[0].file, items[0].file.name);
+          body.append("password", $("pw").value);
+          editor.setExisting((await (await api("/api/form/fields", { method: "POST", body })).json()).fields);
+        } catch (e) { /* showing them is optional */ }
+      },
+    };
+  },
+};
 PANELS.recipe = {
   title: "Recipe", sub: "Runs from top to bottom", always: true,
   async setup(host) {
@@ -1158,7 +1304,8 @@ async function run(preview) {
   for (const it of items) body.append("files", it.file, it.file.name);
   busy(true, current.id === "ocr" ? "Recognising text — this can take a while…" : "Working…");
   try {
-    const res = await api("/api/run", { method: "POST", body, headers: isDesktop() ? { "X-Pdfm-Keep": "1" } : {} });
+    const res = await runJob("/api/run", { method: "POST", body, headers: isDesktop() ? { "X-Pdfm-Keep": "1" } : {} });
+    if (!res) return;  // cancelled
     const name = res.headers.get("X-Pdfm-Filename") || "result.pdf";
     const resultId = res.headers.get("X-Pdfm-Result-Id");
     const note = decodeURIComponent(res.headers.get("X-Pdfm-Note") || "");
@@ -1193,8 +1340,18 @@ async function showResult(name, blob, resultId, note = "") {
       } catch (e) { showError(String(e.message || e)); }
     });
     actions.append(save);
+  } else if (filesLib && filesLib.canSave) {
+    // Edge or Chrome: the computer's own Save dialog (it needs a click).
+    const save = el("button", { class: "btn", type: "button" }, icon("download"), "Save…");
+    save.addEventListener("click", async () => {
+      try {
+        const saved = await filesLib.saveAs(blob, name);
+        if (saved) subEl.replaceChildren(el("span", { class: "saving" }, "Saved"), ` as ${saved}`);
+      } catch (e) { showError("Could not save: " + (e.message || e)); }
+    });
+    actions.append(save, el("a", { class: "btn secondary", href: lastUrl, download: name }, "Download"));
   } else {
-    actions.append(el("a", { class: "btn", href: lastUrl, download: name }, icon("download"), "Download"));
+    actions.append(el("a", { class: "btn", href: lastUrl, download: name, "data-auto": "" }, icon("download"), "Download"));
   }
   if (/\.pdf$/i.test(name)) {
     actions.append(el("button", { class: "btn secondary", type: "button", onclick: () => openInReader(new File([blob], name, { type: "application/pdf" })) }, icon("reader"), "Open in reader"));
@@ -1206,7 +1363,8 @@ async function showResult(name, blob, resultId, note = "") {
       note ? el("div", { class: "result-note" }, ...note.split("\n").map((line) => el("div", {}, line))) : null, actions));
   $("result").hidden = false;
   $("result").scrollIntoView({ behavior: "smooth", block: "nearest" });
-  if (!isDesktop()) actions.querySelector("a").click();
+  const auto = actions.querySelector("a[data-auto]");
+  if (auto) auto.click();  // browsers without a Save dialog: download straight away
   if (/\.pdf$/i.test(name)) {
     const body = new FormData();
     body.append("file", blob, name);
@@ -1228,8 +1386,11 @@ async function runFolder(apply) {
   }
   busy(true, apply ? "Applying…" : "Previewing…", apply ? "run" : "preview");
   try {
-    const data = await (await api("/api/folder", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ op: current.id, options: opts, apply }) })).json();
+    const res = await runJob("/api/folder", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op: current.id, options: opts, apply }) });
+    if (!res) return;  // cancelled
+    const data = await res.json();
+    if (data.matches) { showSearchResults(data, opts.query); return; }
     const n = data.rows.length;
     const msg = n === 0 ? "Nothing to do — everything is already in order."
       : apply ? `${plural(n, "file")} handled.` : `${plural(n, "file")} would change. Nothing has changed yet — click Apply to do it.`;
@@ -1246,16 +1407,205 @@ async function runFolder(apply) {
   } catch (err) { showError(err.message); } finally { busy(false); }
 }
 
+function showSearchResults(data, query) {
+  const pages = data.matches.length, files = new Set(data.matches.map((m) => m.path)).size;
+  const msg = pages ? `Found on ${plural(pages, "page")} in ${plural(files, "file")} (${plural(data.files, "PDF")} searched)${data.limited ? " — showing the first " + pages : ""}.`
+    : `Not found in the ${plural(data.files, "PDF")} searched.`;
+  const extra = data.skipped.length ? ` ${plural(data.skipped.length, "file")} couldn't be searched (password protected or unreadable).` : "";
+  $("result").replaceChildren(el("div", { class: "result-body" },
+    el("div", { class: "result-title" }, icon(pages ? "check" : "alert"), "Search"), el("div", { class: "result-sub" }, msg + extra)));
+  $("result").hidden = false;
+  if (!pages) return;
+  const tbody = el("tbody");
+  for (const m of data.matches) {
+    const name = m.path.split(/[\\/]/).pop(), folder = m.path.slice(0, m.path.length - name.length - 1);
+    const open = () => openInReaderById([m.id], { page: m.page, find: query });
+    const row = el("tr", { class: "search-row", tabindex: "0", title: "Open this page in the reader",
+      onclick: open, onkeydown: (e) => { if (e.key === "Enter") open(); } },
+      el("td", {}, el("strong", {}, name), el("div", { class: "search-folder" }, folder)),
+      el("td", { class: "search-page" }, `p. ${m.page}`),
+      el("td", {}, m.before, el("mark", {}, m.match), m.after, m.count > 1 ? el("span", { class: "search-more" }, ` +${m.count - 1} more`) : null));
+    tbody.append(row);
+  }
+  $("result-table").replaceChildren(el("table", { class: "search-results" },
+    el("thead", {}, el("tr", {}, el("th", {}, "File"), el("th", {}, "Page"), el("th", {}, "Text"))), tbody));
+  $("result-table").hidden = false;
+}
+
 function busy(on, text, which = "run") {
   for (const id of ["run", "preview"]) { $(id).disabled = on; $(id).classList.toggle("busy", on && id === which); }
   if (on) { $("summary").textContent = text; $("kbd-hint").textContent = ""; } else updateSummary();
+  if (!on) { $("job-progress").hidden = true; $("cancel").hidden = true; }
+  if (!on && jobCancelled) { $("summary").textContent = "Cancelled — nothing was changed."; jobCancelled = false; }
 }
+
+// Tools run as background jobs: the bar shows how far they are, and Cancel
+// stops them. Resolves with the result's response, or null if cancelled.
+let jobId = null, jobCancelled = false;
+async function runJob(path, options) {
+  const start = await (await api(path, { ...options, headers: { ...(options.headers || {}), "X-Pdfm-Async": "1" } })).json();
+  jobId = start.job;
+  const cancel = $("cancel"), bar = $("job-bar"), box = $("job-progress");
+  cancel.hidden = false; cancel.disabled = false; cancel.textContent = "Cancel";
+  const shown = Date.now();
+  try {
+    for (let wait = 150; ; wait = Math.min(wait * 1.5, 600)) {
+      await new Promise((r) => setTimeout(r, wait));
+      const s = await (await api(`/api/job/${start.job}`)).json();
+      if (s.message) $("summary").textContent = s.message;
+      if (Date.now() - shown > 400) {  // quick jobs don't need a bar
+        box.hidden = false;
+        bar.style.width = `${Math.round(s.fraction * 100)}%`;
+        box.setAttribute("aria-valuenow", String(Math.round(s.fraction * 100)));
+      }
+      if (s.state === "cancelled") { jobCancelled = true; return null; }
+      if (s.state === "done" || s.state === "failed") break;
+    }
+    return await api(`/api/job/${start.job}/result`);
+  } finally { jobId = null; }
+}
+$("cancel").addEventListener("click", async () => {
+  if (!jobId) return;
+  $("cancel").disabled = true; $("cancel").textContent = "Cancelling…";
+  try { await api(`/api/job/${jobId}/cancel`, { method: "POST" }); } catch (e) { /* it may just have finished */ }
+});
 $("run").addEventListener("click", () => run(false));
 $("preview").addEventListener("click", () => run(true));
+
+// ---- settings and updates ---------------------------------------------------------
+// The app checks GitHub for a newer version (at most twice a day); an
+// "Update" button appears in the sidebar when there is one.
+const jsonApi = async (path, data) => (await api(path, data === undefined ? {} : {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })).json();
+let updateInfo = null;
+function showUpdate(info) {
+  updateInfo = info;
+  $("update-btn").hidden = !info.available;
+  if (info.available) $("update-label").textContent = `Update to ${info.latest}`;
+}
+async function checkForUpdates() {
+  try { showUpdate(await jsonApi("/api/update")); } catch (e) { /* offline: try again next time */ }
+}
+function updateStatus(id, text, error = false) { $(id).textContent = text; $(id).classList.toggle("err", error); }
+
+async function openSettings() {
+  const s = await jsonApi("/api/settings");
+  $("settings-version").textContent = `You have version ${$("version").textContent.replace("Version ", "")}` +
+    ({ source: " (running from a source folder: update it with git pull)", frozen: " (the standalone app: download a new one to update it)" }[s.how] || ".");
+  $("set-check").checked = s.check;
+  $("set-repo").value = s.repo;
+  $("set-token").value = "";
+  $("set-token-state").textContent = s.token_set ? "· saved" : "";
+  $("set-token-clear").hidden = !s.token_set;
+  updateStatus("set-status", "");
+  $("settings-dialog").showModal();
+}
+async function saveSettings() {
+  const data = { check: $("set-check").checked, repo: $("set-repo").value.trim() };
+  if ($("set-token").value.trim()) data.token = $("set-token").value.trim();
+  const s = await jsonApi("/api/settings", data);
+  $("set-token").value = "";
+  $("set-token-state").textContent = s.token_set ? "· saved" : "";
+  $("set-token-clear").hidden = !s.token_set;
+  return s;
+}
+$("settings-btn").addEventListener("click", () => openSettings().catch((e) => showError(e.message)));
+$("set-cancel").addEventListener("click", () => $("settings-dialog").close());
+$("settings-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try { await saveSettings(); $("settings-dialog").close(); checkForUpdates(); }
+  catch (err) { updateStatus("set-status", err.message, true); }
+});
+$("set-token-clear").addEventListener("click", async () => {
+  try { await jsonApi("/api/settings", { clear_token: true }); $("set-token-state").textContent = ""; $("set-token-clear").hidden = true; updateStatus("set-status", "The token was removed."); }
+  catch (err) { updateStatus("set-status", err.message, true); }
+});
+$("set-check-now").addEventListener("click", async () => {
+  updateStatus("set-status", "Checking…");
+  try {
+    await saveSettings();
+    const info = await jsonApi("/api/update/check", {});
+    showUpdate(info);
+    if (info.error) updateStatus("set-status", "Couldn't check: " + info.error, true);
+    else if (info.available) updateStatus("set-status", `Version ${info.latest} is available — use the Update button in the sidebar.`);
+    else updateStatus("set-status", `You have the newest version (${info.latest}).`);
+  } catch (err) { updateStatus("set-status", err.message, true); }
+});
+
+$("update-btn").addEventListener("click", () => {
+  const info = updateInfo;
+  if (!info) return;
+  $("update-text").textContent = info.how === "pip"
+    ? `Version ${info.latest} is available (you have ${info.current}). It's downloaded from GitHub and installed, then PDF Manager starts again. Save your work in the reader first.`
+    : info.how === "source" ? `Version ${info.latest} is available (you have ${info.current}). This copy runs from a source folder: update it with git pull.`
+    : `Version ${info.latest} is available (you have ${info.current}). Download the new standalone app from GitHub to update.`;
+  $("update-go").hidden = info.how !== "pip";
+  $("update-go").disabled = false;
+  $("update-later").textContent = info.how === "pip" ? "Later" : "Close";
+  $("update-progress").hidden = true;
+  updateStatus("update-status", "");
+  $("update-dialog").showModal();
+});
+$("update-later").addEventListener("click", () => $("update-dialog").close());
+$("update-go").addEventListener("click", async () => {
+  if (reader && reader.hasUnsavedChanges() && !confirm("The reader has changes that haven't been saved. Update anyway?")) return;
+  const go = $("update-go"), bar = $("update-progress");
+  go.disabled = true; $("update-later").disabled = true; bar.hidden = false;
+  try {
+    const { job } = await (await api("/api/update/install", { method: "POST", headers: { "X-Pdfm-Async": "1" } })).json();
+    let state;
+    for (let wait = 300; ; wait = Math.min(wait * 1.4, 1000)) {
+      await new Promise((r) => setTimeout(r, wait));
+      state = await (await api(`/api/job/${job}`)).json();
+      if (state.message) updateStatus("update-status", state.message);
+      bar.firstElementChild.style.width = `${Math.max(8, Math.round(state.fraction * 100))}%`;
+      if (state.state !== "running") break;
+    }
+    const { version } = await (await api(`/api/job/${job}/result`)).json();  // throws with the error if it failed
+    bar.firstElementChild.style.width = "100%";
+    if (!updateInfo.can_restart) {
+      updateStatus("update-status", `Version ${version} is installed. Close PDF Manager and open it again to use it.`);
+      $("update-later").disabled = false; $("update-later").textContent = "Close"; go.hidden = true;
+      return;
+    }
+    updateStatus("update-status", `Version ${version} is installed. Starting it…`);
+    restarting = true;
+    await api("/api/update/restart", { method: "POST" });
+    // A browser tab can't close itself: say where the new copy is.
+    setTimeout(() => updateStatus("update-status", "PDF Manager has started again in a new window. You can close this one."), 8000);
+  } catch (e) {
+    updateStatus("update-status", "The update didn't work: " + (e.message || e), true);
+    go.disabled = false; $("update-later").disabled = false;
+  }
+});
+let restarting = false;
 
 // Tell the server the page is still open; it shuts down some time after the
 // last window running the app has closed.
 const ping = () => { if (token) api("/api/ping", { method: "POST" }).catch(() => {}); };
+// Tell the server when the window closes, so the app stops right away.
+window.addEventListener("pagehide", () => { if (token) navigator.sendBeacon(`/api/bye?token=${encodeURIComponent(token)}&page=${pageId}`); });
+
+// Warn before closing the window with unsaved changes in the reader.
+window.addEventListener("beforeunload", (e) => { if (!restarting && reader && reader.hasUnsavedChanges()) { e.preventDefault(); e.returnValue = ""; } });
+
+// Files handed over by another launch of the app (e.g. a PDF opened from
+// Explorer while the app is already running) arrive as events.
+async function listen() {
+  let after = 0;
+  for (;;) {
+    try {
+      const data = await (await api(`/api/events?after=${after}`)).json();
+      if (data.none) return;  // not the app's own window: nothing will come
+      after = data.last;
+      for (const event of data.events) if (event.open && event.open.length) await openInReaderById(event.open);
+    } catch (e) { await new Promise((r) => setTimeout(r, 3000)); }
+  }
+}
+async function openInReaderById(ids, goto = null) {
+  await select("reader");
+  for (const id of ids) await reader.openById(id, goto);  // each in its own tab
+}
 setInterval(ping, 15000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) ping(); });
 

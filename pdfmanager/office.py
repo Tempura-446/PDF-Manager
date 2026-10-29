@@ -27,7 +27,7 @@ import zipfile
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from pdfmanager import core
+from pdfmanager import core, progress
 
 WORD_TYPES = {".doc", ".docx", ".docm", ".dot", ".dotx", ".rtf", ".odt", ".wpd", ".txt"}
 EXCEL_TYPES = {".xls", ".xlsx", ".xlsm", ".xlsb", ".ods", ".csv"}
@@ -290,7 +290,8 @@ def basic_docx(path, output, password=None):
         try:
             pages = []
             heights = {}
-            for page in doc:
+            for number, page in enumerate(doc):
+                progress.report(number, len(doc), "page")
                 textpage = page.get_textpage()
                 content = _page_content(page, textpage)
                 textpage.close()

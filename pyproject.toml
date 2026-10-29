@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdf-manager"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Command-line tool to merge, split, resize, rotate, compress and organize PDF files"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,6 +31,9 @@ pdfm-app = "pdfmanager.gui:main_app"
 
 [tool.setuptools]
 packages = ["pdfmanager"]
+
+[tool.setuptools.dynamic]
+version = {attr = "pdfmanager.__version__"}
 
 [tool.setuptools.package-data]
 pdfmanager = ["gui.html", "static/*.js", "static/*.css", "static/pdfjs/**/*"]

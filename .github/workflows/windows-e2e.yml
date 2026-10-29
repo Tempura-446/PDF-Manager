@@ -1,0 +1,98 @@
+name: Windows end-to-end
+
+# Installs PDF Manager on a clean Windows machine with "Install PDF Manager.cmd"
+# (under PowerShell's Constrained Language mode, as with Smart App Control),
+# then starts the installed app like its Start menu shortcut does, uses it in
+# both kinds of window (its own WebView2 window and the Edge app window),
+# closes it and checks nothing is left running. Finally uninstalls it the
+# way Settings > Apps does.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install, with scripts limited (Constrained Language mode)
+        shell: cmd
+        run: |
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v __PSLockdownPolicy /t REG_SZ /d 4 /f
+          powershell -NoProfile -Command "$ExecutionContext.SessionState.LanguageMode"
+          call "Install PDF Manager.cmd" -NoLaunch
+          set rc=%errorlevel%
+          reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v __PSLockdownPolicy /f
+          exit /b %rc%
+
+      - name: Check what was installed
+        shell: pwsh
+        run: |
+          $app = "$env:LOCALAPPDATA\PDF Manager\app"
+          & "$app\venv\Scripts\python.exe" -I -m pdfmanager --version
+          # the installed copy, not this checkout
+          & "$app\venv\Scripts\python.exe" -I -c 'import pdfmanager, sys; print(pdfmanager.__file__); sys.exit(0 if "\\venv\\" in pdfmanager.__file__ else 1)'
+          if ($LASTEXITCODE -ne 0) { throw "pdfmanager is not installed in the venv" }
+          $shell = New-Object -ComObject WScript.Shell
+          foreach ($folder in @([Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPath("Desktop"))) {
+            $lnk = $shell.CreateShortcut((Join-Path $folder "PDF Manager.lnk"))
+            "$($lnk.FullName): $($lnk.TargetPath) $($lnk.Arguments)"
+            if ($lnk.TargetPath -notlike "*\venv\Scripts\pythonw.exe") { throw "shortcut target: $($lnk.TargetPath)" }
+          }
+          $cmd = (Get-ItemProperty "HKCU:\Software\Classes\PDFManager.Document\shell\open\command")."(default)"
+          "Open with: $cmd"
+          if ($cmd -notlike '*-m pdfmanager gui "%1"') { throw "Open with command: $cmd" }
+          $entry = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFManager"
+          "Settings > Apps: $($entry.DisplayName) $($entry.DisplayVersion) -> $($entry.UninstallString)"
+          if (-not (Test-Path "$app\uninstall.ps1")) { throw "uninstall.ps1 missing" }
+
+      - name: Install the test driver
+        run: python -m pip install playwright
+
+      - name: Use the app in its own window
+        run: python tests/e2e/windows_e2e.py desktop
+
+      - name: Use the app in the Edge app window (and restart it)
+        run: python tests/e2e/windows_e2e.py app-window
+
+      - name: Uninstall like Settings > Apps, with scripts limited
+        shell: cmd
+        run: |
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v __PSLockdownPolicy /t REG_SZ /d 4 /f
+          for /f "tokens=2,*" %%a in ('reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFManager" /v UninstallString ^| find "UninstallString"') do set uninstall=%%b
+          echo %uninstall%
+          %uninstall%
+          set rc=%errorlevel%
+          reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v __PSLockdownPolicy /f
+          exit /b %rc%
+
+      - name: Check it's gone
+        shell: pwsh
+        run: |
+          $left = @("$env:LOCALAPPDATA\PDF Manager\app",
+                    (Join-Path ([Environment]::GetFolderPath("Programs")) "PDF Manager.lnk"),
+                    (Join-Path ([Environment]::GetFolderPath("Desktop")) "PDF Manager.lnk"),
+                    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFManager",
+                    "HKCU:\Software\Classes\PDFManager.Document") | Where-Object { Test-Path $_ }
+          if ($left) { $left; throw "left behind after uninstalling" }
+          "All removed"
+
+      - name: App log files (on failure)
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-ChildItem "$env:LOCALAPPDATA\PDF Manager" -Recurse -Depth 1 -ErrorAction SilentlyContinue | Select-Object FullName, Length
+          foreach ($f in @("window-error.txt", "instance.json")) {
+            $p = "$env:LOCALAPPDATA\PDF Manager\$f"
+            if (Test-Path $p) { "--- $f"; Get-Content $p }
+          }

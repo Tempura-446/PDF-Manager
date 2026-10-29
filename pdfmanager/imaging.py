@@ -25,6 +25,8 @@ from pypdf.generic import (
     TextStringObject,
 )
 
+from pdfmanager import progress
+
 # Compression presets: (max image DPI, JPEG quality). None = leave images alone.
 COMPRESSION_LEVELS = {
     "low": (None, None),     # lossless only
@@ -215,7 +217,8 @@ def downsample_images(writer, max_dpi, jpeg_quality):
     """Downsample/re-encode images. Returns (images changed, bytes saved)."""
     changed = saved = 0
     done = set()
-    for page in writer.pages:
+    for number, page in enumerate(writer.pages):
+        progress.report(number, len(writer.pages), "page")
         sizes = image_display_sizes(page, writer)
         for key, obj in _page_images(page):
             if key in done or _skip(obj):
@@ -392,7 +395,8 @@ def convert_colors(writer, target, icc_profile=None):
     transform = _icc_transform(icc_profile, target) if icc_profile else None
     images = 0
     done_images, done_forms = set(), set()
-    for page in writer.pages:
+    for number, page in enumerate(writer.pages):
+        progress.report(number, len(writer.pages), "page")
         resources = page.get("/Resources")
         resources = resources.get_object() if resources is not None else None
         contents = page.get_contents()

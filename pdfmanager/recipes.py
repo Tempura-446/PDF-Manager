@@ -13,12 +13,12 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from pdfmanager import core
+from pdfmanager import core, progress
 from pdfmanager.appdata import data_dir
 
 # Tools that take one PDF and give one PDF back, and need no extra files.
 STEP_OPS = ("clean", "ocr", "compress", "color", "rotate", "extract", "delete", "reorder",
-            "reverse", "resize", "crop", "nup", "watermark", "number", "metadata",
+            "reverse", "resize", "crop", "nup", "watermark", "number", "headers", "metadata",
             "bookmarks", "flatten", "sanitize", "redact", "pdfa")
 
 
@@ -94,8 +94,11 @@ def describe(steps):
     return " → ".join(OPS[s["op"]]["label"] for s in steps)
 
 
-def run(steps, src, output, password=None, notes=None):
-    """Run the steps on ``src`` and write the result to ``output``."""
+def run(steps, src, output, password=None, notes=None, state=None):
+    """Run the steps on ``src`` and write the result to ``output``. ``state``
+    is a dict the caller keeps from file to file for what continues across
+    them (the next Bates number of a Headers & footers step)."""
+    state = {} if state is None else state
     from pdfmanager import gui
 
     steps = check_steps(steps)
@@ -108,22 +111,27 @@ def run(steps, src, output, password=None, notes=None):
             shutil.copyfile(src, current)
         for n, step in enumerate(steps, 1):
             spec = gui.OPS[step["op"]]
-            for field in spec["fields"]:
-                if field.get("required") and not step["options"].get(field["key"], "").strip():
-                    raise core.PdfManagerError(
-                        f"step {n} ({spec['label']}): fill in “{field['label']}”")
-            out_dir = Path(tmp) / f"step{n}"
-            out_dir.mkdir()
-            try:
-                outputs = gui._run_file_op(step["op"], current, out_dir, step["options"],
-                                           None, {}, notes)
-            except gui.UserError as exc:
-                raise core.PdfManagerError(f"step {n} ({spec['label']}): {exc}") from None
-            pdfs = [p for p in outputs if p.suffix.lower() == ".pdf"]
-            if len(pdfs) != 1:
-                raise core.PdfManagerError(f"step {n} ({spec['label']}) didn't give one PDF")
-            # Steps work on unprotected copies; the caller re-protects the result.
-            current = pdfs[0]
+            with progress.section(n - 1, len(steps), f"step {n} of {len(steps)}: {spec['label']}"):
+                for field in spec["fields"]:
+                    if field.get("required") and not step["options"].get(field["key"], "").strip():
+                        raise core.PdfManagerError(
+                            f"step {n} ({spec['label']}): fill in “{field['label']}”")
+                out_dir = Path(tmp) / f"step{n}"
+                out_dir.mkdir()
+                options = dict(step["options"])
+                if step["op"] == "headers" and "_bates_next" in state:
+                    options["_bates_next"] = state["_bates_next"]
+                try:
+                    outputs = gui._run_file_op(step["op"], current, out_dir, options, None, {}, notes)
+                except gui.UserError as exc:
+                    raise core.PdfManagerError(f"step {n} ({spec['label']}): {exc}") from None
+                if step["op"] == "headers" and "_bates_next" in options:
+                    state["_bates_next"] = options["_bates_next"]
+                pdfs = [p for p in outputs if p.suffix.lower() == ".pdf"]
+                if len(pdfs) != 1:
+                    raise core.PdfManagerError(f"step {n} ({spec['label']}) didn't give one PDF")
+                # Steps work on unprotected copies; the caller re-protects the result.
+                current = pdfs[0]
         Path(output).parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(current), str(output))
     return output

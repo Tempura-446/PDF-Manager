@@ -13,7 +13,7 @@ from pathlib import Path
 
 from PIL import Image, ImageChops
 
-from pdfmanager import core
+from pdfmanager import core, progress
 
 CELL = 6          # pixels per cell when grouping changed pixels into areas
 THRESHOLD = 48    # 0-255 difference for a pixel to count as changed
@@ -28,7 +28,8 @@ def _load(path, password, dpi):
     with core.PDFIUM_LOCK:
         doc = pdfium.PdfDocument(str(path), password=password)
         try:
-            for page in doc:
+            for number, page in enumerate(doc):
+                progress.report(number, len(doc), "page")
                 textpage = page.get_textpage()
                 text = textpage.get_text_range()
                 textpage.close()
@@ -100,9 +101,14 @@ def compare(old, new, output, old_password=None, new_password=None, all_pages=Fa
     "kind", "removed", "added", "areas"}]} with 1-based page numbers (None
     for a page that is only in one file); kind is "changed", "added",
     "removed" or "same"."""
-    a, b = _load(old, old_password, dpi), _load(new, new_password, dpi)
+    with progress.section(0, 3, "original"):
+        a = _load(old, old_password, dpi)
+    with progress.section(1, 3, "changed version"):
+        b = _load(new, new_password, dpi)
     rows = []
-    for i, j in _align(a, b):
+    pairs = _align(a, b)
+    for n, (i, j) in enumerate(pairs):
+        progress.report(2 * len(pairs) + n, 3 * len(pairs), message="comparing pages")
         if i is None or j is None:
             kind, removed, added, areas = ("added" if i is None else "removed"), [], [], []
         else:

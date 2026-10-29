@@ -6,28 +6,29 @@
 //             to draw one; click a box to select it, drag to move, use the
 //             corner handles to resize, Delete or × to remove. Text matches
 //             found by the server are shown striped.
+//   "form"    fillable fields (Add form fields): drawn and edited like the
+//             redact boxes, each with a type (text, multi-line text,
+//             checkbox, signature) and a name. A click without dragging
+//             adds a field of the usual size. Fields already in the file
+//             are shown striped.
 //
 //   const ed = new RegionEditor(host, { mode, onChange(value) });
 //   await ed.load(file, password)        // "ok", "password", "wrong-password" or "error"
 //   ed.setCrop({ left, bottom, right, top })   // margins in points
 //   ed.setMatches({ page: [[x0, y0, x1, y1]] })
+//   ed.setExisting({ page: [{ rect, name, type }] })   // form fields in the file
 // Coordinates sent back are PDF points (origin bottom left, before rotation):
 // crop margins {left, bottom, right, top}; redact boxes {"1": [[x0, y0, x1, y1]]}
-// with 1-based page numbers.
+// with 1-based page numbers; form fields {"1": [{ rect, type, name }]}.
 
-const BASE = new URL("/static/pdfjs/", location.href).href;
-let pdfjs = null;
-async function loadPdfjs() {
-  if (!pdfjs) {
-    pdfjs = await import(BASE + "build/pdf.min.mjs");
-    pdfjs.GlobalWorkerOptions.workerSrc = BASE + "build/pdf.worker.min.mjs";
-  }
-  return pdfjs;
-}
+import { DOC_OPTIONS, destroyTask, loadPdfjs, openDocument } from "./pdfjs.js";
 
 const ICON = {
   prev: '<path d="m15 18-6-6 6-6"/>', next: '<path d="m9 18 6-6-6-6"/>',
-  x: '<path d="M18 6 6 18M6 6l12 12"/>', trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  text: '<path d="M4 7V5h16v2M12 5v14M9 19h6"/>', multiline: '<path d="M4 6h16M4 10h16M4 14h16M4 18h10"/>',
+  checkbox: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="m8 12 3 3 5-6"/>',
+  signature: '<path d="M3 17c3-1 4-9 7-9 2 0 0 7 2 7s2-3 4-3 2 2 5 2"/><path d="M3 21h18"/>', trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
 };
 function icon(name) {
   const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -47,8 +48,15 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
-const HANDLES = { crop: ["n", "e", "s", "w", "ne", "nw", "se", "sw"], redact: ["ne", "nw", "se", "sw"] };
+const HANDLES = { crop: ["n", "e", "s", "w", "ne", "nw", "se", "sw"], redact: ["ne", "nw", "se", "sw"], form: ["ne", "nw", "se", "sw"] };
 const MIN = 6;  // smallest box, in screen pixels
+
+// Form fields: label, and the size (points) of one added with a click.
+export const FIELD_TYPES = {
+  text: ["Text", 180, 20], multiline: ["Multi-line text", 260, 64],
+  checkbox: ["Checkbox", 12, 12], signature: ["Signature", 180, 40],
+};
+const FIELD_LABEL = { text: "Text", multiline: "Text", checkbox: "Checkbox", signature: "Signature" };
 
 export class RegionEditor {
   constructor(host, { mode, onChange }) {
@@ -59,6 +67,9 @@ export class RegionEditor {
     this.crop = { left: 0, bottom: 0, right: 0, top: 0 };  // margins, points
     this.boxes = {};     // redact: page index -> [[x0, y0, x1, y1]] in PDF points
     this.matches = {};   // redact: page index -> boxes found by text search
+    this.kinds = {};     // form: page index -> [{type, name}], one per box
+    this.existing = {};  // form: page index -> fields already in the file
+    this.fieldType = "text";
     this.selected = -1;
     this.gen = 0;
 
@@ -69,13 +80,15 @@ export class RegionEditor {
     this.clearBtn = el("button", { type: "button", class: "btn secondary pb-small", onclick: () => this.#clearPage() }, icon("trash"), "Clear this page");
     this.toolbar = el("div", { class: "pb-toolbar" },
       el("div", { class: "re-nav" }, this.prevBtn, this.pageLabel, this.nextBtn), this.status,
-      mode === "redact" ? this.clearBtn : null);
+      mode !== "crop" ? this.clearBtn : null);
+    if (mode === "form") this.#buildFieldBar();
     this.canvas = el("canvas", { class: "re-canvas" });
     this.overlay = el("div", { class: "re-overlay", tabindex: "0", role: "application",
-      "aria-label": mode === "crop" ? "Crop area: drag its edges" : "Page: drag to draw a box to black out" });
+      "aria-label": { crop: "Crop area: drag its edges", redact: "Page: drag to draw a box to black out",
+        form: "Page: drag or click to add a form field" }[mode] });
     this.stage = el("div", { class: "re-stage" }, this.canvas, this.overlay);
     this.message = el("div", { class: "pb-message" });
-    this.root = el("div", { class: "region-editor", "data-mode": mode }, this.toolbar, this.stage, this.message);
+    this.root = el("div", { class: "region-editor", "data-mode": mode }, this.toolbar, this.fieldBar, this.stage, this.message);
     host.append(this.root);
 
     this.overlay.addEventListener("pointerdown", (e) => this.#down(e));
@@ -98,13 +111,11 @@ export class RegionEditor {
     const lib = await loadPdfjs();
     const data = new Uint8Array(await file.arrayBuffer());
     if (gen !== this.gen) return "stale";
-    const task = lib.getDocument({ data, password: password || undefined, isEvalSupported: false,
-      cMapUrl: BASE + "cmaps/", cMapPacked: true, standardFontDataUrl: BASE + "standard_fonts/",
-      wasmUrl: BASE + "wasm/", iccUrl: BASE + "iccs/" });
+    const task = await openDocument({ ...DOC_OPTIONS, data, password: password || undefined });
     let locked = null;
     task.onPassword = (update, reason) => {
       locked = reason === lib.PasswordResponses.INCORRECT_PASSWORD ? "wrong-password" : "password";
-      task.destroy();
+      destroyTask(task);
     };
     this.task = task;
     try {
@@ -126,10 +137,10 @@ export class RegionEditor {
   async close() {
     this.gen++;
     this.file = null; this.password = null; this.doc = null; this.total = 0;
-    this.boxes = {}; this.matches = {}; this.selected = -1;
+    this.boxes = {}; this.matches = {}; this.kinds = {}; this.existing = {}; this.selected = -1;
     const task = this.task;
     this.task = null;
-    if (task) await task.destroy().catch(() => {});
+    await destroyTask(task);
     this.#state("empty");
   }
 
@@ -140,9 +151,19 @@ export class RegionEditor {
   }
 
   setBoxes(boxes) {
-    this.boxes = {};
-    for (const [page, list] of Object.entries(boxes || {})) this.boxes[Number(page) - 1] = list.map((b) => [...b]);
+    this.boxes = {}; this.kinds = {};
+    for (const [page, list] of Object.entries(boxes || {})) {
+      this.boxes[Number(page) - 1] = list.map((b) => [...(b.rect || b)]);
+      if (this.mode === "form") this.kinds[Number(page) - 1] = list.map((b) => ({ type: b.type || "text", name: b.name || "" }));
+    }
     this.selected = -1;
+    this.#draw();
+  }
+
+  /** Form fields already in the file: {page: [{rect, name, type}]}. */
+  setExisting(fields) {
+    this.existing = {};
+    for (const [page, list] of Object.entries(fields || {})) this.existing[Number(page) - 1] = list;
     this.#draw();
   }
 
@@ -164,9 +185,15 @@ export class RegionEditor {
   // ---- rendering --------------------------------------------------------------
 
   async #show() {
-    const gen = this.gen, index = this.pageIndex;
+    const gen = this.gen, index = this.pageIndex, ticket = this.showing = (this.showing || 0) + 1;
     const page = await this.doc.getPage(index + 1);
     if (gen !== this.gen || index !== this.pageIndex) return;
+    if (this.renderTask) {
+      // A canvas can only be drawn by one render at a time.
+      this.renderTask.cancel();
+      await this.renderTask.promise.catch(() => {});
+    }
+    if (ticket !== this.showing) return;  // a newer call takes over
     const base = page.getViewport({ scale: 1 });
     const width = Math.max(200, this.root.clientWidth - 2);
     const maxHeight = Math.max(320, Math.min(window.innerHeight * 0.7, 900));
@@ -179,10 +206,10 @@ export class RegionEditor {
     canvas.height = Math.floor(this.viewport.height * ratio);
     canvas.style.width = this.stage.style.width = `${Math.floor(this.viewport.width)}px`;
     canvas.style.height = this.stage.style.height = `${Math.floor(this.viewport.height)}px`;
-    if (this.renderTask) this.renderTask.cancel();
     this.renderTask = page.render({ canvas, viewport: this.viewport, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null });
-    try { await this.renderTask.promise; } catch (e) { if (e?.name !== "RenderingCancelledException") throw e; }
-    this.renderTask = null;
+    const task = this.renderTask;
+    try { await task.promise; } catch (e) { if (e?.name !== "RenderingCancelledException") throw e; }
+    if (this.renderTask === task) this.renderTask = null;
     this.#draw();
   }
 
@@ -210,6 +237,20 @@ export class RegionEditor {
     const parts = [];
     if (this.mode === "crop") {
       parts.push(this.#rectEl(this.#toScreen(this.#cropBox()), "re-crop", -1));
+    } else if (this.mode === "form") {
+      for (const f of this.existing[this.pageIndex] || []) {
+        const r = this.#toScreen(f.rect);
+        parts.push(el("div", { class: "re-existing", title: `Already in the file: ${f.name}`, style: `left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px` }));
+      }
+      const kinds = this.kinds[this.pageIndex] || [];
+      (this.boxes[this.pageIndex] || []).forEach((b, i) => {
+        const box = this.#rectEl(this.#toScreen(b), "re-field" + (i === this.selected ? " selected" : ""), i);
+        const kind = kinds[i] || { type: "text", name: "" };
+        box.dataset.type = kind.type;
+        box.title = `${FIELD_TYPES[kind.type][0]}: ${kind.name}`;
+        box.prepend(el("span", { class: "re-field-label" }, kind.type === "checkbox" ? "" : kind.name));
+        parts.push(box);
+      });
     } else {
       for (const m of this.matches[this.pageIndex] || []) {
         const r = this.#toScreen(m);
@@ -226,7 +267,7 @@ export class RegionEditor {
     if (this.mode === "crop" || index === this.selected) {
       for (const h of HANDLES[this.mode]) box.append(el("span", { class: `re-handle re-${h}`, "data-handle": h }));
     }
-    if (this.mode === "redact" && index === this.selected) {
+    if (this.mode !== "crop" && index === this.selected) {
       box.append(el("button", { type: "button", class: "re-delete", title: "Remove this box", "aria-label": "Remove this box",
         onpointerdown: (e) => e.stopPropagation(), onclick: () => this.#remove(index) }, icon("x")));
     }
@@ -258,6 +299,7 @@ export class RegionEditor {
     } else {
       kind = "draw";
       this.selected = -1;
+      this.drawStart = start;
       origin = { x: start.x, y: start.y, w: 0, h: 0 };
     }
     e.preventDefault();
@@ -301,16 +343,29 @@ export class RegionEditor {
       } else {
         const list = this.boxes[this.pageIndex] ||= [];
         if (kind === "draw") {
-          if (this.drawing == null) { list.push(this.#toPdf(rect)); this.drawing = list.length - 1; this.selected = this.drawing; }
-          else list[this.drawing] = this.#toPdf(rect);
+          if (this.drawing == null) {
+            list.push(this.#toPdf(rect)); this.drawing = list.length - 1; this.selected = this.drawing;
+            if (this.mode === "form") (this.kinds[this.pageIndex] ||= []).push({ type: this.fieldType, name: this.#nextName(this.fieldType) });
+          } else list[this.drawing] = this.#toPdf(rect);
         } else list[index] = this.#toPdf(rect);
       }
       this.#draw();
     }
     if (done) {
-      if (kind === "draw" && this.drawing != null) {
-        const r = this.#toScreen(this.boxes[this.pageIndex][this.drawing]);
-        if (r.w < MIN || r.h < MIN) { this.boxes[this.pageIndex].splice(this.drawing, 1); this.selected = -1; }
+      if (kind === "draw" && this.mode === "form" && (this.drawing == null || this.#tooSmall(this.drawing))) {
+        // A click: a field of the usual size, with its top left corner there.
+        if (this.drawing != null) this.#splice(this.drawing);
+        const [, w, h] = FIELD_TYPES[this.fieldType], s = this.viewport.scale;
+        const size = { w: w * s, h: h * s }, p = this.drawStart;
+        let x = this.fieldType === "checkbox" ? p.x - size.w / 2 : p.x, y = this.fieldType === "checkbox" ? p.y - size.h / 2 : p.y - size.h * 0.75;
+        x = Math.max(0, Math.min(this.viewport.width - size.w, x)); y = Math.max(0, Math.min(this.viewport.height - size.h, y));
+        (this.boxes[this.pageIndex] ||= []).push(this.#toPdf({ x, y, ...size }));
+        (this.kinds[this.pageIndex] ||= []).push({ type: this.fieldType, name: this.#nextName(this.fieldType) });
+        this.selected = this.boxes[this.pageIndex].length - 1;
+        this.drawing = null;
+        this.#draw();
+      } else if (kind === "draw" && this.drawing != null) {
+        if (this.#tooSmall(this.drawing)) { this.#splice(this.drawing); this.selected = -1; }
         this.drawing = null;
         this.#draw();
       }
@@ -318,8 +373,18 @@ export class RegionEditor {
     }
   }
 
-  #remove(index) {
+  #tooSmall(index) {
+    const r = this.#toScreen(this.boxes[this.pageIndex][index]);
+    return r.w < MIN || r.h < MIN;
+  }
+
+  #splice(index) {
     (this.boxes[this.pageIndex] || []).splice(index, 1);
+    (this.kinds[this.pageIndex] || []).splice(index, 1);
+  }
+
+  #remove(index) {
+    this.#splice(index);
     this.selected = -1;
     this.#draw();
     this.#emit();
@@ -328,6 +393,7 @@ export class RegionEditor {
   #clearPage() {
     if (!(this.boxes[this.pageIndex] || []).length) return;
     this.boxes[this.pageIndex] = [];
+    this.kinds[this.pageIndex] = [];
     this.selected = -1;
     this.#draw();
     this.#emit();
@@ -336,15 +402,83 @@ export class RegionEditor {
   #key(e) {
     if (e.key === "PageDown" || (e.key === "ArrowRight" && e.altKey)) { e.preventDefault(); this.goTo(this.pageIndex + 1); return; }
     if (e.key === "PageUp" || (e.key === "ArrowLeft" && e.altKey)) { e.preventDefault(); this.goTo(this.pageIndex - 1); return; }
-    if (this.mode === "redact" && this.selected >= 0 && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); this.#remove(this.selected); return; }
-    if (this.mode === "redact" && e.key === "Escape") { this.selected = -1; this.#draw(); }
+    if (this.mode !== "crop" && this.selected >= 0 && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); this.#remove(this.selected); return; }
+    if (this.mode !== "crop" && e.key === "Escape") { this.selected = -1; this.#draw(); }
   }
 
   #emit() {
     if (this.mode === "crop") { this.onChange({ ...this.crop }); return; }
     const out = {};
-    for (const [page, list] of Object.entries(this.boxes)) if (list.length) out[Number(page) + 1] = list;
+    for (const [page, list] of Object.entries(this.boxes)) {
+      if (!list.length) continue;
+      out[Number(page) + 1] = this.mode === "form" ? list.map((rect, i) => ({ rect, ...this.kinds[page][i] })) : list;
+    }
     this.onChange(out);
+  }
+
+  // ---- form fields ----------------------------------------------------------------
+
+  #buildFieldBar() {
+    this.typeBtns = Object.entries(FIELD_TYPES).map(([type, [label]]) => el("button", {
+      type: "button", class: "re-type", "data-type": type, title: `Add ${label.toLowerCase()} fields`,
+      "aria-pressed": String(type === this.fieldType), onclick: () => this.#setType(type),
+    }, icon(type), el("span", {}, label)));
+    this.nameInput = el("input", { type: "text", class: "re-name", spellcheck: "false", "aria-label": "Field name",
+      oninput: () => this.#changeSelected({ name: this.nameInput.value }),
+      onkeydown: (e) => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); this.overlay.focus({ preventScroll: true }); } },
+    });
+    this.typeSelect = el("select", { class: "re-name", "aria-label": "Type of this field",
+      onchange: () => {
+        const kind = this.kinds[this.pageIndex]?.[this.selected], type = this.typeSelect.value;
+        if (!kind) return;
+        // An automatic name follows the type ("Text 2" -> "Checkbox 1").
+        const name = /^(Text|Checkbox|Signature) \d+$/.test(kind.name) ? (kind.name = "", this.#nextName(type)) : kind.name;
+        this.#changeSelected({ type, name });
+      },
+    }, ...Object.entries(FIELD_TYPES).map(([type, [label]]) => el("option", { value: type }, label)));
+    this.nameBox = el("div", { class: "re-name-box" },
+      el("label", {}, el("span", {}, "Name"), this.nameInput), el("label", {}, el("span", {}, "Type"), this.typeSelect));
+    this.fieldBar = el("div", { class: "re-fieldbar" },
+      el("div", { class: "re-add" }, el("span", { class: "re-add-label" }, "Add"),
+        el("div", { class: "re-types", role: "group", "aria-label": "Type of field to add" }, ...this.typeBtns)),
+      this.nameBox);
+  }
+
+  /** The type of field added by the next drag or click. */
+  #setType(type) {
+    this.fieldType = type;
+    if (this.selected >= 0) { this.selected = -1; this.#draw(); }
+    this.#syncFieldBar();
+  }
+
+  #changeSelected(changes) {
+    const kind = this.kinds[this.pageIndex]?.[this.selected];
+    if (!kind) return;
+    Object.assign(kind, changes);
+    this.#draw();
+    this.#emit();
+  }
+
+  #syncFieldBar() {
+    if (!this.fieldBar) return;
+    const kind = this.kinds[this.pageIndex]?.[this.selected];
+    for (const b of this.typeBtns) b.setAttribute("aria-pressed", String(b.dataset.type === this.fieldType));
+    // Hidden but keeping its space, so the page doesn't jump while drawing.
+    this.nameBox.style.visibility = kind ? "" : "hidden";
+    this.nameBox.inert = !kind;
+    if (!kind) return;
+    if (document.activeElement !== this.nameInput) this.nameInput.value = kind.name;
+    this.typeSelect.value = kind.type;
+  }
+
+  /** "Text 1", "Text 2"... not used by another field yet. */
+  #nextName(type) {
+    const taken = new Set();
+    for (const list of Object.values(this.kinds)) for (const k of list) taken.add(k.name);
+    for (const list of Object.values(this.existing)) for (const f of list) taken.add(f.name);
+    let n = 1;
+    while (taken.has(`${FIELD_LABEL[type]} ${n}`)) n++;
+    return `${FIELD_LABEL[type]} ${n}`;
   }
 
   // ---- status ----------------------------------------------------------------------
@@ -357,6 +491,13 @@ export class RegionEditor {
       const mm = (v) => Math.round((v * 25.4) / 72);
       const { top, right, bottom, left } = this.crop;
       this.status.textContent = `Trim: top ${mm(top)} · right ${mm(right)} · bottom ${mm(bottom)} · left ${mm(left)} mm`;
+    } else if (this.mode === "form") {
+      const here = (this.boxes[this.pageIndex] || []).length, all = this.boxCount;
+      const old = Object.values(this.existing).reduce((n, l) => n + l.length, 0);
+      const count = (n) => `${n} field${n === 1 ? "" : "s"}`;
+      this.status.textContent = `${here !== all ? `this page: ${count(here)} · ` : ""}new: ${count(all)}${old ? ` · already in the file: ${old}` : ""}`;
+      this.clearBtn.disabled = !here;
+      this.#syncFieldBar();
     } else {
       const here = (this.boxes[this.pageIndex] || []).length, found = (this.matches[this.pageIndex] || []).length;
       const all = this.boxCount, matches = Object.values(this.matches).reduce((n, l) => n + l.length, 0);
@@ -371,6 +512,7 @@ export class RegionEditor {
   #state(name, detail) {
     this.root.dataset.state = name;
     this.toolbar.hidden = this.stage.hidden = name !== "ready";
+    if (this.fieldBar) this.fieldBar.hidden = name !== "ready";
     const text = {
       empty: "", loading: "Loading the page…",
       password: "This PDF is password-protected. Enter its password under Options to see the pages.",
