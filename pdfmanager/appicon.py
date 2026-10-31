@@ -1,4 +1,10 @@
-"""The app's icon: a bold brush-stroke Z on a red page with a folded corner.
+"""The app's icon: a Z written with a Chinese brush, white on a red page with a
+folded corner, like the white characters of a carved seal.
+
+The Z is built the way a brush writes it: each stroke follows a curved spine
+and swells or thins with the brush's pressure, starting with a pressed,
+angled entry (起笔), pausing in a pressed knot at each turn (顿笔), and leaving
+in a sharp tapered exit (出锋). Dry-brush gaps (飞白) run along the fast parts.
 
 One set of shapes on a 100-unit grid feeds both the Pillow drawing (the
 Windows .ico and the packaged app's icon) and the SVG in the app's sidebar
@@ -15,30 +21,33 @@ FOLD_COLOR = (255, 208, 198)
 
 RADIUS = 20  # the page's rounded corners
 CUT = 20     # how far the folded corner reaches in from the top right
-# The Z as one brush-painted outline: a rounded press where the brush lands,
-# a pointed tip where it turns, a heavy diagonal, and a bottom stroke that
-# sweeps out into a tail. ("M"/"L", point) or ("C", control1, control2, point).
-Z = [
-    ("M", (25, 34)),
-    ("C", (39, 31.5), (57, 30.5), (72, 29.6)),
-    ("C", (75, 29.4), (77.5, 29.2), (79.5, 29)),
-    ("C", (77.5, 31.5), (76, 33.5), (74.5, 35.5)),
-    ("C", (65, 45), (55, 54), (46.5, 62)),
-    ("C", (58, 61), (70, 60), (84, 58)),
-    ("C", (79, 67.5), (68, 75), (52, 76.4)),
-    ("C", (40, 77.3), (27, 77.6), (15, 78)),
-    ("C", (16.5, 75), (18, 71), (20, 68.5)),
-    ("C", (28, 60.5), (36, 53), (44, 45.8)),
-    ("C", (38, 46), (32.5, 46.6), (27.5, 47.5)),
-    ("C", (22, 48.5), (19.5, 44.5), (20, 41)),
-    ("C", (20.5, 37), (22.5, 34.5), (25, 34)),
+STREAKS_FROM = 48  # px; in the .ico the dry-brush gaps only show from here up
+
+# Strokes: a cubic spine (start, control 1, control 2, end) and the brush's
+# width along it, as (t, width) points, linearly interpolated.
+STROKES = [
+    # 横: the top stroke, rising slightly, thinning as the brush moves
+    (((25, 39), (40, 35.5), (58, 34.5), (73, 32.5)), [(0, 13), (0.2, 11.5), (0.6, 10), (1, 12)]),
+    # 撇: the diagonal, pulled down fast from the corner
+    (((75, 35), (62, 46), (46, 57), (31, 67)), [(0, 14), (0.4, 12.5), (0.8, 12.5), (1, 14)]),
+    # 横 ending in 出锋: the bottom stroke, pressing near the end, then lifting off
+    (((26, 71), (45, 72.5), (62, 70.5), (85, 63.5)), [(0, 14), (0.4, 11.5), (0.72, 13.5), (1, 0.4)]),
 ]
-# Dry-brush streaks: hairline gaps running out of the tail.
-STREAKS = [
-    [("M", (58, 66.2)), ("C", (67, 65.4), (75, 63.6), (84, 59.5)), ("C", (75, 64.8), (67, 66.8), (58, 66.2))],
-    [("M", (62, 70.4)), ("C", (68, 69.6), (73, 68), (79, 65)), ("C", (73, 68.9), (68, 70.8), (62, 70.4))],
+# Pressed knots, as rotated ellipses (centre, radius x, radius y, angle):
+KNOTS = [
+    ((26, 38.8), 8.6, 5.6, 42),    # 起笔: the brush lands at an angle, its tip to the top left
+    ((74.6, 34), 8.4, 5.8, 48),    # 顿笔: the pause at the top right turn, a shoulder
+    ((28.3, 70.6), 8.6, 5.9, -32), # 顿笔: the press at the bottom left turn
 ]
-STREAKS_FROM = 48  # px; below this the streaks are too fine to see
+# 飞白, dry-brush gaps: (stroke, t from, t to, offset across the stroke at the
+# start and end, from -1 to 1, widest gap). A gap that drifts past ±1 breaks
+# through the stroke's edge, splitting off a few bristles.
+GAPS = [
+    (1, 0.3, 0.85, -0.3, -0.15, 1.0),
+    (2, 0.5, 0.97, -0.2, 0.05, 0.9),
+    (2, 0.62, 1.0, 0.45, 1.2, 0.9),
+]
+SAMPLES = 32
 
 
 def _arc(cx, cy, r, start, end, steps=16):
@@ -59,21 +68,68 @@ def _fold():
     return [(x, 6)] + _arc(x + 4, y - 4, 4, 180, 90) + [(94, y)]
 
 
-def _flatten(path, steps=24):
-    points, here = [], None
-    for op, *p in path:
-        if op != "C":
-            here = p[0]
-            points.append(here)
-            continue
-        c1, c2, end = p
-        for i in range(1, steps + 1):
-            t = i / steps
-            u = 1 - t
-            points.append(tuple(u ** 3 * a + 3 * u * u * t * b + 3 * u * t * t * c + t ** 3 * e
-                                for a, b, c, e in zip(here, c1, c2, end)))
-        here = end
-    return points
+def _spine(curve, t):
+    """The point on a cubic spine at t, and the unit normal there."""
+    (ax, ay), (bx, by), (cx, cy), (dx, dy) = curve
+    u = 1 - t
+    x = u ** 3 * ax + 3 * u * u * t * bx + 3 * u * t * t * cx + t ** 3 * dx
+    y = u ** 3 * ay + 3 * u * u * t * by + 3 * u * t * t * cy + t ** 3 * dy
+    tx = 3 * u * u * (bx - ax) + 6 * u * t * (cx - bx) + 3 * t * t * (dx - cx)
+    ty = 3 * u * u * (by - ay) + 6 * u * t * (cy - by) + 3 * t * t * (dy - cy)
+    n = math.hypot(tx, ty) or 1
+    return x, y, -ty / n, tx / n
+
+
+def _width(profile, t, stroke):
+    for (t0, w0), (t1, w1) in zip(profile, profile[1:]):
+        if t <= t1:
+            w = w0 + (w1 - w0) * (t - t0) / (t1 - t0)
+            break
+    # a slight unevenness, as a real brush leaves
+    return w * (1 + 0.025 * math.sin(t * 23 + stroke * 2.1))
+
+
+def _stroke(i):
+    curve, profile = STROKES[i]
+    left, right = [], []
+    for k in range(SAMPLES + 1):
+        t = k / SAMPLES
+        x, y, nx, ny = _spine(curve, t)
+        h = _width(profile, t, i) / 2
+        left.append((x + nx * h, y + ny * h))
+        right.append((x - nx * h, y - ny * h))
+    return left + right[::-1]
+
+
+def _knot(centre, rx, ry, angle, steps=28):
+    (cx, cy), a = centre, math.radians(angle)
+    return [(cx + rx * math.cos(s) * math.cos(a) - ry * math.sin(s) * math.sin(a),
+             cy + rx * math.cos(s) * math.sin(a) + ry * math.sin(s) * math.cos(a))
+            for s in (2 * math.pi * k / steps for k in range(steps))]
+
+
+def _gap(i, t0, t1, o0, o1, widest):
+    curve, profile = STROKES[i]
+    left, right = [], []
+    steps = max(6, round(SAMPLES * (t1 - t0)))
+    for k in range(steps + 1):
+        f = k / steps
+        t = t0 + (t1 - t0) * f
+        x, y, nx, ny = _spine(curve, t)
+        h = _width(profile, t, i) / 2
+        o = (o0 + (o1 - o0) * f) * h
+        g = widest * math.sin(math.pi * f) ** 0.8 / 2
+        left.append((x + nx * (o + g), y + ny * (o + g)))
+        right.append((x + nx * (o - g), y + ny * (o - g)))
+    return left + right[::-1]
+
+
+def _ink():
+    return [_stroke(i) for i in range(len(STROKES))] + [_knot(*k) for k in KNOTS]
+
+
+def _gaps():
+    return [_gap(*g) for g in GAPS]
 
 
 def make_icon(size=1024):
@@ -92,14 +148,14 @@ def make_icon(size=1024):
     ImageDraw.Draw(mask).polygon(pts(_page()), fill=255)
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     img.paste(tile, (0, 0), mask)
-    d = ImageDraw.Draw(img)
-    d.polygon(pts(_fold()), fill=FOLD_COLOR + (255,))
+    ImageDraw.Draw(img).polygon(pts(_fold()), fill=FOLD_COLOR + (255,))
     z = Image.new("L", (s, s), 0)
     zd = ImageDraw.Draw(z)
-    zd.polygon(pts(_flatten(Z)), fill=255)
+    for shape in _ink():
+        zd.polygon(pts(shape), fill=255)
     if size >= STREAKS_FROM:
-        for streak in STREAKS:
-            zd.polygon(pts(_flatten(streak)), fill=0)
+        for shape in _gaps():
+            zd.polygon(pts(shape), fill=0)
     img.paste((255, 255, 255, 255), (0, 0), z)
     return img.resize((size, size), Image.LANCZOS)
 
@@ -117,15 +173,17 @@ def svg(gradient_id="zpdf-g"):
             f"H{lo + r}A{r} {r} 0 0 1 {lo} {hi - r}V{lo + r}A{r} {r} 0 0 1 {lo + r} {lo}Z")
     fold = f"M{c} {lo}V{lo + CUT - 4}A4 4 0 0 0 {c + 4} {lo + CUT}H{hi}Z"
 
-    def d(path):
-        return "".join(op + " ".join(f"{x:g} {y:g}" for x, y in p) for op, *p in path) + "Z"
+    def paths(shapes, fill):
+        # one path per shape: overlapping shapes in a single path could cancel out
+        return "".join(f'<path d="M{"L".join(f"{x:.1f} {y:.1f}" for x, y in shape)}Z" fill="{fill}"/>'
+                       for shape in shapes)
 
-    streaks = "".join(f'<path d="{d(st)}" fill="#000"/>' for st in STREAKS)
     hexc = "#{:02x}{:02x}{:02x}".format
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
             f'<defs><linearGradient id="{gradient_id}" x1="0" y1="0" x2="1" y2="1">'
             f'<stop offset="0" stop-color="{hexc(*TOP_LEFT)}"/><stop offset="1" stop-color="{hexc(*BOTTOM_RIGHT)}"/>'
-            f'</linearGradient><mask id="{gradient_id}-z"><path d="{d(Z)}" fill="#fff"/>{streaks}</mask></defs>'
+            f'</linearGradient><mask id="{gradient_id}-z">'
+            f'{paths(_ink(), "#fff")}{paths(_gaps(), "#000")}</mask></defs>'
             f'<path d="{page}" fill="url(#{gradient_id})"/>'
             f'<path d="{fold}" fill="{hexc(*FOLD_COLOR)}"/>'
             f'<rect width="100" height="100" fill="#fff" mask="url(#{gradient_id}-z)"/>'
