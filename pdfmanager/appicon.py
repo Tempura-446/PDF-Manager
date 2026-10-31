@@ -1,63 +1,68 @@
-"""The app's icon, drawn with Pillow: a brush-stroke Z with a spark (the same
-mark as in the app's sidebar, whose SVG is ``Z_PATH`` and ``SPARK``)."""
+"""The app's icon: a bold white Z on a red page with a folded corner.
+
+One set of shapes on a 100-unit grid feeds both the Pillow drawing (the
+Windows .ico and the packaged app's icon) and the SVG in the app's sidebar
+and tab (``svg()``), so the two can't drift apart.
+"""
+
+import math
 
 from PIL import Image, ImageDraw
 
 ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
-TOP_LEFT, BOTTOM_RIGHT = (226, 94, 66), (158, 42, 28)  # the tile's gradient: the app's red, as before ZPDF
-SPARK_COLOR = (255, 214, 138)
+TOP_LEFT, BOTTOM_RIGHT = (244, 86, 64), (186, 30, 42)  # the page's red gradient
+FOLD_COLOR = (255, 208, 198)
 
-# On a 100-unit grid: hairline top stroke, heavy diagonal, a bottom stroke
-# that ends in an upturned swash. ("M"/"L", point) or ("C", c1, c2, point).
-Z = [
-    ("M", (22, 32)),
-    ("C", (34, 26), (52, 29), (66, 25)),
-    ("L", (80, 24)),
-    ("L", (43, 70)),
-    ("C", (56, 71), (68, 70), (76, 64)),
-    ("C", (79, 62), (83, 62), (82, 66)),
-    ("C", (76, 76), (58, 78), (40, 77)),
-    ("L", (20, 77)),
-    ("L", (57, 31)),
-    ("C", (45, 31), (33, 33), (25, 36)),
-    ("C", (21, 37.5), (19, 34), (22, 32)),
-]
-SPARK = [(77, 9), (78.8, 14.2), (84, 16), (78.8, 17.8), (77, 23), (75.2, 17.8), (70, 16), (75.2, 14.2)]
-Z_PATH = "".join(op + " ".join(f"{x:g} {y:g}" for x, y in pts) for op, *pts in Z) + "Z"
+RADIUS = 20  # the page's rounded corners
+CUT = 22     # how far the folded corner reaches in from the top right
+# The Z's outline, drawn with a round-joined stroke of width 2 * Z_ROUND so its
+# corners come out softly rounded: 11-unit bars, a matching diagonal.
+Z = [(28, 34), (68, 34), (68, 41), (39, 63), (68, 63), (68, 70), (28, 70), (28, 63), (57, 41), (28, 41)]
+Z_ROUND = 2
 
 
-def _outline(scale, steps=24):
-    points, here = [], None
-    for op, *pts in Z:
-        if op != "C":
-            here = pts[0]
-            points.append(here)
-            continue
-        c1, c2, end = pts
-        for i in range(1, steps + 1):
-            t = i / steps
-            u = 1 - t
-            points.append(tuple(u ** 3 * a + 3 * u * u * t * b + 3 * u * t * t * c + t ** 3 * d
-                                for a, b, c, d in zip(here, c1, c2, end)))
-        here = end
-    return [(x * scale, y * scale) for x, y in points]
+def _arc(cx, cy, r, start, end, steps=16):
+    return [(cx + r * math.cos(math.radians(a)), cy + r * math.sin(math.radians(a)))
+            for a in (start + (end - start) * i / steps for i in range(steps + 1))]
+
+
+def _page():
+    """The page: a rounded square with its top right corner cut off."""
+    lo, hi, r = 6, 94, RADIUS
+    return ([(hi - CUT, lo), (hi, lo + CUT)] + _arc(hi - r, hi - r, r, 0, 90)
+            + _arc(lo + r, hi - r, r, 90, 180) + _arc(lo + r, lo + r, r, 180, 270))
+
+
+def _fold():
+    """The folded-over corner, with a small curve where it bends."""
+    x, y = 94 - CUT, 6 + CUT
+    return [(x, 6)] + _arc(x + 4, y - 4, 4, 180, 90) + [(94, y)]
 
 
 def make_icon(size=1024):
     s = size * 4  # drawn large, then scaled down for smooth edges
+    k = s / 100
+
+    def pts(points):
+        return [(x * k, y * k) for x, y in points]
+
     down = Image.linear_gradient("L")
     ramp = Image.blend(down, down.transpose(Image.Transpose.ROTATE_90).transpose(Image.Transpose.FLIP_TOP_BOTTOM), 0.5)
     ramp = ramp.resize((s, s), Image.BILINEAR)  # 0 at the top left, 255 at the bottom right
     tile = Image.composite(Image.new("RGBA", (s, s), BOTTOM_RIGHT + (255,)),
                            Image.new("RGBA", (s, s), TOP_LEFT + (255,)), ramp)
     mask = Image.new("L", (s, s), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([s * 0.06, s * 0.06, s * 0.94, s * 0.94], radius=s * 0.22, fill=255)
+    ImageDraw.Draw(mask).polygon(pts(_page()), fill=255)
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     img.paste(tile, (0, 0), mask)
     d = ImageDraw.Draw(img)
-    d.polygon(_outline(s / 100), fill=(255, 255, 255, 255))
-    if size >= 24:  # too small to read below that
-        d.polygon([(x * s / 100, y * s / 100) for x, y in SPARK], fill=SPARK_COLOR + (255,))
+    d.polygon(pts(_fold()), fill=FOLD_COLOR + (255,))
+    white, w = (255, 255, 255, 255), Z_ROUND * k
+    z = pts(Z)
+    d.polygon(z, fill=white)
+    d.line(z + z[:1], fill=white, width=round(2 * w), joint="curve")
+    for x, y in z:  # round the corners the line joint leaves square
+        d.ellipse([x - w, y - w, x + w, y + w], fill=white)
     return img.resize((size, size), Image.LANCZOS)
 
 
@@ -65,3 +70,21 @@ def save_ico(path):
     img = make_icon(256)
     img.save(path, sizes=ICO_SIZES, append_images=[make_icon(w) for w, _ in ICO_SIZES[:-1]])
     return path
+
+
+def svg(gradient_id="zpdf-g"):
+    """The icon as an SVG, for the app's sidebar and its browser tab."""
+    lo, hi, r, c = 6, 94, RADIUS, 94 - CUT
+    page = (f"M{lo + r} {lo}H{c}L{hi} {lo + CUT}V{hi - r}A{r} {r} 0 0 1 {hi - r} {hi}"
+            f"H{lo + r}A{r} {r} 0 0 1 {lo} {hi - r}V{lo + r}A{r} {r} 0 0 1 {lo + r} {lo}Z")
+    fold = f"M{c} {lo}V{lo + CUT - 4}A4 4 0 0 0 {c + 4} {lo + CUT}H{hi}Z"
+    z = " ".join(f"{x},{y}" for x, y in Z)
+    hexc = "#{:02x}{:02x}{:02x}".format
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+            f'<defs><linearGradient id="{gradient_id}" x1="0" y1="0" x2="1" y2="1">'
+            f'<stop offset="0" stop-color="{hexc(*TOP_LEFT)}"/><stop offset="1" stop-color="{hexc(*BOTTOM_RIGHT)}"/>'
+            f'</linearGradient></defs>'
+            f'<path d="{page}" fill="url(#{gradient_id})"/>'
+            f'<path d="{fold}" fill="{hexc(*FOLD_COLOR)}"/>'
+            f'<polygon points="{z}" fill="#fff" stroke="#fff" stroke-width="{2 * Z_ROUND}" stroke-linejoin="round"/>'
+            f'</svg>')

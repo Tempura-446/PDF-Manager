@@ -1177,3 +1177,17 @@ def test_attachments_saved_once_and_bare_file_specs_skipped(tmp_path):
     out = tmp_path / "media"
     saved = core.extract_media(src, out, images=False)
     assert len(saved["attachments"]) == 1 and saved["attachments"][0].read_bytes() == b"the same bytes"
+
+
+def test_app_icon_matches_the_page_and_draws(tmp_path):
+    from pdfmanager import appicon
+    import urllib.parse
+    html = (Path(__file__).resolve().parents[1] / "pdfmanager" / "gui.html").read_text(encoding="utf-8")
+    inner = appicon.svg().split(">", 1)[1]  # everything after the opening <svg ...>
+    assert inner in html  # the sidebar mark
+    assert urllib.parse.quote(appicon.svg(), safe="") in html  # the tab icon
+    ico = appicon.save_ico(tmp_path / "z.ico")
+    from PIL import Image
+    with Image.open(ico) as im:
+        assert (256, 256) in im.info["sizes"] or im.size == (256, 256)
+        assert im.convert("RGBA").getpixel((128, 128))[3] == 255
