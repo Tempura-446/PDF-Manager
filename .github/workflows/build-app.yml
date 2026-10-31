@@ -64,8 +64,12 @@ jobs:
           "dist/ZPDF/ZPDF" --self-test "$RUNNER_TEMP/selftest.txt" || status=$?
           cat "$RUNNER_TEMP/selftest.txt"
           exit ${status:-0}
+      # On pull requests the zip is only a by-product of checking the build, so
+      # keep it briefly and don't fail the check if the storage quota is full.
       - uses: actions/upload-artifact@v4
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
         with:
           name: ZPDF-${{ matrix.label }}
           path: dist/ZPDF-${{ matrix.label }}.zip
           if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 90 }}
