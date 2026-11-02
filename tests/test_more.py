@@ -1285,6 +1285,15 @@ const out = {
   none: g.snap([900, 900], 6),
   nearestEndWins: r(g.snap([217, 217], 8)),
 };
+// Fallbacks: built a chunk at a time; a pdf.js we don't know; bad numbers; too many lines.
+const built = await S.Geometry.build(S.segmentsFromOperatorList(ol, OPS), { yieldWith: (fn) => fn() });
+out.builtSame = built.count === g.count && r(built.snap([650, 506], 8))[0] === "end";
+out.unknownOps = S.fromOperatorList(ol, {}).count;
+out.noList = S.fromOperatorList({}, OPS).count;
+out.nan = S.fromOperatorList({ fnArray: [91], argsArray: [[20, path(0, 0, 0, 1, NaN, 5, 1, 10, 10), null]] }, OPS).count;
+const unindexed = new S.Geometry(S.segmentsFromOperatorList(ol, OPS), { index: false });
+out.beforeIndexed = unindexed.snap([650, 506], 8);
+out.badTol = g.snap([650, 506], 0) === null && g.snap([NaN, 1], 8) === null;
 console.log(JSON.stringify(out));
 """
     out = subprocess.run([node, "--input-type=module", "-e", script, module], capture_output=True, text=True, timeout=60)
@@ -1302,3 +1311,7 @@ console.log(JSON.stringify(out));
     assert got["ortho"] == ["cross", 648, 300]
     assert got["none"] is None
     assert got["nearestEndWins"] == ["end", 216, 216]
+    assert got["builtSame"] is True
+    assert got["unknownOps"] == 0 and got["noList"] == 0
+    assert got["nan"] == 1  # the segment with a NaN end is left out, the good one kept
+    assert got["beforeIndexed"] is None and got["badTol"] is True

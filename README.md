@@ -228,7 +228,9 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
     one again (or Enter), for its square feet (or m²) and perimeter.
     Backspace takes back the last point or measurement, Esc stops;
     **Clear** removes them. Measurements are only on screen, not saved in
-    the file. Scanned sheets have no lines to snap to: zoom in close.
+    the file. Scanned sheets have no lines to snap to, and if a sheet's
+    lines can't be read ZPDF says so: points then go exactly where you
+    click, so zoom in close.
   - A scale read from the sheet is only as right as the sheet: measure one
     written dimension to check it before relying on the numbers.
 - **Command palette (Ctrl+K):** type what you want (a tool, an action like

@@ -15,7 +15,8 @@
 import { BASE, DOC_OPTIONS, destroyTask, loadPdfjs as loadLibrary, openDocument } from "./pdfjs.js";
 import * as files from "./files.js";
 import * as measure from "./measure.js";
-import * as snap from "./snap.js";
+let snap = null;  // snapping to a drawing's lines (snap.js); the reader works without it
+const snapReady = import("./snap.js").then((m) => { snap = m; }, () => {});
 
 let pdfjs = null;   // pdf.js display API
 let viewer = null;  // pdf.js viewer components
@@ -81,6 +82,8 @@ const HIGHLIGHT_COLORS = "yellow=#FFFF98,green=#53FFBC,blue=#80EBFF,pink=#FFCBE6
 const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
 
 const SNAP_PX = 12;  // how close (on screen) a measuring click snaps to a line of the drawing
+const GEOMETRY_PAGES = 8;  // how many pages' lines to keep per document
+const isScale = (s) => !!s && typeof s === "object" && Number.isFinite(s.ratio) && s.ratio > 0 && (s.units === "ft" || s.units === "m") && typeof s.label === "string";
 
 const ZOOM_PRESETS = [
   ["auto", "Automatic"], ["page-fit", "Fit page"], ["page-width", "Fit width"], ["page-actual", "Actual size"], ["true-size", "True paper size"],
@@ -2014,7 +2017,11 @@ export class Reader {
   async #refreshScale() {
     const tab = this.activeTab, doc = this.doc;
     if (!tab || !doc) return;
-    tab.scales ||= store.get(this.#scaleKey(), {});
+    if (!tab.scales) {
+      const saved = store.get(this.#scaleKey(), {});
+      tab.scales = {};
+      if (saved && typeof saved === "object") for (const [k, v] of Object.entries(saved)) if (v === false || isScale(v)) tab.scales[k] = v;
+    }
     tab.detected ||= new Map();
     const n = this.pdfViewer.currentPageNumber || 1;
     if (!tab.detected.has(n)) {
@@ -2092,16 +2099,23 @@ export class Reader {
 
   /** The zoom at which a page shows at its true printed size on this screen. */
   #trueZoom() {
-    const devicePpi = store.get("pdfm-screen-ppi", null);
+    const devicePpi = this.#screenPpi();
     const cssPpi = devicePpi ? devicePpi / (window.devicePixelRatio || 1) : 96;
     return cssPpi / 96;  // at 100%, pdf.js draws 96 CSS pixels to the inch
+  }
+
+  /** The screen's pixels per inch, as calibrated (kept here as well as in
+   *  storage, which may be unavailable); null if not yet, or nonsense. */
+  #screenPpi() {
+    const ppi = this.screenPpi ?? store.get("pdfm-screen-ppi", null);
+    return Number.isFinite(ppi) && ppi >= 30 && ppi <= 1000 ? ppi : null;
   }
 
   /** Zoom to true paper size ("true") or so the drawing looks as if drawn at
    *  another scale ("s:<index>"). */
   async #viewAt(value) {
     if (!this.doc) return;
-    if (!store.get("pdfm-screen-ppi", null) && !(await this.calibrateScreen(true))) { this.#syncZoomSelect(); this.viewAtSelect.value = ""; return; }
+    if (!this.#screenPpi() && !(await this.calibrateScreen(true))) { this.#syncZoomSelect(); this.viewAtSelect.value = ""; return; }
     let zoom = this.#trueZoom(), what = "true paper size";
     if (value !== "true") {
       const target = measure.ALL_SCALES[+value.slice(2)];
@@ -2110,8 +2124,11 @@ export class Reader {
       zoom *= scale.ratio / target.ratio;
       what = target.label;
     }
-    zoom = Math.min(25, Math.max(0.1, zoom));
+    const wanted = zoom;
+    zoom = Math.min(10, Math.max(0.1, zoom));  // what the viewer can draw
+    if (!Number.isFinite(zoom)) { this.toast("That zoom can't be worked out; calibrate the screen again."); return; }
     this.pdfViewer.currentScale = zoom;
+    if (zoom !== wanted) this.toast(`That would be ${Math.round(wanted * 100)}%; the viewer stops at ${Math.round(zoom * 100)}%.`, 4000);
     this.viewAtZoom = zoom;
     this.viewAtSelect.value = value;
     this.toast(`Showing the drawing at ${what} on your screen`, 2500);
@@ -2125,7 +2142,7 @@ export class Reader {
    *  the screen's diagonal. Resolves true once calibrated. */
   async calibrateScreen(first = false) {
     const dpr = window.devicePixelRatio || 1;
-    let cssPpi = (store.get("pdfm-screen-ppi", null) || 96 * dpr) / dpr;
+    let cssPpi = (this.#screenPpi() || 96 * dpr) / dpr;
     const CARD_W = 3.370, CARD_H = 2.125;  // a bank card, in inches (85.6 × 54 mm)
     const card = el("div", { class: "rd-card" }, el("span", {}, "Bank card"));
     const ruler = el("div", { class: "rd-ruler", "aria-hidden": "true" });
@@ -2141,8 +2158,8 @@ export class Reader {
     };
     slider.addEventListener("input", () => { cssPpi = +slider.value; diagonal.value = ""; show(); });
     diagonal.addEventListener("input", () => {
-      const d = +diagonal.value;
-      if (d >= 5) { cssPpi = Math.hypot(screen.width, screen.height) / d; show(); }
+      const d = +diagonal.value, w = screen?.width, h = screen?.height;
+      if (d >= 5 && w > 0 && h > 0) { cssPpi = Math.min(320, Math.max(40, Math.hypot(w, h) / d)); show(); }
     });
     show();
     const body = [
@@ -2154,8 +2171,9 @@ export class Reader {
       el("label", { class: "rd-diag" }, diagonal, "inches"),
     ];
     const answer = await this.#dialog("Calibrate your screen", body, [["cancel", "Cancel"], ["ok", "Save", true]]);
-    if (answer !== "ok") return false;
-    store.set("pdfm-screen-ppi", cssPpi * dpr);
+    if (answer !== "ok" || !Number.isFinite(cssPpi)) return false;
+    this.screenPpi = cssPpi * dpr;
+    store.set("pdfm-screen-ppi", this.screenPpi);
     this.toast("Screen calibrated: true paper size now matches the real world.", 3000);
     if (this.zoomSelect.value === "true-size" && this.pdfViewer) this.pdfViewer.currentScale = this.#trueZoom();
     return true;
@@ -2209,21 +2227,33 @@ export class Reader {
     if (!tab || !doc) return null;
     tab.geometry ||= new Map();
     const have = tab.geometry.get(n);
-    if (have !== undefined) return have || null;
+    if (have !== undefined) {
+      if (have) { tab.geometry.delete(n); tab.geometry.set(n, have); }  // most recently used, kept longest
+      return have || null;
+    }
     tab.geometry.set(n, false);  // being read
-    doc.getPage(n)
+    const done = (geometry, why) => {
+      if (doc !== this.doc) return;
+      tab.geometry.set(n, geometry);
+      // Lines of pages long left are let go of; the ones being read stay.
+      for (const [page, g] of tab.geometry) {
+        if (tab.geometry.size <= GEOMETRY_PAGES) break;
+        if (g && page !== n) tab.geometry.delete(page);
+      }
+      if (this.measureMode && this.pdfViewer.currentPageNumber === n && !tab.noLinesHinted) {
+        let hint = null;
+        if (why) hint = "This sheet's lines couldn't be read, so points go exactly where you click: zoom in close.";
+        else if (!geometry.count) hint = "This sheet has no line work to snap to (a scan?): points go exactly where you click, so zoom in close.";
+        else if (geometry.truncated) hint = "This sheet has more lines than can be read; snapping covers the first part of it.";
+        if (hint) { tab.noLinesHinted = true; this.toast(hint, 6000); }
+      }
+      if (this.draft?.page === n || this.hoverPage === n) this.#drawMeasures(n);
+    };
+    snapReady
+      .then(() => { if (!snap) throw new Error("snapping unavailable"); return doc.getPage(n); })
       .then((page) => page.getOperatorList({ annotationMode: pdfjs.AnnotationMode.DISABLE }))
-      .then((ops) => {
-        if (doc !== this.doc) return;
-        const geometry = snap.fromOperatorList(ops, pdfjs.OPS);
-        tab.geometry.set(n, geometry);
-        if (!geometry.count && this.measureMode && !tab.noLinesHinted) {
-          tab.noLinesHinted = true;
-          this.toast("This sheet has no line work to snap to (a scan?): points go exactly where you click, so zoom in close.", 6000);
-        }
-        if (this.draft?.page === n) this.#drawMeasures(n);
-      })
-      .catch(() => tab.geometry.set(n, null));
+      .then((ops) => snap.buildFromOperatorList(ops, pdfjs.OPS))
+      .then((geometry) => done(geometry, null), (e) => done(null, e));
     return null;
   }
 
@@ -2237,9 +2267,11 @@ export class Reader {
     const n = Number(pageEl?.dataset.pageNumber);
     if (!n || (only && n !== only)) return null;
     const view = this.pdfViewer.getPageView(n - 1);
+    if (!view?.div || !view.viewport) return null;
     const box = view.div.getBoundingClientRect();
     const x = e.clientX - box.left - view.div.clientLeft, y = e.clientY - box.top - view.div.clientTop;
     let pdf = view.viewport.convertToPdfPoint(x, y);
+    if (!Number.isFinite(pdf[0]) || !Number.isFinite(pdf[1])) return null;
     const pts = this.draft?.page === n ? this.draft.pts : null;
     const from = pts?.length ? pts.at(-1) : null;
     let ortho = null;
@@ -2250,9 +2282,14 @@ export class Reader {
     }
     let snapped = null;
     if (this.measureMode && !e.altKey) {
-      const geometry = this.#geometry(n);
-      const hit = geometry?.snap(pdf, SNAP_PX / view.viewport.scale, { from, ortho });
-      if (hit) { pdf = [hit.x, hit.y]; snapped = hit.kind; }
+      try {
+        const geometry = this.#geometry(n);
+        const hit = geometry?.snap(pdf, SNAP_PX / view.viewport.scale, { from, ortho });
+        if (hit && Number.isFinite(hit.x) && Number.isFinite(hit.y)) { pdf = [hit.x, hit.y]; snapped = hit.kind; }
+      } catch (err) {
+        // Snapping failing must never stop a measurement: the point stays where it was clicked.
+        this.activeTab.geometry?.set(n, null);
+      }
     }
     return { page: n, view, x, y, pdf, snapped };
   }
@@ -2318,7 +2355,10 @@ export class Reader {
           [["cancel", "Cancel"], ["ok", "Set the scale", true]]);
         if (answer !== "ok") { this.measureTool(null); return; }
         real = measure.parseLength(input.value, units);
-        if (real) break;
+        const ratio = real ? real.inches / (length / 72) : NaN;
+        if (real && ratio >= 0.05 && ratio <= 20000) break;
+        error.textContent = real ? `That would make the scale 1:${ratio < 1 ? ratio.toFixed(3) : Math.round(ratio)}, which doesn't look like a drawing scale. Check the length and the points you clicked.`
+          : "Type a length such as 12'-6\", 150\", 3.6 m or 3600 mm.";
         error.hidden = false;
       }
       const scale = measure.scaleFrom(length, real);
@@ -2361,6 +2401,10 @@ export class Reader {
 
   /** Draw page ``n``'s measurements (and the one being made) over it. */
   #drawMeasures(n) {
+    try { this.#drawMeasuresOn(n); } catch (e) { /* a bad point or scale: the page itself is unaffected */ }
+  }
+
+  #drawMeasuresOn(n) {
     if (!this.pdfViewer || !this.doc) return;
     const view = this.pdfViewer.getPageView(n - 1);
     if (!view?.div) return;

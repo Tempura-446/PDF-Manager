@@ -12,6 +12,8 @@
 
 const CELL = 24;        // the index's cell size, in points (1/3 in)
 const CURVE_STEPS = 16; // a curve becomes this many straight pieces; its ends stay exact
+export const MAX_SEGMENTS = 2_000_000;  // past this a sheet is read only so far (memory)
+const CHUNK = 20000;    // segments indexed between two breathers, when built async
 
 /** m1 then m2, as pdf.js composes transforms (p -> m1(m2(p))). */
 function compose(m1, m2) {
@@ -29,6 +31,8 @@ function apply(m, x, y) { return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * 
  *  filled strips. */
 export function segmentsFromOperatorList({ fnArray, argsArray }, OPS) {
   const out = [];
+  out.truncated = false;
+  if (!fnArray || !argsArray || typeof OPS?.constructPath !== "number") return out;  // not the pdf.js we know
   let ctm = [1, 0, 0, 1, 0, 0];
   const stack = [];
   const paint = new Set([OPS.stroke, OPS.closeStroke, OPS.fill, OPS.eoFill, OPS.fillStroke, OPS.eoFillStroke,
@@ -42,9 +46,10 @@ export function segmentsFromOperatorList({ fnArray, argsArray }, OPS) {
       case OPS.paintFormXObjectBegin: stack.push(ctm); if (args?.[0]) ctm = compose(ctm, args[0]); break;
       case OPS.paintFormXObjectEnd: if (stack.length) ctm = stack.pop(); break;
       case OPS.constructPath: {
-        if (!paint.has(args[0])) break;  // a clip, or a path thrown away
+        if (!paint.has(args?.[0])) break;  // a clip, or a path thrown away
         const path = args[1]?.[0];
-        if (path) addPath(out, path, ctm);
+        if (path?.length) addPath(out, path, ctm);
+        if (out.length >= MAX_SEGMENTS * 4) { out.truncated = true; return out; }
         break;
       }
       default: break;
@@ -55,7 +60,7 @@ export function segmentsFromOperatorList({ fnArray, argsArray }, OPS) {
 
 function addPath(out, path, m) {
   let cx = 0, cy = 0, sx = 0, sy = 0;
-  const line = (x, y) => { out.push(cx, cy, x, y); cx = x; cy = y; };
+  const line = (x, y) => { if (Number.isFinite(x) && Number.isFinite(y)) out.push(cx, cy, x, y); cx = x; cy = y; };
   for (let i = 0; i < path.length;) {
     switch (path[i++]) {
       case 0: [cx, cy] = apply(m, path[i++], path[i++]); sx = cx; sy = cy; break;
@@ -107,12 +112,27 @@ export function intersection(ax, ay, bx, by, cx, cy, dx, dy) {
 
 /** The geometry of one page, indexed for quick lookups near a point. */
 export class Geometry {
-  constructor(segments) {
+  constructor(segments, { index = true } = {}) {
     this.segments = segments;  // flat [x1, y1, x2, y2, ...]
     this.cells = new Map();    // "cx|cy" -> segment indices crossing that cell
-    const n = segments.length / 4;
-    for (let i = 0; i < n; i++) this.#index(i);
-    this.count = n;
+    this.count = segments.length / 4;
+    this.truncated = !!segments.truncated;
+    this.indexed = 0;
+    if (index) this.indexTo(this.count);
+  }
+
+  /** Index segments up to ``end``; returns true once all are indexed. */
+  indexTo(end) {
+    for (; this.indexed < Math.min(end, this.count); this.indexed++) this.#index(this.indexed);
+    return this.indexed >= this.count;
+  }
+
+  /** Build the index a chunk at a time, giving the page a chance to draw
+   *  between chunks (a dense sheet can have a million lines). */
+  static async build(segments, { yieldWith = (fn) => setTimeout(fn, 0) } = {}) {
+    const geometry = new Geometry(segments, { index: false });
+    while (!geometry.indexTo(geometry.indexed + CHUNK)) await new Promise((r) => yieldWith(r));
+    return geometry;
   }
 
   /** Put segment ``i`` in every cell it passes through (a supercover walk). */
@@ -154,6 +174,7 @@ export class Geometry {
    *  from ``from`` crosses a line of the drawing. Returns
    *  { x, y, kind, dist }. */
   snap([px, py], tol, { from = null, ortho = null } = {}) {
+    if (this.indexed < this.count || !Number.isFinite(px) || !Number.isFinite(py) || !(tol > 0)) return null;
     const s = this.segments;
     const ids = [...this.near(px, py, tol)];
     if (!ids.length) return null;
@@ -204,4 +225,9 @@ export class Geometry {
 
 export function fromOperatorList(opList, OPS) {
   return new Geometry(segmentsFromOperatorList(opList, OPS));
+}
+
+/** Like fromOperatorList, but without freezing the page while it works. */
+export function buildFromOperatorList(opList, OPS) {
+  return Geometry.build(segmentsFromOperatorList(opList, OPS));
 }
