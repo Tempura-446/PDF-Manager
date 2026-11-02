@@ -960,6 +960,11 @@ function paletteMatch(query) {
     const n = Number(page[1]);
     if (n >= 1 && n <= reader.doc.numPages) found.push({ label: `Go to page ${n}`, group: "This document", icon: "reader", run: () => reader.goToPage(n), score: -1 });
   }
+  const zoom = doc && q.match(/^(?:zoom\s*(?:to\s*)?)?(\d+(?:[.,]\d+)?)\s*%$/);
+  if (zoom) {
+    const pct = parseFloat(zoom[1].replace(",", "."));
+    if (pct >= 10 && pct <= 1000) found.push({ label: `Zoom to ${pct}%`, group: "This document", icon: "reader", run: () => reader.setZoom(pct / 100), score: -1 });
+  }
   if (!q) return palette.items.filter((c) => !c.later).slice(0, 40);
   const words = q.split(/\s+/);
   for (const c of palette.items) {

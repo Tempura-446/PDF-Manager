@@ -38,6 +38,19 @@
   transition: border-color var(--t), box-shadow var(--t);
 }
 .rd-page input:focus, .rd-zoom:focus, .rd-findbar input[type=search]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.rd-zoominput {
+  width: 64px; height: 34px; text-align: center; border: 1px solid var(--border-strong); border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-variant-numeric: tabular-nums;
+  transition: border-color var(--t), box-shadow var(--t);
+}
+.rd-zoominput:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); position: relative; z-index: 1; }
+.rd-zoommenu-btn { min-width: 26px; padding: 0 2px; border: 1px solid var(--border-strong); border-left: 0; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--surface); margin-right: 2px; }
+.rd-zoommenu-btn svg { width: 14px; height: 14px; stroke-width: 2.25; }
+.rd-zoommenu-btn[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
+.rd-zoomgroup { gap: 0; }
+.rd-zoomgroup .rd-btn:first-child { margin-right: 2px; }
+.rd-zoommenu { min-width: 190px; }
+.rd-zoommenu button[aria-checked="true"] { color: var(--accent); font-weight: 600; }
 .rd-zoom {
   height: 34px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text);
   padding: 0 24px 0 8px; font: inherit; font-size: 13px; max-width: 132px;  /* the chevron comes from gui.html's select rule */
@@ -243,6 +256,7 @@
   .rd-sep { margin: 0 3px; }
   .rd-sidebar { position: absolute; inset: 0 auto 0 0; z-index: 10; box-shadow: var(--shadow-pop); }
   .rd-zoom { max-width: 96px; }
+  .rd-zoominput { width: 56px; }
   .rd-empty { padding: 16px; }
   .rd-empty-card { padding: 30px 20px 24px; }
   .rd-menu { right: 8px; left: 8px; min-width: 0; }
@@ -251,7 +265,7 @@
   /* Phones: every control of the toolbar fits without scrolling. */
   .rd-toolbar { gap: 0; }
   .rd-toolbar .rd-btn { min-width: 32px; padding: 0 6px; }
-  .rd-toolbar .rd-zoom, .rd-page span { display: none; }
+  .rd-toolbar .rd-zoominput, .rd-toolbar .rd-zoommenu-btn, .rd-page span { display: none; }
   .rd-page input { width: 46px; }
 }
 
