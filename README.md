@@ -234,7 +234,7 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   - A scale read from the sheet is only as right as the sheet: measure one
     written dimension to check it before relying on the numbers.
 - **Command palette (Ctrl+K):** type what you want (a tool, an action like
-  "fit width" or "delete this page", or a page number) and press Enter.
+  "fit width" or "delete this page", a page number, or a zoom like "150%") and press Enter.
 - Rotate the view, hand tool (drag to scroll), dark pages for night
   reading, full screen, print, document properties.
 - Password-protected PDFs ask for their password.
@@ -247,6 +247,7 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
 | Ctrl/⌘+O | open a PDF |
 | Ctrl/⌘+F, Enter / Shift+Enter, Esc | find, next / previous match, close |
 | Ctrl/⌘ + / − / 0 | zoom in / out / automatic |
+| (zoom box) | type any percentage and press Enter; ↑ ↓ change it by 10% (Shift: 1%); the arrow beside it lists the presets |
 | N or J, P or K, Home, End | next, previous, first, last page |
 | R, Shift+R | rotate the view clockwise, counter-clockwise |
 | Ctrl/⌘+K | command palette |

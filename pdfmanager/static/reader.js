@@ -81,6 +81,7 @@ const COLORS = [["Black", "#000000", "#bdbdbd"], ["Blue", "#1f4fd8", "#80ebff"],
 const HIGHLIGHT_COLORS = "yellow=#FFFF98,green=#53FFBC,blue=#80EBFF,pink=#FFCBE6,red=#FF4F5F";
 const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
 
+const MIN_ZOOM = 0.1, MAX_ZOOM = 10;  // what the viewer can draw
 const SNAP_PX = 12;  // how close (on screen) a measuring click snaps to a line of the drawing
 const GEOMETRY_PAGES = 8;  // how many pages' lines to keep per document
 const isScale = (s) => !!s && typeof s === "object" && Number.isFinite(s.ratio) && s.ratio > 0 && (s.units === "ft" || s.units === "m") && typeof s.label === "string";
@@ -153,10 +154,11 @@ export class Reader {
     this.pageCount = el("span", {}, "");
     this.zoomOutBtn = b("minus", "Zoom out (Ctrl −)", { disabled: true });
     this.zoomInBtn = b("plus", "Zoom in (Ctrl +)", { disabled: true });
-    this.zoomSelect = el("select", { class: "rd-zoom", "aria-label": "Zoom", disabled: true });
-    for (const [v, label] of ZOOM_PRESETS) this.zoomSelect.append(el("option", { value: v }, label));
-    this.zoomCustom = el("option", { value: "custom", hidden: true, disabled: true });
-    this.zoomSelect.append(this.zoomCustom);
+    this.zoomInput = el("input", { type: "text", class: "rd-zoominput", inputmode: "decimal", "aria-label": "Zoom (type a percentage)",
+      title: "Zoom: type a percentage and press Enter; ↑ ↓ change it by 10% (with Shift, 1%)", autocomplete: "off", disabled: true });
+    this.zoomMenuBtn = b("down", "Zoom presets", { class: "rd-btn rd-zoommenu-btn", "aria-haspopup": "menu", "aria-expanded": "false", disabled: true });
+    this.zoomMenu = el("div", { class: "rd-menu rd-zoommenu", role: "menu", "aria-label": "Zoom", hidden: true });
+    this.zoomPreset = "auto";  // the preset the zoom is at, or "custom"
     this.scaleBtn = el("button", { class: "rd-btn rd-scale-btn", type: "button", disabled: true, "aria-expanded": "false",
       title: "Drawing scale, true-size zoom and measuring (M to measure)", html: svg("ruler") + "<span>Scale</span>" });
     this.scaleLabel = this.scaleBtn.querySelector("span");
@@ -171,7 +173,7 @@ export class Reader {
       el("div", { class: "rd-group" }, this.prevBtn, this.nextBtn,
         el("label", { class: "rd-page" }, this.pageInput, this.pageCount)),
       el("span", { class: "rd-sep" }),
-      el("div", { class: "rd-group" }, this.zoomOutBtn, this.zoomSelect, this.zoomInBtn),
+      el("div", { class: "rd-group rd-zoomgroup" }, this.zoomOutBtn, this.zoomInput, this.zoomMenuBtn, this.zoomInBtn),
       el("span", { class: "rd-sep" }),
       this.scaleBtn, this.toolsBtn);
 
@@ -267,7 +269,7 @@ export class Reader {
     this.menu = el("div", { class: "rd-menu", role: "menu", hidden: true });
     this.ctxMenu = el("div", { class: "rd-menu rd-ctxmenu", role: "menu", hidden: true, "aria-label": "Page" });
     this.tabbar = el("div", { class: "rd-tabbar", role: "tablist", "aria-label": "Open documents", hidden: true });
-    this.root.append(toolbar, this.tray, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.body, this.menu, this.ctxMenu, this.fileInput);
+    this.root.append(toolbar, this.tray, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.fileInput);
     // A drawing in progress takes every click in the window as the next
     // stroke; end it first when the tabs, toolbar or menu are used. This
     // listens on the window before pdf.js does, so it runs first.
@@ -326,6 +328,61 @@ export class Reader {
   }
   #closeMenu() { this.menu.hidden = true; this.moreBtn.setAttribute("aria-expanded", "false"); }
 
+  // ---- zoom -------------------------------------------------------------------
+  /** Show the zoom in its box: the percentage, and which preset it is. */
+  #showZoom(scale = this.pdfViewer?.currentScale) {
+    if (!this.doc || !Number.isFinite(scale)) return;
+    this.zoomInput.value = Math.round(scale * 100) + "%";
+    const preset = ZOOM_PRESETS.find(([v]) => v === this.zoomPreset);
+    this.zoomMenuBtn.title = preset ? `Zoom presets (now: ${preset[1]})` : "Zoom presets";
+  }
+
+  /** Zoom to ``factor`` (1 = 100%), kept to what the viewer can draw. */
+  setZoom(factor) {
+    if (!this.doc || !Number.isFinite(factor)) return false;
+    const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, factor));
+    this.pdfViewer.currentScale = zoom;
+    if (zoom !== factor) this.toast(`Zoom goes from ${MIN_ZOOM * 100}% to ${MAX_ZOOM * 100}%.`, 2500);
+    return true;
+  }
+
+  /** The zoom typed into the box: 137, 137%, 137.5 (or 1.37, as a factor). */
+  #applyTypedZoom() {
+    const text = this.zoomInput.value.trim().replace(",", ".");
+    const m = text.match(/^(\d+(?:\.\d+)?)\s*%?$/);
+    const n = m ? parseFloat(m[1]) : NaN;
+    if (!(n > 0)) { this.#showZoom(); if (text) this.toast("Type a zoom such as 150 or 66.7%."); return; }
+    this.setZoom(n < 10 && !text.includes("%") ? n : n / 100);
+    this.#showZoom();
+  }
+
+  #toggleZoomMenu() {
+    if (!this.zoomMenu.hidden) return this.#closeZoomMenu();
+    if (!this.doc) return;
+    const items = [];
+    for (const [value, label] of ZOOM_PRESETS) {
+      if (value === "0.5") items.push(el("hr"));
+      const item = el("button", { type: "button", role: "menuitemradio", "aria-checked": String(value === this.zoomPreset) },
+        el("span", {}, label), el("span", { class: "check", html: svg("check") }));
+      item.addEventListener("click", () => {
+        this.#closeZoomMenu();
+        if (value === "true-size") this.#viewAt("true");
+        else this.pdfViewer.currentScaleValue = value;
+        this.container.focus();
+      });
+      items.push(item);
+    }
+    this.zoomMenu.replaceChildren(...items);
+    const at = this.zoomInput.getBoundingClientRect(), box = this.root.getBoundingClientRect();
+    this.zoomMenu.style.top = `${at.bottom - box.top + 6}px`;
+    this.zoomMenu.style.left = `${Math.max(8, at.left - box.left)}px`;
+    this.zoomMenu.style.right = "auto";
+    this.zoomMenu.hidden = false;
+    this.zoomMenuBtn.setAttribute("aria-expanded", "true");
+    (this.zoomMenu.querySelector("[aria-checked=true]") || this.zoomMenu.querySelector("button")).focus();
+  }
+  #closeZoomMenu() { this.zoomMenu.hidden = true; this.zoomMenuBtn.setAttribute("aria-expanded", "false"); }
+
   // ---- events -----------------------------------------------------------------
   #wire() {
     this.openBtn.addEventListener("click", () => this.chooseFile());
@@ -339,10 +396,20 @@ export class Reader {
     this.pageInput.addEventListener("focus", () => this.pageInput.select());
     this.zoomInBtn.addEventListener("click", () => this.pdfViewer.increaseScale());
     this.zoomOutBtn.addEventListener("click", () => this.pdfViewer.decreaseScale());
-    this.zoomSelect.addEventListener("change", () => {
-      if (this.zoomSelect.value === "true-size") this.#viewAt("true");
-      else this.pdfViewer.currentScaleValue = this.zoomSelect.value;
+    this.zoomInput.addEventListener("focus", () => this.zoomInput.select());
+    this.zoomInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); this.#applyTypedZoom(); this.container.focus(); }
+      else if (e.key === "Escape") { e.preventDefault(); this.#showZoom(); this.container.focus(); }
+      else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        e.preventDefault();
+        const step = (e.shiftKey ? 1 : 10) * (e.key === "ArrowUp" ? 1 : -1);
+        this.setZoom((Math.round(this.pdfViewer.currentScale * 100) + step) / 100);
+        this.zoomInput.select();
+      }
     });
+    this.zoomInput.addEventListener("change", () => this.#applyTypedZoom());
+    this.zoomMenuBtn.addEventListener("click", () => this.#toggleZoomMenu());
+    document.addEventListener("pointerdown", (e) => { if (!this.zoomMenu.hidden && !this.zoomMenu.contains(e.target) && !this.zoomMenuBtn.contains(e.target)) this.#closeZoomMenu(); });
     this.scaleBtn.addEventListener("click", () => this.toggleScaleBar());
     this.rotCwBtn.addEventListener("click", () => this.rotate(90));
     this.rotCcwBtn.addEventListener("click", () => this.rotate(-90));
@@ -449,6 +516,7 @@ export class Reader {
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === "o") { e.preventDefault(); this.chooseFile(); return; }
     if (e.key === "Escape" && !this.menu.hidden) { this.#closeMenu(); this.moreBtn.focus(); return; }
+    if (e.key === "Escape" && !this.zoomMenu.hidden) { this.#closeZoomMenu(); this.zoomMenuBtn.focus(); return; }
     if (!this.doc) return;
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
     if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); this.print(); return; }
@@ -696,7 +764,8 @@ export class Reader {
     this.pageInput.value = "";
     this.pageCount.textContent = "";
     for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
-      this.zoomSelect, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.annotateBtn, this.scaleBtn]) c.disabled = true;
+      this.zoomInput, this.zoomMenuBtn, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.annotateBtn, this.scaleBtn]) c.disabled = true;
+    this.zoomInput.value = "";
     this.sidebar.hidden = true;
     this.root.classList.remove("reading");
     if (this.active) document.title = "PDF reader — ZPDF";
@@ -747,7 +816,7 @@ export class Reader {
       document.title = tab.name + " — ZPDF";
       this.empty.hidden = true;
       for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
-        this.zoomSelect, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.annotateBtn, this.scaleBtn]) c.disabled = false;
+        this.zoomInput, this.zoomMenuBtn, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.annotateBtn, this.scaleBtn]) c.disabled = false;
       this.pageCount.textContent = `of ${doc.numPages}`;
       this.root.classList.add("reading");
       this.toggleTray(store.get("pdfm-reader-tray", false), false);
@@ -812,9 +881,9 @@ export class Reader {
     eventBus.on("scalechanging", ({ scale, presetValue }) => {
       const value = presetValue || String(scale);
       const preset = ZOOM_PRESETS.find(([v]) => v === value || (!presetValue && Math.abs(parseFloat(v) - scale) < 0.001));
-      if (!presetValue && Math.abs(scale - this.#trueZoom()) < 0.001) { this.zoomSelect.value = "true-size"; this.zoomCustom.hidden = true; }
-      else if (preset) { this.zoomSelect.value = preset[0]; this.zoomCustom.hidden = true; }
-      else { this.zoomCustom.textContent = Math.round(scale * 100) + "%"; this.zoomCustom.hidden = false; this.zoomSelect.value = "custom"; }
+      if (!presetValue && Math.abs(scale - this.#trueZoom()) < 0.001) this.zoomPreset = "true-size";
+      else this.zoomPreset = preset ? preset[0] : "custom";
+      this.#showZoom(scale);
       if (this.viewAtZoom && Math.abs(scale - this.viewAtZoom) > 0.001) { this.viewAtZoom = null; this.viewAtSelect.value = ""; }
       this.#remember();
       requestAnimationFrame(() => this.#drawAllMeasures());
@@ -2125,7 +2194,7 @@ export class Reader {
       what = target.label;
     }
     const wanted = zoom;
-    zoom = Math.min(10, Math.max(0.1, zoom));  // what the viewer can draw
+    zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
     if (!Number.isFinite(zoom)) { this.toast("That zoom can't be worked out; calibrate the screen again."); return; }
     this.pdfViewer.currentScale = zoom;
     if (zoom !== wanted) this.toast(`That would be ${Math.round(wanted * 100)}%; the viewer stops at ${Math.round(zoom * 100)}%.`, 4000);
@@ -2175,7 +2244,7 @@ export class Reader {
     this.screenPpi = cssPpi * dpr;
     store.set("pdfm-screen-ppi", this.screenPpi);
     this.toast("Screen calibrated: true paper size now matches the real world.", 3000);
-    if (this.zoomSelect.value === "true-size" && this.pdfViewer) this.pdfViewer.currentScale = this.#trueZoom();
+    if (this.zoomPreset === "true-size" && this.pdfViewer) this.pdfViewer.currentScale = this.#trueZoom();
     return true;
   }
 
@@ -2512,6 +2581,7 @@ export class Reader {
       { icon: "ruler", label: "Set the drawing scale from a dimension", words: "blueprint plan calibrate known length", run: () => this.measureTool("calibrate") },
       { icon: "ruler", label: "Drawing scale", words: "blueprint plan sheet show at measure", run: () => this.toggleScaleBar(true) },
       { icon: "screen", label: "Calibrate the screen for true size", words: "monitor dpi ppi real size card", run: () => this.calibrateScreen() },
+      { icon: "plus", label: "Zoom to a percentage…", words: "custom zoom type number", run: () => { this.zoomInput.focus(); } },
       { icon: "plus", label: "Zoom in", keys: "Ctrl +", run: () => v.increaseScale() },
       { icon: "minus", label: "Zoom out", keys: "Ctrl −", run: () => v.decreaseScale() },
       { icon: "up", label: "First page", keys: "Home", words: "start beginning", run: () => this.goToPage(1) },
