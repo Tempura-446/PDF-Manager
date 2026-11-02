@@ -185,15 +185,16 @@
   border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 0; background: var(--surface); color: var(--text);
   box-shadow: var(--shadow-pop); width: min(520px, calc(100vw - 32px));
 }
+.rd-dialog:has(.rd-cardbox) { width: min(820px, calc(100vw - 32px)); }
 .rd-dialog::backdrop { background: rgb(20 20 18 / .36); backdrop-filter: blur(3px); }
 .rd-dialog form { padding: 24px 26px 22px; }
 .rd-dialog h3 { margin: 0 0 12px; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
 .rd-dialog p { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
-.rd-dialog input[type=password] {
+.rd-dialog input[type=password], .rd-dialog input[type=text]:not(.rd-sigtext), .rd-dialog input[type=number] {
   width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit;
   transition: border-color var(--t), box-shadow var(--t);
 }
-.rd-dialog input[type=password]:focus, .rd-sigtext:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.rd-dialog input[type=password]:focus, .rd-dialog input[type=text]:focus, .rd-dialog input[type=number]:focus, .rd-sigtext:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
 .rd-dialog .err { color: var(--err); font-size: 13px; margin-top: 8px; }
 .rd-dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 .rd-dialog .actions button {
@@ -380,3 +381,46 @@ textarea.rd-textedit { line-height: 1.25; padding: 2px 3px; resize: both; min-he
 .rd-ctxmenu { top: 0; left: 0; right: auto; min-width: 264px; }
 .rd-ctxmenu kbd { margin-left: auto; font: 11px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--muted);
   border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 3px 5px; background: var(--surface-2); }
+
+/* ---- Drawing scale and measuring ---- */
+.rd-scale-btn { font-size: 13px; font-weight: 600; padding: 0 10px 0 8px; max-width: 190px; }
+.rd-scale-btn span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.rd-scale-btn.set { color: var(--accent); }
+.rd-scale-btn[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
+.rd-scalebar .rd-zoom { max-width: 230px; }
+.rd-scalebar .rd-sep { margin: 0 4px; }
+@container (max-width: 980px) { .rd-scalebar .rd-btn span { display: none; } }
+@container (max-width: 640px) { .rd-scale-btn span { display: none; } }
+
+.rd-measuring .textLayer, .rd-measuring .annotationLayer, .rd-measuring .annotationEditorLayer { pointer-events: none !important; }
+.rd-measuring .rd-container, .rd-measuring .page { cursor: crosshair; }
+svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 20; }
+.rd-measure-line { stroke: var(--accent); stroke-width: 2; stroke-linecap: round; }
+.rd-measure-line.draft { stroke-dasharray: 6 4; }
+.rd-measure-line.calibrate { stroke: #1f4fd8; stroke-dasharray: 6 4; }
+.rd-measure-area { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.rd-measure-area.draft { fill: color-mix(in srgb, var(--accent) 8%, transparent); stroke-dasharray: 6 4; }
+.rd-measure-dot { fill: #fff; stroke: var(--accent); stroke-width: 2; }
+.rd-measure-label {
+  font: 700 13px/1 system-ui, -apple-system, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums;
+  fill: #1b1b19; stroke: #fff; stroke-width: 4px; stroke-linejoin: round; paint-order: stroke;
+}
+.rd-measure-label.area tspan + tspan { font-weight: 500; font-size: 11.5px; }
+
+.rd-cardbox { display: grid; place-items: center; min-height: 230px; max-width: 100%; overflow: auto; margin: 6px 0 10px;
+  background: var(--surface-2); border-radius: var(--radius-sm); }
+.rd-card { border: 2px solid var(--accent); border-radius: 10px; display: grid; place-items: center; color: var(--muted); font-size: 12px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent); box-sizing: border-box; }
+.rd-dialog input[type=range] { width: 100%; accent-color: var(--accent); }
+.rd-or { margin-top: 14px; }
+.rd-diag { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
+.rd-dialog .rd-diag input { width: 7em; }
+.rd-snap { fill: none; stroke: #1f4fd8; stroke-width: 2; }
+.rd-snap-hint { font-weight: 600; font-size: 11.5px; fill: #1f4fd8; text-anchor: start; }
+.rd-ruler { position: relative; height: 44px; margin: 10px 0 18px; border: 2px solid var(--text); border-bottom-width: 4px; border-radius: 3px; background: #fffdf5; box-sizing: content-box; max-width: 100%; }
+.rd-ruler i { position: absolute; bottom: 0; width: 2px; height: 16px; background: var(--text); margin-left: -1px; }
+.rd-ruler i:first-child { margin-left: 0; } .rd-ruler i:last-of-type { margin-left: -2px; }
+.rd-ruler i b { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); font-size: 11px; font-weight: 600; color: var(--text); }
+.rd-ruler i:first-child b { left: 0; transform: none; padding-left: 3px; } .rd-ruler i:last-of-type b { left: auto; right: 0; transform: none; padding-right: 3px; }
+.rd-ruler span { position: absolute; left: 8px; top: 4px; font-size: 11px; color: var(--muted); }
+.rd-cardbox { padding: 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 0; min-height: 0; }

@@ -1191,3 +1191,127 @@ def test_app_icon_matches_the_page_and_draws(tmp_path):
     with Image.open(ico) as im:
         assert (256, 256) in im.info["sizes"] or im.size == (256, 256)
         assert im.convert("RGBA").getpixel((128, 128))[3] == 255
+
+
+def test_drawing_scales_and_measuring_js():
+    """static/measure.js: reading a sheet's scale, and lengths and areas in feet and metres."""
+    import shutil
+    import subprocess
+    import pytest
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("needs Node.js")
+    module = (Path(__file__).resolve().parents[1] / "pdfmanager" / "static" / "measure.js").as_uri()
+    script = """
+const M = await import(process.argv[1]);
+const out = {};
+const scale = (t) => { const s = M.findScale(t); return s && [s.label, s.ratio, s.units]; };
+out.arch = scale(`FLOOR PLAN  SCALE: 1/4" = 1'-0"  DETAIL 3  1" = 1'-0"`);
+out.arch2 = scale(`SCALE 1 1/2" = 1'-0"`);
+out.words = scale(`Scale 1/8 in = 1 ft`);
+out.eng = scale(`SITE PLAN 1" = 20'`);
+out.metric = scale(`SITE PLAN  SCALE 1:100`);
+out.time = scale(`Meeting at 1:30 pm, ratio 1:2`);
+out.none = scale(`NTS`);
+const quarter = { ratio: 48, units: "ft" }, hundred = { ratio: 100, units: "m" };
+out.len = M.formatLength(72 * 6, quarter);
+out.len2 = M.formatLength(72 * 3.125, quarter);
+out.paper = M.formatLength(72, null);
+out.m = M.formatLength(72 * 100 / 25.4, hundred);
+out.mm = M.formatLength(72 * 4.5 / 25.4, hundred);
+out.area = M.formatArea(M.polygonArea([[0, 0], [432, 0], [432, 288], [0, 288]]), quarter);
+out.perimeter = M.formatLength(M.perimeter([[0, 0], [432, 0], [432, 288], [0, 288]]), quarter);
+out.lengths = ["12'-6\\"", "12' 6 1/2\\"", "150\\"", "12.5'", "3.5 m", "3500mm", "12", "abc"].map((t) => {
+  const r = M.parseLength(t); return r && [Math.round(r.inches * 100) / 100, r.units]; });
+const fromDim = M.scaleFrom(144, M.parseLength("8'"));
+out.fromDim = [fromDim.ratio, fromDim.units, fromDim.label];
+console.log(JSON.stringify(out));
+"""
+    out = subprocess.run([node, "--input-type=module", "-e", script, module], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout)
+    assert got["arch"] == ['1/4" = 1\'-0"', 48, "ft"]  # the one after "SCALE", not the detail's
+    assert got["arch2"] == ['1 1/2" = 1\'-0"', 8, "ft"]
+    assert got["words"] == ['1/8" = 1\'-0"', 96, "ft"]
+    assert got["eng"] == ['1" = 20\'', 240, "ft"]
+    assert got["metric"] == ["1:100", 100, "m"]
+    assert got["time"] is None and got["none"] is None
+    assert got["len"] == "24' 0\"" and got["len2"] == "12' 6\""
+    assert got["paper"] == "1.000 in on paper"
+    assert got["m"] == "10.000 m" and got["mm"] == "450 mm"
+    assert got["area"] == "384.00 sq ft" and got["perimeter"] == "80' 0\""
+    assert got["lengths"] == [[150, "ft"], [150.5, "ft"], [150, "ft"], [150, "ft"], [137.8, "m"], [137.8, "m"], [144, "ft"], None]
+    assert got["fromDim"] == [48, "ft", 'Set from a dimension (1/4" = 1\'-0")']
+
+
+def test_snapping_to_the_drawing_js():
+    """static/snap.js: the lines of a page from a pdf.js operator list, and snapping to them."""
+    import shutil
+    import subprocess
+    import pytest
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("needs Node.js")
+    module = (Path(__file__).resolve().parents[1] / "pdfmanager" / "static" / "snap.js").as_uri()
+    script = """
+const S = await import(process.argv[1]);
+const OPS = { save: 10, restore: 11, transform: 12, stroke: 20, closeStroke: 21, fill: 22, eoFill: 23, fillStroke: 24,
+  eoFillStroke: 25, closeFillStroke: 26, closeEOFillStroke: 27, endPath: 28, paintFormXObjectBegin: 74, paintFormXObjectEnd: 75, constructPath: 91 };
+const path = (...a) => [new Float32Array(a)];
+const ol = { fnArray: [12, 91, 91, 10, 12, 91, 11, 74, 91, 75, 91, 91], argsArray: [
+  [1, 0, 0, 1, 0, 0],
+  [20, path(0, 216, 216, 1, 648, 216, 1, 648, 504, 1, 216, 504, 4), null],  // a closed rectangle, stroked
+  [28, path(0, 0, 0, 1, 10, 10), null],                                      // a clipping path: not a line
+  null, [2, 0, 0, 2, 100, 100], [22, path(0, 0, 0, 1, 50, 50), null], null,  // filled, under a transform
+  [[1, 0, 0, 1, 300, 300], [0, 0, 10, 10]], [20, path(0, 0, 0, 1, 0, 100), null], null,  // inside a form XObject
+  [20, path(0, 216, 216, 2, 300, 216, 400, 504, 648, 504), null],            // a curve
+  [20, path(0, 200, 360, 1, 700, 360), null],                                // a line right across the rectangle
+]};
+const g = S.fromOperatorList(ol, OPS);
+const r = (h) => h && [h.kind, +h.x.toFixed(6), +h.y.toFixed(6)];
+const out = {
+  count: g.count,
+  rect: [...g.segments.slice(0, 16)],
+  transformed: [...g.segments.slice(16, 20)],
+  form: [...g.segments.slice(20, 24)],
+  end: r(g.snap([650, 506], 8)),
+  cross: r(g.snap([647, 362], 6)),
+  mid: r(g.snap([432, 218], 6)),
+  perp: r(g.snap([500, 215], 6, { from: [500, 300] })),
+  on: r(g.snap([520, 217], 6)),
+  ortho: r(g.snap([647, 300], 6, { from: [216, 300], ortho: 0 })),
+  none: g.snap([900, 900], 6),
+  nearestEndWins: r(g.snap([217, 217], 8)),
+};
+// Fallbacks: built a chunk at a time; a pdf.js we don't know; bad numbers; too many lines.
+const built = await S.Geometry.build(S.segmentsFromOperatorList(ol, OPS), { yieldWith: (fn) => fn() });
+out.builtSame = built.count === g.count && r(built.snap([650, 506], 8))[0] === "end";
+out.unknownOps = S.fromOperatorList(ol, {}).count;
+out.noList = S.fromOperatorList({}, OPS).count;
+out.nan = S.fromOperatorList({ fnArray: [91], argsArray: [[20, path(0, 0, 0, 1, NaN, 5, 1, 10, 10), null]] }, OPS).count;
+const unindexed = new S.Geometry(S.segmentsFromOperatorList(ol, OPS), { index: false });
+out.beforeIndexed = unindexed.snap([650, 506], 8);
+out.badTol = g.snap([650, 506], 0) === null && g.snap([NaN, 1], 8) === null;
+console.log(JSON.stringify(out));
+"""
+    out = subprocess.run([node, "--input-type=module", "-e", script, module], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout)
+    assert got["count"] == 4 + 1 + 1 + 16 + 1  # the curve becomes 16 pieces
+    assert got["rect"] == [216, 216, 648, 216, 648, 216, 648, 504, 648, 504, 216, 504, 216, 504, 216, 216]
+    assert got["transformed"] == [100, 100, 200, 200]
+    assert got["form"] == [300, 300, 300, 400]
+    assert got["end"] == ["end", 648, 504]
+    assert got["cross"] == ["cross", 648, 360]
+    assert got["mid"] == ["mid", 432, 216]
+    assert got["perp"] == ["perp", 500, 216]
+    assert got["on"] == ["on", 520, 216]
+    assert got["ortho"] == ["cross", 648, 300]
+    assert got["none"] is None
+    assert got["nearestEndWins"] == ["end", 216, 216]
+    assert got["builtSame"] is True
+    assert got["unknownOps"] == 0 and got["noList"] == 0
+    assert got["nan"] == 1  # the segment with a NaN end is left out, the good one kept
+    assert got["beforeIndexed"] is None and got["badTol"] is True
