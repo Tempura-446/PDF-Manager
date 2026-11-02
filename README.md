@@ -216,12 +216,21 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
     to it, or type its diagonal; asked the first time). **Show at** zooms so
     the drawing looks as if drawn at another scale, e.g. a 1/4" plan at
     1/8" = 1'-0".
-  - **Measure** (M): click two points for a length in feet and inches (or
-    metres); hold Shift to keep the line straight. **Area**: click a room's
-    corners, then the first one again (or Enter), for its square feet (or
-    m²) and perimeter. Backspace takes back the last point or measurement,
-    Esc stops; **Clear** removes them. Measurements are only on screen, not
-    saved in the file. Zoom in for the most exact clicks.
+  - **Measure** (M): click two points for a length in feet and inches to
+    the sixteenth (or metres to the millimetre). Clicks **snap to the
+    drawing's own lines**, read from the file: a line's end, where two
+    lines cross, a line's middle, the foot of the perpendicular from the
+    last point (wall thicknesses), or a point on a line. A marker shows
+    what the click will land on, so a snapped measurement is exact to the
+    drawing, not to the mouse. Hold Shift to keep the line straight (it
+    then snaps to where that straight line crosses the drawing), Alt to
+    place a point freely. **Area**: click a room's corners, then the first
+    one again (or Enter), for its square feet (or m²) and perimeter.
+    Backspace takes back the last point or measurement, Esc stops;
+    **Clear** removes them. Measurements are only on screen, not saved in
+    the file. Scanned sheets have no lines to snap to: zoom in close.
+  - A scale read from the sheet is only as right as the sheet: measure one
+    written dimension to check it before relying on the numbers.
 - **Command palette (Ctrl+K):** type what you want (a tool, an action like
   "fit width" or "delete this page", or a page number) and press Enter.
 - Rotate the view, hand tool (drag to scroll), dark pages for night
@@ -240,7 +249,7 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
 | R, Shift+R | rotate the view clockwise, counter-clockwise |
 | Ctrl/⌘+K | command palette |
 | E | Edit text on / off |
-| M | measure on / off (Esc stops, Backspace undoes a point) |
+| M | measure on / off (Esc stops, Backspace undoes a point, Shift straight, Alt no snapping) |
 | T | show / hide the tools |
 | Ctrl/⌘+Z | undo a text or page change |
 | Ctrl/⌘+P, Ctrl/⌘+S | print, save a copy |

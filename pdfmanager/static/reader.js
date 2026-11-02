@@ -15,6 +15,7 @@
 import { BASE, DOC_OPTIONS, destroyTask, loadPdfjs as loadLibrary, openDocument } from "./pdfjs.js";
 import * as files from "./files.js";
 import * as measure from "./measure.js";
+import * as snap from "./snap.js";
 
 let pdfjs = null;   // pdf.js display API
 let viewer = null;  // pdf.js viewer components
@@ -78,6 +79,8 @@ const COLORS = [["Black", "#000000", "#bdbdbd"], ["Blue", "#1f4fd8", "#80ebff"],
   ["Green", "#1f8a3b", "#53ffbc"], ["Yellow", "#b8860b", "#ffff98"]];
 const HIGHLIGHT_COLORS = "yellow=#FFFF98,green=#53FFBC,blue=#80EBFF,pink=#FFCBE6,red=#FF4F5F";
 const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
+
+const SNAP_PX = 12;  // how close (on screen) a measuring click snaps to a line of the drawing
 
 const ZOOM_PRESETS = [
   ["auto", "Automatic"], ["page-fit", "Fit page"], ["page-width", "Fit width"], ["page-actual", "Actual size"], ["true-size", "True paper size"],
@@ -800,7 +803,7 @@ export class Reader {
       this.#updatePage();
       this.container.focus({ preventScroll: true });
     });
-    eventBus.on("pagechanging", () => { this.#updatePage(); this.#remember(); this.#refreshScale(); });
+    eventBus.on("pagechanging", ({ pageNumber }) => { this.#updatePage(); this.#remember(); this.#refreshScale(); if (this.measureMode) this.#geometry(pageNumber); });
     eventBus.on("pagesloaded", () => this.#refreshScale());
     eventBus.on("pagerendered", ({ pageNumber }) => this.#drawMeasures(pageNumber));
     eventBus.on("scalechanging", ({ scale, presetValue }) => {
@@ -1965,7 +1968,7 @@ export class Reader {
       title: "Click both ends of a line whose real length you know, such as a dimension", html: svg("ruler") + "<span>Set from a dimension</span>" });
     this.viewAtSelect = el("select", { class: "rd-zoom", "aria-label": "Show the drawing at" });
     this.distanceBtn = el("button", { class: "rd-btn rd-tool", type: "button", "aria-pressed": "false",
-      title: "Measure a length: click both ends (M). Hold Shift to keep it straight.", html: svg("ruler") + "<span>Distance</span>" });
+      title: "Measure a length: click both ends (M). Clicks snap to the drawing's lines (Alt: no snapping); hold Shift to keep it straight.", html: svg("ruler") + "<span>Distance</span>" });
     this.areaBtn = el("button", { class: "rd-btn rd-tool", type: "button", "aria-pressed": "false",
       title: "Measure an area: click its corners, then click the first one again (or press Enter)", html: svg("area") + "<span>Area</span>" });
     this.clearMeasuresBtn = el("button", { class: "rd-btn", type: "button", title: "Remove the measurements", html: svg("trash") + "<span>Clear</span>" });
@@ -2125,11 +2128,15 @@ export class Reader {
     let cssPpi = (store.get("pdfm-screen-ppi", null) || 96 * dpr) / dpr;
     const CARD_W = 3.370, CARD_H = 2.125;  // a bank card, in inches (85.6 × 54 mm)
     const card = el("div", { class: "rd-card" }, el("span", {}, "Bank card"));
+    const ruler = el("div", { class: "rd-ruler", "aria-hidden": "true" });
+    for (let i = 0; i <= 6; i++) ruler.append(el("i", { style: `left:${(i / 6) * 100}%` }, el("b", {}, String(i))));
+    ruler.append(el("span", {}, "6 inches"));
     const slider = el("input", { type: "range", min: "40", max: "320", step: "0.25", "aria-label": "Card size" });
     const diagonal = el("input", { type: "number", min: "5", max: "100", step: "0.1", placeholder: "e.g. 24", "aria-label": "Screen diagonal in inches" });
     const show = () => {
       card.style.width = `${CARD_W * cssPpi}px`;
       card.style.height = `${CARD_H * cssPpi}px`;
+      ruler.style.width = `${6 * cssPpi}px`;
       slider.value = String(cssPpi);
     };
     slider.addEventListener("input", () => { cssPpi = +slider.value; diagonal.value = ""; show(); });
@@ -2141,8 +2148,8 @@ export class Reader {
     const body = [
       el("p", {}, first ? "To show drawings at their real size, ZPDF needs to know how big your screen's pixels are. This is done once."
         : "Make true paper size match the real world on this screen."),
-      el("p", {}, "Hold a bank card (or any card that size) against the screen and drag the slider until the outline matches it:"),
-      el("div", { class: "rd-cardbox" }, card), slider,
+      el("p", {}, "Hold a ruler or a bank card against the screen and drag the slider until the 6 inches, or the card's outline, match exactly (a ruler is the more exact):"),
+      el("div", { class: "rd-cardbox" }, ruler, card), slider,
       el("p", { class: "rd-or" }, "Or type your screen's size (its diagonal, as sold):"),
       el("label", { class: "rd-diag" }, diagonal, "inches"),
     ];
@@ -2165,17 +2172,27 @@ export class Reader {
       if (this.scalebar.hidden) this.toggleScaleBar(true);
       if (this.container.classList.contains("hand")) this.toggleHand();
     }
-    const page = this.draft?.page;
+    const page = this.draft?.page, hoverPage = this.hoverPage;
     this.measureMode = mode;
     this.draft = null;
+    this.hover = null;
+    this.hoverPage = null;
     if (page) this.#drawMeasures(page);
+    if (hoverPage && hoverPage !== page) this.#drawMeasures(hoverPage);
+    if (mode) this.#geometry(this.pdfViewer.currentPageNumber || 1);  // start reading the lines now
     this.root.classList.toggle("rd-measuring", !!mode);
     this.distanceBtn.setAttribute("aria-pressed", String(mode === "distance"));
     this.areaBtn.setAttribute("aria-pressed", String(mode === "area"));
     this.fromDimensionBtn.setAttribute("aria-pressed", String(mode === "calibrate"));
-    if (mode === "calibrate") this.toast("Click both ends of a line whose real length you know, such as a dimension.", 5000);
+    if (mode === "calibrate") this.toast("Click both ends of a line whose real length you know, such as a dimension's extension lines. Clicks snap to the drawing's lines.", 6000);
     else if (mode && !this.#pageScale(this.pdfViewer.currentPageNumber || 1)) {
       this.toast("This sheet's scale isn't set, so lengths show as on paper. Pick it under Sheet scale, or use Set from a dimension.", 6000);
+    } else if (mode && !this.activeTab.scaleChecked) {
+      const n = this.pdfViewer.currentPageNumber || 1;
+      if (this.#pageScale(n) === this.activeTab.detected?.get(n)) {
+        this.activeTab.scaleChecked = true;
+        this.toast(`The scale ${this.#pageScale(n).label} was read from the sheet. Measure one written dimension to check it before relying on it.`, 7000);
+      }
     }
   }
 
@@ -2185,22 +2202,59 @@ export class Reader {
     this.#drawAllMeasures();
   }
 
+  /** The lines of page ``n`` (see snap.js), read from the file the first
+   *  time they're needed; null while they're being read. */
+  #geometry(n) {
+    const tab = this.activeTab, doc = this.doc;
+    if (!tab || !doc) return null;
+    tab.geometry ||= new Map();
+    const have = tab.geometry.get(n);
+    if (have !== undefined) return have || null;
+    tab.geometry.set(n, false);  // being read
+    doc.getPage(n)
+      .then((page) => page.getOperatorList({ annotationMode: pdfjs.AnnotationMode.DISABLE }))
+      .then((ops) => {
+        if (doc !== this.doc) return;
+        const geometry = snap.fromOperatorList(ops, pdfjs.OPS);
+        tab.geometry.set(n, geometry);
+        if (!geometry.count && this.measureMode && !tab.noLinesHinted) {
+          tab.noLinesHinted = true;
+          this.toast("This sheet has no line work to snap to (a scan?): points go exactly where you click, so zoom in close.", 6000);
+        }
+        if (this.draft?.page === n) this.#drawMeasures(n);
+      })
+      .catch(() => tab.geometry.set(n, null));
+    return null;
+  }
+
   /** Where a pointer event is on a page: its number, its view and the point
-   *  on the page, in PDF units and on screen (relative to the page). */
+   *  on the page, in PDF units and on screen (relative to the page). While
+   *  measuring, the point snaps to the drawing's lines (Alt: no snapping);
+   *  with Shift and a point already placed, it stays at a multiple of 45°
+   *  from that point. ``snapped`` says what it landed on. */
   #pageAt(e, only = null) {
     const pageEl = e.target.closest?.(".page");
     const n = Number(pageEl?.dataset.pageNumber);
     if (!n || (only && n !== only)) return null;
     const view = this.pdfViewer.getPageView(n - 1);
     const box = view.div.getBoundingClientRect();
-    let x = e.clientX - box.left - view.div.clientLeft, y = e.clientY - box.top - view.div.clientTop;
+    const x = e.clientX - box.left - view.div.clientLeft, y = e.clientY - box.top - view.div.clientTop;
+    let pdf = view.viewport.convertToPdfPoint(x, y);
     const pts = this.draft?.page === n ? this.draft.pts : null;
-    if (e.shiftKey && pts?.length) {  // keep it straight: snap to steps of 45°
-      const [px, py] = view.viewport.convertToViewportPoint(...pts.at(-1));
-      const len = Math.hypot(x - px, y - py), ang = Math.round(Math.atan2(y - py, x - px) / (Math.PI / 4)) * (Math.PI / 4);
-      x = px + len * Math.cos(ang); y = py + len * Math.sin(ang);
+    const from = pts?.length ? pts.at(-1) : null;
+    let ortho = null;
+    if (e.shiftKey && from) {  // keep it straight
+      ortho = Math.round(Math.atan2(pdf[1] - from[1], pdf[0] - from[0]) / (Math.PI / 4)) * (Math.PI / 4);
+      const len = Math.hypot(pdf[0] - from[0], pdf[1] - from[1]);
+      pdf = [from[0] + len * Math.cos(ortho), from[1] + len * Math.sin(ortho)];
     }
-    return { page: n, view, x, y, pdf: view.viewport.convertToPdfPoint(x, y) };
+    let snapped = null;
+    if (this.measureMode && !e.altKey) {
+      const geometry = this.#geometry(n);
+      const hit = geometry?.snap(pdf, SNAP_PX / view.viewport.scale, { from, ortho });
+      if (hit) { pdf = [hit.x, hit.y]; snapped = hit.kind; }
+    }
+    return { page: n, view, x, y, pdf, snapped };
   }
 
   #measureDown(e) {
@@ -2210,7 +2264,7 @@ export class Reader {
     e.preventDefault();
     e.stopPropagation();
     if (!this.draft) {
-      this.draft = { page: at.page, kind: this.measureMode, pts: [at.pdf], hover: null };
+      this.draft = { page: at.page, kind: this.measureMode, pts: [at.pdf], hover: null, snapped: at.snapped };
       this.#drawMeasures(at.page);
       return;
     }
@@ -2230,10 +2284,19 @@ export class Reader {
   }
 
   #measureMove(e) {
-    if (!this.draft) return;
+    if (!this.measureMode) return;
+    if (!this.draft) {  // nothing placed yet: still show what a click would land on
+      const at = this.#pageAt(e);
+      const n = at?.page || this.hoverPage;
+      this.hover = at?.snapped ? { page: at.page, pdf: at.pdf, snapped: at.snapped } : null;
+      this.hoverPage = at?.page || null;
+      if (n && !this.moveFrame) this.moveFrame = requestAnimationFrame(() => { this.moveFrame = null; this.#drawMeasures(n); if (n !== this.hoverPage && this.hoverPage) this.#drawMeasures(this.hoverPage); });
+      return;
+    }
     const at = this.#pageAt(e, this.draft.page);
     if (!at) return;
     this.draft.hover = at.pdf;
+    this.draft.snapped = at.snapped;
     if (this.moveFrame) return;
     this.moveFrame = requestAnimationFrame(() => { this.moveFrame = null; if (this.draft) this.#drawMeasures(this.draft.page); });
   }
@@ -2244,7 +2307,7 @@ export class Reader {
     if (!d) return;
     if (d.kind === "calibrate") {
       this.#drawMeasures(d.page);
-      const length = measure.distance(d.pts[0], d.pts[1]);
+      const length = measure.distance(d.pts[0], d.pts[1]) * (this.pdfViewer.getPageView(d.page - 1).pdfPage?.userUnit || 1);
       if (length < 1) return;
       const units = this.#pageScale(d.page)?.units || "ft";
       const input = el("input", { type: "text", placeholder: units === "m" ? "e.g. 3.6 m or 3600 mm" : "e.g. 12'-6\" or 3.6 m", "aria-label": "Real length", autocomplete: "off" });
@@ -2303,13 +2366,17 @@ export class Reader {
     if (!view?.div) return;
     const items = (this.activeTab?.measures || []).filter((m) => m.page === n);
     const d = this.draft?.page === n ? this.draft : null;
+    const hover = !d && this.hover?.page === n ? this.hover : null;
     let layer = view.div.querySelector(":scope > svg.rd-measures");
-    if (!items.length && !d) { layer?.remove(); return; }
+    if (!items.length && !d && !hover) { layer?.remove(); return; }
     const NS = "http://www.w3.org/2000/svg";
     const make = (tag, attrs = {}) => { const node = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v); return node; };
     if (!layer) { layer = make("svg", { class: "rd-measures", "aria-hidden": "true" }); view.div.append(layer); }
     layer.replaceChildren();
     const vp = view.viewport, scale = this.#pageScale(n);
+    const uu = view.pdfPage?.userUnit || 1;  // a page can declare its unit bigger than a point
+    const length = (pts) => measure.formatLength(pts * uu, scale);
+    const area = (pts2) => measure.formatArea(pts2 * uu * uu, scale);
     const xy = (p) => vp.convertToViewportPoint(...p);
     const label = (x, y, lines, cls = "") => {
       const text = make("text", { x, y, class: "rd-measure-label" + cls, "text-anchor": "middle" });
@@ -2331,7 +2398,7 @@ export class Reader {
       const len = Math.hypot(nx, ny);
       nx /= len; ny /= len;
       if (ny > 0) { nx = -nx; ny = -ny; }
-      label((ax + bx) / 2 + nx * 13, (ay + by) / 2 + ny * 13, [measure.formatLength(measure.distance(a, b), scale)]);
+      label((ax + bx) / 2 + nx * 13, (ay + by) / 2 + ny * 13, [length(measure.distance(a, b))]);
     };
     const drawArea = (pts, draft) => {
       const screen = pts.map(xy);
@@ -2339,7 +2406,7 @@ export class Reader {
       for (const [x, y] of screen) dot(x, y);
       if (pts.length < 3) return;
       const cx = screen.reduce((s, p) => s + p[0], 0) / screen.length, cy = screen.reduce((s, p) => s + p[1], 0) / screen.length;
-      label(cx, cy, [measure.formatArea(measure.polygonArea(pts), scale), "perimeter " + measure.formatLength(measure.perimeter(pts), scale)], " area");
+      label(cx, cy, [area(measure.polygonArea(pts)), "perimeter " + length(measure.perimeter(pts))], " area");
     };
     for (const m of items) (m.kind === "area" ? drawArea(m.pts) : drawLine(m.pts[0], m.pts[1]));
     if (d) {
@@ -2347,6 +2414,25 @@ export class Reader {
       if (d.kind === "area") drawArea(pts, true);
       else if (pts.length > 1) drawLine(pts[0], pts[1], true, d.kind === "calibrate");
       else { const [x, y] = xy(pts[0]); dot(x, y); }
+    }
+    // What the next click would land on.
+    const at = d?.hover && d.snapped ? { pdf: d.hover, snapped: d.snapped } : hover;
+    if (at) {
+      const [x, y] = xy(at.pdf), r = 7;
+      const shapes = {
+        end: make("rect", { x: x - r, y: y - r, width: 2 * r, height: 2 * r }),
+        cross: make("path", { d: `M${x - r} ${y - r}L${x + r} ${y + r}M${x + r} ${y - r}L${x - r} ${y + r}` }),
+        mid: make("path", { d: `M${x} ${y - r}L${x + r} ${y + r}L${x - r} ${y + r}Z` }),
+        perp: make("path", { d: `M${x - r} ${y - r}V${y + r}H${x + r}M${x - r} ${y}H${x}V${y + r}` }),
+        on: make("circle", { cx: x, cy: y, r }),
+      };
+      const mark = shapes[at.snapped];
+      mark.setAttribute("class", "rd-snap");
+      layer.append(mark);
+      const words = { end: "end of line", cross: "crossing", mid: "middle", perp: "perpendicular", on: "on line" };
+      const hint = make("text", { x: x + 12, y: y - 10, class: "rd-measure-label rd-snap-hint" });
+      hint.textContent = words[at.snapped];
+      layer.append(hint);
     }
   }
 
@@ -2377,7 +2463,7 @@ export class Reader {
       { icon: "spread", label: "Fit width", words: "zoom", run: () => { v.currentScaleValue = "page-width"; } },
       { icon: "plus", label: "Actual size", words: "zoom 100%", run: () => { v.currentScaleValue = "page-actual"; } },
       { icon: "ruler", label: "True paper size", words: "zoom real scale blueprint plan drawing", run: () => this.#viewAt("true") },
-      { icon: "ruler", label: "Measure a distance", keys: "M", words: "length dimension blueprint plan scale ruler", run: () => this.measureTool("distance") },
+      { icon: "ruler", label: "Measure a distance", keys: "M", words: "length dimension blueprint plan scale ruler snap", run: () => this.measureTool("distance") },
       { icon: "area", label: "Measure an area", words: "room square feet metres blueprint plan scale", run: () => this.measureTool("area") },
       { icon: "ruler", label: "Set the drawing scale from a dimension", words: "blueprint plan calibrate known length", run: () => this.measureTool("calibrate") },
       { icon: "ruler", label: "Drawing scale", words: "blueprint plan sheet show at measure", run: () => this.toggleScaleBar(true) },

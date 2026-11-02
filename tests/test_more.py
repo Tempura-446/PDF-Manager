@@ -1238,8 +1238,67 @@ console.log(JSON.stringify(out));
     assert got["metric"] == ["1:100", 100, "m"]
     assert got["time"] is None and got["none"] is None
     assert got["len"] == "24' 0\"" and got["len2"] == "12' 6\""
-    assert got["paper"] == "1.00 in on paper"
-    assert got["m"] == "10.00 m" and got["mm"] == "450 mm"
-    assert got["area"] == "384.0 sq ft" and got["perimeter"] == "80' 0\""
+    assert got["paper"] == "1.000 in on paper"
+    assert got["m"] == "10.000 m" and got["mm"] == "450 mm"
+    assert got["area"] == "384.00 sq ft" and got["perimeter"] == "80' 0\""
     assert got["lengths"] == [[150, "ft"], [150.5, "ft"], [150, "ft"], [150, "ft"], [137.8, "m"], [137.8, "m"], [144, "ft"], None]
     assert got["fromDim"] == [48, "ft", 'Set from a dimension (1/4" = 1\'-0")']
+
+
+def test_snapping_to_the_drawing_js():
+    """static/snap.js: the lines of a page from a pdf.js operator list, and snapping to them."""
+    import shutil
+    import subprocess
+    import pytest
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("needs Node.js")
+    module = (Path(__file__).resolve().parents[1] / "pdfmanager" / "static" / "snap.js").as_uri()
+    script = """
+const S = await import(process.argv[1]);
+const OPS = { save: 10, restore: 11, transform: 12, stroke: 20, closeStroke: 21, fill: 22, eoFill: 23, fillStroke: 24,
+  eoFillStroke: 25, closeFillStroke: 26, closeEOFillStroke: 27, endPath: 28, paintFormXObjectBegin: 74, paintFormXObjectEnd: 75, constructPath: 91 };
+const path = (...a) => [new Float32Array(a)];
+const ol = { fnArray: [12, 91, 91, 10, 12, 91, 11, 74, 91, 75, 91, 91], argsArray: [
+  [1, 0, 0, 1, 0, 0],
+  [20, path(0, 216, 216, 1, 648, 216, 1, 648, 504, 1, 216, 504, 4), null],  // a closed rectangle, stroked
+  [28, path(0, 0, 0, 1, 10, 10), null],                                      // a clipping path: not a line
+  null, [2, 0, 0, 2, 100, 100], [22, path(0, 0, 0, 1, 50, 50), null], null,  // filled, under a transform
+  [[1, 0, 0, 1, 300, 300], [0, 0, 10, 10]], [20, path(0, 0, 0, 1, 0, 100), null], null,  // inside a form XObject
+  [20, path(0, 216, 216, 2, 300, 216, 400, 504, 648, 504), null],            // a curve
+  [20, path(0, 200, 360, 1, 700, 360), null],                                // a line right across the rectangle
+]};
+const g = S.fromOperatorList(ol, OPS);
+const r = (h) => h && [h.kind, +h.x.toFixed(6), +h.y.toFixed(6)];
+const out = {
+  count: g.count,
+  rect: [...g.segments.slice(0, 16)],
+  transformed: [...g.segments.slice(16, 20)],
+  form: [...g.segments.slice(20, 24)],
+  end: r(g.snap([650, 506], 8)),
+  cross: r(g.snap([647, 362], 6)),
+  mid: r(g.snap([432, 218], 6)),
+  perp: r(g.snap([500, 215], 6, { from: [500, 300] })),
+  on: r(g.snap([520, 217], 6)),
+  ortho: r(g.snap([647, 300], 6, { from: [216, 300], ortho: 0 })),
+  none: g.snap([900, 900], 6),
+  nearestEndWins: r(g.snap([217, 217], 8)),
+};
+console.log(JSON.stringify(out));
+"""
+    out = subprocess.run([node, "--input-type=module", "-e", script, module], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout)
+    assert got["count"] == 4 + 1 + 1 + 16 + 1  # the curve becomes 16 pieces
+    assert got["rect"] == [216, 216, 648, 216, 648, 216, 648, 504, 648, 504, 216, 504, 216, 504, 216, 216]
+    assert got["transformed"] == [100, 100, 200, 200]
+    assert got["form"] == [300, 300, 300, 400]
+    assert got["end"] == ["end", 648, 504]
+    assert got["cross"] == ["cross", 648, 360]
+    assert got["mid"] == ["mid", 432, 216]
+    assert got["perp"] == ["perp", 500, 216]
+    assert got["on"] == ["on", 520, 216]
+    assert got["ortho"] == ["cross", 648, 300]
+    assert got["none"] is None
+    assert got["nearestEndWins"] == ["end", 216, 216]

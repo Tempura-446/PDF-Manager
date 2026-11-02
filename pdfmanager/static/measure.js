@@ -89,13 +89,13 @@ function fraction(inches, step = 4) {
   return whole ? `${whole} ${n}/${d}` : `${n}/${d}`;
 }
 
-/** Feet and inches to the nearest quarter inch: 12' 6 1/4". */
-export function feetInches(inches) {
+/** Feet and inches to the nearest sixteenth: 12' 6 1/16". */
+export function feetInches(inches, step = 16) {
   const sign = inches < 0 ? "-" : "";
-  let quarters = Math.round(Math.abs(inches) * 4);
-  const feet = Math.floor(quarters / 48);
-  quarters -= feet * 48;
-  const rest = fraction(quarters / 4);
+  let parts = Math.round(Math.abs(inches) * step);
+  const feet = Math.floor(parts / (12 * step));
+  parts -= feet * 12 * step;
+  const rest = fraction(parts / step, step);
   if (!feet) return `${sign}${rest}"`;
   return `${sign}${feet}' ${rest}"`;
 }
@@ -103,11 +103,11 @@ export function feetInches(inches) {
 /** A length on the page (PDF points) as the real length it stands for. */
 export function formatLength(points, scale) {
   const paperIn = points / PT_PER_IN;
-  if (!scale) return `${paperIn.toFixed(2)} in on paper`;
+  if (!scale) return `${paperIn.toFixed(3)} in on paper`;
   const real = paperIn * scale.ratio;
   if (scale.units === "m") {
     const mm = real * MM_PER_IN;
-    return mm >= 1000 ? `${(mm / 1000).toFixed(2)} m` : `${Math.round(mm)} mm`;
+    return mm >= 1000 ? `${(mm / 1000).toFixed(3)} m` : `${Math.round(mm)} mm`;
   }
   return feetInches(real);
 }
@@ -115,10 +115,10 @@ export function formatLength(points, scale) {
 /** An area on the page (square PDF points) as the real area it stands for. */
 export function formatArea(points2, scale) {
   const paperIn2 = points2 / (PT_PER_IN * PT_PER_IN);
-  if (!scale) return `${paperIn2.toFixed(2)} sq in on paper`;
+  if (!scale) return `${paperIn2.toFixed(3)} sq in on paper`;
   const real = paperIn2 * scale.ratio * scale.ratio;
-  if (scale.units === "m") return `${(real * MM_PER_IN * MM_PER_IN / 1e6).toFixed(2)} m²`;
-  return `${(real / 144).toFixed(1)} sq ft`;
+  if (scale.units === "m") return `${(real * MM_PER_IN * MM_PER_IN / 1e6).toFixed(3)} m²`;
+  return `${(real / 144).toFixed(2)} sq ft`;
 }
 
 /** A real length as typed: 12'-6", 12' 6 1/2", 150", 12.5' (feet), 3.5 m,
