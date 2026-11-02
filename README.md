@@ -206,6 +206,22 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
 - **Right-click a page** for what you can do there: copy the selected
   words, edit this text, rewrite this paragraph, add text here, turn,
   duplicate, delete or extract the page, or insert a PDF after it.
+- **Drawings to scale** (house plans, blueprints): the **Scale** button
+  next to the zoom reads each sheet's scale from its title block
+  (`1/4" = 1'-0"`, `1" = 20'`, `1:100`, …), or you pick it, or **Set from a
+  dimension**: click both ends of a line you know (say a 24'-0" wall) and
+  type its length.
+  - **True paper size** (in the zoom menu) shows the sheet exactly as big
+    as it would print, once you've calibrated your screen (hold a bank card
+    to it, or type its diagonal; asked the first time). **Show at** zooms so
+    the drawing looks as if drawn at another scale, e.g. a 1/4" plan at
+    1/8" = 1'-0".
+  - **Measure** (M): click two points for a length in feet and inches (or
+    metres); hold Shift to keep the line straight. **Area**: click a room's
+    corners, then the first one again (or Enter), for its square feet (or
+    m²) and perimeter. Backspace takes back the last point or measurement,
+    Esc stops; **Clear** removes them. Measurements are only on screen, not
+    saved in the file. Zoom in for the most exact clicks.
 - **Command palette (Ctrl+K):** type what you want (a tool, an action like
   "fit width" or "delete this page", or a page number) and press Enter.
 - Rotate the view, hand tool (drag to scroll), dark pages for night
@@ -224,6 +240,7 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
 | R, Shift+R | rotate the view clockwise, counter-clockwise |
 | Ctrl/⌘+K | command palette |
 | E | Edit text on / off |
+| M | measure on / off (Esc stops, Backspace undoes a point) |
 | T | show / hide the tools |
 | Ctrl/⌘+Z | undo a text or page change |
 | Ctrl/⌘+P, Ctrl/⌘+S | print, save a copy |

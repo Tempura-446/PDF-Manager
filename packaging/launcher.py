@@ -47,7 +47,7 @@ def self_test(result_file):
         page = urllib.request.urlopen(base).read()
         # The reader and its bundled pdf.js must be in the bundle too.
         for asset in ("static/reader.js", "static/pdfjs.js", "static/pages.js", "static/regions.js",
-                      "static/bookmarks.js", "static/recipes.js", "static/files.js", "static/pdfjs/build/pdf.min.mjs",
+                      "static/bookmarks.js", "static/recipes.js", "static/files.js", "static/measure.js", "static/pdfjs/build/pdf.min.mjs",
                       "static/pdfjs/build/pdf.worker.min.mjs", "static/pdfjs/web/pdf_viewer.mjs"):
             assert urllib.request.urlopen(base + asset).status == 200, f"missing {asset}"
         server.shutdown()

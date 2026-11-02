@@ -792,6 +792,7 @@ def test_reader_static_files_are_served(server):
                         ("/static/regions.js", "text/javascript"),
                         ("/static/bookmarks.js", "text/javascript"),
                         ("/static/recipes.js", "text/javascript"),
+                        ("/static/measure.js", "text/javascript"),
                         ("/static/pdfjs.js", "text/javascript"),
                         ("/static/reader.css", "text/css"),
                         ("/static/pdfjs/build/pdf.min.mjs", "text/javascript"),

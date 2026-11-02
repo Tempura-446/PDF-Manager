@@ -1191,3 +1191,55 @@ def test_app_icon_matches_the_page_and_draws(tmp_path):
     with Image.open(ico) as im:
         assert (256, 256) in im.info["sizes"] or im.size == (256, 256)
         assert im.convert("RGBA").getpixel((128, 128))[3] == 255
+
+
+def test_drawing_scales_and_measuring_js():
+    """static/measure.js: reading a sheet's scale, and lengths and areas in feet and metres."""
+    import shutil
+    import subprocess
+    import pytest
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("needs Node.js")
+    module = (Path(__file__).resolve().parents[1] / "pdfmanager" / "static" / "measure.js").as_uri()
+    script = """
+const M = await import(process.argv[1]);
+const out = {};
+const scale = (t) => { const s = M.findScale(t); return s && [s.label, s.ratio, s.units]; };
+out.arch = scale(`FLOOR PLAN  SCALE: 1/4" = 1'-0"  DETAIL 3  1" = 1'-0"`);
+out.arch2 = scale(`SCALE 1 1/2" = 1'-0"`);
+out.words = scale(`Scale 1/8 in = 1 ft`);
+out.eng = scale(`SITE PLAN 1" = 20'`);
+out.metric = scale(`SITE PLAN  SCALE 1:100`);
+out.time = scale(`Meeting at 1:30 pm, ratio 1:2`);
+out.none = scale(`NTS`);
+const quarter = { ratio: 48, units: "ft" }, hundred = { ratio: 100, units: "m" };
+out.len = M.formatLength(72 * 6, quarter);
+out.len2 = M.formatLength(72 * 3.125, quarter);
+out.paper = M.formatLength(72, null);
+out.m = M.formatLength(72 * 100 / 25.4, hundred);
+out.mm = M.formatLength(72 * 4.5 / 25.4, hundred);
+out.area = M.formatArea(M.polygonArea([[0, 0], [432, 0], [432, 288], [0, 288]]), quarter);
+out.perimeter = M.formatLength(M.perimeter([[0, 0], [432, 0], [432, 288], [0, 288]]), quarter);
+out.lengths = ["12'-6\\"", "12' 6 1/2\\"", "150\\"", "12.5'", "3.5 m", "3500mm", "12", "abc"].map((t) => {
+  const r = M.parseLength(t); return r && [Math.round(r.inches * 100) / 100, r.units]; });
+const fromDim = M.scaleFrom(144, M.parseLength("8'"));
+out.fromDim = [fromDim.ratio, fromDim.units, fromDim.label];
+console.log(JSON.stringify(out));
+"""
+    out = subprocess.run([node, "--input-type=module", "-e", script, module], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout)
+    assert got["arch"] == ['1/4" = 1\'-0"', 48, "ft"]  # the one after "SCALE", not the detail's
+    assert got["arch2"] == ['1 1/2" = 1\'-0"', 8, "ft"]
+    assert got["words"] == ['1/8" = 1\'-0"', 96, "ft"]
+    assert got["eng"] == ['1" = 20\'', 240, "ft"]
+    assert got["metric"] == ["1:100", 100, "m"]
+    assert got["time"] is None and got["none"] is None
+    assert got["len"] == "24' 0\"" and got["len2"] == "12' 6\""
+    assert got["paper"] == "1.00 in on paper"
+    assert got["m"] == "10.00 m" and got["mm"] == "450 mm"
+    assert got["area"] == "384.0 sq ft" and got["perimeter"] == "80' 0\""
+    assert got["lengths"] == [[150, "ft"], [150.5, "ft"], [150, "ft"], [150, "ft"], [137.8, "m"], [137.8, "m"], [144, "ft"], None]
+    assert got["fromDim"] == [48, "ft", 'Set from a dimension (1/4" = 1\'-0")']
