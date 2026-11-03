@@ -70,10 +70,14 @@ OPERATIONS = [
     {"id": "split", "group": "Combine", "label": "Split", "files": "pdf",
      "help": "Split into several files (downloaded as a ZIP). With one PDF, click the page "
              "previews where each new file should start.",
-     "board": {"mode": "split", "field": "ranges", "every": "every"},
-     "fields": [_f("every", "Pages per file", "number", 1, min=1),
-                _f("ranges", "…or ranges (one file each)", "text", "",
-                   placeholder="1-3, 4-10, 11-", hint="separate ranges with spaces or ;")]},
+     "board": {"mode": "split", "field": "ranges", "every": "every", "how": "by"},
+     "fields": [_f("by", "Split", "select", "every",
+                   choices=[["every", "Every few pages"], ["ranges", "At the pages I choose"]]),
+                _f("every", "Pages per file", "number", 1, min=1, show_if={"by": "every"}),
+                _f("ranges", "Page ranges, one file each", "text", "", show_if={"by": "ranges"},
+                   placeholder="1-3, 4-10, 11-",
+                   hint="Separate ranges with spaces or ;. With one PDF, clicking the page "
+                        "previews fills this in.")]},
     {"id": "interleave", "group": "Combine", "label": "Interleave scans", "files": "pdf2",
      "help": "Combine separately scanned front sides (first file) and back sides "
              "(second file).",
@@ -116,7 +120,7 @@ OPERATIONS = [
                             ["270", "90° counter-clockwise"]]),
                 _f("pages", "Pages (blank = all)", "text", "", placeholder="all",
                    hint="updates as you click")]},
-    {"id": "resize", "group": "Layout", "label": "Resize", "files": "pdf",
+    {"id": "resize", "live": True, "group": "Layout", "label": "Resize", "files": "pdf",
      "fields": [_f("size", "Paper size", "select", "a4",
                    choices=[[p, p.upper() if p[0] == "a" else p.capitalize()] for p in PAPER]
                    + [["custom", "Custom…"], ["scale", "Scale by factor…"]]),
@@ -137,7 +141,7 @@ OPERATIONS = [
                 _f("bottom", "Bottom (mm)", "number", 10, min=0),
                 _f("left", "Left (mm)", "number", 10, min=0),
                 _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
-    {"id": "nup", "group": "Layout", "label": "Pages per sheet", "files": "pdf",
+    {"id": "nup", "live": True, "group": "Layout", "label": "Pages per sheet", "files": "pdf",
      "fields": [_f("per_sheet", "Pages per sheet", "select", "2",
                    choices=[[str(n), str(n)] for n in (2, 4, 6, 8, 9)]),
                 _f("size", "Sheet size", "select", "a4",
@@ -166,14 +170,14 @@ OPERATIONS = [
                             ["medium", "Normal — allows a few specks"],
                             ["high", "Generous — also nearly empty pages"]]),
                 _f("auto_rotate", "Turn pages upright (needs Tesseract)", "check", False)]},
-    {"id": "watermark", "group": "Stamp", "label": "Watermark", "files": "pdf",
+    {"id": "watermark", "live": True, "group": "Stamp", "label": "Watermark", "files": "pdf",
      "fields": [_f("text", "Text", "text", "CONFIDENTIAL", required=True),
-                _f("opacity", "Opacity", "number", 0.15, min=0.01, max=1, step=0.05),
+                _f("opacity", "Opacity", "range", 0.15, min=0.05, max=1, step=0.05, unit="%"),
                 _f("font_size", "Font size", "number", 60, min=4),
-                _f("angle", "Angle", "number", 45),
+                _f("angle", "Angle", "range", 45, min=-90, max=90, step=5, unit="°"),
                 _f("below", "Put under the content", "check", False),
                 _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
-    {"id": "number", "group": "Stamp", "label": "Page numbers", "files": "pdf",
+    {"id": "number", "live": True, "group": "Stamp", "label": "Page numbers", "files": "pdf",
      "fields": [_f("format", "Format", "text", "{n} / {total}",
                    hint="{n} = page number, {total} = page count"),
                 _f("position", "Position", "select", "bottom-center",
@@ -196,7 +200,7 @@ OPERATIONS = [
                 _f("border", "Draw a border around each field", "check", True),
                 _f("required", "Make text fields required", "check", False),
                 _f("fields", "", "hidden", "")]},
-    {"id": "headers", "group": "Stamp", "label": "Headers & footers", "files": "pdf",
+    {"id": "headers", "live": True, "group": "Stamp", "label": "Headers & footers", "files": "pdf",
      "help": "Add text at the top or bottom of every page: a title, the date, page numbers or "
              "Bates numbers (which continue from one file to the next).",
      "fields": [_f("top_left", "Top left"), _f("top_center", "Top centre"),
@@ -507,7 +511,8 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             raise UserError("enter the PDF's current password")
         core.decrypt(src, out, password)
     elif op == "split":
-        ranges = [r for r in re.split(r"[;\s]+", opts.get("ranges") or "") if r]
+        ranges = [r for r in re.split(r"[;\s]+", opts.get("ranges") or "") if r] \
+            if opts.get("by", "ranges") == "ranges" else []
         folder = out_dir / f"{src.stem}_split"
         return core.split(src, folder, every=None if ranges else _num(opts.get("every"), int, 1),
                           ranges=ranges or None, password=password)
@@ -718,6 +723,44 @@ def run_folder_operation(op, opts, apply):
 # --------------------------------------------------------------------------
 
 THUMB_WIDTH = 240
+
+
+# Tools whose result can be seen before running them: page 1 of it, redrawn
+# as the options change.
+PREVIEW_OPS = {"watermark", "number", "headers", "resize", "nup"}
+PREVIEW_PAGES = 40  # longer documents are previewed from their first pages only
+
+
+def preview_operation(op, data, filename, opts, password=None, width=960):
+    """What ``op`` makes of the first page(s) of a PDF (``data``): page 1 of
+    the result as PNG bytes, ``width`` pixels wide."""
+    if op not in PREVIEW_OPS:
+        raise UserError(f"no preview for {op!r}")
+    import pypdfium2 as pdfium
+
+    with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+        tmp = Path(tmp)
+        (tmp / "in").mkdir()
+        src = tmp / "in" / _safe_name(filename or "file.pdf")
+        src.write_bytes(data)
+        if len(core.open_pdf(src, password).pages) > PREVIEW_PAGES:
+            (tmp / "first").mkdir()
+            first = tmp / "first" / src.name
+            core.select_pages(src, first, "1-9", password)  # enough for any sheet of pages
+            src = first
+        (tmp / "work").mkdir()
+        _, result, _ = run_operation(op, [src], opts, password, {}, tmp / "work", [])
+        with core.PDFIUM_LOCK:
+            doc = pdfium.PdfDocument(result, password=password)
+            try:
+                page = doc[0]
+                image = page.render(scale=width / max(1.0, page.get_width()), draw_annots=True).to_pil()
+                page.close()
+            finally:
+                doc.close()
+    out = io.BytesIO()
+    image.convert("RGB").save(out, "PNG", optimize=False)
+    return out.getvalue()
 
 
 def inspect_pdf(path, password=None):
@@ -1145,6 +1188,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._run(body)
             if path == "/api/inspect":
                 return self._inspect(body)
+            if path == "/api/preview":
+                fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+                if not uploads:
+                    raise UserError("no file")
+                op = fields.pop("op", "")
+                password = fields.pop("password", "") or None
+                png = preview_operation(op, uploads[0][2], uploads[0][1], fields, password)
+                return self._send(HTTPStatus.OK, png, "image/png")
             if path == "/api/keep":
                 return self._keep(body)
             if path == "/api/outline":

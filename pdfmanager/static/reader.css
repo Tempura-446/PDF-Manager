@@ -61,6 +61,8 @@
 .rd:not(.reading) .rd-toolbar { display: none; }
 
 /* ---- Tools: one button in the toolbar pulls out the tray of everything else ---- */
+.rd-savenow { padding: 0 12px 0 10px; font-weight: 600; font-size: 13px; margin-right: 4px; animation: rd-pop calc(var(--t) * 2) var(--ease); }
+@keyframes rd-pop { from { transform: scale(.92); opacity: 0; } }
 .rd-tools-btn { margin-left: 2px; padding: 0 10px 0 9px; font-weight: 600; font-size: 13px; }
 .rd-tools-btn svg:last-child { width: 14px; height: 14px; stroke-width: 2.25; margin-left: -2px; transition: transform var(--t) var(--ease); }
 .rd-tools-btn[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
@@ -252,7 +254,7 @@
 
 @media (max-width: 760px) {
   .rd-toolbar { padding: 6px 8px; gap: 2px; overflow-x: auto; scrollbar-width: none; }
-  .rd-title, .rd-tools-btn span { display: none; }
+  .rd-title, .rd-tools-btn span, .rd-savenow span { display: none; }
   .rd-sep { margin: 0 3px; }
   .rd-sidebar { position: absolute; inset: 0 auto 0 0; z-index: 10; box-shadow: var(--shadow-pop); }
   .rd-zoom { max-width: 96px; }

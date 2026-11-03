@@ -6,6 +6,7 @@ import io
 import json
 import re
 import threading
+import zipfile
 from pathlib import Path
 import time
 import urllib.error
@@ -659,6 +660,63 @@ def test_arrange_endpoint_inserts_and_keeps_the_password(app, tmp_path):
     assert len(reader.pages) == 2 and reader.pages[0].rotation == 90
     body, headers = multipart({"password": "secret", "plan": "[]"}, [("file", tmp_path / "locked.pdf")])
     assert call(base, token, "/api/pages/arrange", body, headers)[0] == 400
+
+
+def test_preview_shows_page_one_of_the_result(app, tmp_path):
+    from PIL import Image
+
+    base, token, _ = app
+    src = edit_pdf(tmp_path / "invoice.pdf")
+    core.encrypt(src, tmp_path / "locked.pdf", "secret")
+    plain = multipart({"op": "number", "format": "{n} / {total}", "position": "bottom-center",
+                       "start": "1", "font_size": "10"}, [("file", src)])
+    status, headers, png = call(base, token, "/api/preview", *plain)
+    assert status == 200 and headers["Content-Type"] == "image/png"
+    image = Image.open(io.BytesIO(png))
+    assert image.width == 960 and image.height > image.width  # an A4 page, upright
+    # The watermark shows on it (and a locked file is read with its password).
+    body = multipart({"op": "watermark", "text": "PAID", "opacity": "1", "font_size": "80", "angle": "0",
+                      "below": "false", "pages": "", "password": "secret"}, [("file", tmp_path / "locked.pdf")])
+    status, _, marked = call(base, token, "/api/preview", *body)
+    assert status == 200
+    before = Image.open(io.BytesIO(png)).convert("L")
+    after = Image.open(io.BytesIO(marked)).convert("L")
+    middle = (0, before.height // 3, before.width, before.height * 2 // 3)
+    assert after.crop(middle).getextrema()[0] < before.crop(middle).getextrema()[0] - 50
+    # A tool with nothing to preview, a missing field or a wrong password: a plain error.
+    for fields in ({"op": "compress"}, {"op": "watermark", "text": ""}, {"op": "number", "password": "wrong"}):
+        status, _, data = call(base, token, "/api/preview", *multipart(fields, [("file", tmp_path / "locked.pdf")]))
+        assert status == 400 and json.loads(data)["error"]
+    assert {op["id"] for op in json.loads(call(base, token, "/api/operations")[2])["operations"] if op.get("live")} \
+        == gui.PREVIEW_OPS
+
+
+def test_split_uses_ranges_only_when_chosen(tmp_path):
+    src = toc_like(tmp_path / "six.pdf", 6)
+    work = tmp_path / "work"
+    work.mkdir()
+    name, data, _ = gui.run_operation("split", [src], {"by": "every", "every": "3", "ranges": "1 2-6"}, work=work)
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        assert len(z.namelist()) == 2  # every 3 pages; the ranges (filled in by the page previews) wait
+    work2 = tmp_path / "work2"
+    work2.mkdir()
+    _, data, _ = gui.run_operation("split", [src], {"by": "ranges", "every": "3", "ranges": "1 2-6"}, work=work2)
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        assert len(z.namelist()) == 2 and any("1" in n for n in z.namelist())
+    work3 = tmp_path / "work3"
+    work3.mkdir()
+    _, data, _ = gui.run_operation("split", [src], {"every": "1", "ranges": "1-2 3-6"}, work=work3)  # older recipes
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        assert len(z.namelist()) == 2
+
+
+def toc_like(path, pages):
+    c = canvas.Canvas(str(path), pagesize=A4)
+    for n in range(pages):
+        c.drawString(72, 700, f"Page {n + 1}")
+        c.showPage()
+    c.save()
+    return path
 
 
 def test_edit_text_endpoint_keeps_the_password(app, tmp_path):

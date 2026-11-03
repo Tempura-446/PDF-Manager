@@ -92,15 +92,24 @@ to try the native window again. The app stops by itself when its window is
 closed.
 
 - The app opens on a **Home** screen: open or drop PDFs to read them, go
-  back to the tools you used recently, reopen a recent file, or pick any
-  tool from the list with a line about each. In a narrower window the
+  back to the tools you pinned or used recently, reopen a recent file, or
+  pick any tool from the list with a line about each.
+- **Pin** the tools you use most (the ☆ Pin button by a tool's name, or the
+  star on its card on Home): they stay at the top of the sidebar and Home,
+  above a few you used lately. In a narrower window the
   sidebar becomes a rail of icons; on a phone it's a menu.
 - Drop files anywhere on the window. Each file shows a **preview of its
   first page**, its page count and size; drag the cards to change the
   order (for merging, interleaving and images).
 - Pick a tool on the left, or press **/** to search for one. Set the
-  options and click **Run** (or Ctrl/⌘+Enter).
-- The result appears with a preview. In the app window, **Save…** opens
+  options and click **Run** (or Ctrl/⌘+Enter). Run waits until there are
+  enough files to work on.
+- **Live preview:** Watermark, Page numbers, Headers & footers, Resize and
+  Pages per sheet show page 1 as it will come out beside the options, and
+  redraw it as you change them (watermark opacity and angle are sliders).
+  Click the preview to see it larger.
+- The result appears with a preview; **Run again** after changing options,
+  or **Start over** to clear the files. In the app window, **Save…** opens
   the normal save dialog and **Show in folder** reveals the file; in a
   browser, the result downloads. Several files come back as a ZIP.
 - The **page tools** show a preview of every page (with one PDF added):
@@ -110,7 +119,8 @@ closed.
     (Shift+click for a range, or All / Odd / Even / Invert / Clear). Pages
     to delete are crossed out, and rotated pages are shown turned.
   - **Reverse order:** shows the pages in their new order.
-  - **Split:** click a page to start a new file there.
+  - **Split:** choose *every few pages*, or *at the pages I choose*: click
+    a page to start a new file there (or type the ranges).
 
   The page box under Options updates as you go, and typing pages there
   updates the previews.
@@ -173,6 +183,12 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   keeps only the page number, zoom and the thumbnails button; **Tools** (or
   the T key) pulls out the rest (open, find, annotate and sign, rotate,
   print, save, more), and **All tools** in it slides out the app's tool list.
+  The **Home** button (top left) goes back to the tools; your documents stay
+  open in the reader.
+- **Save** and **Undo** appear in the toolbar as soon as a document has
+  changes not saved yet.
+- A zoom that fits the page (Automatic, Fit width, Fit page) fits it again
+  when the window or the sidebar changes size.
 - **Tabs:** open several PDFs at once (the + button, or drop more files),
   each with its own unsaved changes; a dot marks tabs with changes.
 - **Recent files** on the start screen, to open them again with one click.
