@@ -414,6 +414,9 @@ textarea.rd-textedit.rd-textedit-fit { white-space: pre-wrap; overflow: auto; }
 .rd-scale-btn span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .rd-scale-btn.set { color: var(--accent); }
 .rd-scale-btn[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
+/* One line always: a bar that wraps changes the page's height (and so its fit) mid-measurement. */
+.rd-scalebar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; gap: 5px; }
+.rd-scalebar > * { flex: none; }
 .rd-scalebar .rd-zoom { max-width: 230px; }
 .rd-scalebar .rd-sep { margin: 0 4px; }
 @container (max-width: 980px) { .rd-scalebar .rd-btn span { display: none; } }
@@ -428,6 +431,9 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
 .rd-measure-area { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
 .rd-measure-area.draft { fill: color-mix(in srgb, var(--accent) 8%, transparent); stroke-dasharray: 6 4; }
 .rd-measure-dot { fill: #fff; stroke: var(--accent); stroke-width: 2; }
+.rd-measure-dot.picked { fill: var(--accent); stroke: #fff; stroke-width: 2.5; }
+.rd-measure-path { fill: none; stroke-linejoin: round; }
+.rd-measure-label.seg { font-weight: 600; font-size: 11.5px; fill: #3a3a36; }
 .rd-measure-label {
   font: 700 13px/1 system-ui, -apple-system, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums;
   fill: #1b1b19; stroke: #fff; stroke-width: 4px; stroke-linejoin: round; paint-order: stroke;

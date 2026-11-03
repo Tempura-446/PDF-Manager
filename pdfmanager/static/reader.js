@@ -56,6 +56,7 @@ const ICON = {
   twisty: '<path d="m9 6 6 6-6 6"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
   list: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
+  path: '<path d="M3 18 9 9l5 6 7-10"/><circle cx="3" cy="18" r="1.3"/><circle cx="9" cy="9" r="1.3"/><circle cx="14" cy="15" r="1.3"/><circle cx="21" cy="5" r="1.3"/>',
   straight: '<path d="M5 4v15h15"/><path d="M9 15h7V8" stroke-dasharray="2.5 2.5"/>',
   copypage: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2"/><path d="M14 12v5M11.5 14.5h5"/>',
   command: '<path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z"/>',
@@ -534,6 +535,8 @@ export class Reader {
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
     if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); this.print(); return; }
     if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); this.saveCopy(); return; }
+    if (mod && !isTyping(e) && !this.scalebar.hidden && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")
+        && this.#measureUndo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); return; }
     if (mod && e.key.toLowerCase() === "z" && !e.shiftKey && !isTyping(e) && this.activeTab?.undo?.length
         && (this.textEditMode || this.annotbar.hidden)) { e.preventDefault(); this.#undoTextEdit(); return; }
     if (e.key === "Escape" && !this.ctxMenu.hidden) { this.#closeContextMenu(); return; }
@@ -875,11 +878,14 @@ export class Reader {
     // the pages, not the scrolling box itself: that one narrows when its
     // scrollbar appears (Windows), which a new fit can bring or take away,
     // and the fitting would go round and round.
-    let refit = 0, lastSize = "";
+    // A bar opening or closing above the pages (find, annotate, scale) only
+    // changes the height a little: that's not a reason to zoom.
+    let refit = 0, lastW = 0, lastH = 0;
     new ResizeObserver(([entry]) => {
-      const size = `${Math.round(entry.contentRect.width / 4)}x${Math.round(entry.contentRect.height / 4)}`;
-      if (size === lastSize) return;  // not a few pixels this way and that
-      lastSize = size;
+      const { width, height } = entry.contentRect;
+      if (Math.abs(width - lastW) < 4 && Math.abs(height - lastH) < 100) return;
+      lastW = width;
+      lastH = height;
       cancelAnimationFrame(refit);
       refit = requestAnimationFrame(() => {
         const value = this.pdfViewer.currentScaleValue;
@@ -2362,11 +2368,13 @@ export class Reader {
       group("Architectural", measure.ARCHITECTURAL), group("Engineering", measure.ENGINEERING),
       group("Metric", measure.METRIC), option("full", measure.FULL_SIZE.label));
     this.fromDimensionBtn = el("button", { class: "rd-btn rd-tool", type: "button", "aria-pressed": "false",
-      title: "Click both ends of a line whose real length you know, such as a dimension", html: svg("ruler") + "<span>Set from a dimension</span>" });
+      title: "Click both ends of a line whose real length you know, such as a dimension", html: svg("ruler") + "<span>From a dimension</span>" });
     this.viewAtSelect = el("select", { class: "rd-zoom", "aria-label": "Zoom to scale",
       title: "Zoom so the drawing is its true paper size on your screen, or looks as if printed at another scale" });
     this.distanceBtn = el("button", { class: "rd-btn rd-tool", type: "button", "aria-pressed": "false",
       title: "Measure a length: click both ends (M). Clicks snap to the drawing's lines (Alt: no snapping); hold Shift to keep it straight.", html: svg("ruler") + "<span>Distance</span>" });
+    this.pathBtn = el("button", { class: "rd-btn rd-tool", type: "button", "aria-pressed": "false",
+      title: "Measure a run of lines (walls, a baseboard): click along it, then Enter or double-click for the total", html: svg("path") + "<span>Path</span>" });
     this.areaBtn = el("button", { class: "rd-btn rd-tool", type: "button", "aria-pressed": "false",
       title: "Measure an area: click its corners, then click the first one again (or press Enter)", html: svg("area") + "<span>Area</span>" });
     this.clearMeasuresBtn = el("button", { class: "rd-btn", type: "button", title: "Remove every measurement", "aria-label": "Remove every measurement", html: svg("trash") });
@@ -2385,13 +2393,17 @@ export class Reader {
     this.scalebar = el("div", { class: "rd-findbar rd-scalebar", hidden: true, role: "toolbar", "aria-label": "Scale and measuring" },
       el("label", {}, "Sheet scale", this.sheetScaleSelect), this.fromDimensionBtn, el("span", { class: "rd-sep" }),
       el("label", {}, "Zoom to scale", this.viewAtSelect), el("span", { class: "rd-sep" }),
-      this.distanceBtn, this.areaBtn, this.straightBtn, el("span", { class: "rd-sep" }), this.listBtn, this.clearMeasuresBtn,
+      this.distanceBtn, this.pathBtn, this.areaBtn, this.straightBtn, el("span", { class: "rd-sep" }), this.listBtn, this.clearMeasuresBtn,
       el("span", { style: "flex:1" }), this.calibrateBtn, close);
     this.sheetScaleSelect.addEventListener("change", () => this.#pickSheetScale(this.sheetScaleSelect.value));
     this.fromDimensionBtn.addEventListener("click", () => this.measureTool(this.measureMode === "calibrate" ? null : "calibrate"));
     this.viewAtSelect.addEventListener("change", () => { if (this.viewAtSelect.value) this.#viewAt(this.viewAtSelect.value); });
     this.distanceBtn.addEventListener("click", () => this.measureTool(this.measureMode === "distance" ? null : "distance"));
     this.areaBtn.addEventListener("click", () => this.measureTool(this.measureMode === "area" ? null : "area"));
+    this.pathBtn.addEventListener("click", () => {
+      if (this.measureMode === "path" && this.draft?.pts.length > 1) { this.#finishMeasure(); return; }  // the button again: done
+      this.measureTool(this.measureMode === "path" ? null : "path");
+    });
     this.clearMeasuresBtn.addEventListener("click", () => this.clearMeasures());
     this.straightBtn.addEventListener("click", () => {
       this.straightOnly = !this.straightOnly;
@@ -2651,8 +2663,11 @@ export class Reader {
     this.root.classList.toggle("rd-measuring", !!mode);
     this.distanceBtn.setAttribute("aria-pressed", String(mode === "distance"));
     this.areaBtn.setAttribute("aria-pressed", String(mode === "area"));
+    this.pathBtn.setAttribute("aria-pressed", String(mode === "path"));
+    if (!mode) this.selected = null;
     this.fromDimensionBtn.setAttribute("aria-pressed", String(mode === "calibrate"));
-    if (mode === "calibrate") this.toast("Click both ends of a line whose real length you know, such as a dimension's extension lines. Clicks snap to the drawing's lines.", 6000);
+    if (mode === "path") this.toast("Click along the run of lines; Enter, a double-click or Path again for the total. Backspace takes back a point.", 5000);
+    else if (mode === "calibrate") this.toast("Click both ends of a line whose real length you know, such as a dimension's extension lines. Clicks snap to the drawing's lines.", 6000);
     else if (mode && !this.#pageScale(this.pdfViewer.currentPageNumber || 1)) {
       this.toast("This sheet's scale isn't set, so lengths show as on paper. Pick it under Sheet scale, or use Set from a dimension.", 6000);
     } else if (mode && !this.activeTab.scaleChecked) {
@@ -2665,7 +2680,9 @@ export class Reader {
   }
 
   clearMeasures() {
+    if (this.activeTab?.measures?.length) this.#rememberMeasures();
     if (this.activeTab) this.activeTab.measures = [];
+    this.selected = null;
     this.draft = null;
     this.#drawAllMeasures();
   }
@@ -2781,7 +2798,7 @@ export class Reader {
     };
     for (let k = items.length - 1; k >= 0; k--) {
       const m = items[k], pts = screen(m);
-      const edges = m.kind === "area" ? pts.map((p, i) => [p, pts[(i + 1) % pts.length]]) : [[pts[0], pts[1]]];
+      const edges = m.kind === "area" ? pts.map((p, i) => [p, pts[(i + 1) % pts.length]]) : pts.slice(1).map((p, i) => [pts[i], p]);
       if (edges.some(([a, b]) => toSegment(a, b) <= 5)) return { m, index: null, page: n };
       const label = this.labelBoxes?.get(m.id);
       if (label && x >= label.x && x <= label.x + label.width && y >= label.y && y <= label.y + label.height) return { m, index: null, page: n };
@@ -2795,6 +2812,7 @@ export class Reader {
     // a click without dragging measures from there as usual.
     if (!this.draft && this.measureMode !== "calibrate") {
       const hit = this.#hitMeasure(e);
+      if (hit) this.selected = { id: hit.m.id, index: hit.index };
       if (hit) {
         e.preventDefault();
         e.stopPropagation();
@@ -2819,12 +2837,12 @@ export class Reader {
       return;
     }
     const d = this.draft;
-    if (d.kind === "area") {
+    if (d.kind === "area" || d.kind === "path") {
       const screen = (p) => at.view.viewport.convertToViewportPoint(...p);
       const [fx, fy] = screen(d.pts[0]), [lx, ly] = screen(d.pts.at(-1));
-      const nearFirst = d.pts.length >= 3 && Math.hypot(at.x - fx, at.y - fy) < 9;
+      const nearFirst = d.kind === "area" && d.pts.length >= 3 && Math.hypot(at.x - fx, at.y - fy) < 9;
       const onLast = Math.hypot(at.x - lx, at.y - ly) < 4;  // the second click of a double-click
-      if (nearFirst || (onLast && d.pts.length >= 3)) { this.#finishMeasure(); return; }
+      if (nearFirst || (onLast && d.pts.length >= (d.kind === "area" ? 3 : 2))) { this.#finishMeasure(); return; }
       if (!onLast) d.pts.push(at.pdf);
       this.#drawMeasures(at.page);
       return;
@@ -2840,6 +2858,7 @@ export class Reader {
     if (this.pendingDrag && Math.hypot(e.clientX - this.pendingDrag.x, e.clientY - this.pendingDrag.y) > 3) {
       const { hit, start } = this.pendingDrag;
       this.pendingDrag = null;
+      this.#rememberMeasures();
       this.dragging = { ...hit, start, orig: hit.m.pts.map((p) => [...p]) };
       this.container.classList.add("rd-dragging");
     }
@@ -2872,7 +2891,8 @@ export class Reader {
       m.pts = g.orig.map(([x, y]) => [x + dx, y + dy]);
       this.aim = null;
     } else {  // one point: it snaps, kept straight from its neighbour with Shift or Straight only
-      const other = m.kind === "area" ? m.pts[(g.index + m.pts.length - 1) % m.pts.length] : m.pts[1 - g.index];
+      const other = m.kind === "area" ? m.pts[(g.index + m.pts.length - 1) % m.pts.length]
+        : m.kind === "path" ? m.pts[g.index ? g.index - 1 : 1] : m.pts[1 - g.index];
       const at = this.#pageAt(e, g.page, other);
       if (!at) return;
       m.pts[g.index] = at.pdf;
@@ -2903,10 +2923,13 @@ export class Reader {
     this.draft = null;
     if (!d) return;
     if (d.kind === "calibrate") { this.#drawMeasures(d.page); await this.#scaleFromLine(d); return; }
-    if (d.kind === "area" && d.pts.length < 3) { this.#drawMeasures(d.page); return; }
+    if ((d.kind === "area" && d.pts.length < 3) || d.pts.length < 2) { this.#drawMeasures(d.page); return; }
     const tab = this.activeTab;
     tab.measures ||= [];
-    tab.measures.push({ id: ++measureSeq, page: d.page, kind: d.kind, pts: d.pts });
+    this.#rememberMeasures();
+    const m = { id: ++measureSeq, page: d.page, kind: d.kind, pts: d.pts };
+    tab.measures.push(m);
+    this.selected = { id: m.id, index: m.pts.length - 1 };  // the arrow keys nudge the last point
     this.#drawMeasures(d.page);
     // The list opens with the first measurement, unless it was closed before.
     if (this.measPanel.hidden && !store.get("pdfm-measure-list-closed", false)) this.#toggleMeasPanel(true, false);
@@ -2998,17 +3021,79 @@ export class Reader {
     }
     if (e.key === "Escape") {
       if (this.draft) { const n = this.draft.page; this.draft = null; this.#drawMeasures(n); }
+      else if (this.selected) { const m = this.#selectedMeasure(); this.selected = null; if (m) this.#drawMeasures(m.page); }
       else this.measureTool(null);
       return true;
     }
-    if (e.key === "Enter" && this.draft?.kind === "area") { this.#finishMeasure(); return true; }
+    if (e.key === "Enter" && (this.draft?.kind === "area" || this.draft?.kind === "path")) { this.#finishMeasure(); return true; }
+    if (e.key.startsWith("Arrow") && !this.draft && this.#selectedMeasure()) {
+      const step = e.shiftKey ? 10 : 1;
+      const [dx, dy] = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+      this.#nudge(dx, dy);
+      return true;
+    }
     if (e.key === "Backspace" || e.key === "Delete") {
       if (this.draft && this.draft.pts.length > 1) { this.draft.pts.pop(); this.#drawMeasures(this.draft.page); }
       else if (this.draft) { const n = this.draft.page; this.draft = null; this.#drawMeasures(n); }
+      else if (this.#selectedMeasure()) this.#deleteMeasure(this.selected.id);
       else if (this.activeTab?.measures?.length) this.#deleteMeasure(this.activeTab.measures.at(-1).id);
       return true;
     }
     return false;
+  }
+
+  #selectedMeasure() {
+    return this.selected ? (this.activeTab?.measures || []).find((m) => m.id === this.selected.id) || null : null;
+  }
+
+  /** Move the selected point (or measurement) by (dx, dy) pixels on screen. */
+  #nudge(dx, dy) {
+    const m = this.#selectedMeasure();
+    const view = m && this.pdfViewer.getPageView(m.page - 1);
+    if (!view?.viewport) return;
+    const vp = view.viewport;
+    const [x0, y0] = vp.convertToPdfPoint(0, 0), [x1, y1] = vp.convertToPdfPoint(dx, dy);
+    const ddx = x1 - x0, ddy = y1 - y0;
+    // Arrow presses close together are one step to undo.
+    const now = performance.now();
+    if (!this.nudging || this.nudging.id !== m.id || this.nudging.index !== this.selected.index || now - this.nudging.at > 1200) this.#rememberMeasures();
+    this.nudging = { id: m.id, index: this.selected.index, at: now };
+    const move = (p) => [p[0] + ddx, p[1] + ddy];
+    if (this.selected.index === null || this.selected.index === undefined) m.pts = m.pts.map(move);
+    else m.pts[this.selected.index] = move(m.pts[this.selected.index]);
+    this.#drawMeasures(m.page);
+    this.#renderMeasPanel();
+  }
+
+  // ---- undo and redo for measuring ----------------------------------------------------
+  /** Keep how the measurements are now, before changing them. */
+  #rememberMeasures() {
+    const tab = this.activeTab;
+    if (!tab) return;
+    tab.measureHistory ||= { undo: [], redo: [] };
+    tab.measureHistory.undo.push(JSON.stringify(tab.measures || []));
+    if (tab.measureHistory.undo.length > 200) tab.measureHistory.undo.shift();
+    tab.measureHistory.redo = [];
+    this.nudging = null;
+  }
+
+  /** Ctrl+Z (or Ctrl+Y / Ctrl+Shift+Z with ``redo``) for measurements.
+   *  True if there was something to take back (or bring back). */
+  #measureUndo(redo) {
+    const tab = this.activeTab, h = tab?.measureHistory;
+    const from = redo ? h?.redo : h?.undo, to = redo ? h?.undo : h?.redo;
+    if (!from?.length) return false;
+    to.push(JSON.stringify(tab.measures || []));
+    const pages = new Set((tab.measures || []).map((m) => m.page));
+    tab.measures = JSON.parse(from.pop());
+    for (const m of tab.measures) { pages.add(m.page); measureSeq = Math.max(measureSeq, m.id || 0); }
+    this.selected = null;
+    this.nudging = null;
+    this.draft = null;
+    for (const n of pages) this.#drawMeasures(n);
+    this.#renderMeasPanel();
+    this.toast(redo ? "Measurement change redone" : "Measurement change undone", 1500);
+    return true;
   }
 
   #drawAllMeasures() {
@@ -3034,8 +3119,9 @@ export class Reader {
       return { text: measure.formatArea(a, scale, this.units), sub: "perimeter " + measure.formatLength(measure.perimeter(m.pts) * uu, scale, this.units),
         real: scale ? a / 5184 * scale.ratio * scale.ratio : null, units: scale?.units };
     }
-    const len = measure.distance(m.pts[0], m.pts[1]) * uu;
-    return { text: measure.formatLength(len, scale, this.units), sub: "", real: scale ? measure.realInches(len, scale) : null, units: scale?.units };
+    const len = measure.pathLength(m.pts) * uu;
+    return { text: measure.formatLength(len, scale, this.units), sub: m.kind === "path" ? `${m.pts.length - 1} segments` : "",
+      real: scale ? measure.realInches(len, scale) : null, units: scale?.units };
   }
 
   #drawMeasuresOn(n) {
@@ -3075,11 +3161,13 @@ export class Reader {
         if (id !== null) this.labelBoxes.set(id, pill);
       } catch (err) { /* not laid out: the text alone */ }
     };
-    const dot = (x, y) => layer.append(make("circle", { cx: x, cy: y, r: 3.5, class: "rd-measure-dot" }));
+    const dot = (x, y, picked = false) => layer.append(make("circle", { cx: x, cy: y, r: picked ? 5.5 : 3.5, class: "rd-measure-dot" + (picked ? " picked" : "") }));
+    const sel = this.measureMode ? this.selected : null;
+    const isPicked = (id, i) => sel && sel.id === id && (sel.index === null || sel.index === undefined || sel.index === i);
     const drawLine = (a, b, { draft = false, calibrate = false, hot = "", id = null } = {}) => {
       const [ax, ay] = xy(a), [bx, by] = xy(b);
       layer.append(make("line", { x1: ax, y1: ay, x2: bx, y2: by, class: "rd-measure-line" + (draft ? " draft" : "") + (calibrate ? " calibrate" : "") + hot }));
-      dot(ax, ay); dot(bx, by);
+      dot(ax, ay, isPicked(id, 0)); dot(bx, by, isPicked(id, 1));
       if (calibrate || Math.hypot(bx - ax, by - ay) < 2) return;
       // the label beside the line's middle, on its upper side
       let nx = -(by - ay), ny = bx - ax;
@@ -3091,18 +3179,42 @@ export class Reader {
     const drawArea = (pts, { draft = false, hot = "", id = null } = {}) => {
       const screen = pts.map(xy);
       layer.append(make(draft ? "polyline" : "polygon", { points: screen.map((p) => p.join(",")).join(" "), class: "rd-measure-area" + (draft ? " draft" : "") + hot }));
-      for (const [x, y] of screen) dot(x, y);
+      screen.forEach(([x, y], i) => dot(x, y, isPicked(id, i)));
       if (pts.length < 3) return;
       const cx = screen.reduce((s, p) => s + p[0], 0) / screen.length, cy = screen.reduce((s, p) => s + p[1], 0) / screen.length;
       label(cx, cy, [area(measure.polygonArea(pts)), "perimeter " + length(measure.perimeter(pts))], " area" + hot, id);
     };
+    // A run of lines: each segment's length beside it, the total at its end.
+    const drawPath = (pts, { draft = false, hot = "", id = null } = {}) => {
+      const screen = pts.map(xy);
+      layer.append(make("polyline", { points: screen.map((p) => p.join(",")).join(" "), class: "rd-measure-line rd-measure-path" + (draft ? " draft" : "") + hot }));
+      screen.forEach(([x, y], i) => dot(x, y, isPicked(id, i)));
+      if (pts.length < 2) return;
+      if (pts.length > 2) {
+        for (let i = 1; i < pts.length; i++) {
+          const [ax, ay] = screen[i - 1], [bx, by] = screen[i];
+          if (Math.hypot(bx - ax, by - ay) < 60) continue;  // too short for its own label
+          let nx = -(by - ay), ny = bx - ax;
+          const len = Math.hypot(nx, ny);
+          nx /= len; ny /= len;
+          if (ny > 0) { nx = -nx; ny = -ny; }
+          label((ax + bx) / 2 + nx * 13, (ay + by) / 2 + ny * 13, [length(measure.distance(pts[i - 1], pts[i]))], " seg" + hot);
+        }
+      }
+      const [ex, ey] = screen.at(-1), [px, py] = screen.at(-2);
+      const ux = ex - px, uy = ey - py, ul = Math.hypot(ux, uy) || 1;
+      label(ex + (ux / ul) * 34, ey + (uy / ul) * 18 - 4, [(pts.length > 2 ? "total " : "") + length(measure.pathLength(pts))], " total" + hot, id);
+    };
     for (const m of items) {
-      const opts = { hot: m.id === this.hot || m === this.dragging?.m ? " hot" : "", id: m.id };
-      if (m.kind === "area") drawArea(m.pts, opts); else drawLine(m.pts[0], m.pts[1], opts);
+      const opts = { hot: m.id === this.hot || m === this.dragging?.m || (sel && sel.id === m.id) ? " hot" : "", id: m.id };
+      if (m.kind === "area") drawArea(m.pts, opts);
+      else if (m.kind === "path") drawPath(m.pts, opts);
+      else drawLine(m.pts[0], m.pts[1], opts);
     }
     if (d) {
       const pts = d.hover ? [...d.pts, d.hover] : d.pts;
       if (d.kind === "area") drawArea(pts, { draft: true });
+      else if (d.kind === "path") drawPath(pts, { draft: true });
       else if (pts.length > 1) drawLine(pts[0], pts[1], { draft: true, calibrate: d.kind === "calibrate" });
       else { const [x, y] = xy(pts[0]); dot(x, y); }
     }
@@ -3190,7 +3302,7 @@ export class Reader {
     const head = el("div", { class: "rd-mhead" }, el("strong", {}, "Measurements"), close);
     const unitRow = el("label", { class: "rd-munits" }, "Show in", units);
     if (!items.length) {
-      this.measPanel.replaceChildren(head, unitRow, el("p", { class: "rd-mempty" }, "Click two points with Distance, or the corners of a room with Area. Drag a measurement to move it, or a point of it to change it."));
+      this.measPanel.replaceChildren(head, unitRow, el("p", { class: "rd-mempty" }, "Click two points with Distance, along a run of walls with Path, or the corners of a room with Area. Drag a measurement to move it, or a point of it to change it; arrow keys nudge the selected point. Ctrl+Z undoes."));
       return;
     }
     let lengths = 0, nLengths = 0, areas = 0, nAreas = 0, unscaled = 0, sheet = null;
@@ -3202,12 +3314,12 @@ export class Reader {
       const del = el("button", { class: "rd-mdel", type: "button", title: "Delete this measurement", "aria-label": `Delete measurement ${i + 1}`, html: svg("x") });
       del.addEventListener("click", (e) => { e.stopPropagation(); this.#deleteMeasure(m.id); });
       const row = el("li", { class: "rd-mrow" + (this.hot === m.id ? " hot" : ""), tabindex: "0", title: "Show it on the page" },
-        el("span", { class: "rd-mkind", html: svg(m.kind === "area" ? "area" : "ruler") }),
+        el("span", { class: "rd-mkind", html: svg(m.kind === "area" ? "area" : m.kind === "path" ? "path" : "ruler") }),
         el("span", { class: "rd-mval" }, v.text, v.sub ? el("small", {}, v.sub) : null),
         el("span", { class: "rd-mpage" }, `p. ${this.labels?.[m.page - 1] || m.page}`), del);
       row.addEventListener("mouseenter", () => this.#hotMeasure(m.id));
       row.addEventListener("mouseleave", () => this.#hotMeasure(null));
-      row.addEventListener("click", () => this.#showMeasure(m));
+      row.addEventListener("click", () => { this.selected = { id: m.id, index: null }; this.#showMeasure(m); });
       row.addEventListener("keydown", (e) => { if (e.key === "Enter") this.#showMeasure(m); if (e.key === "Delete") this.#deleteMeasure(m.id); });
       return row;
     });
@@ -3219,15 +3331,17 @@ export class Reader {
     copy.addEventListener("click", () => this.#copyMeasures());
     const clear = el("button", { class: "rd-btn", type: "button", title: "Remove every measurement", html: svg("trash") + "<span>Clear all</span>" });
     clear.addEventListener("click", () => this.clearMeasures());
-    this.measPanel.replaceChildren(head, unitRow, el("ol", { class: "rd-mlist" }, ...rows),
-      totals.length ? el("div", { class: "rd-mtotals" }, ...totals) : null, el("div", { class: "rd-mfoot" }, copy, clear));
+    this.measPanel.replaceChildren(...[head, unitRow, el("ol", { class: "rd-mlist" }, ...rows),
+      totals.length ? el("div", { class: "rd-mtotals" }, ...totals) : null, el("div", { class: "rd-mfoot" }, copy, clear)].filter(Boolean));
   }
 
   #deleteMeasure(id) {
     const tab = this.activeTab;
     const m = tab?.measures?.find((x) => x.id === id);
     if (!m) return;
+    this.#rememberMeasures();
     tab.measures = tab.measures.filter((x) => x !== m);
+    if (this.selected?.id === id) this.selected = null;
     if (this.hot === id) this.hot = null;
     this.#drawMeasures(m.page);
     this.#renderMeasPanel();
@@ -3252,10 +3366,10 @@ export class Reader {
 
   async #copyMeasures() {
     const items = this.activeTab?.measures || [];
-    const lines = ["Page\tKind\tValue\tPerimeter"];
+    const lines = ["Page\tKind\tValue\tPerimeter (areas)"];
     for (const m of items) {
       const v = this.#measureValue(m);
-      lines.push([this.labels?.[m.page - 1] || m.page, m.kind === "area" ? "Area" : "Length", v.text, v.sub.replace(/^perimeter /, "")].join("\t"));
+      lines.push([this.labels?.[m.page - 1] || m.page, { area: "Area", path: "Path" }[m.kind] || "Length", v.text, m.kind === "area" ? v.sub.replace(/^perimeter /, "") : ""].join("\t"));
     }
     for (const t of this.measPanel.querySelectorAll(".rd-mtotals > div")) lines.push(["", t.firstChild.textContent, t.lastChild.textContent, ""].join("\t"));
     try {
@@ -3295,6 +3409,7 @@ export class Reader {
       { icon: "ruler", label: "True paper size", words: "zoom real scale blueprint plan drawing", run: () => this.#viewAt("true") },
       { icon: "ruler", label: "Measure a distance", keys: "M", words: "length dimension blueprint plan scale ruler snap", run: () => this.measureTool("distance") },
       { icon: "area", label: "Measure an area", words: "room square feet metres blueprint plan scale", run: () => this.measureTool("area") },
+      { icon: "path", label: "Measure a run of lines (path)", words: "polyline walls total length baseboard blueprint", run: () => this.measureTool("path") },
       { icon: "list", label: "List of measurements", words: "totals copy units blueprint takeoff", run: () => { this.toggleScaleBar(true); this.#toggleMeasPanel(true); } },
       { icon: "straight", label: this.straightOnly ? "Measure at any angle" : "Measure straight lines only", words: "horizontal vertical orthogonal blueprint", run: () => this.straightBtn.click() },
       { icon: "ruler", label: "Set the drawing scale from a dimension", words: "blueprint plan calibrate known length", run: () => this.measureTool("calibrate") },

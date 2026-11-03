@@ -1289,6 +1289,7 @@ const line = 72 * (244.3125 / 48);
 out.units = Object.fromEntries(M.UNITS.map(([u]) => [u, M.formatLength(line, quarter, u)]));
 out.areaUnits = ["auto", "ft", "in", "m"].map((u) => M.formatArea(72 * 72 * 30, quarter, u));
 out.total = M.formatInches(12 * 40, "auto", "ft");
+out.path = M.formatLength(M.pathLength([[216, 216], [216, 504], [648, 504], [648, 216]]), quarter);
 out.nearest = [M.nearestScale(47.8, "ft"), M.nearestScale(98, "m"), M.nearestScale(250, "ft")].map((n) => [n.scale.label, +n.off.toFixed(4)]);
 console.log(JSON.stringify(out));
 """
@@ -1312,6 +1313,7 @@ console.log(JSON.stringify(out));
                             "m": "6.206 m", "mm": "6206 mm"}
     assert got["areaUnits"] == ["480.00 sq ft", "480.00 sq ft", "69120.0 sq in", "44.593 m²"]
     assert got["total"] == "40' 0\""
+    assert got["path"] == "56' 0\""  # three walls of the 24' x 16' room, open
     assert got["nearest"] == [['1/4" = 1\'-0"', 0.0042], ["1:100", 0.02], ['1" = 20\'', 0.0417]]
 
 

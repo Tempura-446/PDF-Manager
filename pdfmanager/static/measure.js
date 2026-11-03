@@ -200,6 +200,12 @@ export function polygonArea(points) {
   }
   return Math.abs(s) / 2;
 }
+/** Length of an open polyline (a run of walls), in PDF points. */
+export function pathLength(points) {
+  let s = 0;
+  for (let i = 1; i < points.length; i++) s += distance(points[i - 1], points[i]);
+  return s;
+}
 export function perimeter(points) {
   let s = 0;
   for (let i = 0; i < points.length; i++) s += distance(points[i], points[(i + 1) % points.length]);

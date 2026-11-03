@@ -258,11 +258,20 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
     Shift for steps of 45°, Alt to place a point freely. **Area**: click a
     room's corners, then the first one again (or Enter), for its square feet
     (or m²) and perimeter.
+  - **Path**: click along a run of lines (a wall run, a baseboard) for one
+    total length, each segment's length shown beside it; Enter, a
+    double-click or the Path button again finishes it.
   - **Move a measurement:** drag it (its line, edge or label) to move it, or
     drag one of its points to change it (the point snaps again). A click on
     it without dragging measures from there.
+  - **Nudge:** the point last placed or moved is selected (shown filled);
+    the arrow keys move it a pixel at a time (Shift: ten). Click a
+    measurement in the list to select all of it. Delete removes the
+    selected one, Esc lets go of it.
+  - **Undo / redo** (Ctrl+Z, Ctrl+Y) while the scale bar is open: adding,
+    moving, nudging, deleting and clearing measurements.
   - **List** shows every measurement with its value and page, **totals** of
-    lengths and of areas, a delete button for each, **Copy** (to paste in a
+    lengths (distances and paths) and of areas, a delete button for each, **Copy** (to paste in a
     spreadsheet) and **Show in**: feet and inches to 1/16", 1/8", 1/4", 1/2"
     or the inch, decimal feet, inches, metres or millimetres. Labels sit on
     a white backing so the drawing's lines don't run through them, and hints
