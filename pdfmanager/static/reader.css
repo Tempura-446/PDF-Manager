@@ -345,6 +345,17 @@
   box-shadow: 0 0 0 3px var(--accent-ring), 0 4px 14px rgb(0 0 0 / .18); line-height: 1; outline: none;
 }
 textarea.rd-textedit { line-height: 1.25; padding: 2px 3px; resize: both; min-height: 3em; }
+/* Over the page's own words: same font, size and baseline, the outline outside the text. */
+.rd-textedit.rd-textedit-fit {
+  padding: 0; border: 0; border-radius: 1px; min-height: 0; overflow: hidden; white-space: pre;
+  /* fonts cut down for a PDF can keep ligature rules for letters they lost */
+  font-variant-ligatures: none; font-feature-settings: "liga" 0, "clig" 0, "dlig" 0, "calt" 0;
+  box-shadow: 0 0 0 1.5px var(--accent), 0 0 0 4.5px var(--accent-ring), 0 4px 14px rgb(0 0 0 / .18);
+}
+textarea.rd-textedit.rd-textedit-fit { white-space: pre-wrap; overflow: auto; }
+.rd-textedit-box.rd-pending { pointer-events: none; }
+.rd-textedit-box.rd-pending .rd-textedit { box-shadow: none; caret-color: transparent; }
+.rd-textedit-box.rd-pending .rd-textedit-hint { display: none; }
 .rd-textedit-hint {
   display: flex; align-items: center; gap: 10px; padding: 4px 6px 4px 10px; border-radius: 999px;
   background: var(--text); color: var(--bg); font-size: 12px; line-height: 1.2; font-family: system-ui, sans-serif; white-space: nowrap;
