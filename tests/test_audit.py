@@ -792,6 +792,122 @@ def test_new_words_take_the_look_of_the_nearest_text(tmp_path):
     assert font_at(out, 0, "Added") == "Times-Roman"
 
 
+def raw_text_pdf(path, content, fonts=(("F1", "Helvetica"),)):
+    """A one-page PDF drawing ``content`` (content stream operators) with the
+    standard ``fonts``."""
+    writer = PdfWriter()
+    page = writer.add_blank_page(612, 792)
+    table = DictionaryObject()
+    for key, base in fonts:
+        table[NameObject("/" + key)] = writer._add_object(DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/" + base), NameObject("/Encoding"): NameObject("/WinAnsiEncoding")}))
+    page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): table})
+    stream = DecodedStreamObject()
+    stream.set_data(content.encode("latin-1"))
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    writer.write(str(path))
+    return path
+
+
+def shown_letters(path, rect):
+    """The letters that show in ``rect`` (not old ones covered by a change):
+    [(letter, x, y, font name)], left to right."""
+    import pypdfium2 as pdfium
+    from pdfmanager import textedit
+
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        page = doc[0]
+        textpage = page.get_textpage()
+        letters = textedit._letters(textpage, textedit._chars(textpage, rect), {}, textedit._Covers(page)) or []
+        return [(L["char"], L["origin"][0], L["origin"][1], L["style"]["font"]) for L in letters]
+    finally:
+        doc.close()
+
+
+def test_a_changed_word_leaves_the_rest_of_its_line_where_it_was(tmp_path):
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    from pdfmanager import textedit
+
+    # Letter spacing 0.4: kept, not reset to the font's own.
+    src = raw_text_pdf(tmp_path / "line.pdf", "BT /F1 12 Tf 0.4 Tc 72 700 Td (Pay the sum of 1234 euros today) Tj ET")
+    rect = [70, 695, 400, 712]
+    before = shown_letters(src, rect)
+    out = tmp_path / "out.pdf"
+    old = "Pay the sum of 1234 euros today"
+    report = []
+    textedit.edit_text(src, out, [{"page": 1, "rect": rect, "text": "Pay the sum of 99999 euros today", "old": old}],
+                       report=report)
+    assert report == [{"font": "Helvetica", "kind": "same"}]
+    after = shown_letters(out, rect)
+    assert "".join(c for c, *_ in after) == "Paythesumof99999eurostoday"
+    for (c0, x0, y0, _), (c1, x1, y1, _) in zip(before[:11], after[:11]):  # "Paythesumof": untouched
+        assert c0 == c1 and abs(x0 - x1) < 0.01 and abs(y0 - y1) < 0.01
+    # The new number starts where the old one did, spaced like the line.
+    assert abs(after[11][1] - before[11][1]) < 0.01
+    for (_, xa, *_), (_, xb, *_) in zip(after[11:15], after[12:16]):
+        assert abs(xb - xa - (stringWidth("9", "Helvetica", 12) + 0.4)) < 0.01
+    # The words after it move by exactly the difference in width.
+    shift = stringWidth("99999", "Helvetica", 12) - stringWidth("1234", "Helvetica", 12) + 0.4
+    for (c0, x0, *_), (c1, x1, *_) in zip(before[15:], after[16:]):
+        assert c0 == c1 and abs(x1 - x0 - shift) < 0.01
+
+
+def test_a_justified_line_keeps_its_right_edge(tmp_path):
+    from pdfmanager import textedit
+
+    src = raw_text_pdf(tmp_path / "just.pdf", "BT /F1 11 Tf 6 Tw 72 700 Td (one two three four five six seven) Tj ET")
+    rect = [70, 695, 500, 711]
+    before = shown_letters(src, rect)
+    out = tmp_path / "out.pdf"
+    old = "one two three four five six seven"
+    report = []
+    textedit.edit_text(src, out, [{"page": 1, "rect": rect, "text": old.replace("two", "2"), "old": old}], report=report)
+    after = shown_letters(out, rect)
+    assert "".join(c for c, *_ in after) == "one2threefourfivesixseven"
+    assert abs(after[-1][1] - before[-1][1]) < 0.01 and "wider" not in report[0]
+    # Made much longer, it can't fit: the reader is told so.
+    report = []
+    textedit.edit_text(src, out, [{"page": 1, "rect": rect, "text": old.replace("two", "two hundred and twenty"),
+                                   "old": old}], report=report)
+    assert report[0].get("wider") is True
+
+
+def test_a_bold_word_stays_bold_when_its_line_changes(tmp_path):
+    from pdfmanager import textedit
+
+    src = raw_text_pdf(tmp_path / "mixed.pdf",
+                       "BT /F1 12 Tf 72 700 Td (Total ) Tj /F2 12 Tf (45.00) Tj /F1 12 Tf ( EUR) Tj ET",
+                       fonts=(("F1", "Helvetica"), ("F2", "Helvetica-Bold")))
+    rect = [70, 695, 300, 712]
+    out = tmp_path / "out.pdf"
+    textedit.edit_text(src, out, [{"page": 1, "rect": rect, "text": "Total 45.00 USD", "old": "Total 45.00 EUR"}])
+    shown = shown_letters(out, rect)
+    assert "".join(c for c, *_ in shown) == "Total45.00USD"
+    assert {f for c, *_, f in shown if c in "45.0"} == {"Helvetica-Bold"}
+    assert {f for c, *_, f in shown if c in "TotalUSD"} == {"Helvetica"}
+
+
+def test_a_line_changed_twice_reads_only_its_new_words(tmp_path):
+    from pdfmanager import textedit
+
+    src = raw_text_pdf(tmp_path / "twice.pdf", "BT /F1 12 Tf 72 700 Td (Invoice 1234 is due) Tj ET")
+    rect = [70, 695, 300, 712]
+    once, twice = tmp_path / "once.pdf", tmp_path / "twice-out.pdf"
+    textedit.edit_text(src, once, [{"page": 1, "rect": rect, "text": "Invoice 98 is due", "old": "Invoice 1234 is due"}])
+    textedit.edit_text(once, twice, [{"page": 1, "rect": rect, "text": "Invoice 98765 is due",
+                                      "old": "Invoice 98 is due"}])
+    direct = tmp_path / "direct.pdf"
+    textedit.edit_text(src, direct, [{"page": 1, "rect": rect, "text": "Invoice 98765 is due"}])  # no "old": read off the page
+    a, b = shown_letters(twice, rect), shown_letters(direct, rect)
+    assert "".join(c for c, *_ in a) == "".join(c for c, *_ in b) == "Invoice98765isdue"
+    assert all(abs(p[1] - q[1]) < 0.01 for p, q in zip(a, b))
+    # Words given as shown that don't match the page are read off the page instead.
+    textedit.edit_text(src, direct, [{"page": 1, "rect": rect, "text": "Invoice 5 is due", "old": "something else"}])
+    assert "".join(c for c, *_ in shown_letters(direct, rect)) == "Invoice5isdue"
+
+
 def edit_pdf_times(path):
     c = canvas.Canvas(str(path), pagesize=letter)
     c.setFont("Times-Roman", 13)

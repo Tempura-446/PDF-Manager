@@ -788,6 +788,7 @@ export class Reader {
         data: tab.bytes.slice(),  // pdf.js takes ownership of the buffer; keep our copy intact
         password: tab.password || undefined,
         enableXfa: true,
+        fontExtraProperties: true,  // fonts' own names, to find the installed copy when editing text
       });
       task.onPassword = (update, reason) => {
         this.#busy(false);
@@ -1519,8 +1520,12 @@ export class Reader {
     const span = e.target.closest?.(".textLayer span");
     e.preventDefault();
     e.stopPropagation();
-    if (span && !span.classList.contains("markedContent") && span.textContent.trim()) {
-      this.#openTextEditor(span, pageEl, pageNumber, e.shiftKey ? "paragraph" : "line");
+    // The words that show at the click (not old ones covered by a change).
+    const line = span && !span.classList.contains("markedContent") && span.textContent.trim()
+      ? this.#lineOf(span, pageEl, e.clientX, e.clientY) : this.#lineOf(null, pageEl, e.clientX, e.clientY);
+    if (line) {
+      const at = line.spans.find((it) => it.r.left <= e.clientX && e.clientX <= it.r.right) || line.spans[0];
+      this.#openTextEditor(at.s, pageEl, pageNumber, e.shiftKey ? "paragraph" : "line");
     } else {
       this.#openNewText(e, pageEl, pageNumber);  // an empty spot: new words there
     }
@@ -1528,16 +1533,44 @@ export class Reader {
 
   /** The lines of text on a page as drawn: [{spans, left, top, right, bottom, h}],
    *  top to bottom. Words next to each other share a line; a far-off column doesn't. */
-  #pageLines(pageEl) {
-    const items = [...pageEl.querySelectorAll(".textLayer span")]
+  /** The page's words that show: [{s: span, r: its box}]. A change covers
+   *  the old words and writes them again later on the page; the old ones
+   *  are still in the file (and in pdf.js's text) under the new ones. */
+  #shownSpans(pageEl) {
+    const all = [...pageEl.querySelectorAll(".textLayer span")]
       .filter((s) => !s.classList.contains("markedContent") && s.textContent.trim())
-      .map((s) => ({ s, r: s.getBoundingClientRect() }))
+      .map((s) => ({ s, r: s.getBoundingClientRect() }));
+    if (all.length > 4000) return all;  // a drawing full of labels: take them all
+    return all.filter((it, i) => {
+      const area = it.r.width * it.r.height;
+      if (!area) return false;
+      let under = 0;
+      for (let j = i + 1; j < all.length; j++) {
+        const o = all[j].r;
+        const w = Math.min(it.r.right, o.right) - Math.max(it.r.left, o.left);
+        const h = Math.min(it.r.bottom, o.bottom) - Math.max(it.r.top, o.top);
+        if (w > 0 && h > it.r.height * 0.5) under += w * h;
+      }
+      return under < area * 0.5;
+    });
+  }
+
+  /** The words on the line at a span (or a point): next to each other,
+   *  without the gap of another column. Or null. */
+  #lineOf(span, pageEl, x, y) {
+    const lines = this.#pageLines(pageEl, 1.2);
+    return lines.find((l) => l.spans.some((it) => it.s === span))
+      || lines.find((l) => x >= l.left - 2 && x <= l.right + 2 && y >= l.top - 1 && y <= l.bottom + 1) || null;
+  }
+
+  #pageLines(pageEl, apart = 2.5) {
+    const items = this.#shownSpans(pageEl)
       .sort((a, b) => (a.r.top + a.r.bottom) / 2 - (b.r.top + b.r.bottom) / 2 || a.r.left - b.r.left);
     const lines = [];
     for (const it of items) {
       const h = it.r.height, cy = (it.r.top + it.r.bottom) / 2;
       const line = lines.find((l) => Math.abs((l.top + l.bottom) / 2 - cy) < Math.min(l.h, h) * 0.5
-        && it.r.left - l.right < Math.max(l.h, h) * 2.5 && l.left - it.r.right < Math.max(l.h, h) * 2.5);
+        && it.r.left - l.right < Math.max(l.h, h) * apart && l.left - it.r.right < Math.max(l.h, h) * apart);
       if (line) {
         line.spans.push(it);
         Object.assign(line, { left: Math.min(line.left, it.r.left), right: Math.max(line.right, it.r.right),
@@ -1548,6 +1581,11 @@ export class Reader {
     }
     for (const l of lines) l.spans.sort((a, b) => a.r.left - b.r.left);
     return lines.sort((a, b) => a.top - b.top);
+  }
+
+  static #middle(node) {
+    const r = node.getBoundingClientRect();
+    return [r.left + r.width / 2, r.top + r.height / 2];
   }
 
   static #lineText(line) {
@@ -1565,9 +1603,17 @@ export class Reader {
     const lines = this.#pageLines(pageEl);
     let at = lines.findIndex((l) => l.spans.some((it) => it.s === span));
     if (at < 0) return null;
+    // Lines of one paragraph: close below each other, in one column, and in
+    // the same type (a heading or a differently set paragraph is another).
+    const type = (l) => {
+      const st = l.spans[0].s.style;
+      return [parseFloat(st.getPropertyValue("--font-height")) || l.h, st.fontFamily];
+    };
     const close = (a, b) => {
       const gap = b.top - a.bottom, h = Math.min(a.h, b.h);
+      const [fa, ka] = type(a), [fb, kb] = type(b);
       return gap > -h * 0.3 && gap < h * 1.1 && Math.abs(a.h - b.h) < h * 0.35
+        && Math.abs(fa - fb) <= Math.max(fa, fb) * 0.08 && ka === kb
         && b.left < a.right && b.right > a.left && Math.abs(b.left - a.left) < h * 3;
     };
     let first = at, last = at;
@@ -1587,41 +1633,243 @@ export class Reader {
     return {
       text, left: Math.min(...chosen.map((l) => l.left)), right: Math.max(...chosen.map((l) => l.right)),
       top: chosen[0].top, bottom: chosen.at(-1).bottom, h: lines[at].h, lines: chosen.length,
+      first: chosen[0].spans[0].s,  // its first words, for the look
+      lead: chosen.length > 1 ? (chosen.at(-1).top - chosen[0].top) / (chosen.length - 1) : lines[at].h * 1.2,
     };
   }
 
   /** A box on the page for typing: [wrapper, input or textarea]. */
-  #editorBox(pageEl, { left, top, width, height, fontSize, fontFamily, multiline, value, label, hint }) {
+  /** How words of the page look on screen, to type over them in place:
+   *  {family, size, left, baseline (screen px), color, background}, from
+   *  the text pdf.js read (its font is the document's own), or null. */
+  async #textLook(span, pageNumber) {
+    try {
+      const view = this.pdfViewer.getPageView(pageNumber - 1);
+      if (!view?.pdfPage || view.viewport.rotation % 360 !== 0) return null;
+      this.textContents ||= new WeakMap();
+      let content = this.textContents.get(view.pdfPage);
+      if (!content) {
+        content = await view.pdfPage.getTextContent();
+        this.textContents.set(view.pdfPage, content);
+      }
+      const layer = span.closest(".textLayer")?.getBoundingClientRect();
+      if (!layer || !span.isConnected) return null;
+      const r = span.getBoundingClientRect();
+      const [a, b, c, d, e, f] = view.viewport.transform;
+      let best = null, far = Infinity;
+      for (const item of content.items) {
+        if (!item.str || item.str !== span.textContent) continue;
+        const [ia, ib, ic, id, ie, iff] = item.transform;
+        const tx = [a * ia + c * ib, b * ia + d * ib, a * ic + c * id, b * ic + d * id, a * ie + c * iff + e, b * ie + d * iff + f];
+        const size = Math.hypot(tx[2], tx[3]);
+        if (Math.abs(tx[1]) > size * 0.01 || Math.abs(tx[2]) > size * 0.01) continue;  // not level
+        const dist = Math.abs(layer.left + tx[4] - r.left) + Math.abs(layer.top + tx[5] - (r.top + r.height * 0.8));
+        if (dist < far) { far = dist; best = { item, tx, size }; }
+      }
+      if (!best || far > best.size) return null;
+      const { item, tx, size } = best;
+      const generic = content.styles[item.fontName]?.fontFamily || "sans-serif";
+      let real = null;  // the font's own name, for the copy installed on this computer
+      try { if (view.pdfPage.commonObjs.has(item.fontName)) real = view.pdfPage.commonObjs.get(item.fontName); } catch (err) { /* not read yet */ }
+      const name = String(real?.name || "").replace(/^[A-Z]{6}\+/, "");
+      const bold = !!(real?.bold || real?.black) || /bold|black|heavy|semibold|demi/i.test(name);
+      const italic = !!real?.italic || /italic|oblique/i.test(name);
+      const look = { size, left: layer.left + tx[4], baseline: layer.top + tx[5], width: r.width,
+        weight: bold ? "bold" : "", style: italic ? "italic" : "", ...this.#pageColours(span.closest(".page"), r) };
+      // The document's font as pdf.js loaded it shows the words just as on the
+      // page, unless it mixed up its letters (fonts cut down for a PDF can
+      // map a letter to the wrong shape); so it's checked against the page,
+      // then the same font installed here, then a plain one of its kind.
+      const candidates = [];
+      if ([...document.fonts].some((ff) => ff.family.replace(/["']/g, "") === item.fontName && ff.status === "loaded")) {
+        candidates.push({ family: `"${item.fontName}", ${generic}`, weight: "", style: "" });
+      }
+      const base = name.replace(/[-,]?(bold|italic|oblique|regular|roman|book|semibold|black|medium|light|mt|ps)+$/gi, "").replace(/(ps)?mt$/i, "");
+      for (const n of new Set([base.replace(/([a-z])([A-Z])/g, "$1 $2"), base, name.replace(/[-,]/g, " ")])) {
+        if (n && /^[\w .]+$/.test(n)) candidates.push({ family: `"${n}", ${generic}`, weight: look.weight, style: look.style });
+      }
+      const pageEl = span.closest(".page");
+      for (const c of candidates) {
+        if (this.#inkMatches(pageEl, { ...look, ...c }, span.textContent, r)) return { ...look, ...c };
+      }
+      return { ...look, family: generic };
+    } catch (err) {
+      return null;  // the plain box will do
+    }
+  }
+
+  /** The paper and ink colours around a box on the page as drawn. */
+  #pageColours(pageEl, r) {
+    const out = { background: "#fff", color: "#111" };
+    try {
+      const canvas = pageEl?.querySelector("canvas");
+      if (!canvas) return out;
+      const cr = canvas.getBoundingClientRect(), k = canvas.width / cr.width;
+      const x0 = Math.max(0, Math.floor((r.left - cr.left) * k) - 3), y0 = Math.max(0, Math.floor((r.top - cr.top) * k) - 3);
+      const w = Math.min(canvas.width - x0, Math.ceil(r.width * k) + 6), h = Math.min(canvas.height - y0, Math.ceil(r.height * k) + 6);
+      if (w < 2 || h < 2) return out;
+      const px = canvas.getContext("2d").getImageData(x0, y0, w, h).data;
+      const edge = [];
+      for (let x = 0; x < w; x++) edge.push((x) * 4, ((h - 1) * w + x) * 4);
+      for (let y = 0; y < h; y++) edge.push(y * w * 4, (y * w + w - 1) * 4);
+      const mid = (ch) => { const v = edge.map((i) => px[i + ch]).sort((p, q) => p - q); return v[v.length >> 1]; };
+      const bg = [mid(0), mid(1), mid(2)];
+      let ink = null, most = 60;
+      for (let i = 0; i < px.length; i += 4) {
+        const dist = Math.abs(px[i] - bg[0]) + Math.abs(px[i + 1] - bg[1]) + Math.abs(px[i + 2] - bg[2]);
+        if (dist > most) { most = dist; ink = [px[i], px[i + 1], px[i + 2]]; }
+      }
+      out.background = `rgb(${bg.join(" ")})`;
+      if (ink) out.color = `rgb(${ink.join(" ")})`;
+    } catch (err) { /* a canvas that can't be read: black on white */ }
+    return out;
+  }
+
+  /** The spacing that makes ``text`` in a font as wide as on the page:
+   *  {letter, word} in px, or {}. */
+  #fitSpacing(text, look, width) {
+    const natural = this.#textWidth(text, look), spaces = text.split(" ").length - 1;
+    const diff = width - natural;
+    if (Math.abs(diff) <= 0.5 || text.length < 2) return {};
+    return diff > 0 && spaces ? { word: Math.min(diff / spaces, look.size * 1.5) }
+      : { letter: Math.max(-look.size * 0.25, Math.min(diff / (text.length - 1), look.size * 0.25)) };
+  }
+
+  /** Whether ``text`` drawn in the look's font lands on the page's own ink
+   *  in the box ``r`` (same letters, same shapes). */
+  #inkMatches(pageEl, look, text, r) {
+    try {
+      const canvas = pageEl?.querySelector("canvas");
+      if (!canvas || !text.trim()) return false;
+      const cr = canvas.getBoundingClientRect(), k = canvas.width / cr.width;
+      const x0 = Math.max(0, Math.floor((r.left - cr.left) * k)), y0 = Math.max(0, Math.floor((r.top - cr.top) * k));
+      const w = Math.min(canvas.width - x0, Math.ceil(r.width * k) + 2), h = Math.min(canvas.height - y0, Math.ceil(r.height * k) + 2);
+      if (w < 4 || h < 4) return false;
+      const page = canvas.getContext("2d").getImageData(x0, y0, w, h).data;
+      const off = document.createElement("canvas");
+      off.width = w; off.height = h;
+      const c = off.getContext("2d", { willReadFrequently: true });
+      const spacing = this.#fitSpacing(text, look, r.width);
+      c.font = `${look.style || ""} ${look.weight || ""} ${look.size * k}px ${look.family}`;
+      if ("letterSpacing" in c) c.letterSpacing = `${(spacing.letter || 0) * k}px`;
+      if ("wordSpacing" in c) c.wordSpacing = `${(spacing.word || 0) * k}px`;
+      c.fillText(text, (look.left - cr.left) * k - x0, (look.baseline - cr.top) * k - y0);
+      const ours = c.getImageData(0, 0, w, h).data;
+      const lum = (d, i) => d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11;
+      let bg = 0;
+      for (let x = 0; x < w; x++) bg += lum(page, x * 4) + lum(page, ((h - 1) * w + x) * 4);
+      bg /= 2 * w;
+      const inkA = new Uint8Array(w * h), inkB = new Uint8Array(w * h);
+      for (let i = 0; i < w * h; i++) {
+        inkA[i] = Math.abs(lum(page, i * 4) - bg) > 70 ? 1 : 0;
+        inkB[i] = ours[i * 4 + 3] > 110 ? 1 : 0;
+      }
+      const near = (ink, i) => {  // ink within a pixel
+        const x = i % w, y = (i / w) | 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx, yy = y + dy;
+          if (xx >= 0 && yy >= 0 && xx < w && yy < h && ink[yy * w + xx]) return true;
+        }
+        return false;
+      };
+      let a = 0, b = 0, ab = 0, ba = 0;
+      for (let i = 0; i < w * h; i++) {
+        if (inkA[i]) { a++; if (near(inkB, i)) ab++; }
+        if (inkB[i]) { b++; if (near(inkA, i)) ba++; }
+      }
+      return a > 0 && b > 0 && ab / a > 0.96 && ba / b > 0.96;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  /** Where the baseline sits in a line box of ``lineHeight`` (px from its top). */
+  static #baselineIn(look, lineHeight) {
+    const probe = el("div", {}, "Hg", el("span"));
+    Object.assign(probe.style, { position: "absolute", visibility: "hidden", left: "-9999px", top: "0", whiteSpace: "pre",
+      fontFamily: look.family, fontSize: `${look.size}px`, fontWeight: look.weight || "", fontStyle: look.style || "",
+      lineHeight: `${lineHeight}px` });
+    Object.assign(probe.lastChild.style, { display: "inline-block", width: "0", height: "0", verticalAlign: "baseline" });
+    document.body.append(probe);
+    const at = probe.lastChild.offsetTop;
+    probe.remove();
+    return at;
+  }
+
+  /** How wide ``text`` is in a font, in px. */
+  #textWidth(text, look) {
+    this.measureCtx ||= document.createElement("canvas").getContext("2d");
+    this.measureCtx.font = `${look.style || ""} ${look.weight || ""} ${look.size}px ${look.family}`;
+    return this.measureCtx.measureText(text).width;
+  }
+
+  /** A box on the page for typing: [wrapper, input or textarea]. With a
+   *  ``look``, the words in it sit exactly on the page's own: same font,
+   *  size, spacing, colour and baseline, so nothing moves as you type. */
+  #editorBox(pageEl, { left, top, width, height, fontSize, fontFamily, multiline, value, label, hint, look, lineHeight }) {
     const page = pageEl.getBoundingClientRect();
     const field = multiline
       ? el("textarea", { class: "rd-textedit", spellcheck: "true", "aria-label": label })
       : el("input", { type: "text", class: "rd-textedit", spellcheck: "true", "aria-label": label });
     field.value = value;
-    Object.assign(field.style, { width: `${width}px`, height: `${height}px`, fontSize: `${fontSize}px`, fontFamily: fontFamily || "" });
     const box = el("div", { class: "rd-textedit-box" }, field, el("div", { class: "rd-textedit-hint" }, ...hint));
+    if (look) {
+      const lh = lineHeight || Math.round(look.size * 1.3 * 100) / 100;
+      const spacing = look.spacing || {};
+      field.classList.add("rd-textedit-fit");
+      Object.assign(field.style, { fontFamily: look.family, fontSize: `${look.size}px`, lineHeight: `${lh}px`,
+        fontWeight: look.weight || "", fontStyle: look.style || "",
+        color: look.color, background: look.background, width: `${width}px`, height: `${multiline ? height : lh}px`,
+        letterSpacing: spacing.letter ? `${spacing.letter}px` : "", wordSpacing: spacing.word ? `${spacing.word}px` : "" });
+      left = look.left;
+      top = look.baseline - Reader.#baselineIn(look, lh);
+      Object.assign(box.style, { left: `${left - page.left - pageEl.clientLeft}px`, top: `${top - page.top - pageEl.clientTop}px` });
+      if (!multiline) {  // grows with the words
+        const grow = () => {
+          const t = field.value;
+          const w = this.#textWidth(t, look) + (spacing.letter || 0) * t.length
+            + (spacing.word || 0) * (t.split(" ").length - 1) + look.size;
+          field.style.width = `${Math.max(width, Math.ceil(w))}px`;
+        };
+        field.addEventListener("input", grow);
+        grow();
+      }
+      return [box, field];
+    }
+    Object.assign(field.style, { width: `${width}px`, height: `${height}px`, fontSize: `${fontSize}px`, fontFamily: fontFamily || "" });
     Object.assign(box.style, { left: `${left - page.left - pageEl.clientLeft - 3}px`, top: `${top - page.top - pageEl.clientTop - 2}px` });
     return [box, field];
   }
 
-  #openTextEditor(span, pageEl, pageNumber, mode = "line") {
+  async #openTextEditor(span, pageEl, pageNumber, mode = "line") {
     this.#closeTextEditor(false);
+    const ticket = (this.editTicket = (this.editTicket || 0) + 1);
     const viewport = this.pdfViewer.getPageView(pageNumber - 1).viewport;
-    const layer = pageEl.querySelector(".textLayer").getBoundingClientRect();
     const sideways = viewport.rotation % 180 !== 0;
     const paragraph = mode === "paragraph" && !sideways ? this.#paragraphOf(span, pageEl) : null;
+    const first = paragraph ? paragraph.first
+      : (!sideways && this.#lineOf(span, pageEl, ...Reader.#middle(span))?.spans[0].s) || span;
+    const look = await this.#textLook(first, pageNumber);
+    if (ticket !== this.editTicket || !span.isConnected || !this.textEditMode) return;  // clicked elsewhere meanwhile
+    const layer = pageEl.querySelector(".textLayer").getBoundingClientRect();
     const r = span.getBoundingClientRect();
-    const area = paragraph || { left: r.left, right: r.right, top: r.top, bottom: r.bottom, h: sideways ? r.width : r.height };
-    const original = paragraph ? paragraph.text : span.textContent;
+    // A line is all its words, however pdf.js split them up.
+    const line = !paragraph && !sideways ? this.#lineOf(span, pageEl, r.left + r.width / 2, r.top + r.height / 2) : null;
+    const area = paragraph || line || { left: r.left, right: r.right, top: r.top, bottom: r.bottom, h: sideways ? r.width : r.height };
+    const original = paragraph ? paragraph.text : line ? Reader.#lineText(line) : span.textContent;
     // With the view turned, the line runs up or down the screen: size the box
     // from the line's own length and height.
     const lineW = sideways ? r.height : area.right - area.left, lineH = area.h;
+    // The page's spacing, so the typed words line up with the page's to the end.
+    if (look && !paragraph) look.spacing = this.#fitSpacing(original, look, area.right - look.left);
     const toggle = el("button", { type: "button", class: "rd-textedit-mode", title: paragraph ? "Change this line only" : "Rewrite the whole paragraph (or Shift+click a line)" },
       paragraph ? "One line" : "¶ Whole paragraph");
     toggle.disabled = sideways;
+    const lead = paragraph ? paragraph.lead : null;
     const [box, field] = this.#editorBox(pageEl, {
-      left: area.left, top: area.top, multiline: !!paragraph, value: original,
-      width: Math.max(lineW + (paragraph ? 16 : 40), 80),
-      height: paragraph ? area.bottom - area.top + lineH * 1.5 : lineH + 4,
+      left: area.left, top: area.top, multiline: !!paragraph, value: original, look, lineHeight: lead,
+      width: look ? (paragraph ? lineW + look.size * 0.6 : Math.max(lineW + look.size, 80)) : Math.max(lineW + (paragraph ? 16 : 40), 80),
+      height: paragraph ? (look ? lead * (paragraph.lines + 1) : area.bottom - area.top + lineH * 1.5) : lineH + 4,
       fontSize: Math.max(8, lineH * 0.8), fontFamily: getComputedStyle(span).fontFamily,
       label: paragraph ? "New paragraph (Ctrl+Enter to change, Esc to cancel)" : "New text (Enter to change, Esc to cancel)",
       hint: [el("span", {}, paragraph ? "Ctrl+Enter to change · Esc to cancel" : "Enter to change · Esc to cancel"), toggle],
@@ -1635,28 +1883,38 @@ export class Reader {
       this.#closeTextEditor(false);
       this.#openTextEditor(span, pageEl, pageNumber, paragraph ? "line" : "paragraph");
     });
+    // The words as shown go along, so only what was changed is drawn again.
     this.#startEditing(box, field, pageEl, original, (text) =>
-      this.#applyTextEdit({ page: pageNumber, rect, text, ...(paragraph ? { paragraph: true } : {}) }));
+      this.#applyTextEdit({ page: pageNumber, rect, text, ...(paragraph ? { paragraph: true } : { old: original }) }));
   }
 
   /** New words where the page was clicked; they take the look of the nearest text. */
-  #openNewText(e, pageEl, pageNumber) {
+  async #openNewText(e, pageEl, pageNumber) {
     this.#closeTextEditor(true);
+    const ticket = (this.editTicket = (this.editTicket || 0) + 1);
+    const at = { clientX: e.clientX, clientY: e.clientY };
     const viewport = this.pdfViewer.getPageView(pageNumber - 1).viewport;
-    const layer = pageEl.querySelector(".textLayer")?.getBoundingClientRect() || pageEl.getBoundingClientRect();
     let near = null, best = Infinity;
     for (const line of this.#pageLines(pageEl)) {
-      const d = Math.hypot(Math.max(line.left - e.clientX, 0, e.clientX - line.right), Math.max(line.top - e.clientY, 0, e.clientY - line.bottom) * 2);
+      const d = Math.hypot(Math.max(line.left - at.clientX, 0, at.clientX - line.right), Math.max(line.top - at.clientY, 0, at.clientY - line.bottom) * 2);
       if (d < best) { best = d; near = line; }
+    }
+    const look = near ? await this.#textLook(near.spans[0].s, pageNumber) : null;
+    if (ticket !== this.editTicket || !pageEl.isConnected || !this.textEditMode) return;
+    const layer = pageEl.querySelector(".textLayer")?.getBoundingClientRect() || pageEl.getBoundingClientRect();
+    if (look) {  // the new words' top left at the click, as they'll be drawn
+      Object.assign(look, { left: at.clientX, baseline: at.clientY + look.size * 0.8 },
+        this.#pageColours(pageEl, { left: at.clientX, top: at.clientY, width: 40, height: look.size }));
+      if (near) look.color = this.#pageColours(pageEl, near.spans[0].r).color;
     }
     const h = near ? near.h : 16 * viewport.scale;
     const [box, field] = this.#editorBox(pageEl, {
-      left: e.clientX, top: e.clientY, width: 240, height: h + 4, fontSize: Math.max(8, h * 0.8),
-      fontFamily: near ? getComputedStyle(near.spans[0].s).fontFamily : "", value: "",
+      left: at.clientX, top: at.clientY, width: look ? Math.max(160, look.size * 8) : 240, height: h + 4, fontSize: Math.max(8, h * 0.8),
+      fontFamily: near ? getComputedStyle(near.spans[0].s).fontFamily : "", value: "", look,
       label: "New text (Enter to add, Esc to cancel)",
       hint: [el("span", {}, "New text · Enter to add · Esc to cancel")],
     });
-    const [x, y] = viewport.convertToPdfPoint(e.clientX - layer.left, e.clientY - layer.top);
+    const [x, y] = viewport.convertToPdfPoint(at.clientX - layer.left, at.clientY - layer.top);
     this.#startEditing(box, field, pageEl, "", (text) => this.#applyTextEdit({ page: pageNumber, at: [x, y], text }));
   }
 
@@ -1665,9 +1923,17 @@ export class Reader {
     const finish = (keep) => {
       if (done) return;
       done = true;
-      box.remove();
       if (this.textEditor?.box === box) this.textEditor = null;
-      if (keep && field.value !== original && (original || field.value.trim())) apply(field.value);
+      if (keep && field.value !== original && (original || field.value.trim())) {
+        // The typed words stay showing where they go until the page is
+        // drawn again with them, so nothing flickers back to the old ones.
+        box.classList.add("rd-pending");
+        field.readOnly = true;
+        field.blur();
+        Promise.resolve(apply(field.value)).finally(() => box.remove());
+      } else {
+        box.remove();
+      }
     };
     field.addEventListener("keydown", (e) => {
       e.stopPropagation();
@@ -1675,7 +1941,7 @@ export class Reader {
       if (e.key === "Enter" && (!multiline || e.ctrlKey || e.metaKey)) { e.preventDefault(); finish(true); }
       if (e.key === "Escape") { e.preventDefault(); finish(false); }
     });
-    field.addEventListener("blur", () => setTimeout(() => { if (!box.contains(document.activeElement)) finish(true); }));
+    field.addEventListener("blur", () => setTimeout(() => { if (!done && !box.contains(document.activeElement)) finish(true); }));
     pageEl.append(box);
     this.textEditor = { box, finish };
     field.focus();
@@ -1736,11 +2002,15 @@ export class Reader {
         let used = [];
         try { used = JSON.parse(res.headers.get("X-Pdfm-Fonts") || "[]"); } catch (e) {}
         const other = used.find((u) => u.kind !== "same");
+        const notes = [];
         if (other) {
-          this.toast(other.kind === "installed"
+          notes.push(other.kind === "installed"
             ? `This PDF's copy of the font lacks some of those letters, so ${other.font} from this computer was used.`
-            : `This PDF's copy of the font lacks some of those letters, so a similar font (${other.font}) was used.`, 7000);
+            : `This PDF's copy of the font lacks some of those letters, so a similar font (${other.font}) was used.`);
         }
+        if (used.some((u) => u.wider)) notes.push("The line is now longer than its column: to wrap it again, rewrite the whole paragraph (Shift+click it).");
+        if (used.some((u) => u.taller)) notes.push("The paragraph now takes more lines than before, so it may run into what's below it. Undo with Ctrl+Z.");
+        if (notes.length) this.toast(notes.join(" "), 8000);
       },
     });
   }

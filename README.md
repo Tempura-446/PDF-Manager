@@ -190,8 +190,16 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   forms & comments* afterwards to make them part of the page.
 - **Edit text** (E, or Tools → Annotate & sign → Edit text): click a line
   and retype it, **Shift+click** to rewrite its whole paragraph (it rewraps
-  to the same width and line spacing), or click an empty spot to add words
-  that take the look of the text nearest to them. The new words keep the
+  to the same width and line spacing, and stays justified if it was), or
+  click an empty spot to add words that take the look of the text nearest
+  to them. **Text stays where it was:** you type over the page's own words,
+  in their font, size and colour; afterwards every letter you didn't change
+  is exactly where it was (a bold word stays bold), the new letters start
+  where the old ones did, spaced like the rest of the line, and the words
+  after them move by exactly the difference in width (a justified line
+  keeps its right edge, if its word gaps can take it up). The reader says
+  when a line got too long for its column or a paragraph too long for its
+  space. You can change the same line again and again. The new words keep the
   **document's own font** when its copy has every letter needed; otherwise
   the same font installed on your computer (found by name, e.g. Calibri),
   and only then a similar standard font; the reader tells you when it
