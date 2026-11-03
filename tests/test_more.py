@@ -1293,7 +1293,7 @@ out.path = M.formatLength(M.pathLength([[216, 216], [216, 504], [648, 504], [648
 out.nearest = [M.nearestScale(47.8, "ft"), M.nearestScale(98, "m"), M.nearestScale(250, "ft")].map((n) => [n.scale.label, +n.off.toFixed(4)]);
 console.log(JSON.stringify(out));
 """
-    out = subprocess.run([node, "--input-type=module", "-e", script, module], capture_output=True, text=True, timeout=60)
+    out = subprocess.run([node, "--input-type=module", "-e", script, module], capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert out.returncode == 0, out.stderr
     got = json.loads(out.stdout)
     assert got["arch"] == ['1/4" = 1\'-0"', 48, "ft"]  # the one after "SCALE", not the detail's
@@ -1375,7 +1375,7 @@ out.candsFirstIsSnap = r(g.snap([217, 217], 8))[1] === Math.round(c[0].x);
 out.seg = g.segment(0);
 console.log(JSON.stringify(out));
 """
-    out = subprocess.run([node, "--input-type=module", "-e", script, module], capture_output=True, text=True, timeout=60)
+    out = subprocess.run([node, "--input-type=module", "-e", script, module], capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert out.returncode == 0, out.stderr
     got = json.loads(out.stdout)
     assert got["count"] == 4 + 1 + 1 + 16 + 1  # the curve becomes 16 pieces
