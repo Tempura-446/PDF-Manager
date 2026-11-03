@@ -268,6 +268,14 @@ def run(mode):
             # Close the window like a person would (the app window's only page).
             page.close()
         else:
+            # What the page is doing just before it's closed (for a window that won't).
+            state = page.evaluate("""async () => {
+              const widths = [];
+              for (let i = 0; i < 6; i++) { widths.push(document.querySelector('.page')?.getBoundingClientRect().width); await new Promise((r) => setTimeout(r, 150)); }
+              return { unsaved: document.querySelectorAll('.rd-dot:not([hidden])').length, widths,
+                       zoom: document.querySelector('.rd-zoominput')?.value, size: [innerWidth, innerHeight] };
+            }""")
+            log("page before closing:", state)
             # (Not browser.close(): that would end the window's web engine.)
             windows = wait_for(window_handles, 10, "the app window")
             log("closing window:", windows)

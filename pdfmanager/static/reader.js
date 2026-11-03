@@ -867,15 +867,21 @@ export class Reader {
     });
     this.linkService.setViewer(this.pdfViewer);
     // The window (or the sidebar) changes size: a zoom that fits the page
-    // fits it again, as a reader should.
-    let refit = 0;
-    new ResizeObserver(() => {
+    // fits it again, as a reader should. What's watched is the area around
+    // the pages, not the scrolling box itself: that one narrows when its
+    // scrollbar appears (Windows), which a new fit can bring or take away,
+    // and the fitting would go round and round.
+    let refit = 0, lastSize = "";
+    new ResizeObserver(([entry]) => {
+      const size = `${Math.round(entry.contentRect.width / 4)}x${Math.round(entry.contentRect.height / 4)}`;
+      if (size === lastSize) return;  // not a few pixels this way and that
+      lastSize = size;
       cancelAnimationFrame(refit);
       refit = requestAnimationFrame(() => {
         const value = this.pdfViewer.currentScaleValue;
         if (this.doc && ["auto", "page-width", "page-fit", "page-height"].includes(value)) this.pdfViewer.currentScaleValue = value;
       });
-    }).observe(this.container);
+    }).observe(this.main);
     eventBus.on("annotationeditoruimanager", ({ uiManager }) => { this.uiManager = uiManager; this.#applyAnnotParams(); });
     // pdf.js asks to switch tools itself, e.g. after a picture is pasted.
     eventBus.on("switchannotationeditormode", ({ mode }) => this.#setEditMode(this.#modeName(mode)));
