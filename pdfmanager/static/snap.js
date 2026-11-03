@@ -173,17 +173,24 @@ export class Geometry {
    *  ``ortho`` (an angle in radians, with ``from``), where the locked line
    *  from ``from`` crosses a line of the drawing. Returns
    *  { x, y, kind, dist }. */
-  snap([px, py], tol, { from = null, ortho = null } = {}) {
-    if (this.indexed < this.count || !Number.isFinite(px) || !Number.isFinite(py) || !(tol > 0)) return null;
+  snap(p, tol, options = {}) {
+    const best = this.candidates(p, tol, options)[0];
+    return best ? { x: best.x, y: best.y, kind: best.kind, dist: best.dist } : null;
+  }
+
+  /** Every point snap() could choose within ``tol`` of p, best first (the
+   *  order snap() goes by), each once: [{ x, y, kind, dist, segs }], with
+   *  ``segs`` the indices of the lines it's on (to show which line it is). */
+  candidates([px, py], tol, { from = null, ortho = null } = {}) {
+    if (this.indexed < this.count || !Number.isFinite(px) || !Number.isFinite(py) || !(tol > 0)) return [];
     const s = this.segments;
     const ids = [...this.near(px, py, tol)];
-    if (!ids.length) return null;
+    if (!ids.length) return [];
     const d = (x, y) => Math.hypot(x - px, y - py);
-    let best = null;
-    const consider = (x, y, kind, limit, priority) => {
+    const found = [];
+    const consider = (x, y, kind, limit, priority, segs) => {
       const dist = d(x, y);
-      if (dist > limit) return;
-      if (!best || priority < best.priority || (priority === best.priority && dist < best.dist)) best = { x, y, kind, dist, priority };
+      if (dist <= limit) found.push({ x, y, kind, dist, priority, segs });
     };
     if (ortho !== null && from) {
       // The locked line through ``from``: where does it cross the drawing?
@@ -191,36 +198,47 @@ export class Geometry {
       const fx = from[0] - Math.cos(ortho) * 1e6, fy = from[1] - Math.sin(ortho) * 1e6;
       for (const i of ids) {
         const hit = intersection(fx, fy, ex, ey, s[i * 4], s[i * 4 + 1], s[i * 4 + 2], s[i * 4 + 3]);
-        if (hit) consider(hit[0], hit[1], "cross", tol, 0);
+        if (hit) consider(hit[0], hit[1], "cross", tol, 0, [i]);
       }
-      return best && { x: best.x, y: best.y, kind: best.kind, dist: best.dist };
-    }
-    for (const i of ids) {
-      consider(s[i * 4], s[i * 4 + 1], "end", tol, 0);
-      consider(s[i * 4 + 2], s[i * 4 + 3], "end", tol, 0);
-    }
-    if (ids.length <= 80) {
-      for (let a = 0; a < ids.length; a++) {
-        const i = ids[a];
-        for (let b = a + 1; b < ids.length; b++) {
-          const j = ids[b];
-          const hit = intersection(s[i * 4], s[i * 4 + 1], s[i * 4 + 2], s[i * 4 + 3], s[j * 4], s[j * 4 + 1], s[j * 4 + 2], s[j * 4 + 3]);
-          if (hit) consider(hit[0], hit[1], "cross", tol * 0.9, 1);
+    } else {
+      for (const i of ids) {
+        consider(s[i * 4], s[i * 4 + 1], "end", tol, 0, [i]);
+        consider(s[i * 4 + 2], s[i * 4 + 3], "end", tol, 0, [i]);
+      }
+      if (ids.length <= 80) {
+        for (let a = 0; a < ids.length; a++) {
+          const i = ids[a];
+          for (let b = a + 1; b < ids.length; b++) {
+            const j = ids[b];
+            const hit = intersection(s[i * 4], s[i * 4 + 1], s[i * 4 + 2], s[i * 4 + 3], s[j * 4], s[j * 4 + 1], s[j * 4 + 2], s[j * 4 + 3]);
+            if (hit) consider(hit[0], hit[1], "cross", tol * 0.9, 1, [i, j]);
+          }
         }
       }
-    }
-    for (const i of ids) {
-      const ax = s[i * 4], ay = s[i * 4 + 1], bx = s[i * 4 + 2], by = s[i * 4 + 3];
-      consider((ax + bx) / 2, (ay + by) / 2, "mid", tol * 0.8, 2);
-      if (from) {
-        const [fx, fy, t] = nearestOnSegment(ax, ay, bx, by, from[0], from[1]);
-        if (t > 0 && t < 1) consider(fx, fy, "perp", tol * 0.8, 3);
+      for (const i of ids) {
+        const ax = s[i * 4], ay = s[i * 4 + 1], bx = s[i * 4 + 2], by = s[i * 4 + 3];
+        consider((ax + bx) / 2, (ay + by) / 2, "mid", tol * 0.8, 2, [i]);
+        if (from) {
+          const [fx, fy, t] = nearestOnSegment(ax, ay, bx, by, from[0], from[1]);
+          if (t > 0 && t < 1) consider(fx, fy, "perp", tol * 0.8, 3, [i]);
+        }
+        const [ox, oy] = nearestOnSegment(ax, ay, bx, by, px, py);
+        consider(ox, oy, "on", tol * 0.8, 4, [i]);
       }
-      const [ox, oy] = nearestOnSegment(ax, ay, bx, by, px, py);
-      consider(ox, oy, "on", tol * 0.8, 4);
     }
-    return best && { x: best.x, y: best.y, kind: best.kind, dist: best.dist };
+    found.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
+    // The same spot found more than once (two lines ending there): once, with all its lines.
+    const out = [];
+    for (const c of found) {
+      const same = out.find((o) => Math.abs(o.x - c.x) < 1e-6 && Math.abs(o.y - c.y) < 1e-6);
+      if (same) { for (const i of c.segs) if (!same.segs.includes(i)) same.segs.push(i); continue; }
+      out.push({ x: c.x, y: c.y, kind: c.kind, dist: c.dist, segs: [...c.segs] });
+    }
+    return out;
   }
+
+  /** Segment ``i`` as [x1, y1, x2, y2]. */
+  segment(i) { const s = this.segments; return [s[i * 4], s[i * 4 + 1], s[i * 4 + 2], s[i * 4 + 3]]; }
 }
 
 export function fromOperatorList(opList, OPS) {

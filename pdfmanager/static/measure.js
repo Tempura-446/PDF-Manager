@@ -100,25 +100,63 @@ export function feetInches(inches, step = 16) {
   return `${sign}${feet}' ${rest}"`;
 }
 
+/** How lengths can be shown: [id, label]. "auto" follows the sheet's
+ *  scale (feet and inches to 1/16", or metres and millimetres). */
+export const UNITS = [
+  ["auto", "As the sheet's scale"],
+  ["ftin16", "Feet and inches, to 1/16\""], ["ftin8", "Feet and inches, to 1/8\""], ["ftin4", "Feet and inches, to 1/4\""],
+  ["ftin2", "Feet and inches, to 1/2\""], ["ftin1", "Feet and inches, to the inch"],
+  ["ft", "Decimal feet"], ["in", "Inches"], ["m", "Metres"], ["mm", "Millimetres"],
+];
+
+/** A real length (in inches) shown in ``units`` (see UNITS); ``sheet`` is
+ *  the sheet scale's kind ("ft" or "m"), for "auto". */
+export function formatInches(inches, units = "auto", sheet = "ft") {
+  const u = units === "auto" || !UNITS.some(([id]) => id === units) ? (sheet === "m" ? "m-auto" : "ftin16") : units;
+  const mm = inches * MM_PER_IN;
+  if (u === "m-auto") return mm >= 1000 ? `${(mm / 1000).toFixed(3)} m` : `${Math.round(mm)} mm`;
+  if (u.startsWith("ftin")) return feetInches(inches, +u.slice(4));
+  if (u === "ft") return `${(inches / 12).toFixed(2)} ft`;
+  if (u === "in") return `${inches < 0 ? "-" : ""}${fraction(Math.abs(inches), 16)}"`;
+  if (u === "m") return `${(mm / 1000).toFixed(3)} m`;
+  return `${Math.round(mm)} mm`;
+}
+
+/** A real area (in square inches) shown in ``units``. */
+export function formatSquareInches(sqIn, units = "auto", sheet = "ft") {
+  const u = units === "auto" || !UNITS.some(([id]) => id === units) ? (sheet === "m" ? "m" : "ft") : units;
+  if (u === "m" || u === "mm") return `${(sqIn * MM_PER_IN * MM_PER_IN / 1e6).toFixed(3)} m²`;
+  if (u === "in") return `${sqIn.toFixed(1)} sq in`;
+  return `${(sqIn / 144).toFixed(2)} sq ft`;
+}
+
+/** The real length (inches) a length on the page (points) stands for. */
+export function realInches(points, scale) { return points / PT_PER_IN * scale.ratio; }
+
 /** A length on the page (PDF points) as the real length it stands for. */
-export function formatLength(points, scale) {
+export function formatLength(points, scale, units = "auto") {
   const paperIn = points / PT_PER_IN;
   if (!scale) return `${paperIn.toFixed(3)} in on paper`;
-  const real = paperIn * scale.ratio;
-  if (scale.units === "m") {
-    const mm = real * MM_PER_IN;
-    return mm >= 1000 ? `${(mm / 1000).toFixed(3)} m` : `${Math.round(mm)} mm`;
-  }
-  return feetInches(real);
+  return formatInches(paperIn * scale.ratio, units, scale.units);
 }
 
 /** An area on the page (square PDF points) as the real area it stands for. */
-export function formatArea(points2, scale) {
+export function formatArea(points2, scale, units = "auto") {
   const paperIn2 = points2 / (PT_PER_IN * PT_PER_IN);
   if (!scale) return `${paperIn2.toFixed(3)} sq in on paper`;
-  const real = paperIn2 * scale.ratio * scale.ratio;
-  if (scale.units === "m") return `${(real * MM_PER_IN * MM_PER_IN / 1e6).toFixed(3)} m²`;
-  return `${(real / 144).toFixed(2)} sq ft`;
+  return formatSquareInches(paperIn2 * scale.ratio * scale.ratio, units, scale.units);
+}
+
+/** The standard scale nearest to ``ratio``, of the same kind (feet or
+ *  metres): { scale, off }, ``off`` how far apart they are (0.004 = 0.4%). */
+export function nearestScale(ratio, units = "ft") {
+  const list = units === "m" ? METRIC : [...ARCHITECTURAL, ...ENGINEERING, FULL_SIZE];
+  let best = null;
+  for (const scale of list) {
+    const off = Math.abs(ratio / scale.ratio - 1);
+    if (!best || off < best.off) best = { scale, off };
+  }
+  return best;
 }
 
 /** A real length as typed: 12'-6", 12' 6 1/2", 150", 12.5' (feet), 3.5 m,
