@@ -51,7 +51,7 @@ const ICON = {
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
   full: '<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/>',
   print: '<path d="M6 9V2h12v7"/><rect x="6" y="14" width="12" height="8"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>',
-  save: '<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>', info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  save: '<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>', home: '<path d="M4 11 12 4l8 7"/><path d="M6 9.5V20h12V9.5"/>', info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
   tool: '<path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3-3 8-8-1.3-1.3a4 4 0 0 0-5-5z"/><path d="m4 20 4-4"/>',
   twisty: '<path d="m9 6 6 6-6 6"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
@@ -116,7 +116,7 @@ const store = {
 };
 
 export class Reader {
-  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands } = {}) {
+  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome } = {}) {
     this.host = host;
     this.token = token;
     this.isDesktop = isDesktop || (() => false);
@@ -125,6 +125,7 @@ export class Reader {
     this.onEdit = onEdit;
     this.onAllTools = onAllTools;
     this.onCommands = onCommands;
+    this.onHome = onHome;
     // Everything that changes which document is shown runs one after the
     // other (see #serial): two loads at once would show the wrong tab or
     // trip over the shared worker.
@@ -164,18 +165,23 @@ export class Reader {
     this.scaleLabel = this.scaleBtn.querySelector("span");
     this.toolsBtn = el("button", { class: "rd-btn rd-tools-btn", type: "button", title: "Show the tools (T)", "aria-expanded": "false",
       html: svg("sliders") + "<span>Tools</span>" + svg("down") });
+    // Changes not saved yet: Save and Undo come out where they're seen.
+    this.saveNowBtn = el("button", { class: "rd-btn primary rd-savenow", type: "button", hidden: true,
+      title: "Save a copy with your changes (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
+    this.undoNowBtn = b("undo", "Undo the last change (Ctrl+Z)", { hidden: true });
+    this.homeBtn = this.onHome ? b("home", "Home: all of ZPDF's tools (your documents stay open)") : null;
 
     // The toolbar keeps what reading needs; everything else waits in the
     // tray under it until Tools pulls it out.
     const toolbar = el("div", { class: "rd-toolbar", role: "toolbar", "aria-label": "Reader" },
-      el("div", { class: "rd-group" }, this.sidebarBtn),
+      el("div", { class: "rd-group" }, this.homeBtn, this.sidebarBtn),
       this.titleEl,
       el("div", { class: "rd-group" }, this.prevBtn, this.nextBtn,
         el("label", { class: "rd-page" }, this.pageInput, this.pageCount)),
       el("span", { class: "rd-sep" }),
       el("div", { class: "rd-group rd-zoomgroup" }, this.zoomOutBtn, this.zoomInput, this.zoomMenuBtn, this.zoomInBtn),
       el("span", { class: "rd-sep" }),
-      this.scaleBtn, this.toolsBtn);
+      this.undoNowBtn, this.saveNowBtn, this.scaleBtn, this.toolsBtn);
 
     // Tools tray
     const t = (name, label, title, attrs = {}) => el("button", { class: "rd-btn rd-tray-btn", type: "button", title, html: svg(name) + `<span>${label}</span>`, ...attrs });
@@ -416,6 +422,9 @@ export class Reader {
     this.findBtn.addEventListener("click", () => (this.findbar.hidden ? this.openFind() : this.closeFind()));
     this.moreBtn.addEventListener("click", () => this.#toggleMenu());
     this.toolsBtn.addEventListener("click", () => this.toggleTray());
+    this.saveNowBtn.addEventListener("click", () => this.saveCopy());
+    this.undoNowBtn.addEventListener("click", () => this.#undoLast());
+    this.homeBtn?.addEventListener("click", () => this.onHome());
     this.printBtn.addEventListener("click", () => this.print());
     this.saveBtn.addEventListener("click", () => this.saveCopy());
     if (this.appToolsBtn) this.appToolsBtn.addEventListener("click", () => this.onAllTools());
@@ -750,6 +759,7 @@ export class Reader {
       parts.dot.hidden = !tab.dirty;
       return parts.wrap;
     });
+    this.#showSaveState();
     // Re-append only if the order changed, so elements stay where they are.
     const current = [...this.tabbar.children].filter((n) => n !== this.addTabBtn);
     if (current.length !== order.length || current.some((n, i) => n !== order[i])) this.tabbar.replaceChildren(...order, this.addTabBtn);
@@ -856,11 +866,23 @@ export class Reader {
       imageResourcesPath: BASE + "web/images/",
     });
     this.linkService.setViewer(this.pdfViewer);
+    // The window (or the sidebar) changes size: a zoom that fits the page
+    // fits it again, as a reader should.
+    let refit = 0;
+    new ResizeObserver(() => {
+      cancelAnimationFrame(refit);
+      refit = requestAnimationFrame(() => {
+        const value = this.pdfViewer.currentScaleValue;
+        if (this.doc && ["auto", "page-width", "page-fit", "page-height"].includes(value)) this.pdfViewer.currentScaleValue = value;
+      });
+    }).observe(this.container);
     eventBus.on("annotationeditoruimanager", ({ uiManager }) => { this.uiManager = uiManager; this.#applyAnnotParams(); });
     // pdf.js asks to switch tools itself, e.g. after a picture is pasted.
     eventBus.on("switchannotationeditormode", ({ mode }) => this.#setEditMode(this.#modeName(mode)));
     eventBus.on("annotationeditormodechanged", ({ mode }) => this.#showEditMode(this.#modeName(mode)));
     eventBus.on("editingstateschanged", ({ details }) => {
+      this.annotUndo = !!details.hasSomethingToUndo;
+      this.#showSaveState();
       this.undoBtn.disabled = !details.hasSomethingToUndo;
       this.redoBtn.disabled = !details.hasSomethingToRedo;
       this.deleteBtn.disabled = !details.hasSelectedEditor;
@@ -899,6 +921,7 @@ export class Reader {
     this.closeAnnotate();
     this.measureTool(null);
     this.uiManager = null;
+    this.annotUndo = false;
     this.labels = null;
     if (this.thumbObserver) { this.thumbObserver.disconnect(); this.thumbObserver = null; }
     this.thumbsList.replaceChildren();
@@ -906,6 +929,7 @@ export class Reader {
     const doc = this.doc, task = this.task;
     this.doc = null;
     this.task = null;
+    this.#showSaveState();
     if (doc) {
       this.pdfViewer.setDocument(null);
       this.linkService.setDocument(null);
@@ -1269,12 +1293,14 @@ export class Reader {
     if (!this.doc) return;
     this.annotbar.hidden = false;
     this.annotateBtn.setAttribute("aria-pressed", "true");
+    this.#showSaveState();
     this.#showEditMode(this.editMode || "NONE");
   }
   closeAnnotate() {
     if (this.annotbar.hidden) return;
     this.annotbar.hidden = true;
     this.annotateBtn.setAttribute("aria-pressed", "false");
+    this.#showSaveState();
     if (this.editMode && this.editMode !== "NONE") this.#setEditMode("NONE");
   }
 
@@ -2241,6 +2267,21 @@ export class Reader {
   }
 
   /** The tab's changes up to ``version`` are in a file now. */
+  /** Save and Undo in the toolbar while there are changes to keep or take back. */
+  #showSaveState() {
+    if (!this.saveNowBtn) return;
+    // (The annotation bar has its own while it's open.)
+    const tab = this.activeTab, open = !!(this.doc && tab && this.annotbar.hidden);
+    this.saveNowBtn.hidden = !(open && tab.dirty);
+    this.undoNowBtn.hidden = !(open && (this.annotUndo || tab.undo?.length));
+  }
+
+  /** Take back the last change: an annotation if one was just made, else a page or text change. */
+  #undoLast() {
+    if (this.annotUndo && this.uiManager) this.uiManager.undo();
+    else if (this.activeTab?.undo?.length) this.#undoTextEdit();
+  }
+
   #markSaved(tab, version) {
     if (!tab || !this.tabs.includes(tab) || (tab.version || 0) !== version) return;  // changed since
     tab.dirty = false;

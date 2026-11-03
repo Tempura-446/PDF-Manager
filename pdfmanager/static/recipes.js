@@ -170,7 +170,7 @@ export class RecipeBuilder {
       } else if (f.kind === "check") {
         input = el("input", { id, type: "checkbox", checked: value === "true" || value === true });
       } else {
-        input = el("input", { id, type: f.kind === "number" ? "number" : "text", value, placeholder: f.placeholder || "",
+        input = el("input", { id, type: f.kind === "number" || f.kind === "range" ? "number" : "text", value, placeholder: f.placeholder || "",
           min: f.min, max: f.max, step: f.step || (f.kind === "number" ? "any" : null), spellcheck: "false" });
       }
       const update = () => {

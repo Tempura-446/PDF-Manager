@@ -230,7 +230,7 @@ main > .action-bar { max-width: none; width: auto; }
 .drop.compact strong { font-size: 14px; font-weight: 600; color: var(--text-2); }
 
 /* File cards */
-.file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; margin-bottom: 14px; }
+.file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 12px; margin-bottom: 14px; }
 .file-card {
   position: relative; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
   overflow: hidden; transition: box-shadow var(--t) var(--ease), transform var(--t) var(--ease), border-color var(--t); cursor: grab;
@@ -469,6 +469,30 @@ details.pw summary svg { width: 15px; height: 15px; }
 .btn:hover { filter: brightness(1.06); }
 .btn:active { transform: translateY(1px); box-shadow: inset 0 1px 0 rgb(255 255 255 / .1); }
 .btn.secondary { background: var(--surface); color: var(--text); border-color: var(--border-strong); box-shadow: var(--shadow); }
+.opts-body { display: block; }
+#options-card.has-live .opts-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); gap: 24px; align-items: start; }
+.live { position: sticky; top: 16px; }
+.live-frame { position: relative; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); overflow: hidden;
+  min-height: 160px; display: grid; place-items: center; box-shadow: var(--shadow); }
+.live-frame img { display: block; width: 100%; height: auto; background: #fff; transition: opacity var(--t); }
+.live-frame img:not([src]) { visibility: hidden; height: 200px; }
+.live.busy img { opacity: .55; }
+.live.failed img { opacity: .25; }
+.live-spin { position: absolute; width: 22px; height: 22px; border: 2px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%;
+  animation: spin .8s linear infinite; opacity: 0; transition: opacity var(--t); pointer-events: none; }
+.live.busy .live-spin { opacity: 1; }
+.live-msg { position: absolute; inset: auto 8px 8px; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--surface); color: var(--err); font-size: 12px; box-shadow: var(--shadow); }
+.live-frame img[src] { cursor: zoom-in; }
+.live-big { border: 0; padding: 0; background: transparent; max-width: 92vw; max-height: 92vh; overflow: visible; cursor: zoom-out; }
+.live-big::backdrop { background: rgb(0 0 0 / .55); }
+.live-big img { display: block; max-width: 92vw; max-height: 92vh; width: auto; height: auto; background: #fff; border-radius: 6px; box-shadow: 0 20px 60px rgb(0 0 0 / .45); }
+.live-cap { font-size: 12px; color: var(--muted); margin-top: 6px; text-align: center; }
+.range { display: flex; align-items: center; gap: 10px; height: 38px; }
+.range input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.range output { min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; color: var(--text-2); }
+@media (max-width: 900px) { #options-card.has-live .opts-body { grid-template-columns: 1fr; } .live { position: static; max-width: 320px; } }
+.btn.ghost { background: transparent; color: var(--muted); border-color: transparent; box-shadow: none; }
+.btn.ghost:hover { background: var(--surface-3); color: var(--text); }
 .btn.secondary:hover { background: var(--surface-2); filter: none; }
 .btn:disabled { opacity: .6; cursor: progress; filter: none; transform: none; }
 .btn svg { width: 16px; height: 16px; }
@@ -544,6 +568,25 @@ td { word-break: break-all; }
 .home-group { margin-bottom: 24px; }
 .home-group-title { margin: 0 0 10px; font-size: 16px; font-weight: 600; color: var(--text); }
 .home-tools { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+.home-tool-wrap { position: relative; display: flex; }
+.home-tool-wrap .home-tool { flex: 1; min-width: 0; padding-right: 34px; }
+.home-star {
+  position: absolute; top: 8px; right: 8px; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 8px; background: transparent;
+  display: grid; place-items: center; color: var(--faint); cursor: pointer; opacity: 0; transition: opacity var(--t), color var(--t), background var(--t);
+}
+.home-star svg { width: 16px; height: 16px; }
+.home-tool-wrap:hover .home-star, .home-star:focus-visible, .home-star[aria-pressed="true"] { opacity: 1; }
+.home-star:hover { background: var(--surface-3); color: var(--text); }
+.home-star[aria-pressed="true"] { color: #e0a100; }
+.home-star[aria-pressed="true"] svg, .fav-btn[aria-pressed="true"] svg { fill: currentColor; }
+.fav-btn {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px 0 10px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: background var(--t), color var(--t), border-color var(--t); flex: none;
+}
+.fav-btn svg { width: 15px; height: 15px; }
+.fav-btn:hover { color: var(--text); border-color: var(--text-2); }
+.fav-btn[aria-pressed="true"] { color: #b37f00; border-color: color-mix(in srgb, #e0a100 55%, transparent); background: color-mix(in srgb, #e0a100 10%, var(--surface)); }
 .home-tool {
   display: flex; gap: 12px; align-items: flex-start; text-align: left; padding: 12px 13px; border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--surface); cursor: pointer; color: var(--text); transition: box-shadow var(--t) var(--ease), transform var(--t) var(--ease), border-color var(--t);
@@ -644,6 +687,7 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
     <div class="page-head">
       <div class="tool-icon" id="tool-icon"></div>
       <div><h1 id="title">ZPDF</h1><p id="help"></p></div>
+      <button class="fav-btn" id="fav-btn" type="button" aria-pressed="false" hidden></button>
     </div>
 
     <div class="message err" id="error" hidden role="alert"></div>
@@ -681,8 +725,9 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
       <p class="pb-hint" id="panel-hint"></p>
     </section>
 
-    <section class="card">
+    <section class="card" id="options-card">
       <div class="card-head"><h3>Options</h3></div>
+      <div class="opts-body"><div class="opts-main">
       <form id="form" class="fields" autocomplete="off"></form>
       <details class="pw" id="pw-box">
         <summary><svg class="i" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Password-protected files?</summary>
@@ -691,6 +736,13 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
           <div class="hint">Results stay protected with the same password.</div>
         </div>
       </details>
+      </div>
+      <aside class="live" id="live" hidden aria-label="Preview">
+        <div class="live-frame"><img id="live-img" alt="Preview of the result"><span class="live-spin" aria-hidden="true"></span>
+          <div class="live-msg" id="live-msg" hidden></div></div>
+        <div class="live-cap" id="live-cap">Page 1 as it will come out</div>
+      </aside></div>
+      <dialog class="live-big" id="live-big" aria-label="Preview, larger"><img id="live-big-img" alt="Preview of the result, larger"></dialog>
     </section>
 
     <div class="table-wrap card" id="result-table" hidden></div>
@@ -772,6 +824,7 @@ const isMac = /Mac/.test(navigator.platform);
 
 // ---- icons ----------------------------------------------------------------
 const ICONS = {
+  star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>',
   home: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-6h4v6"/>',
   reader: '<path d="M2 5h6a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2z"/><path d="M22 5h-6a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h7z"/>',
   merge: '<path d="M8 4v5a4 4 0 0 0 4 4h0a4 4 0 0 1 4 4v3"/><path d="M16 4v5a4 4 0 0 1-4 4"/><path d="m13 17 3 3 3-3"/>',
@@ -913,6 +966,7 @@ async function ensureReader() {
     },
     onAllTools: () => setNavDrawer(!document.body.classList.contains("nav-drawer")),
     onCommands: () => openPalette(),
+    onHome: () => select("home"),
   });
   return reader;
 }
@@ -1032,17 +1086,50 @@ function renderTools(query) {
   const box = $("tools");
   box.replaceChildren();
   let group = null, shown = 0;
+  const button = (op) => el("button", { type: "button", "data-op": op.id, class: op.group ? "" : "nav-home", title: op.label,
+    "aria-current": current && current.id === op.id ? "true" : "false",
+    onclick: () => select(op.id) }, icon(op.id), el("span", {}, op.label));
   for (const op of ops) {
     const hay = (op.label + " " + op.group + " " + (op.help || "") + " " + (TAGLINES[op.id] || "") + " " + op.id).toLowerCase();
     if (q && !hay.includes(q)) continue;
     if (op.group && op.group !== group) { group = op.group; box.append(el("h2", {}, group)); }
-    box.append(el("button", { type: "button", "data-op": op.id, class: op.group ? "" : "nav-home", title: op.label,
-      "aria-current": current && current.id === op.id ? "true" : "false",
-      onclick: () => select(op.id) }, icon(op.id), el("span", {}, op.label)));
+    box.append(button(op));
     shown++;
+    if (!op.group && !q) {
+      // Under Home: the tools pinned, then a few used lately, before the full list.
+      const pinned = toolsFrom(favTools());
+      const recent = toolsFrom(recentTools()).filter((o) => !pinned.includes(o) && o.id !== "reader").slice(0, 3);
+      for (const [title, list] of [["Pinned", pinned], ["Recent", recent]]) {
+        if (!list.length) continue;
+        box.append(el("h2", { class: "quick" }, title));
+        for (const o of list) box.append(button(o));
+      }
+    }
   }
   if (!shown) box.append(el("div", { class: "none" }, "No matching tools"));
 }
+const toolsFrom = (ids) => ids.map((id) => ops.find((o) => o.id === id && o.group)).filter(Boolean);
+function favTools() { try { return JSON.parse(localStorage.getItem("pdfm-fav-tools") || "[]"); } catch (e) { return []; } }
+function setFav(id, on) {
+  const list = favTools().filter((t) => t !== id);
+  if (on) list.push(id);
+  try { localStorage.setItem("pdfm-fav-tools", JSON.stringify(list)); } catch (e) { /* not kept */ }
+  renderTools($("search").value);
+  showFav();
+  if (inHome()) renderHome();
+}
+/** The star beside a tool's name: pin it to the top of the list (and Home). */
+function showFav() {
+  const btn = $("fav-btn"), op = current;
+  btn.hidden = !op || !op.group || op.files === "reader";
+  if (btn.hidden) return;
+  const on = favTools().includes(op.id);
+  btn.setAttribute("aria-pressed", String(on));
+  btn.title = on ? "Unpin this tool" : "Pin this tool to the top of the list and Home";
+  btn.setAttribute("aria-label", btn.title);
+  btn.replaceChildren(icon("star"), el("span", {}, on ? "Pinned" : "Pin"));
+}
+$("fav-btn").addEventListener("click", () => setFav(current.id, !favTools().includes(current.id)));
 $("search").addEventListener("input", (e) => renderTools(e.target.value));
 $("search").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { const first = $("tools").querySelector("button"); if (first) { e.target.blur(); first.click(); } }
@@ -1068,6 +1155,7 @@ async function select(id) {
   if (reader && !readerMode) reader.hide();
   try { localStorage.setItem("pdfm-op", id); } catch (e) {}
   if (!homeMode) rememberTool(id);
+  showFav();
   document.querySelectorAll(".tools button[data-op]").forEach((b) => b.setAttribute("aria-current", String(b.dataset.op === id)));
   $("picker").value = id;
   $("tool-icon").replaceChildren(icon(id));
@@ -1102,7 +1190,7 @@ async function select(id) {
   if (keep) return;
   const want = accepts(current.files);
   items = items.filter((it) => want(it.file));
-  renderFiles(); renderForm(); clearMessages();
+  renderForm(); renderFiles(); clearMessages();
 }
 function defaultHelp(op) { return op.files === "pdf" ? "Add one or more PDFs. Several files come back together as a ZIP." : ""; }
 function isPdf(f) { return f.type === "application/pdf" || /\.pdf$/i.test(f.name); }
@@ -1190,6 +1278,7 @@ function renderFiles() {
   $("files-sub").textContent = items.length ? `${plural(items.length, "file")}${pages ? " · " + plural(pages, "page") : ""} · ${humanSize(size)}` : "";
   updateSummary();
   syncBoard();
+  scheduleLive(0);
   syncPanel();
 }
 function move(from, to) {
@@ -1205,9 +1294,25 @@ function updateSummary() {
   }
   const need = current.files === "pdf2" ? 2 : current.min || 1;
   const ready = items.length >= need;
-  $("summary").textContent = ready ? `Ready · ${plural(items.length, "file")}`
+  const done = ready && !$("result").hidden;
+  $("summary").textContent = done ? "Done · change anything and run again, or start over"
+    : ready ? `Ready · ${plural(items.length, "file")}`
     : (need === 1 ? "Add a file to get started" : `Add ${current.files === "pdf2" ? "exactly 2" : "at least " + need} files`);
-  $("kbd-hint").textContent = ready ? ` · ${isMac ? "⌘" : "Ctrl"}+Enter to run` : "";
+  $("kbd-hint").textContent = ready && !done ? ` · ${isMac ? "⌘" : "Ctrl"}+Enter to run` : "";
+  $("run-label").textContent = (current.action || "Run") + (done ? " again" : "");
+  // Nothing to run on yet: the button waits (the line beside it says why).
+  if (!$("run").classList.contains("busy") && !$("preview").classList.contains("busy")) {
+    $("run").disabled = !ready;
+    $("run").title = ready ? "" : (need === 1 ? "Add a file first" : $("summary").textContent);
+  }
+}
+/** Back to an empty tool: no files, no result, options as they were. */
+function startOver() {
+  items = [];
+  clearMessages();
+  renderFiles();
+  updateSummary();
+  document.querySelector("main").scrollIntoView({ block: "start", behavior: "smooth" });
 }
 
 const drop = $("drop");
@@ -1284,10 +1389,21 @@ async function renderHome() {
         el("button", { type: "button", class: "btn", onclick: () => input.click() }, icon("reader"), "Open a PDF"),
         el("button", { type: "button", class: "btn secondary", onclick: () => toolsHeading.scrollIntoView({ behavior: "smooth", block: "start" }) }, "Browse the tools"))),
     drop, input);
-  const toolCard = (op) => el("button", { type: "button", class: "home-tool", "data-op": op.id, onclick: () => select(op.id) },
-    el("span", { class: "ticon" }, icon(op.id)), el("span", {}, el("strong", {}, op.label), el("span", {}, TAGLINES[op.id] || op.help || op.group)));
+  const pinnedIds = favTools();
+  const toolCard = (op) => {
+    const on = pinnedIds.includes(op.id);
+    const star = el("button", { type: "button", class: "home-star", "aria-pressed": String(on),
+      title: on ? `Unpin ${op.label}` : `Pin ${op.label} to the top`, "aria-label": on ? `Unpin ${op.label}` : `Pin ${op.label}`,
+      onclick: (e) => { e.stopPropagation(); setFav(op.id, !on); } }, icon("star"));
+    return el("div", { class: "home-tool-wrap" + (on ? " pinned" : "") },
+      el("button", { type: "button", class: "home-tool", "data-op": op.id, onclick: () => select(op.id) },
+        el("span", { class: "ticon" }, icon(op.id)), el("span", {}, el("strong", {}, op.label), el("span", {}, TAGLINES[op.id] || op.help || op.group))),
+      star);
+  };
   const sections = [];
-  const recent = recentTools().map((id) => ops.find((o) => o.id === id)).filter(Boolean);
+  const pinned = toolsFrom(pinnedIds);
+  if (pinned.length) sections.push(el("section", {}, el("h2", {}, "Pinned"), el("div", { class: "home-tools" }, ...pinned.map(toolCard))));
+  const recent = recentTools().map((id) => ops.find((o) => o.id === id)).filter((o) => o && !pinned.includes(o));
   if (recent.length) sections.push(el("section", {}, el("h2", {}, "Recently used"), el("div", { class: "home-tools" }, ...recent.map(toolCard))));
   const recentFiles = el("ul", { class: "home-recent" });
   const filesSection = el("section", { hidden: true }, el("h2", {}, "Recent files"), recentFiles);
@@ -1327,6 +1443,9 @@ function boardChanged(pages) {
   const f = boardField();
   if (!f) return;
   f.value = current.board.mode === "split" ? splitsToRanges(pages, board.total) : boardLib.formatRanges(pages);
+  // Pages clicked to split at: the split is now "at the pages I choose".
+  const how = current.board.how && $("f-" + current.board.how);
+  if (how && how.value !== "ranges") { how.value = "ranges"; updateVisibility(); }
 }
 // Split: pages that start a new file (0-based) <-> "1-3 4-7 8-12".
 function splitsToRanges(starts, total) {
@@ -1369,7 +1488,8 @@ async function syncBoard() {
   if (!f) return;
   if (spec.mode === "split") {
     const every = Number($("f-" + spec.every)?.value) || 1;
-    const typed = rangesToSplits(f.value, board.total);
+    const byRanges = !spec.how || $("f-" + spec.how)?.value === "ranges";
+    const typed = byRanges ? rangesToSplits(f.value, board.total) : null;
     board.setSplits(typed || [...Array(board.total).keys()].filter((p) => p > 0 && p % every === 0));
     f.value = splitsToRanges(board.splits, board.total);
     return;
@@ -1384,6 +1504,12 @@ $("form").addEventListener("input", (e) => {
   const spec = current && current.board;
   if (!spec || !board || !board.doc || !boardLib || board.tool !== current.id) return;
   if (spec.degrees && e.target.id === "f-" + spec.degrees) board.setRotation(e.target.value);
+  if (spec.how && e.target.id === "f-" + spec.how && e.target.value === "every") {
+    const every = Math.max(1, Number($("f-" + spec.every).value) || 1);  // back to every few pages
+    board.setSplits([...Array(board.total).keys()].filter((p) => p > 0 && p % every === 0));
+    boardField().value = splitsToRanges(board.splits, board.total);
+    return;
+  }
   if (spec.every && e.target.id === "f-" + spec.every) {
     const every = Math.max(1, Number(e.target.value) || 1);
     board.setSplits([...Array(board.total).keys()].filter((p) => p > 0 && p % every === 0));
@@ -1594,6 +1720,10 @@ function renderForm() {
     if (f.kind === "select") {
       input = el("select", { id, name: f.key });
       for (const [v, label] of f.choices) input.append(el("option", { value: v, selected: String(f.default) === v }, label));
+    } else if (f.kind === "range") {
+      // Limits first, then the value: set the other way, the browser rounds it to the default step.
+      input = el("input", { id, name: f.key, type: "range", min: f.min, max: f.max, step: f.step || "any" });
+      input.value = f.default ?? "";
     } else if (f.kind === "check") {
       input = el("input", { id, name: f.key, type: "checkbox", checked: !!f.default });
     } else if (f.kind === "file") {
@@ -1604,6 +1734,11 @@ function renderForm() {
         step: f.step || (f.kind === "number" ? "any" : null), required: !!f.required, spellcheck: "false" });
     }
     let control = input;
+    if (f.kind === "range") {  // a slider, its value beside it
+      const shown = el("output", { for: id }, fmtRange(f, input.value));
+      input.addEventListener("input", () => { shown.textContent = fmtRange(f, input.value); });
+      control = el("div", { class: "range" }, input, shown);
+    }
     if (PATH_FIELDS.has(f.key) && isDesktop()) {
       control = el("div", { class: "with-btn" }, input, el("button", { class: "btn secondary", type: "button", onclick: async () => {
         const chosen = await window.pywebview.api.pick_folder();
@@ -1620,6 +1755,56 @@ function renderForm() {
   updateVisibility();
 }
 $("form").addEventListener("input", updateVisibility);
+function fmtRange(f, v) {
+  const n = Number(v);
+  return f.unit === "%" ? Math.round(n * 100) + "%" : f.unit ? `${Math.round(n)}${f.unit}` : String(v);
+}
+
+// ---- live preview: page 1 of the result, redrawn as the options change -----------
+let liveSeq = 0, liveTimer = 0, liveUrl = null;
+function liveWanted() { return !!(current && current.live && items.length && isPdf(items[0].file)); }
+function scheduleLive(delay = 350) {
+  clearTimeout(liveTimer);
+  const on = liveWanted();
+  $("live").hidden = !on;
+  $("options-card").classList.toggle("has-live", on);
+  if (!on) { liveSeq++; return; }
+  $("live").classList.add("busy");
+  liveTimer = setTimeout(updateLive, delay);
+}
+async function updateLive() {
+  const seq = ++liveSeq, op = current.id, file = items[0].file;
+  const { opts } = collectOptions();
+  const body = new FormData();
+  body.append("op", op);
+  body.append("password", $("pw").value);
+  for (const [k, v] of Object.entries(opts)) body.append(k, v);
+  body.append("file", file, file.name);
+  let message = "";
+  try {
+    const blob = await (await api("/api/preview", { method: "POST", body })).blob();
+    if (seq !== liveSeq) return;
+    if (liveUrl) URL.revokeObjectURL(liveUrl);
+    liveUrl = URL.createObjectURL(blob);
+    $("live-img").src = liveUrl;
+  } catch (e) {
+    if (seq !== liveSeq) return;
+    message = String(e.message || e).replace(/^./, (c) => c.toUpperCase());
+  }
+  $("live").classList.remove("busy");
+  $("live").classList.toggle("failed", !!message);
+  $("live-msg").hidden = !message;
+  $("live-msg").textContent = message ? `No preview: ${message}` : "";
+  $("live-cap").textContent = (op === "nup" ? "The first sheet" : "Page 1") + " as it will come out"
+    + (items.length > 1 ? ` (${file.name})` : "");
+}
+$("form").addEventListener("input", () => scheduleLive());
+$("form").addEventListener("change", () => scheduleLive());
+$("pw").addEventListener("change", () => scheduleLive(0));
+// A click shows it larger (small print such as page numbers); any click or Esc closes it.
+$("live-img").title = "Click to see it larger";
+$("live-img").addEventListener("click", () => { if (!liveUrl) return; $("live-big-img").src = liveUrl; $("live-big").showModal(); });
+$("live-big").addEventListener("click", () => $("live-big").close());
 $("form").addEventListener("submit", (e) => { e.preventDefault(); run(false); });
 function updateVisibility() {
   for (const f of current.fields) {
@@ -1712,12 +1897,14 @@ async function showResult(name, blob, resultId, note = "") {
   if (/\.pdf$/i.test(name)) {
     actions.append(el("button", { class: "btn secondary", type: "button", onclick: () => openInReader(new File([blob], name, { type: "application/pdf" })) }, icon("reader"), "Open in reader"));
   }
+  actions.append(el("button", { class: "btn ghost", type: "button", title: "Clear the files to start again with this tool", onclick: startOver }, "Start over"));
   $("result").replaceChildren(thumb,
     el("div", { class: "result-body" },
       el("div", { class: "result-title" }, icon("check"), "Done"),
       el("div", { class: "result-name" }, name), subEl,
       note ? el("div", { class: "result-note" }, ...note.split("\n").map((line) => el("div", {}, line))) : null, actions));
   $("result").hidden = false;
+  updateSummary();
   $("result").scrollIntoView({ behavior: "smooth", block: "nearest" });
   const auto = actions.querySelector("a[data-auto]");
   if (auto) auto.click();  // browsers without a Save dialog: download straight away
