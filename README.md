@@ -234,27 +234,52 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   next to the zoom reads each sheet's scale from its title block
   (`1/4" = 1'-0"`, `1" = 20'`, `1:100`, …), or you pick it, or **Set from a
   dimension**: click both ends of a line you know (say a 24'-0" wall) and
-  type its length.
+  type its length. The dialog shows what that line measures at the current
+  scale, the scale your length makes and the **standard scale it matches**
+  (pick that, or exactly as measured), and whether to use it for this sheet
+  or **every sheet** of the document.
   - **True paper size** (in the zoom menu) shows the sheet exactly as big
-    as it would print, once you've calibrated your screen (hold a bank card
-    to it, or type its diagonal; asked the first time). **Show at** zooms so
-    the drawing looks as if drawn at another scale, e.g. a 1/4" plan at
-    1/8" = 1'-0".
+    as it would print, once you've calibrated your screen (hold a ruler, in
+    inches or centimetres, or a bank card to it, or type its diagonal; asked
+    the first time). **Zoom to scale** zooms so the drawing looks as if
+    printed at another scale, e.g. a 1/4" plan at 1/8" = 1'-0", and always
+    shows what's in effect ("Not to scale (67%)" otherwise).
   - **Measure** (M): click two points for a length in feet and inches to
     the sixteenth (or metres to the millimetre). Clicks **snap to the
     drawing's own lines**, read from the file: a line's end, where two
     lines cross, a line's middle, the foot of the perpendicular from the
     last point (wall thicknesses), or a point on a line. A marker shows
-    what the click will land on, so a snapped measurement is exact to the
-    drawing, not to the mouse. Hold Shift to keep the line straight (it
-    then snaps to where that straight line crosses the drawing), Alt to
-    place a point freely. **Area**: click a room's corners, then the first
-    one again (or Enter), for its square feet (or m²) and perimeter.
-    Backspace takes back the last point or measurement, Esc stops;
-    **Clear** removes them. Measurements are only on screen, not saved in
-    the file. Scanned sheets have no lines to snap to, and if a sheet's
-    lines can't be read ZPDF says so: points then go exactly where you
-    click, so zoom in close.
+    what the click will land on and the line it's on is highlighted, so a
+    snapped measurement is exact to the drawing, not to the mouse.
+  - **Lines close together:** when there's more than one thing to snap to
+    under the pointer, a **magnifier** shows the lines there, the points to
+    choose from and the one chosen; **Tab** (Shift+Tab) picks the next.
+  - **Straight** keeps every line across or up and down (no slants); hold
+    Shift for steps of 45°, Alt to place a point freely. **Area**: click a
+    room's corners, then the first one again (or Enter), for its square feet
+    (or m²) and perimeter.
+  - **Path**: click along a run of lines (a wall run, a baseboard) for one
+    total length, each segment's length shown beside it; Enter, a
+    double-click or the Path button again finishes it.
+  - **Move a measurement:** drag it (its line, edge or label) to move it, or
+    drag one of its points to change it (the point snaps again). A click on
+    it without dragging measures from there.
+  - **Nudge:** the point last placed or moved is selected (shown filled);
+    the arrow keys move it a pixel at a time (Shift: ten). Click a
+    measurement in the list to select all of it. Delete removes the
+    selected one, Esc lets go of it.
+  - **Undo / redo** (Ctrl+Z, Ctrl+Y) while the scale bar is open: adding,
+    moving, nudging, deleting and clearing measurements.
+  - **List** shows every measurement with its value and page, **totals** of
+    lengths (distances and paths) and of areas, a delete button for each, **Copy** (to paste in a
+    spreadsheet) and **Show in**: feet and inches to 1/16", 1/8", 1/4", 1/2"
+    or the inch, decimal feet, inches, metres or millimetres. Labels sit on
+    a white backing so the drawing's lines don't run through them, and hints
+    appear at the top of the page, clear of the title block.
+  - Backspace takes back the last point or measurement, Esc stops.
+    Measurements are only on screen, not saved in the file. Scanned sheets
+    have no lines to snap to, and if a sheet's lines can't be read ZPDF says
+    so: points then go exactly where you click, so zoom in close.
   - A scale read from the sheet is only as right as the sheet: measure one
     written dimension to check it before relying on the numbers.
 - **Command palette (Ctrl+K):** type what you want (a tool, an action like

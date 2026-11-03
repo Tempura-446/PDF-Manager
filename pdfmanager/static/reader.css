@@ -414,6 +414,9 @@ textarea.rd-textedit.rd-textedit-fit { white-space: pre-wrap; overflow: auto; }
 .rd-scale-btn span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .rd-scale-btn.set { color: var(--accent); }
 .rd-scale-btn[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
+/* One line always: a bar that wraps changes the page's height (and so its fit) mid-measurement. */
+.rd-scalebar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; gap: 5px; }
+.rd-scalebar > * { flex: none; }
 .rd-scalebar .rd-zoom { max-width: 230px; }
 .rd-scalebar .rd-sep { margin: 0 4px; }
 @container (max-width: 980px) { .rd-scalebar .rd-btn span { display: none; } }
@@ -428,11 +431,68 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
 .rd-measure-area { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
 .rd-measure-area.draft { fill: color-mix(in srgb, var(--accent) 8%, transparent); stroke-dasharray: 6 4; }
 .rd-measure-dot { fill: #fff; stroke: var(--accent); stroke-width: 2; }
+.rd-measure-dot.picked { fill: var(--accent); stroke: #fff; stroke-width: 2.5; }
+.rd-measure-path { fill: none; stroke-linejoin: round; }
+.rd-measure-label.seg { font-weight: 600; font-size: 11.5px; fill: #3a3a36; }
 .rd-measure-label {
   font: 700 13px/1 system-ui, -apple-system, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums;
   fill: #1b1b19; stroke: #fff; stroke-width: 4px; stroke-linejoin: round; paint-order: stroke;
 }
 .rd-measure-label.area tspan + tspan { font-weight: 500; font-size: 11.5px; }
+/* Labels sit on a white backing, so the drawing's lines don't run through them. */
+.rd-measure-pill { fill: rgb(255 255 255 / .94); stroke: color-mix(in srgb, var(--accent) 45%, transparent); stroke-width: 1; }
+.rd-measure-pill.hot { stroke: var(--accent); stroke-width: 2; }
+.rd-measure-line.hot, .rd-measure-area.hot { stroke-width: 3.5; }
+.rd-measure-area.hot { fill: color-mix(in srgb, var(--accent) 24%, transparent); }
+.rd-snap-seg { stroke: #1f4fd8; stroke-width: 6; stroke-opacity: .25; stroke-linecap: round; }
+.rd-loupe-bg { fill: #fff; filter: drop-shadow(0 4px 12px rgb(0 0 0 / .28)); }
+.rd-loupe-ring { fill: none; stroke: #1f4fd8; stroke-width: 2; }
+.rd-loupe-line { stroke: #3b3b38; stroke-width: 1.3; stroke-linecap: round; }
+.rd-loupe-target { stroke: #1f4fd8; stroke-width: 3; stroke-linecap: round; }
+.rd-loupe-cand { fill: #fff; stroke: #6b6b66; stroke-width: 1.5; }
+.rd-loupe-pick { fill: #1f4fd8; stroke: #fff; stroke-width: 1.5; }
+.rd-loupe-cross { stroke: #e0533d; stroke-width: 1.2; }
+.rd-container.rd-dragging, .rd-container.rd-dragging * { cursor: grabbing !important; }
+.rd-toast.top { bottom: auto; animation-name: rd-drop; }
+@keyframes rd-drop { from { opacity: 0; transform: translate(-50%, -6px); } }
+.rd-count { margin-left: 2px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--accent-text, #fff);
+  font-size: 11px; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.rd-measpanel {
+  position: absolute; top: 12px; right: 12px; z-index: 25; width: 300px; max-width: calc(100% - 24px); max-height: calc(100% - 24px);
+  display: flex; flex-direction: column; background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-pop); overflow: hidden; font-size: 13px;
+}
+.rd-mhead { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 4px 14px; }
+.rd-mhead strong { font-size: 14px; }
+.rd-munits { display: flex; align-items: center; gap: 8px; padding: 2px 14px 8px; color: var(--muted); font-size: 12px; }
+.rd-munits select { flex: 1; min-width: 0; max-width: none; width: 100%; }
+.rd-mempty { margin: 0; padding: 4px 14px 14px; color: var(--muted); line-height: 1.45; }
+.rd-mlist { list-style: none; margin: 0; padding: 4px 6px; overflow: auto; border-top: 1px solid var(--border); flex: 1; min-height: 0; }
+.rd-mrow { display: grid; grid-template-columns: 22px 1fr auto 26px; align-items: center; gap: 8px; padding: 6px 6px 6px 8px; border-radius: var(--radius-sm); cursor: pointer; }
+.rd-mrow:hover, .rd-mrow.hot, .rd-mrow:focus-visible { background: var(--accent-soft); outline: none; }
+.rd-mkind svg { width: 18px; height: 18px; color: var(--accent); fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.rd-mval { font-weight: 600; font-variant-numeric: tabular-nums; display: flex; flex-direction: column; min-width: 0; }
+.rd-mval small { font-weight: 400; color: var(--muted); font-size: 11.5px; }
+.rd-mpage { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.rd-mdel { width: 26px; height: 26px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); display: grid; place-items: center; cursor: pointer; opacity: .55; }
+.rd-mdel svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.rd-mrow:hover .rd-mdel, .rd-mdel:focus-visible { opacity: 1; }
+.rd-mdel:hover { background: var(--surface-3, rgb(0 0 0 / .06)); color: var(--text); }
+.rd-mtotals { border-top: 1px solid var(--border); padding: 8px 14px; display: grid; gap: 4px; }
+.rd-mtotals div { display: flex; justify-content: space-between; gap: 10px; }
+.rd-mtotals b { font-variant-numeric: tabular-nums; }
+.rd-mtotals small { color: var(--muted); font-size: 11.5px; }
+.rd-mfoot { display: flex; gap: 4px; padding: 6px 8px 8px; border-top: 1px solid var(--border); }
+.rd-now { padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface-2); }
+.rd-scaleresult { margin-top: 10px; display: grid; gap: 6px; }
+.rd-scaleresult p { margin: 0; }
+.rd-radio { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; line-height: 1.35; }
+.rd-radio input { margin: 2px 0 0; accent-color: var(--accent); }
+.rd-scope { border: 0; padding: 0; margin: 12px 0 0; display: grid; gap: 6px; }
+.rd-scope legend { padding: 0; margin-bottom: 6px; font-weight: 600; }
+.rd-seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 999px; padding: 2px; gap: 2px; }
+.rd-segbtn { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 600; padding: 4px 12px; border-radius: 999px; cursor: pointer; }
+.rd-segbtn[aria-pressed="true"] { background: var(--accent); color: var(--accent-text, #fff); }
 
 .rd-cardbox { display: grid; place-items: center; min-height: 230px; max-width: 100%; overflow: auto; margin: 6px 0 10px;
   background: var(--surface-2); border-radius: var(--radius-sm); }
@@ -449,5 +509,5 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
 .rd-ruler i:first-child { margin-left: 0; } .rd-ruler i:last-of-type { margin-left: -2px; }
 .rd-ruler i b { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); font-size: 11px; font-weight: 600; color: var(--text); }
 .rd-ruler i:first-child b { left: 0; transform: none; padding-left: 3px; } .rd-ruler i:last-of-type b { left: auto; right: 0; transform: none; padding-right: 3px; }
-.rd-ruler span { position: absolute; left: 8px; top: 4px; font-size: 11px; color: var(--muted); }
+.rd-ruler span { position: absolute; top: calc(100% + 6px); right: 0; left: auto !important; font-size: 11px; color: var(--muted); white-space: nowrap; }
 .rd-cardbox { padding: 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 0; min-height: 0; }

@@ -1284,9 +1284,16 @@ out.lengths = ["12'-6\\"", "12' 6 1/2\\"", "150\\"", "12.5'", "3.5 m", "3500mm",
   const r = M.parseLength(t); return r && [Math.round(r.inches * 100) / 100, r.units]; });
 const fromDim = M.scaleFrom(144, M.parseLength("8'"));
 out.fromDim = [fromDim.ratio, fromDim.units, fromDim.label];
+// Units and rounding: the same 20' 4 5/16" line, and a 30 sq in (on paper) room at 1/4".
+const line = 72 * (244.3125 / 48);
+out.units = Object.fromEntries(M.UNITS.map(([u]) => [u, M.formatLength(line, quarter, u)]));
+out.areaUnits = ["auto", "ft", "in", "m"].map((u) => M.formatArea(72 * 72 * 30, quarter, u));
+out.total = M.formatInches(12 * 40, "auto", "ft");
+out.path = M.formatLength(M.pathLength([[216, 216], [216, 504], [648, 504], [648, 216]]), quarter);
+out.nearest = [M.nearestScale(47.8, "ft"), M.nearestScale(98, "m"), M.nearestScale(250, "ft")].map((n) => [n.scale.label, +n.off.toFixed(4)]);
 console.log(JSON.stringify(out));
 """
-    out = subprocess.run([node, "--input-type=module", "-e", script, module], capture_output=True, text=True, timeout=60)
+    out = subprocess.run([node, "--input-type=module", "-e", script, module], capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert out.returncode == 0, out.stderr
     got = json.loads(out.stdout)
     assert got["arch"] == ['1/4" = 1\'-0"', 48, "ft"]  # the one after "SCALE", not the detail's
@@ -1301,6 +1308,13 @@ console.log(JSON.stringify(out));
     assert got["area"] == "384.00 sq ft" and got["perimeter"] == "80' 0\""
     assert got["lengths"] == [[150, "ft"], [150.5, "ft"], [150, "ft"], [150, "ft"], [137.8, "m"], [137.8, "m"], [144, "ft"], None]
     assert got["fromDim"] == [48, "ft", 'Set from a dimension (1/4" = 1\'-0")']
+    assert got["units"] == {"auto": "20' 4 5/16\"", "ftin16": "20' 4 5/16\"", "ftin8": "20' 4 3/8\"", "ftin4": "20' 4 1/4\"",
+                            "ftin2": "20' 4 1/2\"", "ftin1": "20' 4\"", "ft": "20.36 ft", "in": "244 5/16\"",
+                            "m": "6.206 m", "mm": "6206 mm"}
+    assert got["areaUnits"] == ["480.00 sq ft", "480.00 sq ft", "69120.0 sq in", "44.593 m²"]
+    assert got["total"] == "40' 0\""
+    assert got["path"] == "56' 0\""  # three walls of the 24' x 16' room, open
+    assert got["nearest"] == [['1/4" = 1\'-0"', 0.0042], ["1:100", 0.02], ['1" = 20\'', 0.0417]]
 
 
 def test_snapping_to_the_drawing_js():
@@ -1352,9 +1366,16 @@ out.nan = S.fromOperatorList({ fnArray: [91], argsArray: [[20, path(0, 0, 0, 1, 
 const unindexed = new S.Geometry(S.segmentsFromOperatorList(ol, OPS), { index: false });
 out.beforeIndexed = unindexed.snap([650, 506], 8);
 out.badTol = g.snap([650, 506], 0) === null && g.snap([NaN, 1], 8) === null;
+// Everything there is to snap to near a corner, best first, each spot once (with all its lines).
+const c = g.candidates([217, 217], 8);
+out.cands = c.map((h) => [h.kind, Math.round(h.x), Math.round(h.y)]);
+out.spots = new Set(c.map((h) => `${h.x},${h.y}`)).size === c.length;
+out.cornerLines = c[0].segs.length;
+out.candsFirstIsSnap = r(g.snap([217, 217], 8))[1] === Math.round(c[0].x);
+out.seg = g.segment(0);
 console.log(JSON.stringify(out));
 """
-    out = subprocess.run([node, "--input-type=module", "-e", script, module], capture_output=True, text=True, timeout=60)
+    out = subprocess.run([node, "--input-type=module", "-e", script, module], capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert out.returncode == 0, out.stderr
     got = json.loads(out.stdout)
     assert got["count"] == 4 + 1 + 1 + 16 + 1  # the curve becomes 16 pieces
@@ -1373,3 +1394,8 @@ console.log(JSON.stringify(out));
     assert got["unknownOps"] == 0 and got["noList"] == 0
     assert got["nan"] == 1  # the segment with a NaN end is left out, the good one kept
     assert got["beforeIndexed"] is None and got["badTol"] is True
+    assert got["cands"][0] == ["end", 216, 216] and got["candsFirstIsSnap"] is True
+    assert got["cornerLines"] == 3  # the rectangle's two sides and the curve meet there
+    assert got["spots"] is True and len(got["cands"]) >= 3
+    assert ["on", 217, 216] in got["cands"] and ["on", 216, 217] in got["cands"]
+    assert got["seg"] == [216, 216, 648, 216]
