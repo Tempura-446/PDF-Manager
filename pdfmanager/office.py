@@ -469,7 +469,6 @@ def _wrap(line, font, size, room):
 def text_to_pdf(path, output):
     """Plain text to PDF (A4, 10 pt monospace), no other program needed."""
     from reportlab.lib.pagesizes import A4
-    from reportlab.pdfgen import canvas
 
     raw = Path(path).read_bytes()
     encodings = ("utf-16",) if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else ()
@@ -479,7 +478,7 @@ def text_to_pdf(path, output):
             break
         except UnicodeDecodeError:
             continue
-    c = canvas.Canvas(str(output), pagesize=A4)
+    c = core.pdf_canvas(str(output), pagesize=A4)
     c.setTitle(Path(path).stem)
     width, height = A4
     margin, size = 56, 10

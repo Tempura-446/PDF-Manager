@@ -20,12 +20,17 @@ from pdfmanager import core, progress
 # Fraction of dark pixels below which a page counts as blank.
 BLANK_THRESHOLDS = {"low": 0.000005, "medium": 0.001, "high": 0.004}
 DARK = 150         # 0-255; lighter pixels (paper, bleed-through, dust) don't count
+# Pages that look blank are checked again, closer: at 40 dpi the thin strokes
+# of small or faded text blur to light grey, and light pencil is lighter than
+# DARK. Show-through from the other side of the paper stays lighter than this.
+CHECK_DPI, CHECK_DARK = 100, 170
 BORDER = 0.04      # ignore this fraction of the page on each side
 MIN_CONFIDENCE = 2.0  # Tesseract orientation confidence needed to rotate
 
 
-def ink_coverage(path, password=None, dpi=40):
-    """Fraction of dark pixels on each page (0.0 for an empty page)."""
+def ink_coverage(path, password=None, dpi=40, pages=None, dark=DARK):
+    """Fraction of pixels darker than ``dark`` on each page (0.0 for an
+    empty page), or on the pages with the 0-based indices in ``pages``."""
     import pypdfium2 as pdfium
 
     coverage = []
@@ -33,15 +38,18 @@ def ink_coverage(path, password=None, dpi=40):
         doc = pdfium.PdfDocument(str(path), password=password)
         doc.init_forms()  # filled-in fields count as ink too
         try:
-            for number, page in enumerate(doc):
-                progress.report(number, len(doc), "page")
+            indices = range(len(doc)) if pages is None else list(pages)
+            for number, index in enumerate(indices):
+                progress.report(number, len(indices), "page")
+                page = doc[index]
                 image = page.render(scale=dpi / 72, may_draw_forms=True).to_pil().convert("L")
+                page.close()
                 w, h = image.size
                 bx, by = int(w * BORDER), int(h * BORDER)
                 image = image.crop((bx, by, max(bx + 1, w - bx), max(by + 1, h - by)))
                 hist = image.histogram()
                 total = sum(hist) or 1
-                coverage.append(sum(hist[:DARK]) / total)
+                coverage.append(sum(hist[:dark]) / total)
         finally:
             doc.close()
     return coverage
@@ -56,7 +64,11 @@ def find_blank_pages(path, password=None, sensitivity="medium"):
     except KeyError:
         raise core.PdfManagerError(f"sensitivity must be one of {', '.join(BLANK_THRESHOLDS)}") \
             from None
-    return [i for i, ink in enumerate(ink_coverage(path, password)) if ink < threshold]
+    maybe = [i for i, ink in enumerate(ink_coverage(path, password)) if ink < threshold]
+    if not maybe:
+        return []
+    closer = ink_coverage(path, password, dpi=CHECK_DPI, pages=maybe, dark=CHECK_DARK)
+    return [i for i, ink in zip(maybe, closer) if ink < threshold]
 
 
 def find_tesseract():

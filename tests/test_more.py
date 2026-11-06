@@ -1415,3 +1415,98 @@ def test_printing_puts_each_page_on_one_sheet():
     assert "max-width: 100%; max-height: 100%" in rules and "object-fit: contain" in rules
     assert "break-after: page" not in rules
     assert 'el("div", { class: "rd-print-page" }, el("img"' in js
+
+
+# -- 0.8.2: faster writing and reading of pictures, safer blank pages ------------
+
+def test_faded_or_pencil_text_is_not_a_blank_page(tmp_path):
+    """At the quick 40 dpi look, small faded text blurs to light grey; pages
+    that look blank are checked again closer before they are removed.
+    Show-through from the other side of the paper still counts as blank."""
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+    from pdfmanager import scan
+
+    def page(fill, mirrored=False):
+        im = Image.new("L", (1240, 1754), 245)
+        draw, font = ImageDraw.Draw(im), ImageFont.load_default(30)
+        for k in range(30):
+            draw.text((80, 100 + k * 50), "The quick brown fox jumps over the lazy dog.", fill=fill, font=font)
+        return im.transpose(Image.FLIP_LEFT_RIGHT).filter(ImageFilter.GaussianBlur(1.5)) if mirrored else im
+
+    pictures = [page(195, mirrored=True), page(150), page(120), Image.new("L", (1240, 1754), 240)]
+    for k, im in enumerate(pictures):
+        im.save(tmp_path / f"p{k}.png")
+    src = core.images_to_pdf([tmp_path / f"p{k}.png" for k in range(4)], tmp_path / "scan.pdf")
+    for sensitivity in ("low", "medium", "high"):
+        assert scan.find_blank_pages(src, sensitivity=sensitivity) == [0, 3]
+    # Faded print in small type, drawn as text.
+    c = canvas.Canvas(str(tmp_path / "faded.pdf"), pagesize=A4)
+    c.setFillGray(0.45)
+    c.setFont("Helvetica", 10)
+    for i in range(45):
+        c.drawString(60, 780 - i * 13, "The quick brown fox jumps over the lazy dog, 1234567890.")
+    c.showPage()
+    c.save()
+    assert scan.find_blank_pages(tmp_path / "faded.pdf", sensitivity="low") == []
+
+
+def test_jpeg_photos_go_into_the_pdf_as_they_are(tmp_path):
+    from PIL import Image
+
+    photo = Image.new("RGB", (400, 300), (240, 240, 240))
+    photo.paste((220, 20, 20), (0, 0, 120, 90))  # red at the top left when upright
+    for orientation, stored in ((1, photo), (3, photo.rotate(180)), (6, photo.rotate(90, expand=True)),
+                                (8, photo.rotate(-90, expand=True))):
+        exif = Image.Exif()
+        exif[0x0112] = orientation
+        stored.save(tmp_path / f"o{orientation}.jpg", quality=95, exif=exif, dpi=(72, 72))
+        out = core.images_to_pdf([tmp_path / f"o{orientation}.jpg"], tmp_path / f"o{orientation}.pdf")
+        page = PdfReader(out).pages[0]
+        assert [round(float(v)) for v in page.mediabox[2:]] == [400, 300]
+        images = page["/Resources"]["/XObject"]
+        assert [images[k].get_object()["/Filter"] for k in images] == [["/DCTDecode"]]
+        assert (tmp_path / f"o{orientation}.pdf").stat().st_size < (tmp_path / f"o{orientation}.jpg").stat().st_size + 3000
+        import pypdfium2 as pdfium
+
+        doc = pdfium.PdfDocument(str(out))
+        shown = doc[0].render(scale=1).to_pil().convert("RGB")
+        doc.close()
+        assert shown.getpixel((40, 30))[0] > 180 and shown.getpixel((40, 30))[1] < 80, orientation
+        assert shown.getpixel((360, 270)) > (200, 200, 200), orientation
+
+
+def test_written_pictures_are_binary_and_ascii85_reads_fast(tmp_path):
+    """ZPDF's own pages (redacted, compared, from pictures) are not wrapped
+    in ASCII85; files that are still read correctly through pypdf."""
+    import base64
+
+    from pypdf.filters import ASCII85Decode
+    from reportlab import rl_config
+
+    from pdfmanager import redact
+
+    src = text_pdf(tmp_path / "doc.pdf", ["Call 555-1234 today"])
+    assert redact.redact(src, tmp_path / "red.pdf", terms=["555-1234"]) == {1: 1}
+    assert b"/ASCII85Decode" not in (tmp_path / "red.pdf").read_bytes()
+    raw = bytes(range(256)) * 50 + b"\0" * 40 + b"end"
+    assert ASCII85Decode.decode(base64.a85encode(raw, adobe=True, wrapcol=75)) == raw
+    assert ASCII85Decode.decode(base64.a85encode(raw).decode() + "~>") == raw
+    # A picture written the old way still comes out the same.
+    from PIL import Image
+
+    Image.new("RGB", (64, 48), (10, 120, 220)).save(tmp_path / "pic.png")
+    old = rl_config.useA85
+    rl_config.useA85 = 1
+    try:
+        c = canvas.Canvas(str(tmp_path / "a85.pdf"))
+        c.drawImage(str(tmp_path / "pic.png"), 0, 0, 64, 48)
+        c.showPage()
+        c.save()
+    finally:
+        rl_config.useA85 = old
+    assert b"/ASCII85Decode" in (tmp_path / "a85.pdf").read_bytes()
+    saved = core.extract_media(tmp_path / "a85.pdf", tmp_path / "media")
+    assert len(saved["images"]) == 1
+    with Image.open(saved["images"][0]) as im:
+        assert im.convert("RGB").getpixel((5, 5)) == (10, 120, 220)
