@@ -150,11 +150,35 @@ def _crop_margins(values):
 
 
 def run_crop(a, src, out, pw):
-    return core.crop(src, out, _crop_margins(a.margins), a.pages, pw)
+    if a.auto == bool(a.margins):
+        raise core.PdfManagerError("give the margins to trim (-m) or --auto, not both")
+    if not a.auto:
+        return core.crop(src, out, _crop_margins(a.margins), a.pages, pw)
+    report = core.trim_margins(src, out, padding=a.padding * core.POINTS_PER_MM,
+                               same=a.same, pages=a.pages, password=pw)
+    blank = report["blank"]
+    if blank:
+        pages = ", ".join(map(str, blank))
+        return f"{out}  (page{'s' if len(blank) > 1 else ''} {pages} " \
+               f"{'are' if len(blank) > 1 else 'is'} blank and {'were' if len(blank) > 1 else 'was'} left as is)"
+    return out
 
 
 def run_nup(a, src, out, pw):
     return core.n_up(src, out, a.per_sheet, a.size, pw)
+
+
+def run_insert_blank(a, src, out, pw):
+    if not a.after and not a.at_start:
+        raise core.PdfManagerError("say where the blank pages go: --after PAGES and/or --at-start")
+    return core.insert_blank_pages(src, out, a.after, a.count, at_start=a.at_start, password=pw)
+
+
+def run_booklet(a, src, out, pw):
+    result = core.booklet(src, out, a.size, pw)
+    sheets = len(PdfReader(str(result)).pages) // 2
+    return (f"{result}  ({sheets} sheet{'s' if sheets != 1 else ''}: print on both sides, "
+            "flipping on the short edge, then fold in the middle)")
 
 
 def run_compress(a, src, out, pw):
@@ -355,7 +379,12 @@ def run_text(a, src, out, pw):
 
 
 def run_split(a, src, out, pw):
-    files = core.split(src, out, every=a.every, ranges=a.ranges, prefix=a.prefix, password=pw)
+    notes = []
+    files = core.split(src, out, every=a.every, ranges=a.ranges, prefix=a.prefix, password=pw,
+                       bookmarks=a.level if a.bookmarks else None,
+                       max_size=int(a.max_size * 1_000_000) if a.max_size else None, notes=notes)
+    for note in notes:
+        print(f"note: {src}: {note}")
     for f in files if pw else ():
         _reencrypt(f, pw)
     return f"{len(files)} file(s) in {out}"
@@ -399,7 +428,8 @@ OUTPUTS = {
     "extract": ("extract", "pdf"), "delete": ("edited", "pdf"),
     "reorder": ("reordered", "pdf"), "reverse": ("reversed", "pdf"),
     "rotate": ("rotated", "pdf"), "resize": ("resized", "pdf"), "crop": ("cropped", "pdf"),
-    "nup": ("nup", "pdf"), "compress": ("compressed", "pdf"), "color": ("color", "pdf"),
+    "nup": ("nup", "pdf"), "insert-blank": ("blanks", "pdf"), "booklet": ("booklet", "pdf"),
+    "compress": ("compressed", "pdf"), "color": ("color", "pdf"),
     "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
     "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
     "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "headers": ("headers", "pdf"), "form": ("form", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
@@ -797,7 +827,17 @@ def build_parser():
     g.add_argument("-n", "--every", type=int, help="pages per output file (default: 1)")
     g.add_argument("-r", "--ranges", nargs="+", metavar="RANGE",
                    help="one output file per range, e.g. -r 1-3 4-10 11-")
-    sp.add_argument("--prefix", help="output filename prefix (default: input name)")
+    g.add_argument("-b", "--bookmarks", action="store_true",
+                   help="one file per bookmark (chapter), named after it; pages before the "
+                        "first bookmark get a file of their own")
+    g.add_argument("--max-size", type=_positive(float), metavar="MB",
+                   help="files of at most this many MB (1 MB = 1,000,000 bytes), as many "
+                        "pages in each as fit")
+    sp.add_argument("--level", type=int, choices=[1, 2], default=1,
+                    help="with --bookmarks: 1 = top-level bookmarks only (default), "
+                         "2 = also the ones under them")
+    sp.add_argument("--prefix", help="output filename prefix (default: input name; with "
+                                     "--bookmarks: none)")
 
     sp = per_file("extract", run_extract, "copy selected pages into a new PDF")
     sp.add_argument("-p", "--pages", required=True, help=PAGES_HELP)
@@ -834,14 +874,37 @@ def build_parser():
                     help="don't rotate the target size to match landscape pages")
     sp.add_argument("-p", "--pages", help=PAGES_HELP + " (default: all)")
 
-    sp = per_file("crop", run_crop, "trim page margins")
-    sp.add_argument("-m", "--margins", nargs="+", required=True, metavar="MM", type=float,
+    sp = per_file("crop", run_crop, "trim page margins, or the white margins (--auto)")
+    sp.add_argument("-m", "--margins", nargs="+", metavar="MM", type=float,
                     help="margins in mm: ALL | VERTICAL HORIZONTAL | TOP RIGHT BOTTOM LEFT")
+    sp.add_argument("--auto", action="store_true",
+                    help="trim the white margins around the content of each page instead "
+                         "(blank pages are left as they are)")
+    sp.add_argument("--padding", type=float, default=3.5, metavar="MM",
+                    help="with --auto: space to keep around the content (default: 3.5 mm)")
+    sp.add_argument("--same", action="store_true",
+                    help="with --auto: crop every page the same, enough for all their content")
     sp.add_argument("-p", "--pages", help=PAGES_HELP + " (default: all)")
 
     sp = per_file("nup", run_nup, "print several pages per sheet")
     sp.add_argument("-n", "--per-sheet", type=int, default=2, choices=[2, 4, 6, 8, 9])
     sp.add_argument("-s", "--size", default="a4", help="sheet size (default: a4)")
+
+    sp = per_file("booklet", run_booklet,
+                  "arrange pages to print a booklet: double-sided, flip on the short edge, "
+                  "fold in the middle")
+    sp.add_argument("-s", "--size",
+                    help="sheet size, e.g. a4 or letter, used landscape with two pages side by "
+                         "side (default: twice the page size)")
+
+    sp = per_file("insert-blank", run_insert_blank,
+                  "insert blank pages (e.g. a page for notes after every page)")
+    sp.add_argument("--after", metavar="PAGES",
+                    help="pages to put blank pages after, e.g. 3,7 · end · all (after every "
+                         "page) · 0 (before the first page)")
+    sp.add_argument("--at-start", action="store_true", help="also put blank pages before page 1")
+    sp.add_argument("-c", "--count", type=_positive(int), default=1,
+                    help="blank pages at each place (default: 1)")
 
     sp = per_file("compress", run_compress, "reduce file size")
     sp.add_argument("-l", "--level", default="medium",

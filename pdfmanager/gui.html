@@ -408,6 +408,12 @@ select.re-name { width: auto; }
 .page-board[data-effect="remove"] .pb-tile.picked .pb-label { color: var(--err); text-decoration: line-through; }
 .page-board[data-effect="remove"] .pb-tile.picked .pb-thumb img { opacity: .35; filter: grayscale(1); }
 .page-board.pb-warn .pb-status { color: var(--err); }
+/* insert blank pages: a blank sheet after each picked page */
+.page-board[data-effect="insert"] .pb-tile.picked::after {
+  content: "+"; position: absolute; right: -13px; top: 50%; transform: translateY(-50%); z-index: 2;
+  width: 18px; height: 26px; display: grid; place-items: center; font-size: 13px; font-weight: 700;
+  border: 1.5px dashed var(--accent); border-radius: 3px; background: var(--surface); color: var(--accent);
+}
 /* rotate: picked pages are shown turned */
 .pb-thumb img { transition: transform var(--t) var(--ease); }
 .pb-tile.turned .pb-thumb img { transform: rotate(var(--pb-turn, 90deg)) scale(var(--pb-fit, .8)); }
@@ -837,6 +843,9 @@ const ICONS = {
   rotate: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
   resize: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
   crop: '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>',
+  "insert-blank": '<path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7"/><path d="M13 3l4 4v4"/><path d="M18 14v7M14.5 17.5h7"/>',
+  booklet: '<path d="M12 6.5C10 5 7 4.5 3 4.5v13c4 0 7 .5 9 2 2-1.5 5-2 9-2v-13c-4 0-7 .5-9 2z"/><path d="M12 6.5v13"/>',
+  autocrop: '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/><path d="M10 10h4v4h-4z" stroke-dasharray="2 2"/>',
   nup: '<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/>',
   compress: '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
   color: '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/>',
@@ -1340,6 +1349,7 @@ const TAGLINES = {
   reader: "Read, annotate and sign PDFs", merge: "Combine several PDFs into one", split: "Break a PDF into separate files",
   interleave: "Weave scanned fronts and backs together", compare: "See what changed between two versions",
   extract: "Pull out just the pages you need", delete: "Take pages out", reorder: "Drag pages into a new order",
+  "insert-blank": "Add empty pages, e.g. for notes", booklet: "Print a folded, stapled booklet", autocrop: "Cut away white borders automatically",
   reverse: "Flip the page order", bookmarks: "Add and edit the outline in the sidebar", rotate: "Turn pages the right way up",
   resize: "Change the paper size or scale pages", crop: "Trim the margins", nup: "Several pages on one sheet",
   compress: "Make files smaller", color: "Grayscale, RGB or CMYK", ocr: "Make scans searchable",
@@ -1437,6 +1447,7 @@ const BOARD_TEXT = {
   rotate: ["Click the pages to rotate", "The previews show the result. Shift+click selects a range; with no page selected, every page is rotated."],
   reverse: ["Preview of the result", ""],
   split: ["Click a page to start a new file there", "Each colour band becomes one file. With the keyboard: arrow keys, then Space."],
+  insert: ["Click the pages to put a blank page after", "Shift+click selects a range; All puts a blank page after every page (for notes). With the keyboard: arrow keys, then Space."],
 };
 const boardField = () => current && current.board && current.board.field ? $("f-" + current.board.field) : null;
 function boardChanged(pages) {
@@ -1446,6 +1457,28 @@ function boardChanged(pages) {
   // Pages clicked to split at: the split is now "at the pages I choose".
   const how = current.board.how && $("f-" + current.board.how);
   if (how && how.value !== "ranges") { how.value = "ranges"; updateVisibility(); }
+}
+// Split at bookmarks: show where each file starts (the bookmarks are read
+// from the file once); by size, the files are only known when it runs.
+const outlines = new WeakMap();  // File -> its bookmarks
+async function showSplitBy(how) {
+  const spec = current.board, file = board.file;
+  if (how === "size") { board.setSplits([]); $("pages-hint").textContent = "The files are worked out when you click Run: each gets as many pages as fit in the size you choose."; return; }
+  $("pages-hint").textContent = BOARD_TEXT.split[1];
+  let list = outlines.get(file);
+  if (!list) {
+    try {
+      const body = new FormData();
+      body.append("file", file, file.name);
+      body.append("password", $("pw").value);
+      body.append("detect", "");
+      list = (await (await api("/api/outline", { method: "POST", body })).json()).items || [];
+      outlines.set(file, list);
+    } catch (e) { list = []; }
+  }
+  if (board.file !== file || current.board !== spec || $("f-" + spec.how)?.value !== "bookmarks") return;
+  const level = Number($("f-level")?.value) || 1;
+  board.setSplits([...new Set(list.filter((b) => b.level < level).map((b) => b.page - 1))].sort((a, b) => a - b));
 }
 // Split: pages that start a new file (0-based) <-> "1-3 4-7 8-12".
 function splitsToRanges(starts, total) {
@@ -1487,6 +1520,8 @@ async function syncBoard() {
   const f = boardField();
   if (!f) return;
   if (spec.mode === "split") {
+    const how = spec.how && $("f-" + spec.how)?.value;
+    if (how === "bookmarks" || how === "size") { await showSplitBy(how); return; }
     const every = Number($("f-" + spec.every)?.value) || 1;
     const byRanges = !spec.how || $("f-" + spec.how)?.value === "ranges";
     const typed = byRanges ? rangesToSplits(f.value, board.total) : null;
@@ -1504,6 +1539,13 @@ $("form").addEventListener("input", (e) => {
   const spec = current && current.board;
   if (!spec || !board || !board.doc || !boardLib || board.tool !== current.id) return;
   if (spec.degrees && e.target.id === "f-" + spec.degrees) board.setRotation(e.target.value);
+  if (spec.how && (e.target.id === "f-" + spec.how || e.target.id === "f-level")) {
+    const how = $("f-" + spec.how).value;
+    if (how === "bookmarks" || how === "size") { showSplitBy(how); return; }
+    $("pages-hint").textContent = BOARD_TEXT.split[1];
+    // From the bookmarks to "at the pages I choose": start from where they split.
+    if (how === "ranges" && e.target.id === "f-" + spec.how) { boardField().value = splitsToRanges(board.splits, board.total); return; }
+  }
   if (spec.how && e.target.id === "f-" + spec.how && e.target.value === "every") {
     const every = Math.max(1, Number($("f-" + spec.every).value) || 1);  // back to every few pages
     board.setSplits([...Array(board.total).keys()].filter((p) => p > 0 && p % every === 0));
