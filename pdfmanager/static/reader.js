@@ -15,6 +15,7 @@
 import { BASE, DOC_OPTIONS, destroyTask, loadPdfjs as loadLibrary, openDocument } from "./pdfjs.js";
 import * as files from "./files.js";
 import * as measure from "./measure.js";
+import { Overlay } from "./overlay.js";
 let snap = null;  // snapping to a drawing's lines (snap.js); the reader works without it
 const snapReady = import("./snap.js").then((m) => { snap = m; }, () => {});
 
@@ -76,6 +77,7 @@ const ICON = {
   area: '<path d="M4 7 11 3l9 5-2.5 11L6 20z"/><circle cx="4" cy="7" r="1.2"/><circle cx="11" cy="3" r="1.2"/><circle cx="20" cy="8" r="1.2"/>',
   screen: '<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
   note: '<path d="M4 5h16v11H10l-4 4v-4H4z"/><path d="M8 9h8M8 12h5"/>',
+  layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
   rect: '<rect x="4" y="6" width="16" height="12" rx="1"/><circle cx="4" cy="6" r="1.4"/><circle cx="20" cy="18" r="1.4"/>',
   cutout: '<rect x="3" y="4" width="18" height="16" rx="1"/><rect x="9" y="9" width="7" height="6" stroke-dasharray="2 2"/>',
   count: '<circle cx="7" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="12" cy="17" r="3"/>',
@@ -323,7 +325,29 @@ export class Reader {
     this.menu = el("div", { class: "rd-menu", role: "menu", hidden: true });
     this.ctxMenu = el("div", { class: "rd-menu rd-ctxmenu", role: "menu", hidden: true, "aria-label": "Page" });
     this.tabbar = el("div", { class: "rd-tabbar", role: "tablist", "aria-label": "Open documents", hidden: true });
-    this.root.append(toolbar, this.tray, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.fileInput);
+    // Comparing with another revision of the drawing
+    this.overlayName = el("b", {});
+    this.overlayMode = el("select", { class: "rd-zoom", "aria-label": "Show" },
+      el("option", { value: "both" }, "Both, changes in colour"), el("option", { value: "changes" }, "Changes only"),
+      el("option", { value: "this" }, "This version only"), el("option", { value: "other" }, "The other version only"));
+    this.overlayOffset = el("input", { type: "number", class: "rd-overlay-offset", value: "0", step: "1", "aria-label": "Page offset",
+      title: "When the other version has its sheets in other places: its page = this page plus this number" });
+    const overlayClose = el("button", { class: "rd-btn", type: "button", title: "Stop comparing", "aria-label": "Stop comparing", html: svg("x") });
+    this.overlaybar = el("div", { class: "rd-findbar rd-overlaybar", hidden: true, role: "toolbar", "aria-label": "Compare revisions" },
+      el("span", { class: "rd-overlay-title" }, "Comparing with ", this.overlayName),
+      el("span", { class: "rd-legend" }, el("i", { class: "other" }), "only in that one"),
+      el("span", { class: "rd-legend" }, el("i", { class: "this" }), "only in this one"),
+      el("span", { class: "rd-sep" }), el("label", {}, "Show", this.overlayMode),
+      el("label", {}, "Its page = this page +", this.overlayOffset),
+      el("span", { style: "flex:1" }), overlayClose);
+    this.overlayMode.addEventListener("change", () => { if (this.overlay) { this.overlay.mode = this.overlayMode.value; this.#drawOverlays(); } });
+    this.overlayOffset.addEventListener("change", () => {
+      if (!this.overlay) return;
+      this.overlay.offset = Math.round(Number(this.overlayOffset.value) || 0);
+      this.#drawOverlays();
+    });
+    overlayClose.addEventListener("click", () => this.closeCompare());
+    this.root.append(toolbar, this.tray, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.overlaybar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.fileInput);
     // A drawing in progress takes every click in the window as the next
     // stroke; end it first when the tabs, toolbar or menu are used. This
     // listens on the window before pdf.js does, so it runs first.
@@ -359,6 +383,7 @@ export class Reader {
       this.#menuItem("print", "Print…", () => this.print()),
       ...(this.activeTab?.fileId ? [this.#menuItem("save", "Save", () => this.save())] : []),
       this.#menuItem("save", this.activeTab?.fileId ? "Save as…" : this.#edited() ? "Save a copy with your changes…" : "Save a copy…", () => this.saveCopy()),
+      this.#menuItem("layers", this.overlay ? "Stop comparing revisions" : "Compare with another revision…", () => (this.overlay ? this.closeCompare() : this.compareRevision())),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
       this.#menuItem("x", "Close this document", () => this.closeTab()),
     ];
@@ -986,7 +1011,10 @@ export class Reader {
     });
     eventBus.on("pagechanging", ({ pageNumber }) => { this.#updatePage(); this.#remember(); this.#refreshScale(); if (this.measureMode) this.#geometry(pageNumber); });
     eventBus.on("pagesloaded", () => this.#refreshScale());
-    eventBus.on("pagerendered", ({ pageNumber }) => this.#drawMeasures(pageNumber));
+    eventBus.on("pagerendered", ({ pageNumber }) => {
+      this.#drawMeasures(pageNumber);
+      if (this.overlay) this.overlay.draw(this.pdfViewer.getPageView(pageNumber - 1), pageNumber).catch(() => {});
+    });
     eventBus.on("scalechanging", ({ scale, presetValue }) => {
       const value = presetValue || String(scale);
       const preset = ZOOM_PRESETS.find(([v]) => v === value || (!presetValue && Math.abs(parseFloat(v) - scale) < 0.001));
@@ -1004,6 +1032,7 @@ export class Reader {
 
   async #closeDocument() {
     this.closeFind();
+    await this.closeCompare();
     this.closeAnnotate();
     this.measureTool(null);
     this.uiManager = null;
@@ -1696,6 +1725,71 @@ export class Reader {
       view.div.append(flash);
       setTimeout(() => flash.remove(), 1600);
     }, 150);
+  }
+
+  // ---- comparing revisions (overlay.js) -------------------------------------------
+  /** Draw another version of this document over it: what changed shows in red
+   *  (only in that version) and blue (only in this one). */
+  async compareRevision() {
+    if (!this.doc) return;
+    const others = this.tabs.filter((t) => t !== this.activeTab);
+    const answer = await this.#dialog("Compare with another revision", [el("p", {},
+      "The other version is drawn over this one, page by page: what both have is black, what's only in that version red, "
+      + "and what's only in this one blue. Pick the other version:")],
+      [...others.map((t) => ["tab:" + t.id, t.name]), ["file", "Choose a file…"], ["cancel", "Cancel"]]);
+    let source = null, name = "", password = null;
+    if (answer.startsWith("tab:")) {
+      const tab = others.find((t) => "tab:" + t.id === answer);
+      if (!tab) return;
+      source = tab.bytes ? { data: tab.bytes.slice() } : { url: tab.url, httpHeaders: { "X-Pdfm-Token": this.token }, length: tab.size || undefined,
+        rangeChunkSize: 1 << 20, disableAutoFetch: true, disableStream: true };
+      name = tab.name;
+      password = tab.password;
+    } else if (answer === "file") {
+      const file = await this.#pickPdf();
+      if (!file) return;
+      source = { data: new Uint8Array(await file.arrayBuffer()) };
+      name = file.name;
+    } else return;
+    this.#busy(true);
+    try {
+      await this.closeCompare();
+      const overlay = new Overlay(openDocument, destroyTask, DOC_OPTIONS);
+      await overlay.open(source, password, (wrong) => this.#askPassword(wrong));
+      this.overlay = overlay;
+      overlay.mode = this.overlayMode.value;
+      this.overlayOffset.value = "0";
+      this.overlayName.textContent = name;
+      this.overlaybar.hidden = false;
+      await this.#drawOverlays();
+      if (overlay.doc.numPages !== this.doc.numPages) {
+        this.toast(`That version has ${overlay.doc.numPages} pages, this one ${this.doc.numPages}: if sheets moved, set its page number offset in the bar.`, 7000);
+      }
+    } catch (e) {
+      this.toast("Could not open the other version: " + (e.message || e));
+    } finally {
+      this.#busy(false);
+    }
+  }
+
+  async closeCompare() {
+    const overlay = this.overlay;
+    if (!overlay) return;
+    this.overlay = null;
+    this.overlaybar.hidden = true;
+    for (let i = 0; i < (this.pdfViewer?.pagesCount || 0); i++) overlay.clear(this.pdfViewer.getPageView(i));
+    await overlay.close();
+  }
+
+  /** Draw the comparison on the pages drawn so far. */
+  async #drawOverlays() {
+    const overlay = this.overlay;
+    if (!overlay || !this.pdfViewer) return;
+    for (let i = 0; i < this.pdfViewer.pagesCount; i++) {
+      const view = this.pdfViewer.getPageView(i);
+      if (view?.canvas?.width) await overlay.draw(view, i + 1).catch(() => {});
+      if (this.overlay !== overlay) return;
+    }
   }
 
   /** Draw, type or pick a signature, then place it on the current page. */
@@ -2753,13 +2847,16 @@ export class Reader {
     this.measPanel = el("aside", { class: "rd-measpanel", hidden: true, "aria-label": "Measurements" });
     this.calibrateBtn = el("button", { class: "rd-btn", type: "button", title: "Calibrate the screen: match the app to it, so true paper size really is",
       "aria-label": "Calibrate the screen", html: svg("screen") });
+    this.compareBtn = el("button", { class: "rd-btn", type: "button", title: "Compare with another revision of the drawing: changes show in red and blue",
+      "aria-label": "Compare with another revision", html: svg("layers") });
+    this.compareBtn.addEventListener("click", () => (this.overlay ? this.closeCompare() : this.compareRevision()));
     const close = el("button", { class: "rd-btn", type: "button", title: "Close the scale bar", "aria-label": "Close the scale bar", html: svg("x") });
     this.scalebar = el("div", { class: "rd-findbar rd-scalebar", hidden: true, role: "toolbar", "aria-label": "Scale and measuring" },
       el("label", {}, "Sheet scale", this.sheetScaleSelect), this.fromDimensionBtn, el("span", { class: "rd-sep" }),
       el("label", {}, "Zoom to scale", this.viewAtSelect), el("span", { class: "rd-sep" }),
       this.distanceBtn, this.pathBtn, this.areaBtn, this.rectBtn, this.cutoutBtn, this.countBtn, this.angleBtn, this.straightBtn,
       el("span", { class: "rd-sep" }), this.listBtn, this.clearMeasuresBtn,
-      el("span", { style: "flex:1" }), this.calibrateBtn, close);
+      el("span", { style: "flex:1" }), this.compareBtn, this.calibrateBtn, close);
     this.sheetScaleSelect.addEventListener("change", () => this.#pickSheetScale(this.sheetScaleSelect.value));
     this.fromDimensionBtn.addEventListener("click", () => this.measureTool(this.measureMode === "calibrate" ? null : "calibrate"));
     this.viewAtSelect.addEventListener("change", () => { if (this.viewAtSelect.value) this.#viewAt(this.viewAtSelect.value); });
@@ -4150,6 +4247,8 @@ export class Reader {
       { icon: "cutout", label: "Cut an opening out of an area", words: "subtract hole stair shaft column deduct takeoff", run: () => this.measureTool("cutout") },
       { icon: "count", label: "Count things", words: "outlets doors fixtures windows tally takeoff", run: () => this.measureTool("count") },
       { icon: "angle", label: "Measure an angle", words: "degrees corner slope", run: () => this.measureTool("angle") },
+      { icon: "layers", label: this.overlay ? "Stop comparing revisions" : "Compare with another revision", words: "overlay difference drawing changes old new version",
+        run: () => (this.overlay ? this.closeCompare() : this.compareRevision()) },
       { icon: "csv", label: "Save the measurements as CSV", words: "excel spreadsheet export takeoff", run: () => this.#exportMeasures() },
       { icon: "pdfin", label: "Put the measurements in the PDF", words: "annotations save keep markup", run: () => this.#measuresIntoPdf() },
       { icon: "path", label: "Measure a run of lines (path)", words: "polyline walls total length baseboard blueprint", run: () => this.measureTool("path") },
