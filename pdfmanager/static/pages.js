@@ -693,6 +693,7 @@ export class PageBoard {
       remove: n === total ? `All pages selected — at least one page has to stay`
         : n ? `${pages(n)} will be deleted · ${pages(total - n)} left` : `Click the pages to delete`,
       rotate: n ? `${pages(n)} of ${total} will be rotated` : `No pages selected — all ${total} will be rotated`,
+      insert: n === total ? `A blank page after every page` : n ? `Blank pages after ${pages(n)}` : `Click the pages to put a blank page after`,
     }[this.effect] || `${pages(n)} selected`;
     this.root.classList.toggle("pb-warn", this.effect === "remove" && n === total);
     this.message.hidden = true;

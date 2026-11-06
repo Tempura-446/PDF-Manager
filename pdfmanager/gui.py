@@ -70,12 +70,23 @@ OPERATIONS = [
              "previews where each new file should start.",
      "board": {"mode": "split", "field": "ranges", "every": "every", "how": "by"},
      "fields": [_f("by", "Split", "select", "every",
-                   choices=[["every", "Every few pages"], ["ranges", "At the pages I choose"]]),
+                   choices=[["every", "Every few pages"], ["ranges", "At the pages I choose"],
+                            ["bookmarks", "At each bookmark (chapter)"],
+                            ["size", "Into files no larger than…"]]),
                 _f("every", "Pages per file", "number", 1, min=1, show_if={"by": "every"}),
                 _f("ranges", "Page ranges, one file each", "text", "", show_if={"by": "ranges"},
                    placeholder="1-3, 4-10, 11-",
                    hint="Separate ranges with spaces or ;. With one PDF, clicking the page "
-                        "previews fills this in.")]},
+                        "previews fills this in."),
+                _f("level", "Bookmarks to split at", "select", "1", show_if={"by": "bookmarks"},
+                   choices=[["1", "Main bookmarks only"],
+                            ["2", "Also the bookmarks one level below"]],
+                   hint="Each file is named after its bookmark. Pages before the first "
+                        "bookmark get a file of their own."),
+                _f("max_mb", "Largest file size (MB)", "number", 10, min=0.01, step=0.5,
+                   show_if={"by": "size"},
+                   hint="Handy for email attachments. Each file gets as many pages as fit; a "
+                        "single page larger than this gets a file of its own.")]},
     {"id": "interleave", "group": "Combine", "label": "Interleave scans", "files": "pdf2",
      "help": "Combine separately scanned front sides (first file) and back sides "
              "(second file).",
@@ -100,6 +111,14 @@ OPERATIONS = [
      "board": {"mode": "order", "field": "order"},
      "fields": [_f("order", "New order", "text", "", placeholder="3,1,2,4-", required=True,
                    hint="updates as you drag; e.g. 3,1,2,4- or 5-1")]},
+    {"id": "insert-blank", "group": "Pages", "label": "Insert blank pages", "files": "pdf",
+     "help": "Click the pages to put a blank page after. Each blank page has the size of the "
+             "page before it. Choose All to get a page for notes after every page.",
+     "board": {"mode": "select", "effect": "insert", "field": "after"},
+     "fields": [_f("after", "After pages", "text", "", placeholder="3,7 or all",
+                   hint="updates as you click; e.g. 3,7 or end or all"),
+                _f("at_start", "Also before the first page", "check", False),
+                _f("count", "Blank pages at each place", "number", 1, min=1, max=100)]},
     {"id": "reverse", "group": "Pages", "label": "Reverse order", "files": "pdf",
      "help": "Put the pages in reverse order (last page first).",
      "board": {"mode": "view", "effect": "reverse"}, "fields": []},
@@ -139,11 +158,32 @@ OPERATIONS = [
                 _f("bottom", "Bottom (mm)", "number", 10, min=0),
                 _f("left", "Left (mm)", "number", 10, min=0),
                 _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
+    {"id": "autocrop", "group": "Layout", "label": "Trim white margins", "files": "pdf",
+     "help": "Cut away the empty white border around the content of each page, e.g. to read "
+             "a paper or a scan more comfortably on a small screen. Blank pages are left as "
+             "they are; the cut-off margins stay in the file, hidden.",
+     "fields": [_f("padding", "Space to keep around the content (mm)", "number", 3.5, min=0,
+                   step=0.5),
+                _f("same", "Crop every page the same", "check", False,
+                   hint="Keeps the pages the same size: the crop fits the content of all of "
+                        "them. Otherwise each page is trimmed on its own."),
+                _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
     {"id": "nup", "live": True, "group": "Layout", "label": "Pages per sheet", "files": "pdf",
      "fields": [_f("per_sheet", "Pages per sheet", "select", "2",
                    choices=[[str(n), str(n)] for n in (2, 4, 6, 8, 9)]),
                 _f("size", "Sheet size", "select", "a4",
                    choices=[[p, p.upper() if p[0] == "a" else p.capitalize()] for p in PAPER])]},
+    {"id": "booklet", "group": "Layout", "label": "Booklet", "files": "pdf",
+     "help": "Print a folded booklet: two pages side by side on each sheet, in the order that "
+             "comes out right once the sheets are folded in the middle. Print it on both sides, "
+             "flipping on the short edge, then fold the stack and staple it on the fold. Blank "
+             "pages are added at the end to fill the last sheet.",
+     "fields": [_f("size", "Sheet size", "select", "",
+                   choices=[["", "Twice the page size"]]
+                   + [[p, p.upper() if p[0] == "a" else p.capitalize()]
+                      for p in ("a4", "letter", "a3", "tabloid", "legal")],
+                   hint="Used sideways, with two pages on each side. Twice the page size "
+                        "keeps the pages as they are: A5 pages on A4 paper, A4 on A3.")]},
     {"id": "compress", "group": "Optimize", "label": "Compress", "files": "pdf",
      "fields": [_f("level", "Compression", "select", "medium",
                    choices=[["low", "Low — lossless"],
@@ -311,6 +351,7 @@ OPERATIONS = [
 OPS = {op["id"]: op for op in OPERATIONS}
 
 SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
+          "insert-blank": "blanks", "booklet": "booklet", "autocrop": "trimmed",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
@@ -381,6 +422,26 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
     elif op == "nup":
         core.n_up(src, out, _num(opts.get("per_sheet"), int, 2), opts.get("size") or "a4",
                   password)
+    elif op == "insert-blank":
+        after, at_start = _pages(opts, "after"), _bool(opts.get("at_start"))
+        if not after and not at_start:
+            raise UserError("click the pages to put blank pages after, or type them")
+        core.insert_blank_pages(src, out, after, _num(opts.get("count"), int, 1),
+                                at_start=at_start, password=password)
+    elif op == "booklet":
+        core.booklet(src, out, opts.get("size") or None, password)
+        sheets = len(PdfReader(str(out)).pages) // 2
+        notes.append(f"{src.name}: {sheets} sheet{'s' if sheets != 1 else ''} of paper. Print on "
+                     "both sides, flipping on the short edge, then fold in the middle.")
+    elif op == "autocrop":
+        report = core.trim_margins(src, out, padding=_num(opts.get("padding"), float, 3.5)
+                                   * core.POINTS_PER_MM, same=_bool(opts.get("same")),
+                                   pages=_pages(opts), password=password)
+        if report["blank"]:
+            many = len(report["blank"]) > 1
+            notes.append(f"{src.name}: page{'s' if many else ''} {_pages_list(report['blank'])} "
+                         f"{'are' if many else 'is'} blank and {'were' if many else 'was'} "
+                         f"left as {'they are' if many else 'it is'}")
     elif op == "compress":
         core.compress(src, out, level=opts.get("level") or "medium", password=password)
     elif op == "color":
@@ -509,9 +570,22 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             raise UserError("enter the PDF's current password")
         core.decrypt(src, out, password)
     elif op == "split":
-        ranges = [r for r in re.split(r"[;\s]+", opts.get("ranges") or "") if r] \
-            if opts.get("by", "ranges") == "ranges" else []
+        by = opts.get("by", "ranges")
         folder = out_dir / f"{src.stem}_split"
+        if by == "bookmarks":
+            return core.split(src, folder, bookmarks=_num(opts.get("level"), int, 1),
+                              password=password)
+        if by == "size":
+            mb = _num(opts.get("max_mb"), float, 10)
+            if mb <= 0:
+                raise UserError("the largest file size must be more than 0 MB")
+            found = []
+            files = core.split(src, folder, max_size=int(mb * 1_000_000), password=password,
+                               notes=found)
+            notes.extend(f"{src.name}: {note}" for note in found)
+            return files
+        ranges = [r for r in re.split(r"[;\s]+", opts.get("ranges") or "") if r] \
+            if by == "ranges" else []
         return core.split(src, folder, every=None if ranges else _num(opts.get("every"), int, 1),
                           ranges=ranges or None, password=password)
     elif op == "media":

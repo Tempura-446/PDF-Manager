@@ -2,6 +2,7 @@
 hidden data, and convert to PDF/A for long-term archiving."""
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -301,16 +302,32 @@ def sanitize(path, output, metadata=True, javascript=True, attachments=True, com
 PDFA_LEVELS = ("1", "2", "3")
 
 
+def _version_key(exe):
+    """gs10.05.1 comes after gs9.56.1 (as numbers, not as text), and the
+    64-bit program before the 32-bit one."""
+    numbers = tuple(int(n) for n in re.findall(r"\d+", exe.parent.parent.name))
+    return numbers, "64" in exe.name
+
+
 def find_ghostscript():
+    r"""The Ghostscript program: on the PATH or, on Windows, the newest in
+    Program Files\gs\gs<version>\bin (where its installer puts it, also when
+    installed with winget), or where the registry says it is."""
     for name in ("gs", "gswin64c", "gswin32c"):
         found = shutil.which(name)
         if found:
             return found
     if sys.platform == "win32":
-        for base in (os.environ.get("PROGRAMFILES"), os.environ.get("PROGRAMFILES(X86)")):
-            if base and (Path(base) / "gs").is_dir():
-                for exe in sorted((Path(base) / "gs").glob("gs*/bin/gswin*c.exe"), reverse=True):
-                    return str(exe)
+        from pdfmanager.scan import program_dirs, registry_subkey_values
+
+        found = []
+        for base in program_dirs():
+            found += (base / "gs").glob("gs*/bin/gswin*c.exe")
+        for dll in registry_subkey_values(r"SOFTWARE\GPL Ghostscript", "GS_DLL"):
+            found += Path(str(dll)).parent.glob("gswin*c.exe")  # next to bin\gsdll64.dll
+        found = [exe for exe in found if exe.is_file()]
+        if found:
+            return str(max(found, key=_version_key))
     return None
 
 
