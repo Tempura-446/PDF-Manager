@@ -187,11 +187,10 @@ def _label(row):
 def _report(old_name, new_name, a, b, rows, output, all_pages, dpi):
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.utils import ImageReader
-    from reportlab.pdfgen import canvas
 
     W, H = landscape(A4)
     margin = 36
-    c = canvas.Canvas(str(output), pagesize=(W, H))
+    c = core.pdf_canvas(str(output), pagesize=(W, H))
     c.setTitle(f"Comparison of {old_name} and {new_name}")
     c.setCreator("ZPDF")
 

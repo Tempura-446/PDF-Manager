@@ -9,10 +9,10 @@ description = "Command-line tool to merge, split, resize, rotate, compress and o
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "pypdf>=5.0",
+    "pypdf>=7.0",  # 6.20-7.0 harden reading broken or hostile files
     "reportlab>=4.0",
     "Pillow>=9.0",
-    "cryptography>=3.1",
+    "cryptography>=43",  # what pypdf 7 supports (AES encryption)
     "pypdfium2>=4.0",
     "pikepdf>=8",  # qpdf: packs compressed files into object streams
 ]

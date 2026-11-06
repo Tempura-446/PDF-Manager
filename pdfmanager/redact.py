@@ -189,12 +189,11 @@ def _render_redacted(path, areas, dpi, password):
 def _image_page(image, width, height):
     """A one-page PDF showing ``image`` at width x height points."""
     from reportlab.lib.utils import ImageReader
-    from reportlab.pdfgen import canvas
 
     if image.convert("L").convert("RGB").tobytes() == image.tobytes():
         image = image.convert("L")  # black and white or gray: a third of the size
     buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=(width, height))
+    c = core.pdf_canvas(buf, pagesize=(width, height))
     c.drawImage(ImageReader(image), 0, 0, width, height)
     c.showPage()
     c.save()

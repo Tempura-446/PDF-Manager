@@ -964,11 +964,21 @@ def _update_xmp(writer, updates):
 # Stamping
 # --------------------------------------------------------------------------
 
-def _overlay_page(width, height, draw):
+def pdf_canvas(target, **kwargs):
+    """A reportlab canvas writing to ``target`` (a path or file object).
+    Its streams are written as plain binary: reportlab's default wraps them
+    in ASCII85 text, 25% bigger, and without its optional C accelerator that
+    encoding takes most of the time of writing a page picture."""
+    from reportlab import rl_config
     from reportlab.pdfgen import canvas
 
+    rl_config.useA85 = 0
+    return canvas.Canvas(target, **kwargs)
+
+
+def _overlay_page(width, height, draw):
     buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=(width, height))
+    c = pdf_canvas(buf, pagesize=(width, height))
     draw(c, width, height)
     c.save()
     buf.seek(0)
@@ -1250,29 +1260,38 @@ def images_to_pdf(images, output, size=None, margin=0):
     per image, with ``margin`` points of padding."""
     from PIL import Image
     from reportlab.lib.utils import ImageReader
-    from reportlab.pdfgen import canvas
 
     if not images:
         raise PdfManagerError("no images given")
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    c = canvas.Canvas(str(output))
+    c = pdf_canvas(str(output))
     for img_path in images:
         try:
             opened = Image.open(img_path)
         except (OSError, ValueError) as exc:  # not a picture, or a damaged one
             raise PdfManagerError(f"{img_path} is not a picture ({exc})") from None
         with opened as source:
-            # A scanner's TIFF holds a page per frame.
-            for frame in range(getattr(source, "n_frames", 1)):
+            turn = _jpeg_turn(source)
+            # A scanner's TIFF holds a page per frame. A camera's MPO also
+            # has several, but they are other views of the same photo.
+            frames = 1 if source.format == "MPO" else getattr(source, "n_frames", 1)
+            for frame in range(frames):
                 if frame:
                     source.seek(frame)
-                source.load()
                 # Pillow gives TIFF resolutions as fractions; the page size must be plain numbers.
                 dpi_x, dpi_y = (float(v) if v and float(v) >= 1 else 72.0
                                 for v in (source.info.get("dpi") or (72, 72))[:2])
-                im = _page_image(source)
-                iw, ih = im.width * 72 / dpi_x, im.height * 72 / dpi_y
+                if turn is None:
+                    source.load()
+                    im = _page_image(source)
+                    pixels = im.size
+                else:  # a JPEG goes in as it is: no quality lost, and many times smaller
+                    im = ImageReader(str(img_path))
+                    pixels = source.size[::-1] if turn in (90, 270) else source.size
+                    if turn in (90, 270):
+                        dpi_x, dpi_y = dpi_y, dpi_x
+                iw, ih = pixels[0] * 72 / dpi_x, pixels[1] * 72 / dpi_y
                 if size:
                     pw, ph = parse_paper_size(size)
                     if (iw > ih) != (pw > ph):
@@ -1284,10 +1303,38 @@ def images_to_pdf(images, output, size=None, margin=0):
                     pw, ph = iw + 2 * margin, ih + 2 * margin
                     dw, dh, x, y = iw, ih, margin, margin
                 c.setPageSize((pw, ph))
-                c.drawImage(ImageReader(im), x, y, width=dw, height=dh)
+                if turn is None:
+                    c.drawImage(ImageReader(im), x, y, width=dw, height=dh)
+                else:
+                    _draw_turned(c, im, x, y, dw, dh, turn)
                 c.showPage()
     c.save()
     return output
+
+
+# EXIF orientation -> degrees to turn the stored picture anticlockwise to
+# show it upright (the mirrored orientations are left to Pillow).
+_EXIF_TURNS = {1: 0, 3: 180, 6: 270, 8: 90}
+
+
+def _jpeg_turn(source):
+    """For a JPEG the PDF can show as it is (RGB or gray; Adobe CMYK
+    JPEGs store their colours inverted), how far to turn it to be upright;
+    None for any other picture."""
+    if source.format != "JPEG" or source.mode not in ("RGB", "L"):
+        return None
+    return _EXIF_TURNS.get(source.getexif().get(0x0112, 1))
+
+
+def _draw_turned(c, image, x, y, width, height, turn):
+    """Draw ``image`` turned ``turn`` degrees anticlockwise to fill the
+    ``width`` x ``height`` box at ``x``, ``y``."""
+    c.saveState()
+    c.translate(x + (width if turn in (90, 180) else 0), y + (height if turn in (180, 270) else 0))
+    c.rotate(turn)
+    sw, sh = (height, width) if turn in (90, 270) else (width, height)
+    c.drawImage(image, 0, 0, width=sw, height=sh)
+    c.restoreState()
 
 
 def _page_image(im):

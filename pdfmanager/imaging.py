@@ -314,6 +314,29 @@ def ascii85_decode(data):
     return bytes(out[:len(out) - tail])
 
 
+def _use_fast_ascii85():
+    """Have pypdf decode ASCII85 streams with ``ascii85_decode``: every tool
+    that reads pictures (colours, extracting pictures, ...) gets it. Data the
+    fast decoder can't read goes to pypdf's own, for its error handling."""
+    from pypdf import filters
+
+    original = filters.ASCII85Decode.decode
+    if getattr(original, "_pdfm_fast", False):
+        return
+
+    def decode(data, decode_parms=None, **kwargs):
+        try:
+            return ascii85_decode(data.encode("latin-1") if isinstance(data, str) else data)
+        except (ValueError, UnicodeEncodeError):
+            return original(data, decode_parms, **kwargs)
+
+    decode._pdfm_fast = True
+    filters.ASCII85Decode.decode = staticmethod(decode)
+
+
+_use_fast_ascii85()
+
+
 def _ascii_decode(name, data):
     if name in ("/ASCIIHexDecode", "/AHx"):
         data = bytes(data).translate(None, _WHITESPACE)
