@@ -247,8 +247,15 @@
 #rd-print { display: none; }
 @media print {
   body.rd-printing > *:not(#rd-print) { display: none !important; }
+  html:has(body.rd-printing), body.rd-printing { margin: 0 !important; padding: 0 !important; height: auto !important; min-height: 0 !important; overflow: visible !important; }
   body.rd-printing #rd-print { display: block; }
-  #rd-print img { display: block; width: 100%; height: auto; page-break-after: always; break-after: page; }
+  /* Each page exactly one sheet, the picture fitted inside it: at the full
+     width, a page as tall as the paper (or taller) spilled a sliver onto a
+     sheet of its own, a blank page after every page. Breaks go between
+     pages only, never after the last. */
+  #rd-print .rd-print-page { width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; overflow: hidden; break-inside: avoid; }
+  #rd-print .rd-print-page + .rd-print-page { break-before: page; page-break-before: always; }
+  #rd-print img { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
   @page { margin: 0; }
 }
 

@@ -2316,6 +2316,12 @@ export class Reader {
     if (box) box.remove();
     box = el("div", { id: "rd-print" });
     document.body.append(box);
+    // The print dialog starts in the document's orientation (a landscape
+    // sheet on portrait paper prints small).
+    const first = (await doc.getPage(1)).getViewport({ scale: 1 });
+    const orientation = el("style", { id: "rd-print-page" }, `@media print { @page { size: ${first.width > first.height ? "landscape" : "portrait"}; margin: 0; } }`);
+    document.getElementById("rd-print-page")?.remove();
+    document.head.append(orientation);
     try {
       for (let n = 1; n <= total; n++) {
         this.toast(`Preparing page ${n} of ${total} for printing…`, 60000);
@@ -2325,7 +2331,7 @@ export class Reader {
         await page.render({ canvas, viewport, intent: "print", annotationMode: pdfjs.AnnotationMode.ENABLE_STORAGE,
           printAnnotationStorage: doc.annotationStorage.print }).promise;
         const blob = await new Promise((r) => canvas.toBlob(r, "image/png"));
-        box.append(el("img", { src: URL.createObjectURL(blob), alt: "" }));
+        box.append(el("div", { class: "rd-print-page" }, el("img", { src: URL.createObjectURL(blob), alt: "" })));
         if (doc !== this.doc) return;
       }
       if (this.toastEl) this.toastEl.remove();
@@ -2337,6 +2343,7 @@ export class Reader {
         document.body.classList.remove("rd-printing");
         for (const img of box.querySelectorAll("img")) URL.revokeObjectURL(img.src);
         box.remove();
+        orientation.remove();
       }, 1000);
     }
   }

@@ -148,10 +148,16 @@ def test_flatten_comments_only_keeps_the_form(tmp_path):
 
 def test_sanitize_removes_hidden_data(tmp_path):
     from pypdf import PdfWriter
+    from pypdf.generic import ArrayObject, DictionaryObject, NameObject, TextStringObject
 
     writer = PdfWriter(clone_from=str(form_pdf(tmp_path / "form.pdf")))
     writer.add_metadata({"/Author": "Secret Person"})
-    writer.add_js("app.alert('hi');")
+    # Document JavaScript, by hand (pypdf 7 removed PdfWriter.add_js).
+    script = writer._add_object(DictionaryObject({
+        NameObject("/Type"): NameObject("/Action"), NameObject("/S"): NameObject("/JavaScript"),
+        NameObject("/JS"): TextStringObject("app.alert('hi');")}))
+    writer._root_object[NameObject("/Names")] = DictionaryObject({NameObject("/JavaScript"): DictionaryObject({
+        NameObject("/Names"): ArrayObject([TextStringObject("hi"), script])})})
     writer.add_attachment("notes.txt", b"hidden notes")
     writer.write(tmp_path / "dirty.pdf")
     counts = archive.sanitize(tmp_path / "dirty.pdf", tmp_path / "clean.pdf")
