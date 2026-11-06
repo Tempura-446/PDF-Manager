@@ -30,8 +30,10 @@ pdfm = "pdfmanager.cli:main"
 [project.gui-scripts]
 pdfm-app = "pdfmanager.gui:main_app"
 
-[tool.setuptools]
-packages = ["pdfmanager"]
+# pdfmanager and its folders of web files (static/, static/pdfjs/...): setuptools
+# counts every folder inside a package as one too, and warns about any not listed.
+[tool.setuptools.packages.find]
+include = ["pdfmanager", "pdfmanager.*"]
 
 [tool.setuptools.dynamic]
 version = {attr = "pdfmanager.__version__"}
