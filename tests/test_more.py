@@ -1291,6 +1291,13 @@ out.areaUnits = ["auto", "ft", "in", "m"].map((u) => M.formatArea(72 * 72 * 30, 
 out.total = M.formatInches(12 * 40, "auto", "ft");
 out.path = M.formatLength(M.pathLength([[216, 216], [216, 504], [648, 504], [648, 216]]), quarter);
 out.nearest = [M.nearestScale(47.8, "ft"), M.nearestScale(98, "m"), M.nearestScale(250, "ft")].map((n) => [n.scale.label, +n.off.toFixed(4)]);
+// Angles, cut-outs, rectangles and plain numbers for a spreadsheet.
+const sq = [[0, 0], [10, 0], [10, 10], [0, 10]];
+out.angles = [M.angle([10, 0], [0, 0], [0, 10]), +M.angle([10, 0], [0, 0], [-10, 0.001]).toFixed(1), +M.angle([1, 1], [0, 0], [1, -1]).toFixed(1)];
+out.inside = [M.inside([5, 5], sq), M.inside([15, 5], sq), M.inside([0.5, 9.5], sq)];
+out.net = M.netArea(sq, [[[1, 1], [3, 1], [3, 3], [1, 3]]]);
+out.rect = M.rectangle([0, 0], [2, 3]);
+out.plain = [M.plainNumber(144 * 12, false, "ft"), M.plainNumber(144 * 144, true, "ft"), M.plainNumber(1000 / 25.4, false, "m")];
 console.log(JSON.stringify(out));
 """
     out = subprocess.run([node, "--input-type=module", "-e", script, module], capture_output=True, text=True, encoding="utf-8", timeout=60)
@@ -1315,6 +1322,9 @@ console.log(JSON.stringify(out));
     assert got["total"] == "40' 0\""
     assert got["path"] == "56' 0\""  # three walls of the 24' x 16' room, open
     assert got["nearest"] == [['1/4" = 1\'-0"', 0.0042], ["1:100", 0.02], ['1" = 20\'', 0.0417]]
+    assert got["angles"] == [90, 180.0, 90.0] and got["inside"] == [True, False, True]
+    assert got["net"] == 96 and got["rect"] == [[0, 0], [2, 0], [2, 3], [0, 3]]
+    assert got["plain"] == [[144, "ft"], [144, "sq ft"], [1, "m"]]
 
 
 def test_snapping_to_the_drawing_js():
@@ -1655,3 +1665,48 @@ def test_markup_endpoint_keeps_a_protected_file_protected(app, tmp_path):
     reader = PdfReader(tmp_path / "out.pdf")
     assert reader.is_encrypted and reader.decrypt("pw")
     assert len(added) == 1 and reader.pages[0]["/Annots"][0].get_object()["/T"] == "Pat"
+
+
+def test_measurements_go_into_the_pdf_as_measurement_annotations(tmp_path):
+    """The reader's measurements written into the file: dimension annotations
+    with the drawing's scale (/Measure), their value as the comment, and an
+    appearance with the value, so any viewer shows and prints them."""
+    import pypdfium2 as pdfium
+
+    from pdfmanager import markup
+
+    c = canvas.Canvas(str(tmp_path / "plan.pdf"), pagesize=(1224, 792))
+    c.rect(100, 100, 600, 500)
+    c.showPage()
+    c.save()
+    scale = {"ratio": 48, "units": "ft", "label": '1/4" = 1\'-0"'}
+    markup.apply(tmp_path / "plan.pdf", tmp_path / "m.pdf", [
+        {"op": "add", "page": 1, "kind": "measure", "shape": "distance", "points": [[100, 620], [700, 620]],
+         "value": "33' 4\"", "label": "North wall", "group": "Walls", "scale": scale, "color": "#c0392b"},
+        {"op": "add", "page": 1, "kind": "measure", "shape": "path", "points": [[100, 80], [400, 80], [400, 60]],
+         "value": "total 17' 8\"", "scale": scale},
+        {"op": "add", "page": 1, "kind": "measure", "shape": "area", "value": "1,076.39 sq ft", "scale": scale,
+         "points": [[100, 100], [400, 100], [400, 600], [100, 600]], "holes": [[[150, 150], [250, 150], [250, 250], [150, 250]]]},
+        {"op": "add", "page": 1, "kind": "measure", "shape": "count", "points": [[500, 300], [550, 300]], "value": "2 items",
+         "label": "Outlets"},
+        {"op": "add", "page": 1, "kind": "measure", "shape": "angle", "points": [[800, 300], [800, 100], [1000, 250]], "value": "53.1°"},
+    ], author="Pat")
+    annots = _annots(tmp_path / "m.pdf")
+    assert [(a["/Subtype"], a.get("/IT")) for a in annots] == [
+        ("/Line", "/LineDimension"), ("/PolyLine", "/PolyLineDimension"), ("/Polygon", "/PolygonDimension"),
+        ("/Circle", None), ("/Circle", None), ("/PolyLine", None)]
+    wall = annots[0]
+    assert wall["/Contents"] == "Walls - North wall - 33' 4\"" and wall["/Subj"] == "Walls"
+    measure = wall["/Measure"]
+    assert measure["/Subtype"] == "/RL" and measure["/R"] == '1/4" = 1\'-0"'
+    assert measure["/X"][0]["/U"] == "ft" and abs(float(measure["/X"][0]["/C"]) - 48 / 72 / 12) < 1e-9
+    assert [a["/Contents"] for a in annots[3:5]] == ["Outlets - 2 items (1 of 2)", "Outlets - 2 items (2 of 2)"]
+    assert "/Measure" not in annots[3] and annots[5]["/Contents"] == "53.1°"
+    # Drawn by pdfium: the area's tint, but not inside its cut-out.
+    doc = pdfium.PdfDocument(str(tmp_path / "m.pdf"))
+    image = doc[0].render(scale=1, draw_annots=True).to_pil().convert("RGB")
+    doc.close()
+    assert image.getpixel((300, 792 - 500)) != (255, 255, 255) and image.getpixel((200, 792 - 200)) == (255, 255, 255)
+    with pytest.raises(core.PdfManagerError, match="too few points"):
+        markup.apply(tmp_path / "plan.pdf", tmp_path / "x.pdf", [
+            {"op": "add", "page": 1, "kind": "measure", "shape": "area", "points": [[1, 1], [2, 2]]}])

@@ -33,7 +33,7 @@ from pypdf.generic import (ArrayObject, BooleanObject, DecodedStreamObject, Dict
 
 from pdfmanager import core
 
-KINDS = ("note", "underline", "strikeout", "rect", "ellipse", "cloud", "line", "arrow")
+KINDS = ("note", "underline", "strikeout", "rect", "ellipse", "cloud", "line", "arrow", "measure")
 DEFAULT_COLORS = {"note": "#f5c400", "underline": "#1f4fd8", "strikeout": "#d52b1e"}
 PRINT = 4  # annotation flag: printed with the page
 NOTE_SIZE = 20
@@ -86,13 +86,13 @@ def _rgb(color, stroke=True):
     return " ".join(_fmt(c) for c in color) + (" RG" if stroke else " rg")
 
 
-def _appearance(writer, bbox, content):
+def _appearance(writer, bbox, content, resources=None):
     """An appearance stream (/AP /N) drawing ``content``, in page coordinates."""
     stream = DecodedStreamObject()
     stream.set_data(content.encode("latin-1"))
     stream.update({NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Form"),
                    NameObject("/BBox"): ArrayObject(FloatObject(v) for v in bbox),
-                   NameObject("/Resources"): DictionaryObject()})
+                   NameObject("/Resources"): resources if resources is not None else DictionaryObject()})
     return DictionaryObject({NameObject("/N"): writer._add_object(stream)})
 
 
@@ -160,6 +160,14 @@ def _add(writer, page, page_ref, change, author):
     kind = change.get("kind")
     if kind not in KINDS:
         raise core.PdfManagerError(f"unknown kind of annotation: {kind!r}")
+    if kind == "measure":
+        added = _measure(writer, page_ref, change, author)
+        annots = page.get("/Annots")
+        if annots is None:
+            page[NameObject("/Annots")] = ArrayObject()
+            annots = page["/Annots"]
+        annots.get_object().extend(added)
+        return added[0]
     color = _color(change.get("color"), DEFAULT_COLORS.get(kind, "#d52b1e"))
     text = str(change.get("text") or "")
     width = max(0.25, min(_num(change.get("width", 2)), 50))
@@ -257,6 +265,179 @@ def _add(writer, page, page_ref, change, author):
     annots = annots.get_object()
     annots.extend(added)
     return added[0]
+
+
+# ---- measurements (the reader's Scale bar), as measurement annotations ----------
+
+LABEL_SIZE = 9  # points
+MEASURE_SHAPES = {"distance": "/Line", "path": "/PolyLine", "area": "/Polygon", "angle": "/PolyLine", "count": "/Circle"}
+
+
+def _point(value):
+    try:
+        x, y = value
+    except (TypeError, ValueError):
+        raise core.PdfManagerError("a measurement point is not a pair of numbers") from None
+    return [_num(x), _num(y)]
+
+
+def _pdf_text(text):
+    """``text`` as a PDF string for Helvetica (WinAnsi): (…) with escapes."""
+    raw = str(text).encode("cp1252", "replace")
+    return "(" + "".join(chr(b) if b not in (0x28, 0x29, 0x5C) else "\\" + chr(b) for b in raw) + ")"
+
+
+def _text_width(text, size):
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    return stringWidth(str(text).encode("cp1252", "replace").decode("cp1252"), "Helvetica", size)
+
+
+def _label(x, y, lines, color, size=LABEL_SIZE):
+    """A label centred on x, y (on a white backing, so the drawing's lines
+    don't run through it): (content, its box)."""
+    lines = [line for line in lines if line]
+    width = max(_text_width(line, size) for line in lines) + 8
+    height = len(lines) * size * 1.2 + 4
+    x0, y0 = x - width / 2, y - height / 2
+    f = _fmt
+    out = [f"q 1 1 1 rg {_rgb(color)} 0.6 w {f(x0)} {f(y0)} {f(width)} {f(height)} re B Q",
+           f"q 0.1 0.1 0.1 rg BT /Helv {f(size)} Tf"]
+    for i, line in enumerate(lines):
+        tx = x - _text_width(line, size) / 2
+        ty = y0 + height - 2 - size * 1.2 * (i + 1) + size * 0.25
+        out.append(f"1 0 0 1 {f(tx)} {f(ty)} Tm {_pdf_text(line)} Tj")
+    out.append("ET Q")
+    return " ".join(out), [x0, y0, x0 + width, y0 + height]
+
+
+def _measure_dict(scale):
+    """A /Measure dictionary (rectilinear) for a drawing ``scale`` {ratio,
+    units ("ft" or "m"), label}: how much one unit of the page is really."""
+    try:
+        ratio = float(scale["ratio"])
+    except (TypeError, KeyError, ValueError):
+        return None
+    if not ratio > 0 or not math.isfinite(ratio):
+        return None
+    metric = scale.get("units") == "m"
+    per_point = ratio / 72 * 0.0254 if metric else ratio / 72 / 12  # metres or feet per point
+
+    def fmt(unit, factor, places):
+        return DictionaryObject({NameObject("/Type"): NameObject("/NumberFormat"), NameObject("/U"): TextStringObject(unit),
+                                 NameObject("/C"): FloatObject(factor), NameObject("/D"): NumberObject(places)})
+
+    length = [fmt("m", per_point, 1000)] if metric else [fmt("ft", per_point, 1), fmt("in", 12, 16)]
+    area = [fmt("m²" if metric else "sq ft", per_point * per_point, 100)]
+    return DictionaryObject({
+        NameObject("/Type"): NameObject("/Measure"), NameObject("/Subtype"): NameObject("/RL"),
+        NameObject("/R"): TextStringObject(str(scale.get("label") or "")[:80]),
+        NameObject("/X"): ArrayObject(length), NameObject("/D"): ArrayObject(length), NameObject("/A"): ArrayObject(area),
+        NameObject("/O"): ArrayObject([FloatObject(0), FloatObject(0)])})
+
+
+def _measure(writer, page_ref, change, author):
+    """One measurement from the reader as annotation(s); returns their refs."""
+    shape = change.get("shape")
+    if shape not in MEASURE_SHAPES:
+        raise core.PdfManagerError(f"unknown kind of measurement: {shape!r}")
+    pts = [_point(p) for p in change.get("points") or []]
+    holes = [[_point(p) for p in hole] for hole in change.get("holes") or [] if len(hole) >= 3]
+    least = {"area": 3, "angle": 3, "count": 1}.get(shape, 2)
+    if len(pts) < least:
+        raise core.PdfManagerError("a measurement has too few points")
+    color = _color(change.get("color"), "#1f4fd8")
+    name, group = str(change.get("label") or "")[:80], str(change.get("group") or "")[:60]
+    value, extra = str(change.get("value") or "")[:80], str(change.get("sub") or "")[:120]
+    contents = " - ".join(t for t in (group, name, value) if t) + (f" ({extra})" if extra else "")
+    fonts = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/Helv"): DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica"), NameObject("/Encoding"): NameObject("/WinAnsiEncoding")})})})
+    measure = _measure_dict(change.get("scale")) if isinstance(change.get("scale"), dict) else None
+    f, width = _fmt, 1.5
+    lines = [name, value] if name else [value]
+
+    def build(subtype, content, boxes, extra_keys, text=contents):
+        xs = [b[0] for b in boxes] + [b[2] for b in boxes]
+        ys = [b[1] for b in boxes] + [b[3] for b in boxes]
+        rect = [min(xs) - 2, min(ys) - 2, max(xs) + 2, max(ys) + 2]
+        annot = _base(writer, page_ref, subtype, rect, color, author, text)
+        annot.update(extra_keys)
+        annot[NameObject("/BS")] = DictionaryObject({NameObject("/W"): FloatObject(width)})
+        if measure is not None and subtype != "/Circle":
+            annot[NameObject("/Measure")] = measure
+        if group:
+            annot[NameObject("/Subj")] = TextStringObject(group)
+        annot[NameObject("/AP")] = _appearance(writer, rect, content, fonts)
+        return writer._add_object(annot)
+
+    def bounds(points):
+        return [min(p[0] for p in points), min(p[1] for p in points), max(p[0] for p in points), max(p[1] for p in points)]
+
+    def path(points, close=False):
+        return " ".join(f"{f(x)} {f(y)} {'m' if i == 0 else 'l'}" for i, (x, y) in enumerate(points)) + (" h" if close else "")
+
+    vertices = lambda points: ArrayObject(FloatObject(v) for p in points for v in p)  # noqa: E731
+    if shape == "count":
+        refs = []
+        for i, (x, y) in enumerate(pts):
+            r = 7
+            num = str(i + 1)
+            content = (f"q {_rgb(color, False)} {_ellipse_path(x - r, y - r, x + r, y + r)} f Q "
+                       f"q 1 1 1 rg BT /Helv 8 Tf 1 0 0 1 {f(x - _text_width(num, 8) / 2)} {f(y - 2.8)} Tm {_pdf_text(num)} Tj ET Q")
+            boxes = [[x - r, y - r, x + r, y + r]]
+            if i == 0:  # the count by the first mark
+                text, box = _label(x, y + r + 12, lines, color)
+                content += " " + text
+                boxes.append(box)
+            refs.append(build("/Circle", content, boxes, {NameObject("/IC"): ArrayObject(FloatObject(c) for c in color)},
+                              text=f"{contents} ({i + 1} of {len(pts)})"))
+        return refs
+    if shape == "angle":
+        a, vertex, b = pts[:3]
+        a1, a2 = math.atan2(a[1] - vertex[1], a[0] - vertex[0]), math.atan2(b[1] - vertex[1], b[0] - vertex[0])
+        span = (a2 - a1 + math.pi) % (2 * math.pi) - math.pi
+        r, steps = 18, 12
+        arc = [(vertex[0] + r * math.cos(a1 + span * k / steps), vertex[1] + r * math.sin(a1 + span * k / steps)) for k in range(steps + 1)]
+        mid = a1 + span / 2
+        text, box = _label(vertex[0] + 34 * math.cos(mid), vertex[1] + 34 * math.sin(mid), lines, color)
+        content = f"{_rgb(color)} {f(width)} w 1 J 1 j {path([a, vertex, b])} S 0.8 w {path(arc)} S {text}"
+        return [build("/PolyLine", content, [bounds(pts), box], {NameObject("/Vertices"): vertices([a, vertex, b])})]
+    if shape == "area":
+        cx, cy = sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
+        text, box = _label(cx, cy, lines + ([extra] if extra else []), color)
+        rings = " ".join(path(ring, close=True) for ring in [pts] + holes)
+        dashed = " ".join(path(h, close=True) for h in holes)
+        content = (f"q /G0 gs {_rgb(color, False)} {rings} f* Q {_rgb(color)} {f(width)} w 1 j {path(pts, close=True)} S "
+                   + (f"q [3 2] 0 d 0.8 w {dashed} S Q " if holes else "") + text)
+        fonts[NameObject("/ExtGState")] = DictionaryObject({NameObject("/G0"): DictionaryObject({
+            NameObject("/Type"): NameObject("/ExtGState"), NameObject("/ca"): FloatObject(0.15)})})
+        return [build("/Polygon", content, [bounds(pts), box], {
+            NameObject("/Vertices"): vertices(pts), NameObject("/IT"): NameObject("/PolygonDimension")})]
+    # distance, path: the line(s), ticks at the ends, the length by the middle (or the end of a path)
+    ends = [(pts[0], pts[1]), (pts[-1], pts[-2])]
+    ticks = []
+    for (x, y), (ox, oy) in ends:
+        length = math.hypot(x - ox, y - oy) or 1
+        nx, ny = -(y - oy) / length * 4, (x - ox) / length * 4
+        ticks.append(f"{f(x - nx)} {f(y - ny)} m {f(x + nx)} {f(y + ny)} l")
+    if shape == "distance":
+        (ax, ay), (bx, by) = pts[0], pts[1]
+        length = math.hypot(bx - ax, by - ay) or 1
+        nx, ny = -(by - ay) / length, (bx - ax) / length
+        if ny < 0:
+            nx, ny = -nx, -ny
+        text, box = _label((ax + bx) / 2 + nx * 10, (ay + by) / 2 + ny * 10, lines, color)
+        keys = {NameObject("/L"): vertices(pts[:2]), NameObject("/IT"): NameObject("/LineDimension")}
+        subtype = "/Line"
+    else:
+        (ex, ey), (px, py) = pts[-1], pts[-2]
+        length = math.hypot(ex - px, ey - py) or 1
+        text, box = _label(ex + (ex - px) / length * 26, ey + (ey - py) / length * 14, lines, color)
+        keys = {NameObject("/Vertices"): vertices(pts), NameObject("/IT"): NameObject("/PolyLineDimension")}
+        subtype = "/PolyLine"
+    content = f"{_rgb(color)} {f(width)} w 1 J 1 j {path(pts)} S {' '.join(ticks)} S {text}"
+    return [build(subtype, content, [bounds(pts), box], keys)]
 
 
 def _find(reader, writer, number, ident):

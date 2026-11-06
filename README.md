@@ -300,6 +300,18 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   - **Path**: click along a run of lines (a wall run, a baseboard) for one
     total length, each segment's length shown beside it; Enter, a
     double-click or the Path button again finishes it.
+  - **Rectangle**: two opposite corners for a rectangular room's area.
+    **Cut-out**: click the corners of an opening (a stair, a shaft, a
+    column) inside an area; it's taken off that area, which then shows its
+    net size and how many cut-outs it has.
+  - **Count**: click each outlet, door or fixture; each gets a number and
+    the count shows by the first. Enter (or Count again) starts a new
+    count, e.g. for another kind of fixture; Backspace takes back a mark.
+  - **Angle**: a point on one line, the corner, a point on the other line.
+  - **Names and groups:** name a measurement ("Living room", "North wall")
+    and put it in a group ("Floors", "Outlets"); a group has its own
+    colour on the page and in the list, and its subtotal. Pick the group
+    new measurements go in at the top of the list.
   - **Move a measurement:** drag it (its line, edge or label) to move it, or
     drag one of its points to change it (the point snaps again). A click on
     it without dragging measures from there.
@@ -309,16 +321,29 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
     selected one, Esc lets go of it.
   - **Undo / redo** (Ctrl+Z, Ctrl+Y) while the scale bar is open: adding,
     moving, nudging, deleting and clearing measurements.
-  - **List** shows every measurement with its value and page, **totals** of
-    lengths (distances and paths) and of areas, a delete button for each, **Copy** (to paste in a
-    spreadsheet) and **Show in**: feet and inches to 1/16", 1/8", 1/4", 1/2"
-    or the inch, decimal feet, inches, metres or millimetres. Labels sit on
-    a white backing so the drawing's lines don't run through them, and hints
-    appear at the top of the page, clear of the title block.
-  - Backspace takes back the last point or measurement, Esc stops.
-    Measurements are only on screen, not saved in the file. Scanned sheets
-    have no lines to snap to, and if a sheet's lines can't be read ZPDF says
-    so: points then go exactly where you click, so zoom in close.
+  - **List** shows every measurement with its name, value and page, by
+    group with subtotals, **totals** of lengths (distances and paths),
+    areas and counts, and **Show in**: feet and inches to 1/16", 1/8",
+    1/4", 1/2" or the inch, decimal feet, inches, metres or millimetres.
+    Labels sit on a white backing so the drawing's lines don't run through
+    them, and hints appear at the top of the page, clear of the title block.
+  - **Kept with the file:** measurements are remembered on this computer
+    for each file and come back when it's opened again. **Copy** (to paste
+    in a spreadsheet), **CSV** (group, name, page, kind, the value as shown
+    and a plain number with its unit, for Excel or an estimate) and **Into
+    PDF**: the measurements become measurement annotations in the document
+    (with the drawing's scale), showing their values in Acrobat and other
+    viewers and when printed, and listed under Comments.
+  - **Compare revisions** (the layers button in the scale bar, or More →
+    Compare with another revision): another version of the drawing, open
+    in a tab or picked from a file, is drawn over this one page by page:
+    what both have is black, what only that version has red, what only this
+    one has blue, so a moved wall shows as a red line and a blue one.
+    *Changes only* fades what's the same; you can also show either version
+    alone, and if sheets moved, set the other version's page offset.
+  - Backspace takes back the last point or measurement, Esc stops. Scanned
+    sheets have no lines to snap to, and if a sheet's lines can't be read
+    ZPDF says so: points then go exactly where you click, so zoom in close.
   - A scale read from the sheet is only as right as the sheet: measure one
     written dimension to check it before relying on the numbers.
 - **Command palette (Ctrl+K):** type what you want (a tool, an action like
