@@ -186,7 +186,15 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   The **Home** button (top left) goes back to the tools; your documents stay
   open in the reader.
 - **Save** and **Undo** appear in the toolbar as soon as a document has
-  changes not saved yet.
+  changes not saved yet. **Save** (Ctrl+S) writes them into the file you
+  opened (safely: to a new file next to it that then takes its place; if
+  another program changed the file in the meantime you're asked first).
+  **Save as** (Ctrl+Shift+S) starts in the file's own folder. A PDF that
+  came from elsewhere (dropped from a browser, a tool's result) is saved
+  as a copy.
+- **Big files open fast:** a PDF of over 32 MB from your computer is read
+  a piece at a time as you go, so the first pages show at once (a 277 MB
+  drawing set: first page in about a second, using a few MB of memory).
 - A zoom that fits the page (Automatic, Fit width, Fit page) fits it again
   when the window or the sidebar changes size.
 - **Tabs:** open several PDFs at once (the + button, or drop more files),
@@ -199,11 +207,20 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
 - **Find** (Ctrl+F) with highlighting, match case and whole words.
 - **Select and copy text**; links work (web links open in your browser).
 - **Fill in forms** and save a copy with your entries.
-- **Annotate and sign** (Tools → Annotate & sign): highlight text, add text, draw,
-  add pictures, and sign by drawing, typing your name or using a picture of
-  your signature (remembered on this computer if you like). Colours and
-  sizes, undo/redo, and **Save a copy** with your changes. Use *Flatten
-  forms & comments* afterwards to make them part of the page.
+- **Annotate and sign** (Tools → Annotate & sign): highlight, underline
+  or strike out text, add **notes** (click, type your comment), add text,
+  draw, draw **shapes** (rectangle, ellipse, revision cloud, arrow, line;
+  hold Shift for squares, circles and 45° lines), add pictures, and sign
+  by drawing, typing your name or using a picture of your signature
+  (remembered on this computer if you like). Colours and sizes,
+  undo/redo, and **Save** with your changes. Notes, underlines, strikeouts
+  and shapes are standard PDF annotations with their own appearance, so
+  Acrobat and other viewers show them the same, and they print. Use
+  *Flatten forms & comments* afterwards to make them part of the page.
+- **Comments** (a tab in the sidebar): every note, highlight, shape and
+  other markup in the document, page by page, with its author, date and
+  comment and the replies under it. Click one to go to it; add or change
+  its comment, reply, or delete it. Your name for comments is asked once.
 - **Edit text** (E, or Tools → Annotate & sign → Edit text): click a line
   and retype it, **Shift+click** to rewrite its whole paragraph (it rewraps
   to the same width and line spacing, and stays justified if it was), or
@@ -226,12 +243,13 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   Ctrl or Shift to pick several, and turn, duplicate, delete or extract
   them (the buttons on a thumbnail, the bar above them, or right-click).
   **Insert PDF**, or drop a PDF between the thumbnails, puts its pages in.
-  Every change can be undone (Ctrl+Z) and is kept with **Save a copy**.
+  Every change can be undone (Ctrl+Z) and is kept with **Save**.
 - **Right-click a page** for what you can do there: copy the selected
   words, edit this text, rewrite this paragraph, add text here, turn,
   duplicate, delete or extract the page, or insert a PDF after it.
 - **Drawings to scale** (house plans, blueprints): the **Scale** button
-  next to the zoom reads each sheet's scale from its title block
+  next to the zoom uses the exact scale CAD programs and Bluebeam store in
+  the PDF when there is one, else reads each sheet's scale from its title block
   (`1/4" = 1'-0"`, `1" = 20'`, `1:100`, …), or you pick it, or **Set from a
   dimension**: click both ends of a line you know (say a 24'-0" wall) and
   type its length. The dialog shows what that line measures at the current
