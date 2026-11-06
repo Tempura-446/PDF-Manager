@@ -1399,3 +1399,19 @@ console.log(JSON.stringify(out));
     assert got["spots"] is True and len(got["cands"]) >= 3
     assert ["on", 217, 216] in got["cands"] and ["on", 216, 217] in got["cands"]
     assert got["seg"] == [216, 216, 648, 216]
+
+
+def test_printing_puts_each_page_on_one_sheet():
+    """The reader prints each page as a picture: one sheet each, fitted
+    inside it, with breaks between pages only. (A picture at the full width,
+    a break after every page, printed a blank sheet after each page.)"""
+    root = Path(__file__).resolve().parents[1] / "pdfmanager" / "static"
+    css = (root / "reader.css").read_text(encoding="utf-8")
+    js = (root / "reader.js").read_text(encoding="utf-8")
+    rules = css[css.index("@media print"):]
+    rules = rules[:rules.index("\n}\n")]
+    assert ".rd-print-page { width: 100vw; height: 100vh;" in rules
+    assert ".rd-print-page + .rd-print-page { break-before: page;" in rules
+    assert "max-width: 100%; max-height: 100%" in rules and "object-fit: contain" in rules
+    assert "break-after: page" not in rules
+    assert 'el("div", { class: "rd-print-page" }, el("img"' in js
