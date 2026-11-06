@@ -211,3 +211,43 @@ export function perimeter(points) {
   for (let i = 0; i < points.length; i++) s += distance(points[i], points[(i + 1) % points.length]);
   return s;
 }
+
+/** The angle at ``vertex`` between the arms to ``a`` and ``b``, in degrees (0-180). */
+export function angle(a, vertex, b) {
+  const a1 = Math.atan2(a[1] - vertex[1], a[0] - vertex[0]), a2 = Math.atan2(b[1] - vertex[1], b[0] - vertex[0]);
+  let d = Math.abs(a1 - a2) * 180 / Math.PI;
+  if (d > 180) d = 360 - d;
+  return d;
+}
+
+/** Whether ``p`` is inside the polygon ``points``. */
+export function inside(p, points) {
+  let into = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const [xi, yi] = points[i], [xj, yj] = points[j];
+    if ((yi > p[1]) !== (yj > p[1]) && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi) into = !into;
+  }
+  return into;
+}
+
+/** The middle (average) of some points. */
+export function centre(points) {
+  return [points.reduce((s, p) => s + p[0], 0) / points.length, points.reduce((s, p) => s + p[1], 0) / points.length];
+}
+
+/** An area's own size less its cut-outs (``holes``), in square PDF points. */
+export function netArea(points, holes = []) {
+  return Math.max(0, polygonArea(points) - holes.reduce((s, h) => s + polygonArea(h), 0));
+}
+
+/** The four corners of the rectangle with opposite corners ``a`` and ``b``. */
+export function rectangle(a, b) {
+  return [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]];
+}
+
+/** A real length (inches) or area (square inches) as a plain number in the
+ *  sheet's units, for a spreadsheet: [number, unit]. */
+export function plainNumber(real, isArea, sheet = "ft") {
+  if (sheet === "m") return isArea ? [+(real * MM_PER_IN * MM_PER_IN / 1e6).toFixed(4), "m²"] : [+(real * MM_PER_IN / 1000).toFixed(4), "m"];
+  return isArea ? [+(real / 144).toFixed(3), "sq ft"] : [+(real / 12).toFixed(4), "ft"];
+}
