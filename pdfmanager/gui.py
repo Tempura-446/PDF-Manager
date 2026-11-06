@@ -41,7 +41,7 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
-                        forms, recipes, redact, scan, search, textedit, update)
+                        forms, recipes, redact, scan, search, textedit, update, viewports)
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
@@ -1227,6 +1227,23 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(chunk)
                 left -= len(chunk)
 
+    def _scales(self, body):
+        """The drawing scales stored in a PDF (see viewports.py): of a file
+        opened from this computer (field "id") or of an uploaded copy."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        password = fields.get("password") or None
+        if fields.get("id"):
+            path = self.opened.get(fields["id"]) if self.opened is not None else None
+            if path is None:
+                raise UserError("that file is no longer available")
+            return self._send(HTTPStatus.OK, {"pages": viewports.stored_scales(path, password)})
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            return self._send(HTTPStatus.OK, {"pages": viewports.stored_scales(path, password)})
+
     def _save_in_place(self, key, body):
         """Write the reader's copy of an opened file over the file itself:
         to a temporary file next to it first, then swapped in, so a failure
@@ -1306,6 +1323,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(HTTPStatus.OK, png, "image/png")
             if path == "/api/keep":
                 return self._keep(body)
+            if path == "/api/scales":
+                return self._scales(body)
             if path.startswith("/api/save/"):
                 return self._save_in_place(path[len("/api/save/"):], body)
             if path == "/api/outline":

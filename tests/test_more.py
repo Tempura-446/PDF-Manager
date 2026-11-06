@@ -1510,3 +1510,59 @@ def test_written_pictures_are_binary_and_ascii85_reads_fast(tmp_path):
     assert len(saved["images"]) == 1
     with Image.open(saved["images"][0]) as im:
         assert im.convert("RGB").getpixel((5, 5)) == (10, 120, 220)
+
+
+def vp_pdf(path, viewports, size=(1224, 792)):
+    """A drawing whose page stores scales the way CAD and Bluebeam do."""
+    from pypdf import PdfWriter
+    from pypdf.generic import ArrayObject, DictionaryObject, FloatObject, NameObject, TextStringObject
+
+    writer = PdfWriter()
+    page = writer.add_blank_page(*size)
+    entries = []
+    for bbox, unit, per_point, label in viewports:
+        fmt = DictionaryObject({NameObject("/Type"): NameObject("/NumberFormat"),
+                                NameObject("/U"): TextStringObject(unit),
+                                NameObject("/C"): FloatObject(per_point)})
+        measure = DictionaryObject({NameObject("/Type"): NameObject("/Measure"),
+                                    NameObject("/Subtype"): NameObject("/RL"),
+                                    NameObject("/X"): ArrayObject([fmt]), NameObject("/D"): ArrayObject([fmt])})
+        if label:
+            measure[NameObject("/R")] = TextStringObject(label)
+        entries.append(DictionaryObject({NameObject("/Type"): NameObject("/Viewport"),
+                                         NameObject("/BBox"): ArrayObject(FloatObject(v) for v in bbox),
+                                         NameObject("/Measure"): measure}))
+    page[NameObject("/VP")] = ArrayObject(entries)
+    writer.add_blank_page(*size)  # a sheet without one
+    writer.write(path)
+    return path
+
+
+def test_drawing_scales_stored_in_the_pdf_are_read(tmp_path):
+    from pdfmanager import viewports
+
+    # 1/4" = 1'-0": a point on paper (1/72 in) is 48/72 in = 1/18 ft.
+    src = vp_pdf(tmp_path / "plan.pdf", [((40, 40, 300, 200), "ft", 1 / 18, ""),
+                                          ((20, 20, 1200, 770), "ft", 1 / 18, '1/4" = 1\'-0"'),
+                                          ((0, 0, 10, 10), "m", 100 * 25.4 / 72 / 1000, "1:100")])
+    found = viewports.stored_scales(src)
+    assert list(found) == [1]
+    big, small, metric = found[1]
+    assert big["label"] == '1/4" = 1\'-0"' and big["units"] == "ft" and round(big["ratio"], 3) == 48
+    assert big["bbox"] == [20, 20, 1200, 770] and round(small["ratio"], 3) == 48 and small["label"] == ""
+    assert metric["units"] == "m" and round(metric["ratio"], 3) == 100
+    # Geospatial measures and unknown units are not drawing scales.
+    assert viewports.stored_scales(vp_pdf(tmp_path / "odd.pdf", [((0, 0, 9, 9), "furlong", 1, "")])) == {}
+
+
+def test_reader_asks_for_stored_scales(app, tmp_path):
+    base, token, srv = app
+    src = vp_pdf(tmp_path / "plan.pdf", [((20, 20, 1200, 770), "m", 100 * 25.4 / 72 / 1000, "1:100")])
+    key = srv.RequestHandlerClass.opened.add(src)
+    boundary = "pdfmtestboundary"
+    body = f'--{boundary}\r\nContent-Disposition: form-data; name="id"\r\n\r\n{key}\r\n--{boundary}--\r\n'.encode()
+    request = urllib.request.Request(base + "/api/scales", data=body, headers={
+        "X-Pdfm-Token": token, "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(request, timeout=20) as res:
+        pages = json.loads(res.read())["pages"]
+    assert list(pages) == ["1"] and round(pages["1"][0]["ratio"], 3) == 100 and pages["1"][0]["units"] == "m"

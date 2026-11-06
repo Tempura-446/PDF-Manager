@@ -2519,10 +2519,20 @@ export class Reader {
       if (saved && typeof saved === "object") for (const [k, v] of Object.entries(saved)) if (v === false || isScale(v)) tab.scales[k] = v;
     }
     tab.detected ||= new Map();
+    tab.stored ||= this.#storedScales(tab);
     const n = this.pdfViewer.currentPageNumber || 1;
     if (!tab.detected.has(n)) {
       tab.detected.set(n, null);
-      try {
+      // A scale the drawing program stored in the PDF is exact; the one
+      // written on the sheet is read from its text.
+      const stored = (await tab.stored)[n]?.[0];
+      if (doc !== this.doc) return;
+      if (stored) {
+        const near = measure.nearestScale(stored.ratio, stored.units);
+        const label = stored.label || (near.off < 0.005 ? near.scale.label : `1:${+stored.ratio.toFixed(stored.ratio < 10 ? 2 : 0)}`);
+        tab.detected.set(n, { ratio: stored.ratio, units: stored.units, label, stored: true });
+      }
+      else try {
         const page = await doc.getPage(n);
         const content = await page.getTextContent();
         const text = content.items.map((i) => (i.str || "") + (i.hasEOL ? "\n" : " ")).join("");
@@ -2531,6 +2541,24 @@ export class Reader {
       if (doc !== this.doc) return;
     }
     this.#showScale();
+  }
+
+  /** {page: [viewport scale, biggest first]} stored in the PDF (see viewports.py). */
+  async #storedScales(tab) {
+    try {
+      const body = new FormData();
+      if (tab.fileId && !tab.edited) body.append("id", tab.fileId);
+      else {
+        const bytes = tab === this.activeTab ? await this.#fullBytes() : tab.bytes;  // (annotations don't matter here)
+        if (!bytes) return {};
+        body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
+      }
+      if (tab.password) body.append("password", tab.password);
+      const res = await fetch("/api/scales", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
+      return res.ok ? (await res.json()).pages || {} : {};
+    } catch (e) {
+      return {};
+    }
   }
 
   #showScale() {
@@ -2542,7 +2570,7 @@ export class Reader {
     this.scaleLabel.textContent = scale ? (scale.custom ? "≈ " + scale.label.replace(/^.*\((.*)\)$/, "$1") : scale.label) : "Scale";
     this.scaleBtn.classList.toggle("set", !!scale);
     this.sheetDetected.hidden = !detected;
-    this.sheetDetected.textContent = detected ? `${detected.label} (from the sheet)` : "";
+    this.sheetDetected.textContent = detected ? `${detected.label} (${detected.stored ? "stored in the PDF" : "from the sheet"})` : "";
     const custom = scale?.custom ? scale : null;
     this.sheetCustom.hidden = !custom;
     this.sheetCustom.textContent = custom ? custom.label : "";
@@ -2746,7 +2774,7 @@ export class Reader {
       this.toast("This sheet's scale isn't set, so lengths show as on paper. Pick it under Sheet scale, or use Set from a dimension.", 6000);
     } else if (mode && !this.activeTab.scaleChecked) {
       const n = this.pdfViewer.currentPageNumber || 1;
-      if (this.#pageScale(n) === this.activeTab.detected?.get(n)) {
+      if (this.#pageScale(n) === this.activeTab.detected?.get(n) && !this.#pageScale(n).stored) {
         this.activeTab.scaleChecked = true;
         this.toast(`The scale ${this.#pageScale(n).label} was read from the sheet. Measure one written dimension to check it before relying on it.`, 7000);
       }
