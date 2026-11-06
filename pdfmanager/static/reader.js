@@ -108,6 +108,11 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 let tabSeq = 0;
+// Files bigger than this, opened from this computer, are read in pieces as
+// pages are shown (the whole file only when a change or save needs it).
+const LAZY_BYTES = 32 * 1024 * 1024;
+const header = (res, name) => { try { return decodeURIComponent(res.headers.get(name) || ""); } catch (e) { return ""; } };
+
 function sameBytes(a, b) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
@@ -171,7 +176,7 @@ export class Reader {
       html: svg("sliders") + "<span>Tools</span>" + svg("down") });
     // Changes not saved yet: Save and Undo come out where they're seen.
     this.saveNowBtn = el("button", { class: "rd-btn primary rd-savenow", type: "button", hidden: true,
-      title: "Save a copy with your changes (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
+      title: "Save your changes (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
     this.undoNowBtn = b("undo", "Undo the last change (Ctrl+Z)", { hidden: true });
     this.homeBtn = this.onHome ? b("home", "Home: all of ZPDF's tools (your documents stay open)") : null;
 
@@ -195,7 +200,7 @@ export class Reader {
     this.rotCcwBtn = b("ccw", "Rotate counter-clockwise (Shift+R)");
     this.rotCwBtn = b("cw", "Rotate clockwise (R)");
     this.printBtn = t("print", "Print", "Print (Ctrl+P)");
-    this.saveBtn = t("save", "Save a copy", "Save a copy (Ctrl+S)");
+    this.saveBtn = t("save", "Save", "Save (Ctrl+S); Save as: Ctrl+Shift+S");
     this.moreBtn = b("more", "More", { "aria-haspopup": "menu", "aria-expanded": "false" });
     this.appToolsBtn = this.onAllTools ? t("grid", "All tools", "Show every ZPDF tool") : null;
     this.commandsBtn = this.onCommands ? t("command", "Commands", "Search every command and tool (Ctrl+K)") : null;
@@ -236,7 +241,7 @@ export class Reader {
     this.undoBtn = b("undo", "Undo (Ctrl+Z)", { disabled: true });
     this.redoBtn = b("redo", "Redo (Ctrl+Y)", { disabled: true });
     this.deleteBtn = b("trash", "Delete the selected annotation (Delete)", { disabled: true });
-    this.annotSaveBtn = el("button", { class: "rd-btn primary", type: "button", title: "Save a copy with your changes (Ctrl+S)", html: svg("save") + "<span>Save a copy</span>" });
+    this.annotSaveBtn = el("button", { class: "rd-btn primary", type: "button", title: "Save your changes (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
     this.annotCloseBtn = b("x", "Close the annotation tools");
     this.annotbar = el("div", { class: "rd-findbar rd-annotbar", hidden: true, role: "toolbar", "aria-label": "Annotate" },
       ...this.annotTools, this.signBtn, el("span", { class: "rd-sep" }),
@@ -313,7 +318,8 @@ export class Reader {
       el("hr"),
       this.#menuItem("full", "Full screen", () => this.toggleFullscreen()),
       this.#menuItem("print", "Print…", () => this.print()),
-      this.#menuItem("save", this.#edited() ? "Save a copy with your changes…" : "Save a copy…", () => this.saveCopy()),
+      ...(this.activeTab?.fileId ? [this.#menuItem("save", "Save", () => this.save())] : []),
+      this.#menuItem("save", this.activeTab?.fileId ? "Save as…" : this.#edited() ? "Save a copy with your changes…" : "Save a copy…", () => this.saveCopy()),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
       this.#menuItem("x", "Close this document", () => this.closeTab()),
     ];
@@ -426,11 +432,11 @@ export class Reader {
     this.findBtn.addEventListener("click", () => (this.findbar.hidden ? this.openFind() : this.closeFind()));
     this.moreBtn.addEventListener("click", () => this.#toggleMenu());
     this.toolsBtn.addEventListener("click", () => this.toggleTray());
-    this.saveNowBtn.addEventListener("click", () => this.saveCopy());
+    this.saveNowBtn.addEventListener("click", () => this.save());
     this.undoNowBtn.addEventListener("click", () => this.#undoLast());
     this.homeBtn?.addEventListener("click", () => this.onHome());
     this.printBtn.addEventListener("click", () => this.print());
-    this.saveBtn.addEventListener("click", () => this.saveCopy());
+    this.saveBtn.addEventListener("click", () => this.save());
     if (this.appToolsBtn) this.appToolsBtn.addEventListener("click", () => this.onAllTools());
     if (this.commandsBtn) this.commandsBtn.addEventListener("click", () => this.onCommands());
     document.addEventListener("pointerdown", (e) => { if (!this.menu.hidden && !this.menu.contains(e.target) && e.target !== this.moreBtn && !this.moreBtn.contains(e.target)) this.#closeMenu(); });
@@ -459,7 +465,7 @@ export class Reader {
     this.undoBtn.addEventListener("click", () => (this.textEditMode ? this.#undoTextEdit() : this.uiManager?.undo()));
     this.redoBtn.addEventListener("click", () => this.uiManager?.redo());
     this.deleteBtn.addEventListener("click", () => this.uiManager?.delete());
-    this.annotSaveBtn.addEventListener("click", () => this.saveCopy());
+    this.annotSaveBtn.addEventListener("click", () => this.save());
     this.annotCloseBtn.addEventListener("click", () => this.closeAnnotate());
 
     // Drop a PDF anywhere on the reader to open it.
@@ -534,7 +540,7 @@ export class Reader {
     if (!this.doc) return;
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
     if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); this.print(); return; }
-    if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); this.saveCopy(); return; }
+    if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); if (e.shiftKey) this.saveCopy(); else this.save(); return; }
     if (mod && !isTyping(e) && !this.scalebar.hidden && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")
         && this.#measureUndo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); return; }
     if (mod && e.key.toLowerCase() === "z" && !e.shiftKey && !isTyping(e) && this.activeTab?.undo?.length
@@ -643,10 +649,19 @@ export class Reader {
   async openById(id, goto = null) {
     this.#busy(true);
     try {
-      const res = await fetch("/api/file/" + encodeURIComponent(id), { headers: { "X-Pdfm-Token": this.token } });
+      const url = "/api/file/" + encodeURIComponent(id), headers = { "X-Pdfm-Token": this.token };
+      // The first byte tells the file's size, place and version.
+      const probe = await fetch(url, { headers: { ...headers, Range: "bytes=0-0" } });
+      if (!probe.ok && probe.status !== 416) throw new Error((await probe.json().catch(() => ({}))).error || probe.statusText);
+      await probe.arrayBuffer();
+      const name = header(probe, "X-Pdfm-Filename") || "document.pdf";
+      const file = { fileId: id, path: header(probe, "X-Pdfm-Path"), stamp: probe.headers.get("X-Pdfm-Stamp") || "",
+        size: Number((probe.headers.get("Content-Range") || "").split("/")[1]) || 0 };
+      if (file.size > LAZY_BYTES) { await this.#serial(() => this.#openBytesNow(null, name, null, goto, { ...file, url })); return; }
+      const res = await fetch(url, { headers });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-      const name = decodeURIComponent(res.headers.get("X-Pdfm-Filename") || "") || "document.pdf";
-      await this.openBytes(new Uint8Array(await res.arrayBuffer()), name, null, goto);
+      file.stamp = res.headers.get("X-Pdfm-Stamp") || file.stamp;
+      await this.openBytes(new Uint8Array(await res.arrayBuffer()), name, null, goto, file);
     } catch (e) {
       this.toast("Could not open the file: " + (e.message || e));
     } finally {
@@ -666,12 +681,15 @@ export class Reader {
   }
 
   /** Open a PDF in a new tab, or switch to its tab if it's already open. */
-  openBytes(bytes, name, password = null, goto = null) {
-    return this.#serial(() => this.#openBytesNow(bytes, name, password, goto));
+  openBytes(bytes, name, password = null, goto = null, file = null) {
+    return this.#serial(() => this.#openBytesNow(bytes, name, password, goto, file));
   }
 
-  async #openBytesNow(bytes, name, password, goto) {
-    const same = this.tabs.find((t) => t.name === name && sameBytes(t.original, bytes));
+  /** ``file``: where a document opened from this computer lives (fileId,
+   *  path, stamp, size; url when it's read in pieces, bytes then null). */
+  async #openBytesNow(bytes, name, password, goto, file = null) {
+    const same = this.tabs.find((t) => (file?.path && t.path === file.path)
+      || (bytes && t.original && t.name === name && sameBytes(t.original, bytes)));
     if (same) {
       if (same === this.activeTab) { if (goto) this.#goto(goto); }
       else { if (goto) same.goto = goto; await this.#switchToNow(same); }  // applied once its pages are there
@@ -681,7 +699,7 @@ export class Reader {
     await this.#stash();
     // edited: bytes holds changes made here; dirty: changes not saved to a file
     // yet; version: counts every change, so a save knows what it included.
-    const tab = { id: ++tabSeq, original: bytes, bytes, name, password, edited: false, dirty: false, version: 0, goto };
+    const tab = { id: ++tabSeq, original: bytes, bytes, name, password, edited: false, dirty: false, version: 0, goto, ...file };
     this.tabs.push(tab);
     if (!(await this.#load(tab))) {
       this.tabs.splice(this.tabs.indexOf(tab), 1);
@@ -802,7 +820,10 @@ export class Reader {
       this.password = tab.password;
       const task = await openDocument({
         ...DOC_OPTIONS,
-        data: tab.bytes.slice(),  // pdf.js takes ownership of the buffer; keep our copy intact
+        ...(tab.bytes
+          ? { data: tab.bytes.slice() }  // pdf.js takes ownership of the buffer; keep our copy intact
+          : { url: tab.url, httpHeaders: { "X-Pdfm-Token": this.token }, length: tab.size || undefined,
+              rangeChunkSize: 1 << 20, disableAutoFetch: true, disableStream: true }),
         password: tab.password || undefined,
         enableXfa: true,
         fontExtraProperties: true,  // fonts' own names, to find the installed copy when editing text
@@ -1525,7 +1546,7 @@ export class Reader {
     };
     const size = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
     const rows = [
-      ["File", this.name], ["File size", size(this.bytes.length)],
+      ["File", this.activeTab?.path || this.name], ["File size", size(this.bytes?.length ?? this.activeTab?.size ?? 0)],
       ["Title", metadata?.get("dc:title") || info.Title], ["Author", info.Author], ["Subject", info.Subject],
       ["Keywords", info.Keywords], ["Created", date(info.CreationDate)], ["Modified", date(info.ModDate)],
       ["Application", info.Creator], ["PDF producer", info.Producer], ["PDF version", info.PDFFormatVersion],
@@ -2098,8 +2119,18 @@ export class Reader {
 
   async #currentBytes() {
     this.#finishEditing();
-    if (!this.#changed()) return this.bytes;
+    if (!this.#changed()) return await this.#fullBytes();
     return await this.doc.saveDocument();
+  }
+
+  /** The shown document's bytes; a file read in pieces is read in full now. */
+  async #fullBytes() {
+    if (!this.bytes && this.doc) {
+      const tab = this.activeTab, data = await this.doc.getData();
+      this.bytes = data;
+      if (tab && !tab.bytes) tab.bytes = tab.original = data;
+    }
+    return this.bytes;
   }
 
   #copyName() {
@@ -2107,16 +2138,52 @@ export class Reader {
     return this.#edited() ? `${stem} (edited).pdf` : `${stem}.pdf`;
   }
 
+  /** Save the changes into the file itself when it was opened from this
+   *  computer (Ctrl+S); otherwise as a copy. */
+  async save() {
+    await this.chain;  // a text change still on its way is included
+    const tab = this.activeTab;
+    if (!this.doc || !tab) return;
+    if (!tab.fileId) { await this.saveCopy(); return; }
+    if (!tab.dirty && !this.#changed()) { this.toast("No changes to save", 1500); return; }
+    const version = tab.version || 0;
+    const bytes = await this.#currentBytes();
+    const put = (force) => fetch("/api/save/" + encodeURIComponent(tab.fileId), { method: "POST", body: bytes,
+      headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/pdf", "X-Pdfm-Stamp": tab.stamp || "",
+        ...(force ? { "X-Pdfm-Force": "1" } : {}) } });
+    try {
+      let res = await put(false);
+      if (res.status === 409) {
+        if (!confirm(`“${tab.name}” was changed by another program since you opened it.\n\nReplace it with your version? (Cancel saves your version as a copy instead.)`)) {
+          await this.saveCopy();
+          return;
+        }
+        res = await put(true);
+      }
+      const answer = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(answer.error || res.statusText);
+      // The file now holds these bytes (and a file read in pieces is in memory now).
+      Object.assign(tab, { stamp: answer.stamp, original: bytes, size: bytes.length });
+      if (!tab.bytes || tab === this.activeTab && !this.bytes) tab.bytes = bytes;
+      this.#markSaved(tab, version);
+      this.toast(`Saved ${tab.name}`, 2000);
+    } catch (e) {
+      this.toast("Could not save: " + (e.message || e), 9000, ["Save as…", () => this.saveCopy()]);
+    }
+  }
+
+  /** Save as a new file, starting in the document's own folder (Ctrl+Shift+S). */
   async saveCopy() {
     await this.chain;  // a text change still on its way is included
     if (!this.doc) return;
     const tab = this.activeTab, version = tab.version || 0;
     const bytes = await this.#currentBytes();
-    await this.#saveBytes(bytes, this.#copyName(), () => this.#markSaved(tab, version));
+    await this.#saveBytes(bytes, this.#copyName(), () => this.#markSaved(tab, version), tab?.fileId);
   }
 
-  /** Save ``bytes`` as a file the person picks (or download it). */
-  async #saveBytes(bytes, name, saved = () => {}) {
+  /** Save ``bytes`` as a file the person picks (or download it); the
+   *  dialog starts next to the opened file ``near`` (its id). */
+  async #saveBytes(bytes, name, saved = () => {}, near = null) {
     const api = this.api();
     if (this.isDesktop() && api && api.save_result) {
       const body = new FormData();
@@ -2124,7 +2191,7 @@ export class Reader {
       try {
         const res = await fetch("/api/keep", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
         const { id } = await res.json();
-        const path = await api.save_result(id, name);
+        const path = await api.save_result(id, name, near);
         if (path) { saved(); this.toast("Saved to " + path, 5000, ["Show in folder", () => api.reveal(path)]); }
       } catch (e) { this.toast("Could not save: " + (e.message || e)); }
       return;
@@ -3432,7 +3499,9 @@ export class Reader {
       { icon: "hand", label: "Hand tool", words: "drag scroll pan", run: () => this.toggleHand() },
       { icon: "full", label: "Full screen", words: "presentation", run: () => this.toggleFullscreen() },
       { icon: "print", label: "Print", keys: "Ctrl+P", run: () => this.print() },
-      { icon: "save", label: this.#edited() ? "Save a copy with your changes" : "Save a copy", keys: "Ctrl+S", words: "download export", run: () => this.saveCopy() },
+      ...(this.activeTab?.fileId ? [{ icon: "save", label: "Save", keys: "Ctrl+S", words: "write file", run: () => this.save() }] : []),
+      { icon: "save", label: this.activeTab?.fileId ? "Save as" : this.#edited() ? "Save a copy with your changes" : "Save a copy",
+        keys: this.activeTab?.fileId ? "Ctrl+Shift+S" : "Ctrl+S", words: "download export copy", run: () => this.saveCopy() },
       { icon: "info", label: "Document properties", words: "info metadata author title", run: () => this.showProperties() },
       { icon: "x", label: "Close this document", words: "tab", run: () => this.closeTab() },
       open,

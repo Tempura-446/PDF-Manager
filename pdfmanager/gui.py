@@ -10,8 +10,6 @@ and other machines can't drive the server.
 """
 
 import base64
-import email.parser
-import email.policy
 import hashlib
 import hmac
 import importlib.util
@@ -49,7 +47,7 @@ from pdfmanager.pageranges import PageRangeError
 
 # One run's uploads. Parsing a form upload takes several times its size in
 # memory, so this stays well inside what a laptop has.
-MAX_UPLOAD = 256 * 1024 * 1024
+MAX_UPLOAD = 1024 * 1024 * 1024
 
 PAPER = ["a4", "letter", "legal", "a3", "a5", "a6", "tabloid", "executive"]
 
@@ -953,22 +951,75 @@ def _page_csp(allow_eval):
             "worker-src 'self' blob:; connect-src 'self' data: blob:; "
             "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
+_PARAM = re.compile(r';\s*([\w*-]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;\s]*))')
+
+
 def _parse_multipart(content_type, body):
-    """Return (fields, files) where files is a list of (field name, filename, bytes)."""
-    message = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(
-        b"Content-Type: " + content_type.encode("latin-1") + b"\r\n\r\n" + body)
-    if not message.is_multipart():
+    """Return (fields, files) where files is a list of (field name, filename, bytes).
+
+    A direct split of the browser's multipart/form-data body: the email
+    parser took seconds and many times the upload's size in memory (5.6 s
+    and 2.4 GB for a 277 MB PDF). Uploaded files come back as read-only
+    views of ``body``, so they cost no copy."""
+    match = re.search(r'boundary=(?:"([^"]+)"|([^;\s]+))', content_type or "")
+    if not content_type.lower().startswith("multipart/") or not match:
         raise UserError("expected a form upload")
+    delimiter = b"--" + (match.group(1) or match.group(2)).encode("latin-1")
+    view = memoryview(body).toreadonly()
     fields, files = {}, []
-    for part in message.iter_parts():
-        name = part.get_param("name", header="content-disposition")
-        filename = part.get_filename()
-        data = part.get_payload(decode=True) or b""
-        if filename is not None:
-            files.append((name, filename, data))
+    start = body.find(delimiter)
+    if start < 0:
+        raise UserError("expected a form upload")
+    while True:
+        start += len(delimiter)
+        if body[start:start + 2] == b"--":  # the closing delimiter
+            break
+        head_end = body.find(b"\r\n\r\n", start)
+        end = body.find(b"\r\n" + delimiter, head_end + 4 if head_end >= 0 else start)
+        if head_end < 0 or end < 0:
+            raise UserError("the upload was cut short; try again")
+        headers = {}
+        for line in body[start:head_end].decode("utf-8", "replace").split("\r\n"):
+            key, sep, value = line.partition(":")
+            if sep:
+                headers[key.strip().lower()] = value.strip()
+        params = {}
+        for key, quoted, plain in _PARAM.findall(";" + headers.get("content-disposition", "").partition(";")[2]):
+            value = re.sub(r"\\(.)", r"\1", quoted) if quoted else plain
+            # Browsers write ", CR and LF in names as %22, %0D and %0A.
+            params[key.lower()] = re.sub(r"%(22|0D|0A)", lambda m: chr(int(m.group(1), 16)), value,
+                                         flags=re.IGNORECASE)
+        if "filename*" in params and "'" in params["filename*"]:  # RFC 5987: UTF-8''name
+            charset, _, encoded = params["filename*"].partition("'")
+            params["filename"] = urllib.parse.unquote(encoded.partition("'")[2],
+                                                      encoding=charset or "utf-8", errors="replace")
+        data = view[head_end + 4:end]
+        if "filename" in params:
+            files.append((params.get("name"), params["filename"], data))
         else:
-            fields[name] = data.decode("utf-8")
+            fields[params.get("name")] = bytes(data).decode("utf-8")
+        start = end + 2
     return fields, files
+
+
+def _file_stamp(path):
+    """Changes whenever the file does (its time and size)."""
+    info = Path(path).stat()
+    return f"{info.st_mtime_ns}-{info.st_size}"
+
+
+def _byte_range(header, size):
+    """(first, last) byte of a one-range ``Range`` header for a file of
+    ``size`` bytes; None if the range is outside the file or not one we serve."""
+    match = re.fullmatch(r"\s*bytes=(\d*)-(\d*)\s*", header or "")
+    if not match or not (match.group(1) or match.group(2)) or size == 0:
+        return None
+    if match.group(1):
+        start = int(match.group(1))
+        end = min(int(match.group(2)), size - 1) if match.group(2) else size - 1
+    else:  # the last n bytes
+        start, end = max(0, size - int(match.group(2))), size - 1
+    return (start, end) if start <= end and start < size else None
 
 
 def _safe_name(name):
@@ -1041,6 +1092,11 @@ class Handler(BaseHTTPRequestHandler):
             body = json.dumps(body).encode()
         elif isinstance(body, str):
             body = body.encode()
+        self._start(status, ctype, len(body), headers, cache)
+        self.wfile.write(body)
+
+    def _start(self, status, ctype, length, headers=None, cache=False):
+        """The status line and headers of an answer ``length`` bytes long."""
         # Headers can only carry latin-1 (see _download_headers): check them
         # before the status line is written, so a bad one can't leave a
         # half-sent answer that a second status line then gets appended to.
@@ -1051,7 +1107,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise RuntimeError(f"the {k} header can't be sent as it is") from None
         self.send_response(status)
         self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(length))
         # Static files may be cached but are checked (cheaply, by ETag) on every
         # load, so an updated app never runs old code.
         self.send_header("Cache-Control", "no-cache" if cache else "no-store")
@@ -1060,7 +1116,6 @@ class Handler(BaseHTTPRequestHandler):
         for k, v in (headers or {}).items():
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(body)
 
     def _error(self, status, message):
         # The request body may not have been read; don't reuse the connection.
@@ -1138,16 +1193,69 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(HTTPStatus.OK, data, ctype, {"ETag": etag}, cache=True)
 
     def _open_file(self, key):
+        """A file opened from this computer. Big files are read in pieces
+        (HTTP Range): the reader shows the first pages without waiting for
+        the whole file."""
         path = self.opened.get(key) if self.opened is not None else None
         if path is None or not path.is_file():
             return self._error(HTTPStatus.NOT_FOUND, "that file is no longer available")
-        data = path.read_bytes()
-        RecentFiles.add(path)
+        size = path.stat().st_size
         # The path is percent-encoded like the name: a folder called
         # "Документы" would otherwise be unsendable.
-        return self._send(HTTPStatus.OK, data, "application/pdf",
-                          {"X-Pdfm-Filename": _download_headers(path.name)["X-Pdfm-Filename"],
-                           "X-Pdfm-Path": urllib.parse.quote(str(path), safe="")})
+        headers = {"X-Pdfm-Filename": _download_headers(path.name)["X-Pdfm-Filename"],
+                   "X-Pdfm-Path": urllib.parse.quote(str(path), safe=""),
+                   "X-Pdfm-Stamp": _file_stamp(path), "Accept-Ranges": "bytes"}
+        wanted = self.headers.get("Range")
+        span = _byte_range(wanted, size) if wanted else (0, size - 1)
+        if span is None:
+            return self._send(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, b"", "application/pdf",
+                              {**headers, "Content-Range": f"bytes */{size}"})
+        start, end = span
+        if start == 0:
+            RecentFiles.add(path)
+        if wanted:
+            headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        with path.open("rb") as f:
+            f.seek(start)
+            self._start(HTTPStatus.PARTIAL_CONTENT if wanted else HTTPStatus.OK, "application/pdf",
+                        end - start + 1, headers)
+            left = end - start + 1
+            while left > 0:
+                chunk = f.read(min(left, 1 << 20))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                left -= len(chunk)
+
+    def _save_in_place(self, key, body):
+        """Write the reader's copy of an opened file over the file itself:
+        to a temporary file next to it first, then swapped in, so a failure
+        halfway never leaves a broken file. If another program changed the
+        file since it was opened, the answer is 409 unless X-Pdfm-Force."""
+        path = self.opened.get(key) if self.opened is not None else None
+        if path is None:
+            raise UserError("this file can't be saved in place; use Save as")
+        if b"%PDF" not in body[:1024]:
+            raise UserError("not a PDF")
+        expected = self.headers.get("X-Pdfm-Stamp", "")
+        if (path.exists() and expected and _file_stamp(path) != expected
+                and self.headers.get("X-Pdfm-Force") != "1"):
+            return self._send(HTTPStatus.CONFLICT, {"error": f"{path.name} was changed by another "
+                                                             "program", "changed": True})
+        temp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.zpdf-saving")
+        try:
+            temp.write_bytes(body)
+            try:
+                shutil.copymode(path, temp)
+            except OSError:
+                pass
+            os.replace(temp, path)
+        except OSError as exc:
+            temp.unlink(missing_ok=True)
+            raise UserError(f"could not save {path.name}: it may be open in another program, "
+                            f"or read-only ({exc.strerror or exc})") from None
+        RecentFiles.add(path)
+        return self._send(HTTPStatus.OK, {"path": str(path), "stamp": _file_stamp(path)})
 
     def _recent(self):
         """Recently opened files that still exist, each with an id the
@@ -1198,6 +1306,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(HTTPStatus.OK, png, "image/png")
             if path == "/api/keep":
                 return self._keep(body)
+            if path.startswith("/api/save/"):
+                return self._save_in_place(path[len("/api/save/"):], body)
             if path == "/api/outline":
                 return self._outline(body)
             if path == "/api/redact/find":
@@ -1331,7 +1441,7 @@ class Handler(BaseHTTPRequestHandler):
         if not uploads or self.results is None:
             raise UserError("no file")
         _, filename, data = uploads[0]
-        return self._send(HTTPStatus.OK, {"id": self.results.add(_safe_name(filename), data)})
+        return self._send(HTTPStatus.OK, {"id": self.results.add(_safe_name(filename), bytes(data))})
 
     def _outline(self, body):
         """The bookmarks of an uploaded PDF, or (detect=1) suggestions from
@@ -1856,17 +1966,20 @@ class DesktopApi:
         path = Path(chosen if isinstance(chosen, str) else chosen[0])
         return {"id": self._opened.add(path), "name": path.name}
 
-    def save_result(self, key, suggested_name):
+    def save_result(self, key, suggested_name, near=None):
         """Ask where to save a result and write it. Returns the path, or
-        None if the user cancelled."""
+        None if the user cancelled. The dialog starts in the folder of the
+        opened file ``near`` (its id), if given, else the home folder."""
         import webview
 
         item = self._results.get(key)
         if item is None:
             raise ValueError("that result has expired; run the tool again")
         name, data = item
+        beside = self._opened.get(near) if near else None
+        folder = beside.parent if beside is not None and beside.parent.is_dir() else Path.home()
         chosen = self._window.create_file_dialog(
-            webview.FileDialog.SAVE, directory=str(Path.home()),
+            webview.FileDialog.SAVE, directory=str(folder),
             save_filename=suggested_name or name)
         if not chosen:
             return None
