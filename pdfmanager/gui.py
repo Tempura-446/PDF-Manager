@@ -10,8 +10,6 @@ and other machines can't drive the server.
 """
 
 import base64
-import email.parser
-import email.policy
 import hashlib
 import hmac
 import importlib.util
@@ -43,13 +41,13 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
-                        forms, recipes, redact, scan, search, textedit, update)
+                        forms, recipes, redact, scan, search, textedit, update, viewports, markup)
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
 # One run's uploads. Parsing a form upload takes several times its size in
 # memory, so this stays well inside what a laptop has.
-MAX_UPLOAD = 256 * 1024 * 1024
+MAX_UPLOAD = 1024 * 1024 * 1024
 
 PAPER = ["a4", "letter", "legal", "a3", "a5", "a6", "tabloid", "executive"]
 
@@ -72,12 +70,23 @@ OPERATIONS = [
              "previews where each new file should start.",
      "board": {"mode": "split", "field": "ranges", "every": "every", "how": "by"},
      "fields": [_f("by", "Split", "select", "every",
-                   choices=[["every", "Every few pages"], ["ranges", "At the pages I choose"]]),
+                   choices=[["every", "Every few pages"], ["ranges", "At the pages I choose"],
+                            ["bookmarks", "At each bookmark (chapter)"],
+                            ["size", "Into files no larger than…"]]),
                 _f("every", "Pages per file", "number", 1, min=1, show_if={"by": "every"}),
                 _f("ranges", "Page ranges, one file each", "text", "", show_if={"by": "ranges"},
                    placeholder="1-3, 4-10, 11-",
                    hint="Separate ranges with spaces or ;. With one PDF, clicking the page "
-                        "previews fills this in.")]},
+                        "previews fills this in."),
+                _f("level", "Bookmarks to split at", "select", "1", show_if={"by": "bookmarks"},
+                   choices=[["1", "Main bookmarks only"],
+                            ["2", "Also the bookmarks one level below"]],
+                   hint="Each file is named after its bookmark. Pages before the first "
+                        "bookmark get a file of their own."),
+                _f("max_mb", "Largest file size (MB)", "number", 10, min=0.01, step=0.5,
+                   show_if={"by": "size"},
+                   hint="Handy for email attachments. Each file gets as many pages as fit; a "
+                        "single page larger than this gets a file of its own.")]},
     {"id": "interleave", "group": "Combine", "label": "Interleave scans", "files": "pdf2",
      "help": "Combine separately scanned front sides (first file) and back sides "
              "(second file).",
@@ -102,6 +111,14 @@ OPERATIONS = [
      "board": {"mode": "order", "field": "order"},
      "fields": [_f("order", "New order", "text", "", placeholder="3,1,2,4-", required=True,
                    hint="updates as you drag; e.g. 3,1,2,4- or 5-1")]},
+    {"id": "insert-blank", "group": "Pages", "label": "Insert blank pages", "files": "pdf",
+     "help": "Click the pages to put a blank page after. Each blank page has the size of the "
+             "page before it. Choose All to get a page for notes after every page.",
+     "board": {"mode": "select", "effect": "insert", "field": "after"},
+     "fields": [_f("after", "After pages", "text", "", placeholder="3,7 or all",
+                   hint="updates as you click; e.g. 3,7 or end or all"),
+                _f("at_start", "Also before the first page", "check", False),
+                _f("count", "Blank pages at each place", "number", 1, min=1, max=100)]},
     {"id": "reverse", "group": "Pages", "label": "Reverse order", "files": "pdf",
      "help": "Put the pages in reverse order (last page first).",
      "board": {"mode": "view", "effect": "reverse"}, "fields": []},
@@ -141,11 +158,32 @@ OPERATIONS = [
                 _f("bottom", "Bottom (mm)", "number", 10, min=0),
                 _f("left", "Left (mm)", "number", 10, min=0),
                 _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
+    {"id": "autocrop", "group": "Layout", "label": "Trim white margins", "files": "pdf",
+     "help": "Cut away the empty white border around the content of each page, e.g. to read "
+             "a paper or a scan more comfortably on a small screen. Blank pages are left as "
+             "they are; the cut-off margins stay in the file, hidden.",
+     "fields": [_f("padding", "Space to keep around the content (mm)", "number", 3.5, min=0,
+                   step=0.5),
+                _f("same", "Crop every page the same", "check", False,
+                   hint="Keeps the pages the same size: the crop fits the content of all of "
+                        "them. Otherwise each page is trimmed on its own."),
+                _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
     {"id": "nup", "live": True, "group": "Layout", "label": "Pages per sheet", "files": "pdf",
      "fields": [_f("per_sheet", "Pages per sheet", "select", "2",
                    choices=[[str(n), str(n)] for n in (2, 4, 6, 8, 9)]),
                 _f("size", "Sheet size", "select", "a4",
                    choices=[[p, p.upper() if p[0] == "a" else p.capitalize()] for p in PAPER])]},
+    {"id": "booklet", "group": "Layout", "label": "Booklet", "files": "pdf",
+     "help": "Print a folded booklet: two pages side by side on each sheet, in the order that "
+             "comes out right once the sheets are folded in the middle. Print it on both sides, "
+             "flipping on the short edge, then fold the stack and staple it on the fold. Blank "
+             "pages are added at the end to fill the last sheet.",
+     "fields": [_f("size", "Sheet size", "select", "",
+                   choices=[["", "Twice the page size"]]
+                   + [[p, p.upper() if p[0] == "a" else p.capitalize()]
+                      for p in ("a4", "letter", "a3", "tabloid", "legal")],
+                   hint="Used sideways, with two pages on each side. Twice the page size "
+                        "keeps the pages as they are: A5 pages on A4 paper, A4 on A3.")]},
     {"id": "compress", "group": "Optimize", "label": "Compress", "files": "pdf",
      "fields": [_f("level", "Compression", "select", "medium",
                    choices=[["low", "Low — lossless"],
@@ -313,6 +351,7 @@ OPERATIONS = [
 OPS = {op["id"]: op for op in OPERATIONS}
 
 SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
+          "insert-blank": "blanks", "booklet": "booklet", "autocrop": "trimmed",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
@@ -383,6 +422,26 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
     elif op == "nup":
         core.n_up(src, out, _num(opts.get("per_sheet"), int, 2), opts.get("size") or "a4",
                   password)
+    elif op == "insert-blank":
+        after, at_start = _pages(opts, "after"), _bool(opts.get("at_start"))
+        if not after and not at_start:
+            raise UserError("click the pages to put blank pages after, or type them")
+        core.insert_blank_pages(src, out, after, _num(opts.get("count"), int, 1),
+                                at_start=at_start, password=password)
+    elif op == "booklet":
+        core.booklet(src, out, opts.get("size") or None, password)
+        sheets = len(PdfReader(str(out)).pages) // 2
+        notes.append(f"{src.name}: {sheets} sheet{'s' if sheets != 1 else ''} of paper. Print on "
+                     "both sides, flipping on the short edge, then fold in the middle.")
+    elif op == "autocrop":
+        report = core.trim_margins(src, out, padding=_num(opts.get("padding"), float, 3.5)
+                                   * core.POINTS_PER_MM, same=_bool(opts.get("same")),
+                                   pages=_pages(opts), password=password)
+        if report["blank"]:
+            many = len(report["blank"]) > 1
+            notes.append(f"{src.name}: page{'s' if many else ''} {_pages_list(report['blank'])} "
+                         f"{'are' if many else 'is'} blank and {'were' if many else 'was'} "
+                         f"left as {'they are' if many else 'it is'}")
     elif op == "compress":
         core.compress(src, out, level=opts.get("level") or "medium", password=password)
     elif op == "color":
@@ -511,9 +570,22 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             raise UserError("enter the PDF's current password")
         core.decrypt(src, out, password)
     elif op == "split":
-        ranges = [r for r in re.split(r"[;\s]+", opts.get("ranges") or "") if r] \
-            if opts.get("by", "ranges") == "ranges" else []
+        by = opts.get("by", "ranges")
         folder = out_dir / f"{src.stem}_split"
+        if by == "bookmarks":
+            return core.split(src, folder, bookmarks=_num(opts.get("level"), int, 1),
+                              password=password)
+        if by == "size":
+            mb = _num(opts.get("max_mb"), float, 10)
+            if mb <= 0:
+                raise UserError("the largest file size must be more than 0 MB")
+            found = []
+            files = core.split(src, folder, max_size=int(mb * 1_000_000), password=password,
+                               notes=found)
+            notes.extend(f"{src.name}: {note}" for note in found)
+            return files
+        ranges = [r for r in re.split(r"[;\s]+", opts.get("ranges") or "") if r] \
+            if by == "ranges" else []
         return core.split(src, folder, every=None if ranges else _num(opts.get("every"), int, 1),
                           ranges=ranges or None, password=password)
     elif op == "media":
@@ -953,22 +1025,75 @@ def _page_csp(allow_eval):
             "worker-src 'self' blob:; connect-src 'self' data: blob:; "
             "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
+_PARAM = re.compile(r';\s*([\w*-]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;\s]*))')
+
+
 def _parse_multipart(content_type, body):
-    """Return (fields, files) where files is a list of (field name, filename, bytes)."""
-    message = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(
-        b"Content-Type: " + content_type.encode("latin-1") + b"\r\n\r\n" + body)
-    if not message.is_multipart():
+    """Return (fields, files) where files is a list of (field name, filename, bytes).
+
+    A direct split of the browser's multipart/form-data body: the email
+    parser took seconds and many times the upload's size in memory (5.6 s
+    and 2.4 GB for a 277 MB PDF). Uploaded files come back as read-only
+    views of ``body``, so they cost no copy."""
+    match = re.search(r'boundary=(?:"([^"]+)"|([^;\s]+))', content_type or "")
+    if not content_type.lower().startswith("multipart/") or not match:
         raise UserError("expected a form upload")
+    delimiter = b"--" + (match.group(1) or match.group(2)).encode("latin-1")
+    view = memoryview(body).toreadonly()
     fields, files = {}, []
-    for part in message.iter_parts():
-        name = part.get_param("name", header="content-disposition")
-        filename = part.get_filename()
-        data = part.get_payload(decode=True) or b""
-        if filename is not None:
-            files.append((name, filename, data))
+    start = body.find(delimiter)
+    if start < 0:
+        raise UserError("expected a form upload")
+    while True:
+        start += len(delimiter)
+        if body[start:start + 2] == b"--":  # the closing delimiter
+            break
+        head_end = body.find(b"\r\n\r\n", start)
+        end = body.find(b"\r\n" + delimiter, head_end + 4 if head_end >= 0 else start)
+        if head_end < 0 or end < 0:
+            raise UserError("the upload was cut short; try again")
+        headers = {}
+        for line in body[start:head_end].decode("utf-8", "replace").split("\r\n"):
+            key, sep, value = line.partition(":")
+            if sep:
+                headers[key.strip().lower()] = value.strip()
+        params = {}
+        for key, quoted, plain in _PARAM.findall(";" + headers.get("content-disposition", "").partition(";")[2]):
+            value = re.sub(r"\\(.)", r"\1", quoted) if quoted else plain
+            # Browsers write ", CR and LF in names as %22, %0D and %0A.
+            params[key.lower()] = re.sub(r"%(22|0D|0A)", lambda m: chr(int(m.group(1), 16)), value,
+                                         flags=re.IGNORECASE)
+        if "filename*" in params and "'" in params["filename*"]:  # RFC 5987: UTF-8''name
+            charset, _, encoded = params["filename*"].partition("'")
+            params["filename"] = urllib.parse.unquote(encoded.partition("'")[2],
+                                                      encoding=charset or "utf-8", errors="replace")
+        data = view[head_end + 4:end]
+        if "filename" in params:
+            files.append((params.get("name"), params["filename"], data))
         else:
-            fields[name] = data.decode("utf-8")
+            fields[params.get("name")] = bytes(data).decode("utf-8")
+        start = end + 2
     return fields, files
+
+
+def _file_stamp(path):
+    """Changes whenever the file does (its time and size)."""
+    info = Path(path).stat()
+    return f"{info.st_mtime_ns}-{info.st_size}"
+
+
+def _byte_range(header, size):
+    """(first, last) byte of a one-range ``Range`` header for a file of
+    ``size`` bytes; None if the range is outside the file or not one we serve."""
+    match = re.fullmatch(r"\s*bytes=(\d*)-(\d*)\s*", header or "")
+    if not match or not (match.group(1) or match.group(2)) or size == 0:
+        return None
+    if match.group(1):
+        start = int(match.group(1))
+        end = min(int(match.group(2)), size - 1) if match.group(2) else size - 1
+    else:  # the last n bytes
+        start, end = max(0, size - int(match.group(2))), size - 1
+    return (start, end) if start <= end and start < size else None
 
 
 def _safe_name(name):
@@ -1041,6 +1166,11 @@ class Handler(BaseHTTPRequestHandler):
             body = json.dumps(body).encode()
         elif isinstance(body, str):
             body = body.encode()
+        self._start(status, ctype, len(body), headers, cache)
+        self.wfile.write(body)
+
+    def _start(self, status, ctype, length, headers=None, cache=False):
+        """The status line and headers of an answer ``length`` bytes long."""
         # Headers can only carry latin-1 (see _download_headers): check them
         # before the status line is written, so a bad one can't leave a
         # half-sent answer that a second status line then gets appended to.
@@ -1051,7 +1181,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise RuntimeError(f"the {k} header can't be sent as it is") from None
         self.send_response(status)
         self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(length))
         # Static files may be cached but are checked (cheaply, by ETag) on every
         # load, so an updated app never runs old code.
         self.send_header("Cache-Control", "no-cache" if cache else "no-store")
@@ -1060,7 +1190,6 @@ class Handler(BaseHTTPRequestHandler):
         for k, v in (headers or {}).items():
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(body)
 
     def _error(self, status, message):
         # The request body may not have been read; don't reuse the connection.
@@ -1138,16 +1267,86 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(HTTPStatus.OK, data, ctype, {"ETag": etag}, cache=True)
 
     def _open_file(self, key):
+        """A file opened from this computer. Big files are read in pieces
+        (HTTP Range): the reader shows the first pages without waiting for
+        the whole file."""
         path = self.opened.get(key) if self.opened is not None else None
         if path is None or not path.is_file():
             return self._error(HTTPStatus.NOT_FOUND, "that file is no longer available")
-        data = path.read_bytes()
-        RecentFiles.add(path)
+        size = path.stat().st_size
         # The path is percent-encoded like the name: a folder called
         # "Документы" would otherwise be unsendable.
-        return self._send(HTTPStatus.OK, data, "application/pdf",
-                          {"X-Pdfm-Filename": _download_headers(path.name)["X-Pdfm-Filename"],
-                           "X-Pdfm-Path": urllib.parse.quote(str(path), safe="")})
+        headers = {"X-Pdfm-Filename": _download_headers(path.name)["X-Pdfm-Filename"],
+                   "X-Pdfm-Path": urllib.parse.quote(str(path), safe=""),
+                   "X-Pdfm-Stamp": _file_stamp(path), "Accept-Ranges": "bytes"}
+        wanted = self.headers.get("Range")
+        span = _byte_range(wanted, size) if wanted else (0, size - 1)
+        if span is None:
+            return self._send(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, b"", "application/pdf",
+                              {**headers, "Content-Range": f"bytes */{size}"})
+        start, end = span
+        if start == 0:
+            RecentFiles.add(path)
+        if wanted:
+            headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        with path.open("rb") as f:
+            f.seek(start)
+            self._start(HTTPStatus.PARTIAL_CONTENT if wanted else HTTPStatus.OK, "application/pdf",
+                        end - start + 1, headers)
+            left = end - start + 1
+            while left > 0:
+                chunk = f.read(min(left, 1 << 20))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                left -= len(chunk)
+
+    def _scales(self, body):
+        """The drawing scales stored in a PDF (see viewports.py): of a file
+        opened from this computer (field "id") or of an uploaded copy."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        password = fields.get("password") or None
+        if fields.get("id"):
+            path = self.opened.get(fields["id"]) if self.opened is not None else None
+            if path is None:
+                raise UserError("that file is no longer available")
+            return self._send(HTTPStatus.OK, {"pages": viewports.stored_scales(path, password)})
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            return self._send(HTTPStatus.OK, {"pages": viewports.stored_scales(path, password)})
+
+    def _save_in_place(self, key, body):
+        """Write the reader's copy of an opened file over the file itself:
+        to a temporary file next to it first, then swapped in, so a failure
+        halfway never leaves a broken file. If another program changed the
+        file since it was opened, the answer is 409 unless X-Pdfm-Force."""
+        path = self.opened.get(key) if self.opened is not None else None
+        if path is None:
+            raise UserError("this file can't be saved in place; use Save as")
+        if b"%PDF" not in body[:1024]:
+            raise UserError("not a PDF")
+        expected = self.headers.get("X-Pdfm-Stamp", "")
+        if (path.exists() and expected and _file_stamp(path) != expected
+                and self.headers.get("X-Pdfm-Force") != "1"):
+            return self._send(HTTPStatus.CONFLICT, {"error": f"{path.name} was changed by another "
+                                                             "program", "changed": True})
+        temp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.zpdf-saving")
+        try:
+            temp.write_bytes(body)
+            try:
+                shutil.copymode(path, temp)
+            except OSError:
+                pass
+            os.replace(temp, path)
+        except OSError as exc:
+            temp.unlink(missing_ok=True)
+            raise UserError(f"could not save {path.name}: it may be open in another program, "
+                            f"or read-only ({exc.strerror or exc})") from None
+        RecentFiles.add(path)
+        return self._send(HTTPStatus.OK, {"path": str(path), "stamp": _file_stamp(path)})
 
     def _recent(self):
         """Recently opened files that still exist, each with an id the
@@ -1198,6 +1397,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(HTTPStatus.OK, png, "image/png")
             if path == "/api/keep":
                 return self._keep(body)
+            if path == "/api/markup":
+                return self._markup(body)
+            if path == "/api/scales":
+                return self._scales(body)
+            if path.startswith("/api/save/"):
+                return self._save_in_place(path[len("/api/save/"):], body)
             if path == "/api/outline":
                 return self._outline(body)
             if path == "/api/redact/find":
@@ -1331,7 +1536,7 @@ class Handler(BaseHTTPRequestHandler):
         if not uploads or self.results is None:
             raise UserError("no file")
         _, filename, data = uploads[0]
-        return self._send(HTTPStatus.OK, {"id": self.results.add(_safe_name(filename), data)})
+        return self._send(HTTPStatus.OK, {"id": self.results.add(_safe_name(filename), bytes(data))})
 
     def _outline(self, body):
         """The bookmarks of an uploaded PDF, or (detect=1) suggestions from
@@ -1491,6 +1696,28 @@ class Handler(BaseHTTPRequestHandler):
         # Which font each change got, for the reader to say so.
         return self._send(HTTPStatus.OK, data, "application/pdf",
                           {"X-Pdfm-Fonts": json.dumps(report, ensure_ascii=True)})
+
+    def _markup(self, body):
+        """Add notes, underlines, strikeouts and shapes, or change, answer or
+        remove comments (see markup.py); sends back the changed PDF."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        try:
+            changes = json.loads(fields.get("changes") or "[]")
+        except ValueError:
+            raise UserError("the changes are damaged; make them again") from None
+        if not isinstance(changes, list) or not all(isinstance(c, dict) for c in changes):
+            raise UserError("the changes are damaged; make them again")
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "marked.pdf"
+            src.write_bytes(uploads[0][2])
+            added = markup.apply(src, out, changes, password, fields.get("author"))
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)  # stays protected
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf", {"X-Pdfm-Added": json.dumps(added)})
 
     def _arrange(self, body):
         """Reorder, turn, delete, copy or insert the reader's pages; sends back
@@ -1856,17 +2083,20 @@ class DesktopApi:
         path = Path(chosen if isinstance(chosen, str) else chosen[0])
         return {"id": self._opened.add(path), "name": path.name}
 
-    def save_result(self, key, suggested_name):
+    def save_result(self, key, suggested_name, near=None):
         """Ask where to save a result and write it. Returns the path, or
-        None if the user cancelled."""
+        None if the user cancelled. The dialog starts in the folder of the
+        opened file ``near`` (its id), if given, else the home folder."""
         import webview
 
         item = self._results.get(key)
         if item is None:
             raise ValueError("that result has expired; run the tool again")
         name, data = item
+        beside = self._opened.get(near) if near else None
+        folder = beside.parent if beside is not None and beside.parent.is_dir() else Path.home()
         chosen = self._window.create_file_dialog(
-            webview.FileDialog.SAVE, directory=str(Path.home()),
+            webview.FileDialog.SAVE, directory=str(folder),
             save_filename=suggested_name or name)
         if not chosen:
             return None

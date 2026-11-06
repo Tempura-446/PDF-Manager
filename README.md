@@ -4,8 +4,10 @@
 the **command line**, or as a **Python library**.
 
 It includes a full **PDF reader** with tabs, where you can also annotate,
-sign and change existing text, and it can merge, split, compare, extract,
-reorder, rotate, resize, crop, n-up, compress (three levels), convert colours
+sign and change existing text, and it can merge, split (also at bookmarks or
+into files of a maximum size), compare, extract, reorder, insert blank pages,
+rotate, resize, crop (also trimming white margins automatically), n-up, make
+**booklets** for folded printing, compress (three levels), convert colours
 (grayscale / RGB / CMYK, with ICC profiles), OCR and clean up scans, redact,
 flatten, remove hidden data, convert to PDF/A, Word and from Office files or
 images, edit bookmarks, encrypt, watermark and number pages, add headers,
@@ -30,6 +32,15 @@ apps*) for PDFs, and an entry in **Settings → Apps** to uninstall it. No
 administrator rights are needed, and you can delete the unzipped folder
 afterwards. Running it again updates the installed copy (or use the
 **Update** button, below).
+
+At the end it asks whether to add **OCR and PDF/A support** (about 150 MB):
+OCRmyPDF, plus the Tesseract and Ghostscript programs installed with
+winget (`UB-Mannheim.TesseractOCR`, `ArtifexSoftware.GhostScript`; Windows
+may ask for permission, as they install for all users). It doesn't ask when
+they're already there, and skips the programs when winget is missing.
+`Install ZPDF.cmd -WithOcr` adds them without asking, `-NoOcr` never does.
+ZPDF finds both programs where their installers put them, also when they
+aren't on the PATH.
 
 The app runs with Python's own `pythonw.exe`, which is signed by the Python
 Software Foundation, so Windows **Smart App Control** lets it start (it may
@@ -118,14 +129,24 @@ closed.
   - **Extract pages**, **Delete pages**, **Rotate:** click the pages to use
     (Shift+click for a range, or All / Odd / Even / Invert / Clear). Pages
     to delete are crossed out, and rotated pages are shown turned.
+  - **Insert blank pages:** click the pages to put a blank page after
+    (each the size of the page before it); *All* gives a page for notes
+    after every page.
   - **Reverse order:** shows the pages in their new order.
-  - **Split:** choose *every few pages*, or *at the pages I choose*: click
-    a page to start a new file there (or type the ranges).
+  - **Split:** choose *every few pages*, *at the pages I choose* (click
+    a page to start a new file there, or type the ranges), *at each
+    bookmark* (one file per chapter, named after it; the previews show
+    where each file starts), or *into files no larger than* a size, e.g.
+    for email.
 
   The page box under Options updates as you go, and typing pages there
   updates the previews.
 - **Crop margins** shows the page with a box to drag (the margins are as
-  the page is shown, also for turned pages). **Redact** lets you
+  the page is shown, also for turned pages). **Trim white margins** finds
+  the content of each page and cuts away the white around it (or the same
+  for every page). **Booklet** puts two pages on each sheet in the order
+  for a folded, stapled booklet: print it double-sided, flipping on the
+  short edge. **Redact** lets you
   draw boxes to black out, and shows where the words you typed are found.
 - **Bookmarks** has an editor: rename, indent and reorder bookmarks, or
   detect them from the document's headings.
@@ -186,7 +207,15 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   The **Home** button (top left) goes back to the tools; your documents stay
   open in the reader.
 - **Save** and **Undo** appear in the toolbar as soon as a document has
-  changes not saved yet.
+  changes not saved yet. **Save** (Ctrl+S) writes them into the file you
+  opened (safely: to a new file next to it that then takes its place; if
+  another program changed the file in the meantime you're asked first).
+  **Save as** (Ctrl+Shift+S) starts in the file's own folder. A PDF that
+  came from elsewhere (dropped from a browser, a tool's result) is saved
+  as a copy.
+- **Big files open fast:** a PDF of over 32 MB from your computer is read
+  a piece at a time as you go, so the first pages show at once (a 277 MB
+  drawing set: first page in about a second, using a few MB of memory).
 - A zoom that fits the page (Automatic, Fit width, Fit page) fits it again
   when the window or the sidebar changes size.
 - **Tabs:** open several PDFs at once (the + button, or drop more files),
@@ -199,11 +228,20 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
 - **Find** (Ctrl+F) with highlighting, match case and whole words.
 - **Select and copy text**; links work (web links open in your browser).
 - **Fill in forms** and save a copy with your entries.
-- **Annotate and sign** (Tools → Annotate & sign): highlight text, add text, draw,
-  add pictures, and sign by drawing, typing your name or using a picture of
-  your signature (remembered on this computer if you like). Colours and
-  sizes, undo/redo, and **Save a copy** with your changes. Use *Flatten
-  forms & comments* afterwards to make them part of the page.
+- **Annotate and sign** (Tools → Annotate & sign): highlight, underline
+  or strike out text, add **notes** (click, type your comment), add text,
+  draw, draw **shapes** (rectangle, ellipse, revision cloud, arrow, line;
+  hold Shift for squares, circles and 45° lines), add pictures, and sign
+  by drawing, typing your name or using a picture of your signature
+  (remembered on this computer if you like). Colours and sizes,
+  undo/redo, and **Save** with your changes. Notes, underlines, strikeouts
+  and shapes are standard PDF annotations with their own appearance, so
+  Acrobat and other viewers show them the same, and they print. Use
+  *Flatten forms & comments* afterwards to make them part of the page.
+- **Comments** (a tab in the sidebar): every note, highlight, shape and
+  other markup in the document, page by page, with its author, date and
+  comment and the replies under it. Click one to go to it; add or change
+  its comment, reply, or delete it. Your name for comments is asked once.
 - **Edit text** (E, or Tools → Annotate & sign → Edit text): click a line
   and retype it, **Shift+click** to rewrite its whole paragraph (it rewraps
   to the same width and line spacing, and stays justified if it was), or
@@ -226,12 +264,13 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   Ctrl or Shift to pick several, and turn, duplicate, delete or extract
   them (the buttons on a thumbnail, the bar above them, or right-click).
   **Insert PDF**, or drop a PDF between the thumbnails, puts its pages in.
-  Every change can be undone (Ctrl+Z) and is kept with **Save a copy**.
+  Every change can be undone (Ctrl+Z) and is kept with **Save**.
 - **Right-click a page** for what you can do there: copy the selected
   words, edit this text, rewrite this paragraph, add text here, turn,
   duplicate, delete or extract the page, or insert a PDF after it.
 - **Drawings to scale** (house plans, blueprints): the **Scale** button
-  next to the zoom reads each sheet's scale from its title block
+  next to the zoom uses the exact scale CAD programs and Bluebeam store in
+  the PDF when there is one, else reads each sheet's scale from its title block
   (`1/4" = 1'-0"`, `1" = 20'`, `1:100`, …), or you pick it, or **Set from a
   dimension**: click both ends of a line you know (say a 24'-0" wall) and
   type its length. The dialog shows what that line measures at the current
@@ -327,16 +366,18 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `view` | read PDFs in the reader | `pdfm view report.pdf` |
 | `info` | page count, page sizes, metadata | `pdfm info *.pdf` |
 | `merge` | combine files (optionally picking pages) | `pdfm merge a.pdf b.pdf:1-3 -o all.pdf` |
-| `split` | one file per page, every N pages, or per range | `pdfm split book.pdf -r 1-10 11-20 21-` |
+| `split` | one file per page, every N pages, per range, per bookmark, or files of at most N MB | `pdfm split book.pdf -r 1-10 11-20 21-` · `--bookmarks` · `--max-size 10` |
 | `extract` | copy selected pages to a new file | `pdfm extract doc.pdf -p 2,4-6` |
 | `delete` | remove pages | `pdfm delete doc.pdf -p 1,end` |
 | `reorder` | rearrange (or repeat) pages | `pdfm reorder doc.pdf --order 3,1,2,4-` |
+| `insert-blank` | insert blank pages (after pages, at the start, or after every page) | `pdfm insert-blank doc.pdf --after 3,7` · `--after all` |
 | `reverse` | reverse page order | `pdfm reverse scan.pdf` |
 | `interleave` | merge separately scanned fronts and backs | `pdfm interleave fronts.pdf backs.pdf -o book.pdf` |
 | `rotate` | rotate all or some pages | `pdfm rotate *.pdf -d 90 -p 2-3` |
 | `resize` | change paper size or scale pages | `pdfm resize doc.pdf -s a4` · `--scale 0.5` |
-| `crop` | trim margins (mm, CSS-style order, as the page is shown) | `pdfm crop doc.pdf -m 10` · `-m 10 5 10 5` |
+| `crop` | trim margins (mm, CSS-style order, as the page is shown), or the white margins | `pdfm crop doc.pdf -m 10` · `-m 10 5 10 5` · `--auto --padding 3` |
 | `nup` | 2/4/6/8/9 pages per sheet | `pdfm nup slides.pdf -n 4` |
+| `booklet` | arrange pages for a folded, saddle-stitched booklet | `pdfm booklet zine.pdf` · `-s letter` |
 | `compress` | shrink files: `low`, `medium`, `high` | `pdfm compress *.pdf -l high -o small/` |
 | `color` | convert to grayscale, RGB or CMYK | `pdfm color doc.pdf --to cmyk --icc printer.icc` |
 | `ocr` | make scans searchable | `pdfm ocr scan.pdf --language eng+deu` |
@@ -369,6 +410,30 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `setup-windows` | Windows shortcuts, Open with, uninstall entry (`--remove`) | used by the installer |
 
 Run `pdfm <command> -h` for all options.
+
+### Splitting, blank pages, booklets and white margins
+
+- `split --bookmarks` makes one file per top-level bookmark (`--level 2`
+  also splits at the bookmarks under them), named `01 Title.pdf`,
+  `02 …`; pages before the first bookmark go in `00 Opening pages.pdf`.
+  `split --max-size 10` makes files of at most 10 MB (1 MB = 1,000,000
+  bytes), each with as many pages as fit; a page larger than that on its
+  own gets a file of its own, and a note says so.
+- `insert-blank --after 3,7` puts a blank page after pages 3 and 7 (`end`
+  after the last page, `0` or `--at-start` before the first, `all` after
+  every page, e.g. to print slides with a page for notes); `--count 2`
+  inserts two at each place. Each blank page has the size of the page
+  before it.
+- `booklet` adds blank pages to make a multiple of four and puts two pages
+  side by side on each sheet in booklet order (8, 1 · 2, 7 · 6, 3 · 4, 5).
+  By default a sheet is twice the page size (A5 pages on A4, A4 on A3);
+  `-s a4` or `-s letter` scales them onto that paper instead. Print it
+  double-sided, **flipping on the short edge**, fold the stack in the
+  middle and staple it on the fold.
+- `crop --auto` draws each page and cuts away the white around its content,
+  keeping `--padding` mm (default 3.5); `--same` gives every page the same
+  crop. Blank pages are left as they are, and only the crop box changes, so
+  the margins are still in the file.
 
 ### Compression levels
 

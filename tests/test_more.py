@@ -1510,3 +1510,148 @@ def test_written_pictures_are_binary_and_ascii85_reads_fast(tmp_path):
     assert len(saved["images"]) == 1
     with Image.open(saved["images"][0]) as im:
         assert im.convert("RGB").getpixel((5, 5)) == (10, 120, 220)
+
+
+def vp_pdf(path, viewports, size=(1224, 792)):
+    """A drawing whose page stores scales the way CAD and Bluebeam do."""
+    from pypdf import PdfWriter
+    from pypdf.generic import ArrayObject, DictionaryObject, FloatObject, NameObject, TextStringObject
+
+    writer = PdfWriter()
+    page = writer.add_blank_page(*size)
+    entries = []
+    for bbox, unit, per_point, label in viewports:
+        fmt = DictionaryObject({NameObject("/Type"): NameObject("/NumberFormat"),
+                                NameObject("/U"): TextStringObject(unit),
+                                NameObject("/C"): FloatObject(per_point)})
+        measure = DictionaryObject({NameObject("/Type"): NameObject("/Measure"),
+                                    NameObject("/Subtype"): NameObject("/RL"),
+                                    NameObject("/X"): ArrayObject([fmt]), NameObject("/D"): ArrayObject([fmt])})
+        if label:
+            measure[NameObject("/R")] = TextStringObject(label)
+        entries.append(DictionaryObject({NameObject("/Type"): NameObject("/Viewport"),
+                                         NameObject("/BBox"): ArrayObject(FloatObject(v) for v in bbox),
+                                         NameObject("/Measure"): measure}))
+    page[NameObject("/VP")] = ArrayObject(entries)
+    writer.add_blank_page(*size)  # a sheet without one
+    writer.write(path)
+    return path
+
+
+def test_drawing_scales_stored_in_the_pdf_are_read(tmp_path):
+    from pdfmanager import viewports
+
+    # 1/4" = 1'-0": a point on paper (1/72 in) is 48/72 in = 1/18 ft.
+    src = vp_pdf(tmp_path / "plan.pdf", [((40, 40, 300, 200), "ft", 1 / 18, ""),
+                                          ((20, 20, 1200, 770), "ft", 1 / 18, '1/4" = 1\'-0"'),
+                                          ((0, 0, 10, 10), "m", 100 * 25.4 / 72 / 1000, "1:100")])
+    found = viewports.stored_scales(src)
+    assert list(found) == [1]
+    big, small, metric = found[1]
+    assert big["label"] == '1/4" = 1\'-0"' and big["units"] == "ft" and round(big["ratio"], 3) == 48
+    assert big["bbox"] == [20, 20, 1200, 770] and round(small["ratio"], 3) == 48 and small["label"] == ""
+    assert metric["units"] == "m" and round(metric["ratio"], 3) == 100
+    # Geospatial measures and unknown units are not drawing scales.
+    assert viewports.stored_scales(vp_pdf(tmp_path / "odd.pdf", [((0, 0, 9, 9), "furlong", 1, "")])) == {}
+
+
+def test_reader_asks_for_stored_scales(app, tmp_path):
+    base, token, srv = app
+    src = vp_pdf(tmp_path / "plan.pdf", [((20, 20, 1200, 770), "m", 100 * 25.4 / 72 / 1000, "1:100")])
+    key = srv.RequestHandlerClass.opened.add(src)
+    boundary = "pdfmtestboundary"
+    body = f'--{boundary}\r\nContent-Disposition: form-data; name="id"\r\n\r\n{key}\r\n--{boundary}--\r\n'.encode()
+    request = urllib.request.Request(base + "/api/scales", data=body, headers={
+        "X-Pdfm-Token": token, "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(request, timeout=20) as res:
+        pages = json.loads(res.read())["pages"]
+    assert list(pages) == ["1"] and round(pages["1"][0]["ratio"], 3) == 100 and pages["1"][0]["units"] == "m"
+
+
+def _annots(path, page=0):
+    return [a.get_object() for a in PdfReader(path).pages[page].get("/Annots", [])]
+
+
+def test_notes_markup_and_shapes_are_standard_annotations(tmp_path):
+    import pypdfium2 as pdfium
+
+    from pdfmanager import markup
+
+    src = text_pdf(tmp_path / "doc.pdf", ["Underline these words please"])
+    added = markup.apply(src, tmp_path / "m.pdf", [
+        {"op": "add", "page": 1, "kind": "note", "at": [400, 720], "text": "Check with the client"},
+        {"op": "add", "page": 1, "kind": "underline", "rects": [[72, 756, 300, 772]], "color": "#1f4fd8"},
+        {"op": "add", "page": 1, "kind": "strikeout", "rects": [[72, 756, 300, 772]], "text": "drop this"},
+        {"op": "add", "page": 1, "kind": "rect", "rect": [72, 450, 250, 600], "color": "#1f4fd8", "width": 3},
+        {"op": "add", "page": 1, "kind": "ellipse", "rect": [300, 600, 520, 450]},
+        {"op": "add", "page": 1, "kind": "cloud", "rect": [90, 220, 300, 380], "text": "Revise"},
+        {"op": "add", "page": 1, "kind": "arrow", "points": [[350, 250], [500, 380]]},
+        {"op": "add", "page": 1, "kind": "line", "points": [[350, 200], [550, 200]]},
+    ], author="Pat")
+    annots = _annots(tmp_path / "m.pdf")
+    assert [a["/Subtype"] for a in annots] == ["/Text", "/Popup", "/Underline", "/StrikeOut", "/Square", "/Circle",
+                                               "/Polygon", "/Line", "/Line"]
+    assert len(added) == 8 and all(re.fullmatch(r"\d+R", i) for i in added)
+    note, popup = annots[0], annots[1]
+    assert note["/Contents"] == "Check with the client" and note["/T"] == "Pat" and note["/Popup"]
+    assert popup["/Parent"].get_object() is not None
+    assert [round(float(v)) for v in annots[2]["/QuadPoints"]] == [72, 772, 300, 772, 72, 756, 300, 756]
+    assert annots[6]["/BE"]["/S"] == "/C" and annots[7]["/LE"][1] == "/ClosedArrow"
+    assert all("/AP" in a for a in annots if a["/Subtype"] != "/Popup")  # every viewer shows them alike
+    # pdfium (printing, flattening) draws them: the rectangle's blue edge.
+    doc = pdfium.PdfDocument(str(tmp_path / "m.pdf"))
+    image = doc[0].render(scale=1, draw_annots=True).to_pil().convert("RGB")
+    doc.close()
+    r, g, b = image.getpixel((72, 792 - 525))
+    assert b > 150 and r < 100
+    with pytest.raises(core.PdfManagerError, match="select some text"):
+        markup.apply(src, tmp_path / "x.pdf", [{"op": "add", "page": 1, "kind": "underline", "rects": []}])
+    with pytest.raises(core.PdfManagerError, match="no page 3"):
+        markup.apply(src, tmp_path / "x.pdf", [{"op": "add", "page": 3, "kind": "note", "at": [1, 1]}])
+
+
+def test_comments_are_changed_answered_and_deleted(tmp_path):
+    from pdfmanager import markup
+
+    src = text_pdf(tmp_path / "doc.pdf")
+    note, shape = markup.apply(src, tmp_path / "a.pdf", [
+        {"op": "add", "page": 1, "kind": "note", "at": [100, 700], "text": "Is this right?"},
+        {"op": "add", "page": 1, "kind": "rect", "rect": [100, 100, 200, 200]}], author="Pat")
+    # The ids are the file's own (pdf.js reads the same).
+    refs = PdfReader(tmp_path / "a.pdf").pages[0]["/Annots"]
+    assert [f"{r.idnum}R" for r in refs if hasattr(r, "idnum")][:1] == [note]
+    markup.apply(tmp_path / "a.pdf", tmp_path / "b.pdf", [
+        {"op": "text", "page": 1, "id": shape, "text": "Door moved here"},
+        {"op": "reply", "page": 1, "id": note, "text": "Yes"},
+        {"op": "reply", "page": 1, "id": note, "text": "Confirmed on site"}], author="Sam")
+    annots = _annots(tmp_path / "b.pdf")
+    assert [(a["/Subtype"], a.get("/Contents"), a.get("/T")) for a in annots] == [
+        ("/Text", "Is this right?", "Pat"), ("/Popup", None, None), ("/Square", "Door moved here", "Pat"),
+        ("/Text", "Yes", "Sam"), ("/Text", "Confirmed on site", "Sam")]
+    assert annots[3]["/IRT"].get_object() == annots[0] and annots[3]["/RT"] == "/R"
+    # Deleting the note takes its popup and replies with it.
+    first = PdfReader(tmp_path / "b.pdf").pages[0]["/Annots"][0]
+    markup.apply(tmp_path / "b.pdf", tmp_path / "c.pdf", [{"op": "delete", "page": 1, "id": f"{first.idnum}R"}])
+    assert [a["/Subtype"] for a in _annots(tmp_path / "c.pdf")] == ["/Square"]
+    with pytest.raises(core.PdfManagerError, match="can't be found"):
+        markup.apply(tmp_path / "c.pdf", tmp_path / "d.pdf", [{"op": "delete", "page": 1, "id": "999R"}])
+
+
+def test_markup_endpoint_keeps_a_protected_file_protected(app, tmp_path):
+    base, token, _ = app
+    core.encrypt(text_pdf(tmp_path / "doc.pdf"), tmp_path / "locked.pdf", "pw")
+    boundary = "pdfmtestboundary"
+    changes = json.dumps([{"op": "add", "page": 1, "kind": "note", "at": [100, 700], "text": "Hi"}])
+    body = (f'--{boundary}\r\nContent-Disposition: form-data; name="changes"\r\n\r\n{changes}\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="password"\r\n\r\npw\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="author"\r\n\r\nPat\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="locked.pdf"\r\n\r\n').encode() \
+        + (tmp_path / "locked.pdf").read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+    request = urllib.request.Request(base + "/api/markup", data=body, headers={
+        "X-Pdfm-Token": token, "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(request, timeout=20) as res:
+        (tmp_path / "out.pdf").write_bytes(res.read())
+        added = json.loads(res.headers["X-Pdfm-Added"])
+    reader = PdfReader(tmp_path / "out.pdf")
+    assert reader.is_encrypted and reader.decrypt("pw")
+    assert len(added) == 1 and reader.pages[0]["/Annots"][0].get_object()["/T"] == "Pat"

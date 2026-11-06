@@ -410,19 +410,50 @@ def merge(inputs, output, bookmarks=True, password=None):
     return _write(writer, output)
 
 
-def split(path, outdir, every=None, ranges=None, prefix=None, password=None):
+def split(path, outdir, every=None, ranges=None, prefix=None, password=None, bookmarks=None,
+          max_size=None, notes=None):
     """Split a PDF.
 
     - ``ranges``: list of range specs, one output file per spec.
     - ``every``: chunks of N pages.
-    - neither: one file per page.
-    Returns the list of written files.
+    - ``bookmarks``: 1 or 2: one file per bookmark of that level or above
+      (1 = top-level bookmarks only), named after the bookmark.
+    - ``max_size``: files of at most this many bytes, as many pages as fit.
+    - none of these: one file per page.
+    Messages for the user (a page too large for ``max_size`` on its own) are
+    appended to ``notes``. Returns the list of written files.
     """
     reader = open_pdf(path, password)
     total = len(reader.pages)
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+
+    if bookmarks:
+        groups = _bookmark_groups(path, total, int(bookmarks), password)
+        width = max(2, len(str(len(groups))))
+        first = 0 if groups[0][0] is None else 1  # 00 for the pages before the first bookmark
+        taken, names = set(), []
+        for n, (title, _) in enumerate(groups, first):
+            label = f"{n:0{width}d} {_title_filename(title or 'Opening pages')}"
+            name = f"{prefix}_{label}" if prefix else label
+            names.append(_unique_filename(name, taken))
+        written = []
+        for n, (name, (_, indices)) in enumerate(zip(names, groups)):
+            progress.report(n, len(groups), "file")
+            written.append(_write(_writer_from_pages(reader, indices), outdir / name))
+        return written
+
     prefix = prefix or Path(path).stem
+    width = len(str(total))
+
+    def label(g):
+        return f"{g[0] + 1:0{width}d}" if len(g) == 1 else f"{g[0] + 1:0{width}d}-{g[-1] + 1:0{width}d}"
+
+    if max_size is not None:
+        written = []
+        for indices, data in _size_chunks(path, reader, max_size, notes):
+            written.append(_write(_Bytes(data), outdir / f"{prefix}_{label(indices)}.pdf"))
+        return written
 
     if ranges:
         groups = [(spec, parse_page_ranges(spec, total)) for spec in ranges]
@@ -433,16 +464,117 @@ def split(path, outdir, every=None, ranges=None, prefix=None, password=None):
         if n < 1:
             raise PdfManagerError("--every must be at least 1")
         groups = [list(range(i, min(i + n, total))) for i in range(0, total, n)]
-        width = len(str(total))
-        labels = [
-            f"{g[0] + 1:0{width}d}" if len(g) == 1 else f"{g[0] + 1:0{width}d}-{g[-1] + 1:0{width}d}"
-            for g in groups
-        ]
+        labels = [label(g) for g in groups]
 
     written = []
-    for label, indices in zip(labels, groups):
-        written.append(_write(_writer_from_pages(reader, indices), outdir / f"{prefix}_{label}.pdf"))
+    for label_, indices in zip(labels, groups):
+        written.append(_write(_writer_from_pages(reader, indices), outdir / f"{prefix}_{label_}.pdf"))
     return written
+
+
+def _bookmark_groups(path, total, level, password=None):
+    """[(bookmark title, 0-based pages)] for splitting at the bookmarks of
+    ``level`` or above (1 = top level). The pages before the first bookmark
+    come first, with the title None."""
+    from pdfmanager import outline  # outline uses this module
+
+    if level not in (1, 2):
+        raise PdfManagerError("the bookmark level must be 1 (top level) or 2")
+    starts = {}  # first page -> title; of several bookmarks on one page, the first
+    for item in sorted(outline.get_outline(path, password), key=lambda i: i["page"]):
+        if item["level"] < level:
+            starts.setdefault(item["page"] - 1, item["title"])
+    if not starts:
+        raise PdfManagerError(
+            f"{Path(path).name} has no bookmarks to split at; split it another way, or add "
+            "bookmarks first (the Bookmarks tool can create them from the headings)")
+    firsts = sorted(starts)
+    groups = [(None, list(range(firsts[0])))] if firsts[0] > 0 else []
+    for k, first in enumerate(firsts):
+        end = firsts[k + 1] if k + 1 < len(firsts) else total
+        groups.append((starts[first], list(range(first, end))))
+    return groups
+
+
+def _title_filename(title, limit=80):
+    """A bookmark title as (part of) a file name that works on every system."""
+    text = re.sub(r"[\\/]+", "-", str(title))
+    text = "".join("_" if c in '<>:"|?*' or ord(c) < 32 else c for c in text)
+    text = " ".join(text.split())
+    while len(text.encode("utf-8")) > limit:
+        text = text[:-1]
+    return text.strip(" .") or "Untitled"
+
+
+def _unique_filename(stem, taken, ext=".pdf"):
+    """``stem + ext``, or ``stem (2) + ext`` and so on if that name (in any
+    upper/lower case, as on Windows and macOS) is already in ``taken``."""
+    name, n = stem + ext, 1
+    while name.lower() in taken:
+        n += 1
+        name = f"{stem} ({n}){ext}"
+    taken.add(name.lower())
+    return name
+
+
+def _pages_bytes(reader, indices):
+    buf = io.BytesIO()
+    _writer_from_pages(reader, indices).write(buf)
+    return buf.getvalue()
+
+
+def _size_chunks(path, reader, max_size, notes=None):
+    """Split for ``split(max_size=...)``: yields (0-based pages, the file's
+    bytes) for runs of pages whose file is at most ``max_size`` bytes, each
+    as long as possible. A page that is larger on its own gets a file of
+    its own, and a note says so.
+
+    Each file is really written (in memory) and measured; the number of
+    pages to try is estimated from the sizes measured so far, so a long
+    document takes a few tries per file, not one per page."""
+    max_size = int(max_size)
+    if max_size < 1024:
+        raise PdfManagerError("the largest file size must be at least 1 KB")
+    total = len(reader.pages)
+    # Results made from a protected file are protected again afterwards,
+    # which adds a little to each file.
+    limit = int(max_size * 0.98) - 2048 if reader.is_encrypted else max_size
+    per_page = max(1.0, os.path.getsize(path) / total)
+    start = 0
+    while start < total:
+        progress.report(start, total, "page")
+        left = total - start
+        sizes, data = {}, {}  # pages tried -> file size, and the bytes of those that fit
+        fits, too_big = 0, left + 1  # most pages known to fit; fewest known not to
+        tries = min(left, max(1, int(limit * 0.97 / per_page)))
+        while True:
+            blob = _pages_bytes(reader, range(start, start + tries))
+            sizes[tries] = len(blob)
+            if len(blob) <= limit:
+                fits, data[tries] = tries, blob
+            else:
+                too_big = tries
+            if fits == left or too_big == fits + 1:
+                break
+            if too_big > left:  # everything tried fits: try more pages
+                guess = int(tries * limit * 0.97 / max(1, len(blob)))
+            elif fits == 0:  # nothing fits yet: try fewer
+                guess = int(tries * limit * 0.97 / max(1, len(blob)))
+            else:  # between the two, assuming size grows evenly with the pages
+                low, high = sizes[fits], sizes[too_big]
+                guess = fits + int((limit - low) * (too_big - fits) / max(1, high - low))
+            tries = min(max(guess, fits + 1), too_big - 1, left)
+        if fits:
+            yield list(range(start, start + fits)), data[fits]
+            per_page = max(1.0, sizes[fits] / fits)
+            start += fits
+        else:  # one page is larger than the limit by itself
+            blob = _pages_bytes(reader, [start])
+            if notes is not None:
+                notes.append(f"page {start + 1} alone is {len(blob) / 1e6:.1f} MB, more than "
+                             f"{max_size / 1e6:g} MB, so it is in a file of its own")
+            yield [start], blob
+            start += 1
 
 
 def select_pages(path, output, pages, password=None):
@@ -665,8 +797,20 @@ def n_up(path, output, per_sheet=2, size="a4", password=None):
         sw, sh = max(sw, sh), min(sw, sh)
     else:
         sw, sh = min(sw, sh), max(sw, sh)
-    cell_w, cell_h = sw / cols, sh / rows
+    total = len(open_pdf(path, password).pages)
+    sheets = [list(range(i, min(i + per_sheet, total))) for i in range(0, total, per_sheet)]
+    return _write(_impose(path, password, sheets, (sw, sh), cols, rows), output)
 
+
+def _impose(path, password, sheets, sheet_size, cols, rows, fill=0.95):
+    """A writer with sheets of ``sheet_size`` holding the pages of ``path``
+    in a grid of ``cols`` x ``rows`` cells: ``sheets`` lists, per sheet, the
+    0-based page for each cell (row by row from the top left; None leaves
+    the cell empty). Each page is scaled to ``fill`` of its cell, centred.
+    Links, form fields and comments move with their page; links to other
+    pages point to the sheet that holds that page."""
+    sw, sh = sheet_size
+    cell_w, cell_h = sw / cols, sh / rows
     # Work on a copy so pages can be normalised without touching the reader.
     source = clone_document(open_pdf(path, password))
     shared = _shared_objects(source)
@@ -675,22 +819,54 @@ def n_up(path, output, per_sheet=2, size="a4", password=None):
         _own_contents(page, shared)
         _retarget_links(page, page_numbers)
     writer = PdfWriter()
-    sheet = None
-    for i, src in enumerate(source.pages):
-        slot = i % per_sheet
-        if slot == 0:
-            sheet = writer.add_blank_page(width=sw, height=sh)
-        _transfer_rotation(src)
-        box = _visible_box(src)  # what the page shows goes in the cell
-        pw, ph = float(box.width), float(box.height)
-        s = min(cell_w / pw, cell_h / ph) * 0.95
-        col, row = slot % cols, slot // cols
-        x = col * cell_w + (cell_w - pw * s) / 2
-        y = sh - (row + 1) * cell_h + (cell_h - ph * s) / 2
-        op = Transformation().translate(-float(box.left), -float(box.bottom)).scale(s, s).translate(x, y)
-        sheet.merge_transformed_page(src, op)  # also moves the annotations
-    _resolve_links(writer, per_sheet)
-    return _write(writer, output)
+    sheet_of = {}  # page -> the sheet it is on
+    for n, cells in enumerate(sheets):
+        progress.report(n, len(sheets), "sheet")
+        sheet = writer.add_blank_page(width=sw, height=sh)
+        for slot, i in enumerate(cells):
+            if i is None:
+                continue
+            src = source.pages[i]
+            sheet_of.setdefault(i, n)
+            _transfer_rotation(src)
+            box = _visible_box(src)  # what the page shows goes in the cell
+            pw, ph = float(box.width), float(box.height)
+            s = min(cell_w / pw, cell_h / ph) * fill
+            col, row = slot % cols, slot // cols
+            x = col * cell_w + (cell_w - pw * s) / 2
+            y = sh - (row + 1) * cell_h + (cell_h - ph * s) / 2
+            op = Transformation().translate(-float(box.left), -float(box.bottom)).scale(s, s).translate(x, y)
+            sheet.merge_transformed_page(src, op)  # also moves the annotations
+    _resolve_links(writer, sheet_of)
+    return writer
+
+
+def booklet(path, output, size=None, password=None):
+    """Arrange pages for a booklet printed on both sides of the paper,
+    folded in the middle and stapled on the fold (saddle stitch): two pages
+    side by side on each landscape sheet, in the order that puts them in
+    sequence once folded (n, 1 | 2, n-1 | n-2, 3 | ...). Blank pages are
+    added at the end to make a multiple of four.
+
+    ``size`` is the sheet (paper) size, e.g. "a4" or "letter", turned
+    landscape; by default a sheet is twice the first page (A5 pages give
+    A4 sheets, A4 pages A3 sheets). Print the result double-sided,
+    flipping on the short edge."""
+    reader = open_pdf(path, password)
+    total = len(reader.pages)
+    if size:
+        w, h = parse_paper_size(size)
+        sheet = (max(w, h), min(w, h))
+    else:
+        w, h = _page_size(reader.pages[0])
+        sheet = (2 * w, h)
+    padded = -(-total // 4) * 4
+    sides = []
+    for k in range(padded // 4):
+        sides.append([padded - 1 - 2 * k, 2 * k])      # front of sheet k + 1
+        sides.append([2 * k + 1, padded - 2 - 2 * k])  # its back
+    sides = [[i if i < total else None for i in side] for side in sides]
+    return _write(_impose(path, password, sides, sheet, 2, 1, fill=1.0), output)
 
 
 _LINK_TARGET = NameObject("/PdfmTargetPage")
@@ -728,15 +904,127 @@ def _retarget_links(page, page_numbers):
     page[NameObject("/Annots")] = keep
 
 
-def _resolve_links(writer, per_sheet):
+def _resolve_links(writer, sheet_of):
+    """Point the links ``_retarget_links`` marked at the sheet that holds
+    their page (``sheet_of``: page -> sheet)."""
     for sheet in writer.pages:
         for ref in sheet.get("/Annots", ArrayObject()):
             annot = ref.get_object()
             if isinstance(annot, DictionaryObject) and _LINK_TARGET in annot:
-                target = writer.pages[int(annot[_LINK_TARGET]) // per_sheet]
-                annot[NameObject("/Dest")] = ArrayObject(
-                    [target.indirect_reference, NameObject("/Fit")])
+                target = sheet_of.get(int(annot[_LINK_TARGET]))
                 del annot[_LINK_TARGET]
+                if target is not None:
+                    annot[NameObject("/Dest")] = ArrayObject(
+                        [writer.pages[target].indirect_reference, NameObject("/Fit")])
+
+
+# --------------------------------------------------------------------------
+# Blank pages and white margins
+# --------------------------------------------------------------------------
+
+def _insert_positions(after, total, at_start=False):
+    """Where blank pages go: the number of pages before each place, from a
+    page list ("3,7", "end", "all"; 0 or "start" = before the first page)."""
+    positions = {0} if at_start else set()
+    rest = []
+    for token in str(after or "").split(","):
+        token = token.strip().lower()
+        if token in ("0", "start"):
+            positions.add(0)
+        elif token:
+            rest.append(token)
+    if rest:
+        positions.update(i + 1 for i in parse_page_ranges(",".join(rest), total))
+    if not positions:
+        raise PdfManagerError("say after which pages the blank pages go")
+    return sorted(positions)
+
+
+def insert_blank_pages(path, output, after=None, count=1, at_start=False, password=None):
+    """Insert ``count`` blank pages after each page in ``after`` (a page
+    list such as "3,7" or "end"; "all" puts them after every page, e.g. to
+    print with a sheet for notes beside each page; 0 means before the first
+    page, as does ``at_start``). Each blank page has the size of the page
+    before it (at the start, of the first page). Bookmarks, links and form
+    fields are kept."""
+    if not 1 <= int(count) <= 100:
+        raise PdfManagerError("insert between 1 and 100 blank pages at each place")
+    reader = open_pdf(path, password)
+    positions = _insert_positions(after, len(reader.pages), at_start)
+    writer = clone_document(reader)
+    sizes = [_page_size(page) for page in writer.pages]
+    for n, position in enumerate(reversed(positions)):  # from the end, so positions stay put
+        progress.report(n, len(positions), "place")
+        width, height = sizes[max(position - 1, 0)]
+        for _ in range(int(count)):
+            writer.insert_blank_page(width, height, position)
+    return _write(writer, output)
+
+
+def trim_margins(path, output, padding=10, same=False, pages=None, tolerance=24, dpi=50,
+                 password=None):
+    """Crop away the white margins around each page's content: the pages
+    are drawn at ``dpi`` and everything lighter than ``tolerance`` below
+    pure white counts as margin. ``padding`` (points) is kept around the
+    content. With ``same``, every page gets the same crop, large enough
+    for the content of all of them (good for a book whose page numbers or
+    headings sit in different places); otherwise each page is trimmed on
+    its own. Pages that are entirely blank are left as they are.
+
+    Only the crop box changes (what viewers show and print); the media box
+    stays, so the margins can be brought back.
+    Returns {"trimmed": [...], "blank": [...]} with 1-based page numbers."""
+    import pypdfium2 as pdfium
+
+    if padding < 0:
+        raise PdfManagerError("the space around the content can't be negative")
+    reader = open_pdf(path, password)
+    total = len(reader.pages)
+    targets = sorted(set(parse_page_ranges(pages, total))) if pages else list(range(total))
+    found, blank = {}, []  # page -> margins as fractions of the page as shown (l, b, r, t)
+    white = 255 - max(0, min(254, int(tolerance)))
+    with PDFIUM_LOCK:
+        try:
+            doc = pdfium.PdfDocument(str(path), password=password)
+        except pdfium.PdfiumError as exc:
+            raise PdfManagerError(f"{path} can't be rendered ({exc})") from None
+        try:
+            doc.init_forms()  # filled-in form fields count as content
+            for n, i in enumerate(targets):
+                progress.report(n, len(targets), "page")
+                page = doc[i]
+                try:
+                    image = page.render(scale=dpi / 72, may_draw_forms=True).to_pil().convert("L")
+                finally:
+                    page.close()
+                box = image.point(lambda v: 255 if v < white else 0).getbbox()
+                if box is None:
+                    blank.append(i)
+                    continue
+                w, h = image.size
+                x0, y0, x1, y1 = box
+                found[i] = (x0 / w, (h - y1) / h, (w - x1) / w, y0 / h)
+        finally:
+            doc.close()
+    writer = clone_document(reader)
+    margins = {}  # page -> margins to trim as the page is shown, in points
+    for i, fractions in found.items():
+        w, h = _page_size(writer.pages[i])
+        margins[i] = [max(0.0, f * size - padding) for f, size in zip(fractions, (w, h, w, h))]
+    if same and margins:
+        common = [min(m[k] for m in margins.values()) for k in range(4)]
+        margins = {i: common for i in margins}
+    for i, shown in margins.items():
+        page = writer.pages[i]
+        left, bottom, right, top = _unturned(shown, page.rotation or 0)
+        box = _visible_box(page)
+        page.cropbox = RectangleObject([float(box.left) + left, float(box.bottom) + bottom,
+                                        float(box.right) - right, float(box.top) - top])
+        for name in ("/TrimBox", "/BleedBox", "/ArtBox"):
+            if name in page:
+                del page[name]
+    _write(writer, output)
+    return {"trimmed": [i + 1 for i in sorted(margins)], "blank": [i + 1 for i in blank]}
 
 
 # --------------------------------------------------------------------------
@@ -1380,6 +1668,9 @@ def ocr(path, output, language="eng", force=False, deskew=False, password=None):
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp_out = output.with_name(output.name + ".tmp.pdf")
+    from pdfmanager import scan  # scan uses this module
+
+    scan.add_programs_to_path()  # Tesseract and Ghostscript where installers put them
     progress.say("recognising text (this can take a while)")
     try:
         ocrmypdf.ocr(str(source), str(tmp_out), language=language.split("+"),

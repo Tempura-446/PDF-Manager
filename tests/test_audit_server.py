@@ -390,7 +390,90 @@ def test_uncollected_job_results_expire_on_their_own():
 
 def test_upload_limit_is_realistic_and_the_message_matches(app):
     base, token, _ = app
-    assert gui.MAX_UPLOAD <= 256 * 1024 * 1024
+    # Uploads are held once in memory (the parser hands out views of the
+    # body, see below), so 1 GB is safe on any computer that runs the app.
+    assert gui.MAX_UPLOAD <= 1024 * 1024 * 1024
     status, _, out = call(base, token, "/api/ping", b"", {"Content-Length": str(gui.MAX_UPLOAD + 1)})
     assert status == 413
     assert json.loads(out)["error"] == f"upload too large ({gui.MAX_UPLOAD // 2**20} MB max)"
+
+
+def test_multipart_uploads_are_split_without_copies():
+    body, headers = multipart({"op": "compress", "note": "a\r\nb"},
+                              [("files", "Отчёт “2026”.pdf", b"%PDF-1.4 x\r\n--pdfmtestboundar"),
+                               ("files", "b.pdf", b"")])
+    fields, files = gui._parse_multipart(headers["Content-Type"], body)
+    assert fields == {"op": "compress", "note": "a\r\nb"}
+    assert [(n, f, bytes(d)) for n, f, d in files] == [
+        ("files", "Отчёт “2026”.pdf", b"%PDF-1.4 x\r\n--pdfmtestboundar"), ("files", "b.pdf", b"")]
+    assert all(isinstance(d, memoryview) and d.obj is body for _, _, d in files)
+    with pytest.raises(gui.UserError, match="cut short"):
+        gui._parse_multipart(headers["Content-Type"], body[:-40])
+    with pytest.raises(gui.UserError, match="form upload"):
+        gui._parse_multipart("application/json", body)
+
+
+def test_opened_files_are_read_in_pieces_and_saved_in_place(app, tmp_path):
+    base, token, srv = app
+    src = text_pdf(tmp_path / "Plan – A.pdf", ["one", "two"])
+    original = src.read_bytes()
+    key = srv.RequestHandlerClass.opened.add(src)
+    # Whole file, then pieces (the reader reads big files a piece at a time).
+    status, headers, body = call(base, token, f"/api/file/{key}")
+    assert status == 200 and body == original and headers["Accept-Ranges"] == "bytes"
+    stamp = headers["X-Pdfm-Stamp"]
+    status, headers, body = call(base, token, f"/api/file/{key}", headers={"Range": "bytes=0-9"})
+    assert status == 206 and body == original[:10]
+    assert headers["Content-Range"] == f"bytes 0-9/{len(original)}"
+    status, _, body = call(base, token, f"/api/file/{key}", headers={"Range": "bytes=-5"})
+    assert status == 206 and body == original[-5:]
+    status, headers, _ = call(base, token, f"/api/file/{key}", headers={"Range": f"bytes={len(original)}-"})
+    assert status == 416 and headers["Content-Range"] == f"bytes */{len(original)}"
+    # Save in place: the file takes the new bytes, nothing is left beside it.
+    changed = text_pdf(tmp_path / "other.pdf", ["changed"]).read_bytes()
+    status, _, out = call(base, token, f"/api/save/{key}", changed,
+                          {"Content-Type": "application/pdf", "X-Pdfm-Stamp": stamp})
+    assert status == 200 and src.read_bytes() == changed
+    new_stamp = json.loads(out)["stamp"]
+    assert new_stamp != stamp and sorted(p.name for p in tmp_path.iterdir()
+                                         if p.suffix != "") == ["Plan – A.pdf", "other.pdf"]
+    # Another program changed the file since: refused unless forced.
+    status, _, out = call(base, token, f"/api/save/{key}", original,
+                          {"Content-Type": "application/pdf", "X-Pdfm-Stamp": stamp})
+    assert status == 409 and json.loads(out)["changed"] and src.read_bytes() == changed
+    status, _, _ = call(base, token, f"/api/save/{key}", original,
+                        {"Content-Type": "application/pdf", "X-Pdfm-Stamp": stamp, "X-Pdfm-Force": "1"})
+    assert status == 200 and src.read_bytes() == original
+    # Only files the person opened, and only PDFs.
+    status, _, out = call(base, token, "/api/save/nope", original, {"Content-Type": "application/pdf"})
+    assert status == 400 and "Save as" in json.loads(out)["error"]
+    status, _, out = call(base, token, f"/api/save/{key}", b"hello", {"Content-Type": "application/pdf"})
+    assert status == 400 and src.read_bytes() == original
+    status, _, _ = call(base, "wrong", f"/api/save/{key}", original, {"Content-Type": "application/pdf"})
+    assert status == 403
+
+
+def test_save_as_starts_next_to_the_opened_file(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    seen = {}
+    fake = types.SimpleNamespace(FileDialog=types.SimpleNamespace(SAVE="save"))
+    monkeypatch.setitem(sys.modules, "webview", fake)
+    folder = tmp_path / "drawings"
+    folder.mkdir()
+    src = text_pdf(folder / "a.pdf")
+    results, opened = gui.ResultCache(), gui.OpenFiles()
+    api = gui.DesktopApi(results, opened)
+
+    def dialog(kind, directory, save_filename):
+        seen["directory"] = directory
+        return str(folder / save_filename)
+
+    api._window = types.SimpleNamespace(create_file_dialog=dialog)
+    key = results.add("a (edited).pdf", b"%PDF-1.4 x")
+    assert api.save_result(key, "a (edited).pdf", opened.add(src)) == str(folder / "a (edited).pdf")
+    assert seen["directory"] == str(folder)
+    key = results.add("b.pdf", b"%PDF-1.4 y")
+    api.save_result(key, "b.pdf")
+    assert seen["directory"] == str(Path.home())
