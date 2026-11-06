@@ -1289,17 +1289,21 @@ class Handler(BaseHTTPRequestHandler):
             RecentFiles.add(path)
         if wanted:
             headers["Content-Range"] = f"bytes {start}-{end}/{size}"
-        with path.open("rb") as f:
-            f.seek(start)
-            self._start(HTTPStatus.PARTIAL_CONTENT if wanted else HTTPStatus.OK, "application/pdf",
-                        end - start + 1, headers)
-            left = end - start + 1
-            while left > 0:
+        self._start(HTTPStatus.PARTIAL_CONTENT if wanted else HTTPStatus.OK, "application/pdf",
+                    end - start + 1, headers)
+        # The file is open only while a piece is read, never while it's being
+        # sent: on Windows an open file can't be replaced (Save) or deleted,
+        # and the reader may act on it as soon as the last byte arrives.
+        at, left = start, end - start + 1
+        while left > 0:
+            with path.open("rb") as f:
+                f.seek(at)
                 chunk = f.read(min(left, 1 << 20))
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
-                left -= len(chunk)
+            if not chunk:
+                break
+            self.wfile.write(chunk)
+            at += len(chunk)
+            left -= len(chunk)
 
     def _scales(self, body):
         """The drawing scales stored in a PDF (see viewports.py): of a file

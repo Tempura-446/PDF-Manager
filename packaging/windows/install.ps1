@@ -134,7 +134,9 @@ function Install-WithWinget($id, $name) {
 function Install-OcrSupport($status) {
     if (-not $status.OcrMyPdf) {
         Say "Adding OCRmyPDF to ZPDF..."
-        & $venvPython -m pip install --disable-pip-version-check --quiet "$source[app,ocr]"
+        # Just OCRmyPDF (the version pyproject.toml's "ocr" extra asks for): ZPDF
+        # itself is installed already and needn't be built again.
+        & $venvPython -m pip install --disable-pip-version-check --quiet "ocrmypdf>=15"
         if ($LASTEXITCODE -ne 0) { Say "Installing OCRmyPDF didn't work (see above)." }
     }
     if ($status.Tesseract -and $status.Ghostscript) { return }

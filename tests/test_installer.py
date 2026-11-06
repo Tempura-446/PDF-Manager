@@ -136,3 +136,13 @@ def test_installer_parses():
     out = subprocess.run(["pwsh", "-NoProfile", "-Command", command], capture_output=True,
                          text=True, timeout=60)
     assert out.returncode == 0 and not out.stdout.strip(), out.stdout + out.stderr
+
+
+def test_installer_adds_the_ocrmypdf_the_ocr_extra_asks_for():
+    """Adding OCR installs only OCRmyPDF (ZPDF isn't built again), in the
+    version pyproject.toml's "ocr" extra names."""
+    pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    extra = re.search(r'^ocr = \[([^\]]*)\]', pyproject, re.M).group(1)  # (tomllib is 3.11+)
+    wanted = re.findall(r'pip install [^\n]*"(ocrmypdf[^"]*)"', script())
+    assert wanted and [f'"{w}"' for w in wanted] == re.findall(r'"ocrmypdf[^"]*"', extra)
+    assert "[app,ocr]" not in script()
