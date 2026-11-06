@@ -41,7 +41,7 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
-                        forms, recipes, redact, scan, search, textedit, update, viewports)
+                        forms, recipes, redact, scan, search, textedit, update, viewports, markup)
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
@@ -1323,6 +1323,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(HTTPStatus.OK, png, "image/png")
             if path == "/api/keep":
                 return self._keep(body)
+            if path == "/api/markup":
+                return self._markup(body)
             if path == "/api/scales":
                 return self._scales(body)
             if path.startswith("/api/save/"):
@@ -1620,6 +1622,28 @@ class Handler(BaseHTTPRequestHandler):
         # Which font each change got, for the reader to say so.
         return self._send(HTTPStatus.OK, data, "application/pdf",
                           {"X-Pdfm-Fonts": json.dumps(report, ensure_ascii=True)})
+
+    def _markup(self, body):
+        """Add notes, underlines, strikeouts and shapes, or change, answer or
+        remove comments (see markup.py); sends back the changed PDF."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        try:
+            changes = json.loads(fields.get("changes") or "[]")
+        except ValueError:
+            raise UserError("the changes are damaged; make them again") from None
+        if not isinstance(changes, list) or not all(isinstance(c, dict) for c in changes):
+            raise UserError("the changes are damaged; make them again")
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "marked.pdf"
+            src.write_bytes(uploads[0][2])
+            added = markup.apply(src, out, changes, password, fields.get("author"))
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)  # stays protected
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf", {"X-Pdfm-Added": json.dumps(added)})
 
     def _arrange(self, body):
         """Reorder, turn, delete, copy or insert the reader's pages; sends back

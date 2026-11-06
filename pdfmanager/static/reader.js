@@ -75,12 +75,24 @@ const ICON = {
   ruler: '<path d="M3 16.5 16.5 3 21 7.5 7.5 21z"/><path d="m7.5 12 2 2M10.5 9l2 2M13.5 6l2 2"/>',
   area: '<path d="M4 7 11 3l9 5-2.5 11L6 20z"/><circle cx="4" cy="7" r="1.2"/><circle cx="11" cy="3" r="1.2"/><circle cx="20" cy="8" r="1.2"/>',
   screen: '<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
+  note: '<path d="M4 5h16v11H10l-4 4v-4H4z"/><path d="M8 9h8M8 12h5"/>',
+  underline: '<path d="M7 4v6a5 5 0 0 0 10 0V4"/><path d="M5 20h14"/>',
+  strike: '<path d="M16 6.5C15 5 13.6 4.5 12 4.5c-2.2 0-4 1.2-4 3.2 0 1.5 1 2.4 2.6 3"/><path d="M4 12h16"/><path d="M8 17.5c1 1.4 2.4 2 4 2 2.3 0 4-1.3 4-3.3 0-.8-.3-1.5-.8-2"/>',
+  shapes: '<rect x="3" y="11" width="9" height="9" rx="1"/><circle cx="16" cy="8" r="5"/>',
+  comments: '<path d="M4 5h13v9H9l-3 3v-3H4z"/><path d="M17 9h3v8h-2v3l-3-3h-4"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
 };
 
 // Annotation colours (highlights use the pale versions, as on paper).
 const COLORS = [["Black", "#000000", "#bdbdbd"], ["Blue", "#1f4fd8", "#80ebff"], ["Red", "#d52b1e", "#ff4f5f"],
   ["Green", "#1f8a3b", "#53ffbc"], ["Yellow", "#b8860b", "#ffff98"]];
+// Notes, underline, strikeout and shapes: the reader's own tools, written into
+// the file by the server (markup.py) as standard annotations.
+const MARKUP = new Set(["NOTE", "UNDERLINE", "STRIKEOUT", "SHAPE"]);
+const SHAPES = [["rect", "Rectangle"], ["ellipse", "Ellipse"], ["cloud", "Cloud"], ["arrow", "Arrow"], ["line", "Line"]];
+const KIND_NAMES = { Text: "Note", FreeText: "Text", Highlight: "Highlight", Underline: "Underline", StrikeOut: "Strikeout",
+  Squiggly: "Squiggly", Square: "Rectangle", Circle: "Ellipse", Line: "Line", Polygon: "Shape", PolyLine: "Lines",
+  Ink: "Drawing", Stamp: "Stamp", Caret: "Insert", FileAttachment: "Attachment", Sound: "Sound" };
 const HIGHLIGHT_COLORS = "yellow=#FFFF98,green=#53FFBC,blue=#80EBFF,pink=#FFCBE6,red=#FF4F5F";
 const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
 
@@ -229,10 +241,21 @@ export class Reader {
     // Annotation bar
     const tool = (name, label, mode) => el("button", { class: "rd-btn rd-tool", type: "button", title: label, "aria-pressed": "false", "data-mode": mode, html: svg(name) + `<span>${label}</span>` });
     this.annotTools = [
-      tool("pointer", "Select", "NONE"), tool("highlight", "Highlight", "HIGHLIGHT"), tool("text", "Text", "FREETEXT"),
-      tool("draw", "Draw", "INK"), tool("image", "Picture", "STAMP"),
+      tool("pointer", "Select", "NONE"), tool("highlight", "Highlight", "HIGHLIGHT"),
+      tool("underline", "Underline", "UNDERLINE"), tool("strike", "Strike out", "STRIKEOUT"),
+      tool("note", "Note", "NOTE"), tool("text", "Text", "FREETEXT"),
+      tool("draw", "Draw", "INK"), tool("shapes", "Shapes", "SHAPE"), tool("image", "Picture", "STAMP"),
       tool("edittext", "Edit text", "EDITTEXT"),
     ];
+    const tip = (mode, title) => { this.annotTools.find((b) => b.dataset.mode === mode).title = title; };
+    for (const mode of ["NONE", "UNDERLINE", "STRIKEOUT"]) this.annotTools.find((b) => b.dataset.mode === mode).classList.add("compact");
+    tip("UNDERLINE", "Underline text: select the words (or select them first, then click here)");
+    tip("STRIKEOUT", "Strike out text: select the words (or select them first, then click here)");
+    tip("NOTE", "Add a note: click where it goes, then type your comment");
+    tip("SHAPE", "Draw a rectangle, ellipse, cloud, arrow or line: drag on the page (Shift: square, circle, 45°)");
+    this.shapeSelect = el("select", { class: "rd-zoom", "aria-label": "Shape", hidden: true },
+      ...SHAPES.map(([v, label]) => el("option", { value: v }, label)));
+    this.shapeSelect.value = store.get("pdfm-shape", "rect");
     this.annotTools.at(-1).title = "Change words on the page: click a line of text (E)";
     this.signBtn = el("button", { class: "rd-btn rd-tool", type: "button", title: "Add your signature", html: svg("sign") + "<span>Sign</span>" });
     this.swatches = COLORS.map(([name, ink, mark], i) => el("button", { class: "rd-swatch", type: "button", title: name, "aria-label": name, "aria-pressed": String(i === 1),
@@ -245,7 +268,7 @@ export class Reader {
     this.annotCloseBtn = b("x", "Close the annotation tools");
     this.annotbar = el("div", { class: "rd-findbar rd-annotbar", hidden: true, role: "toolbar", "aria-label": "Annotate" },
       ...this.annotTools, this.signBtn, el("span", { class: "rd-sep" }),
-      el("div", { class: "rd-swatches", role: "group", "aria-label": "Colour" }, ...this.swatches), this.sizeSelect,
+      el("div", { class: "rd-swatches", role: "group", "aria-label": "Colour" }, ...this.swatches), this.shapeSelect, this.sizeSelect,
       el("span", { class: "rd-sep" }), this.undoBtn, this.redoBtn, this.deleteBtn,
       el("span", { style: "flex:1" }), this.annotSaveBtn, this.annotCloseBtn);
 
@@ -254,14 +277,21 @@ export class Reader {
     // Sidebar
     this.thumbsTab = el("button", { class: "rd-tab", type: "button", role: "tab", "aria-selected": "true" }, "Pages");
     this.outlineTab = el("button", { class: "rd-tab", type: "button", role: "tab", "aria-selected": "false", disabled: true }, "Bookmarks");
+    this.commentsTab = el("button", { class: "rd-tab", type: "button", role: "tab", "aria-selected": "false" }, "Comments");
+    this.authorInput = el("input", { type: "text", class: "rd-author", placeholder: "Your name", "aria-label": "Your name on comments",
+      value: store.get("pdfm-author", "") });
+    this.commentsList = el("div", { class: "rd-comments", "aria-live": "polite" });
+    this.commentsPanel = el("div", { class: "rd-panel rd-commentspanel", role: "tabpanel", hidden: true },
+      el("label", { class: "rd-authorrow" }, "Comment as", this.authorInput), this.commentsList);
     this.thumbsList = el("ol", { class: "rd-thumbs", role: "listbox", "aria-multiselectable": "true", "aria-label": "Pages" });
     this.selected = new Set();
     this.outlineList = el("ul", { class: "rd-outline" });
     this.pageBar = el("div", { class: "rd-pagebar" });
     this.thumbsPanel = el("div", { class: "rd-panel", role: "tabpanel" }, this.pageBar, this.thumbsList);
     this.outlinePanel = el("div", { class: "rd-panel", role: "tabpanel", hidden: true }, this.outlineList);
-    this.sidebar = el("aside", { class: "rd-sidebar", hidden: true, "aria-label": "Pages and bookmarks" },
-      el("div", { class: "rd-tabs", role: "tablist" }, this.thumbsTab, this.outlineTab), this.thumbsPanel, this.outlinePanel);
+    this.sidebar = el("aside", { class: "rd-sidebar", hidden: true, "aria-label": "Pages, bookmarks and comments" },
+      el("div", { class: "rd-tabs", role: "tablist" }, this.thumbsTab, this.outlineTab, this.commentsTab),
+      this.thumbsPanel, this.outlinePanel, this.commentsPanel);
 
     // Viewer
     this.viewerEl = el("div", { class: "pdfViewer" });
@@ -442,6 +472,9 @@ export class Reader {
     document.addEventListener("pointerdown", (e) => { if (!this.menu.hidden && !this.menu.contains(e.target) && e.target !== this.moreBtn && !this.moreBtn.contains(e.target)) this.#closeMenu(); });
     this.thumbsTab.addEventListener("click", () => this.#showTab("thumbs"));
     this.outlineTab.addEventListener("click", () => this.#showTab("outline"));
+    this.commentsTab.addEventListener("click", () => this.#showTab("comments"));
+    this.authorInput.addEventListener("change", () => store.set("pdfm-author", this.authorInput.value.trim()));
+    this.shapeSelect.addEventListener("change", () => store.set("pdfm-shape", this.shapeSelect.value));
 
     // Find
     this.findInput.addEventListener("input", () => this.#find(""));
@@ -462,7 +495,7 @@ export class Reader {
     this.signBtn.addEventListener("click", () => this.sign());
     for (const sw of this.swatches) sw.addEventListener("click", () => this.#setColor(+sw.dataset.index));
     this.sizeSelect.addEventListener("change", () => this.#setSize(+this.sizeSelect.value));
-    this.undoBtn.addEventListener("click", () => (this.textEditMode ? this.#undoTextEdit() : this.uiManager?.undo()));
+    this.undoBtn.addEventListener("click", () => (this.textEditMode || this.markupMode ? this.#undoTextEdit() : this.uiManager?.undo()));
     this.redoBtn.addEventListener("click", () => this.uiManager?.redo());
     this.deleteBtn.addEventListener("click", () => this.uiManager?.delete());
     this.annotSaveBtn.addEventListener("click", () => this.save());
@@ -527,6 +560,11 @@ export class Reader {
 
     // Edit text tool: click a line of text to change it.
     this.container.addEventListener("click", (e) => this.#textClick(e), true);
+
+    // Notes and shapes: click or drag on a page; underline and strike out: select words.
+    this.container.addEventListener("pointerdown", (e) => this.#markupDown(e), true);
+    this.container.addEventListener("pointermove", (e) => this.#markupMove(e));
+    window.addEventListener("pointerup", (e) => this.#markupUp(e));
 
     document.addEventListener("keydown", (e) => this.#onKey(e));
   }
@@ -862,6 +900,7 @@ export class Reader {
       this.#setSidebar(store.get("pdfm-reader-sidebar", false));
       this.#buildThumbs();
       this.#buildOutline();
+      this.#listComments();
       doc.getPageLabels().then((labels) => {
         if (doc !== this.doc || !labels) return;
         // Only use labels that differ from plain page numbers.
@@ -1046,11 +1085,12 @@ export class Reader {
     if (open) this.#updatePage();
   }
   #showTab(which) {
-    const thumbs = which === "thumbs";
-    this.thumbsTab.setAttribute("aria-selected", String(thumbs));
-    this.outlineTab.setAttribute("aria-selected", String(!thumbs));
-    this.thumbsPanel.hidden = !thumbs;
-    this.outlinePanel.hidden = thumbs;
+    for (const [name, tab, panel] of [["thumbs", this.thumbsTab, this.thumbsPanel], ["outline", this.outlineTab, this.outlinePanel],
+      ["comments", this.commentsTab, this.commentsPanel]]) {
+      tab.setAttribute("aria-selected", String(name === which));
+      panel.hidden = name !== which;
+    }
+    if (which === "comments") this.#listComments();
   }
 
   async #buildThumbs() {
@@ -1239,7 +1279,7 @@ export class Reader {
     if (!outline || !outline.length) {
       this.outlineList.replaceChildren();
       this.outlinePanel.replaceChildren(el("p", { class: "rd-empty-note" }, "This document has no bookmarks."));
-      this.#showTab("thumbs");
+      if (!this.outlinePanel.hidden) this.#showTab("thumbs");
       return;
     }
     this.outlinePanel.replaceChildren(this.outlineList);
@@ -1272,7 +1312,8 @@ export class Reader {
     });
     this.outlineList.replaceChildren(...build(outline, 0));
     // Long documents with bookmarks open on the bookmarks tab.
-    if (doc.numPages >= 20) this.#showTab("outline");
+    // (The Comments tab stays open while comments are being worked on.)
+    if (doc.numPages >= 20 && this.commentsPanel.hidden) this.#showTab("outline");
   }
 
   /** Show page ``page`` and search for ``find`` from there; ``scale`` and
@@ -1354,33 +1395,43 @@ export class Reader {
       this.textEditHinted = true;
       this.toast("Click a line to change it, Shift+click for its whole paragraph, or click an empty spot to add words. Old words are covered, not removed — to remove text for good, use Redact.", 8000);
     }
-    if (name !== "NONE" || editText) this.measureTool(null);
+    const markup = MARKUP.has(name), custom = editText || markup;
+    if (name !== "NONE" || custom) this.measureTool(null);
     this.textEditMode = editText;
+    this.markupMode = markup ? name : null;
+    this.#cancelMarkup();
     this.root.classList.toggle("rd-edittext", editText);
-    if (editText) name = "NONE";
+    this.root.classList.toggle("rd-markup", markup);
+    this.root.dataset.markup = markup ? name.toLowerCase() : "";
+    if (custom) name = "NONE";
     const mode = pdfjs.AnnotationEditorType[name];
     if (mode === undefined) return;
-    if (this.annotbar.hidden && (name !== "NONE" || editText)) this.openAnnotate();
+    if (this.annotbar.hidden && (name !== "NONE" || custom)) this.openAnnotate();
     try {
-      if (!(editText && this.pdfViewer.annotationEditorMode === mode)) this.pdfViewer.annotationEditorMode = { mode };
+      if (!(custom && this.pdfViewer.annotationEditorMode === mode)) this.pdfViewer.annotationEditorMode = { mode };
     } catch (e) {
-      if (!editText) { this.toast("Annotating isn't available for this document."); return; }
+      if (!custom) { this.toast("Annotating isn't available for this document."); return; }
     }
     this.#showEditMode(name);
+    // Words selected before choosing Underline or Strike out get it straight away.
+    if (this.markupMode === "UNDERLINE" || this.markupMode === "STRIKEOUT") this.#markSelection();
     // "Picture" asks for an image file straight away.
     if (create && this.uiManager) setTimeout(() => this.uiManager.updateParams(pdfjs.AnnotationEditorParamsType.CREATE, null), 50);
   }
 
   #showEditMode(name) {
     if (name === "NONE" && this.textEditMode) name = "EDITTEXT";
+    if (name === "NONE" && this.markupMode) name = this.markupMode;
     this.editMode = name;
-    if (name === "EDITTEXT") this.undoBtn.disabled = !this.activeTab?.undo?.length;
+    if (name === "EDITTEXT" || MARKUP.has(name)) this.undoBtn.disabled = !this.activeTab?.undo?.length;
     for (const btn of this.annotTools) btn.setAttribute("aria-pressed", String(btn.dataset.mode === name));
     const sizes = name === "FREETEXT" ? [[10, "10 pt"], [12, "12 pt"], [14, "14 pt"], [18, "18 pt"], [24, "24 pt"], [36, "36 pt"]]
       : name === "INK" ? [[1, "Thin"], [2, "Fine"], [4, "Medium"], [8, "Thick"], [14, "Marker"]]
-      : name === "HIGHLIGHT" ? [[8, "Thin"], [12, "Normal"], [20, "Wide"]] : [];
-    const key = { FREETEXT: "text", INK: "ink", HIGHLIGHT: "mark" }[name];
-    const chosen = this.annotParams?.size?.[key];
+      : name === "HIGHLIGHT" ? [[8, "Thin"], [12, "Normal"], [20, "Wide"]]
+      : name === "SHAPE" ? [[1, "Thin"], [2, "Medium"], [4, "Thick"], [8, "Heavy"]] : [];
+    const key = { FREETEXT: "text", INK: "ink", HIGHLIGHT: "mark", SHAPE: "shape", NOTE: "note", UNDERLINE: "line", STRIKEOUT: "line" }[name];
+    this.shapeSelect.hidden = name !== "SHAPE";
+    const chosen = this.annotParams?.size?.[key] ?? (key === "shape" ? 2 : undefined);
     this.sizeSelect.replaceChildren(...sizes.map(([v, label]) => el("option", { value: v, selected: v === chosen }, label)));
     this.sizeSelect.hidden = !sizes.length;
     this.root.querySelector(".rd-swatches").hidden = !key;
@@ -1405,12 +1456,236 @@ export class Reader {
     if (remember) { this.annotParams.color = index; store.set("pdfm-annot", this.annotParams); }
   }
 
-  #setSize(value, key = { FREETEXT: "text", INK: "ink", HIGHLIGHT: "mark" }[this.editMode], remember = true) {
+  #setSize(value, key = { FREETEXT: "text", INK: "ink", HIGHLIGHT: "mark", SHAPE: "shape" }[this.editMode], remember = true) {
     if (!key || !value) return;
     const P = pdfjs.AnnotationEditorParamsType;
     const type = { text: P.FREETEXT_SIZE, ink: P.INK_THICKNESS, mark: P.HIGHLIGHT_THICKNESS }[key];
-    if (this.uiManager) this.uiManager.updateParams(type, value);
+    if (this.uiManager && type !== undefined) this.uiManager.updateParams(type, value);
     if (remember) { this.annotParams.size[key] = value; store.set("pdfm-annot", this.annotParams); }
+  }
+
+  // ---- notes, underline, strikeout, shapes and comments (markup.py) ---------------
+  /** The colour picked in the annotation bar, as #rrggbb. */
+  #markupColor() {
+    const [, ink] = COLORS[this.annotParams?.color ?? 1] || COLORS[1];
+    return ink;
+  }
+
+  /** Where a pointer event is on a page: { n, pt (PDF), view, box } or null. */
+  #pointOnPage(e) {
+    const pageEl = e.target.closest?.(".page") || document.elementFromPoint(e.clientX, e.clientY)?.closest?.(".page");
+    const n = Number(pageEl?.dataset.pageNumber);
+    const view = n ? this.pdfViewer.getPageView(n - 1) : null;
+    if (!view?.div || !view.viewport) return null;
+    const box = view.div.getBoundingClientRect();
+    const x = e.clientX - box.left - view.div.clientLeft, y = e.clientY - box.top - view.div.clientTop;
+    const pt = view.viewport.convertToPdfPoint(x, y);
+    return Number.isFinite(pt[0]) && Number.isFinite(pt[1]) ? { n, pt, view, x, y } : null;
+  }
+
+  /** Send ``changes`` (see markup.py) to be written into the document. */
+  #applyMarkup(changes, failure = "Could not add that: ") {
+    return this.#changeDocument((bytes, tab) => this.#post("/api/markup", bytes, tab, {
+      changes: JSON.stringify(changes), author: this.authorInput.value.trim() }), { failure });
+  }
+
+  #cancelMarkup() {
+    this.shapeDraft?.el.remove();
+    this.shapeDraft = null;
+    this.noteBox?.remove();
+    this.noteBox = null;
+  }
+
+  #markupDown(e) {
+    const mode = this.markupMode;
+    if (!mode || e.button !== 0 || mode === "UNDERLINE" || mode === "STRIKEOUT") return;
+    if (e.target.closest?.(".rd-notebox, a, input, textarea, select, button")) return;
+    const at = this.#pointOnPage(e);
+    if (!at) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (mode === "NOTE") { this.#openNoteBox(at); return; }
+    // SHAPE: drag out the shape; it's drawn on screen until the file has it.
+    this.#cancelMarkup();
+    const svgEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svgEl.setAttribute("class", "rd-shapedraft");
+    at.view.div.append(svgEl);
+    this.shapeDraft = { el: svgEl, start: at, end: at, kind: this.shapeSelect.value, pointer: e.pointerId };
+    this.container.setPointerCapture?.(e.pointerId);
+  }
+
+  #markupMove(e) {
+    const d = this.shapeDraft;
+    if (!d || e.pointerId !== d.pointer) return;
+    const view = d.start.view, box = view.div.getBoundingClientRect();
+    let x = e.clientX - box.left - view.div.clientLeft, y = e.clientY - box.top - view.div.clientTop;
+    const line = d.kind === "arrow" || d.kind === "line";
+    if (e.shiftKey) {  // a square or circle; a line at 45° steps
+      const dx = x - d.start.x, dy = y - d.start.y;
+      if (line) {
+        const a = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4), len = Math.hypot(dx, dy);
+        x = d.start.x + len * Math.cos(a); y = d.start.y + len * Math.sin(a);
+      } else {
+        const side = Math.max(Math.abs(dx), Math.abs(dy));
+        x = d.start.x + Math.sign(dx || 1) * side; y = d.start.y + Math.sign(dy || 1) * side;
+      }
+    }
+    d.end = { x, y, pt: view.viewport.convertToPdfPoint(x, y) };
+    const color = this.#markupColor(), width = Math.max(1, (this.annotParams?.size?.shape || 2) * view.viewport.scale);
+    const [x0, y0, x1, y1] = [Math.min(d.start.x, x), Math.min(d.start.y, y), Math.max(d.start.x, x), Math.max(d.start.y, y)];
+    const shape = d.kind === "ellipse" ? `<ellipse cx="${(x0 + x1) / 2}" cy="${(y0 + y1) / 2}" rx="${(x1 - x0) / 2}" ry="${(y1 - y0) / 2}"/>`
+      : line ? `<line x1="${d.start.x}" y1="${d.start.y}" x2="${x}" y2="${y}"${d.kind === "arrow" ? ' marker-end="url(#rd-arrowhead)"' : ""}/>`
+      : `<rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}"${d.kind === "cloud" ? ' stroke-dasharray="2 3" rx="6"' : ""}/>`;
+    d.el.innerHTML = `<defs><marker id="rd-arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">`
+      + `<path d="M0 0 10 5 0 10z" fill="${color}"/></marker></defs><g fill="none" stroke="${color}" stroke-width="${width}">${shape}</g>`;
+  }
+
+  #markupUp(e) {
+    const mode = this.markupMode;
+    if (!mode) return;
+    if (mode === "UNDERLINE" || mode === "STRIKEOUT") {
+      if (e.target.closest?.(".rd-container")) setTimeout(() => this.#markSelection(), 0);
+      return;
+    }
+    const d = this.shapeDraft;
+    if (!d || e.pointerId !== d.pointer) return;
+    this.#markupMove(e);
+    this.shapeDraft = null;
+    const { start, end, kind } = d;
+    if (Math.hypot(end.x - start.x, end.y - start.y) < 4) { d.el.remove(); return; }  // a click, not a drag
+    const page = start.n, color = this.#markupColor(), width = this.annotParams?.size?.shape || 2;
+    const change = kind === "arrow" || kind === "line"
+      ? { op: "add", page, kind, points: [start.pt, end.pt], color, width }
+      : { op: "add", page, kind, rect: [start.pt[0], start.pt[1], end.pt[0], end.pt[1]], color, width };
+    this.#applyMarkup([change]).finally(() => d.el.remove());
+  }
+
+  /** Underline or strike out the selected words. */
+  #markSelection() {
+    const kind = { UNDERLINE: "underline", STRIKEOUT: "strikeout" }[this.markupMode];
+    const sel = window.getSelection();
+    if (!kind || !sel || sel.isCollapsed || !sel.rangeCount) return;
+    const pages = new Map();
+    for (const r of sel.getRangeAt(0).getClientRects()) {
+      if (r.width < 1 || r.height < 1) continue;
+      const at = this.#pointOnPage({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, target: document.body });
+      if (!at || !this.container.contains(at.view.div)) continue;
+      const box = at.view.div.getBoundingClientRect(), dx = box.left + at.view.div.clientLeft, dy = box.top + at.view.div.clientTop;
+      const a = at.view.viewport.convertToPdfPoint(r.left - dx, r.top - dy), b = at.view.viewport.convertToPdfPoint(r.right - dx, r.bottom - dy);
+      const rect = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
+      if (!pages.has(at.n)) pages.set(at.n, []);
+      pages.get(at.n).push(rect);
+    }
+    if (!pages.size) return;
+    sel.removeAllRanges();
+    const color = this.#markupColor();
+    this.#applyMarkup([...pages].map(([page, rects]) => ({ op: "add", page, kind, rects, color })));
+  }
+
+  /** A box to type a note into, where the page was clicked. */
+  #openNoteBox(at) {
+    this.#cancelMarkup();
+    const text = el("textarea", { rows: 4, placeholder: "Your comment", "aria-label": "Note" });
+    const add = el("button", { type: "button", class: "rd-btn primary" }, "Add note");
+    const cancel = el("button", { type: "button", class: "rd-btn" }, "Cancel");
+    const box = el("div", { class: "rd-notebox", style: `left:${at.x}px;top:${at.y}px` }, text, el("div", { class: "rd-notebtns" }, cancel, add));
+    at.view.div.append(box);
+    this.noteBox = box;
+    const done = () => {
+      const words = text.value.trim();
+      this.#cancelMarkup();
+      if (words) this.#applyMarkup([{ op: "add", page: at.n, kind: "note", at: at.pt, text: words, color: "#f5c400" }]);
+    };
+    add.addEventListener("click", done);
+    cancel.addEventListener("click", () => this.#cancelMarkup());
+    text.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") this.#cancelMarkup();
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) done();
+    });
+    setTimeout(() => text.focus(), 0);
+  }
+
+  // ---- the Comments tab --------------------------------------------------------------
+  /** Every annotation with what's written on it, by page, replies under what they answer. */
+  async #listComments() {
+    const doc = this.doc, list = this.commentsList;
+    if (!doc || this.commentsPanel.hidden) return;
+    const seq = (this.commentsSeq = (this.commentsSeq || 0) + 1);
+    list.replaceChildren(el("p", { class: "rd-muted" }, "Reading comments…"));
+    const items = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      let annots = [];
+      try { annots = await (await doc.getPage(n)).getAnnotations({ intent: "display" }); } catch (e) { /* skip the page */ }
+      if (seq !== this.commentsSeq || doc !== this.doc) return;
+      for (const a of annots) {
+        if (!KIND_NAMES[a.subtype] || a.replyType === "Group") continue;
+        items.push({ page: n, id: a.id, kind: a.subtype === "Line" && a.lineEndings?.[1] && a.lineEndings[1] !== "None" ? "Arrow" : KIND_NAMES[a.subtype],
+          text: a.contentsObj?.str || "", author: a.titleObj?.str || "", date: a.modificationDate || a.creationDate,
+          reply: a.inReplyTo || null, rect: a.rect, color: a.color });
+      }
+    }
+    const byId = new Map(items.map((it) => [it.id, it]));
+    const top = items.filter((it) => !it.reply || !byId.has(it.reply));
+    for (const it of items) if (it.reply && byId.has(it.reply)) (byId.get(it.reply).replies ||= []).push(it);
+    const fresh = this.#changed() ? [el("p", { class: "rd-muted" }, "Highlights and drawings not saved yet show here once you save or add a note.")] : [];
+    if (!top.length) {
+      list.replaceChildren(...fresh, el("p", { class: "rd-muted" }, "No comments or markup yet. Use Note, Underline, Strike out or Shapes in Annotate & sign."));
+      return;
+    }
+    list.replaceChildren(...fresh, ...top.map((it) => this.#commentCard(it)));
+  }
+
+  #commentCard(it, isReply = false) {
+    const date = (raw) => {
+      const d = raw && pdfjs.PDFDateString.toDateObject(raw);
+      return d ? d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+    };
+    const swatch = it.color ? `rgb(${[...it.color].join(",")})` : "transparent";
+    const head = el("div", { class: "rd-commenthead" },
+      el("i", { class: "rd-commentdot", style: `background:${swatch}` }),
+      el("b", {}, isReply ? "Reply" : it.kind), el("span", {}, it.author ? " · " + it.author : ""),
+      el("span", { class: "rd-muted" }, ` · p. ${this.labels?.[it.page - 1] || it.page}`));
+    const body = el("p", { class: "rd-commenttext" + (it.text ? "" : " rd-muted") }, it.text || "No comment");
+    const when = el("div", { class: "rd-muted rd-commentdate" }, date(it.date));
+    const btn = (label, fn) => { const b = el("button", { type: "button", class: "rd-linkbtn" }, label); b.addEventListener("click", (e) => { e.stopPropagation(); fn(); }); return b; };
+    const card = el("article", { class: "rd-comment" + (isReply ? " reply" : ""), tabindex: "0" }, head, body, when);
+    const ask = (label, value, apply) => {
+      card.querySelector(".rd-commentedit")?.remove();
+      const area = el("textarea", { rows: 3, "aria-label": label }, value);
+      const ok = el("button", { type: "button", class: "rd-btn primary" }, label);
+      const box = el("div", { class: "rd-commentedit" }, area, el("div", { class: "rd-notebtns" }, btn("Cancel", () => box.remove()), ok));
+      ok.addEventListener("click", (e) => { e.stopPropagation(); apply(area.value.trim()); });
+      area.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) ok.click(); if (e.key === "Escape") box.remove(); });
+      card.append(box);
+      area.focus();
+    };
+    card.append(el("div", { class: "rd-commentbtns" },
+      isReply ? null : btn("Reply", () => ask("Reply", "", (text) => text && this.#applyMarkup([{ op: "reply", page: it.page, id: it.id, text }], "Could not reply: "))),
+      btn(it.text ? "Edit" : "Add comment", () => ask("Save", it.text, (text) => this.#applyMarkup([{ op: "text", page: it.page, id: it.id, text }], "Could not change the comment: "))),
+      btn("Delete", () => {
+        if (confirm(isReply ? "Delete this reply?" : `Delete this ${it.kind.toLowerCase()}${it.replies?.length ? " and its replies" : ""}?`)) {
+          this.#applyMarkup([{ op: "delete", page: it.page, id: it.id }], "Could not delete it: ");
+        }
+      })));
+    card.addEventListener("click", () => this.#showComment(it));
+    card.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === card) this.#showComment(it); });
+    for (const r of it.replies || []) card.append(this.#commentCard(r, true));
+    return card;
+  }
+
+  /** Scroll to an annotation and flash it. */
+  #showComment(it) {
+    const [x0, y0, x1, y1] = it.rect || [0, 0, 0, 0];
+    this.pdfViewer.scrollPageIntoView({ pageNumber: it.page, destArray: [null, { name: "XYZ" }, x0 - 40, y1 + 60, null] });
+    setTimeout(() => {
+      const view = this.pdfViewer.getPageView(it.page - 1);
+      if (!view?.div || !view.viewport) return;
+      const [a, b, c, d] = view.viewport.convertToViewportRectangle([x0, y0, x1, y1]);
+      const flash = el("div", { class: "rd-flash", style: `left:${Math.min(a, c) - 4}px;top:${Math.min(b, d) - 4}px;width:${Math.abs(c - a) + 8}px;height:${Math.abs(d - b) + 8}px` });
+      view.div.append(flash);
+      setTimeout(() => flash.remove(), 1600);
+    }, 150);
   }
 
   /** Draw, type or pick a signature, then place it on the current page. */
@@ -2101,13 +2376,13 @@ export class Reader {
 
   /** Show the tab's changed bytes, staying in the Edit text tool if it was on. */
   async #reloadEditing(tab) {
-    const editing = this.textEditMode;
+    const editing = this.textEditMode ? "EDITTEXT" : this.markupMode;
     await this.#load(tab);
     this.#renderTabs();
     if (tab !== this.activeTab) return;
     if (editing) {
       this.openAnnotate();
-      this.#setEditMode("EDITTEXT");
+      this.#setEditMode(editing);
     }
     this.undoBtn.disabled = !tab.undo?.length;
   }
@@ -3494,6 +3769,10 @@ export class Reader {
       { icon: "search", label: "Find in document", keys: "Ctrl+F", words: "search look for", run: () => this.openFind() },
       tool("Highlight text", "HIGHLIGHT", "mark marker", "highlight"), tool("Add a text box", "FREETEXT", "note comment type", "text"),
       tool("Draw", "INK", "pen ink freehand", "draw"), tool("Add a picture", "STAMP", "image photo stamp", "image"),
+      tool("Add a note", "NOTE", "comment sticky review", "note"), tool("Underline text", "UNDERLINE", "markup", "underline"),
+      tool("Strike out text", "STRIKEOUT", "strikethrough delete markup", "strike"),
+      tool("Draw a shape", "SHAPE", "rectangle ellipse circle cloud arrow line markup revision", "shapes"),
+      { icon: "comments", label: "Comments", words: "notes replies review list markup", run: () => { this.#setSidebar(true); this.#showTab("comments"); } },
       { icon: "sign", label: "Sign", words: "signature autograph", run: () => this.sign() },
       { icon: "cw", label: "Rotate the view clockwise", keys: "R", words: "turn right", run: () => this.rotate(90) },
       { icon: "ccw", label: "Rotate the view counter-clockwise", keys: "Shift+R", words: "turn left anticlockwise", run: () => this.rotate(-90) },
