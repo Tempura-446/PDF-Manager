@@ -200,6 +200,11 @@ def run(mode):
             raise
         exercise(page, pdf)
 
+        # What the page says, for when something doesn't show up.
+        console = []
+        page.on("console", lambda m: console.append(f"{m.type}: {m.text}"))
+        page.on("pageerror", lambda e: console.append(f"pageerror: {e}"))
+
         # Opening a PDF again (e.g. from Explorer) hands it to the running app.
         second = make_pdf(tmp / "second.pdf", pages=2)
         handed = start(mode, second)
@@ -218,7 +223,20 @@ def run(mode):
                     continue  # still loading
             return None
 
-        shown = wait_for(window_with_second, 45, "the second file in the reader")
+        try:
+            shown = wait_for(window_with_second, 45, "the second file in the reader")
+        except AssertionError:
+            for pg in [pg for c in browser.contexts for pg in c.pages]:
+                try:
+                    log("page:", pg.url[:60], pg.evaluate(
+                        "() => ({tabs: [...document.querySelectorAll('.rd-doctab')].map((e) => e.textContent),"
+                        " title: document.querySelector('.rd-title')?.textContent,"
+                        " toasts: [...document.querySelectorAll('.rd-toast, .toast')].map((e) => e.textContent)})"))
+                except Exception as exc:
+                    log("page:", pg.url[:60], "(can't read:", exc, ")")
+            log("console:\n  " + "\n  ".join(console[-30:]))
+            log("app.log:\n" + app_log())
+            raise
         log("second launch handed its file to the running app",
             "(same window)" if shown == page else "(new window)")
         if shown != page:
