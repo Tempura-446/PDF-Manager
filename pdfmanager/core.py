@@ -1668,6 +1668,9 @@ def ocr(path, output, language="eng", force=False, deskew=False, password=None):
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp_out = output.with_name(output.name + ".tmp.pdf")
+    from pdfmanager import scan  # scan uses this module
+
+    scan.add_programs_to_path()  # Tesseract and Ghostscript where installers put them
     progress.say("recognising text (this can take a while)")
     try:
         ocrmypdf.ocr(str(source), str(tmp_out), language=language.split("+"),

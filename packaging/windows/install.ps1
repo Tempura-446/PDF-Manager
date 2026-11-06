@@ -7,6 +7,10 @@
 #      (running it again updates it).
 #   3. Adds Start menu and desktop shortcuts, ZPDF in "Open with" for
 #      PDFs, and an entry in Settings > Apps to uninstall it.
+#   4. Asks whether to add OCR and PDF/A support too (unless -WithOcr or
+#      -NoOcr says): OCRmyPDF in ZPDF's folder, and the Tesseract and
+#      Ghostscript programs with winget. Skipped when they're already there
+#      or winget is missing; it never stops the installation.
 #
 # The app runs with Python's own pythonw.exe, which is signed, so Windows
 # Smart App Control lets it start. This script only uses plain PowerShell
@@ -16,12 +20,17 @@
 param(
     [switch]$NoDesktop,   # no desktop shortcut
     [switch]$NoOpenWith,  # don't add to "Open with"
-    [switch]$NoLaunch     # don't start the app at the end
+    [switch]$NoLaunch,    # don't start the app at the end
+    [switch]$WithOcr,     # also install OCR and PDF/A support, without asking
+    [switch]$NoOcr        # don't install OCR and PDF/A support, and don't ask
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"  # makes downloads much faster
 $PythonVersion = "3.13.1"
+# winget packages for OCR (Tesseract) and PDF/A (Ghostscript).
+$TesseractId = "UB-Mannheim.TesseractOCR"
+$GhostscriptId = "ArtifexSoftware.GhostScript"
 
 function Say($text) { Write-Host "  $text" }
 function Step($text) { Write-Host ""; Write-Host "> $text" -ForegroundColor Cyan }
@@ -92,6 +101,54 @@ function Install-Python {
     return $found
 }
 
+# What the installed ZPDF finds itself, with the same lookups the app uses:
+# OCRmyPDF, Tesseract, Ghostscript (each $true or $false), or $null.
+function Get-OcrStatus {
+    $ErrorActionPreference = "Continue"  # a warning on stderr isn't a failure
+    try {
+        $out = & $venvPython -I -c "import importlib.util as u; from pdfmanager import scan, archive; print(int(u.find_spec('ocrmypdf') is not None), int(bool(scan.find_tesseract())), int(bool(archive.find_ghostscript())))" 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $found = "$out".Trim() -split " "
+        return @{ OcrMyPdf = ($found[0] -eq "1"); Tesseract = ($found[1] -eq "1"); Ghostscript = ($found[2] -eq "1") }
+    } catch { return $null }
+}
+
+function Install-WithWinget($id, $name) {
+    Say "Installing $name with winget..."
+    try {
+        & winget.exe install --exact --id $id --scope user --silent `
+            --accept-package-agreements --accept-source-agreements --disable-interactivity | Out-Host
+        if ($LASTEXITCODE -eq 0) { return $true }
+        # No installer just for this user: install it for everyone. Windows
+        # may ask for permission.
+        Say "Installing $name for all users (Windows may ask for permission)..."
+        & winget.exe install --exact --id $id --silent `
+            --accept-package-agreements --accept-source-agreements --disable-interactivity | Out-Host
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        Say "Installing $name didn't work: $_"
+        return $false
+    }
+}
+
+function Install-OcrSupport($status) {
+    if (-not $status.OcrMyPdf) {
+        Say "Adding OCRmyPDF to ZPDF..."
+        & $venvPython -m pip install --disable-pip-version-check --quiet "$source[app,ocr]"
+        if ($LASTEXITCODE -ne 0) { Say "Installing OCRmyPDF didn't work (see above)." }
+    }
+    if ($status.Tesseract -and $status.Ghostscript) { return }
+    if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
+        Say "winget isn't available here, so Tesseract and Ghostscript weren't installed."
+        Say "Install them by hand if you need them:"
+        if (-not $status.Tesseract) { Say "  OCR:   https://github.com/UB-Mannheim/tesseract/wiki" }
+        if (-not $status.Ghostscript) { Say "  PDF/A: https://ghostscript.com/releases/gsdnld.html" }
+        return
+    }
+    if (-not $status.Tesseract) { Install-WithWinget $TesseractId "Tesseract (for OCR)" | Out-Null }
+    if (-not $status.Ghostscript) { Install-WithWinget $GhostscriptId "Ghostscript (for PDF/A)" | Out-Null }
+}
+
 Write-Host "ZPDF installer" -ForegroundColor Cyan
 
 Step "Looking for Python 3.10 or newer"
@@ -117,6 +174,42 @@ if ($NoDesktop) { $setup += "--no-desktop" }
 if ($NoOpenWith) { $setup += "--no-open-with" }
 & $venvPython @setup | ForEach-Object { Say $_ }
 if ($LASTEXITCODE -ne 0) { throw "Adding the shortcuts failed (see above)." }
+
+# Optional, and never stops the installation: ZPDF works without them.
+try {
+    $status = Get-OcrStatus
+    $complete = $status -and $status.OcrMyPdf -and $status.Tesseract -and $status.Ghostscript
+    $wanted = $false
+    if ($complete -or $NoOcr) {
+        $wanted = $false
+    } elseif ($WithOcr) {
+        $wanted = $true
+    } elseif ($env:CI -or $env:GITHUB_ACTIONS -or $env:TF_BUILD) {
+        $wanted = $false  # an automated run: no one to ask
+    } else {
+        Write-Host ""
+        Write-Host "OCR makes scanned PDFs searchable; PDF/A is for long-term archiving."
+        try { $answer = Read-Host "Also install OCR and PDF/A support? (about 150 MB) [Y/n]" } catch { $answer = "n" }
+        $wanted = ("$answer".Trim() -notmatch "^(n|no)$")
+    }
+    if ($complete) {
+        Step "OCR and PDF/A support"
+        Say "Already installed"
+    } elseif ($wanted) {
+        Step "Adding OCR and PDF/A support"
+        if (-not $status) { $status = @{ OcrMyPdf = $false; Tesseract = $false; Ghostscript = $false } }
+        Install-OcrSupport $status
+        $after = Get-OcrStatus
+        if ($after) {
+            foreach ($part in @(@("OCRmyPDF", $after.OcrMyPdf), @("Tesseract (OCR)", $after.Tesseract),
+                                @("Ghostscript (PDF/A)", $after.Ghostscript))) {
+                if ($part[1]) { Say "$($part[0]): ready" } else { Say "$($part[0]): not installed" }
+            }
+        }
+    }
+} catch {
+    Say "OCR and PDF/A support wasn't added ($_). ZPDF works without it; run the installer again with -WithOcr to retry."
+}
 
 Write-Host ""
 Write-Host "ZPDF is installed. Find it in the Start menu" -NoNewline -ForegroundColor Green

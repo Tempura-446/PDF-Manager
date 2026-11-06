@@ -71,16 +71,91 @@ def find_blank_pages(path, password=None, sensitivity="medium"):
     return [i for i, ink in zip(maybe, closer) if ink < threshold]
 
 
+def program_dirs():
+    r"""Folders Windows programs are installed in: Program Files (64- and
+    32-bit) for everyone, and for one user %LOCALAPPDATA%\Programs (and
+    %LOCALAPPDATA% itself, where some older installers went)."""
+    local = os.environ.get("LOCALAPPDATA")
+    found = [os.environ.get(name) for name in ("PROGRAMFILES", "PROGRAMW6432", "PROGRAMFILES(X86)")]
+    found += [str(Path(local) / "Programs"), local] if local else []
+    return [Path(d) for d in dict.fromkeys(found) if d]
+
+
+def _registry_keys(key):
+    """Open handles of ``key`` under HKEY_LOCAL_MACHINE and HKEY_CURRENT_USER,
+    in the 64- and 32-bit views of the registry (Windows only)."""
+    try:
+        import winreg
+    except ImportError:
+        return
+    for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        for view in (getattr(winreg, "KEY_WOW64_64KEY", 0), getattr(winreg, "KEY_WOW64_32KEY", 0)):
+            try:
+                handle = winreg.OpenKey(root, key, 0, winreg.KEY_READ | view)
+            except OSError:
+                continue
+            with handle:
+                yield winreg, handle
+
+
+def registry_value(key, name):
+    """The values called ``name`` of the registry ``key`` (see _registry_keys)."""
+    found = []
+    for winreg, handle in _registry_keys(key):
+        try:
+            found.append(winreg.QueryValueEx(handle, name)[0])
+        except OSError:
+            continue
+    return found
+
+
+def registry_subkey_values(key, name):
+    """The values called ``name`` of each sub-key of the registry ``key``."""
+    found = []
+    for winreg, handle in _registry_keys(key):
+        n = 0
+        while True:
+            try:
+                sub = winreg.EnumKey(handle, n)
+            except OSError:
+                break
+            n += 1
+            try:
+                with winreg.OpenKey(handle, sub) as child:
+                    found.append(winreg.QueryValueEx(child, name)[0])
+            except OSError:
+                continue
+    return found
+
+
 def find_tesseract():
+    r"""The Tesseract program: on the PATH or, on Windows, where its
+    installer puts it (Program Files\Tesseract-OCR, also when installed
+    with winget), or the folder its installer noted in the registry."""
     found = shutil.which("tesseract")
     if found:
         return found
     if sys.platform == "win32":
-        for base in (os.environ.get("PROGRAMFILES"), os.environ.get("PROGRAMFILES(X86)"),
-                     os.environ.get("LOCALAPPDATA")):
-            if base and (Path(base) / "Tesseract-OCR" / "tesseract.exe").is_file():
-                return str(Path(base) / "Tesseract-OCR" / "tesseract.exe")
+        folders = [base / "Tesseract-OCR" for base in program_dirs()]
+        folders += [Path(str(d)) for d in registry_value(r"SOFTWARE\Tesseract-OCR", "InstallDir")]
+        for folder in folders:
+            if (folder / "tesseract.exe").is_file():
+                return str(folder / "tesseract.exe")
     return None
+
+
+def add_programs_to_path():
+    """Put the folders of Tesseract and Ghostscript on this process's PATH
+    when they were found elsewhere, so OCRmyPDF (which looks for them on
+    the PATH) finds them too, e.g. right after the installer added them."""
+    from pdfmanager import archive
+
+    paths = os.environ.get("PATH", "").split(os.pathsep)
+    for exe in (find_tesseract(), archive.find_ghostscript()):
+        folder = str(Path(exe).parent) if exe else None
+        if folder and folder not in paths:
+            paths.insert(0, folder)
+    os.environ["PATH"] = os.pathsep.join(p for p in paths if p)
 
 
 def detect_rotation(path, password=None, pages=None, dpi=150):

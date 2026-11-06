@@ -33,6 +33,15 @@ administrator rights are needed, and you can delete the unzipped folder
 afterwards. Running it again updates the installed copy (or use the
 **Update** button, below).
 
+At the end it asks whether to add **OCR and PDF/A support** (about 150 MB):
+OCRmyPDF, plus the Tesseract and Ghostscript programs installed with
+winget (`UB-Mannheim.TesseractOCR`, `ArtifexSoftware.GhostScript`; Windows
+may ask for permission, as they install for all users). It doesn't ask when
+they're already there, and skips the programs when winget is missing.
+`Install ZPDF.cmd -WithOcr` adds them without asking, `-NoOcr` never does.
+ZPDF finds both programs where their installers put them, also when they
+aren't on the PATH.
+
 The app runs with Python's own `pythonw.exe`, which is signed by the Python
 Software Foundation, so Windows **Smart App Control** lets it start (it may
 block the unsigned standalone app below). The script only uses plain
