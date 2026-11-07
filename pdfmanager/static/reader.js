@@ -347,7 +347,7 @@ export class Reader {
     this.overlayOffset = el("input", { type: "number", class: "rd-overlay-offset", value: "0", step: "1", "aria-label": "Page offset",
       title: "When the other version has its sheets in other places: its page = this page plus this number" });
     // Signatures in the document: how they check out
-    this.sigText = el("span", { class: "rd-sigtext" });
+    this.sigText = el("span", { class: "rd-sigstatus" });
     const sigMore = el("button", { class: "rd-btn", type: "button", html: "<span>Details</span>" });
     const sigClose = el("button", { class: "rd-btn", type: "button", title: "Hide", "aria-label": "Hide", html: svg("x") });
     this.sigbar = el("div", { class: "rd-findbar rd-sigbar", hidden: true, role: "status" }, el("span", { class: "rd-sigicon", html: svg("badge") }),
@@ -2001,9 +2001,10 @@ export class Reader {
       for (const [k, v] of Object.entries({ pfx_password: password.value, password: t.password || "", page: String(n), box: JSON.stringify(rect),
         reason: reason.value.trim(), location: location.value.trim(), timestamp_url: stamp.value.trim() })) body.append(k, v);
       return fetch("/api/sign/cert", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
-    }, { failure: "Could not sign: " });
+    }, { failure: "Could not sign: ", signing: true });
     if ((tab?.version || 0) !== version) {
       if (this.markupMode === "CERTSIGN") this.#setEditMode("NONE");
+      tab.signedWarned = false;
       this.toast("Signed. Save it now: anything changed after this shows as changed after signing.", 7000, ["Save", () => this.save()]);
     }
   }
@@ -2025,12 +2026,11 @@ export class Reader {
     const doc = this.doc, tab = this.activeTab;
     this.sigbar.hidden = true;
     if (!doc) return;
-    let signed = false;
-    try {
-      const fields = await doc.getFieldObjects();
-      signed = Object.values(fields || {}).some((list) => list.some((f) => f.type === "signature"));
-    } catch (e) { /* no form */ }
-    if (!signed || doc !== this.doc) return;
+    // Every signature has a /ByteRange (pdf.js leaves signature fields out of
+    // its list of fields). A big file read in pieces isn't searched.
+    const bytes = tab?.bytes;
+    if (!bytes || doc !== this.doc) return;
+    if (!new TextDecoder("latin1").decode(bytes).includes("/ByteRange")) return;
     try {
       const list = await this.#verifySignatures();
       if (doc !== this.doc || tab !== this.activeTab || !list.length) return;
@@ -2059,9 +2059,12 @@ export class Reader {
       modified: "Changed after signing", invalid: "Not valid: the signature is broken or doesn't match" };
     const when = (t) => { const d = t && new Date(t); return d && !Number.isNaN(+d) ? d.toLocaleString() : t || ""; };
     const items = list.map((s) => el("li", { class: "rd-sigitem " + (s.status || "") },
-      el("b", {}, s.signer || "Unknown signer"), el("div", {}, words[s.status] || s.status || ""),
-      el("small", {}, [s.signed_at || s.time ? "Signed " + when(s.signed_at || s.time) + (s.timestamped ? " (trusted timestamp)" : "") : "",
-        s.reason ? "Reason: " + s.reason : "", s.location ? "Location: " + s.location : "", s.page ? "Page " + s.page : ""].filter(Boolean).join(" · "))));
+      el("b", {}, (s.kind === "timestamp" ? "Document timestamp" : s.signer || "Unknown signer") + (s.email ? ` <${s.email}>` : "")),
+      el("div", {}, words[s.status] || s.status || ""),
+      s.summary ? el("div", { class: "rd-muted" }, s.summary) : null,
+      el("small", {}, [s.time ? "Signed " + when(s.time) + (s.time_source === "timestamp" ? " (time from a timestamp server)" : " (time from the signer's computer)") : "",
+        s.reason ? "Reason: " + s.reason : "", s.location ? "Location: " + s.location : "", s.page ? "Page " + s.page : "",
+        s.issuer ? "Certificate from " + s.issuer : ""].filter(Boolean).join(" · "))));
     await this.#dialog("Signatures", [el("ul", { class: "rd-siglist" }, ...items)], [["ok", "Close", true]]);
   }
 
@@ -2752,10 +2755,15 @@ export class Reader {
   /** Replace the open document with what ``make(bytes, tab)`` gets back from
    *  the server, keeping the old bytes for Undo. In the queue: a save or a tab
    *  switch asked for meanwhile waits for it. */
-  #changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null } = {}) {
+  #changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false } = {}) {
     return this.#serial(async () => {
       const tab = this.activeTab;
       if (!tab || !this.doc) return;
+      // Changes are made by rewriting the file, which a signature can't survive.
+      if (!signing && tab.signatures?.length && !tab.signedWarned) {
+        if (!confirm("This document is signed. Changing it makes its signatures show as broken: they no longer cover what the document says. Change it anyway?")) return;
+        tab.signedWarned = true;
+      }
       this.#busy(true);
       try {
         const bytes = await this.#currentBytes();

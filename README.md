@@ -248,6 +248,21 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   and shapes are standard PDF annotations with their own appearance, so
   Acrobat and other viewers show them the same, and they print. Use
   *Flatten forms & comments* afterwards to make them part of the page.
+- **Pictures** (Tools → Annotate & sign → Pictures): every picture on the
+  page is outlined; drag one to move it, drag a corner to resize it (it
+  keeps its proportions; hold Shift to stretch it), or **Replace** or
+  **Delete** it. Only the picture changes, the rest of the page stays as
+  it is; a picture Word or a browser clipped to its box can be moved out
+  of it.
+- **Links** (Tools → Annotate & sign → Links): links are outlined; click
+  one to change where it goes (a web or email address, or a page of the
+  document) or delete it, or drag a box to add one.
+- **Sign with a digital ID** (the badge button in Annotate & sign, or
+  More): drag a box where the signature goes, choose your digital ID
+  (.pfx or .p12) and its password. A signed document shows a bar saying
+  who signed it and whether it has been changed since; **Details** lists
+  every signature. ZPDF asks before changing a signed document, since
+  any change shows up as made after signing.
 - **Comments** (a tab in the sidebar): every note, highlight, shape and
   other markup in the document, page by page, with its author, date and
   comment and the replies under it. Click one to go to it; add or change
