@@ -1710,3 +1710,113 @@ def test_measurements_go_into_the_pdf_as_measurement_annotations(tmp_path):
     with pytest.raises(core.PdfManagerError, match="too few points"):
         markup.apply(tmp_path / "plan.pdf", tmp_path / "x.pdf", [
             {"op": "add", "page": 1, "kind": "measure", "shape": "area", "points": [[1, 1], [2, 2]]}])
+
+
+def _picture_pdf(tmp_path):
+    """A page with two pictures, the second clipped to its box as Word does."""
+    from PIL import Image, ImageDraw
+
+    im = Image.new("RGB", (200, 100), (30, 120, 220))
+    ImageDraw.Draw(im).rectangle((0, 0, 60, 100), fill=(220, 40, 40))
+    im.save(tmp_path / "a.png")
+    c = canvas.Canvas(str(tmp_path / "pics.pdf"), pagesize=(612, 792))
+    c.drawString(72, 740, "Report with pictures")
+    c.drawImage(str(tmp_path / "a.png"), 72, 500, 200, 100)
+    path = c.beginPath()
+    path.rect(300, 500, 150, 100)
+    c.saveState()
+    c.clipPath(path, stroke=0, fill=0)
+    c.drawImage(str(tmp_path / "a.png"), 300, 500, 150, 100)
+    c.restoreState()
+    c.showPage()
+    c.save()
+    return tmp_path / "pics.pdf"
+
+
+def _pixel(path, x, y):
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(str(path))
+    image = doc[0].render(scale=1).to_pil().convert("RGB")
+    doc.close()
+    return image.getpixel((x, 792 - y))
+
+
+def test_pictures_are_moved_resized_replaced_and_deleted_where_they_are(tmp_path):
+    from PIL import Image, ImageDraw
+
+    from pdfmanager import pageimages
+
+    src = _picture_pdf(tmp_path)
+    found = pageimages.list_images(src)
+    assert [p["box"] for p in found[1]] == [[72, 500, 272, 600], [300, 500, 450, 600]]
+    # Moved and made bigger; the clipped one moves out of its clip and still shows.
+    pageimages.edit_images(src, tmp_path / "moved.pdf", [
+        {"page": 1, "index": 0, "op": "move", "box": [72, 300, 372, 450]},
+        {"page": 1, "index": 1, "op": "move", "box": [100, 100, 250, 200]}])
+    assert [p["box"] for p in pageimages.list_images(tmp_path / "moved.pdf")[1]] == [[72, 300, 372, 450], [100, 100, 250, 200]]
+    assert _pixel(tmp_path / "moved.pdf", 300, 400)[2] > 180  # blue where the first one went
+    assert _pixel(tmp_path / "moved.pdf", 200, 150)[2] > 180  # and the clipped one, out of its clip
+    assert _pixel(tmp_path / "moved.pdf", 150, 550) == (255, 255, 255)  # nothing left behind
+    assert "Report with pictures" in PdfReader(tmp_path / "moved.pdf").pages[0].extract_text()
+    # Replaced (fitted into the box, transparency kept) and deleted.
+    dot = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+    ImageDraw.Draw(dot).ellipse((10, 10, 90, 90), fill=(30, 160, 60, 255))
+    buf = io.BytesIO()
+    dot.save(buf, "PNG")
+    pageimages.edit_images(tmp_path / "moved.pdf", tmp_path / "done.pdf", [
+        {"page": 1, "index": 0, "op": "replace", "picture": "p"}, {"page": 1, "index": 1, "op": "delete"}],
+        pictures={"p": buf.getvalue()})
+    left = pageimages.list_images(tmp_path / "done.pdf")[1]
+    assert len(left) == 1 and left[0]["box"] == [147, 300, 297, 450]  # square, centred in the 300 x 150 box
+    assert _pixel(tmp_path / "done.pdf", 222, 375)[1] > 140 and _pixel(tmp_path / "done.pdf", 150, 302) == (255, 255, 255)
+    with pytest.raises(core.PdfManagerError, match="no picture 3"):
+        pageimages.edit_images(src, tmp_path / "x.pdf", [{"page": 1, "index": 2, "op": "delete"}])
+    with pytest.raises(core.PdfManagerError, match="isn't a picture"):
+        pageimages.edit_images(src, tmp_path / "x.pdf", [{"page": 1, "index": 0, "op": "replace", "picture": "p"}],
+                               pictures={"p": b"not an image"})
+
+
+def test_links_are_added_changed_and_kept_safe(tmp_path):
+    from pdfmanager import markup
+
+    src = text_pdf(tmp_path / "doc.pdf", ["Visit our site", "Page 2"])
+    web, page = markup.apply(src, tmp_path / "a.pdf", [
+        {"op": "add", "page": 1, "kind": "link", "rect": [70, 755, 160, 772], "url": "example.com"},
+        {"op": "add", "page": 1, "kind": "link", "rect": [70, 600, 160, 620], "to_page": 2}])
+    links = _annots(tmp_path / "a.pdf")
+    assert links[0]["/A"] == {"/S": "/URI", "/URI": "https://example.com"}
+    reader = PdfReader(tmp_path / "a.pdf")
+    dest = reader.pages[0]["/Annots"][1].get_object()["/Dest"]
+    assert list.__getitem__(dest, 0).idnum == reader.pages[1].indirect_reference.idnum and dest[1] == "/Fit"
+    markup.apply(tmp_path / "a.pdf", tmp_path / "b.pdf", [{"op": "link", "page": 1, "id": web, "url": "me@example.org"},
+                                                          {"op": "link", "page": 1, "id": page, "url": "http://x.org"}])
+    links = _annots(tmp_path / "b.pdf")
+    assert links[0]["/A"]["/URI"] == "mailto:me@example.org" and links[1]["/A"]["/URI"] == "http://x.org" and "/Dest" not in links[1]
+    for bad, why in (({"url": "javascript:alert(1)"}, "web address"), ({"to_page": 9}, "no page 9"), ({}, "say where")):
+        with pytest.raises(core.PdfManagerError, match=why):
+            markup.apply(src, tmp_path / "x.pdf", [{"op": "add", "page": 1, "kind": "link", "rect": [1, 1, 9, 9], **bad}])
+
+
+def test_picture_endpoints(app, tmp_path):
+    base, token, _ = app
+    src = _picture_pdf(tmp_path)
+    boundary = "pdfmtestboundary"
+
+    def post(path, fields, files):
+        parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode() for k, v in fields.items()]
+        for name, data in files:
+            parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="{name}.bin"\r\n\r\n'.encode()
+                         + data + b"\r\n")
+        request = urllib.request.Request(base + path, data=b"".join(parts) + f"--{boundary}--\r\n".encode(),
+                                         headers={"X-Pdfm-Token": token, "Content-Type": f"multipart/form-data; boundary={boundary}"})
+        with urllib.request.urlopen(request, timeout=20) as res:
+            return res.read()
+
+    pages = json.loads(post("/api/images/list", {"password": ""}, [("file", src.read_bytes())]))["pages"]
+    assert [p["index"] for p in pages["1"]] == [0, 1]
+    out = post("/api/images/edit", {"changes": json.dumps([{"page": 1, "index": 1, "op": "delete"}])}, [("file", src.read_bytes())])
+    (tmp_path / "out.pdf").write_bytes(out)
+    from pdfmanager import pageimages
+
+    assert len(pageimages.list_images(tmp_path / "out.pdf")[1]) == 1

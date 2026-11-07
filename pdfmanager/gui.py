@@ -41,7 +41,7 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
-                        forms, recipes, redact, scan, search, textedit, update, viewports, markup)
+                        forms, recipes, redact, scan, search, textedit, update, viewports, markup, pageimages)
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
@@ -1403,6 +1403,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._keep(body)
             if path == "/api/markup":
                 return self._markup(body)
+            if path == "/api/images/list":
+                return self._images_list(body)
+            if path == "/api/images/edit":
+                return self._images_edit(body)
             if path == "/api/scales":
                 return self._scales(body)
             if path.startswith("/api/save/"):
@@ -1700,6 +1704,41 @@ class Handler(BaseHTTPRequestHandler):
         # Which font each change got, for the reader to say so.
         return self._send(HTTPStatus.OK, data, "application/pdf",
                           {"X-Pdfm-Fonts": json.dumps(report, ensure_ascii=True)})
+
+    def _images_list(self, body):
+        """The pictures on the reader's pages (see pageimages.py)."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            src.write_bytes(uploads[0][2])
+            found = pageimages.list_images(src, fields.get("password") or None)
+        return self._send(HTTPStatus.OK, {"pages": found})
+
+    def _images_edit(self, body):
+        """Move, resize, replace or delete pictures; sends back the changed PDF.
+        The first upload is the document, "picture" uploads are new pictures
+        (by their field position: picture0, picture1, ...)."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        try:
+            changes = json.loads(fields.get("changes") or "[]")
+        except ValueError:
+            raise UserError("the changes are damaged; make them again") from None
+        if not isinstance(changes, list) or not all(isinstance(c, dict) for c in changes):
+            raise UserError("the changes are damaged; make them again")
+        pictures = {name: bytes(data) for name, _, data in uploads[1:] if name}
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "edited.pdf"
+            src.write_bytes(uploads[0][2])
+            pageimages.edit_images(src, out, changes, password, pictures)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)  # stays protected
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf")
 
     def _markup(self, body):
         """Add notes, underlines, strikeouts and shapes, or change, answer or

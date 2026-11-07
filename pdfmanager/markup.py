@@ -16,6 +16,8 @@ A change is a dict:
     {"op": "text", "page": 1, "id": "12R", "text": "..."}     (the comment of an annotation)
     {"op": "reply", "page": 1, "id": "12R", "text": "..."}
     {"op": "delete", "page": 1, "id": "12R"}                  (with its popup and replies)
+    {"op": "add", "page": 1, "kind": "link", "rect": [...], "url": "https://..." | "to_page": 3}
+    {"op": "link", "page": 1, "id": "12R", "url": "..." | "to_page": 3}   (where a link goes)
 
 ``add`` also takes "color" ("#rrggbb"), "width" (points, shapes) and
 "text" (the comment). ``id`` is pdf.js's id of an annotation in the file
@@ -33,7 +35,7 @@ from pypdf.generic import (ArrayObject, BooleanObject, DecodedStreamObject, Dict
 
 from pdfmanager import core
 
-KINDS = ("note", "underline", "strikeout", "rect", "ellipse", "cloud", "line", "arrow", "measure")
+KINDS = ("note", "underline", "strikeout", "rect", "ellipse", "cloud", "line", "arrow", "measure", "link")
 DEFAULT_COLORS = {"note": "#f5c400", "underline": "#1f4fd8", "strikeout": "#d52b1e"}
 PRINT = 4  # annotation flag: printed with the page
 NOTE_SIZE = 20
@@ -160,6 +162,20 @@ def _add(writer, page, page_ref, change, author):
     kind = change.get("kind")
     if kind not in KINDS:
         raise core.PdfManagerError(f"unknown kind of annotation: {kind!r}")
+    if kind == "link":
+        annot = DictionaryObject({
+            NameObject("/Type"): NameObject("/Annot"), NameObject("/Subtype"): NameObject("/Link"),
+            NameObject("/Rect"): ArrayObject(FloatObject(v) for v in _rect(change.get("rect") or ())),
+            NameObject("/Border"): ArrayObject([NumberObject(0), NumberObject(0), NumberObject(0)]),
+            NameObject("/F"): NumberObject(PRINT), NameObject("/P"): page_ref})
+        _set_target(writer, annot, change)
+        ref = writer._add_object(annot)
+        annots = page.get("/Annots")
+        if annots is None:
+            page[NameObject("/Annots")] = ArrayObject()
+            annots = page["/Annots"]
+        annots.get_object().append(ref)
+        return ref
     if kind == "measure":
         added = _measure(writer, page_ref, change, author)
         annots = page.get("/Annots")
@@ -440,6 +456,31 @@ def _measure(writer, page_ref, change, author):
     return [build(subtype, content, [bounds(pts), box], keys)]
 
 
+def _set_target(writer, annot, change):
+    """Where a link goes: a web address (or email) or a page of this document."""
+    url, to_page = str(change.get("url") or "").strip(), change.get("to_page")
+    for key in ("/A", "/Dest"):
+        if key in annot:
+            del annot[key]
+    if url:
+        if re.match(r"(?i)\s*(javascript|vbscript|file|data):", url):
+            raise core.PdfManagerError("a link can go to a web address, an email address or a page")
+        if re.fullmatch(r"[\w.+-]+@[\w-]+(\.[\w-]+)+", url):
+            url = "mailto:" + url
+        elif not re.match(r"(?i)(https?|mailto|ftp|tel):", url):
+            url = "https://" + url  # "example.com" means the web site
+        annot[NameObject("/A")] = DictionaryObject({NameObject("/S"): NameObject("/URI"),
+                                                    NameObject("/URI"): TextStringObject(url[:2000])})
+        return
+    try:
+        number = int(to_page)
+    except (TypeError, ValueError):
+        raise core.PdfManagerError("say where the link goes: a web address or a page number") from None
+    if not 1 <= number <= len(writer.pages):
+        raise core.PdfManagerError(f"there is no page {number} to link to")
+    annot[NameObject("/Dest")] = ArrayObject([writer.pages[number - 1].indirect_reference, NameObject("/Fit")])
+
+
 def _find(reader, writer, number, ident):
     """The annotation pdf.js calls ``ident`` on page ``number``: its index
     in the page's /Annots, the same in the reader's and the copy's pages."""
@@ -502,6 +543,10 @@ def apply(path, output, changes, password=None, author=None):
             new = writer._add_object(reply)
             page["/Annots"].get_object().append(new)
             added.append(new)
+        elif op == "link":
+            if annot.get("/Subtype") != "/Link":
+                raise core.PdfManagerError("that isn't a link")
+            _set_target(writer, annot, change)
         elif op == "delete":
             doomed.setdefault(number, set()).add(_key(ref))
         else:

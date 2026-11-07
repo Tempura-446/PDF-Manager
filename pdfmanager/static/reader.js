@@ -77,6 +77,8 @@ const ICON = {
   area: '<path d="M4 7 11 3l9 5-2.5 11L6 20z"/><circle cx="4" cy="7" r="1.2"/><circle cx="11" cy="3" r="1.2"/><circle cx="20" cy="8" r="1.2"/>',
   screen: '<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
   note: '<path d="M4 5h16v11H10l-4 4v-4H4z"/><path d="M8 9h8M8 12h5"/>',
+  imgedit: '<rect x="3" y="3" width="14" height="14" rx="2"/><path d="m3 13 4-4 6 6"/><path d="M14 20h7M17.5 16.5v7" transform="translate(-1 -3)"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/>',
   layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
   rect: '<rect x="4" y="6" width="16" height="12" rx="1"/><circle cx="4" cy="6" r="1.4"/><circle cx="20" cy="18" r="1.4"/>',
   cutout: '<rect x="3" y="4" width="18" height="16" rx="1"/><rect x="9" y="9" width="7" height="6" stroke-dasharray="2 2"/>',
@@ -96,7 +98,7 @@ const COLORS = [["Black", "#000000", "#bdbdbd"], ["Blue", "#1f4fd8", "#80ebff"],
   ["Green", "#1f8a3b", "#53ffbc"], ["Yellow", "#b8860b", "#ffff98"]];
 // Notes, underline, strikeout and shapes: the reader's own tools, written into
 // the file by the server (markup.py) as standard annotations.
-const MARKUP = new Set(["NOTE", "UNDERLINE", "STRIKEOUT", "SHAPE"]);
+const MARKUP = new Set(["NOTE", "UNDERLINE", "STRIKEOUT", "SHAPE", "IMAGES", "LINKS"]);
 const SHAPES = [["rect", "Rectangle"], ["ellipse", "Ellipse"], ["cloud", "Cloud"], ["arrow", "Arrow"], ["line", "Line"]];
 const KIND_NAMES = { Text: "Note", FreeText: "Text", Highlight: "Highlight", Underline: "Underline", StrikeOut: "Strikeout",
   Squiggly: "Squiggly", Square: "Rectangle", Circle: "Ellipse", Line: "Line", Polygon: "Shape", PolyLine: "Lines",
@@ -135,6 +137,12 @@ let tabSeq = 0;
 // pages are shown (the whole file only when a change or save needs it).
 const LAZY_BYTES = 32 * 1024 * 1024;
 const header = (res, name) => { try { return decodeURIComponent(res.headers.get(name) || ""); } catch (e) { return ""; } };
+
+/** A box on the page (PDF coordinates) as [x0, y0, x1, y1] on screen, within the page. */
+function viewRect(viewport, [x0, y0, x1, y1]) {
+  const [a, b] = viewport.convertToViewportPoint(x0, y0), [c, d] = viewport.convertToViewportPoint(x1, y1);
+  return [a, b, c, d];
+}
 
 function sameBytes(a, b) {
   if (a.length !== b.length) return false;
@@ -256,7 +264,7 @@ export class Reader {
       tool("underline", "Underline", "UNDERLINE"), tool("strike", "Strike out", "STRIKEOUT"),
       tool("note", "Note", "NOTE"), tool("text", "Text", "FREETEXT"),
       tool("draw", "Draw", "INK"), tool("shapes", "Shapes", "SHAPE"), tool("image", "Picture", "STAMP"),
-      tool("edittext", "Edit text", "EDITTEXT"),
+      tool("edittext", "Edit text", "EDITTEXT"), tool("imgedit", "Pictures", "IMAGES"), tool("link", "Links", "LINKS"),
     ];
     const tip = (mode, title) => { this.annotTools.find((b) => b.dataset.mode === mode).title = title; };
     for (const mode of ["NONE", "UNDERLINE", "STRIKEOUT"]) this.annotTools.find((b) => b.dataset.mode === mode).classList.add("compact");
@@ -264,6 +272,8 @@ export class Reader {
     tip("STRIKEOUT", "Strike out text: select the words (or select them first, then click here)");
     tip("NOTE", "Add a note: click where it goes, then type your comment");
     tip("SHAPE", "Draw a rectangle, ellipse, cloud, arrow or line: drag on the page (Shift: square, circle, 45°)");
+    tip("IMAGES", "Edit the pictures on the page: drag to move, drag a corner to resize (Shift: freely), replace or delete");
+    tip("LINKS", "Edit links: click one to change where it goes or delete it; drag a box to add one");
     this.shapeSelect = el("select", { class: "rd-zoom", "aria-label": "Shape", hidden: true },
       ...SHAPES.map(([v, label]) => el("option", { value: v }, label)));
     this.shapeSelect.value = store.get("pdfm-shape", "rect");
@@ -624,6 +634,12 @@ export class Reader {
     if (mod || e.altKey || isTyping(e)) return;
     if (this.measureMode && this.#measureKey(e)) { e.preventDefault(); return; }
     if (e.key === "Escape" && !this.findbar.hidden) { this.closeFind(); return; }
+    if (this.markupMode === "IMAGES" && this.pickedImage && !isTyping(e) && (e.key === "Delete" || e.key === "Backspace")) {
+      e.preventDefault();
+      this.#editImage("delete");
+      return;
+    }
+    if (e.key === "Escape" && this.markupMode === "IMAGES" && this.pickedImage) { this.#pickImage(null); return; }
     if (e.key === "Escape" && this.editMode && this.editMode !== "NONE") { this.#setEditMode("NONE"); return; }
     if (e.key === "Escape" && !this.tray.hidden) { this.toggleTray(false); return; }
     const v = this.pdfViewer;
@@ -1013,6 +1029,7 @@ export class Reader {
     eventBus.on("pagesloaded", () => this.#refreshScale());
     eventBus.on("pagerendered", ({ pageNumber }) => {
       this.#drawMeasures(pageNumber);
+      if (this.markupMode === "IMAGES" || this.markupMode === "LINKS") this.#drawObjectBoxes(pageNumber);
       if (this.overlay) this.overlay.draw(this.pdfViewer.getPageView(pageNumber - 1), pageNumber).catch(() => {});
     });
     eventBus.on("scalechanging", ({ scale, presetValue }) => {
@@ -1442,6 +1459,8 @@ export class Reader {
     this.root.classList.toggle("rd-edittext", editText);
     this.root.classList.toggle("rd-markup", markup);
     this.root.dataset.markup = markup ? name.toLowerCase() : "";
+    this.pickedImage = null;
+    this.#objectBoxes();
     if (custom) name = "NONE";
     const mode = pdfjs.AnnotationEditorType[name];
     if (mode === undefined) return;
@@ -1538,12 +1557,14 @@ export class Reader {
   #markupDown(e) {
     const mode = this.markupMode;
     if (!mode || e.button !== 0 || mode === "UNDERLINE" || mode === "STRIKEOUT") return;
-    if (e.target.closest?.(".rd-notebox, a, input, textarea, select, button")) return;
+    if (e.target.closest?.(".rd-notebox, .rd-objbox, .rd-objtools, a, input, textarea, select, button")) return;
     const at = this.#pointOnPage(e);
+    if (mode === "IMAGES") { if (at) this.#pickImage(null); return; }  // a click beside the pictures lets go
     if (!at) return;
     e.preventDefault();
     e.stopPropagation();
     if (mode === "NOTE") { this.#openNoteBox(at); return; }
+    if (mode === "LINKS") { this.#drawLinkBox(e, at); return; }
     // SHAPE: drag out the shape; it's drawn on screen until the file has it.
     this.#cancelMarkup();
     const svgEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -1720,11 +1741,216 @@ export class Reader {
     setTimeout(() => {
       const view = this.pdfViewer.getPageView(it.page - 1);
       if (!view?.div || !view.viewport) return;
-      const [a, b, c, d] = view.viewport.convertToViewportRectangle([x0, y0, x1, y1]);
+      const [a, b, c, d] = viewRect(view.viewport, [x0, y0, x1, y1]);
       const flash = el("div", { class: "rd-flash", style: `left:${Math.min(a, c) - 4}px;top:${Math.min(b, d) - 4}px;width:${Math.abs(c - a) + 8}px;height:${Math.abs(d - b) + 8}px` });
       view.div.append(flash);
       setTimeout(() => flash.remove(), 1600);
     }, 150);
+  }
+
+  // ---- pictures and links on the page (pageimages.py, markup.py) -------------------
+  /** Pictures or Links mode: outlines over the pages' pictures or links. */
+  #objectBoxes() {
+    this.viewerEl?.querySelectorAll(".rd-objbox, .rd-objtools, .rd-linkdraft").forEach((n) => n.remove());
+    if ((this.markupMode !== "IMAGES" && this.markupMode !== "LINKS") || !this.doc) return;
+    for (let i = 0; i < this.pdfViewer.pagesCount; i++) {
+      if (this.pdfViewer.getPageView(i)?.canvas?.width) this.#drawObjectBoxes(i + 1);
+    }
+    if (this.markupMode === "IMAGES" && !this.imagesHinted) {
+      this.imagesHinted = true;
+      this.toast("Click a picture to pick it: drag it to move it, drag a corner to resize it (Shift: freely), or replace or delete it.", 6000);
+    }
+  }
+
+  /** The pictures of the shown document, by page (asked once per change of it). */
+  #imagesOf(tab) {
+    if (tab.imagesFor !== (tab.version || 0) || !tab.images) {
+      tab.imagesFor = tab.version || 0;
+      tab.images = (async () => {
+        const body = new FormData();
+        body.append("file", new Blob([await this.#fullBytes()], { type: "application/pdf" }), "file.pdf");
+        body.append("password", tab.password || "");
+        const res = await fetch("/api/images/list", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
+        return res.ok ? (await res.json()).pages || {} : {};
+      })().catch(() => ({}));
+    }
+    return tab.images;
+  }
+
+  /** Where a link goes: { url } or { page }. */
+  async #linkTarget(a) {
+    if (a.url || a.unsafeUrl) return { url: a.url || a.unsafeUrl };
+    try {
+      let dest = a.dest;
+      if (typeof dest === "string") dest = await this.doc.getDestination(dest);
+      if (Array.isArray(dest) && dest[0]) {
+        const index = typeof dest[0] === "object" ? await this.doc.getPageIndex(dest[0]) : dest[0];
+        return { page: index + 1 };
+      }
+    } catch (e) { /* somewhere this reader can't name */ }
+    return {};
+  }
+
+  async #drawObjectBoxes(n) {
+    const view = this.pdfViewer.getPageView(n - 1), tab = this.activeTab, mode = this.markupMode, doc = this.doc;
+    if (!view?.div || !view.viewport || !tab) return;
+    let items = [];
+    if (mode === "IMAGES") items = (await this.#imagesOf(tab))[n] || [];
+    else if (mode === "LINKS") {
+      try { items = (await (await doc.getPage(n)).getAnnotations({ intent: "display" })).filter((a) => a.subtype === "Link"); } catch (e) { items = []; }
+    }
+    if (mode !== this.markupMode || doc !== this.doc) return;
+    view.div.querySelectorAll(".rd-objbox, .rd-objtools").forEach((x) => x.remove());
+    const vp = view.viewport;
+    for (const item of items) {
+      const [a, b, c, d] = viewRect(vp, item.box || item.rect);
+      const box = el("div", { class: "rd-objbox" + (mode === "LINKS" ? " link" : "") + (item.editable === false ? " locked" : ""),
+        style: `left:${Math.min(a, c)}px;top:${Math.min(b, d)}px;width:${Math.abs(c - a)}px;height:${Math.abs(d - b)}px` });
+      if (mode === "IMAGES") {
+        box.title = item.editable === false ? "This picture is drawn as part of a group, so it can't be edited here" : "Drag to move; click to pick it";
+        if (item.editable !== false) for (const h of ["nw", "ne", "sw", "se"]) box.append(el("i", { class: "rd-handle " + h, "data-handle": h }));
+        box.addEventListener("pointerdown", (e) => this.#grabImage(e, n, item, box));
+      } else {
+        const target = await this.#linkTarget(item);
+        box.title = target.url ? `Goes to ${target.url}` : target.page ? `Goes to page ${target.page}` : "A link";
+        box.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); });
+        box.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); this.#editLink(n, item, null, target); });
+      }
+      view.div.append(box);
+      if (mode === "IMAGES" && this.pickedImage?.page === n && this.pickedImage.index === item.index) this.#pickImage({ page: n, item, box }, false);
+    }
+  }
+
+  /** Pick a picture (null: none): its handles and Replace / Delete. */
+  #pickImage(picked, redraw = true) {
+    this.viewerEl.querySelectorAll(".rd-objbox.picked").forEach((b) => b.classList.remove("picked"));
+    this.viewerEl.querySelectorAll(".rd-objtools").forEach((t) => t.remove());
+    this.pickedImage = picked ? { page: picked.page, index: picked.item.index } : null;
+    if (!picked) return;
+    picked.box.classList.add("picked");
+    const btn = (icon, label, fn) => {
+      const b = el("button", { type: "button", class: "rd-btn", html: svg(icon) + `<span>${label}</span>` });
+      b.addEventListener("pointerdown", (e) => e.stopPropagation());
+      b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
+      return b;
+    };
+    const tools = el("div", { class: "rd-objtools", style: `left:${picked.box.offsetLeft}px;top:${Math.max(0, picked.box.offsetTop - 42)}px` },
+      btn("image", "Replace…", () => this.#editImage("replace")), btn("trash", "Delete", () => this.#editImage("delete")));
+    picked.box.parentElement.append(tools);
+    if (redraw) picked.box.focus?.();
+  }
+
+  /** Drag a picture (or one of its corners) to move (or resize) it. */
+  #grabImage(e, page, item, box) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (item.editable === false) { this.toast("That picture is drawn as part of a group, so it can't be edited here.", 4000); return; }
+    this.#pickImage({ page, item, box }, false);
+    const handle = e.target.dataset?.handle || null;
+    const start = { x: e.clientX, y: e.clientY, left: box.offsetLeft, top: box.offsetTop, width: box.offsetWidth, height: box.offsetHeight };
+    const ratio = start.width / Math.max(1, start.height);
+    let moved = false;
+    const move = (ev) => {
+      const dx = ev.clientX - start.x, dy = ev.clientY - start.y;
+      if (!moved && Math.hypot(dx, dy) < 3) return;
+      moved = true;
+      let { left, top, width, height } = start;
+      if (!handle) { left += dx; top += dy; }
+      else {
+        if (handle.includes("e")) width = start.width + dx;
+        if (handle.includes("w")) width = start.width - dx;
+        if (handle.includes("s")) height = start.height + dy;
+        if (handle.includes("n")) height = start.height - dy;
+        width = Math.max(8, width); height = Math.max(8, height);
+        if (!ev.shiftKey) {  // the picture keeps its proportions
+          if (Math.abs(dx) * start.height >= Math.abs(dy) * start.width) height = width / ratio; else width = height * ratio;
+        }
+        if (handle.includes("w")) left = start.left + start.width - width;
+        if (handle.includes("n")) top = start.top + start.height - height;
+      }
+      Object.assign(box.style, { left: left + "px", top: top + "px", width: width + "px", height: height + "px" });
+      this.viewerEl.querySelectorAll(".rd-objtools").forEach((t) => { t.style.left = left + "px"; t.style.top = Math.max(0, top - 42) + "px"; });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      if (!moved) return;
+      const view = this.pdfViewer.getPageView(page - 1), vp = view.viewport;
+      const [x0, y0] = vp.convertToPdfPoint(box.offsetLeft, box.offsetTop);
+      const [x1, y1] = vp.convertToPdfPoint(box.offsetLeft + box.offsetWidth, box.offsetTop + box.offsetHeight);
+      this.#changeImages([{ op: "move", page, index: item.index, box: [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)] }]);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up, { once: true });
+  }
+
+  async #editImage(op) {
+    const picked = this.pickedImage;
+    if (!picked) return;
+    if (op === "delete") { this.pickedImage = null; await this.#changeImages([{ op: "delete", page: picked.page, index: picked.index }]); return; }
+    const file = await new Promise((resolve) => {
+      const input = el("input", { type: "file", accept: "image/png,image/jpeg,image/gif,image/webp,image/bmp,image/tiff", hidden: true });
+      input.addEventListener("change", () => { resolve(input.files[0] || null); input.remove(); });
+      input.addEventListener("cancel", () => { resolve(null); input.remove(); });
+      this.root.append(input);
+      input.click();
+    });
+    if (file) await this.#changeImages([{ op: "replace", page: picked.page, index: picked.index, picture: "picture0" }], [file]);
+  }
+
+  #changeImages(changes, files = []) {
+    return this.#changeDocument((bytes, tab) => {
+      const body = new FormData();
+      body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
+      body.append("password", tab.password || "");
+      body.append("changes", JSON.stringify(changes));
+      files.forEach((f, i) => body.append("picture" + i, f, f.name || "picture"));
+      return fetch("/api/images/edit", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
+    }, { failure: "Could not change the picture: " });
+  }
+
+  /** Links mode: drag a box on the page for a new link. */
+  #drawLinkBox(e, at) {
+    const view = at.view, draft = el("div", { class: "rd-linkdraft", style: `left:${at.x}px;top:${at.y}px;width:0;height:0` });
+    view.div.append(draft);
+    const box = view.div.getBoundingClientRect(), ox = box.left + view.div.clientLeft, oy = box.top + view.div.clientTop;
+    let end = [at.x, at.y];
+    const move = (ev) => {
+      end = [ev.clientX - ox, ev.clientY - oy];
+      Object.assign(draft.style, { left: Math.min(at.x, end[0]) + "px", top: Math.min(at.y, end[1]) + "px",
+        width: Math.abs(end[0] - at.x) + "px", height: Math.abs(end[1] - at.y) + "px" });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      draft.remove();
+      if (Math.abs(end[0] - at.x) < 6 || Math.abs(end[1] - at.y) < 6) { this.toast("Drag a box over what should be clickable to add a link.", 3000); return; }
+      const a = view.viewport.convertToPdfPoint(at.x, at.y), b = view.viewport.convertToPdfPoint(...end);
+      this.#editLink(at.n, null, [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])]);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up, { once: true });
+  }
+
+  /** Change where a link goes, or delete it; or say where a new one goes. */
+  async #editLink(n, link, rect, target = {}) {
+    const toWeb = el("input", { type: "radio", name: "rd-linkto", value: "web" });
+    const toPage = el("input", { type: "radio", name: "rd-linkto", value: "page" });
+    const url = el("input", { type: "text", value: target.url || "", placeholder: "https://example.com or name@example.com", "aria-label": "Web or email address" });
+    const page = el("input", { type: "number", min: "1", max: String(this.doc.numPages), value: target.page ? String(target.page) : "", "aria-label": "Page" });
+    (target.page && !target.url ? toPage : toWeb).checked = true;
+    url.addEventListener("input", () => { toWeb.checked = true; });
+    page.addEventListener("input", () => { toPage.checked = true; });
+    setTimeout(() => (toPage.checked ? page : url).focus(), 0);
+    const answer = await this.#dialog(link ? "Link" : "New link", [
+      el("label", { class: "rd-field" }, el("span", {}, toWeb, " Goes to a web or email address"), url),
+      el("label", { class: "rd-field" }, el("span", {}, toPage, ` Goes to a page of this document (1–${this.doc.numPages})`), page)],
+      link ? [["delete", "Delete the link"], ["cancel", "Cancel"], ["ok", "Save", true]] : [["cancel", "Cancel"], ["ok", "Add the link", true]]);
+    if (answer === "delete") { await this.#applyMarkup([{ op: "delete", page: n, id: link.id }], "Could not delete the link: "); return; }
+    if (answer !== "ok") return;
+    const where = toPage.checked ? { to_page: Number(page.value) } : { url: url.value.trim() };
+    if (!where.url && !where.to_page) { this.toast("Say where the link goes."); return; }
+    if (link) await this.#applyMarkup([{ op: "link", page: n, id: link.id, ...where }], "Could not change the link: ");
+    else await this.#applyMarkup([{ op: "add", page: n, kind: "link", rect, ...where }], "Could not add the link: ");
   }
 
   // ---- comparing revisions (overlay.js) -------------------------------------------
@@ -2480,13 +2706,14 @@ export class Reader {
 
   /** Show the tab's changed bytes, staying in the Edit text tool if it was on. */
   async #reloadEditing(tab) {
-    const editing = this.textEditMode ? "EDITTEXT" : this.markupMode;
+    const editing = this.textEditMode ? "EDITTEXT" : this.markupMode, picked = this.pickedImage;
     await this.#load(tab);
     this.#renderTabs();
     if (tab !== this.activeTab) return;
     if (editing) {
       this.openAnnotate();
       this.#setEditMode(editing);
+      if (editing === "IMAGES" && picked) this.pickedImage = picked;  // the picture just moved stays picked
     }
     this.undoBtn.disabled = !tab.undo?.length;
   }
@@ -4225,6 +4452,8 @@ export class Reader {
       tool("Add a note", "NOTE", "comment sticky review", "note"), tool("Underline text", "UNDERLINE", "markup", "underline"),
       tool("Strike out text", "STRIKEOUT", "strikethrough delete markup", "strike"),
       tool("Draw a shape", "SHAPE", "rectangle ellipse circle cloud arrow line markup revision", "shapes"),
+      tool("Edit pictures", "IMAGES", "image photo move resize replace delete logo", "imgedit"),
+      tool("Edit links", "LINKS", "hyperlink url web address page add change remove", "link"),
       { icon: "comments", label: "Comments", words: "notes replies review list markup", run: () => { this.#setSidebar(true); this.#showTab("comments"); } },
       { icon: "sign", label: "Sign", words: "signature autograph", run: () => this.sign() },
       { icon: "cw", label: "Rotate the view clockwise", keys: "R", words: "turn right", run: () => this.rotate(90) },
