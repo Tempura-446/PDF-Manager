@@ -309,6 +309,17 @@ OPERATIONS = [
                             ["word", "Microsoft Word only"]],
                    hint="Microsoft Word gives the most editable result. The built-in "
                         "converter turns tables and columns into plain paragraphs.")]},
+    # PDF → Excel: the tables in a PDF (pdfmanager/tables.py)
+    {"id": "to-excel", "group": "Convert", "label": "PDF → Excel", "files": "pdf",
+     "help": "Put the tables in PDFs into an Excel workbook, with numbers as numbers, or into "
+             "CSV files. Works on PDFs with text; scanned pages need OCR first.",
+     "fields": [_f("pages", "Pages (blank = all)", "text", "", placeholder="all"),
+                _f("layout", "Layout", "select", "sheet-per-table",
+                   choices=[["sheet-per-table", "A sheet per table"],
+                            ["one-sheet", "Everything on one sheet"]]),
+                _f("format", "Format", "select", "xlsx",
+                   choices=[["xlsx", "Excel workbook (.xlsx)"], ["csv", "CSV files (zip)"]],
+                   hint="A table that continues on the next page is kept as one table.")]},
     {"id": "from-office", "group": "Convert", "label": "Office → PDF", "files": "office",
      "help": "Convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF. "
              "Uses Microsoft Office if installed, otherwise LibreOffice.",
@@ -356,6 +367,7 @@ SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "rec
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
           "encrypt": "protected", "decrypt": "unlocked"}
+SUFFIX["to-excel"] = "tables"
 
 
 class UserError(Exception):
@@ -611,12 +623,38 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         if engine == "basic" and (opts.get("engine") or "auto") == "auto":
             notes.append("Converted with the built-in converter. For a more editable "
                          "result, install Microsoft Word.")
+    elif op == "to-excel":
+        return _to_excel(src, out_dir, opts, password, notes)
     elif op == "from-office":
         out = out_dir / f"{src.stem}.pdf"
         office.office_to_pdf(src, out)
     else:
         raise UserError(f"unknown operation {op!r}")
     return [out]
+
+
+def _to_excel(src, out_dir, opts, password, notes):
+    """PDF → Excel: a workbook, or a CSV file per table (in a folder, so the
+    download is a ZIP). A file without tables gets a note instead of
+    stopping the other files of the batch."""
+    from pdfmanager import tables
+
+    layout = opts.get("layout") or "sheet-per-table"
+    if layout not in tables.LAYOUTS:
+        raise UserError(f"unknown layout {layout!r}")
+    try:
+        if (opts.get("format") or "xlsx") == "csv":
+            made = tables.to_csv(src, out_dir / f"{src.stem}_tables", password, _pages(opts))
+            outputs = made["files"]
+        else:
+            made = tables.to_excel(src, out_dir / f"{src.stem}.xlsx", password, _pages(opts),
+                                   mode=layout)
+            outputs = [made["output"]]
+    except tables.NoTablesFound as exc:
+        notes.append(f"{src.name}: {exc}")
+        return []
+    notes.append(f"{src.name}: {made['tables']} table{'s' if made['tables'] != 1 else ''}")
+    return outputs
 
 
 def _redact_request(opts):
@@ -742,10 +780,11 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
     if not outputs:
         raise UserError("nothing was found to save" + (f" ({'; '.join(notes)})" if notes else ""))
     _protect(protect, password, op)
-    if len(outputs) == 1 and op != "media":
+    if len(outputs) == 1 and op != "media" and outputs[0].suffix != ".csv":  # CSV: always a ZIP
         path = outputs[0]
         ctype = {".txt": "text/plain; charset=utf-8",
                  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                 ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                  }.get(path.suffix, "application/pdf")
         return path.name, path.read_bytes(), ctype
     buf = io.BytesIO()
