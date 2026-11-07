@@ -15,6 +15,7 @@ dependencies = [
     "cryptography>=43",  # what pypdf 7 supports (AES encryption)
     "pypdfium2>=4.0",
     "pikepdf>=8",  # qpdf: packs compressed files into object streams
+    "pyhanko>=0.34",  # signing with a digital ID and checking signatures
 ]
 
 [project.optional-dependencies]
