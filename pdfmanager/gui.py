@@ -42,6 +42,7 @@ from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
                         forms, recipes, redact, scan, search, textedit, update, viewports, markup, pageimages)
+from pdfmanager import certsign
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
@@ -278,6 +279,39 @@ OPERATIONS = [
                 _f("javascript", "Scripts and actions that run programs", "check", True),
                 _f("attachments", "Attached files", "check", True),
                 _f("comments", "Comments, highlights and notes", "check", False)]},
+    # -- digital ID signatures (certsign.py) --
+    {"id": "sign-cert", "group": "Security", "label": "Sign with a digital ID", "files": "pdf",
+     "action": "Sign",
+     "help": "Sign with your digital ID (a .pfx or .p12 certificate file), like Acrobat's "
+             "“Sign with a digital ID”. Anyone can then check who signed and that nothing "
+             "changed since. Sign last: any later change except more signatures breaks it.",
+     "fields": [_f("pfx", "Digital ID (.pfx or .p12 file)", "file", None, accept=".pfx,.p12"),
+                _f("pfx_password", "Digital ID password", "password", ""),
+                _f("reason", "Reason", "text", "", placeholder="I approve this document"),
+                _f("location", "Location", "text", "", placeholder="City"),
+                _f("appearance", "Signature", "select", "visible",
+                   choices=[["visible", "Visible on a page"],
+                            ["invisible", "Invisible (only in the signature list)"]]),
+                _f("page", "Page", "text", "last", show_if={"appearance": "visible"},
+                   placeholder="last", hint="a page number, or last"),
+                _f("position", "Position", "select", "bottom-right",
+                   show_if={"appearance": "visible"},
+                   choices=[[p, p.replace("-", " ").capitalize()] for p in certsign.POSITIONS]),
+                _f("size", "Size", "select", "medium", show_if={"appearance": "visible"},
+                   choices=[["small", "Small"], ["medium", "Medium"], ["large", "Large"]]),
+                _f("timestamp_url", "Timestamp server (optional)", "text", "",
+                   placeholder="http://timestamp.digicert.com",
+                   hint="A trusted clock vouches for the time of signing; needs the internet. "
+                        "Leave empty to use this computer's clock.")]},
+    {"id": "verify-sig", "group": "Security", "label": "Check signatures", "files": "pdf",
+     "action": "Check",
+     "help": "Check the digital signatures in PDFs: who signed, when, and whether the "
+             "document was changed afterwards. You get a short report; nothing is changed.",
+     "fields": [_f("trust", "Certificate you trust (optional)", "file", None,
+                   accept=".cer,.crt,.pem,.der",
+                   hint="e.g. your company's root certificate: signatures from it count as "
+                        "verified")]},
+    # -- end of digital ID signatures --
     {"id": "pdfa", "group": "Convert", "label": "PDF → PDF/A (archive)", "files": "pdf",
      "help": "Convert to PDF/A, the ISO standard for documents that must stay readable for "
              "decades: fonts and colour profile are embedded. Needs Ghostscript.",
@@ -356,6 +390,7 @@ SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "rec
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
           "encrypt": "protected", "decrypt": "unlocked"}
+SUFFIX.update({"sign-cert": "signed", "verify-sig": "signatures"})  # digital ID signatures
 
 
 class UserError(Exception):
@@ -542,6 +577,19 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                                                   ("comments", "comments"))
                  if (n := counts[key])]
         notes.append(f"{src.name}: removed " + (", ".join(found) if found else "nothing (none found)"))
+    elif op == "sign-cert":
+        result = _sign_cert_op(src, out, opts, password, extra_files)
+        notes.append(f"{src.name}: signed by {result['signer']}"
+                     + (f" on page {result['page']}" if result["visible"] else
+                        " (invisible signature)")
+                     + (", with a timestamp" if result["timestamp"] else ""))
+    elif op == "verify-sig":
+        out = out.with_suffix(".txt")
+        found = certsign.verify(src, password, [extra_files["trust"]]
+                                if extra_files.get("trust") else None)
+        out.write_text(certsign.report(found, src.name), encoding="utf-8")
+        notes.extend([f"{src.name}: no digital signatures"] if not found else
+                     [f"{src.name}, {e['field']}: {e['summary']}" for e in found])
     elif op == "pdfa":
         if not archive.find_ghostscript():
             raise UserError("PDF/A needs Ghostscript: install it from "
@@ -619,6 +667,23 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
     return [out]
 
 
+def _sign_cert_op(src, out, opts, password, extra_files):
+    """The Sign with a digital ID tool on one PDF."""
+    pfx = extra_files.get("pfx")
+    if not pfx:
+        raise UserError("choose your digital ID: a .pfx or .p12 file")
+    page = box = None
+    if (opts.get("appearance") or "visible") == "visible":
+        page, box = certsign.place(src, opts.get("page") or "last",
+                                   opts.get("position") or "bottom-right",
+                                   opts.get("size") or "medium", password)
+    return certsign.sign(src, out, pfx, opts.get("pfx_password") or None, page=page, box=box,
+                         reason=(opts.get("reason") or "").strip() or None,
+                         location=(opts.get("location") or "").strip() or None,
+                         timestamp_url=(opts.get("timestamp_url") or "").strip() or None,
+                         password=password)
+
+
 def _redact_request(opts):
     """(terms, patterns, boxes) from the Redact tool's options. Boxes come
     from the page editor as {"1": [[x0, y0, x1, y1], ...]} (1-based pages)."""
@@ -649,7 +714,8 @@ def _clean_note(name, report):
 
 def _protect(outputs, password, op):
     """PDFs made from a password-protected file get the same password."""
-    if password and op not in ("decrypt", "encrypt", "pdfa", "media"):
+    # A signed PDF keeps its password inside the signed file.
+    if password and op not in ("decrypt", "encrypt", "pdfa", "media", "sign-cert"):
         for path in outputs:
             if path.suffix.lower() == ".pdf":
                 core.encrypt(path, path, password)
@@ -1421,6 +1487,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._text_edit(body)
             if path == "/api/pages/arrange":
                 return self._arrange(body)
+            if path == "/api/sign/cert":
+                return self._sign_cert(body)
+            if path == "/api/sign/verify":
+                return self._sign_verify(body)
             if path == "/api/settings":
                 return self._save_settings(body)
             if path == "/api/update/check":
@@ -1786,6 +1856,64 @@ class Handler(BaseHTTPRequestHandler):
                 core.encrypt(out, out, password)  # stays protected
             data = out.read_bytes()
         return self._send(HTTPStatus.OK, data, "application/pdf")
+
+    def _sign_cert(self, body):
+        """Sign the reader's PDF with a digital ID; sends back the signed PDF,
+        and what certsign.sign() said in X-Pdfm-Signed (JSON). A missing or
+        wrong digital ID password answers 400 with "code": "pfx_password"."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        named = {name: data for name, _, data in uploads}
+        if "file" not in named:
+            raise UserError("no file")
+        if not len(named.get("pfx") or b""):
+            raise UserError("choose your digital ID: a .pfx or .p12 file")
+        password = fields.get("password") or None
+        box = None
+        if (fields.get("box") or "").strip():
+            try:
+                box = certsign.parse_box(json.loads(fields["box"]))
+            except ValueError:
+                raise UserError("the signature box is damaged; draw it again") from None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "signed.pdf"
+            src.write_bytes(named["file"])
+            page = (fields.get("page") or "").strip() or None
+            if page is not None and box is None and not fields.get("field"):
+                page, box = certsign.place(src, page, fields.get("position") or "bottom-right",
+                                           fields.get("size") or "medium", password)
+            try:
+                result = certsign.sign(
+                    src, out, bytes(named["pfx"]), fields.get("pfx_password") or None,
+                    page=page, box=box, field=(fields.get("field") or "").strip() or None,
+                    reason=(fields.get("reason") or "").strip() or None,
+                    location=(fields.get("location") or "").strip() or None,
+                    contact=(fields.get("contact") or "").strip() or None,
+                    timestamp_url=(fields.get("timestamp_url") or "").strip() or None,
+                    password=password)
+            except certsign.IdPasswordError as exc:
+                self.close_connection = True
+                return self._send(HTTPStatus.BAD_REQUEST, {"error": str(exc),
+                                                           "code": "pfx_password"})
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf",
+                          {"X-Pdfm-Signed": json.dumps(result, ensure_ascii=True)})
+
+    def _sign_verify(self, body):
+        """The digital signatures in a PDF, checked: {"signatures": [...]}
+        (see certsign.verify)."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        named = {name: data for name, _, data in uploads}
+        if "file" not in named:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(named["file"])
+            trust = None
+            if len(named.get("trust") or b""):
+                trust = [Path(tmp) / "trusted.cer"]
+                trust[0].write_bytes(named["trust"])
+            found = certsign.verify(path, fields.get("password") or None, trust)
+        return self._send(HTTPStatus.OK, {"signatures": found})
 
     def _inspect(self, body):
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)

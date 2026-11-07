@@ -64,6 +64,11 @@ def main():
         "--collect-data", "reportlab",
         "--collect-all", "pikepdf",
         "--collect-all", "webview",
+        # Digital ID signatures: pyHanko imports parts of itself as needed
+        # and ships certificates (.pem) it reads at run time.
+        "--collect-submodules", "pyhanko",
+        "--collect-data", "pyhanko",
+        "--collect-submodules", "pyhanko_certvalidator",
         # Find the package from the source tree: editable installs use import
         # hooks PyInstaller can't follow.
         "--paths", str(ROOT),

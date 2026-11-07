@@ -15,6 +15,7 @@ from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
                         forms, recipes, redact, scan, search)
+from pdfmanager import certsign
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -263,6 +264,86 @@ def run_pdfa(a, src, out, pw):
     return archive.to_pdfa(src, out, level=a.level, password=pw)
 
 
+# -- digital ID signatures (certsign.py) --
+
+PFX_PASSWORD_ENV = "PDFM_PFX_PASSWORD"
+
+
+def _pfx_password(a):
+    """The digital ID's password: --pfx-password, then PDFM_PFX_PASSWORD,
+    then none (an ID without a password), then a prompt. Asked once per run."""
+    if getattr(a, "pfx_checked", False):
+        return a.pfx_password
+    given = a.pfx_password if a.pfx_password is not None else os.environ.get(PFX_PASSWORD_ENV)
+    try:
+        certsign.load_id(a.pfx, given)
+    except certsign.IdPasswordError:
+        if given is not None:
+            raise
+        if not sys.stdin.isatty():
+            raise core.PdfManagerError(f"{a.pfx} is protected; pass --pfx-password or set "
+                                       f"{PFX_PASSWORD_ENV}") from None
+        for _ in range(3):
+            candidate = getpass.getpass(f"Password for the digital ID {Path(a.pfx).name}: ")
+            try:
+                certsign.load_id(a.pfx, candidate)
+            except certsign.IdPasswordError:
+                print("wrong password", file=sys.stderr)
+                continue
+            given = candidate
+            break
+        else:
+            raise core.PdfManagerError(f"wrong password for {a.pfx}") from None
+    a.pfx_password, a.pfx_checked = given, True
+    return given
+
+
+def run_sign_cert(a, src, out, pw):
+    pfx_password = _pfx_password(a)
+    if a.field and (a.page or a.box):
+        raise core.PdfManagerError("use --field, or --page (and --box), not both")
+    page = box = None
+    if a.box:
+        if not a.page:
+            raise core.PdfManagerError("--box needs --page: the page the signature goes on")
+        page, box = a.page, certsign.parse_box(a.box)
+    elif a.page:
+        page, box = certsign.place(src, a.page, a.position, a.size, pw)
+    result = certsign.sign(src, out, a.pfx, pfx_password, page=page, box=box, field=a.field,
+                           reason=a.reason, location=a.location, contact=a.contact,
+                           timestamp_url=a.timestamp, password=pw)
+    where = f"on page {result['page']}" if result["visible"] else "invisible"
+    return (f"{out}  (signed by {result['signer']}, {where}"
+            f"{', with a timestamp' if result['timestamp'] else ''})")
+
+
+def cmd_verify(a):
+    inputs = _expand(a.inputs)
+    passwords = _Passwords(a.password)
+    ok, records = True, []
+    for src in inputs:
+        try:
+            found = certsign.verify(src, passwords.for_file(src), a.trust)
+        except (core.PdfManagerError, OSError) as exc:
+            if len(inputs) == 1:
+                raise
+            ok = False
+            message = str(exc)
+            print(f"error: {message if str(src) in message else f'{src}: {message}'}",
+                  file=sys.stderr)
+            continue
+        ok = ok and certsign.all_valid(found)
+        if a.json:
+            records.append({"file": str(src), "signatures": found})
+        else:
+            print(("\n" if src != inputs[0] else "") + certsign.report(found, str(src)), end="")
+    if a.json:
+        print(json.dumps(records, indent=2, ensure_ascii=False))
+    return 0 if ok else 1
+
+# -- end of digital ID signatures --
+
+
 def run_bookmarks(a, src, out, pw):
     if a.set and a.detect:
         raise core.PdfManagerError("use --set or --detect, not both")
@@ -435,6 +516,7 @@ OUTPUTS = {
     "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "headers": ("headers", "pdf"), "form": ("form", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
     "split": ("split", "dir"), "to-images": ("images", "dir"), "extract-media": ("media", "dir"),
 }
+OUTPUTS["sign-cert"] = ("signed", "pdf")  # digital ID signatures
 
 
 def _is_batch(patterns, inputs):
@@ -500,6 +582,7 @@ def _check_outputs(plan):
 KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split", "to-word",
                     "extract-media",
                     "pdfa"}  # PDF/A doesn't allow encryption
+KEEP_UNENCRYPTED.add("sign-cert")  # stays protected inside the signed file; re-saving breaks it
 
 
 def _reencrypt(out, password):
@@ -994,6 +1077,41 @@ def build_parser():
     sp.add_argument("--keep-attachments", action="store_true", help="keep attached files")
     sp.add_argument("--comments", action="store_true",
                     help="also remove comments, highlights and notes")
+
+    # -- digital ID signatures (certsign.py) --
+    sp = per_file("sign-cert", run_sign_cert,
+                  "sign with a digital ID (a .pfx or .p12 certificate file), like Acrobat's "
+                  "Sign with a digital ID")
+    sp.add_argument("--pfx", required=True, metavar="FILE", help="the digital ID (.pfx or .p12)")
+    sp.add_argument("--pfx-password", help=f"its password (better: let pdfm prompt, or set "
+                                           f"{PFX_PASSWORD_ENV})")
+    sp.add_argument("--page", help="page for a visible signature (a number, or last); without "
+                                   "--page or --field the signature is invisible")
+    sp.add_argument("--box", metavar="X0,Y0,X1,Y1",
+                    help="where on --page, in points from the bottom-left corner (default: "
+                         "--position and --size)")
+    sp.add_argument("--position", choices=certsign.POSITIONS, default="bottom-right",
+                    help="where on --page without --box (default: bottom-right)")
+    sp.add_argument("--size", choices=list(certsign.SIZES), default="medium",
+                    help="size of the signature without --box (default: medium)")
+    sp.add_argument("--field", metavar="NAME", help="sign this empty signature field")
+    sp.add_argument("--reason", help="e.g. 'I approve this document'")
+    sp.add_argument("--location", help="where you sign, e.g. a city")
+    sp.add_argument("--contact", help="how to reach you")
+    sp.add_argument("--timestamp", metavar="URL",
+                    help="RFC 3161 timestamp server, e.g. http://timestamp.digicert.com")
+
+    sp = other("verify", cmd_verify,
+               "check the digital signatures in PDFs (exit code 0 when every file has "
+               "signatures and all are valid)")
+    sp.add_argument("inputs", nargs="+", metavar="input", help="PDF(s) to check")
+    sp.add_argument("--password", help=f"password for encrypted input (better: let pdfm "
+                                       f"prompt, or set {PASSWORD_ENV})")
+    sp.add_argument("--trust", action="append", metavar="CERT",
+                    help="a certificate you trust (.cer/.crt/.pem), e.g. your company's root; "
+                         "repeat for more")
+    sp.add_argument("--json", action="store_true", help="print JSON")
+    # -- end of digital ID signatures --
 
     sp = per_file("redact", run_redact,
                   "permanently black out text or areas (redacted pages become images)")

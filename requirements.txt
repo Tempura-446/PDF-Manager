@@ -3,3 +3,4 @@ reportlab>=4.0
 Pillow>=9.0
 cryptography>=43
 pypdfium2>=4.0
+pyhanko>=0.34
