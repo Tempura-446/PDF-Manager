@@ -161,6 +161,12 @@ closed.
   just click for a box of the usual size. Click a field to move, resize,
   rename or remove it. Fields already in the file are shown striped. The
   fields work in any PDF reader, including the one here.
+- **Sign with a digital ID** signs PDFs with your certificate (a .pfx or
+  .p12 file), like Acrobat: visible in a corner of a page (showing your
+  name, the date and the reason) or invisible, optionally with a time from
+  a timestamp server. **Check signatures** reports who signed each
+  signature, when, and whether the document was changed afterwards. See
+  [Digital ID signatures](#digital-id-signatures).
 - **Headers & footers** adds text at the top or bottom of every page: a
   title, the date, *Page {n} of {total}*, the file name or **Bates
   numbers** (e.g. ABC000123), which continue from one file to the next.
@@ -420,6 +426,8 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `redact` | black out text, numbers or areas for good | `pdfm redact doc.pdf -t "John Smith" --find emails` |
 | `flatten` | make forms and comments part of the page | `pdfm flatten form.pdf` |
 | `sanitize` | remove hidden data (details, scripts, attachments) | `pdfm sanitize doc.pdf` |
+| `sign-cert` | sign with a digital ID (.pfx/.p12), visible or invisible | `pdfm sign-cert doc.pdf --pfx me.pfx --page last --reason "Approved"` |
+| `verify` | check the digital signatures in PDFs | `pdfm verify signed.pdf` |
 | `pdfa` | convert to PDF/A for archiving | `pdfm pdfa doc.pdf --level 2` |
 | `to-word` | convert to an editable Word document | `pdfm to-word doc.pdf` |
 | `from-office` | convert Word, Excel, PowerPoint, … to PDF | `pdfm from-office report.docx` |
@@ -566,6 +574,55 @@ pages searchable again; metadata isn't changed, so use `sanitize` too.
   `--comments` also removes comments. Form fields are kept.
 - `pdfa` converts to PDF/A-1b, -2b (default) or -3b with Ghostscript:
   fonts embedded, colours tied to sRGB, no encryption or scripts.
+
+### Digital ID signatures
+
+A *digital ID* is a certificate with its private key, usually a `.pfx` or
+`.p12` file protected by a password (exported from Acrobat, Windows'
+certificate manager, or issued by a company or a certificate authority).
+Signing with it proves who signed and that nothing changed since:
+
+```bash
+pdfm sign-cert contract.pdf --pfx me.pfx --page last --reason "I agree"   # bottom right of the last page
+pdfm sign-cert contract.pdf --pfx me.pfx --page 2 --box 350,50,550,110    # a box, in points from the bottom left
+pdfm sign-cert form.pdf --pfx me.pfx --field "Signature 1"                # an empty signature field
+pdfm sign-cert contract.pdf --pfx me.pfx --timestamp http://timestamp.digicert.com
+pdfm verify contract_signed.pdf                                            # exit code 0 if all valid
+```
+
+- `pdfm` asks for the digital ID's password (or set `PDFM_PFX_PASSWORD`,
+  or pass `--pfx-password`). Without `--page` or `--field` the signature is
+  invisible: it shows in a reader's signature panel only. `--position`
+  (`bottom-right`, `bottom-left`, `top-right`, …) and `--size` (`small`,
+  `medium`, `large`) place it on `--page` without `--box`.
+- The visible signature shows the signer's name (from the certificate),
+  the date and time, and the reason and location if given.
+- The signature is **appended** to the file, so signatures already in it
+  stay valid: several people can sign one after the other. Sign last:
+  other tools (and the reader's edits) rewrite the file, which breaks the
+  signatures in it. A password-protected PDF stays protected.
+- With `--timestamp`, a timestamp server vouches for the time of signing
+  (it needs the internet; if the server can't be reached nothing is signed).
+- Expired digital IDs are refused: every reader would call their
+  signatures invalid.
+
+`verify` (and **Check signatures** in the app) reports, for each signature:
+who signed, when (from the signer's clock or a timestamp), the reason and
+location, and one of:
+
+- **valid** — unchanged since signing, by a certificate you trust;
+- **valid, but the signer's identity isn't verified** — unchanged, but the
+  certificate isn't one you trust (ZPDF has no built-in list of trusted
+  authorities, so this is the usual result; add `--trust company-root.cer`
+  to trust a certificate);
+- **modified** — the signed part is intact, but the document was changed
+  afterwards in a way signatures don't allow (later signatures and, for
+  some files, form filling are allowed; pyHanko, which does the checking,
+  is stricter about later changes than Acrobat);
+- **invalid** — the document was altered after signing, the signature
+  doesn't match, or the certificate wasn't valid when it signed.
+
+`--json` prints all the details.
 
 ### Word and Office
 
