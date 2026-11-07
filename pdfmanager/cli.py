@@ -392,6 +392,19 @@ def run_to_word(a, src, out, pw):
     return f"{result}  ({how})"
 
 
+def run_to_excel(a, src, out, pw):
+    from pdfmanager import tables
+
+    if a.csv:
+        made = tables.to_csv(src, out, password=pw, pages=a.pages)
+        n = made["tables"]
+        return f"{out}  ({n} table{'s' if n != 1 else ''}, a CSV file each)"
+    made = tables.to_excel(src, out, password=pw, pages=a.pages,
+                           mode="one-sheet" if a.one_sheet else "sheet-per-table")
+    n = made["tables"]
+    return f"{made['output']}  ({n} table{'s' if n != 1 else ''})"
+
+
 def cmd_from_office(a):
     failures = 0
     files = _expand(a.inputs)
@@ -514,6 +527,7 @@ OUTPUTS = {
     "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
     "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
     "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "headers": ("headers", "pdf"), "form": ("form", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
+    "to-excel": (None, "xlsx"),  # with --csv: a folder, <input>_tables
     "split": ("split", "dir"), "to-images": ("images", "dir"), "extract-media": ("media", "dir"),
 }
 OUTPUTS["sign-cert"] = ("signed", "pdf")  # digital ID signatures
@@ -532,6 +546,8 @@ def _is_folder(output):
 
 def _output_for(a, src, batch):
     suffix, kind = OUTPUTS[a.command]
+    if a.command == "to-excel" and a.csv:
+        suffix, kind = "tables", "dir"
     if kind is None:
         return None
     if a.command == "metadata" and a.output is None:
@@ -539,14 +555,14 @@ def _output_for(a, src, batch):
     if a.command == "text" and a.output is None:
         return None  # print to the terminal
     src = Path(src)
-    ext = {"docx": ".docx", "txt": ".txt"}.get(kind, ".pdf")
+    ext = {"docx": ".docx", "xlsx": ".xlsx", "txt": ".txt"}.get(kind, ".pdf")
     if kind == "dir":
         base = Path(a.output) if a.output else src.parent
         return base / f"{src.stem}_{suffix}" if (batch or not a.output) else base
     if not batch and not _is_folder(a.output):
         if a.output:
             return Path(a.output)
-        return src.with_suffix(ext) if kind == "docx" else _default_output(src, suffix)
+        return src.with_suffix(ext) if kind in ("docx", "xlsx") else _default_output(src, suffix)
     if a.output:  # -o is a folder; keep the original file names
         folder = Path(a.output)
         if folder.exists() and not folder.is_dir():
@@ -554,7 +570,7 @@ def _output_for(a, src, batch):
         folder.mkdir(parents=True, exist_ok=True)
         if folder.resolve() != src.parent.resolve():
             return folder / (src.stem + ext)
-    return src.with_suffix(ext) if kind == "docx" else _default_output(src, suffix, ext)
+    return src.with_suffix(ext) if kind in ("docx", "xlsx") else _default_output(src, suffix, ext)
 
 
 def _check_outputs(plan):
@@ -580,6 +596,7 @@ def _check_outputs(plan):
 # Commands whose output should not inherit the input's password.
 # (split re-encrypts its own output files.)
 KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split", "to-word",
+                    "to-excel",
                     "extract-media",
                     "pdfa"}  # PDF/A doesn't allow encryption
 KEEP_UNENCRYPTED.add("sign-cert")  # stays protected inside the signed file; re-saving breaks it
@@ -1173,6 +1190,18 @@ def build_parser():
                     help="auto (default): Microsoft Word if installed, else the built-in "
                          "converter; word; basic (built-in: paragraphs, headings, pictures); "
                          "layout (LibreOffice: exact look, text in boxes)")
+
+    sp = per_file("to-excel", run_to_excel,
+                  "export the tables in PDFs to Excel workbooks (.xlsx) or CSV files",
+                  out_help="output .xlsx (default: <input>.xlsx), or with --csv a folder (default: "
+                           "<input>_tables); with several inputs, a folder")
+    sp.add_argument("-p", "--pages", help=PAGES_HELP)
+    g = sp.add_mutually_exclusive_group()
+    g.add_argument("--one-sheet", action="store_true",
+                   help="put all tables on one sheet, one under the other (default: a sheet "
+                        "per table)")
+    g.add_argument("--csv", action="store_true",
+                   help="write a CSV file per table instead of a workbook")
 
     sp = other("from-office", cmd_from_office,
                "convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF "

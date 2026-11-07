@@ -63,6 +63,7 @@ def main():
         "--collect-all", "pypdfium2_raw",
         "--collect-data", "reportlab",
         "--collect-all", "pikepdf",
+        "--collect-data", "pdfminer",  # PDF → Excel: pdfplumber's text engine (its CMaps)
         "--collect-all", "webview",
         # Digital ID signatures: pyHanko imports parts of itself as needed
         # and ships certificates (.pem) it reads at run time.

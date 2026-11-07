@@ -172,6 +172,10 @@ closed.
   numbers** (e.g. ABC000123), which continue from one file to the next.
 - **Pictures & attachments** saves the pictures in a PDF and the files
   attached to it, as a ZIP.
+- **PDF → Excel** puts the tables in PDFs into an Excel workbook (a sheet
+  per table, or all on one sheet, after a Summary sheet) with numbers as
+  real numbers, or into CSV files in a ZIP. See
+  [Excel (tables)](#excel-tables).
 - **Search PDFs** finds words in every PDF in a folder (and its
   sub-folders). Each result shows the words around the match; click one to
   open that page in the reader with the words highlighted. The text is
@@ -430,6 +434,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `verify` | check the digital signatures in PDFs | `pdfm verify signed.pdf` |
 | `pdfa` | convert to PDF/A for archiving | `pdfm pdfa doc.pdf --level 2` |
 | `to-word` | convert to an editable Word document | `pdfm to-word doc.pdf` |
+| `to-excel` | put the tables into an Excel workbook (or CSV files) | `pdfm to-excel doc.pdf -p 2-5` · `--one-sheet` · `--csv` |
 | `from-office` | convert Word, Excel, PowerPoint, … to PDF | `pdfm from-office report.docx` |
 | `recipe` | save and run recipes (several tools in a row) | `pdfm recipe run "Scans" *.pdf` |
 | `from-images` | save pictures as a PDF (photos the right way up, scanners' multi-page TIFFs) | `pdfm from-images *.jpg -o photos.pdf -s a4 --margin 10` |
@@ -635,6 +640,32 @@ exact look but puts every line in its own text box.
 `from-office` converts Word, Excel, PowerPoint, OpenDocument, RTF and text
 files to PDF with Microsoft Office or, without it, LibreOffice. Text files
 always work.
+
+### Excel (tables)
+
+`to-excel` finds the tables in a PDF and writes `<name>.xlsx`: a
+**Summary** sheet listing each table (page, rows × columns, a link to it),
+then a sheet per table named like `p3 table 1` (`--one-sheet` stacks them
+all on one sheet under a title each). The first row is the header (bold,
+and frozen on its own sheet), columns are sized to fit, and numbers become
+real numbers: `1,234.50`, `(12)` (negative), `7.5%`, `$ € £` amounts and
+`1.234,50` keep their look as a number format. Codes with leading zeros
+(`00123`, ZIP codes) and anything unclear stay text. `--csv` writes a CSV
+file per table instead (UTF-8 with a byte-order mark, so Excel reads
+accents and € right) into `<name>_tables/`.
+
+- Ruled tables (with cell borders) come out best. Tables without lines are
+  found from columns that line up with white space between them; dot
+  leaders (`Total ....... 12`) count as space.
+- A table that runs to the bottom of a page and goes on at the top of the
+  next with the same columns becomes one table; a repeated header row is
+  dropped.
+- It needs text in the PDF: **scanned pages need OCR first** (*Make
+  searchable*), otherwise it says that no tables were found.
+- Limits: cells that span several columns come out in the first of them;
+  headers on two lines become two rows; two tables side by side without
+  lines can come out as one; text in a cell that looks like a formula
+  stays text (in CSV files it starts with `'`).
 
 ### Recipes
 

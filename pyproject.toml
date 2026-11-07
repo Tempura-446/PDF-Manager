@@ -16,6 +16,9 @@ dependencies = [
     "pypdfium2>=4.0",
     "pikepdf>=8",  # qpdf: packs compressed files into object streams
     "pyhanko>=0.34",  # signing with a digital ID and checking signatures
+    # PDF → Excel (tables.py)
+    "pdfplumber>=0.11",  # finds ruled tables and the words of borderless ones
+    "openpyxl>=3.1",  # writes the workbook
 ]
 
 [project.optional-dependencies]
