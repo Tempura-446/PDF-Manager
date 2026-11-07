@@ -78,6 +78,7 @@ const ICON = {
   screen: '<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
   note: '<path d="M4 5h16v11H10l-4 4v-4H4z"/><path d="M8 9h8M8 12h5"/>',
   imgedit: '<rect x="3" y="3" width="14" height="14" rx="2"/><path d="m3 13 4-4 6 6"/><path d="M14 20h7M17.5 16.5v7" transform="translate(-1 -3)"/>',
+  badge: '<path d="M12 2l2.4 1.8 3 .2.9 2.9 2.3 1.9-.9 2.9.9 2.9-2.3 1.9-.9 2.9-3 .2L12 22l-2.4-1.8-3-.2-.9-2.9-2.3-1.9.9-2.9-.9-2.9 2.3-1.9.9-2.9 3-.2z"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/>',
   layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
   rect: '<rect x="4" y="6" width="16" height="12" rx="1"/><circle cx="4" cy="6" r="1.4"/><circle cx="20" cy="18" r="1.4"/>',
@@ -98,7 +99,7 @@ const COLORS = [["Black", "#000000", "#bdbdbd"], ["Blue", "#1f4fd8", "#80ebff"],
   ["Green", "#1f8a3b", "#53ffbc"], ["Yellow", "#b8860b", "#ffff98"]];
 // Notes, underline, strikeout and shapes: the reader's own tools, written into
 // the file by the server (markup.py) as standard annotations.
-const MARKUP = new Set(["NOTE", "UNDERLINE", "STRIKEOUT", "SHAPE", "IMAGES", "LINKS"]);
+const MARKUP = new Set(["NOTE", "UNDERLINE", "STRIKEOUT", "SHAPE", "IMAGES", "LINKS", "CERTSIGN"]);
 const SHAPES = [["rect", "Rectangle"], ["ellipse", "Ellipse"], ["cloud", "Cloud"], ["arrow", "Arrow"], ["line", "Line"]];
 const KIND_NAMES = { Text: "Note", FreeText: "Text", Highlight: "Highlight", Underline: "Underline", StrikeOut: "Strikeout",
   Squiggly: "Squiggly", Square: "Rectangle", Circle: "Ellipse", Line: "Line", Polygon: "Shape", PolyLine: "Lines",
@@ -279,6 +280,9 @@ export class Reader {
     this.shapeSelect.value = store.get("pdfm-shape", "rect");
     this.annotTools.at(-1).title = "Change words on the page: click a line of text (E)";
     this.signBtn = el("button", { class: "rd-btn rd-tool", type: "button", title: "Add your signature", html: svg("sign") + "<span>Sign</span>" });
+    this.certSignBtn = el("button", { class: "rd-btn rd-tool compact", type: "button", "data-mode": "CERTSIGN", "aria-pressed": "false",
+      title: "Sign with a digital ID (a certificate, .pfx or .p12): drag a box where the signature goes", html: svg("badge") + "<span>Digital ID</span>" });
+    this.annotTools.push(this.certSignBtn);
     this.swatches = COLORS.map(([name, ink, mark], i) => el("button", { class: "rd-swatch", type: "button", title: name, "aria-label": name, "aria-pressed": String(i === 1),
       style: `--ink:${ink};--mark:${mark}`, "data-index": i }));
     this.sizeSelect = el("select", { class: "rd-zoom", "aria-label": "Line thickness or text size" });
@@ -288,7 +292,7 @@ export class Reader {
     this.annotSaveBtn = el("button", { class: "rd-btn primary", type: "button", title: "Save your changes (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
     this.annotCloseBtn = b("x", "Close the annotation tools");
     this.annotbar = el("div", { class: "rd-findbar rd-annotbar", hidden: true, role: "toolbar", "aria-label": "Annotate" },
-      ...this.annotTools, this.signBtn, el("span", { class: "rd-sep" }),
+      ...this.annotTools.filter((b) => b !== this.certSignBtn), this.signBtn, this.certSignBtn, el("span", { class: "rd-sep" }),
       el("div", { class: "rd-swatches", role: "group", "aria-label": "Colour" }, ...this.swatches), this.shapeSelect, this.sizeSelect,
       el("span", { class: "rd-sep" }), this.undoBtn, this.redoBtn, this.deleteBtn,
       el("span", { style: "flex:1" }), this.annotSaveBtn, this.annotCloseBtn);
@@ -342,6 +346,14 @@ export class Reader {
       el("option", { value: "this" }, "This version only"), el("option", { value: "other" }, "The other version only"));
     this.overlayOffset = el("input", { type: "number", class: "rd-overlay-offset", value: "0", step: "1", "aria-label": "Page offset",
       title: "When the other version has its sheets in other places: its page = this page plus this number" });
+    // Signatures in the document: how they check out
+    this.sigText = el("span", { class: "rd-sigtext" });
+    const sigMore = el("button", { class: "rd-btn", type: "button", html: "<span>Details</span>" });
+    const sigClose = el("button", { class: "rd-btn", type: "button", title: "Hide", "aria-label": "Hide", html: svg("x") });
+    this.sigbar = el("div", { class: "rd-findbar rd-sigbar", hidden: true, role: "status" }, el("span", { class: "rd-sigicon", html: svg("badge") }),
+      this.sigText, sigMore, el("span", { style: "flex:1" }), sigClose);
+    sigMore.addEventListener("click", () => this.#signatureDetails());
+    sigClose.addEventListener("click", () => { this.sigbar.hidden = true; });
     const overlayClose = el("button", { class: "rd-btn", type: "button", title: "Stop comparing", "aria-label": "Stop comparing", html: svg("x") });
     this.overlaybar = el("div", { class: "rd-findbar rd-overlaybar", hidden: true, role: "toolbar", "aria-label": "Compare revisions" },
       el("span", { class: "rd-overlay-title" }, "Comparing with ", this.overlayName),
@@ -357,7 +369,7 @@ export class Reader {
       this.#drawOverlays();
     });
     overlayClose.addEventListener("click", () => this.closeCompare());
-    this.root.append(toolbar, this.tray, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.overlaybar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.fileInput);
+    this.root.append(toolbar, this.tray, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.overlaybar, this.sigbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.fileInput);
     // A drawing in progress takes every click in the window as the next
     // stroke; end it first when the tabs, toolbar or menu are used. This
     // listens on the window before pdf.js does, so it runs first.
@@ -394,6 +406,7 @@ export class Reader {
       ...(this.activeTab?.fileId ? [this.#menuItem("save", "Save", () => this.save())] : []),
       this.#menuItem("save", this.activeTab?.fileId ? "Save as…" : this.#edited() ? "Save a copy with your changes…" : "Save a copy…", () => this.saveCopy()),
       this.#menuItem("layers", this.overlay ? "Stop comparing revisions" : "Compare with another revision…", () => (this.overlay ? this.closeCompare() : this.compareRevision())),
+      this.#menuItem("badge", "Sign with a digital ID…", () => this.useTool("CERTSIGN")),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
       this.#menuItem("x", "Close this document", () => this.closeTab()),
     ];
@@ -952,6 +965,7 @@ export class Reader {
       this.#buildOutline();
       this.#listComments();
       this.#loadMeasures();
+      this.#checkSignatures();
       doc.getPageLabels().then((labels) => {
         if (doc !== this.doc || !labels) return;
         // Only use labels that differ from plain page numbers.
@@ -1565,6 +1579,7 @@ export class Reader {
     e.stopPropagation();
     if (mode === "NOTE") { this.#openNoteBox(at); return; }
     if (mode === "LINKS") { this.#drawLinkBox(e, at); return; }
+    if (mode === "CERTSIGN") { this.#dragBox(at, "Drag a box where the signature goes.", (rect) => this.#signWithId(at.n, rect)); return; }
     // SHAPE: drag out the shape; it's drawn on screen until the file has it.
     this.#cancelMarkup();
     const svgEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -1752,6 +1767,7 @@ export class Reader {
   /** Pictures or Links mode: outlines over the pages' pictures or links. */
   #objectBoxes() {
     this.viewerEl?.querySelectorAll(".rd-objbox, .rd-objtools, .rd-linkdraft").forEach((n) => n.remove());
+    if (this.markupMode === "CERTSIGN") this.toast("Drag a box where your signature should appear, then choose your digital ID.", 5000);
     if ((this.markupMode !== "IMAGES" && this.markupMode !== "LINKS") || !this.doc) return;
     for (let i = 0; i < this.pdfViewer.pagesCount; i++) {
       if (this.pdfViewer.getPageView(i)?.canvas?.width) this.#drawObjectBoxes(i + 1);
@@ -1911,6 +1927,11 @@ export class Reader {
 
   /** Links mode: drag a box on the page for a new link. */
   #drawLinkBox(e, at) {
+    this.#dragBox(at, "Drag a box over what should be clickable to add a link.", (rect) => this.#editLink(at.n, null, rect));
+  }
+
+  /** Drag out a box on the page from ``at``; ``done(rect)`` gets it in PDF coordinates. */
+  #dragBox(at, tooSmall, done) {
     const view = at.view, draft = el("div", { class: "rd-linkdraft", style: `left:${at.x}px;top:${at.y}px;width:0;height:0` });
     view.div.append(draft);
     const box = view.div.getBoundingClientRect(), ox = box.left + view.div.clientLeft, oy = box.top + view.div.clientTop;
@@ -1923,9 +1944,9 @@ export class Reader {
     const up = () => {
       window.removeEventListener("pointermove", move);
       draft.remove();
-      if (Math.abs(end[0] - at.x) < 6 || Math.abs(end[1] - at.y) < 6) { this.toast("Drag a box over what should be clickable to add a link.", 3000); return; }
+      if (Math.abs(end[0] - at.x) < 6 || Math.abs(end[1] - at.y) < 6) { this.toast(tooSmall, 3000); return; }
       const a = view.viewport.convertToPdfPoint(at.x, at.y), b = view.viewport.convertToPdfPoint(...end);
-      this.#editLink(at.n, null, [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])]);
+      done([Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])]);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up, { once: true });
@@ -1951,6 +1972,97 @@ export class Reader {
     if (!where.url && !where.to_page) { this.toast("Say where the link goes."); return; }
     if (link) await this.#applyMarkup([{ op: "link", page: n, id: link.id, ...where }], "Could not change the link: ");
     else await this.#applyMarkup([{ op: "add", page: n, kind: "link", rect, ...where }], "Could not add the link: ");
+  }
+
+  // ---- digital ID signatures (certsign.py) --------------------------------------------
+  /** Sign the document with a digital ID, its signature shown in ``rect`` on page ``n``. */
+  async #signWithId(n, rect) {
+    const pfx = el("input", { type: "file", accept: ".pfx,.p12,application/x-pkcs12", "aria-label": "Digital ID file" });
+    const password = el("input", { type: "password", autocomplete: "off", "aria-label": "Digital ID password" });
+    const reason = el("input", { type: "text", placeholder: "e.g. I approve this document", "aria-label": "Reason" });
+    const location = el("input", { type: "text", placeholder: "e.g. Vancouver", "aria-label": "Location" });
+    const stamp = el("input", { type: "text", placeholder: "none (e.g. http://timestamp.digicert.com)", "aria-label": "Timestamp server",
+      value: store.get("pdfm-timestamp-url", "") });
+    const answer = await this.#dialog("Sign with a digital ID", [
+      el("p", {}, "Your digital ID is a .pfx or .p12 file with your certificate. The signature seals the document: a change after signing shows up when it's checked."),
+      el("label", { class: "rd-field" }, "Digital ID file", pfx), el("label", { class: "rd-field" }, "Its password", password),
+      el("label", { class: "rd-field" }, "Reason (optional)", reason), el("label", { class: "rd-field" }, "Location (optional)", location),
+      el("label", { class: "rd-field" }, "Timestamp server (optional)", stamp)],
+      [["cancel", "Cancel"], ["ok", "Sign", true]]);
+    if (answer !== "ok") return;
+    const file = pfx.files[0];
+    if (!file) { this.toast("Choose your digital ID file (.pfx or .p12)."); return; }
+    store.set("pdfm-timestamp-url", stamp.value.trim());
+    const tab = this.activeTab, version = tab?.version || 0;
+    await this.#changeDocument((bytes, t) => {
+      const body = new FormData();
+      body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
+      body.append("pfx", file, file.name);
+      for (const [k, v] of Object.entries({ pfx_password: password.value, password: t.password || "", page: String(n), box: JSON.stringify(rect),
+        reason: reason.value.trim(), location: location.value.trim(), timestamp_url: stamp.value.trim() })) body.append(k, v);
+      return fetch("/api/sign/cert", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
+    }, { failure: "Could not sign: " });
+    if ((tab?.version || 0) !== version) {
+      if (this.markupMode === "CERTSIGN") this.#setEditMode("NONE");
+      this.toast("Signed. Save it now: anything changed after this shows as changed after signing.", 7000, ["Save", () => this.save()]);
+    }
+  }
+
+  /** What the document's signatures say: { signatures: [...] } (see certsign.verify). */
+  async #verifySignatures() {
+    const tab = this.activeTab;
+    if (!tab || !this.doc) return [];
+    const body = new FormData();
+    body.append("file", new Blob([await this.#fullBytes()], { type: "application/pdf" }), "file.pdf");
+    body.append("password", tab.password || "");
+    const res = await fetch("/api/sign/verify", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    return (await res.json()).signatures || [];
+  }
+
+  /** A signed document says so (and whether the signatures hold) in a bar. */
+  async #checkSignatures() {
+    const doc = this.doc, tab = this.activeTab;
+    this.sigbar.hidden = true;
+    if (!doc) return;
+    let signed = false;
+    try {
+      const fields = await doc.getFieldObjects();
+      signed = Object.values(fields || {}).some((list) => list.some((f) => f.type === "signature"));
+    } catch (e) { /* no form */ }
+    if (!signed || doc !== this.doc) return;
+    try {
+      const list = await this.#verifySignatures();
+      if (doc !== this.doc || tab !== this.activeTab || !list.length) return;
+      tab.signatures = list;
+      const bad = list.filter((s) => s.status === "modified" || s.status === "invalid");
+      const names = [...new Set(list.map((s) => s.signer).filter(Boolean))].join(", ");
+      this.sigbar.classList.toggle("bad", bad.length > 0);
+      this.sigText.textContent = bad.length
+        ? `${bad.length === 1 ? "A signature" : `${bad.length} signatures`} no longer hold: the document was changed after signing, or the signature is broken.`
+        : `Signed by ${names || "someone"}${list.length > 1 ? ` (${list.length} signatures)` : ""}: not changed since. `
+          + (list.every((s) => s.status === "valid") ? "The signer's identity is verified." : "The signer's identity isn't verified (their certificate isn't one this computer trusts).");
+      this.sigbar.hidden = false;
+    } catch (e) {
+      this.sigText.textContent = "This document is signed, but its signatures couldn't be checked: " + (e.message || e);
+      this.sigbar.classList.add("bad");
+      this.sigbar.hidden = false;
+    }
+  }
+
+  async #signatureDetails() {
+    let list = this.activeTab?.signatures;
+    try { list = await this.#verifySignatures(); } catch (e) { this.toast("Couldn't check the signatures: " + (e.message || e)); return; }
+    if (!list.length) { this.toast("This document has no signatures."); return; }
+    const words = { valid: "Valid: not changed since, and the signer's identity is verified",
+      "valid-untrusted": "Valid: not changed since. The signer's identity isn't verified (their certificate isn't one this computer trusts)",
+      modified: "Changed after signing", invalid: "Not valid: the signature is broken or doesn't match" };
+    const when = (t) => { const d = t && new Date(t); return d && !Number.isNaN(+d) ? d.toLocaleString() : t || ""; };
+    const items = list.map((s) => el("li", { class: "rd-sigitem " + (s.status || "") },
+      el("b", {}, s.signer || "Unknown signer"), el("div", {}, words[s.status] || s.status || ""),
+      el("small", {}, [s.signed_at || s.time ? "Signed " + when(s.signed_at || s.time) + (s.timestamped ? " (trusted timestamp)" : "") : "",
+        s.reason ? "Reason: " + s.reason : "", s.location ? "Location: " + s.location : "", s.page ? "Page " + s.page : ""].filter(Boolean).join(" · "))));
+    await this.#dialog("Signatures", [el("ul", { class: "rd-siglist" }, ...items)], [["ok", "Close", true]]);
   }
 
   // ---- comparing revisions (overlay.js) -------------------------------------------
@@ -4454,6 +4566,8 @@ export class Reader {
       tool("Draw a shape", "SHAPE", "rectangle ellipse circle cloud arrow line markup revision", "shapes"),
       tool("Edit pictures", "IMAGES", "image photo move resize replace delete logo", "imgedit"),
       tool("Edit links", "LINKS", "hyperlink url web address page add change remove", "link"),
+      tool("Sign with a digital ID", "CERTSIGN", "certificate pfx p12 digital signature sign", "badge"),
+      { icon: "badge", label: "Check the signatures", words: "verify valid certificate signed", run: () => this.#signatureDetails() },
       { icon: "comments", label: "Comments", words: "notes replies review list markup", run: () => { this.#setSidebar(true); this.#showTab("comments"); } },
       { icon: "sign", label: "Sign", words: "signature autograph", run: () => this.sign() },
       { icon: "cw", label: "Rotate the view clockwise", keys: "R", words: "turn right", run: () => this.rotate(90) },
