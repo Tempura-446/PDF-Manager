@@ -63,6 +63,7 @@ def main():
         "--collect-all", "pypdfium2_raw",
         "--collect-data", "reportlab",
         "--collect-all", "pikepdf",
+        "--collect-data", "pdfminer",  # PDF → Excel: pdfplumber's text engine (its CMaps)
         "--collect-all", "webview",
         # Find the package from the source tree: editable installs use import
         # hooks PyInstaller can't follow.
