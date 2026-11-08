@@ -41,7 +41,8 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
-                        forms, recipes, redact, scan, search, textedit, update, viewports, markup)
+                        forms, recipes, redact, scan, search, textedit, update, viewports, markup, pageimages)
+from pdfmanager import certsign
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
@@ -278,6 +279,39 @@ OPERATIONS = [
                 _f("javascript", "Scripts and actions that run programs", "check", True),
                 _f("attachments", "Attached files", "check", True),
                 _f("comments", "Comments, highlights and notes", "check", False)]},
+    # -- digital ID signatures (certsign.py) --
+    {"id": "sign-cert", "group": "Security", "label": "Sign with a digital ID", "files": "pdf",
+     "action": "Sign",
+     "help": "Sign with your digital ID (a .pfx or .p12 certificate file), like Acrobat's "
+             "“Sign with a digital ID”. Anyone can then check who signed and that nothing "
+             "changed since. Sign last: any later change except more signatures breaks it.",
+     "fields": [_f("pfx", "Digital ID (.pfx or .p12 file)", "file", None, accept=".pfx,.p12"),
+                _f("pfx_password", "Digital ID password", "password", ""),
+                _f("reason", "Reason", "text", "", placeholder="I approve this document"),
+                _f("location", "Location", "text", "", placeholder="City"),
+                _f("appearance", "Signature", "select", "visible",
+                   choices=[["visible", "Visible on a page"],
+                            ["invisible", "Invisible (only in the signature list)"]]),
+                _f("page", "Page", "text", "last", show_if={"appearance": "visible"},
+                   placeholder="last", hint="a page number, or last"),
+                _f("position", "Position", "select", "bottom-right",
+                   show_if={"appearance": "visible"},
+                   choices=[[p, p.replace("-", " ").capitalize()] for p in certsign.POSITIONS]),
+                _f("size", "Size", "select", "medium", show_if={"appearance": "visible"},
+                   choices=[["small", "Small"], ["medium", "Medium"], ["large", "Large"]]),
+                _f("timestamp_url", "Timestamp server (optional)", "text", "",
+                   placeholder="http://timestamp.digicert.com",
+                   hint="A trusted clock vouches for the time of signing; needs the internet. "
+                        "Leave empty to use this computer's clock.")]},
+    {"id": "verify-sig", "group": "Security", "label": "Check signatures", "files": "pdf",
+     "action": "Check",
+     "help": "Check the digital signatures in PDFs: who signed, when, and whether the "
+             "document was changed afterwards. You get a short report; nothing is changed.",
+     "fields": [_f("trust", "Certificate you trust (optional)", "file", None,
+                   accept=".cer,.crt,.pem,.der",
+                   hint="e.g. your company's root certificate: signatures from it count as "
+                        "verified")]},
+    # -- end of digital ID signatures --
     {"id": "pdfa", "group": "Convert", "label": "PDF → PDF/A (archive)", "files": "pdf",
      "help": "Convert to PDF/A, the ISO standard for documents that must stay readable for "
              "decades: fonts and colour profile are embedded. Needs Ghostscript.",
@@ -309,6 +343,17 @@ OPERATIONS = [
                             ["word", "Microsoft Word only"]],
                    hint="Microsoft Word gives the most editable result. The built-in "
                         "converter turns tables and columns into plain paragraphs.")]},
+    # PDF → Excel: the tables in a PDF (pdfmanager/tables.py)
+    {"id": "to-excel", "group": "Convert", "label": "PDF → Excel", "files": "pdf",
+     "help": "Put the tables in PDFs into an Excel workbook, with numbers as numbers, or into "
+             "CSV files. Works on PDFs with text; scanned pages need OCR first.",
+     "fields": [_f("pages", "Pages (blank = all)", "text", "", placeholder="all"),
+                _f("layout", "Layout", "select", "sheet-per-table",
+                   choices=[["sheet-per-table", "A sheet per table"],
+                            ["one-sheet", "Everything on one sheet"]]),
+                _f("format", "Format", "select", "xlsx",
+                   choices=[["xlsx", "Excel workbook (.xlsx)"], ["csv", "CSV files (zip)"]],
+                   hint="A table that continues on the next page is kept as one table.")]},
     {"id": "from-office", "group": "Convert", "label": "Office → PDF", "files": "office",
      "help": "Convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF. "
              "Uses Microsoft Office if installed, otherwise LibreOffice.",
@@ -356,6 +401,8 @@ SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "rec
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
           "encrypt": "protected", "decrypt": "unlocked"}
+SUFFIX.update({"sign-cert": "signed", "verify-sig": "signatures"})  # digital ID signatures
+SUFFIX["to-excel"] = "tables"
 
 
 class UserError(Exception):
@@ -542,6 +589,19 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                                                   ("comments", "comments"))
                  if (n := counts[key])]
         notes.append(f"{src.name}: removed " + (", ".join(found) if found else "nothing (none found)"))
+    elif op == "sign-cert":
+        result = _sign_cert_op(src, out, opts, password, extra_files)
+        notes.append(f"{src.name}: signed by {result['signer']}"
+                     + (f" on page {result['page']}" if result["visible"] else
+                        " (invisible signature)")
+                     + (", with a timestamp" if result["timestamp"] else ""))
+    elif op == "verify-sig":
+        out = out.with_suffix(".txt")
+        found = certsign.verify(src, password, [extra_files["trust"]]
+                                if extra_files.get("trust") else None)
+        out.write_text(certsign.report(found, src.name), encoding="utf-8")
+        notes.extend([f"{src.name}: no digital signatures"] if not found else
+                     [f"{src.name}, {e['field']}: {e['summary']}" for e in found])
     elif op == "pdfa":
         if not archive.find_ghostscript():
             raise UserError("PDF/A needs Ghostscript: install it from "
@@ -611,12 +671,55 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         if engine == "basic" and (opts.get("engine") or "auto") == "auto":
             notes.append("Converted with the built-in converter. For a more editable "
                          "result, install Microsoft Word.")
+    elif op == "to-excel":
+        return _to_excel(src, out_dir, opts, password, notes)
     elif op == "from-office":
         out = out_dir / f"{src.stem}.pdf"
         office.office_to_pdf(src, out)
     else:
         raise UserError(f"unknown operation {op!r}")
     return [out]
+
+
+def _sign_cert_op(src, out, opts, password, extra_files):
+    """The Sign with a digital ID tool on one PDF."""
+    pfx = extra_files.get("pfx")
+    if not pfx:
+        raise UserError("choose your digital ID: a .pfx or .p12 file")
+    page = box = None
+    if (opts.get("appearance") or "visible") == "visible":
+        page, box = certsign.place(src, opts.get("page") or "last",
+                                   opts.get("position") or "bottom-right",
+                                   opts.get("size") or "medium", password)
+    return certsign.sign(src, out, pfx, opts.get("pfx_password") or None, page=page, box=box,
+                         reason=(opts.get("reason") or "").strip() or None,
+                         location=(opts.get("location") or "").strip() or None,
+                         timestamp_url=(opts.get("timestamp_url") or "").strip() or None,
+                         password=password)
+
+
+def _to_excel(src, out_dir, opts, password, notes):
+    """PDF → Excel: a workbook, or a CSV file per table (in a folder, so the
+    download is a ZIP). A file without tables gets a note instead of
+    stopping the other files of the batch."""
+    from pdfmanager import tables
+
+    layout = opts.get("layout") or "sheet-per-table"
+    if layout not in tables.LAYOUTS:
+        raise UserError(f"unknown layout {layout!r}")
+    try:
+        if (opts.get("format") or "xlsx") == "csv":
+            made = tables.to_csv(src, out_dir / f"{src.stem}_tables", password, _pages(opts))
+            outputs = made["files"]
+        else:
+            made = tables.to_excel(src, out_dir / f"{src.stem}.xlsx", password, _pages(opts),
+                                   mode=layout)
+            outputs = [made["output"]]
+    except tables.NoTablesFound as exc:
+        notes.append(f"{src.name}: {exc}")
+        return []
+    notes.append(f"{src.name}: {made['tables']} table{'s' if made['tables'] != 1 else ''}")
+    return outputs
 
 
 def _redact_request(opts):
@@ -649,7 +752,8 @@ def _clean_note(name, report):
 
 def _protect(outputs, password, op):
     """PDFs made from a password-protected file get the same password."""
-    if password and op not in ("decrypt", "encrypt", "pdfa", "media"):
+    # A signed PDF keeps its password inside the signed file.
+    if password and op not in ("decrypt", "encrypt", "pdfa", "media", "sign-cert"):
         for path in outputs:
             if path.suffix.lower() == ".pdf":
                 core.encrypt(path, path, password)
@@ -742,10 +846,11 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
     if not outputs:
         raise UserError("nothing was found to save" + (f" ({'; '.join(notes)})" if notes else ""))
     _protect(protect, password, op)
-    if len(outputs) == 1 and op != "media":
+    if len(outputs) == 1 and op != "media" and outputs[0].suffix != ".csv":  # CSV: always a ZIP
         path = outputs[0]
         ctype = {".txt": "text/plain; charset=utf-8",
                  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                 ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                  }.get(path.suffix, "application/pdf")
         return path.name, path.read_bytes(), ctype
     buf = io.BytesIO()
@@ -1403,6 +1508,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._keep(body)
             if path == "/api/markup":
                 return self._markup(body)
+            if path == "/api/images/list":
+                return self._images_list(body)
+            if path == "/api/images/edit":
+                return self._images_edit(body)
             if path == "/api/scales":
                 return self._scales(body)
             if path.startswith("/api/save/"):
@@ -1417,6 +1526,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._text_edit(body)
             if path == "/api/pages/arrange":
                 return self._arrange(body)
+            if path == "/api/sign/cert":
+                return self._sign_cert(body)
+            if path == "/api/sign/verify":
+                return self._sign_verify(body)
             if path == "/api/settings":
                 return self._save_settings(body)
             if path == "/api/update/check":
@@ -1701,6 +1814,41 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(HTTPStatus.OK, data, "application/pdf",
                           {"X-Pdfm-Fonts": json.dumps(report, ensure_ascii=True)})
 
+    def _images_list(self, body):
+        """The pictures on the reader's pages (see pageimages.py)."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            src.write_bytes(uploads[0][2])
+            found = pageimages.list_images(src, fields.get("password") or None)
+        return self._send(HTTPStatus.OK, {"pages": found})
+
+    def _images_edit(self, body):
+        """Move, resize, replace or delete pictures; sends back the changed PDF.
+        The first upload is the document, "picture" uploads are new pictures
+        (by their field position: picture0, picture1, ...)."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        try:
+            changes = json.loads(fields.get("changes") or "[]")
+        except ValueError:
+            raise UserError("the changes are damaged; make them again") from None
+        if not isinstance(changes, list) or not all(isinstance(c, dict) for c in changes):
+            raise UserError("the changes are damaged; make them again")
+        pictures = {name: bytes(data) for name, _, data in uploads[1:] if name}
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "edited.pdf"
+            src.write_bytes(uploads[0][2])
+            pageimages.edit_images(src, out, changes, password, pictures)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)  # stays protected
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf")
+
     def _markup(self, body):
         """Add notes, underlines, strikeouts and shapes, or change, answer or
         remove comments (see markup.py); sends back the changed PDF."""
@@ -1747,6 +1895,64 @@ class Handler(BaseHTTPRequestHandler):
                 core.encrypt(out, out, password)  # stays protected
             data = out.read_bytes()
         return self._send(HTTPStatus.OK, data, "application/pdf")
+
+    def _sign_cert(self, body):
+        """Sign the reader's PDF with a digital ID; sends back the signed PDF,
+        and what certsign.sign() said in X-Pdfm-Signed (JSON). A missing or
+        wrong digital ID password answers 400 with "code": "pfx_password"."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        named = {name: data for name, _, data in uploads}
+        if "file" not in named:
+            raise UserError("no file")
+        if not len(named.get("pfx") or b""):
+            raise UserError("choose your digital ID: a .pfx or .p12 file")
+        password = fields.get("password") or None
+        box = None
+        if (fields.get("box") or "").strip():
+            try:
+                box = certsign.parse_box(json.loads(fields["box"]))
+            except ValueError:
+                raise UserError("the signature box is damaged; draw it again") from None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "signed.pdf"
+            src.write_bytes(named["file"])
+            page = (fields.get("page") or "").strip() or None
+            if page is not None and box is None and not fields.get("field"):
+                page, box = certsign.place(src, page, fields.get("position") or "bottom-right",
+                                           fields.get("size") or "medium", password)
+            try:
+                result = certsign.sign(
+                    src, out, bytes(named["pfx"]), fields.get("pfx_password") or None,
+                    page=page, box=box, field=(fields.get("field") or "").strip() or None,
+                    reason=(fields.get("reason") or "").strip() or None,
+                    location=(fields.get("location") or "").strip() or None,
+                    contact=(fields.get("contact") or "").strip() or None,
+                    timestamp_url=(fields.get("timestamp_url") or "").strip() or None,
+                    password=password)
+            except certsign.IdPasswordError as exc:
+                self.close_connection = True
+                return self._send(HTTPStatus.BAD_REQUEST, {"error": str(exc),
+                                                           "code": "pfx_password"})
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf",
+                          {"X-Pdfm-Signed": json.dumps(result, ensure_ascii=True)})
+
+    def _sign_verify(self, body):
+        """The digital signatures in a PDF, checked: {"signatures": [...]}
+        (see certsign.verify)."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        named = {name: data for name, _, data in uploads}
+        if "file" not in named:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(named["file"])
+            trust = None
+            if len(named.get("trust") or b""):
+                trust = [Path(tmp) / "trusted.cer"]
+                trust[0].write_bytes(named["trust"])
+            found = certsign.verify(path, fields.get("password") or None, trust)
+        return self._send(HTTPStatus.OK, {"signatures": found})
 
     def _inspect(self, body):
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)

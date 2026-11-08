@@ -15,6 +15,7 @@ from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
                         forms, recipes, redact, scan, search)
+from pdfmanager import certsign
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -263,6 +264,86 @@ def run_pdfa(a, src, out, pw):
     return archive.to_pdfa(src, out, level=a.level, password=pw)
 
 
+# -- digital ID signatures (certsign.py) --
+
+PFX_PASSWORD_ENV = "PDFM_PFX_PASSWORD"
+
+
+def _pfx_password(a):
+    """The digital ID's password: --pfx-password, then PDFM_PFX_PASSWORD,
+    then none (an ID without a password), then a prompt. Asked once per run."""
+    if getattr(a, "pfx_checked", False):
+        return a.pfx_password
+    given = a.pfx_password if a.pfx_password is not None else os.environ.get(PFX_PASSWORD_ENV)
+    try:
+        certsign.load_id(a.pfx, given)
+    except certsign.IdPasswordError:
+        if given is not None:
+            raise
+        if not sys.stdin.isatty():
+            raise core.PdfManagerError(f"{a.pfx} is protected; pass --pfx-password or set "
+                                       f"{PFX_PASSWORD_ENV}") from None
+        for _ in range(3):
+            candidate = getpass.getpass(f"Password for the digital ID {Path(a.pfx).name}: ")
+            try:
+                certsign.load_id(a.pfx, candidate)
+            except certsign.IdPasswordError:
+                print("wrong password", file=sys.stderr)
+                continue
+            given = candidate
+            break
+        else:
+            raise core.PdfManagerError(f"wrong password for {a.pfx}") from None
+    a.pfx_password, a.pfx_checked = given, True
+    return given
+
+
+def run_sign_cert(a, src, out, pw):
+    pfx_password = _pfx_password(a)
+    if a.field and (a.page or a.box):
+        raise core.PdfManagerError("use --field, or --page (and --box), not both")
+    page = box = None
+    if a.box:
+        if not a.page:
+            raise core.PdfManagerError("--box needs --page: the page the signature goes on")
+        page, box = a.page, certsign.parse_box(a.box)
+    elif a.page:
+        page, box = certsign.place(src, a.page, a.position, a.size, pw)
+    result = certsign.sign(src, out, a.pfx, pfx_password, page=page, box=box, field=a.field,
+                           reason=a.reason, location=a.location, contact=a.contact,
+                           timestamp_url=a.timestamp, password=pw)
+    where = f"on page {result['page']}" if result["visible"] else "invisible"
+    return (f"{out}  (signed by {result['signer']}, {where}"
+            f"{', with a timestamp' if result['timestamp'] else ''})")
+
+
+def cmd_verify(a):
+    inputs = _expand(a.inputs)
+    passwords = _Passwords(a.password)
+    ok, records = True, []
+    for src in inputs:
+        try:
+            found = certsign.verify(src, passwords.for_file(src), a.trust)
+        except (core.PdfManagerError, OSError) as exc:
+            if len(inputs) == 1:
+                raise
+            ok = False
+            message = str(exc)
+            print(f"error: {message if str(src) in message else f'{src}: {message}'}",
+                  file=sys.stderr)
+            continue
+        ok = ok and certsign.all_valid(found)
+        if a.json:
+            records.append({"file": str(src), "signatures": found})
+        else:
+            print(("\n" if src != inputs[0] else "") + certsign.report(found, str(src)), end="")
+    if a.json:
+        print(json.dumps(records, indent=2, ensure_ascii=False))
+    return 0 if ok else 1
+
+# -- end of digital ID signatures --
+
+
 def run_bookmarks(a, src, out, pw):
     if a.set and a.detect:
         raise core.PdfManagerError("use --set or --detect, not both")
@@ -309,6 +390,19 @@ def run_to_word(a, src, out, pw):
     how = {"word": "Microsoft Word", "basic": "built-in converter",
            "layout": "LibreOffice, exact layout"}[engine]
     return f"{result}  ({how})"
+
+
+def run_to_excel(a, src, out, pw):
+    from pdfmanager import tables
+
+    if a.csv:
+        made = tables.to_csv(src, out, password=pw, pages=a.pages)
+        n = made["tables"]
+        return f"{out}  ({n} table{'s' if n != 1 else ''}, a CSV file each)"
+    made = tables.to_excel(src, out, password=pw, pages=a.pages,
+                           mode="one-sheet" if a.one_sheet else "sheet-per-table")
+    n = made["tables"]
+    return f"{made['output']}  ({n} table{'s' if n != 1 else ''})"
 
 
 def cmd_from_office(a):
@@ -433,8 +527,10 @@ OUTPUTS = {
     "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
     "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
     "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "headers": ("headers", "pdf"), "form": ("form", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
+    "to-excel": (None, "xlsx"),  # with --csv: a folder, <input>_tables
     "split": ("split", "dir"), "to-images": ("images", "dir"), "extract-media": ("media", "dir"),
 }
+OUTPUTS["sign-cert"] = ("signed", "pdf")  # digital ID signatures
 
 
 def _is_batch(patterns, inputs):
@@ -450,6 +546,8 @@ def _is_folder(output):
 
 def _output_for(a, src, batch):
     suffix, kind = OUTPUTS[a.command]
+    if a.command == "to-excel" and a.csv:
+        suffix, kind = "tables", "dir"
     if kind is None:
         return None
     if a.command == "metadata" and a.output is None:
@@ -457,14 +555,14 @@ def _output_for(a, src, batch):
     if a.command == "text" and a.output is None:
         return None  # print to the terminal
     src = Path(src)
-    ext = {"docx": ".docx", "txt": ".txt"}.get(kind, ".pdf")
+    ext = {"docx": ".docx", "xlsx": ".xlsx", "txt": ".txt"}.get(kind, ".pdf")
     if kind == "dir":
         base = Path(a.output) if a.output else src.parent
         return base / f"{src.stem}_{suffix}" if (batch or not a.output) else base
     if not batch and not _is_folder(a.output):
         if a.output:
             return Path(a.output)
-        return src.with_suffix(ext) if kind == "docx" else _default_output(src, suffix)
+        return src.with_suffix(ext) if kind in ("docx", "xlsx") else _default_output(src, suffix)
     if a.output:  # -o is a folder; keep the original file names
         folder = Path(a.output)
         if folder.exists() and not folder.is_dir():
@@ -472,7 +570,7 @@ def _output_for(a, src, batch):
         folder.mkdir(parents=True, exist_ok=True)
         if folder.resolve() != src.parent.resolve():
             return folder / (src.stem + ext)
-    return src.with_suffix(ext) if kind == "docx" else _default_output(src, suffix, ext)
+    return src.with_suffix(ext) if kind in ("docx", "xlsx") else _default_output(src, suffix, ext)
 
 
 def _check_outputs(plan):
@@ -498,8 +596,10 @@ def _check_outputs(plan):
 # Commands whose output should not inherit the input's password.
 # (split re-encrypts its own output files.)
 KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split", "to-word",
+                    "to-excel",
                     "extract-media",
                     "pdfa"}  # PDF/A doesn't allow encryption
+KEEP_UNENCRYPTED.add("sign-cert")  # stays protected inside the signed file; re-saving breaks it
 
 
 def _reencrypt(out, password):
@@ -995,6 +1095,41 @@ def build_parser():
     sp.add_argument("--comments", action="store_true",
                     help="also remove comments, highlights and notes")
 
+    # -- digital ID signatures (certsign.py) --
+    sp = per_file("sign-cert", run_sign_cert,
+                  "sign with a digital ID (a .pfx or .p12 certificate file), like Acrobat's "
+                  "Sign with a digital ID")
+    sp.add_argument("--pfx", required=True, metavar="FILE", help="the digital ID (.pfx or .p12)")
+    sp.add_argument("--pfx-password", help=f"its password (better: let pdfm prompt, or set "
+                                           f"{PFX_PASSWORD_ENV})")
+    sp.add_argument("--page", help="page for a visible signature (a number, or last); without "
+                                   "--page or --field the signature is invisible")
+    sp.add_argument("--box", metavar="X0,Y0,X1,Y1",
+                    help="where on --page, in points from the bottom-left corner (default: "
+                         "--position and --size)")
+    sp.add_argument("--position", choices=certsign.POSITIONS, default="bottom-right",
+                    help="where on --page without --box (default: bottom-right)")
+    sp.add_argument("--size", choices=list(certsign.SIZES), default="medium",
+                    help="size of the signature without --box (default: medium)")
+    sp.add_argument("--field", metavar="NAME", help="sign this empty signature field")
+    sp.add_argument("--reason", help="e.g. 'I approve this document'")
+    sp.add_argument("--location", help="where you sign, e.g. a city")
+    sp.add_argument("--contact", help="how to reach you")
+    sp.add_argument("--timestamp", metavar="URL",
+                    help="RFC 3161 timestamp server, e.g. http://timestamp.digicert.com")
+
+    sp = other("verify", cmd_verify,
+               "check the digital signatures in PDFs (exit code 0 when every file has "
+               "signatures and all are valid)")
+    sp.add_argument("inputs", nargs="+", metavar="input", help="PDF(s) to check")
+    sp.add_argument("--password", help=f"password for encrypted input (better: let pdfm "
+                                       f"prompt, or set {PASSWORD_ENV})")
+    sp.add_argument("--trust", action="append", metavar="CERT",
+                    help="a certificate you trust (.cer/.crt/.pem), e.g. your company's root; "
+                         "repeat for more")
+    sp.add_argument("--json", action="store_true", help="print JSON")
+    # -- end of digital ID signatures --
+
     sp = per_file("redact", run_redact,
                   "permanently black out text or areas (redacted pages become images)")
     sp.add_argument("-t", "--text", action="append", metavar="TEXT",
@@ -1055,6 +1190,18 @@ def build_parser():
                     help="auto (default): Microsoft Word if installed, else the built-in "
                          "converter; word; basic (built-in: paragraphs, headings, pictures); "
                          "layout (LibreOffice: exact look, text in boxes)")
+
+    sp = per_file("to-excel", run_to_excel,
+                  "export the tables in PDFs to Excel workbooks (.xlsx) or CSV files",
+                  out_help="output .xlsx (default: <input>.xlsx), or with --csv a folder (default: "
+                           "<input>_tables); with several inputs, a folder")
+    sp.add_argument("-p", "--pages", help=PAGES_HELP)
+    g = sp.add_mutually_exclusive_group()
+    g.add_argument("--one-sheet", action="store_true",
+                   help="put all tables on one sheet, one under the other (default: a sheet "
+                        "per table)")
+    g.add_argument("--csv", action="store_true",
+                   help="write a CSV file per table instead of a workbook")
 
     sp = other("from-office", cmd_from_office,
                "convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF "

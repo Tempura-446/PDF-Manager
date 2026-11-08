@@ -161,11 +161,21 @@ closed.
   just click for a box of the usual size. Click a field to move, resize,
   rename or remove it. Fields already in the file are shown striped. The
   fields work in any PDF reader, including the one here.
+- **Sign with a digital ID** signs PDFs with your certificate (a .pfx or
+  .p12 file), like Acrobat: visible in a corner of a page (showing your
+  name, the date and the reason) or invisible, optionally with a time from
+  a timestamp server. **Check signatures** reports who signed each
+  signature, when, and whether the document was changed afterwards. See
+  [Digital ID signatures](#digital-id-signatures).
 - **Headers & footers** adds text at the top or bottom of every page: a
   title, the date, *Page {n} of {total}*, the file name or **Bates
   numbers** (e.g. ABC000123), which continue from one file to the next.
 - **Pictures & attachments** saves the pictures in a PDF and the files
   attached to it, as a ZIP.
+- **PDF → Excel** puts the tables in PDFs into an Excel workbook (a sheet
+  per table, or all on one sheet, after a Summary sheet) with numbers as
+  real numbers, or into CSV files in a ZIP. See
+  [Excel (tables)](#excel-tables).
 - **Search PDFs** finds words in every PDF in a folder (and its
   sub-folders). Each result shows the words around the match; click one to
   open that page in the reader with the words highlighted. The text is
@@ -238,6 +248,21 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   and shapes are standard PDF annotations with their own appearance, so
   Acrobat and other viewers show them the same, and they print. Use
   *Flatten forms & comments* afterwards to make them part of the page.
+- **Pictures** (Tools → Annotate & sign → Pictures): every picture on the
+  page is outlined; drag one to move it, drag a corner to resize it (it
+  keeps its proportions; hold Shift to stretch it), or **Replace** or
+  **Delete** it. Only the picture changes, the rest of the page stays as
+  it is; a picture Word or a browser clipped to its box can be moved out
+  of it.
+- **Links** (Tools → Annotate & sign → Links): links are outlined; click
+  one to change where it goes (a web or email address, or a page of the
+  document) or delete it, or drag a box to add one.
+- **Sign with a digital ID** (the badge button in Annotate & sign, or
+  More): drag a box where the signature goes, choose your digital ID
+  (.pfx or .p12) and its password. A signed document shows a bar saying
+  who signed it and whether it has been changed since; **Details** lists
+  every signature. ZPDF asks before changing a signed document, since
+  any change shows up as made after signing.
 - **Comments** (a tab in the sidebar): every note, highlight, shape and
   other markup in the document, page by page, with its author, date and
   comment and the replies under it. Click one to go to it; add or change
@@ -420,8 +445,11 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `redact` | black out text, numbers or areas for good | `pdfm redact doc.pdf -t "John Smith" --find emails` |
 | `flatten` | make forms and comments part of the page | `pdfm flatten form.pdf` |
 | `sanitize` | remove hidden data (details, scripts, attachments) | `pdfm sanitize doc.pdf` |
+| `sign-cert` | sign with a digital ID (.pfx/.p12), visible or invisible | `pdfm sign-cert doc.pdf --pfx me.pfx --page last --reason "Approved"` |
+| `verify` | check the digital signatures in PDFs | `pdfm verify signed.pdf` |
 | `pdfa` | convert to PDF/A for archiving | `pdfm pdfa doc.pdf --level 2` |
 | `to-word` | convert to an editable Word document | `pdfm to-word doc.pdf` |
+| `to-excel` | put the tables into an Excel workbook (or CSV files) | `pdfm to-excel doc.pdf -p 2-5` · `--one-sheet` · `--csv` |
 | `from-office` | convert Word, Excel, PowerPoint, … to PDF | `pdfm from-office report.docx` |
 | `recipe` | save and run recipes (several tools in a row) | `pdfm recipe run "Scans" *.pdf` |
 | `from-images` | save pictures as a PDF (photos the right way up, scanners' multi-page TIFFs) | `pdfm from-images *.jpg -o photos.pdf -s a4 --margin 10` |
@@ -567,6 +595,55 @@ pages searchable again; metadata isn't changed, so use `sanitize` too.
 - `pdfa` converts to PDF/A-1b, -2b (default) or -3b with Ghostscript:
   fonts embedded, colours tied to sRGB, no encryption or scripts.
 
+### Digital ID signatures
+
+A *digital ID* is a certificate with its private key, usually a `.pfx` or
+`.p12` file protected by a password (exported from Acrobat, Windows'
+certificate manager, or issued by a company or a certificate authority).
+Signing with it proves who signed and that nothing changed since:
+
+```bash
+pdfm sign-cert contract.pdf --pfx me.pfx --page last --reason "I agree"   # bottom right of the last page
+pdfm sign-cert contract.pdf --pfx me.pfx --page 2 --box 350,50,550,110    # a box, in points from the bottom left
+pdfm sign-cert form.pdf --pfx me.pfx --field "Signature 1"                # an empty signature field
+pdfm sign-cert contract.pdf --pfx me.pfx --timestamp http://timestamp.digicert.com
+pdfm verify contract_signed.pdf                                            # exit code 0 if all valid
+```
+
+- `pdfm` asks for the digital ID's password (or set `PDFM_PFX_PASSWORD`,
+  or pass `--pfx-password`). Without `--page` or `--field` the signature is
+  invisible: it shows in a reader's signature panel only. `--position`
+  (`bottom-right`, `bottom-left`, `top-right`, …) and `--size` (`small`,
+  `medium`, `large`) place it on `--page` without `--box`.
+- The visible signature shows the signer's name (from the certificate),
+  the date and time, and the reason and location if given.
+- The signature is **appended** to the file, so signatures already in it
+  stay valid: several people can sign one after the other. Sign last:
+  other tools (and the reader's edits) rewrite the file, which breaks the
+  signatures in it. A password-protected PDF stays protected.
+- With `--timestamp`, a timestamp server vouches for the time of signing
+  (it needs the internet; if the server can't be reached nothing is signed).
+- Expired digital IDs are refused: every reader would call their
+  signatures invalid.
+
+`verify` (and **Check signatures** in the app) reports, for each signature:
+who signed, when (from the signer's clock or a timestamp), the reason and
+location, and one of:
+
+- **valid** — unchanged since signing, by a certificate you trust;
+- **valid, but the signer's identity isn't verified** — unchanged, but the
+  certificate isn't one you trust (ZPDF has no built-in list of trusted
+  authorities, so this is the usual result; add `--trust company-root.cer`
+  to trust a certificate);
+- **modified** — the signed part is intact, but the document was changed
+  afterwards in a way signatures don't allow (later signatures and, for
+  some files, form filling are allowed; pyHanko, which does the checking,
+  is stricter about later changes than Acrobat);
+- **invalid** — the document was altered after signing, the signature
+  doesn't match, or the certificate wasn't valid when it signed.
+
+`--json` prints all the details.
+
 ### Word and Office
 
 `to-word` converts with Microsoft Word when it's installed (the most
@@ -578,6 +655,32 @@ exact look but puts every line in its own text box.
 `from-office` converts Word, Excel, PowerPoint, OpenDocument, RTF and text
 files to PDF with Microsoft Office or, without it, LibreOffice. Text files
 always work.
+
+### Excel (tables)
+
+`to-excel` finds the tables in a PDF and writes `<name>.xlsx`: a
+**Summary** sheet listing each table (page, rows × columns, a link to it),
+then a sheet per table named like `p3 table 1` (`--one-sheet` stacks them
+all on one sheet under a title each). The first row is the header (bold,
+and frozen on its own sheet), columns are sized to fit, and numbers become
+real numbers: `1,234.50`, `(12)` (negative), `7.5%`, `$ € £` amounts and
+`1.234,50` keep their look as a number format. Codes with leading zeros
+(`00123`, ZIP codes) and anything unclear stay text. `--csv` writes a CSV
+file per table instead (UTF-8 with a byte-order mark, so Excel reads
+accents and € right) into `<name>_tables/`.
+
+- Ruled tables (with cell borders) come out best. Tables without lines are
+  found from columns that line up with white space between them; dot
+  leaders (`Total ....... 12`) count as space.
+- A table that runs to the bottom of a page and goes on at the top of the
+  next with the same columns becomes one table; a repeated header row is
+  dropped.
+- It needs text in the PDF: **scanned pages need OCR first** (*Make
+  searchable*), otherwise it says that no tables were found.
+- Limits: cells that span several columns come out in the first of them;
+  headers on two lines become two rows; two tables side by side without
+  lines can come out as one; text in a cell that looks like a formula
+  stays text (in CSV files it starts with `'`).
 
 ### Recipes
 

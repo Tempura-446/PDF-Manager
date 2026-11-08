@@ -594,3 +594,41 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
   width: 64px; height: 30px; padding: 0 8px; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums;
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text);
 }
+
+/* Pictures and Links modes: outlines over the page's pictures and links */
+.rd-markup[data-markup="images"] .annotationLayer, .rd-markup[data-markup="links"] .annotationLayer,
+.rd-markup[data-markup="images"] .textLayer, .rd-markup[data-markup="links"] .textLayer { pointer-events: none; }
+.rd-markup[data-markup="links"] .page { cursor: crosshair; }
+.rd-objbox {
+  position: absolute; z-index: 24; box-sizing: border-box; cursor: move; touch-action: none;
+  border: 1.5px dashed var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.rd-objbox:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.rd-objbox.picked { border-style: solid; border-width: 2px; background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.rd-objbox.locked { border-color: #9a9a95; background: rgb(0 0 0 / .04); cursor: not-allowed; }
+.rd-objbox.link { cursor: pointer; border-color: #1f4fd8; background: rgb(31 79 216 / .08); }
+.rd-handle { position: absolute; width: 11px; height: 11px; background: #fff; border: 2px solid var(--accent); border-radius: 2px; display: none; }
+.rd-objbox.picked .rd-handle { display: block; }
+.rd-handle.nw { left: -6px; top: -6px; cursor: nwse-resize; } .rd-handle.se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.rd-handle.ne { right: -6px; top: -6px; cursor: nesw-resize; } .rd-handle.sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+.rd-objtools {
+  position: absolute; z-index: 26; display: flex; gap: 4px; padding: 3px; border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-pop, 0 6px 20px rgb(0 0 0 / .18));
+}
+.rd-objtools .rd-btn { height: 30px; }
+.rd-linkdraft { position: absolute; z-index: 24; border: 1.5px dashed #1f4fd8; background: rgb(31 79 216 / .1); pointer-events: none; }
+
+/* Digital ID signatures */
+.rd-markup[data-markup="certsign"] .page { cursor: crosshair; }
+.rd-markup[data-markup="certsign"] .annotationLayer, .rd-markup[data-markup="certsign"] .textLayer { pointer-events: none; }
+.rd-sigbar { gap: 10px; background: color-mix(in srgb, #1f8a3b 9%, var(--surface)); }
+.rd-sigbar.bad { background: color-mix(in srgb, #d52b1e 10%, var(--surface)); }
+.rd-sigicon { display: inline-flex; color: #1f8a3b; }
+.rd-sigbar.bad .rd-sigicon { color: #d52b1e; }
+.rd-sigicon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.rd-sigstatus { font-size: 13px; min-width: 0; }
+.rd-siglist { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; max-width: 520px; }
+.rd-sigitem { border-left: 3px solid #1f8a3b; padding: 4px 10px; display: grid; gap: 2px; font-size: 13px; }
+.rd-sigitem.modified, .rd-sigitem.invalid { border-left-color: #d52b1e; }
+.rd-sigitem.valid-untrusted { border-left-color: #c77700; }
+.rd-sigitem small { color: var(--muted); }

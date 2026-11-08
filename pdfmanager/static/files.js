@@ -10,6 +10,7 @@ const TYPES = {
   pdf: ["PDF document", "application/pdf"],
   zip: ["ZIP archive", "application/zip"],
   docx: ["Word document", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+  xlsx: ["Excel workbook", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
   txt: ["Text file", "text/plain"],
 };
 
