@@ -8,18 +8,22 @@
 //             found by the server are shown striped.
 //   "form"    fillable fields (Add form fields): drawn and edited like the
 //             redact boxes, each with a type (text, multi-line text,
-//             checkbox, signature) and a name. A click without dragging
-//             adds a field of the usual size. Fields already in the file
-//             are shown striped.
+//             checkbox, radio button, dropdown, signature) and a name. A
+//             click without dragging adds a field of the usual size. Radio
+//             buttons with one name are a group, each with its own value;
+//             a dropdown has its choices. Find fields (with a ``detect``
+//             callback) adds the fields of a printed form. Fields already
+//             in the file are shown striped.
 //
-//   const ed = new RegionEditor(host, { mode, onChange(value) });
+//   const ed = new RegionEditor(host, { mode, onChange(value), detect() });
 //   await ed.load(file, password)        // "ok", "password", "wrong-password" or "error"
 //   ed.setCrop({ left, bottom, right, top })   // margins in points
 //   ed.setMatches({ page: [[x0, y0, x1, y1]] })
 //   ed.setExisting({ page: [{ rect, name, type }] })   // form fields in the file
 // Coordinates sent back are PDF points (origin bottom left, before rotation):
 // crop margins {left, bottom, right, top}; redact boxes {"1": [[x0, y0, x1, y1]]}
-// with 1-based page numbers; form fields {"1": [{ rect, type, name }]}.
+// with 1-based page numbers; form fields {"1": [{ rect, type, name, value?,
+// options?, border? }]}.
 
 import { DOC_OPTIONS, destroyTask, loadPdfjs, openDocument } from "./pdfjs.js";
 
@@ -28,6 +32,9 @@ const ICON = {
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
   text: '<path d="M4 7V5h16v2M12 5v14M9 19h6"/>', multiline: '<path d="M4 6h16M4 10h16M4 14h16M4 18h10"/>',
   checkbox: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="m8 12 3 3 5-6"/>',
+  radio: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor"/>',
+  dropdown: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="m13 11 2.5 2.5L18 11"/>',
+  find: '<circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/><path d="M8.5 11h5M11 8.5v5"/>',
   signature: '<path d="M3 17c3-1 4-9 7-9 2 0 0 7 2 7s2-3 4-3 2 2 5 2"/><path d="M3 21h18"/>', trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
 };
 function icon(name) {
@@ -63,17 +70,28 @@ function turnMargins({ left, bottom, right, top }, degrees) {
 }
 const MIN = 6;  // smallest box, in screen pixels
 
+/** The share of the smaller of two boxes [x0, y0, x1, y1] they have in common. */
+function overlapShare(a, b) {
+  const w = Math.min(a[2], b[2]) - Math.max(a[0], b[0]), h = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
+  if (w <= 0 || h <= 0) return 0;
+  const smaller = Math.min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]));
+  return smaller > 0 ? (w * h) / smaller : 0;
+}
+
 // Form fields: label, and the size (points) of one added with a click.
 export const FIELD_TYPES = {
   text: ["Text", 180, 20], multiline: ["Multi-line text", 260, 64],
-  checkbox: ["Checkbox", 12, 12], signature: ["Signature", 180, 40],
+  checkbox: ["Checkbox", 12, 12], radio: ["Radio button", 12, 12],
+  dropdown: ["Dropdown", 140, 20], signature: ["Signature", 180, 40],
 };
-const FIELD_LABEL = { text: "Text", multiline: "Text", checkbox: "Checkbox", signature: "Signature" };
+const FIELD_LABEL = { text: "Text", multiline: "Text", checkbox: "Checkbox", radio: "Group", dropdown: "Dropdown", signature: "Signature" };
+const AUTO_NAME = /^(Text|Checkbox|Group|Dropdown|Signature) \d+$/;
 
 export class RegionEditor {
-  constructor(host, { mode, onChange }) {
+  constructor(host, { mode, onChange, detect }) {
     this.mode = mode;
     this.onChange = onChange || (() => {});
+    this.detect = detect || null;
     this.doc = null; this.task = null; this.file = null; this.password = null;
     this.pageIndex = 0; this.total = 0;
     this.crop = { left: 0, bottom: 0, right: 0, top: 0 };  // margins, points, in the page's own coordinates
@@ -91,9 +109,11 @@ export class RegionEditor {
     this.pageLabel = el("span", { class: "re-page-label" });
     this.status = el("span", { class: "pb-status" });
     this.clearBtn = el("button", { type: "button", class: "btn secondary pb-small", onclick: () => this.#clearPage() }, icon("trash"), "Clear this page");
+    this.findBtn = mode === "form" && this.detect ? el("button", { type: "button", class: "btn secondary pb-small",
+      title: "Add fields where the form has lines, boxes and tick boxes to fill in", onclick: () => this.#find() }, icon("find"), "Find fields") : null;
     this.toolbar = el("div", { class: "pb-toolbar" },
       el("div", { class: "re-nav" }, this.prevBtn, this.pageLabel, this.nextBtn), this.status,
-      mode !== "crop" ? this.clearBtn : null);
+      this.findBtn, mode !== "crop" ? this.clearBtn : null);
     if (mode === "form") this.#buildFieldBar();
     this.canvas = el("canvas", { class: "re-canvas" });
     this.overlay = el("div", { class: "re-overlay", tabindex: "0", role: "application",
@@ -168,7 +188,7 @@ export class RegionEditor {
     this.boxes = {}; this.kinds = {};
     for (const [page, list] of Object.entries(boxes || {})) {
       this.boxes[Number(page) - 1] = list.map((b) => [...(b.rect || b)]);
-      if (this.mode === "form") this.kinds[Number(page) - 1] = list.map((b) => ({ type: b.type || "text", name: b.name || "" }));
+      if (this.mode === "form") this.kinds[Number(page) - 1] = list.map(({ rect, ...b }) => ({ ...b, type: b.type || "text", name: b.name || "" }));
     }
     this.selected = -1;
     this.#draw();
@@ -266,8 +286,8 @@ export class RegionEditor {
         const box = this.#rectEl(this.#toScreen(b), "re-field" + (i === this.selected ? " selected" : ""), i);
         const kind = kinds[i] || { type: "text", name: "" };
         box.dataset.type = kind.type;
-        box.title = `${FIELD_TYPES[kind.type][0]}: ${kind.name}`;
-        box.prepend(el("span", { class: "re-field-label" }, kind.type === "checkbox" ? "" : kind.name));
+        box.title = `${FIELD_TYPES[kind.type]?.[0] || kind.type}: ${kind.name}${kind.type === "radio" ? ` = ${kind.value || ""}` : ""}`;
+        box.prepend(el("span", { class: "re-field-label" }, kind.type === "checkbox" ? "" : kind.type === "radio" ? "" : kind.name));
         parts.push(box);
       });
     } else {
@@ -364,22 +384,24 @@ export class RegionEditor {
         if (kind === "draw") {
           if (this.drawing == null) {
             list.push(this.#toPdf(rect)); this.drawing = list.length - 1; this.selected = this.drawing;
-            if (this.mode === "form") (this.kinds[this.pageIndex] ||= []).push({ type: this.fieldType, name: this.#nextName(this.fieldType) });
+            if (this.mode === "form") (this.kinds[this.pageIndex] ||= []).push(this.#newKind(this.fieldType));
           } else list[this.drawing] = this.#toPdf(rect);
         } else list[index] = this.#toPdf(rect);
       }
       this.#draw();
     }
     if (done) {
+      this.findNote = "";
       if (kind === "draw" && this.mode === "form" && (this.drawing == null || this.#tooSmall(this.drawing))) {
         // A click: a field of the usual size, with its top left corner there.
         if (this.drawing != null) this.#splice(this.drawing);
         const [, w, h] = FIELD_TYPES[this.fieldType], s = this.viewport.scale;
         const size = { w: w * s, h: h * s }, p = this.drawStart;
-        let x = this.fieldType === "checkbox" ? p.x - size.w / 2 : p.x, y = this.fieldType === "checkbox" ? p.y - size.h / 2 : p.y - size.h * 0.75;
+        const small = this.fieldType === "checkbox" || this.fieldType === "radio";
+        let x = small ? p.x - size.w / 2 : p.x, y = small ? p.y - size.h / 2 : p.y - size.h * 0.75;
         x = Math.max(0, Math.min(this.viewport.width - size.w, x)); y = Math.max(0, Math.min(this.viewport.height - size.h, y));
         (this.boxes[this.pageIndex] ||= []).push(this.#toPdf({ x, y, ...size }));
-        (this.kinds[this.pageIndex] ||= []).push({ type: this.fieldType, name: this.#nextName(this.fieldType) });
+        (this.kinds[this.pageIndex] ||= []).push(this.#newKind(this.fieldType));
         this.selected = this.boxes[this.pageIndex].length - 1;
         this.drawing = null;
         this.#draw();
@@ -410,6 +432,7 @@ export class RegionEditor {
   }
 
   #clearPage() {
+    this.findNote = "";
     if (!(this.boxes[this.pageIndex] || []).length) return;
     this.boxes[this.pageIndex] = [];
     this.kinds[this.pageIndex] = [];
@@ -451,12 +474,30 @@ export class RegionEditor {
         const kind = this.kinds[this.pageIndex]?.[this.selected], type = this.typeSelect.value;
         if (!kind) return;
         // An automatic name follows the type ("Text 2" -> "Checkbox 1").
-        const name = /^(Text|Checkbox|Signature) \d+$/.test(kind.name) ? (kind.name = "", this.#nextName(type)) : kind.name;
-        this.#changeSelected({ type, name });
+        const name = AUTO_NAME.test(kind.name) ? (kind.name = "", this.#nextName(type)) : kind.name;
+        const changes = { type, name };
+        if (type === "radio" && !kind.value) changes.value = this.#nextValue(name);
+        this.#changeSelected(changes);
       },
     }, ...Object.entries(FIELD_TYPES).map(([type, [label]]) => el("option", { value: type }, label)));
+    this.valueInput = el("input", { type: "text", class: "re-name re-short", spellcheck: "false", "aria-label": "This button's value",
+      oninput: () => this.#changeSelected({ value: this.valueInput.value }),
+      onkeydown: (e) => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); this.overlay.focus({ preventScroll: true }); } },
+    });
+    this.optionsInput = el("input", { type: "text", class: "re-name re-short", spellcheck: "false", placeholder: "Yes, No, Maybe",
+      "aria-label": "Choices, separated by commas",
+      oninput: () => this.#changeSelected({ options: this.optionsInput.value }),
+      onkeydown: (e) => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); this.overlay.focus({ preventScroll: true }); } },
+    });
+    this.nameLabel = el("span", {}, "Name");
+    this.valueLabel = el("label", { title: "What this button gives when it's chosen" }, el("span", {}, "Value"), this.valueInput);
+    this.optionsLabel = el("label", { title: "The choices in the list, separated by commas" }, el("span", {}, "Choices"), this.optionsInput);
+    // One slot for a radio button's value or a dropdown's choices, which
+    // keeps its space: the page mustn't move while a field is clicked.
+    this.extraSlot = el("div", { class: "re-extra" }, this.valueLabel, this.optionsLabel);
     this.nameBox = el("div", { class: "re-name-box" },
-      el("label", {}, el("span", {}, "Name"), this.nameInput), el("label", {}, el("span", {}, "Type"), this.typeSelect));
+      el("label", {}, this.nameLabel, this.nameInput), el("label", {}, el("span", {}, "Type"), this.typeSelect),
+      this.extraSlot);
     this.fieldBar = el("div", { class: "re-fieldbar" },
       el("div", { class: "re-add" }, el("span", { class: "re-add-label" }, "Add"),
         el("div", { class: "re-types", role: "group", "aria-label": "Type of field to add" }, ...this.typeBtns)),
@@ -488,6 +529,83 @@ export class RegionEditor {
     if (!kind) return;
     if (document.activeElement !== this.nameInput) this.nameInput.value = kind.name;
     this.typeSelect.value = kind.type;
+    this.nameLabel.textContent = kind.type === "radio" ? "Group" : "Name";
+    this.nameInput.setAttribute("aria-label", kind.type === "radio" ? "Group name (buttons with the same one are a group)" : "Field name");
+    this.valueLabel.hidden = kind.type !== "radio";
+    this.optionsLabel.hidden = kind.type !== "dropdown";
+    this.extraSlot.style.visibility = kind.type === "radio" || kind.type === "dropdown" ? "" : "hidden";
+    if (document.activeElement !== this.valueInput) this.valueInput.value = kind.value || "";
+    if (document.activeElement !== this.optionsInput) {
+      this.optionsInput.value = Array.isArray(kind.options) ? kind.options.join(", ") : kind.options || "";
+    }
+  }
+
+  /** The type and name of a field about to be added. Radio buttons added
+   * one after another join the same group. */
+  #newKind(type) {
+    if (type !== "radio") return { type, name: this.#nextName(type) };
+    const last = this.lastRadio && Object.values(this.kinds).flat().find((k) => k === this.lastRadio);
+    const name = last ? last.name : this.#nextName("radio");
+    const kind = { type, name, value: this.#nextValue(name) };
+    this.lastRadio = kind;
+    return kind;
+  }
+
+  /** "Choice 1", "Choice 2"... not used in the group yet. */
+  #nextValue(group) {
+    const taken = new Set(Object.values(this.kinds).flat().filter((k) => k.type === "radio" && k.name === group).map((k) => k.value));
+    let n = 1;
+    while (taken.has(`Choice ${n}`)) n++;
+    return `Choice ${n}`;
+  }
+
+  /** Add the fields of a printed form (the server finds them). */
+  async #find() {
+    if (!this.detect || this.finding) return;
+    this.finding = true;
+    this.findBtn.disabled = true;
+    const label = this.findBtn.lastChild;
+    label.textContent = "Looking…";
+    try {
+      const found = await this.detect();
+      let added = 0, firstPage = null;
+      for (const [page, list] of Object.entries(found || {})) {
+        const index = Number(page) - 1;
+        const boxes = this.boxes[index] ||= [], kinds = this.kinds[index] ||= [];
+        for (const { rect, ...kind } of list) {
+          if (boxes.some((b) => overlapShare(b, rect) > 0.3)) continue;  // drawn already
+          boxes.push([...rect]);
+          kinds.push({ ...kind, name: this.#freeName(kind.name, kind.type, kinds) });
+          added++;
+          if (firstPage == null || index < firstPage) firstPage = index;
+        }
+      }
+      this.selected = -1;
+      this.findNote = added
+        ? `Found ${added} field${added === 1 ? "" : "s"}: check them, and click one to rename it, change its type or remove it.`
+        : "No fields found: the form needs lines, boxes or tick boxes to fill in. Draw the fields instead.";
+      if (added && firstPage != null && firstPage !== this.pageIndex && !(this.boxes[this.pageIndex] || []).length) await this.goTo(firstPage);
+      else this.#draw();
+      this.#emit();
+    } catch (err) {
+      this.findNote = `Fields can't be found: ${err.message || err}`;
+      this.#update();
+    } finally {
+      this.finding = false;
+      this.findBtn.disabled = false;
+      label.textContent = "Find fields";
+    }
+  }
+
+  /** The found name, unless a field drawn here already has it (radio
+   * buttons share their group's name). */
+  #freeName(name, type, siblings) {
+    if (type === "radio") return name;
+    const taken = new Set(Object.values(this.kinds).flat().map((k) => k.name));
+    if (!taken.has(name)) return name;
+    let n = 2;
+    while (taken.has(`${name} ${n}`)) n++;
+    return `${name} ${n}`;
   }
 
   /** "Text 1", "Text 2"... not used by another field yet. */
@@ -515,6 +633,7 @@ export class RegionEditor {
       const old = Object.values(this.existing).reduce((n, l) => n + l.length, 0);
       const count = (n) => `${n} field${n === 1 ? "" : "s"}`;
       this.status.textContent = `${here !== all ? `this page: ${count(here)} · ` : ""}new: ${count(all)}${old ? ` · already in the file: ${old}` : ""}`;
+      if (this.findNote) this.status.textContent += ` — ${this.findNote}`;
       this.clearBtn.disabled = !here;
       this.#syncFieldBar();
     } else {

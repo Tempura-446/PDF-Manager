@@ -15,7 +15,7 @@ from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
                         forms, recipes, redact, scan, search)
-from pdfmanager import certsign
+from pdfmanager import certsign, formdetect, pdfacheck
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -261,7 +261,38 @@ def run_sanitize(a, src, out, pw):
 
 
 def run_pdfa(a, src, out, pw):
-    return archive.to_pdfa(src, out, level=a.level, password=pw)
+    archive.to_pdfa(src, out, level=a.level, password=pw)
+    try:
+        checked = pdfacheck.summary(pdfacheck.check(out, level=f"{a.level}b", engine="builtin"))
+    except Exception:  # the check is extra; the file is made either way
+        return out
+    return f"{out}  (checked: {checked})"
+
+
+def cmd_check_pdfa(a):
+    inputs = _expand(a.inputs)
+    passwords = _Passwords(a.password)
+    ok, records = True, []
+    for src in inputs:
+        try:
+            result = pdfacheck.check(src, level=a.level, password=passwords.for_file(src),
+                                     engine=a.engine)
+        except (core.PdfManagerError, OSError) as exc:
+            if len(inputs) == 1:
+                raise
+            ok = False
+            message = str(exc)
+            print(f"error: {message if str(src) in message else f'{src}: {message}'}",
+                  file=sys.stderr)
+            continue
+        ok = ok and result["passed"]
+        if a.json:
+            records.append(result)
+        else:
+            print(("\n" if src != inputs[0] else "") + pdfacheck.report(result, str(src)), end="")
+    if a.json:
+        print(json.dumps(records, indent=2, ensure_ascii=False))
+    return 0 if ok else 1
 
 
 # -- digital ID signatures (certsign.py) --
@@ -371,6 +402,15 @@ def run_form(a, src, out, pw):
         data = json.loads(Path(a.fields).read_text(encoding="utf-8-sig"))
         fields += data if isinstance(data, list) else [
             {**f, "page": int(page)} for page, items in data.items() for f in items]
+    if a.detect:
+        found = formdetect.detect(src, pw)
+        given = [(f.get("page", 1), f["rect"]) for f in fields]
+        fields += [{**f, "page": page} for page, items in found.items() for f in items
+                   if not any(p == page and formdetect.overlap(f["rect"], r) > 0.3
+                              for p, r in given)]
+        if not fields:
+            raise core.PdfManagerError("no fields found: the form needs lines, boxes or tick "
+                                       "boxes to fill in")
     if not fields:
         found = forms.existing_fields(src, pw)
         for page, items in found.items():
@@ -1148,7 +1188,11 @@ def build_parser():
                   "add fillable form fields (without --field: list the fields already there)")
     sp.add_argument("-f", "--field", action="append", metavar="TYPE:PAGE:X0,Y0,X1,Y1[:NAME]",
                     help=f"add a field ({', '.join(forms.TYPES)}), in points from the bottom-left "
-                         "corner, e.g. text:1:72,700,300,720:Name (repeat for more)")
+                         "corner, e.g. text:1:72,700,300,720:Name (repeat for more); a radio "
+                         "button's NAME is GROUP=VALUE, a dropdown's NAME=CHOICE|CHOICE|...")
+    sp.add_argument("--detect", action="store_true",
+                    help="find the fields of a printed form (its lines, boxes and tick boxes) "
+                         "and add them")
     sp.add_argument("--fields", metavar="FILE",
                     help='fields from a JSON file: [{"type", "page", "rect": [x0, y0, x1, y1], '
                          '"name"}]')
@@ -1159,6 +1203,18 @@ def build_parser():
     sp = per_file("pdfa", run_pdfa, "convert to PDF/A for long-term archiving (needs Ghostscript)")
     sp.add_argument("--level", choices=archive.PDFA_LEVELS, default="2",
                     help="PDF/A-1b, -2b (default) or -3b")
+
+    sp = other("check-pdfa", cmd_check_pdfa,
+               "check whether PDFs meet PDF/A (exit code 0 when every file passes); uses "
+               "veraPDF when it's installed")
+    sp.add_argument("inputs", nargs="+", metavar="input", help="PDF(s) to check")
+    sp.add_argument("--level", choices=pdfacheck.LEVELS,
+                    help="the level to check against (default: the one the file says, else 2b)")
+    sp.add_argument("--engine", choices=pdfacheck.ENGINES, default="auto",
+                    help="veraPDF (when installed) or ZPDF's own checks (builtin)")
+    sp.add_argument("--password", help=f"password for encrypted input (better: let pdfm "
+                                       f"prompt, or set {PASSWORD_ENV})")
+    sp.add_argument("--json", action="store_true", help="print JSON")
 
     sp = per_file("bookmarks", run_bookmarks,
                   "list, set or detect bookmarks (without options: list them)")

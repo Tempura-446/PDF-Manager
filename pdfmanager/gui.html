@@ -369,6 +369,11 @@ select.re-name { width: auto; }
 .re-name { width: 200px; height: 34px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
 .re-field { background: color-mix(in srgb, var(--page-accent) 14%, transparent); border: 1.5px solid var(--page-accent); cursor: move; }
 .re-field[data-type="checkbox"] { background: color-mix(in srgb, var(--page-ok) 16%, transparent); border-color: var(--page-ok); }
+.re-field[data-type="radio"] { background: color-mix(in srgb, var(--page-ok) 16%, transparent); border-color: var(--page-ok); border-radius: 50%; }
+.re-field[data-type="dropdown"] { border-right-width: 6px; }
+.re-short { width: 150px; }
+.re-extra { display: inline-flex; min-width: 220px; }
+.re-extra label { display: inline-flex; align-items: center; gap: 8px; }
 .re-field[data-type="signature"] { background: color-mix(in srgb, var(--page-warn) 14%, transparent); border-color: var(--page-warn); border-bottom-width: 2.5px; }
 .re-field.selected { outline: 2px solid var(--page-accent); outline-offset: 1px; }
 .re-field .re-handle { border-color: var(--page-accent); }
@@ -867,6 +872,7 @@ const ICONS = {
   "verify-sig": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="m9 14 2 2 4-4"/>',
   redact: '<path d="M4 6h16M4 18h9"/><rect x="4" y="10" width="13" height="4" rx="1" fill="currentColor"/>',
   pdfa: '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4"/>',
+  "pdfa-check": '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h5M19 9v3"/><path d="m14 18 2 2 4-4"/>',
   compare: '<rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="16" rx="1.5"/><path d="M6 9h1M17 9h1M6 13h1M16 13h3"/>',
   "to-word": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="m8 11 1.5 6 2.5-4 2.5 4 1.5-6"/>',
   "to-excel": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14.5h18M9 9v11M15 9v11"/>',
@@ -1359,7 +1365,7 @@ const TAGLINES = {
   clean: "Drop blank pages and straighten scans", watermark: "Stamp text or a logo on every page", number: "Add page numbers",
   flatten: "Bake forms and comments into the page", headers: "Titles, dates and Bates numbers", form: "Create fillable forms",
   metadata: "Set the title, author and keywords", encrypt: "Protect with a password", decrypt: "Remove a password",
-  redact: "Black out text for good", sanitize: "Remove hidden data and scripts", pdfa: "Convert for long-term archiving",
+  redact: "Black out text for good", sanitize: "Remove hidden data and scripts", pdfa: "Convert for long-term archiving", "pdfa-check": "See if a file meets PDF/A, and why not",
   "sign-cert": "Sign with your certificate (.pfx), like Acrobat", "verify-sig": "See who signed and if anything changed",
   "from-images": "Turn photos and scans into a PDF", "to-images": "Save pages as PNG or JPG", text: "Get the text out",
   media: "Extract pictures and attached files", "to-word": "Convert to an editable Word file", "from-office": "Turn Office documents into PDFs",
@@ -1679,13 +1685,21 @@ PANELS.form = {
   title: "Pages", sub: "Drag or click where people should type, tick or sign",
   async setup(host) {
     const { RegionEditor } = await import("/static/regions.js");
-    const editor = new RegionEditor(host, { mode: "form", onChange: (fields) => { const f = $("f-fields"); if (f) f.value = JSON.stringify(fields); } });
+    const editor = new RegionEditor(host, {
+      mode: "form", onChange: (fields) => { const f = $("f-fields"); if (f) f.value = JSON.stringify(fields); },
+      async detect() {
+        const body = new FormData();
+        body.append("file", items[0].file, items[0].file.name);
+        body.append("password", $("pw").value);
+        return (await (await api("/api/form/detect", { method: "POST", body })).json()).fields;
+      },
+    });
     return {
       async sync() {
         host.hidden = !items.length;
         $("panel-hint").textContent = items.length > 1
           ? "The fields drawn on the first file are added to each file (useful for copies of the same blank form)."
-          : "Choose a field type, then drag a box on the page — or just click for a box of the usual size. Click a field to move, resize, rename or remove it. Striped: fields already in the file.";
+          : "Find fields adds the lines, boxes and tick boxes of a printed form. Or choose a field type, then drag a box on the page — or just click for a box of the usual size. Radio buttons added one after another are one group. Click a field to move, resize, rename or remove it. Striped: fields already in the file.";
         if (!items.length) { editor.close(); return; }
         const result = await editor.load(items[0].file, $("pw").value || null);
         if (result === "password" || result === "wrong-password") $("pw-box").open = true;

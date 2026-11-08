@@ -551,7 +551,10 @@ def test_form_field_mistakes(tmp_path):
 
     src = text_pdf(tmp_path / "blank.pdf")
     with pytest.raises(core.PdfManagerError, match="unknown field type"):
-        forms.add_fields(src, tmp_path / "o.pdf", [{"page": 1, "rect": [0, 0, 50, 50], "type": "radio"}])
+        forms.add_fields(src, tmp_path / "o.pdf", [{"page": 1, "rect": [0, 0, 50, 50], "type": "slider"}])
+    with pytest.raises(core.PdfManagerError, match="has no choices"):
+        forms.add_fields(src, tmp_path / "o.pdf", [{"page": 1, "rect": [0, 0, 50, 50],
+                                                     "type": "dropdown", "name": "Pick", "options": " , "}])
     with pytest.raises(core.PdfManagerError, match="page 3 doesn't exist"):
         forms.add_fields(src, tmp_path / "o.pdf", [{"page": 3, "rect": [0, 0, 50, 50]}])
     with pytest.raises(core.PdfManagerError, match="too small"):
@@ -586,7 +589,7 @@ def test_cli_and_app_form_fields(tmp_path, capsys, app):
     assert name == "blank_form.pdf" and notes == ["blank.pdf: added 2 fields (Email, Notes)"]
     email = PdfReader(io.BytesIO(data)).pages[0]["/Annots"][0].get_object()
     assert email["/T"] == "Email" and email["/DA"] == "/Helv 12 Tf 0 g" and email["/Ff"] == 2
-    with pytest.raises(gui.UserError, match="draw the fields"):
+    with pytest.raises(gui.UserError, match="no fields: use Find fields"):
         gui.run_operation("form", [src], {"fields": "{}"}, work=tmp_path)
 
     base, token, _ = app

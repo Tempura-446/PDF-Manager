@@ -41,7 +41,8 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
-                        forms, recipes, redact, scan, search, textedit, update, viewports, markup, pageimages)
+                        forms, recipes, redact, scan, search, textedit, update, viewports, markup, pageimages,
+                        formdetect, pdfacheck)
 from pdfmanager import certsign
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
@@ -231,9 +232,13 @@ OPERATIONS = [
      "fields": [_f("forms", "Form fields", "check", True),
                 _f("comments", "Comments, highlights, drawings and signatures", "check", True)]},
     {"id": "form", "group": "Stamp", "label": "Add form fields", "files": "pdf", "panel": "form",
-     "help": "Draw boxes where people should type, tick or sign. The PDF can then be filled "
-             "in with any PDF reader, including the reader here.",
-     "fields": [_f("font_size", "Text size", "select", "0",
+     "help": "Make a PDF fillable: Find fields picks out the lines, boxes and tick boxes of a "
+             "printed form, and you can draw more where people should type, tick, choose or "
+             "sign. It can then be filled in with any PDF reader, including the reader here.",
+     "fields": [_f("detect", "Find the fields in each file", "check", False,
+                   hint="For several copies of different forms: each file gets the fields "
+                        "found in it, as well as any you drew."),
+                _f("font_size", "Text size", "select", "0",
                    choices=[["0", "Fit the box"], ["8", "8 pt"], ["10", "10 pt"], ["12", "12 pt"],
                             ["14", "14 pt"]]),
                 _f("border", "Draw a border around each field", "check", True),
@@ -318,6 +323,19 @@ OPERATIONS = [
      "fields": [_f("level", "Version", "select", "2",
                    choices=[["2", "PDF/A-2b — recommended"], ["1", "PDF/A-1b — oldest, strictest"],
                             ["3", "PDF/A-3b — allows attachments"]])]},
+    {"id": "pdfa-check", "group": "Convert", "label": "Check PDF/A", "files": "pdf",
+     "action": "Check",
+     "help": "Check whether PDFs meet PDF/A, the archiving standard: what breaks it and on "
+             "which page. You get a short report; nothing is changed. Uses veraPDF, the "
+             "reference checker, when it's installed.",
+     "fields": [_f("level", "Check against", "select", "",
+                   choices=[["", "What the file says"]]
+                   + [[lv, f"PDF/A-{lv}"] for lv in pdfacheck.LEVELS],
+                   hint="A file that doesn't say is checked against PDF/A-2b."),
+                _f("engine", "Checker", "select", "auto",
+                   choices=[["auto", "veraPDF if installed"], ["builtin", "ZPDF's own checks"]],
+                   hint="veraPDF (free, verapdf.org) checks every rule; ZPDF's own checks "
+                        "cover the ones files most often break.")]},
     {"id": "from-images", "group": "Convert", "label": "Images → PDF", "files": "images",
      "fields": [_f("size", "Page size", "select", "",
                    choices=[["", "Same as image"]] +
@@ -402,6 +420,7 @@ SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "rec
           "watermark": "watermarked", "number": "numbered", "metadata": "edited",
           "encrypt": "protected", "decrypt": "unlocked"}
 SUFFIX.update({"sign-cert": "signed", "verify-sig": "signatures"})  # digital ID signatures
+SUFFIX["pdfa-check"] = "pdfa-check"
 SUFFIX["to-excel"] = "tables"
 
 
@@ -551,9 +570,17 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             fields = [{**f, "page": int(page)} for page, found in raw.items() for f in found]
         except (ValueError, TypeError, AttributeError):
             raise UserError("the fields drawn on the pages are damaged; draw them again") from None
+        if _bool(opts.get("detect")):
+            found = formdetect.detect(src, password)
+            drawn = [(f["page"], f["rect"]) for f in fields]
+            fields += [{**f, "page": page} for page, items in found.items() for f in items
+                       if not any(p == page and formdetect.overlap(f["rect"], r) > 0.3
+                                  for p, r in drawn)]
         if not fields:
-            raise UserError("draw the fields on the page first: drag where people should type, "
-                            "tick or sign")
+            raise UserError("no fields: use Find fields, or drag where people should type, "
+                            "tick or sign" if not _bool(opts.get("detect")) else
+                            "no fields were found in this file: it needs lines, boxes or tick "
+                            "boxes to fill in (draw the fields instead)")
         if _bool(opts.get("required")):
             fields = [{**f, "required": f.get("type") in ("text", "multiline")} for f in fields]
         names = forms.add_fields(src, out, fields, border=_bool(opts.get("border")),
@@ -595,6 +622,12 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                      + (f" on page {result['page']}" if result["visible"] else
                         " (invisible signature)")
                      + (", with a timestamp" if result["timestamp"] else ""))
+    elif op == "pdfa-check":
+        out = out.with_suffix(".txt")
+        result = pdfacheck.check(src, level=opts.get("level") or None, password=password,
+                                 engine=opts.get("engine") or "auto")
+        out.write_text(pdfacheck.report(result, src.name), encoding="utf-8")
+        notes.append(f"{src.name}: {pdfacheck.summary(result)}")
     elif op == "verify-sig":
         out = out.with_suffix(".txt")
         found = certsign.verify(src, password, [extra_files["trust"]]
@@ -606,7 +639,13 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         if not archive.find_ghostscript():
             raise UserError("PDF/A needs Ghostscript: install it from "
                             "https://ghostscript.com/releases/gsdnld.html and try again")
-        archive.to_pdfa(src, out, level=opts.get("level") or "2", password=password)
+        level = opts.get("level") or "2"
+        archive.to_pdfa(src, out, level=level, password=password)
+        try:
+            checked = pdfacheck.check(out, level=f"{level}b", engine="builtin")
+            notes.append(f"{src.name}: checked: {pdfacheck.summary(checked)}")
+        except Exception:  # the check is extra; the file is made either way
+            pass
     elif op == "watermark":
         core.watermark(src, out, text=opts.get("text") or "CONFIDENTIAL",
                        opacity=_num(opts.get("opacity"), float, 0.15),
@@ -1522,6 +1561,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._redact_find(body)
             if path == "/api/form/fields":
                 return self._form_fields(body)
+            if path == "/api/form/detect":
+                return self._form_detect(body)
             if path == "/api/text/edit":
                 return self._text_edit(body)
             if path == "/api/pages/arrange":
@@ -1756,6 +1797,17 @@ class Handler(BaseHTTPRequestHandler):
             path = Path(tmp) / "file.pdf"
             path.write_bytes(uploads[0][2])
             found = forms.existing_fields(path, fields.get("password") or None)
+        return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})
+
+    def _form_detect(self, body):
+        """The fields a flat form should have, for the Add form fields editor."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            found = formdetect.detect(path, fields.get("password") or None)
         return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})
 
     def _save_settings(self, body):

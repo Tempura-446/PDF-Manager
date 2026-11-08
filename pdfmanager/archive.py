@@ -4,6 +4,7 @@ hidden data, and convert to PDF/A for long-term archiving."""
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -331,6 +332,50 @@ def find_ghostscript():
     return None
 
 
+def _s15(value):
+    return struct.pack(">i", round(value * 65536))
+
+
+def srgb_v2_profile():
+    """An sRGB colour profile in ICC version 2 (what PDF/A-1 needs): the
+    sRGB primaries adapted to D50 and its tone curve as a table."""
+    def tag_xyz(x, y, z):
+        return b"XYZ " + bytes(4) + _s15(x) + _s15(y) + _s15(z)
+
+    def pad(data):
+        return data + bytes(-len(data) % 4)
+
+    curve = []
+    for i in range(1024):
+        v = i / 1023
+        linear = v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+        curve.append(round(linear * 65535))
+    trc = b"curv" + bytes(4) + struct.pack(">I", len(curve)) + struct.pack(f">{len(curve)}H", *curve)
+    text = b"sRGB (ZPDF, ICC v2)"
+    desc = (b"desc" + bytes(4) + struct.pack(">I", len(text) + 1) + text + b"\0"
+            + bytes(4) + bytes(4)          # no Unicode description
+            + bytes(2) + bytes(1) + bytes(67))  # no Macintosh one
+    cprt = b"text" + bytes(4) + b"No copyright, use freely\0"
+    tags = [(b"desc", desc), (b"cprt", cprt), (b"wtpt", tag_xyz(0.9642, 1.0, 0.8249)),
+            (b"rXYZ", tag_xyz(0.4361, 0.2225, 0.0139)), (b"gXYZ", tag_xyz(0.3851, 0.7169, 0.0971)),
+            (b"bXYZ", tag_xyz(0.1431, 0.0606, 0.7141)), (b"rTRC", trc), (b"gTRC", trc),
+            (b"bTRC", trc)]
+    table_size = 4 + 12 * len(tags)
+    offset, table, body, placed = 128 + table_size, b"", b"", {}
+    for sig, data in tags:
+        if id(data) not in placed:  # the three curves share one table
+            placed[id(data)] = offset + len(body)
+            body += pad(data)
+        table += sig + struct.pack(">II", placed[id(data)], len(data))
+    size = 128 + table_size + len(body)
+    header = (struct.pack(">I", size) + bytes(4) + bytes([2, 0x10, 0, 0]) + b"mntr" + b"RGB "
+              + b"XYZ " + bytes(12) + b"acsp" + bytes(4) + bytes(4) + bytes(4) + bytes(4)
+              + bytes(8) + struct.pack(">I", 0) + _s15(0.9642) + _s15(1.0) + _s15(0.8249)
+              + bytes(4) + bytes(44))
+    assert len(header) == 128
+    return header + struct.pack(">I", len(tags)) + table + body
+
+
 def _ps_text(text):
     """``text`` as a PostScript hex string holding a PDF text string
     (UTF-16 with a byte-order mark), so any character survives."""
@@ -365,7 +410,9 @@ def to_pdfa(path, output, level="2", password=None):
         # holds at most 64 KB) rather than by file name: Ghostscript reads
         # names as UTF-8, and the temp folder is under the user's name,
         # which can be in any alphabet.
-        icc = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes().hex()
+        # PDF/A-1 (PDF 1.4) takes version 2 profiles only; Pillow makes version 4.
+        icc = (srgb_v2_profile() if str(level) == "1" else
+               ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()).hex()
         chunks = [icc[i:i + 60000] for i in range(0, len(icc), 60000)]
         title = (reader.metadata or {}).get("/Title") or output.stem
         definition = tmp / "pdfa_def.ps"
