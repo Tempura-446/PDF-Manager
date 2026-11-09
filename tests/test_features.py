@@ -426,7 +426,10 @@ def test_word_is_used_when_installed(tmp_path, monkeypatch):
 
 
 def test_text_file_to_pdf_without_office(tmp_path, monkeypatch):
+    # Neither LibreOffice nor Microsoft Office (Word, Excel, PowerPoint), even
+    # on a computer that has them.
     monkeypatch.setattr(office, "find_libreoffice", lambda: None)
+    monkeypatch.setattr(office, "_has_com", lambda prog_id: False)
     (tmp_path / "notes.txt").write_text("First line\nSecond line\n", encoding="utf-8")
     out, program = office.office_to_pdf(tmp_path / "notes.txt", tmp_path / "notes.pdf")
     assert program == "ZPDF"
