@@ -23,6 +23,16 @@ The new words keep the original look as far as the file allows:
    Roman, ...), matched by name;
 3. else a standard font of the same kind (serif, sans serif or monospace,
    bold, italic).
+
+The reader can also choose the look: a font family (one of the
+document's, an installed one, or a standard one), size, bold, italic,
+colour and alignment, for the whole line, paragraph or new text. A font
+from this computer is embedded, cut down to the letters used; in a PDF/A
+file, which may not rely on a reader's own fonts, a standard font gives
+way to an installed one that is embedded.
+
+A rewritten paragraph that takes more or fewer lines moves the text below
+it in its column (see textflow.py): text flows, as in a word processor.
 """
 
 import ctypes
@@ -991,8 +1001,9 @@ class _Page:
         old_span = ((rows[-1][0]["origin"][0] - first["origin"][0]) * down[0]
                     + (rows[-1][0]["origin"][1] - first["origin"][1]) * down[1])
 
-        def layout(style):
-            """The new lines: ([(text, word gap, offset)], letter width, letter spacing, line spacing, drop)."""
+        def layout(style, text=text, room=room):
+            """The new lines: ([(text, word gap, offset, ends a part)], letter width,
+            letter spacing, line spacing, drop, growth)."""
             k = style["size"] / base["size"]
             width, space = _metrics(font[0], font[1], style)
             tck = tc * k
@@ -1014,15 +1025,34 @@ class _Page:
                     elif align in ("center", "right"):
                         free = room - measure(line)
                         off = free / 2 if align == "center" else free
-                    lines.append((line, g, off))
+                    lines.append((line, g, off, j == len(wrapped) - 1))
             drop = (k - 1) * ascent  # a bigger size grows down from the old top
             grow = drop + (len(lines) - 1) * lead * k - old_span + 0.22 * (style["size"] - base["size"])
             return lines, width, tck, lead * k, drop, grow
 
         lines, width, tck, lead_k, drop, grow = layout(style)
+        more, nxt = [], None  # lines that run on at the top of the next column
         if flow and abs(grow) > 0.5:
             found = self.flow.column(rows, lead)
             fits = grow <= 0 or found["low"] - grow >= found["limit"] - 0.01
+            if not fits and not found["lines"] and len(lines) > 1:
+                # The last paragraph of its column: what doesn't fit runs on
+                # into the next column, whose text moves down to make room.
+                nxt = self.flow.next_column(found, lead)
+                for keep in range(len(lines) - 1, 0, -1) if nxt else ():
+                    here = drop + (keep - 1) * lead_k - old_span + 0.22 * (style["size"] - base["size"])
+                    if found["low"] - here < found["limit"] - 0.01:
+                        continue
+                    words = "".join(ln[0] + ("\n" if ln[3] else " ") for ln in lines[keep:]).rstrip()
+                    more = layout(style, words, max(nxt["x1"] - nxt["x0"], base["size"] * 4))[0]
+                    push = (len(more) + 0.5) * lead_k
+                    if nxt["low"] - push >= nxt["limit"] - 0.01 and self.flow.move(nxt, -push):
+                        lines, grow, fits = lines[:keep], here, True
+                        self.notes["moved"] = len(nxt["lines"])
+                        self.notes["linked"] = len(more)
+                    else:
+                        more = []
+                    break
             if not fits and opts.get("fit") == "shrink":
                 for step in range(1, 11):  # down to three quarters of the size, a little at a time
                     smaller = _restyle(style, {"size": style["size"] * (1 - 0.025 * step)})
@@ -1037,17 +1067,20 @@ class _Page:
                 pass  # the old words are covered: what's below can't come up under the cover
             elif self.flow.move(found, -grow):
                 if found["lines"]:
-                    self.notes["moved"] = len(found["lines"])
+                    self.notes["moved"] = self.notes.get("moved", 0) + len(found["lines"])
             elif grow > 0:
                 self.notes["taller"] = True
         elif grow > 0.5:
             self.notes["taller"] = True  # runs on below where it ended: into what follows, maybe
-        for n, (line, g, off) in enumerate(lines):
+        for n, (line, g, off, _) in enumerate(lines):
             placed, _ = _place(line, left + off, width, tck, g)
             d = drop + n * lead_k
             point = (first["origin"][0] + u[0] * (-first["s"]) + down[0] * d,
                      first["origin"][1] + u[1] * (-first["s"]) + down[1] * d)
             self.run(style, font, [(ch, point[0] + u[0] * s, point[1] + u[1] * s) for ch, s in placed])
+        for n, (line, g, off, _) in enumerate(more):  # level text only: the paragraph is level
+            placed, _ = _place(line, off, width, tck, g)
+            self.run(style, font, [(ch, nxt["x0"] + s, nxt["baseline"] - n * lead_k) for ch, s in placed])
         return font
 
     # -- helpers ------------------------------------------------------------------------

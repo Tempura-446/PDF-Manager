@@ -309,7 +309,9 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   that isn't text. If the text would no longer fit on the page, nothing
   is moved and no words are lost: the reader says so and offers **Shrink
   to fit** (the paragraph's size comes down a little, to three quarters at
-  most). Text doesn't yet flow on into the next column. A rewritten
+  most). The last paragraph of a column that no longer fits runs on at the
+  top of the next column on the page (its text moves down to make room),
+  as in linked text boxes; text doesn't run on to the next page. A rewritten
   paragraph's old words are taken out of the page where they can be;
   otherwise, as for a changed line, they're covered with the colour around
   them (still in the file underneath, so use **Redact** to remove text for

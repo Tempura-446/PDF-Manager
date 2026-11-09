@@ -22,9 +22,16 @@ share a piece of text with others, sit inside a form XObject, or use a
 font whose letter widths can't be read), the old way is kept: the words
 are covered with the colour around them, and the text below only moves
 down, never up under the cover.
+
+When the text below would be pushed past the bottom margin (or into
+something that stays), nothing moves and the change says so: no words are
+ever pushed off the page. The last paragraph of a column runs on instead
+at the top of the next column, if that one's text can move down to make
+room, as linked text boxes do.
 """
 
 import math
+import statistics
 
 from pypdf.generic import ArrayObject, ContentStream, DecodedStreamObject, FloatObject, NameObject
 
@@ -393,8 +400,9 @@ class Flow:
     # -- the column below a paragraph -------------------------------------------------------
     def column(self, rows, lead):
         """What would move with the paragraph ``rows``: {"lines": [box],
-        "letters": [index], "limit": the lowest a line may go, "gap":
-        what's between the paragraph and the first line}."""
+        "letters", "rules", "covers": what moves, "limit": the lowest a
+        line may go, "low": the lowest it goes now, "left", "right": the
+        column's gutters}."""
         own = {L["index"] for row in rows for L in row}
         everything = [L for row in rows for L in row]
         top = max(L["loose"][3] for L in everything)
@@ -407,15 +415,55 @@ class Flow:
         beside = [L for L in letters if L[1][1] < top and L[1][3] > bottom]
         gutter_r = min([L[1][0] for L in beside if L[1][0] >= right - 0.5] + [self.crop[2]])
         gutter_l = max([L[1][2] for L in beside if L[1][2] <= left + 0.5] + [self.crop[0]])
-        gap_r, gap_l = max(gutter_r - right, 1.0), max(left - gutter_l, 1.0)
+        below = [L for L in letters if L[2][1] < min(L2["origin"][1] for L2 in everything) - size * 0.3
+                 and L[1][3] <= bottom + size * 0.5]
+        found = self._down(below, bottom, gutter_l, gutter_r, max(left - gutter_l, 1.0), max(gutter_r - right, 1.0),
+                           lead)
+        found["start"], found["edge"] = left, right  # the paragraph's left edge, where its longest line ends
+        return found
+
+    def next_column(self, found, lead):
+        """The column to the right of the one ``found`` is in, for a
+        paragraph to run on into: what's in it, as :meth:`column` gives,
+        with "top" (its first line's top), "baseline" (that line's) and
+        "x0", "x1" (its width); or None. Columns are the strips of the page
+        the letters cover, with empty gutters between them (a heading
+        across two columns makes them one: nothing runs on then)."""
+        level = [L for L in self.letters if L[4]]
+        if not level:
+            return None
+        size = statistics.median(L[3] for L in level)
+        strips = []
+        for a, b in sorted((L[1][0], L[1][2]) for L in level):
+            if strips and a <= strips[-1][1] + size:
+                strips[-1][1] = max(strips[-1][1], b)
+            else:
+                strips.append([a, b])
+        at = next((k for k, (a, b) in enumerate(strips) if a - 1 <= found["start"] <= b), None)
+        if at is None or at + 1 >= len(strips):
+            return None
+        x0, x1 = strips[at + 1]
+        gutter = strips[at + 2][0] if at + 2 < len(strips) else self.crop[2]
+        mine = [L for L in level if x0 - 0.5 < (L[1][0] + L[1][2]) / 2 < gutter]
+        first = _lines(mine)[0]
+        top, baseline = max(L[1][3] for L in first), first[0][2][1]
+        below = [L for L in self.letters if L[2][1] <= baseline + 0.01]  # with the other columns', to see what spans
+        nxt = self._down(below, top + 0.5, x0 - 0.5, gutter, max(x0 - strips[at][1], 1.0), max(gutter - x1, 1.0), lead)
+        if not nxt["lines"] or abs(nxt["lines"][0][3] - top) > 0.5:
+            return None  # its first line doesn't move (a heading across the columns, a picture)
+        nxt.update(top=top, baseline=baseline, x0=x0, x1=x1)
+        return nxt
+
+    def _down(self, below, bottom, gutter_l, gutter_r, gap_l, gap_r, lead):
+        """Walk down a column from ``bottom`` between the gutters: the lines
+        (of ``below``) and rules that would move, until a big gap or
+        something that stays."""
         # The bottom margin: as low as the page's text already goes, or an
         # inch from the bottom on a page whose text ends higher up.
         page_low = min([L[1][1] for L in self.letters] + [self.crop[1] + MARGIN])
         margin = self.crop[1] + max(0.0, min(MARGIN, page_low - self.crop[1]))
         found = {"lines": [], "letters": [], "rules": [], "covers": [], "limit": margin,
                  "bottom": bottom, "left": gutter_l, "right": gutter_r, "barrier": None}
-        below = [L for L in letters if L[2][1] < min(L2["origin"][1] for L2 in everything) - size * 0.3
-                 and L[1][3] <= bottom + size * 0.5]
         items = []  # (top, kind, thing)
         for line in _lines(below):
             mine = [L for L in line if gutter_l < (L[1][0] + L[1][2]) / 2 < gutter_r]

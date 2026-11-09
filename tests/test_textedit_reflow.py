@@ -333,6 +333,54 @@ def test_lines_in_a_font_whose_byte_32_is_a_letter_move_too(tmp_path):
     assert all(abs(a[1] - b[1]) < 0.01 and abs((b[2] - a[2]) - 12) < 0.01 for a, b in zip(after, before))
 
 
+def test_a_page_flowed_once_flows_again(tmp_path):
+    src, once, twice, third = columns(tmp_path / "two.pdf"), tmp_path / "1.pdf", tmp_path / "2.pdf", tmp_path / "3.pdf"
+    edit(src, once, {"rect": FIRST_RECT, "text": LONGER, "paragraph": True})  # four lines now
+    report = edit(once, twice, {"rect": [70, 660, 312, 710], "text": "Alpha back to one line.", "paragraph": True})
+    assert report["moved"] == 4
+    for words in ("Second paragraph", "of the page."):
+        assert where(twice, words)[1] - where(src, words)[1] == pytest.approx(24, abs=0.01)
+    assert _rule_y(twice) == pytest.approx(_rule_y(src) + 24, abs=0.05)
+    assert "Alphaparagraphonenowsays" not in text_of(twice)  # the first rewrite is gone too
+    second = where(twice, "Second paragraph")
+    report = edit(twice, third, {"rect": [70, second[1] - 16, 312, second[1] + 10], "paragraph": True,
+                                 "text": "Second paragraph is now longer than it was, so that it wraps onto three "
+                                         "lines in the column and moves the third one."})
+    assert report["moved"] == 2 and where(third, "Third paragraph")[1] == pytest.approx(where(twice, "Third paragraph")[1] - 12)
+    assert [L for L in letters(third) if L[1] >= 315] == [L for L in letters(src) if L[1] >= 315]
+
+
+def test_the_last_paragraph_of_a_column_runs_on_into_the_next(tmp_path):
+    src, out = tmp_path / "link.pdf", tmp_path / "out.pdf"
+    c = canvas.Canvas(str(src), pagesize=letter)
+    c.setFont("Helvetica", 10)
+    for n in range(49):
+        c.drawString(72, 700 - 12 * n, f"Left column filler line number {n} of the long text")
+    last = ["The last paragraph of the left column is here,", "and it ends right at the bottom margin of", "the page."]
+    for n, line in enumerate(last):
+        c.drawString(72, 104 - 12 * n, line)
+    for n in range(10):
+        c.drawString(320, 700 - 12 * n, f"Right column line {n} has room below it")
+    c.save()
+    text = " ".join(last) + (" It now goes on for much longer, so the words that don't fit any more continue at "
+                             "the top of the next column, as in a linked box.")
+    report = edit(src, out, {"rect": [70, 76, 300, 114], "text": text, "paragraph": True})
+    assert report["linked"] == 3 and report["moved"] == 10 and "overflow" not in report
+    assert text.replace(" ", "") in text_of(out)  # every word, in order
+    # The paragraph stays above the margin; the rest starts where the next column did.
+    assert min(y for _, x, y in letters(out) if x < 300) >= 72
+    assert where(out, "linked box.")[0] > 315
+    rest = [L for L in letters(out) if L[1] >= 315]
+    assert max(rest, key=lambda L: (L[2], -L[1]))[1:] == (320.0, 700.0)
+    # That column moved down by the lines put in it and half a line.
+    assert where(src, "Right column line 0")[1] - where(out, "Right column line 0")[1] == pytest.approx(42, abs=0.01)
+    assert where(out, "Right column line 9")[0] == where(src, "Right column line 9")[0]
+    # With no room in the next column either, nothing moves, and it says so.
+    report = edit(src, out, {"rect": [70, 76, 300, 114], "paragraph": True, "text": " ".join([text] * 14)})
+    assert report["overflow"] is True and "linked" not in report
+    assert where(out, "Right column line 0") == where(src, "Right column line 0")
+
+
 def test_flow_can_be_turned_off(tmp_path):
     src, out = columns(tmp_path / "two.pdf"), tmp_path / "out.pdf"
     report = edit(src, out, {"rect": FIRST_RECT, "text": LONGER, "paragraph": True, "flow": False})

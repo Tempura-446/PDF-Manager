@@ -2973,7 +2973,8 @@ export class Reader {
     return tab.fontChoices.promise;
   }
 
-  /** Notes on the fonts a change got when one was picked: [sentence]. */
+  /** Notes on a change: the font it got when one was picked, a smaller
+   *  size, words that ran on into the next column: [sentence]. */
   #fontNotes(used) {
     const notes = [];
     for (const u of used) {
@@ -2983,6 +2984,7 @@ export class Reader {
           : `${u.asked} can't show those letters in that style here, so ${u.font} was used.`);
       }
       if (u.size) notes.push(`The text was made a little smaller (${u.size} pt) to fit.`);
+      if (u.linked) notes.push("What didn't fit in its column runs on at the top of the next one.");
     }
     return notes;
   }
