@@ -130,3 +130,29 @@ def test_non_bmp_characters_become_replacement_character(tmp_path):
     out = tmp_path / "out.pdf"
     w.write(out)
     assert "a�b" in PdfReader(out).pages[0].extract_text()
+
+
+def test_font_is_fit_for_pdfa(tmp_path):
+    """PDF/A forbids text that uses a font's .notdef glyph, and wants the
+    widths in the PDF to agree with the font program: every character maps
+    to the font's one empty glyph, half an em wide, and the space is that
+    wide too (no /W override)."""
+    import struct
+    w, p = page_with_word(tmp_path)
+    textlayer.add_text_layer(w, p, [one_word("Hello", 100, 0, 300, 50)], (827, 1169), 100)
+    out = tmp_path / "out.pdf"
+    w.write(out)
+    font = PdfReader(out).pages[0]["/Resources"]["/Font"][textlayer.GLYPHLESS_FONT_RESOURCE].get_object()
+    cid = font["/DescendantFonts"][0].get_object()
+    gids = cid["/CIDToGIDMap"].get_object().get_data()
+    assert len(gids) == 2 * 65536 and set(gids[0::2]) == {0} and set(gids[1::2]) == {1}
+    assert cid["/DW"] == 500 and "/W" not in cid
+    program = cid["/FontDescriptor"].get_object()["/FontFile2"].get_object().get_data()
+    tables = {}
+    for i in range(struct.unpack(">H", program[4:6])[0]):
+        tag, _, off, _ = struct.unpack(">4sIII", program[12 + 16 * i: 28 + 16 * i])
+        tables[tag.decode()] = off
+    units = struct.unpack(">H", program[tables["head"] + 18: tables["head"] + 20])[0]
+    assert struct.unpack(">H", program[tables["maxp"] + 4: tables["maxp"] + 6])[0] == 2  # .notdef + one
+    advance = struct.unpack(">H", program[tables["hmtx"] + 4: tables["hmtx"] + 6])[0]
+    assert advance * 1000 // units == 500

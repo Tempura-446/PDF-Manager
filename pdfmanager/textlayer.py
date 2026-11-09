@@ -13,17 +13,31 @@ Word boxes come in image pixels of the rendered page (y down, as the
 scanner saw it); ``image_to_page_matrix`` maps them back through the
 page's /Rotate and crop box into PDF user space.
 """
+import base64
 import math
 import zlib
 from dataclasses import dataclass
-from pathlib import Path
 
 from pypdf import PageObject, Transformation
 from pypdf.generic import (ArrayObject, DictionaryObject, NameObject,
                            NumberObject, StreamObject)
 
 GLYPHLESS_FONT_RESOURCE = "/FZPDFOCR"
-GLYPH_WIDTH = 500  # of 1000: every CID is half an em wide (/DW below)
+GLYPH_WIDTH = 500  # of 1000: the empty glyph is half an em wide (/DW below matches)
+
+# Tesseract's pdf.ttf (Apache License 2.0): a TrueType font of two glyphs,
+# .notdef and an empty glyph 1 that is half an em wide. 572 bytes.
+GLYPHLESS_TTF = base64.b64decode("""AAEAAAAKAIAAAwAgT1MvMlbeyJQAAAEoAAAAYGNtYXAACgA0AAABkAAAAB5nbHlmFSJBJAAAAbgA
+AAAYaGVhZAt48WUAAACsAAAANmhoZWEMAgQCAAAA5AAAACRobXR4BAAAAAAAAYgAAAAIbG9jYQAM
+AAAAAAGwAAAABm1heHAABAAFAAABCAAAACBuYW1l8usW2gAAAdAAAABLcG9zdAABAAEAAAIcAAAA
+IAABAAAAAQAAsJRxEF8PPPUEBwgAAAAAAM+a/G4AAAAA1MOn8gAAAAAEAAgAAAAAEAACAAAAAAAA
+AAEAAAgA//8AAAQAAAAAAAQAAAEAAAAAAAAAAAAAAAAAAAACAAEAAAACAAQAAQAAAAAAAQAAAAAA
+AAAAAAAAAAAAAAAAAwAAAZAABQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAQABAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAR09PRwBAAAAAAAAB//8AAAABAAGAAAAAAAAAAAAAAAAAAAABAAAAAAAABAAA
+AAAAAAIAAQAAAAAAFAADAAAAAAAUAAYACgAAAAAAAAAAAAAAAAAMAAAAAQAAAAAEAAgAAAMAADEh
+ESEEAPwACAAAAAADACoAAAADAAAABQAWAAAAAQAAAAAABQALABYAAwABBAkABQAWAAAAVgBlAHIA
+cwBpAG8AbgAgADEALgAwVmVyc2lvbiAxLjAAAAEAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAA
+AAA=""")
 
 
 @dataclass
@@ -33,12 +47,6 @@ class Word:
     text: str
     quad: list
     confidence: float = 1.0
-
-
-def _font_file():
-    import reportlab
-
-    return (Path(reportlab.__file__).parent / "fonts" / "Vera.ttf").read_bytes()
 
 
 def _stream(writer, data, **entries):
@@ -59,7 +67,7 @@ def _glyphless_font(writer):
     cached = getattr(writer, "_zpdf_ocr_font", None)
     if cached is not None:
         return cached
-    ttf = _font_file()
+    ttf = GLYPHLESS_TTF
     font_file = _stream(writer, ttf, Length1=NumberObject(len(ttf)))
     descriptor = writer._add_object(_dict(
         Type=NameObject("/FontDescriptor"), FontName=NameObject("/GlyphLessFont"),
@@ -67,18 +75,14 @@ def _glyphless_font(writer):
                                                      NumberObject(GLYPH_WIDTH), NumberObject(1000)]),
         ItalicAngle=NumberObject(0), Ascent=NumberObject(1000), Descent=NumberObject(0),
         CapHeight=NumberObject(1000), StemV=NumberObject(80), FontFile2=font_file))
-    # Every CID draws glyph 0: 65536 two-byte entries of zero.
-    cid_to_gid = _stream(writer, bytes(2 * 65536))
+    # Every CID draws glyph 1, the empty one: 65536 two-byte entries.
+    cid_to_gid = _stream(writer, b"\x00\x01" * 65536)
     descendant = writer._add_object(_dict(
         Type=NameObject("/Font"), Subtype=NameObject("/CIDFontType2"),
         BaseFont=NameObject("/GlyphLessFont"),
         CIDSystemInfo=_dict(Registry=_text("Adobe"), Ordering=_text("Identity"),
                             Supplement=NumberObject(0)),
-        FontDescriptor=descriptor, DW=NumberObject(GLYPH_WIDTH), CIDToGIDMap=cid_to_gid,
-        # A space takes no room: each word ends with one so that text
-        # extraction always splits words there, whatever the gap between
-        # their boxes on the page.
-        W=ArrayObject([NumberObject(0x20), ArrayObject([NumberObject(0)])])))
+        FontDescriptor=descriptor, DW=NumberObject(GLYPH_WIDTH), CIDToGIDMap=cid_to_gid))
     to_unicode = _stream(writer, b"\n".join([
         b"/CIDInit /ProcSet findresource begin",
         b"12 dict begin",
@@ -141,9 +145,17 @@ def image_to_page_matrix(page, image_size, dpi):
     return (1, 0, 0, 1, x0, y0)
 
 
-def _word_matrix(word, scale, display_h):
-    """Text matrix putting a 1 pt glyphless word onto the word's box, in
-    display points; None for a box with no size."""
+SPACE_SCALE = 0.01  # the space after a word is this fraction of a glyph wide
+
+
+def _word_matrices(word, scale, display_h):
+    """Two text matrices in display points: one putting the 1 pt glyphless
+    word onto the word's box (the characters fill it), one putting the
+    space that follows at the box's right edge, almost no width. None for
+    a box with no size. The space is what makes every reader split the
+    words, whatever the gap between their boxes; kept this narrow, it
+    neither overhangs the next word (pypdf then drops it) nor leaves the
+    word's own box short of its ink."""
     pts = [(x * scale, display_h - y * scale) for x, y in word.quad]
     (tlx, tly), _, (brx, bry), (blx, bly) = pts
     base_x, base_y = brx - blx, bry - bly       # along the bottom edge
@@ -154,7 +166,14 @@ def _word_matrix(word, scale, display_h):
     angle = math.atan2(base_y, base_x)
     sx = width / (len(word.text) * GLYPH_WIDTH / 1000)
     cos, sin = math.cos(angle), math.sin(angle)
-    return (sx * cos, sx * sin, -height * sin, height * cos, blx, bly)
+    word_matrix = (sx * cos, sx * sin, -height * sin, height * cos, blx, bly)
+    space_matrix = (sx * SPACE_SCALE * cos, sx * SPACE_SCALE * sin, -height * sin, height * cos, brx, bry)
+    return word_matrix, space_matrix
+
+
+def _tj(matrix, text):
+    numbers = b" ".join(f"{v:.4f}".rstrip("0").rstrip(".").encode() for v in matrix)
+    return numbers + b" Tm <" + _encode(text).hex().encode() + b"> Tj"
 
 
 def add_text_layer(writer, page, words, image_size, dpi):
@@ -168,11 +187,11 @@ def add_text_layer(writer, page, words, image_size, dpi):
     for word in words:
         if not word.text:
             continue
-        matrix = _word_matrix(word, scale, display_h)
-        if matrix is None:
+        matrices = _word_matrices(word, scale, display_h)
+        if matrices is None:
             continue
-        parts.append(b" ".join(f"{v:.4f}".rstrip("0").rstrip(".").encode() for v in matrix)
-                     + b" Tm <" + _encode(word.text + " ").hex().encode() + b"> Tj")
+        parts.append(_tj(matrices[0], word.text))
+        parts.append(_tj(matrices[1], " "))
         written += 1
     if not written:
         return 0

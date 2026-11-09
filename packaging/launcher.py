@@ -81,7 +81,10 @@ def self_test(result_file):
             try:
                 font = ImageFont.truetype("DejaVuSans.ttf", 48)
             except OSError:
-                font = ImageFont.load_default(size=48)
+                try:
+                    font = ImageFont.load_default(size=48)
+                except TypeError:  # Pillow before 10.1 has only the one small size
+                    font = ImageFont.load_default()
             ImageDraw.Draw(picture).text((40, 70), "ZPDF self-test", font=font, fill=0)
             picture.save(Path(tmp) / "scan.png", dpi=(300, 300))
             scanned = core.images_to_pdf([Path(tmp) / "scan.png"], Path(tmp) / "scan.pdf")

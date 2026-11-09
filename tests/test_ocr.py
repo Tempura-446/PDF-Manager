@@ -265,3 +265,115 @@ def test_core_ocr_passes_the_engine_through(tmp_path, monkeypatch):
     monkeypatch.setattr(ocr, "run", lambda *a, **k: seen.update(k) or tmp_path / "x.pdf")
     core.ocr(tmp_path / "a.pdf", tmp_path / "x.pdf", engine="tesseract", language="deu")
     assert seen["engine"] == "tesseract" and seen["language"] == "deu"
+
+
+# -- findings from the branch review ------------------------------------------
+
+@needs_builtin
+def test_other_pdfium_users_are_not_locked_out_while_recognising(tmp_path, monkeypatch):
+    # The app renders thumbnails and previews under the same lock; a long
+    # OCR job must not hold it while the model runs.
+    scan = clean_scan(tmp_path)
+    free = []
+
+    def recognise_checking_the_lock(image):
+        got = core.PDFIUM_LOCK.acquire(blocking=False)
+        if got:
+            core.PDFIUM_LOCK.release()
+        free.append(got)
+        return []
+
+    monkeypatch.setattr(ocr, "recognise", recognise_checking_the_lock)
+    core.ocr(scan, tmp_path / "out.pdf", engine="builtin")
+    assert free == [True]
+
+
+def test_builtin_counts_as_available_only_when_it_imports(monkeypatch):
+    import builtins
+    real_import = builtins.__import__
+
+    def failing_import(name, *args, **kwargs):
+        if name.startswith("onnxruntime"):
+            raise ImportError("DLL load failed while importing onnxruntime")
+        return real_import(name, *args, **kwargs)
+
+    ocr.reset()
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+    try:
+        assert ocr.builtin_available() is False
+    finally:
+        ocr.reset()
+
+
+@needs_builtin
+def test_engine_trouble_is_reported_plainly(tmp_path, monkeypatch):
+    scan = clean_scan(tmp_path)
+
+    def broken_engine():
+        raise RuntimeError("DLL load failed")
+
+    monkeypatch.setattr(ocr, "_engine", broken_engine)
+    for deskew in (False, True):
+        with pytest.raises(core.PdfManagerError, match="OCR failed on page 1"):
+            core.ocr(scan, tmp_path / "out.pdf", engine="builtin", deskew=deskew)
+
+
+@needs_builtin
+def test_a_model_that_will_not_load_says_how_to_fix_it(monkeypatch):
+    import rapidocr
+
+    def wont_load(*args, **kwargs):
+        raise RuntimeError("Failed to download model")
+
+    ocr.reset()
+    monkeypatch.setattr(rapidocr, "RapidOCR", wont_load)
+    try:
+        with pytest.raises(core.PdfManagerError, match=r"pip install pdf-manager\[ocr\]"):
+            ocr.recognise(ocrpages.render())
+    finally:
+        ocr.reset()
+
+
+def test_auto_leaves_other_scripts_to_tesseract(monkeypatch):
+    monkeypatch.setattr(ocr, "builtin_available", lambda: True)
+    monkeypatch.setattr(ocr, "tesseract_available", lambda: True)
+    assert ocr.choose_engine("auto", "eng+deu") == "builtin"
+    assert ocr.choose_engine("auto", "chi_sim") == "builtin"
+    assert ocr.choose_engine("auto", "rus") == "tesseract"
+    assert ocr.choose_engine("auto", "eng+ara") == "tesseract"
+    monkeypatch.setattr(ocr, "tesseract_available", lambda: False)
+    assert ocr.choose_engine("auto", "rus") == "builtin"  # the best there is
+    assert ocr.choose_engine("builtin", "rus") == "builtin"  # asked for by name
+
+
+def test_core_ocr_lets_the_language_choose_the_engine(tmp_path, monkeypatch):
+    monkeypatch.setattr(ocr, "builtin_available", lambda: True)
+    monkeypatch.setattr(ocr, "tesseract_available", lambda: True)
+    used = []
+    monkeypatch.setattr(ocr, "_run_tesseract", lambda *a, **k: used.append("tesseract"))
+    monkeypatch.setattr(ocr, "_run_builtin", lambda *a, **k: used.append("builtin"))
+    monkeypatch.setattr(ocr.os, "replace", lambda a, b: None)
+    scan = ocrpages.scan_pdf(Image.new("L", (100, 100), 255), tmp_path / "s.pdf", dpi=72)
+    core.ocr(scan, tmp_path / "o.pdf", language="rus")
+    core.ocr(scan, tmp_path / "o2.pdf", language="eng")
+    assert used == ["tesseract", "builtin"]
+
+
+@needs_builtin
+def test_chinese_is_read_and_extractable(tmp_path):
+    font = ocrpages.cjk_font()
+    if font is None:
+        pytest.skip("no Chinese font installed")
+    text = "发票号码 2024-0117\n收货人：北京市朝阳区建国路 88 号\n合计金额 176.16 元"
+    im = ocrpages.render(text, font_size=48, font_path=font)
+    scan = ocrpages.scan_pdf(im, tmp_path / "scan.pdf")
+    out = core.ocr(scan, tmp_path / "out.pdf", engine="builtin")
+    got = core.extract_text(out)
+    for word in ("发票号码", "北京市朝阳区", "合计金额", "176.16"):
+        assert word in got, got
+
+
+def test_huge_pages_are_rendered_no_larger_than_the_cap():
+    assert ocr.render_scale(595, 842) == pytest.approx(ocr.RENDER_DPI / 72)
+    scale = ocr.render_scale(5000, 7000)   # an E-size drawing
+    assert 7000 * scale <= ocr.MAX_RENDER_SIDE and 7000 * scale > ocr.MAX_RENDER_SIDE - 1

@@ -25,8 +25,9 @@ Zusammenfassung: Die Lieferung erfolgt frei Haus, Fälligkeit 14 Tage."""
 A4_300 = (2480, 3508)
 
 
-def _font(size, serif=False):
-    for name in (("DejaVuSerif.ttf", "DejaVuSans.ttf") if serif else ("DejaVuSans.ttf",)):
+def _font(size, serif=False, font_path=None):
+    names = [font_path] if font_path else (["DejaVuSerif.ttf", "DejaVuSans.ttf"] if serif else ["DejaVuSans.ttf"])
+    for name in names:
         try:
             return ImageFont.truetype(name, size)
         except OSError:
@@ -34,11 +35,23 @@ def _font(size, serif=False):
     return ImageFont.load_default(size=size)
 
 
-def render(text=TEXT, font_size=44, serif=False, size=A4_300):
+def cjk_font():
+    """A font with Chinese glyphs, if the computer has one; else None."""
+    candidates = [
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simsun.ttc", "C:/Windows/Fonts/simhei.ttf",
+        "/System/Library/Fonts/PingFang.ttc",
+    ]
+    return next((c for c in candidates if Path(c).exists()), None)
+
+
+def render(text=TEXT, font_size=44, serif=False, size=A4_300, font_path=None):
     """The text as a clean 300 dpi scan (greyscale)."""
     im = Image.new("L", size, 255)
     draw = ImageDraw.Draw(im)
-    font = _font(font_size, serif)
+    font = _font(font_size, serif, font_path)
     y = 300
     for line in text.splitlines():
         draw.text((250, y), line, font=font, fill=0)

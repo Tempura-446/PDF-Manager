@@ -29,7 +29,11 @@ per page on a CPU (1 to 2 s against 0.5 s on a 4-core box).
 - **Tesseract stays** as a second engine (through OCRmyPDF, as now), for
   people who have it and for PDF/A output straight from OCR.
 - An **engine choice** in the GUI, CLI and watch folder: `auto` (built-in
-  when installed, else Tesseract), `builtin`, `tesseract`.
+  when installed, else Tesseract), `builtin`, `tesseract`. With `auto`, a
+  language the built-in model does not read (Russian, Arabic, Korean, Thai
+  and other scripts, by Tesseract code) goes to Tesseract when it is
+  installed, so a 0.13 recipe or watch folder with `language=rus` keeps
+  giving Russian.
 - A **regression benchmark** in the tests: synthetic pages with known text,
   asserting error-rate ceilings for the built-in engine.
 
@@ -113,9 +117,10 @@ core.ocr(path, output, language, force, deskew, password, engine="auto")
   generic objects (no reportlab): Identity-H encoding, each character's
   CID is its UCS-2 code (characters outside the BMP become U+FFFD), a
   ToUnicode CMap that maps the whole range to itself, a CIDToGIDMap sending
-  every CID to glyph 0, default width 500, and reportlab's bundled Vera.ttf
-  embedded as the font file so the font is embedded (PDF/A conversion later
-  keeps working). Checked: reportlab's own TrueType embedding gives nulls
+  every CID to glyph 1 (the empty glyph, half an em wide) of Tesseract's
+  572-byte pdf.ttf (Apache 2.0) embedded as the font file, default width
+  500 and no /W override, so PDF/A conversion later keeps working: no text
+  uses .notdef and the widths agree with the font program. Checked: reportlab's own TrueType embedding gives nulls
   for glyphs the font lacks, and the reader does not ship pdf.js's
   predefined CMaps, so non-embedded CID fonts would not extract there.
   This is what Tesseract's PDF renderer does.

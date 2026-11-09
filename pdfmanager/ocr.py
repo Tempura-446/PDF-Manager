@@ -26,6 +26,15 @@ __all__ = ["Word", "Line", "ENGINES", "choose_engine", "recognise", "reading_ord
 ENGINES = ("auto", "builtin", "tesseract")
 MIN_CONFIDENCE = 0.3   # words and lines the model is less sure of than this are dropped
 RENDER_DPI = 300
+MAX_RENDER_SIDE = 6000  # pixels; a 300 dpi A0 drawing would be 14000 and gain nothing (the model works at 2000)
+
+# Tesseract's codes for the languages the built-in model reads. With engine
+# "auto", a language outside this set goes to Tesseract when it is there.
+BUILTIN_LANGUAGES = frozenset("""
+    afr aze bos cat ces chi_sim chi_tra cym dan deu eng est eus fin fra gle glg hrv hun ind isl
+    ita jpn kur lat lav lit ltz mlt mri msa nld nor oci pol por que roh ron slk slv spa sqi srp_latn
+    swa swe tgl tur uzb vie equ osd
+""".split())
 MIN_SKEW = 0.3         # degrees; smaller tilts are left alone
 MIN_SKEW_BOXES = 3     # wide text boxes needed to trust a skew estimate
 
@@ -41,21 +50,40 @@ class Line:
     words: list
 
 
+_builtin_imports = None  # None: not tried yet
+
+
 def builtin_available():
-    return all(importlib.util.find_spec(name) for name in ("rapidocr", "onnxruntime"))
+    """Whether the built-in engine can be used: its packages import. (A
+    package that is installed but broken, like onnxruntime without its
+    runtime library on Windows, counts as missing, so "auto" can turn to
+    Tesseract.)"""
+    global _builtin_imports
+    if _builtin_imports is None:
+        try:
+            import onnxruntime
+            import rapidocr
+
+            _builtin_imports = bool(onnxruntime and rapidocr)
+        except Exception:
+            _builtin_imports = False
+    return _builtin_imports
 
 
 def tesseract_available():
     return bool(importlib.util.find_spec("ocrmypdf")) and bool(scan.find_tesseract())
 
 
-def choose_engine(engine):
+def choose_engine(engine, language="eng"):
     """'builtin' or 'tesseract' for ``engine`` (one of ENGINES), or a
-    PdfManagerError saying what to install."""
+    PdfManagerError saying what to install. ``language`` (Tesseract codes)
+    matters for "auto": a script the built-in model cannot read, such as
+    Russian or Arabic, goes to Tesseract when it is installed."""
     if engine not in ENGINES:
         raise core.PdfManagerError(f"unknown OCR engine {engine!r}; choose auto, builtin or tesseract")
     if engine == "auto":
-        if builtin_available():
+        wanted = {code.strip() for code in (language or "").split("+") if code.strip()}
+        if builtin_available() and (wanted <= BUILTIN_LANGUAGES or not tesseract_available()):
             return "builtin"
         if tesseract_available():
             return "tesseract"
@@ -73,7 +101,8 @@ def choose_engine(engine):
 
 # -- the built-in engine -------------------------------------------------------
 
-_engine_lock = threading.Lock()
+_engine_lock = threading.Lock()   # building the instance
+_call_lock = threading.Lock()     # using it: it keeps the last call's settings
 _engine_instance = None
 
 
@@ -82,19 +111,25 @@ def _engine():
     global _engine_instance
     with _engine_lock:
         if _engine_instance is None:
-            from rapidocr import RapidOCR
+            try:
+                from rapidocr import RapidOCR
 
-            _engine_instance = RapidOCR(params={"Global.return_word_box": True})
+                _engine_instance = RapidOCR(params={"Global.return_word_box": True})
+            except Exception as exc:  # a broken install, or model files missing from a build
+                raise core.PdfManagerError(
+                    "OCR's built-in engine could not start; reinstall it (pip install "
+                    f"pdf-manager[ocr]) or choose the Tesseract engine ({exc})") from None
             # It announces every model it loads; only trouble is worth hearing.
             logging.getLogger("RapidOCR").setLevel(logging.WARNING)
         return _engine_instance
 
 
 def reset():
-    """Forget the loaded engine (tests)."""
-    global _engine_instance
+    """Forget the loaded engine and what was learnt about its install (tests)."""
+    global _engine_instance, _builtin_imports
     with _engine_lock:
         _engine_instance = None
+        _builtin_imports = None
 
 
 def _array(image):
@@ -111,7 +146,9 @@ def recognise(image):
     """The lines of text in a PIL image, each with its words."""
     # Every switch is named each time: the engine keeps the last call's
     # settings, and skew_angle() runs it with the detector alone.
-    result = _engine()(_array(image), use_det=True, use_cls=True, use_rec=True)
+    engine = _engine()
+    with _call_lock:
+        result = engine(_array(image), use_det=True, use_cls=True, use_rec=True)
     if not result.txts:
         return []
     lines = []
@@ -119,15 +156,44 @@ def recognise(image):
     for text, box, score, found in zip(result.txts, result.boxes, result.scores, word_results):
         if score < MIN_CONFIDENCE or not text.strip():
             continue
-        words = [Word(w_text, _quad(w_box), float(w_score))
-                 for w_text, w_score, w_box in (found or ())
-                 if w_text.strip() and w_score >= MIN_CONFIDENCE]
-        if not found:
-            words = [Word(text, _quad(box), float(score))]
+        words = _words(text, found) if found else [Word(text, _quad(box), float(score))]
         if not words:
             continue
         lines.append(Line(text, _quad(box), float(score), words))
     return reading_order(lines)
+
+
+def _words(text, found):
+    """The words of a line from the model's word boxes. For Latin text the
+    model gives one box per word (and splits words better than its own line
+    text, which can lose a space on a rough scan); for Chinese and Japanese
+    it gives one box per character. So single-character pieces are joined
+    into a word until the line's text puts a space between them, and a
+    piece of several characters is always a word of its own."""
+    pieces = [(w_text.strip(), _quad(w_box), float(w_score)) for w_text, w_score, w_box in found if w_text.strip()]
+    if "".join(piece[0] for piece in pieces) != text.replace(" ", ""):
+        return [Word(*piece) for piece in pieces if piece[2] >= MIN_CONFIDENCE]
+    words, pos, run = [], 0, False   # run: the last word is joined single characters
+    for piece_text, quad, score in pieces:
+        space_before = False
+        while pos < len(text) and text[pos] == " ":
+            space_before, pos = True, pos + 1
+        pos += len(piece_text)
+        if words and run and not space_before and len(piece_text) == 1:
+            last = words[-1]
+            words[-1] = Word(last.text + piece_text, _union([last.quad, quad]), min(last.confidence, score))
+        else:
+            words.append(Word(piece_text, quad, score))
+            run = len(piece_text) == 1
+    return [w for w in words if w.confidence >= MIN_CONFIDENCE]
+
+
+def _union(quads):
+    """One box around several boxes on a line: the first's left edge, the
+    last's right edge."""
+    quads = list(quads)
+    first, last = quads[0], quads[-1]
+    return [first[0], last[1], last[2], first[3]]
 
 
 def _vertical_extent(quad):
@@ -169,7 +235,9 @@ def skew_angle(image):
     """How far the text in ``image`` tilts, in degrees (positive: it rises
     to the right); 0.0 when it is straight or there is too little text to
     tell. Only the text detector runs, so this is quick."""
-    boxes = _engine()(_array(image), use_det=True, use_cls=False, use_rec=False).boxes
+    engine = _engine()
+    with _call_lock:
+        boxes = engine(_array(image), use_det=True, use_cls=False, use_rec=False).boxes
     if boxes is None:
         return 0.0
     angles = []
@@ -200,7 +268,7 @@ def run(path, output, language="eng", force=False, deskew=False, password=None, 
     ``core.ocr``."""
     from pdfmanager import progress
 
-    chosen = choose_engine(engine)
+    chosen = choose_engine(engine, language)
     source = Path(path)
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -243,6 +311,13 @@ def _run_tesseract(source, output, language, force, deskew):
         raise core.PdfManagerError(f"OCR failed: {exc}") from None
 
 
+def render_scale(width_pt, height_pt):
+    """Pixels per point for recognising a page of this size: 300 dpi, or
+    less for a page whose long side would pass MAX_RENDER_SIDE pixels."""
+    longest = max(width_pt, height_pt, 1)
+    return min(RENDER_DPI / 72, MAX_RENDER_SIDE / longest)
+
+
 def _run_builtin(source, output, force, deskew):
     import pypdfium2 as pdfium
     from PIL import Image
@@ -252,16 +327,23 @@ def _run_builtin(source, output, force, deskew):
 
     writer = PdfWriter(clone_from=str(source))
     rasterised = False
+    # The pdfium lock is held only to open the file and render a page: the
+    # app's thumbnails and previews wait on it too, and recognising a page
+    # takes a second or two.
     with core.PDFIUM_LOCK:
         doc = pdfium.PdfDocument(str(source))
-        try:
-            total = len(doc)
-            for i in range(total):
-                progress.report(i, total, "page")
-                page = writer.pages[i]
-                if not force and page_has_text(page):
-                    continue
-                image = doc[i].render(scale=RENDER_DPI / 72).to_pil()
+    try:
+        total = len(doc)
+        for i in range(total):
+            progress.report(i, total, "page")
+            page = writer.pages[i]
+            if not force and page_has_text(page):
+                continue
+            with core.PDFIUM_LOCK:
+                pdfium_page = doc[i]
+                scale = render_scale(pdfium_page.get_width(), pdfium_page.get_height())
+                image = pdfium_page.render(scale=scale).to_pil()
+            try:
                 if deskew:
                     angle = skew_angle(image)
                     if angle:
@@ -269,17 +351,19 @@ def _run_builtin(source, output, force, deskew):
                         # the words and the page stay in step.
                         image = image.rotate(-angle, resample=Image.BICUBIC, fillcolor="white")
                         _turn_page(page, -angle, Transformation)
-                try:
-                    lines = recognise(image)
-                except Exception as exc:  # ONNX Runtime trouble: say which page
-                    raise core.PdfManagerError(f"OCR failed on page {i + 1}: {exc}") from None
-                if force:
-                    _rasterise(writer, page, image)
-                    rasterised = True
-                words = [w for line in lines for w in line.words]
-                if words:
-                    textlayer.add_text_layer(writer, page, words, image.size, RENDER_DPI)
-        finally:
+                lines = recognise(image)
+            except progress.Cancelled:
+                raise
+            except Exception as exc:  # engine trouble: say which page
+                raise core.PdfManagerError(f"OCR failed on page {i + 1}: {exc}") from None
+            if force:
+                _rasterise(writer, page, image, scale)
+                rasterised = True
+            words = [w for line in lines for w in line.words]
+            if words:
+                textlayer.add_text_layer(writer, page, words, image.size, scale * 72)
+    finally:
+        with core.PDFIUM_LOCK:
             doc.close()
     writer.write(str(output))
     if rasterised:
@@ -307,7 +391,7 @@ def _turn_page(page, angle, Transformation):
     page.add_transformation(Transformation().translate(-cx, -cy).rotate(angle).translate(cx, cy))
 
 
-def _rasterise(writer, page, image):
+def _rasterise(writer, page, image, scale):
     """Replace the page's content with ``image`` (its render), dropping
     whatever text layer it had, so a wrong one is not kept beside the new.
     The page keeps its boxes, /Rotate and annotations: the picture is drawn
@@ -344,7 +428,7 @@ def _rasterise(writer, page, image):
     xobj[NameObject("/Width")] = NumberObject(image.width)
     xobj[NameObject("/Height")] = NumberObject(image.height)
     display_w, display_h = textlayer._display_size(page)
-    to_page = textlayer.image_to_page_matrix(page, image.size, RENDER_DPI)
+    to_page = textlayer.image_to_page_matrix(page, image.size, scale * 72)
     ctm = Transformation().scale(display_w, display_h).transform(Transformation(to_page)).ctm
     content = StreamObject()
     content.set_data(("q " + " ".join(f"{v:.4f}" for v in ctm) + " cm /Im0 Do Q").encode())
