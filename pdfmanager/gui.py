@@ -372,6 +372,24 @@ OPERATIONS = [
                 _f("format", "Format", "select", "xlsx",
                    choices=[["xlsx", "Excel workbook (.xlsx)"], ["csv", "CSV files (zip)"]],
                    hint="A table that continues on the next page is kept as one table.")]},
+    # -- pptx and html --
+    {"id": "to-pptx", "group": "Convert", "label": "PDF → PowerPoint", "files": "pdf",
+     "help": "Turn PDFs into PowerPoint slides (.pptx), one slide per page. No PowerPoint "
+             "needed.",
+     "fields": [_f("mode", "Slides", "select", "editable",
+                   choices=[["editable", "Editable text"], ["pictures", "Pictures of the pages"]],
+                   hint="Editable text: the text becomes text boxes you can change, over the "
+                        "page's pictures and drawings."),
+                _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
+    {"id": "to-html", "group": "Convert", "label": "PDF → HTML", "files": "pdf",
+     "help": "Turn PDFs into a web page (.html) that opens in any browser. Pictures are "
+             "inside the file.",
+     "fields": [_f("mode", "Layout", "select", "flowing",
+                   choices=[["flowing", "Flowing text"], ["exact", "Exact layout"]],
+                   hint="Flowing text fits any screen: headings, paragraphs, lists, tables and "
+                        "pictures. Exact layout keeps each page as it looks."),
+                _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
+    # -- end of pptx and html --
     {"id": "from-office", "group": "Convert", "label": "Office → PDF", "files": "office",
      "help": "Convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF. "
              "Uses Microsoft Office if installed, otherwise LibreOffice.",
@@ -712,6 +730,25 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                          "result, install Microsoft Word.")
     elif op == "to-excel":
         return _to_excel(src, out_dir, opts, password, notes)
+    # -- pptx and html --
+    elif op == "to-pptx":
+        from pdfmanager import slides
+
+        mode = opts.get("mode") or "editable"
+        if mode not in slides.MODES:
+            raise UserError(f"unknown kind of slides {mode!r}")
+        out = out_dir / f"{src.stem}.pptx"
+        made = slides.pdf_to_pptx(src, out, password, _pages(opts), mode=mode)
+        notes.append(f"{src.name}: {made['slides']} slide{'s' if made['slides'] != 1 else ''}")
+    elif op == "to-html":
+        from pdfmanager import webpage
+
+        mode = opts.get("mode") or "flowing"
+        if mode not in webpage.MODES:
+            raise UserError(f"unknown layout {mode!r}")
+        out = out_dir / f"{src.stem}.html"
+        webpage.pdf_to_html(src, out, password, _pages(opts), mode=mode)
+    # -- end of pptx and html --
     elif op == "from-office":
         out = out_dir / f"{src.stem}.pdf"
         office.office_to_pdf(src, out)
@@ -890,6 +927,11 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
         ctype = {".txt": "text/plain; charset=utf-8",
                  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                 # -- pptx and html --
+                 ".pptx": "application/vnd.openxmlformats-officedocument.presentationml."
+                          "presentation",
+                 ".html": "text/html; charset=utf-8",
+                 # -- end of pptx and html --
                  }.get(path.suffix, "application/pdf")
         return path.name, path.read_bytes(), ctype
     buf = io.BytesIO()
