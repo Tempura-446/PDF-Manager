@@ -186,6 +186,8 @@ nav {
 .dlg-status { min-height: 1.3em; font-size: 13px !important; color: var(--ok); }
 .dlg-status.err { color: var(--err); }
 .dlg-buttons { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.text-dialog { width: min(760px, calc(100vw - 32px)); }
+.text-dialog pre { margin: 0; max-height: min(60vh, 560px); overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .link-btn { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .link-btn:hover { color: var(--accent-hover); }
 .mobile-picker { display: none; }
@@ -800,16 +802,33 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
     <label class="dlg-field"><span>GitHub repository</span><input type="text" id="set-repo" spellcheck="false" autocomplete="off" placeholder="owner/name"></label>
     <label class="dlg-field"><span>GitHub token <em id="set-token-state"></em></span>
       <input type="password" id="set-token" autocomplete="off" spellcheck="false" placeholder="paste a token to change it"></label>
-    <p class="dlg-hint">The repository is private, so checking for updates needs a token that can read it:
-      on GitHub, <em>Settings → Developer settings → Fine-grained tokens</em>, give it access to this repository
+    <p class="dlg-hint">New versions come from ZPDF's releases on GitHub (Tempura-446/ZPDF-releases): nothing to set up.
+      The token is only for a development copy that follows the private repository (Tempura-446/PDF-Manager):
+      on GitHub, <em>Settings → Developer settings → Fine-grained tokens</em>, give it access to that repository
       with <em>Contents: Read-only</em>. It's kept on this computer only.
       <button type="button" class="link-btn" id="set-token-clear">Forget the token</button></p>
+    <h3>About</h3>
+    <p class="dlg-hint">ZPDF is shared with friends under the PolyForm Internal Use License 1.0.0, with personal use
+      added: use it at home or at work and change it for your own use, but don't pass it on. It comes as is,
+      without warranty. <button type="button" class="link-btn" id="show-licence">Licence</button> ·
+      <button type="button" class="link-btn" id="show-notices">Third-party notices</button></p>
     <p class="dlg-status" id="set-status" aria-live="polite"></p>
     <div class="dlg-buttons">
       <button type="button" class="btn secondary" id="set-check-now">Check now</button>
       <span style="flex:1"></span>
       <button type="button" class="btn secondary" value="cancel" id="set-cancel">Close</button>
       <button type="submit" class="btn" id="set-save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="app-dialog text-dialog" id="text-dialog" aria-labelledby="text-title">
+  <form method="dialog">
+    <h2 id="text-title"></h2>
+    <pre id="text-body" tabindex="0"></pre>
+    <div class="dlg-buttons">
+      <span style="flex:1"></span>
+      <button type="submit" class="btn" id="text-close">Close</button>
     </div>
   </form>
 </dialog>
@@ -2149,6 +2168,16 @@ async function saveSettings() {
   return s;
 }
 $("settings-btn").addEventListener("click", () => openSettings().catch((e) => showError(e.message)));
+async function showText(title, path) {
+  $("text-title").textContent = title;
+  $("text-body").textContent = "Loading…";
+  $("text-dialog").showModal();
+  try { $("text-body").textContent = await (await api(path)).text(); }
+  catch (e) { $("text-body").textContent = "Couldn't load it: " + e.message; }
+  $("text-body").scrollTop = 0;
+}
+$("show-licence").addEventListener("click", () => showText("Licence", "/api/licence"));
+$("show-notices").addEventListener("click", () => showText("Third-party notices", "/api/notices"));
 $("set-cancel").addEventListener("click", () => $("settings-dialog").close());
 $("settings-form").addEventListener("submit", async (e) => {
   e.preventDefault();

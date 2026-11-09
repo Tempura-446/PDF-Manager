@@ -909,10 +909,12 @@ def test_windows_shortcuts_and_registry_for_real(tmp_path, monkeypatch):
 # -- updates --------------------------------------------------------------------------------------
 
 class FakeGitHub:
-    """Answers update.py's requests like GitHub's API."""
+    """Answers update.py's requests like GitHub's API: the development
+    repository's branch, and the releases repository's published releases."""
 
     def __init__(self, version="9.0.0", status=200, zipball=b""):
         self.version, self.status, self.zipball, self.requests = version, status, zipball, []
+        self.release_zip, self.release_sha = b"zip", None  # None: the zip's real checksum
 
     real = staticmethod(urllib.request.urlopen)
 
@@ -931,6 +933,21 @@ class FakeGitHub:
             body = f'"""ZPDF."""\n\n__version__ = "{self.version}"\n'.encode()
         elif url.endswith("/zipball/main"):
             body = self.zipball
+        elif url.endswith("/repos/Tempura-446/ZPDF-releases/releases/latest"):
+            name = f"ZPDF-{self.version}-windows.zip"
+            body = json.dumps({"tag_name": f"v{self.version}", "assets": [
+                {"name": name, "url": "https://api.github.com/repos/Tempura-446/ZPDF-releases/releases/assets/1"},
+                {"name": name + ".sha256",
+                 "url": "https://api.github.com/repos/Tempura-446/ZPDF-releases/releases/assets/2"},
+                {"name": "notes.txt", "url": "https://api.github.com/repos/Tempura-446/ZPDF-releases/releases/assets/3"},
+            ]}).encode()
+        elif url.endswith("/releases/assets/1"):
+            assert req.headers.get("Accept") == "application/octet-stream"
+            body = self.release_zip
+        elif url.endswith("/releases/assets/2"):
+            import hashlib
+            digest = self.release_sha or hashlib.sha256(self.release_zip).hexdigest()
+            body = f"{digest}  ZPDF-{self.version}-windows.zip\n".encode()
         else:
             raise AssertionError(url)
         return io.BytesIO(body)
@@ -950,6 +967,7 @@ def test_update_check(updates):
     from pdfmanager import __version__
 
     update, github = updates
+    update.save_settings(update_repo=update.REPO)  # a development copy follows the private repository
     info = update.check()
     assert info["current"] == __version__ and info["latest"] == "9.0.0" and info["available"]
     assert info["error"] is None and info["how"] == "source"  # this test runs from a checkout
@@ -978,6 +996,7 @@ def test_update_install(updates, tmp_path, monkeypatch):
     import zipfile
 
     update, github = updates
+    update.save_settings(update_repo=update.REPO)  # a development copy follows the private repository
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("Tempura-446-PDF-Manager-abc123/pyproject.toml", "[project]\n")
@@ -1018,12 +1037,17 @@ def test_settings_and_update_endpoints(app, updates):
     base, token, srv = app
     update, github = updates
     status, _, data = call(base, token, "/api/settings")
-    assert status == 200 and json.loads(data) == {"repo": "Tempura-446/PDF-Manager", "token_set": False,
+    assert status == 200 and json.loads(data) == {"repo": "Tempura-446/ZPDF-releases", "token_set": False,
                                                  "check": True, "how": "source"}
     status, _, data = call(base, token, "/api/settings", {"token": "ghp_x", "check": False})
     assert json.loads(data)["token_set"] and "ghp_x" not in data.decode()
     assert update.settings()["github_token"] == "ghp_x" and update.settings()["check_updates"] is False
     assert call(base, token, "/api/settings", {"repo": "not a repo"})[0] == 400
+    # a development copy can follow the private repository, and go back to releases
+    call(base, token, "/api/settings", {"repo": "Tempura-446/PDF-Manager"})
+    assert update.settings()["update_repo"] == "Tempura-446/PDF-Manager"
+    call(base, token, "/api/settings", {"repo": "Tempura-446/ZPDF-releases"})
+    assert "update_repo" not in update.settings()
     call(base, token, "/api/settings", {"clear_token": True, "check": True})
     assert "github_token" not in update.settings() and "check_updates" not in update.settings()
     status, _, data = call(base, token, "/api/update/check", {})
@@ -1031,6 +1055,57 @@ def test_settings_and_update_endpoints(app, updates):
     assert info["available"] and info["latest"] == "9.0.0" and info["can_restart"] is False
     status, _, data = call(base, token, "/api/update/restart", {})
     assert status == 400 and "open it again" in json.loads(data)["error"]
+
+
+def _release_zip(version="9.0.0"):
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(f"ZPDF-{version}/pyproject.toml", "[project]\n")
+        zf.writestr(f"ZPDF-{version}/Install ZPDF.cmd", "@echo off\n")
+    return buf.getvalue()
+
+
+def test_updates_follow_published_releases(updates):
+    """Friends' copies need no GitHub account: the newest release on the
+    public releases repository is the newest version."""
+    update, github = updates
+    info = update.check()
+    assert info["latest"] == "9.0.0" and info["available"] and info["error"] is None
+    assert all("ZPDF-releases" in r.full_url for r in github.requests)
+    assert all("Authorization" not in r.unredirected_hdrs for r in github.requests)
+
+
+def test_no_release_yet_is_said_plainly(updates):
+    update, github = updates
+    github.status = 404
+    info = update.check(force=True)
+    assert not info["available"] and "no release" in info["error"] and "token" not in info["error"]
+
+
+def test_update_installs_the_release_after_checking_it(updates, monkeypatch):
+    update, github = updates
+    github.release_zip = _release_zip()
+    monkeypatch.setattr(update, "how_installed", lambda: "pip")
+    monkeypatch.setattr(update, "_has_pywebview", lambda: True)
+    ran = []
+
+    def fake_run(cmd, **kw):
+        project = Path(cmd[-1].replace("[app,ocr]", ""))
+        assert (project / "pyproject.toml").exists() and project.name == "ZPDF-9.0.0"
+        ran.append(cmd)
+        return type("Done", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(update.subprocess, "run", fake_run)
+    assert update.install(python="py") == "9.0.0"
+    assert ran and ran[-1][-1].endswith("[app,ocr]")
+    # a download whose checksum doesn't match the published one is refused
+    github.release_sha = "0" * 64
+    ran.clear()
+    with pytest.raises(core.PdfManagerError, match="damaged"):
+        update.install(python="py")
+    assert not ran
 
 
 def test_restart_ends_the_wait():
