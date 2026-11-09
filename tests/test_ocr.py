@@ -207,6 +207,37 @@ def test_deskew_straightens_a_crooked_scan(tmp_path):
 
 
 @needs_builtin
+def test_deskew_works_on_a_page_stored_sideways(tmp_path):
+    # Scanners often store the picture sideways and set /Rotate so it shows
+    # upright; the crooked text must still come out straight.
+    im = ocrpages.render().rotate(2.0, resample=Image.BICUBIC, fillcolor=255)
+    scan = ocrpages.scan_pdf(im.rotate(90, expand=True), tmp_path / "scan.pdf")
+    w = PdfWriter(clone_from=str(scan))
+    w.pages[0].rotate(90)
+    turned = tmp_path / "turned.pdf"
+    w.write(turned)
+    out = core.ocr(turned, tmp_path / "out.pdf", engine="builtin", deskew=True)
+    assert "Northwind" in core.extract_text(out)
+    import pypdfium2 as pdfium
+    doc = pdfium.PdfDocument(str(out))
+    page_im = doc[0].render(scale=1).to_pil().convert("L")
+    doc.close()
+    assert ocr.skew_angle(page_im) == 0.0
+
+
+@needs_builtin
+def test_the_engine_is_quiet(tmp_path):
+    import subprocess
+    import sys
+    scan = clean_scan(tmp_path)
+    run = subprocess.run([sys.executable, "-c",
+                          "from pdfmanager import core; import sys; core.ocr(sys.argv[1], sys.argv[2], engine='builtin')",
+                          str(scan), str(tmp_path / "out.pdf")], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    assert "INFO" not in run.stderr and "INFO" not in run.stdout
+
+
+@needs_builtin
 def test_builtin_opens_encrypted_input(tmp_path):
     locked = core.encrypt(clean_scan(tmp_path), tmp_path / "locked.pdf", "pw")
     out = core.ocr(locked, tmp_path / "out.pdf", engine="builtin", password="pw")

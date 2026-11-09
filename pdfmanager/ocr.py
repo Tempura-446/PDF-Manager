@@ -299,15 +299,12 @@ def _drop_unused_objects(path):
 
 
 def _turn_page(page, angle, Transformation):
-    """Rotate the page's content by ``angle`` degrees (counter-clockwise)
-    about the centre of its crop box, in display orientation."""
+    """Rotate the page's content by ``angle`` degrees (counter-clockwise as
+    displayed) about the centre of its crop box. Turning the displayed page
+    is the same turn of its content whatever /Rotate says: rotations add up."""
     box = page.cropbox
     cx, cy = (float(box.left) + float(box.right)) / 2, (float(box.bottom) + float(box.top)) / 2
-    # A counter-clockwise turn of the displayed page is the same turn of the
-    # page's own content for 0 and 180 degrees of /Rotate, the opposite one
-    # for 90 and 270 (the display axes are swapped).
-    turn = angle if (page.rotation or 0) % 180 == 0 else -angle
-    page.add_transformation(Transformation().translate(-cx, -cy).rotate(turn).translate(cx, cy))
+    page.add_transformation(Transformation().translate(-cx, -cy).rotate(angle).translate(cx, cy))
 
 
 def _rasterise(writer, page, image):
