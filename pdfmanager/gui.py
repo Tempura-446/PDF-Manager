@@ -1563,6 +1563,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._form_fields(body)
             if path == "/api/form/detect":
                 return self._form_detect(body)
+            if path == "/api/form/fillable":
+                return self._form_fillable(body)
             if path == "/api/text/edit":
                 return self._text_edit(body)
             if path == "/api/pages/arrange":
@@ -1807,8 +1809,37 @@ class Handler(BaseHTTPRequestHandler):
         with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
             path = Path(tmp) / "file.pdf"
             path.write_bytes(uploads[0][2])
-            found = formdetect.detect(path, fields.get("password") or None)
+            pages = None
+            if fields.get("pages"):  # e.g. "1-2": the reader's quick look at the first pages
+                try:
+                    first, _, last = fields["pages"].partition("-")
+                    pages = range(int(first), int(last or first) + 1)
+                except ValueError:
+                    raise UserError("pages should look like 1-2") from None
+            found = formdetect.detect(path, fields.get("password") or None, pages=pages)
         return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})
+
+    def _form_fillable(self, body):
+        """The reader's "Make it fillable": the fields of a printed form added
+        to it; sends back the changed PDF (X-Pdfm-Fields: how many)."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "fillable.pdf"
+            src.write_bytes(uploads[0][2])
+            found = formdetect.detect(src, password)
+            if not found:
+                raise UserError("no fields found: this page has no lines, boxes or tick boxes to "
+                                "fill in. Add form fields lets you draw them")
+            forms.add_fields(src, out, [{**f, "page": page} for page, items in found.items()
+                                        for f in items], password=password)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)  # stays protected
+            data = out.read_bytes()
+        places = sum(len(items) for items in found.values())  # (a radio group: each button)
+        return self._send(HTTPStatus.OK, data, "application/pdf", {"X-Pdfm-Fields": str(places)})
 
     def _save_settings(self, body):
         data = json.loads(body or b"{}")

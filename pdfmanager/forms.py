@@ -320,6 +320,7 @@ def add_fields(path, output, fields, border=True, font_size=0, password=None):
                         NameObject("/FT"): NameObject("/Btn"),
                         NameObject("/Ff"): NumberObject(RADIO | NO_TOGGLE_OFF | flags),
                         NameObject("/T"): TextStringObject(name),
+                        NameObject("/TU"): TextStringObject(name),  # what screen readers say
                         NameObject("/V"): NameObject("/Off"),
                         NameObject("/Kids"): ArrayObject(),
                     })
@@ -346,6 +347,7 @@ def add_fields(path, output, fields, border=True, font_size=0, password=None):
             name = _unique(field.get("name"), taken, TYPES[kind])
             names.append(name)
             widget[NameObject("/T")] = TextStringObject(name)
+            widget[NameObject("/TU")] = TextStringObject(name)  # what screen readers say
             if kind in ("text", "multiline"):
                 size = font_size or (10 if kind == "multiline" else 0)
                 flags |= MULTILINE if kind == "multiline" else 0

@@ -248,7 +248,9 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   Ctrl/⌘ + mouse wheel or pinch to zoom around the pointer.
 - **Find** (Ctrl+F) with highlighting, match case and whole words.
 - **Select and copy text**; links work (web links open in your browser).
-- **Fill in forms** and save a copy with your entries.
+- **Fill in forms** and save a copy with your entries. A printed form with
+  nothing to type in (lines, boxes and tick boxes only) gets a bar offering
+  **Make it fillable**, which adds its fields right there (also in *Tools*).
 - **Annotate and sign** (Tools → Annotate & sign): highlight, underline
   or strike out text, add **notes** (click, type your comment), add text,
   draw, draw **shapes** (rectangle, ellipse, revision cloud, arrow, line;

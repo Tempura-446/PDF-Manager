@@ -452,3 +452,28 @@ def test_pdf_and_xmp_dates_compare():
     assert same(pdfacheck._pdf_date("D:20240102020405Z"), pdfacheck._xmp_date("2024-01-02T02:04:05.5Z"))
     assert not same(pdfacheck._pdf_date("D:20240102"), pdfacheck._xmp_date("2024-01-03"))
     assert pdfacheck._xmp_date("soon") is None and pdfacheck._pdf_date("D:2024") is not None
+
+
+def test_reader_makes_a_printed_form_fillable(tmp_path, app):
+    src = make_form(tmp_path / "form.pdf")
+    base, token, _ = app
+    body, headers = multipart({"password": "", "pages": "1-2"}, [("file", src)])
+    status, _, res = call(base, token, "/api/form/detect", body, headers)
+    assert status == 200 and len(json.loads(res)["fields"]["1"]) >= 10
+
+    body, headers = multipart({"password": ""}, [("file", src)])
+    status, _, data = call(base, token, "/api/form/fillable", body, headers)
+    assert status == 200 and data[:5] == b"%PDF-"
+    out = tmp_path / "fillable.pdf"
+    out.write_bytes(data)
+    fields = PdfReader(out).get_fields()
+    assert fields["Full name"]["/TU"] == "Full name"  # what screen readers say
+    assert "Comments" in fields
+
+    blank = tmp_path / "blank.pdf"
+    c = canvas.Canvas(str(blank))
+    c.drawString(72, 700, "Just a letter.")
+    c.save()
+    body, headers = multipart({"password": ""}, [("file", blank)])
+    status, _, res = call(base, token, "/api/form/fillable", body, headers)
+    assert status == 400 and "no fields found" in json.loads(res)["error"]

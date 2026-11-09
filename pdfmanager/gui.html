@@ -205,7 +205,7 @@ main > .action-bar { max-width: none; width: auto; }
 
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px 22px; margin-bottom: 16px; }
 .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-.card-head h3 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.005em; }
+.card-head h2, .card-head h3 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.005em; }
 .card-head .sub { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 
 /* Drop zone */
@@ -570,11 +570,13 @@ td { word-break: break-all; }
 .home-drop strong { font-size: 14px; }
 .home h2 { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin: 4px 0 12px; }
 .home-recent { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
-.home-recent li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); cursor: pointer; transition: box-shadow var(--t), transform var(--t), border-color var(--t); min-width: 0; }
-.home-recent li:hover { box-shadow: var(--shadow-lift); transform: translateY(-1px); border-color: var(--border-strong); }
+.home-recent li { min-width: 0; display: flex; }
+.home-recent .recent-item { flex: 1; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); cursor: pointer; transition: box-shadow var(--t), transform var(--t), border-color var(--t); min-width: 0; font: inherit; color: inherit; text-align: left; }
+.home-recent .recent-item:hover { box-shadow: var(--shadow-lift); transform: translateY(-1px); border-color: var(--border-strong); }
+.home-recent .recent-item:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .home-recent .ricon { width: 36px; height: 36px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; flex: none; }
-.home-recent .rname { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.home-recent .rsub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.home-recent .rname { display: block; font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.home-recent .rsub { display: block; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .home-recent .rbody { min-width: 0; flex: 1; }
 .home-group { margin-bottom: 24px; }
 .home-group-title { margin: 0 0 10px; font-size: 16px; font-weight: 600; color: var(--text); }
@@ -706,7 +708,7 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
 
     <section class="card" id="files-card">
       <div class="card-head">
-        <h3>Files</h3>
+        <h2>Files</h2>
         <span class="sub" id="files-sub"></span>
       </div>
       <div class="file-grid" id="file-grid" hidden></div>
@@ -720,7 +722,7 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
 
     <section class="card" id="pages-card" hidden>
       <div class="card-head">
-        <h3>Pages</h3>
+        <h2>Pages</h2>
         <span class="sub" id="pages-sub"></span>
       </div>
       <div id="page-board"></div>
@@ -729,7 +731,7 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
 
     <section class="card" id="panel-card" hidden>
       <div class="card-head">
-        <h3 id="panel-title"></h3>
+        <h2 id="panel-title"></h2>
         <span class="sub" id="panel-sub"></span>
       </div>
       <div id="panel-host"></div>
@@ -737,7 +739,7 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
     </section>
 
     <section class="card" id="options-card">
-      <div class="card-head"><h3>Options</h3></div>
+      <div class="card-head"><h2>Options</h2></div>
       <div class="opts-body"><div class="opts-main">
       <form id="form" class="fields" autocomplete="off"></form>
       <details class="pw" id="pw-box">
@@ -923,6 +925,8 @@ function clearMessages() { $("error").hidden = true; $("result").hidden = true; 
 // Each window of the app tells the server it's there, so closing one window
 // doesn't stop the app while another is still open.
 const pageId = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).slice(0, 36);
+/** "smooth", unless the system asks for less motion. */
+function smoothScroll() { return matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"; }
 async function api(path, options = {}) {
   const res = await fetch(path, { ...options, headers: { "X-Pdfm-Token": token, "X-Pdfm-Page": pageId, ...(options.headers || {}) } });
   if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
@@ -1259,7 +1263,7 @@ function renderFiles() {
   const ordered = current && (current.id === "merge" || current.files === "pdf2" || current.files === "images");
   items.forEach((it, i) => {
     const thumb = el("div", { class: "thumb" });
-    if (it.loading) thumb.append(el("span", { class: "loading", "aria-label": "Loading preview" }));
+    if (it.loading) thumb.append(el("span", { class: "loading", role: "img", "aria-label": "Loading preview" }));
     else if (it.thumb) thumb.append(el("img", { src: it.thumb, alt: "" }));
     else thumb.append(icon(it.locked ? "lock" : "file"));
     const sub = el("div", { class: "file-sub" });
@@ -1330,7 +1334,7 @@ function startOver() {
   clearMessages();
   renderFiles();
   updateSummary();
-  document.querySelector("main").scrollIntoView({ block: "start", behavior: "smooth" });
+  document.querySelector("main").scrollIntoView({ block: "start", behavior: smoothScroll() });
 }
 
 const drop = $("drop");
@@ -1408,7 +1412,7 @@ async function renderHome() {
       el("p", {}, "Read a PDF, or pick a tool to change one. Everything runs on this computer; nothing is sent anywhere."),
       el("div", { class: "home-actions" },
         el("button", { type: "button", class: "btn", onclick: () => input.click() }, icon("reader"), "Open a PDF"),
-        el("button", { type: "button", class: "btn secondary", onclick: () => toolsHeading.scrollIntoView({ behavior: "smooth", block: "start" }) }, "Browse the tools"))),
+        el("button", { type: "button", class: "btn secondary", onclick: () => toolsHeading.scrollIntoView({ behavior: smoothScroll(), block: "start" }) }, "Browse the tools"))),
     drop, input);
   const pinnedIds = favTools();
   const toolCard = (op) => {
@@ -1438,10 +1442,13 @@ async function renderHome() {
   try {
     const { files } = await (await api("/api/recent")).json();
     if (!inHome() || !files.length) return;
-    recentFiles.replaceChildren(...files.slice(0, 8).map((f) => el("li", { role: "button", tabindex: "0", title: f.path,
-      onclick: () => openInReaderById([f.id]), onkeydown: (e) => { if (e.key === "Enter") openInReaderById([f.id]); } },
+    // The end of the path is what tells files apart ("Taxes › 2024"), so
+    // that is what shows; the whole path is on hover.
+    const shortFolder = (folder) => (folder || "").split(/[\\/]+/).filter(Boolean).slice(-2).join(" › ") || folder;
+    recentFiles.replaceChildren(...files.slice(0, 8).map((f) => el("li", {}, el("button", { type: "button", class: "recent-item", title: f.path,
+      onclick: () => openInReaderById([f.id]) },
       el("span", { class: "ricon" }, icon("reader")),
-      el("span", { class: "rbody" }, el("div", { class: "rname" }, f.name), el("div", { class: "rsub" }, `${whenText((f.opened || 0) * 1000)} · ${f.folder}`)))));
+      el("span", { class: "rbody" }, el("span", { class: "rname" }, f.name), el("span", { class: "rsub" }, `${whenText((f.opened || 0) * 1000)} · ${shortFolder(f.folder)}`))))));
     filesSection.hidden = false;
   } catch (e) { /* no recent files to show */ }
 }
@@ -1966,7 +1973,7 @@ async function showResult(name, blob, resultId, note = "") {
       note ? el("div", { class: "result-note" }, ...note.split("\n").map((line) => el("div", {}, line))) : null, actions));
   $("result").hidden = false;
   updateSummary();
-  $("result").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  $("result").scrollIntoView({ behavior: smoothScroll(), block: "nearest" });
   const auto = actions.querySelector("a[data-auto]");
   if (auto) auto.click();  // browsers without a Save dialog: download straight away
   if (/\.pdf$/i.test(name)) {
