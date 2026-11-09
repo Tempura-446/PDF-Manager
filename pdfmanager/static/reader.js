@@ -2855,7 +2855,7 @@ export class Reader {
         return b;
       });
     const alignGroup = el("span", { class: "rd-tf-group", role: "group", "aria-label": "Alignment" }, ...aligns);
-    alignGroup.hidden = !paragraph && !newText;
+    aligns[3].hidden = !paragraph && !newText;  // one line: set within its old width; justifying needs more lines
     const bar = el("div", { class: "rd-tf-bar", role: "toolbar", "aria-label": "Text look" },
       fontSel, sizeIn, el("span", { class: "rd-tf-group" }, boldBtn, italicBtn), colorIn, alignGroup);
     box.append(bar);

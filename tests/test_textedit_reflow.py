@@ -357,7 +357,8 @@ def test_a_page_flowed_once_flows_again(tmp_path):
     report = edit(twice, third, {"rect": [70, second[1] - 16, 312, second[1] + 10], "paragraph": True,
                                  "text": "Second paragraph is now longer than it was, so that it wraps onto three "
                                          "lines in the column and moves the third one."})
-    assert report["moved"] == 2 and where(third, "Third paragraph")[1] == pytest.approx(where(twice, "Third paragraph")[1] - 12)
+    assert report["moved"] == 2
+    assert where(third, "Third paragraph")[1] == pytest.approx(where(twice, "Third paragraph")[1] - 12)
     assert [L for L in letters(third) if L[1] >= 315] == [L for L in letters(src) if L[1] >= 315]
 
 
@@ -444,6 +445,22 @@ def test_picking_a_standard_font_and_bold_italic(tmp_path):
     # Bold alone: the document's own font family, bold.
     report = edit(src, out, {"rect": FIRST_RECT, "text": "Bold words", "paragraph": True, "bold": True})
     assert drawn(out, "Bold words")[0] == "Helvetica-Bold" and report["matched"] is True
+    # One line set to the right of its old width, the rest of the page as it was.
+    line = [318, 695, 540, 710]
+    old_right = max(t[3] for r in _rows_of(src, 600) for t in r if t[2] == 700.0 and t[1] > 315)
+    edit(src, out, {"rect": line, "text": "Short right", "old": "Right column line 0 stays exactly where it is",
+                    "align": "right"})
+    doc = pdfium.PdfDocument(str(out))
+    try:  # the letters that show (the old words are covered, still in the file)
+        page = doc[0]
+        textpage = page.get_textpage()
+        shown = textedit._letters(textpage, textedit._chars(textpage, line), {}, textedit._Covers(page))
+        shown = [(L["char"], L["tight"][0], L["tight"][2]) for L in shown]
+    finally:
+        doc.close()
+    assert "".join(t[0] for t in shown) == "Shortright"
+    assert shown[-1][2] == pytest.approx(old_right, abs=1.0) and shown[0][1] > 400
+    assert where(out, "Right column line 1") == where(src, "Right column line 1")
 
 
 def vera_doc(path, pdfa=False):

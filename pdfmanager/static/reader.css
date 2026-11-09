@@ -439,6 +439,7 @@ textarea.rd-textedit.rd-textedit-fit { white-space: pre-wrap; overflow: auto; }
   display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px;
   background: transparent; color: inherit !important; font: 700 14px/1 Georgia, serif; cursor: pointer;
 }
+.rd-tf-btn[hidden] { display: none; }
 .rd-tf-italic { font-style: italic; font-weight: 400; }
 .rd-tf-btn:hover { background: color-mix(in srgb, var(--bg) 18%, transparent); }
 .rd-tf-btn[aria-pressed="true"] { background: color-mix(in srgb, var(--bg) 32%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bg) 50%, transparent); }
