@@ -343,7 +343,7 @@ def _font_index():
                         low = style.lower()
                         found.append((font_key(postscript), font_key(full), font_key(family),
                                       any(w in low for w in ("bold", "black", "heavy")),
-                                      "italic" in low or "oblique" in low, str(path), number))
+                                      "italic" in low or "oblique" in low, str(path), number, family))
             except (OSError, struct.error, ValueError):
                 continue
     _index = found
@@ -385,3 +385,121 @@ def _register(path, number=0):
             _loaded[(path, number)] = None
     loaded = _loaded[(path, number)]
     return loaded[0] if loaded else None
+
+
+# ---- fonts the reader can pick for edited words ------------------------------------------
+
+# Offered first in the reader's font list, when installed (Windows, Mac and
+# Linux names, and the look-alikes Linux ships).
+COMMON_FAMILIES = (
+    "Arial", "Helvetica Neue", "Calibri", "Cambria", "Candara", "Century Gothic", "Consolas", "Constantia",
+    "Corbel", "Courier New", "Garamond", "Georgia", "Palatino Linotype", "Segoe UI", "Tahoma",
+    "Times New Roman", "Trebuchet MS", "Verdana", "Liberation Sans", "Liberation Serif", "Liberation Mono",
+    "Carlito", "Caladea", "DejaVu Sans", "DejaVu Serif", "DejaVu Sans Mono", "Noto Sans", "Noto Serif",
+    "Open Sans", "Roboto", "Lato", "Source Sans Pro", "Ubuntu", "FreeSans", "FreeSerif", "FreeMono",
+)
+# The standard PDF fonts every reader has, offered by family (bold and
+# italic are picked apart).
+STANDARD_FAMILIES = {"helvetica": "sans", "times": "serif", "courier": "mono"}
+# Installed fonts to embed in place of a standard one (a PDF/A file may not
+# rely on the reader's own copy), best first.
+EMBEDDABLE = {
+    "sans": ("Arial", "Liberation Sans", "Arimo", "Helvetica", "FreeSans", "DejaVu Sans", "Noto Sans"),
+    "serif": ("Times New Roman", "Liberation Serif", "Tinos", "FreeSerif", "DejaVu Serif", "Noto Serif"),
+    "mono": ("Courier New", "Liberation Mono", "Cousine", "FreeMono", "DejaVu Sans Mono", "Noto Mono"),
+}
+# Words naming a face of a family, not a family ("Light", "Black" can be
+# families of their own: Arial Black).
+_FAMILY_STYLE = ("bolditalic", "boldoblique", "bold", "italic", "oblique", "regular")
+
+
+def family_key(name):
+    """The family of a font as a PDF or the reader names it, as a key:
+    ``TimesNewRomanPS-BoldItalicMT``, ``Times New Roman`` and
+    ``ABCDEF+TimesNewRoman,Bold`` all give ``timesnewroman``."""
+    name = strip_subset(name).replace(",", "-").strip("-")
+    key = font_key(name.split("-")[0])
+    changed = True
+    while changed:  # "ArialBold", "TimesRoman" → "arial", "times"
+        changed = False
+        for word in _FAMILY_STYLE:
+            if key.endswith(word) and len(key) > len(word) + 2:
+                key, changed = key[: -len(word)], True
+                break
+    return key
+
+
+def family_name(name):
+    """The family of a font as people know it: ``TimesNewRomanPS-BoldMT`` →
+    ``Times New Roman``, ``Times-Roman`` → ``Times``."""
+    name = strip_subset(name).replace(",", "-").strip("-")
+    words = display_name(name.split("-")[0]).split() if name else []
+    while len(words) > 1 and words[-1].lower() in _FAMILY_STYLE:
+        words.pop()
+    return " ".join(words)
+
+
+def font_style(name):
+    """(bold, italic) as a font's name says."""
+    low = strip_subset(name).lower()
+    return any(n in low for n in BOLD_NAMES), "italic" in low or "oblique" in low
+
+
+def kind_of(name):
+    """The kind of type a family name suggests: "serif", "mono" or "sans"."""
+    low = str(name).lower()
+    if any(n in low for n in MONO_NAMES):
+        return "mono"
+    if any(n in low for n in SERIF_NAMES) and "sans" not in low:
+        return "serif"
+    return "sans"
+
+
+def installed_family(family, bold=False, italic=False, text=""):
+    """A reportlab font name for the installed font of ``family`` (any
+    spelling) in that weight and slant, able to show ``text``; or None.
+    Unlike :func:`installed_font` a regular face doesn't stand in for a
+    bold one: bold was asked for."""
+    key = family_key(family)
+    if not key:
+        return None
+    needed = {ord(ch) for ch in text if not ch.isspace()}
+    for entry in _font_index():
+        if family_key(entry[7]) != key or (entry[3], entry[4]) != (bold, italic):
+            continue
+        name = _register(entry[5], entry[6])
+        if name and needed <= _loaded[(entry[5], entry[6])][1]:
+            return name
+    return None
+
+
+def embedded_like(kind, bold=False, italic=False, text=""):
+    """An installed font (else reportlab's own Vera) to embed in place of
+    the standard font of that kind: a reportlab font name, or None."""
+    for family in EMBEDDABLE.get(kind, EMBEDDABLE["sans"]):
+        name = installed_family(family, bold, italic, text)
+        if name:
+            return name
+    import reportlab
+
+    vera = Path(reportlab.__file__).parent / "fonts" / {
+        (False, False): "Vera.ttf", (True, False): "VeraBd.ttf", (False, True): "VeraIt.ttf",
+        (True, True): "VeraBI.ttf"}[(bool(bold), bool(italic))]
+    name = _register(str(vera)) if vera.is_file() else None
+    if name and {ord(ch) for ch in text if not ch.isspace()} <= _loaded[(str(vera), 0)][1]:
+        return name
+    return None
+
+
+def installed_families():
+    """The installed font families the reader offers: (common ones, the
+    others), each a sorted list of names."""
+    names = {}
+    for entry in _font_index():
+        family = entry[7]
+        if family and family.isprintable() and not family.startswith("."):
+            names.setdefault(family_key(family), family)
+    common = {family_key(f) for f in COMMON_FAMILIES}
+    first = sorted((n for k, n in names.items() if k in common), key=str.lower)
+    rest = sorted((n for k, n in names.items() if k not in common), key=str.lower)
+    return first, rest

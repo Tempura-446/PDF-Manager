@@ -92,7 +92,8 @@ def test_redacted_text_pictures_and_fields_leave_no_trace(tmp_path):
     c.showPage()
     c.save()
     out = tmp_path / "out.pdf"
-    assert redact.redact(src, out, terms=["TOPSECRETWORD"], boxes=["1:72,500,192,580"]) == {1: 2}
+    assert redact.redact(src, out, terms=["TOPSECRETWORD"], boxes=["1:72,500,192,580"],
+                         method="image") == {1: 2}
     left = everything_in(out)
     assert b"TOPSECRETWORD" not in left
     assert b"SSNVALUE123" not in left
@@ -132,7 +133,7 @@ def test_redaction_prunes_the_structure_tree(tmp_path):
         page[NameObject("/StructParents")] = NumberObject(n)
     w.write(src)
     out = tmp_path / "out.pdf"
-    redact.redact(src, out, terms=["TOPSECRETWORD"])
+    redact.redact(src, out, terms=["TOPSECRETWORD"], method="image")
     assert b"TOPSECRETWORD" not in everything_in(out)
     reader = PdfReader(str(out))
     assert "/StructParents" not in reader.pages[0]
@@ -142,7 +143,8 @@ def test_redaction_prunes_the_structure_tree(tmp_path):
     assert reader.pages[1].extract_text().strip() == "second page plain"
 
 
-def test_black_boxes_land_on_the_text_with_an_oversized_cropbox(tmp_path):
+@pytest.mark.parametrize("method", ["remove", "image"])
+def test_black_boxes_land_on_the_text_with_an_oversized_cropbox(tmp_path, method):
     src = tmp_path / "crop.pdf"
     c = canvas.Canvas(str(src), pagesize=(612, 792))
     c.setFont("Helvetica", 14)
@@ -153,10 +155,11 @@ def test_black_boxes_land_on_the_text_with_an_oversized_cropbox(tmp_path):
     w.pages[0][NameObject("/CropBox")] = RectangleObject([-50, -50, 662, 842])
     w.write(src)
     out = tmp_path / "out.pdf"
-    assert redact.redact(src, out, terms=["SECRET WORD"]) == {1: 1}
-    page = PdfReader(str(out)).pages[0]
-    assert [float(v) for v in page.mediabox] == [0, 0, 612, 792]  # what readers showed
-    assert [float(v) for v in page.cropbox] == [0, 0, 612, 792]
+    assert redact.redact(src, out, terms=["SECRET WORD"], method=method) == {1: 1}
+    if method == "image":
+        page = PdfReader(str(out)).pages[0]
+        assert [float(v) for v in page.mediabox] == [0, 0, 612, 792]  # what readers showed
+        assert [float(v) for v in page.cropbox] == [0, 0, 612, 792]
     words = (72, 700, 160, 710)
     assert dark_pixels(out, words) > 0.9 * 88 * 10
     assert dark_pixels(out, (72, 650, 160, 660)) == 0  # blank paper below is untouched
@@ -167,7 +170,7 @@ def test_filled_fields_stay_in_the_redacted_picture(tmp_path):
     name, tick = (72, 700, 272, 720), (72, 650, 92, 670)
     before = dark_pixels(src, name), dark_pixels(src, tick)
     out = tmp_path / "out.pdf"
-    assert redact.redact(src, out, terms=["John Smith"]) == {1: 1}
+    assert redact.redact(src, out, terms=["John Smith"], method="image") == {1: 1}
     assert not PdfReader(str(out)).get_fields()  # a picture now, but still showing
     assert dark_pixels(out, name) > 0.8 * before[0] > 0
     assert dark_pixels(out, tick) > 0.8 * before[1] > 0

@@ -37,6 +37,15 @@ export async function loadPdfjs() {
   }
 }
 
+/** What a protected PDF allows, from pdf.js's list of allowed permissions. */
+function permissionText(allowed) {
+  const P = pdfjs.PermissionFlag, has = (f) => allowed.includes(f);
+  const printing = has(P.PRINT_HIGH_QUALITY) ? "printing" : has(P.PRINT) ? "low-quality printing only" : "no printing";
+  const changes = has(P.MODIFY_CONTENTS) ? "any changes" : has(P.MODIFY_ANNOTATIONS) ? "commenting, filling in forms and signing"
+    : has(P.FILL_INTERACTIVE_FORMS) ? "filling in forms and signing" : has(P.ASSEMBLE) ? "inserting, deleting and turning pages" : "no changes";
+  return `${printing}, ${changes}, ${has(P.COPY) ? "copying allowed" : "no copying"}`;
+}
+
 /** pdf.js's form fields ({name: [field...]}, a Map since pdf.js 5) as [name, list] pairs. */
 function fieldEntries(fields) {
   return fields instanceof Map ? [...fields.entries()] : Object.entries(fields || {});
@@ -86,6 +95,7 @@ const ICON = {
   fillable: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h4M7 14h4"/><rect x="13" y="7.5" width="5" height="3" rx=".5"/><rect x="13" y="12.5" width="3" height="3" rx=".5"/>',
   badge: '<path d="M12 2l2.4 1.8 3 .2.9 2.9 2.3 1.9-.9 2.9.9 2.9-2.3 1.9-.9 2.9-3 .2L12 22l-2.4-1.8-3-.2-.9-2.9-2.3-1.9.9-2.9-.9-2.9 2.3-1.9.9-2.9 3-.2z"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/>',
+  redact: '<path d="M4 6h16M4 18h9"/><rect x="4" y="10" width="13" height="4" rx="1" fill="currentColor"/>',
   layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
   rect: '<rect x="4" y="6" width="16" height="12" rx="1"/><circle cx="4" cy="6" r="1.4"/><circle cx="20" cy="18" r="1.4"/>',
   cutout: '<rect x="3" y="4" width="18" height="16" rx="1"/><rect x="9" y="9" width="7" height="6" stroke-dasharray="2 2"/>',
@@ -96,8 +106,10 @@ const ICON = {
   underline: '<path d="M7 4v6a5 5 0 0 0 10 0V4"/><path d="M5 20h14"/>',
   strike: '<path d="M16 6.5C15 5 13.6 4.5 12 4.5c-2.2 0-4 1.2-4 3.2 0 1.5 1 2.4 2.6 3"/><path d="M4 12h16"/><path d="M8 17.5c1 1.4 2.4 2 4 2 2.3 0 4-1.3 4-3.3 0-.8-.3-1.5-.8-2"/>',
   shapes: '<rect x="3" y="11" width="9" height="9" rx="1"/><circle cx="16" cy="8" r="5"/>',
+  stamp: '<path d="M9 3h6l-1 7h4a2 2 0 0 1 2 2v3H4v-3a2 2 0 0 1 2-2h4z"/><path d="M5 19h14"/>',
   comments: '<path d="M4 5h13v9H9l-3 3v-3H4z"/><path d="M17 9h3v8h-2v3l-3-3h-4"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
+  access: '<circle cx="12" cy="4.5" r="1.8"/><path d="M5 8.5l7 1.5 7-1.5M12 10v4.5M12 14.5 8.5 21M12 14.5l3.5 6.5"/>',  // -- accessibility --
 };
 
 // Annotation colours (highlights use the pale versions, as on paper).
@@ -105,7 +117,10 @@ const COLORS = [["Black", "#000000", "#bdbdbd"], ["Blue", "#1f4fd8", "#80ebff"],
   ["Green", "#1f8a3b", "#53ffbc"], ["Yellow", "#b8860b", "#ffff98"]];
 // Notes, underline, strikeout and shapes: the reader's own tools, written into
 // the file by the server (markup.py) as standard annotations.
-const MARKUP = new Set(["NOTE", "UNDERLINE", "STRIKEOUT", "SHAPE", "IMAGES", "LINKS", "CERTSIGN"]);
+const MARKUP = new Set(["NOTE", "UNDERLINE", "STRIKEOUT", "SHAPE", "IMAGES", "LINKS", "CERTSIGN", "STAMPS", "REDACT"]);
+// Rubber stamps: their words (markup.py draws them in their colours).
+const STAMPS = ["APPROVED", "NOT APPROVED", "REVIEWED", "RECEIVED", "DRAFT", "FINAL", "CONFIDENTIAL",
+  "FOR COMMENT", "VOID"];
 const SHAPES = [["rect", "Rectangle"], ["ellipse", "Ellipse"], ["cloud", "Cloud"], ["arrow", "Arrow"], ["line", "Line"]];
 const KIND_NAMES = { Text: "Note", FreeText: "Text", Highlight: "Highlight", Underline: "Underline", StrikeOut: "Strikeout",
   Squiggly: "Squiggly", Square: "Rectangle", Circle: "Ellipse", Line: "Line", Polygon: "Shape", PolyLine: "Lines",
@@ -270,7 +285,7 @@ export class Reader {
       tool("pointer", "Select", "NONE"), tool("highlight", "Highlight", "HIGHLIGHT"),
       tool("underline", "Underline", "UNDERLINE"), tool("strike", "Strike out", "STRIKEOUT"),
       tool("note", "Note", "NOTE"), tool("text", "Text", "FREETEXT"),
-      tool("draw", "Draw", "INK"), tool("shapes", "Shapes", "SHAPE"), tool("image", "Picture", "STAMP"),
+      tool("draw", "Draw", "INK"), tool("shapes", "Shapes", "SHAPE"), tool("stamp", "Stamp", "STAMPS"), tool("image", "Picture", "STAMP"),
       tool("edittext", "Edit text", "EDITTEXT"), tool("imgedit", "Pictures", "IMAGES"), tool("link", "Links", "LINKS"),
     ];
     const tip = (mode, title) => { this.annotTools.find((b) => b.dataset.mode === mode).title = title; };
@@ -281,6 +296,13 @@ export class Reader {
     tip("SHAPE", "Draw a rectangle, ellipse, cloud, arrow or line: drag on the page (Shift: square, circle, 45°)");
     tip("IMAGES", "Edit the pictures on the page: drag to move, drag a corner to resize (Shift: freely), replace or delete");
     tip("LINKS", "Edit links: click one to change where it goes or delete it; drag a box to add one");
+    tip("STAMPS", "Stamp the page (Approved, Draft…): click where it goes, or drag its size");
+    this.stampSelect = el("select", { class: "rd-zoom", "aria-label": "Stamp", hidden: true },
+      ...STAMPS.map((v) => el("option", { value: v }, v[0] + v.slice(1).toLowerCase())), el("option", { value: "" }, "Your own words…"));
+    this.stampSelect.value = store.get("pdfm-stamp", "APPROVED");
+    this.stampDated = el("input", { type: "checkbox", checked: store.get("pdfm-stamp-dated", true) });
+    this.stampDatedLabel = el("label", { class: "rd-check", hidden: true, title: "Add your name and the date and time under the words" },
+      this.stampDated, "Name and date");
     this.shapeSelect = el("select", { class: "rd-zoom", "aria-label": "Shape", hidden: true },
       ...SHAPES.map(([v, label]) => el("option", { value: v }, label)));
     this.shapeSelect.value = store.get("pdfm-shape", "rect");
@@ -289,6 +311,7 @@ export class Reader {
     this.certSignBtn = el("button", { class: "rd-btn rd-tool compact", type: "button", "data-mode": "CERTSIGN", "aria-pressed": "false",
       title: "Sign with a digital ID (a certificate, .pfx or .p12): drag a box where the signature goes", html: svg("badge") + "<span>Digital ID</span>" });
     this.annotTools.push(this.certSignBtn);
+    this.#buildRedact();  // reader redaction
     this.swatches = COLORS.map(([name, ink, mark], i) => el("button", { class: "rd-swatch", type: "button", title: name, "aria-label": name, "aria-pressed": String(i === 1),
       style: `--ink:${ink};--mark:${mark}`, "data-index": i }));
     this.sizeSelect = el("select", { class: "rd-zoom", "aria-label": "Line thickness or text size" });
@@ -298,8 +321,10 @@ export class Reader {
     this.annotSaveBtn = el("button", { class: "rd-btn primary", type: "button", title: "Save your changes (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
     this.annotCloseBtn = b("x", "Close the annotation tools");
     this.annotbar = el("div", { class: "rd-findbar rd-annotbar", hidden: true, role: "toolbar", "aria-label": "Annotate" },
-      ...this.annotTools.filter((b) => b !== this.certSignBtn), this.signBtn, this.certSignBtn, el("span", { class: "rd-sep" }),
-      el("div", { class: "rd-swatches", role: "group", "aria-label": "Colour" }, ...this.swatches), this.shapeSelect, this.sizeSelect,
+      ...this.annotTools.filter((b) => b !== this.certSignBtn && b !== this.redactBtn), this.signBtn, this.certSignBtn, this.redactBtn,
+      el("span", { class: "rd-sep" }),
+      el("div", { class: "rd-swatches", role: "group", "aria-label": "Colour" }, ...this.swatches), this.shapeSelect, this.stampSelect, this.stampDatedLabel, this.sizeSelect,
+      this.redactHow, this.redactApplyBtn,
       el("span", { class: "rd-sep" }), this.undoBtn, this.redoBtn, this.deleteBtn,
       el("span", { style: "flex:1" }), this.annotSaveBtn, this.annotCloseBtn);
 
@@ -312,8 +337,21 @@ export class Reader {
     this.authorInput = el("input", { type: "text", class: "rd-author", placeholder: "Your name", "aria-label": "Your name on comments",
       value: store.get("pdfm-author", "") });
     this.commentsList = el("div", { class: "rd-comments", "aria-live": "polite" });
+    // -- comment summary and XFDF --
+    const commentBtn = (label, title, fn) => el("button", { type: "button", class: "rd-linkbtn", title, onclick: fn }, label);
+    // (The file box isn't put on the page: the reader has one file box of its own.)
+    const pickXfdf = () => {
+      const input = el("input", { type: "file", accept: ".xfdf,.xml" });
+      input.addEventListener("change", () => { if (input.files[0]) this.#importComments(input.files[0]); });
+      input.click();
+    };
+    const commentActions = el("div", { class: "rd-commentactions" },
+      commentBtn("Summary", "A PDF listing every comment, page by page", () => this.#commentSummary()),
+      commentBtn("Export", "Save the comments as an XFDF file, to send or to add to another copy", () => this.#exportComments()),
+      commentBtn("Import…", "Add comments from an XFDF file (from Acrobat or another copy)", pickXfdf));
+    // -- end of comment summary and XFDF --
     this.commentsPanel = el("div", { class: "rd-panel rd-commentspanel", role: "tabpanel", hidden: true },
-      el("label", { class: "rd-authorrow" }, "Comment as", this.authorInput), this.commentsList);
+      el("label", { class: "rd-authorrow" }, "Comment as", this.authorInput), commentActions, this.commentsList);
     this.thumbsList = el("ol", { class: "rd-thumbs", role: "listbox", "aria-multiselectable": "true", "aria-label": "Pages" });
     this.selected = new Set();
     this.outlineList = el("ul", { class: "rd-outline" });
@@ -423,6 +461,7 @@ export class Reader {
       this.#menuItem("badge", "Sign with a digital ID…", () => this.useTool("CERTSIGN")),
       this.#menuItem("fillable", "Make it fillable (find the form's fields)", () => this.makeFillable()),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
+      this.#menuItem("access", "Check accessibility", () => this.checkAccessibility()),  // -- accessibility --
       this.#menuItem("x", "Close this document", () => this.closeTab()),
     ];
     if (this.onEdit && this.tools.length) {
@@ -654,7 +693,7 @@ export class Reader {
     if (mod && !isTyping(e) && !this.scalebar.hidden && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")
         && this.#measureUndo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); return; }
     if (mod && e.key.toLowerCase() === "z" && !e.shiftKey && !isTyping(e) && this.activeTab?.undo?.length
-        && (this.textEditMode || this.annotbar.hidden)) { e.preventDefault(); this.#undoTextEdit(); return; }
+        && (this.textEditMode || this.markupMode || this.annotbar.hidden)) { e.preventDefault(); this.#undoTextEdit(); return; }
     if (e.key === "Escape" && !this.ctxMenu.hidden) { this.#closeContextMenu(); return; }
     if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); this.pdfViewer.increaseScale(); return; }
     if (mod && e.key === "-") { e.preventDefault(); this.pdfViewer.decreaseScale(); return; }
@@ -963,6 +1002,7 @@ export class Reader {
       };
       this.pdfViewer.setDocument(doc);
       this.linkService.setDocument(doc, null);
+      this.scripting.setDocument(doc).catch(() => {});  // a form without scripts works as before
       // (The viewer hands the document to the find controller itself once the
       // first page is drawn; doing it here too would reset a search started
       // when the pages appear, e.g. from the folder search.)
@@ -1005,15 +1045,20 @@ export class Reader {
     this.eventBus = eventBus;
     this.linkService = new viewer.PDFLinkService({ eventBus, externalLinkTarget: viewer.LinkTarget.BLANK, externalLinkRel: "noopener noreferrer nofollow" });
     this.findController = new viewer.PDFFindController({ eventBus, linkService: this.linkService });
+    // Form scripts (number and date formats, totals, checks — Acrobat's AF
+    // functions) run in pdf.js's sandbox, as in Firefox.
+    this.scripting = new viewer.PDFScriptingManager({ eventBus, sandboxBundleSrc: BASE + "build/pdf.sandbox.min.mjs",
+      wasmUrl: BASE + "wasm/" });
     this.pdfViewer = new viewer.PDFViewer({
       container: this.container, viewer: this.viewerEl, eventBus,
-      linkService: this.linkService, findController: this.findController,
+      linkService: this.linkService, findController: this.findController, scriptingManager: this.scripting,
       annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS,
       annotationEditorMode: pdfjs.AnnotationEditorType.NONE,
       annotationEditorHighlightColors: HIGHLIGHT_COLORS,
       imageResourcesPath: BASE + "web/images/",
     });
     this.linkService.setViewer(this.pdfViewer);
+    this.scripting.setViewer(this.pdfViewer);
     // The window (or the sidebar) changes size: a zoom that fits the page
     // fits it again, as a reader should. What's watched is the area around
     // the pages, not the scrolling box itself: that one narrows when its
@@ -1061,6 +1106,7 @@ export class Reader {
     eventBus.on("pagerendered", ({ pageNumber }) => {
       this.#drawMeasures(pageNumber);
       if (this.markupMode === "IMAGES" || this.markupMode === "LINKS") this.#drawObjectBoxes(pageNumber);
+      this.#drawRedactions(pageNumber);
       if (this.overlay) this.overlay.draw(this.pdfViewer.getPageView(pageNumber - 1), pageNumber).catch(() => {});
     });
     eventBus.on("scalechanging", ({ scale, presetValue }) => {
@@ -1097,6 +1143,7 @@ export class Reader {
       this.pdfViewer.setDocument(null);
       this.linkService.setDocument(null);
       this.findController.setDocument(null);
+      this.scripting?.setDocument(null).catch(() => {});
       await destroyTask(doc.loadingTask || task);  // pdf.js frees a document through its task
     } else if (task) {
       await destroyTask(task);  // e.g. cancelled at the password prompt: wait for it to be gone
@@ -1480,7 +1527,7 @@ export class Reader {
     const editText = name === "EDITTEXT";
     if (editText && !this.textEditHinted) {
       this.textEditHinted = true;
-      this.toast("Click a line to change it, Shift+click for its whole paragraph, or click an empty spot to add words. Old words are covered, not removed — to remove text for good, use Redact.", 8000);
+      this.toast("Click a line to change it, Shift+click for its whole paragraph, or click an empty spot to add words. Old words can stay in the file underneath — to remove text for good, use Redact.", 8000);
     }
     const markup = MARKUP.has(name), custom = editText || markup;
     if (name !== "NONE" || custom) this.measureTool(null);
@@ -1504,6 +1551,7 @@ export class Reader {
     this.#showEditMode(name);
     // Words selected before choosing Underline or Strike out get it straight away.
     if (this.markupMode === "UNDERLINE" || this.markupMode === "STRIKEOUT") this.#markSelection();
+    if (this.markupMode === "REDACT") this.#redactSelection();
     // "Picture" asks for an image file straight away.
     if (create && this.uiManager) setTimeout(() => this.uiManager.updateParams(pdfjs.AnnotationEditorParamsType.CREATE, null), 50);
   }
@@ -1520,10 +1568,12 @@ export class Reader {
       : name === "SHAPE" ? [[1, "Thin"], [2, "Medium"], [4, "Thick"], [8, "Heavy"]] : [];
     const key = { FREETEXT: "text", INK: "ink", HIGHLIGHT: "mark", SHAPE: "shape", NOTE: "note", UNDERLINE: "line", STRIKEOUT: "line" }[name];
     this.shapeSelect.hidden = name !== "SHAPE";
+    this.stampSelect.hidden = this.stampDatedLabel.hidden = name !== "STAMPS";
     const chosen = this.annotParams?.size?.[key] ?? (key === "shape" ? 2 : undefined);
     this.sizeSelect.replaceChildren(...sizes.map(([v, label]) => el("option", { value: v, selected: v === chosen }, label)));
     this.sizeSelect.hidden = !sizes.length;
     this.root.querySelector(".rd-swatches").hidden = !key;
+    this.#showRedactBar(name);
   }
 
   #applyAnnotParams() {
@@ -1587,7 +1637,7 @@ export class Reader {
 
   #markupDown(e) {
     const mode = this.markupMode;
-    if (!mode || e.button !== 0 || mode === "UNDERLINE" || mode === "STRIKEOUT") return;
+    if (!mode || e.button !== 0 || mode === "UNDERLINE" || mode === "STRIKEOUT" || (mode === "REDACT" && this.#redactByText())) return;
     if (e.target.closest?.(".rd-notebox, .rd-objbox, .rd-objtools, a, input, textarea, select, button")) return;
     const at = this.#pointOnPage(e);
     if (mode === "IMAGES") { if (at) this.#pickImage(null); return; }  // a click beside the pictures lets go
@@ -1597,6 +1647,8 @@ export class Reader {
     if (mode === "NOTE") { this.#openNoteBox(at); return; }
     if (mode === "LINKS") { this.#drawLinkBox(e, at); return; }
     if (mode === "CERTSIGN") { this.#dragBox(at, "Drag a box where the signature goes.", (rect) => this.#signWithId(at.n, rect)); return; }
+    if (mode === "STAMPS") { this.#placeStamp(at); return; }
+    if (mode === "REDACT") { this.#dragBox(at, "Drag a box over what should be blacked out.", (rect) => this.#addRedactions(at.n, [rect])); return; }
     // SHAPE: drag out the shape; it's drawn on screen until the file has it.
     this.#cancelMarkup();
     const svgEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -1639,6 +1691,10 @@ export class Reader {
       if (e.target.closest?.(".rd-container")) setTimeout(() => this.#markSelection(), 0);
       return;
     }
+    if (mode === "REDACT") {
+      if (this.#redactByText() && e.target.closest?.(".rd-container")) setTimeout(() => this.#redactSelection(), 0);
+      return;
+    }
     const d = this.shapeDraft;
     if (!d || e.pointerId !== d.pointer) return;
     this.#markupMove(e);
@@ -1651,6 +1707,48 @@ export class Reader {
       : { op: "add", page, kind, rect: [start.pt[0], start.pt[1], end.pt[0], end.pt[1]], color, width };
     this.#applyMarkup([change]).finally(() => d.el.remove());
   }
+
+  // -- stamps --
+  /** A stamp where the page was clicked (the usual size), or in the box
+   *  dragged out. */
+  #placeStamp(at) {
+    const view = at.view, draft = el("div", { class: "rd-linkdraft rd-stampdraft", style: `left:${at.x}px;top:${at.y}px;width:0;height:0` });
+    view.div.append(draft);
+    const box = view.div.getBoundingClientRect(), ox = box.left + view.div.clientLeft, oy = box.top + view.div.clientTop;
+    let end = [at.x, at.y];
+    const move = (ev) => {
+      end = [ev.clientX - ox, ev.clientY - oy];
+      Object.assign(draft.style, { left: Math.min(at.x, end[0]) + "px", top: Math.min(at.y, end[1]) + "px",
+        width: Math.abs(end[0] - at.x) + "px", height: Math.abs(end[1] - at.y) + "px" });
+    };
+    const up = async () => {
+      window.removeEventListener("pointermove", move);
+      draft.remove();
+      const dated = this.stampDated.checked, s = view.viewport.scale;
+      let a = [at.x, at.y], b = end;
+      if (Math.abs(end[0] - at.x) < 12 || Math.abs(end[1] - at.y) < 8) {  // a click: the usual size, centred there
+        const w = 160 * s, h = (dated ? 50 : 42) * s;
+        a = [at.x - w / 2, at.y - h / 2]; b = [at.x + w / 2, at.y + h / 2];
+      }
+      let label = this.stampSelect.value;
+      if (!label) {
+        const words = el("input", { type: "text", value: store.get("pdfm-stamp-own", ""), placeholder: "e.g. PAID", "aria-label": "Stamp words", maxlength: "60" });
+        setTimeout(() => words.focus(), 0);
+        if (await this.#dialog("Your own stamp", [el("label", { class: "rd-field" }, "Words on the stamp", words)],
+          [["cancel", "Cancel"], ["ok", "Stamp", true]]) !== "ok" || !words.value.trim()) return;
+        label = words.value.trim();
+        store.set("pdfm-stamp-own", label);
+      }
+      store.set("pdfm-stamp", this.stampSelect.value);
+      store.set("pdfm-stamp-dated", dated);
+      const p = view.viewport.convertToPdfPoint(...a), q = view.viewport.convertToPdfPoint(...b);
+      const rect = [Math.min(p[0], q[0]), Math.min(p[1], q[1]), Math.max(p[0], q[0]), Math.max(p[1], q[1])];
+      this.#applyMarkup([{ op: "add", page: at.n, kind: "stamp", rect, label, dated }], "Could not stamp the page: ");
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up, { once: true });
+  }
+  // -- end of stamps --
 
   /** Underline or strike out the selected words. */
   #markSelection() {
@@ -1727,6 +1825,60 @@ export class Reader {
     }
     list.replaceChildren(...fresh, ...top.map((it) => this.#commentCard(it)));
   }
+
+  // -- comment summary and XFDF --
+  async #commentRequest(what, extra = null) {
+    await this.chain;
+    const tab = this.activeTab;
+    const body = new FormData();
+    body.append("file", new Blob([await this.#currentBytes()], { type: "application/pdf" }), "file.pdf");
+    body.append("password", tab?.password || "");
+    body.append("name", this.name || "document.pdf");
+    if (extra) body.append("xfdf", extra, extra.name);
+    const res = await fetch(`/api/comments/${what}`, { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    return res;
+  }
+
+  /** A PDF listing the comments, opened in a new tab. */
+  async #commentSummary() {
+    if (!this.doc) return;
+    try {
+      const res = await this.#commentRequest("summary");
+      const stem = (this.name || "document").replace(/\.pdf$/i, "");
+      await this.openBytes(new Uint8Array(await res.arrayBuffer()), `${stem} — comments.pdf`);
+    } catch (e) { this.toast("Couldn't make the summary: " + (e.message || e)); }
+  }
+
+  async #exportComments() {
+    if (!this.doc) return;
+    try {
+      const res = await this.#commentRequest("export");
+      const n = Number(res.headers.get("X-Pdfm-Count")) || 0;
+      if (!n) { this.toast("This document has no comments to export."); return; }
+      const stem = (this.name || "document").replace(/\.pdf$/i, "");
+      await this.#saveBytes(new Uint8Array(await res.arrayBuffer()), `${stem}.xfdf`, () => {}, this.activeTab?.fileId);
+    } catch (e) { this.toast("Couldn't export the comments: " + (e.message || e)); }
+  }
+
+  #importComments(file) {
+    return this.#changeDocument(async (bytes, tab) => {
+      const body = new FormData();
+      body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
+      body.append("password", tab.password || "");
+      body.append("xfdf", file, file.name);
+      return fetch("/api/comments/import", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
+    }, {
+      failure: "Couldn't add the comments: ",
+      after: (res) => {
+        const n = Number(res.headers.get("X-Pdfm-Added")) || 0, skipped = res.headers.get("X-Pdfm-Skipped");
+        this.toast(n ? `Added ${n} comment${n === 1 ? "" : "s"}${skipped ? ` (some kinds couldn't be added: ${skipped})` : ""}.`
+          : "Nothing to add: these comments are already here.");
+        this.#listComments();
+      },
+    });
+  }
+  // -- end of comment summary and XFDF --
 
   #commentCard(it, isReply = false) {
     const date = (raw) => {
@@ -1990,6 +2142,139 @@ export class Reader {
     if (link) await this.#applyMarkup([{ op: "link", page: n, id: link.id, ...where }], "Could not change the link: ");
     else await this.#applyMarkup([{ op: "add", page: n, kind: "link", rect, ...where }], "Could not add the link: ");
   }
+
+  // -- reader redaction --------------------------------------------------------------------
+  // Mark areas to black out (drag boxes, or select words), then Apply sends
+  // them to /api/redact/apply (redact.py, method "remove"): what's under them
+  // is taken out of the file and black boxes are drawn. The marks belong to
+  // the tab and to the version of the document they were made on.
+
+  #buildRedact() {
+    this.redactBtn = el("button", { class: "rd-btn rd-tool", type: "button", "data-mode": "REDACT", "aria-pressed": "false",
+      title: "Redact: mark what should be blacked out for good, then Apply", html: svg("redact") + "<span>Redact</span>" });
+    this.annotTools.push(this.redactBtn);
+    this.redactHow = el("select", { class: "rd-zoom", "aria-label": "How to mark", hidden: true },
+      el("option", { value: "box" }, "Draw boxes"), el("option", { value: "text" }, "Select words"));
+    this.redactHow.value = store.get("pdfm-redact-how", "box");
+    this.redactHow.addEventListener("change", () => {
+      store.set("pdfm-redact-how", this.redactHow.value);
+      this.root.dataset.redact = this.redactHow.value;
+    });
+    this.redactApplyBtn = el("button", { class: "rd-btn primary", type: "button", hidden: true, disabled: true,
+      title: "Black out the marked areas for good", html: svg("redact") + "<span>Apply</span>" });
+    this.redactApplyBtn.addEventListener("click", () => this.#applyRedactions());
+  }
+
+  #redactByText() { return this.redactHow?.value === "text"; }
+
+  /** The tab's marks, {page: [[x0, y0, x1, y1]]} in PDF points; marks made on
+   *  an earlier version of the document are dropped (its pages may have moved). */
+  #redactMarks(tab = this.activeTab) {
+    if (!tab) return {};
+    const version = tab.version || 0;
+    if (tab.redactMarks?.version !== version) tab.redactMarks = { version, pages: {} };
+    return tab.redactMarks.pages;
+  }
+
+  #redactCount(tab = this.activeTab) {
+    return Object.values(this.#redactMarks(tab)).reduce((n, list) => n + list.length, 0);
+  }
+
+  #showRedactBar(name) {
+    const on = name === "REDACT";
+    if (!this.redactHow) return;
+    this.redactHow.hidden = this.redactApplyBtn.hidden = !on;
+    this.root.dataset.redact = on ? this.redactHow.value : "";
+    if (on) this.#showRedactCount();
+    if (on && !this.redactHinted) {
+      this.redactHinted = true;
+      this.toast("Drag boxes over what should go (or choose Select words), then Apply redactions. Click × on a mark to remove it.", 7000);
+    }
+  }
+
+  #showRedactCount() {
+    const n = this.#redactCount();
+    this.redactApplyBtn.disabled = !n;
+    this.redactApplyBtn.querySelector("span").textContent = n ? `Apply (${n})` : "Apply";
+    this.redactApplyBtn.title = n ? `Black out the ${n === 1 ? "marked area" : n + " marked areas"} for good` : "Mark something to black out first";
+  }
+
+  #addRedactions(n, rects) {
+    const list = (this.#redactMarks()[n] ||= []);
+    for (const r of rects) list.push(r.map((v) => Math.round(v * 100) / 100));
+    this.#drawRedactions(n);
+    this.#showRedactCount();
+  }
+
+  /** Red outlines (with a remove button) over the marks on page ``n``. */
+  #drawRedactions(n) {
+    const view = this.pdfViewer?.getPageView(n - 1);
+    if (!view?.div || !view.viewport) return;
+    view.div.querySelectorAll(".rd-redactmark").forEach((x) => x.remove());
+    const list = this.#redactMarks()[n] || [];
+    list.forEach((rect, i) => {
+      const [a, b, c, d] = viewRect(view.viewport, rect);
+      const remove = el("button", { type: "button", class: "rd-redactx", title: "Remove this mark", "aria-label": "Remove this mark", html: svg("x") });
+      remove.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); });
+      remove.addEventListener("click", (e) => {
+        e.stopPropagation();
+        list.splice(i, 1);
+        this.#drawRedactions(n);
+        this.#showRedactCount();
+      });
+      view.div.append(el("div", { class: "rd-redactmark", title: "Marked for redaction",
+        style: `left:${Math.min(a, c)}px;top:${Math.min(b, d)}px;width:${Math.abs(c - a)}px;height:${Math.abs(d - b)}px` }, remove));
+    });
+  }
+
+  /** Mark the selected words (one box per line piece, a little padded). */
+  #redactSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+    const pages = new Map();
+    for (const r of sel.getRangeAt(0).getClientRects()) {
+      if (r.width < 1 || r.height < 1) continue;
+      const at = this.#pointOnPage({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, target: document.body });
+      if (!at || !this.container.contains(at.view.div)) continue;
+      const box = at.view.div.getBoundingClientRect(), dx = box.left + at.view.div.clientLeft, dy = box.top + at.view.div.clientTop;
+      const a = at.view.viewport.convertToPdfPoint(r.left - dx, r.top - dy), b = at.view.viewport.convertToPdfPoint(r.right - dx, r.bottom - dy);
+      const pad = 0.75;
+      const rect = [Math.min(a[0], b[0]) - pad, Math.min(a[1], b[1]) - pad, Math.max(a[0], b[0]) + pad, Math.max(a[1], b[1]) + pad];
+      if (!pages.has(at.n)) pages.set(at.n, []);
+      pages.get(at.n).push(rect);
+    }
+    if (!pages.size) return;
+    sel.removeAllRanges();
+    for (const [n, rects] of pages) this.#addRedactions(n, rects);
+  }
+
+  async #applyRedactions() {
+    const tab = this.activeTab, marks = this.#redactMarks(tab), count = this.#redactCount(tab);
+    if (!tab || !count) { this.toast("Mark something first: drag a box over it, or choose Select words."); return; }
+    const answer = await this.#dialog("Apply redactions?", [
+      el("p", {}, `This removes what's under the ${count === 1 ? "marked area" : count + " marked areas"} for good once you save: `
+        + "the words, the covered parts of pictures, and comments or form fields there. The rest of the page stays as it is."),
+      el("p", {}, "Until then, Undo (Ctrl+Z) brings it back.")],
+      [["cancel", "Cancel"], ["ok", "Apply redactions", true]]);
+    if (answer !== "ok") return;
+    const boxes = Object.fromEntries(Object.entries(marks).filter(([, list]) => list.length));
+    await this.#changeDocument((bytes, t) => this.#post("/api/redact/apply", bytes, t, { boxes: JSON.stringify(boxes) }), {
+      failure: "Could not redact: ",
+      after: (res) => {
+        let done = {};
+        try { done = JSON.parse(res.headers.get("X-Pdfm-Redacted") || "{}"); } catch (e) { /* the default words do */ }
+        const pictures = Object.entries(done.pictures || {});
+        let message = `Blacked out ${done.areas || count} area${(done.areas || count) === 1 ? "" : "s"}.`;
+        if (pictures.length) {
+          message += ` Page${pictures.length === 1 ? "" : "s"} ${pictures.map(([p]) => p).join(", ")} became `
+            + `${pictures.length === 1 ? "a picture" : "pictures"} (${[...new Set(pictures.map(([, why]) => why))].join("; ")}).`;
+        }
+        this.toast(message + " Save to make it permanent.", 8000, ["Save", () => this.save()]);
+      },
+    });
+    if (this.markupMode === "REDACT") this.#showRedactCount();
+  }
+  // -- end of reader redaction --
 
   // ---- digital ID signatures (certsign.py) --------------------------------------------
   /** Sign the document with a digital ID, its signature shown in ``rect`` on page ``n``. */
@@ -2345,21 +2630,70 @@ export class Reader {
       return d ? d.toLocaleString() : "";
     };
     const size = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+    // -- accessibility -- tagged: says so (MarkInfo) or has a structure tree (pdf.js gives MarkInfo as a Map)
+    const mark = await this.doc.getMarkInfo().catch(() => null);
+    const tagged = (mark instanceof Map ? mark.get("Marked") : mark?.Marked) || !!(await page.getStructTree().catch(() => null));
+    // -- end of accessibility --
     const rows = [
       ["File", this.activeTab?.path || this.name], ["File size", size(this.bytes?.length ?? this.activeTab?.size ?? 0)],
       ["Title", metadata?.get("dc:title") || info.Title], ["Author", info.Author], ["Subject", info.Subject],
       ["Keywords", info.Keywords], ["Created", date(info.CreationDate)], ["Modified", date(info.ModDate)],
       ["Application", info.Creator], ["PDF producer", info.Producer], ["PDF version", info.PDFFormatVersion],
       ["Pages", String(this.doc.numPages)],
+      ["Tagged (accessible)", tagged ? "Yes" : "No"], ["Language", info.Language || "Not set"],  // -- accessibility --
       ["Page size", `${(w / 72 * 25.4).toFixed(0)} × ${(h / 72 * 25.4).toFixed(0)} mm (${(w / 72).toFixed(2)} × ${(h / 72).toFixed(2)} in)`],
       ["Fast web view", info.IsLinearized ? "Yes" : "No"],
       ["Form", info.IsAcroFormPresent ? "Yes" : info.IsXFAPresent ? "Yes (XFA)" : "No"],
       ["Password protected", this.password ? "Yes" : "No"],
     ].filter(([, v]) => v);
+    // -- limits and attached files --
+    const perms = await this.doc.getPermissions().catch(() => null);
+    if (perms) rows.push(["Limits", permissionText(perms)]);
+    const attached = Object.values((await this.doc.getAttachments().catch(() => null)) || {});
     const dl = el("dl", { class: "rd-props" });
     for (const [k, v] of rows) dl.append(el("dt", {}, k), el("dd", {}, v));
-    await this.#dialog("Document properties", [dl], [["ok", "Close", true]]);
+    const parts = [dl];
+    if (attached.length) {
+      parts.push(el("h3", {}, `Attached files (${attached.length})`), el("ul", { class: "rd-attached" },
+        ...attached.map((a) => el("li", {}, el("span", {}, a.filename, a.description ? el("small", {}, " — " + a.description) : null),
+          el("small", {}, size(a.content?.length || 0)),
+          el("button", { type: "button", class: "rd-btn", onclick: () => this.#saveBytes(a.content, a.filename, () => {}, this.activeTab?.fileId) }, "Save…")))));
+    }
+    // -- end of limits and attached files --
+    await this.#dialog("Document properties", parts, [["ok", "Close", true]]);
   }
+
+  // -- accessibility --
+  /** Check accessibility: what keeps screen readers out of this document,
+   *  and how to fix it (accessibility.py), in a dialog. */
+  async checkAccessibility() {
+    const tab = this.activeTab;
+    if (!tab || !this.doc) return;
+    this.toast("Checking accessibility…", 120000);
+    let result;
+    try {
+      const body = new FormData();
+      body.append("file", new Blob([await this.#fullBytes()], { type: "application/pdf" }), "file.pdf");
+      body.append("password", tab.password || "");
+      const res = await fetch("/api/accessibility/check", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+      result = await res.json();
+    } catch (e) {
+      this.toast("Couldn't check accessibility: " + (e.message || e));
+      return;
+    }
+    this.toastEl?.remove();
+    const pages = (list) => list.length ? ` (page${list.length > 1 ? "s" : ""} ${list.slice(0, 10).join(", ")}${list.length > 10 ? "…" : ""})` : "";
+    const items = result.issues.map((i) => el("li", { class: "rd-sigitem invalid" },
+      el("b", {}, i.message + pages(i.pages)), el("small", {}, "How to fix: " + i.fix)));
+    const body = [el("p", {}, result.passed ? "No problems found." : `${result.issues.length} problem${result.issues.length > 1 ? "s" : ""} found.`)];
+    if (items.length) body.push(el("ul", { class: "rd-siglist" }, ...items));
+    body.push(el("p", { class: "rd-muted", style: "margin-top: 16px" }, result.note));
+    const fix = !result.passed && this.onEdit && this.tools.some(([id]) => id === "tag");
+    const answer = await this.#dialog("Accessibility", body, [...(fix ? [["tag", "Make accessible…"]] : []), ["ok", "Close", true]]);
+    if (answer === "tag") this.#edit("tag");
+  }
+  // -- end of accessibility --
 
   toast(message, ms = 4000, action = null) {
     if (!message) return;
@@ -2541,7 +2875,7 @@ export class Reader {
       const name = String(real?.name || "").replace(/^[A-Z]{6}\+/, "");
       const bold = !!(real?.bold || real?.black) || /bold|black|heavy|semibold|demi/i.test(name);
       const italic = !!real?.italic || /italic|oblique/i.test(name);
-      const look = { size, left: layer.left + tx[4], baseline: layer.top + tx[5], width: r.width,
+      const look = { size, left: layer.left + tx[4], baseline: layer.top + tx[5], width: r.width, fontName: name,
         weight: bold ? "bold" : "", style: italic ? "italic" : "", ...this.#pageColours(span.closest(".page"), r) };
       // The document's font as pdf.js loaded it shows the words just as on the
       // page, unless it mixed up its letters (fonts cut down for a PDF can
@@ -2751,8 +3085,10 @@ export class Reader {
       this.#openTextEditor(span, pageEl, pageNumber, paragraph ? "line" : "paragraph");
     });
     // The words as shown go along, so only what was changed is drawn again.
+    const picked = this.#fontPicker(box, field, look, viewport, { paragraph: !!paragraph, size: lineH });
     this.#startEditing(box, field, pageEl, original, (text) =>
-      this.#applyTextEdit({ page: pageNumber, rect, text, ...(paragraph ? { paragraph: true } : { old: original }) }));
+      this.#applyTextEdit({ page: pageNumber, rect, text, ...(paragraph ? { paragraph: true } : { old: original }),
+        ...picked.choices() }), picked.changed);
   }
 
   /** New words where the page was clicked; they take the look of the nearest text. */
@@ -2776,22 +3112,27 @@ export class Reader {
     }
     const h = near ? near.h : 16 * viewport.scale;
     const [box, field] = this.#editorBox(pageEl, {
-      left: at.clientX, top: at.clientY, width: look ? Math.max(160, look.size * 8) : 240, height: h + 4, fontSize: Math.max(8, h * 0.8),
+      left: at.clientX, top: at.clientY, width: look ? Math.max(160, look.size * 8) : 240, height: look ? look.size * 1.2 : h + 4,
+      fontSize: Math.max(8, h * 0.8), multiline: true, lineHeight: look ? look.size * 1.2 : null,
       fontFamily: near ? getComputedStyle(near.spans[0].s).fontFamily : "", value: "", look,
-      label: "New text (Enter to add, Esc to cancel)",
-      hint: [el("span", {}, "New text · Enter to add · Esc to cancel")],
+      label: "New text (Enter to add, Shift+Enter for a new line, Esc to cancel)",
+      hint: [el("span", {}, "New text · Enter to add · Shift+Enter new line · Esc to cancel")],
     });
+    field.dataset.enter = "apply";  // Enter adds the words; Shift+Enter starts a new line
+    field.rows = 1;
     const [x, y] = viewport.convertToPdfPoint(at.clientX - layer.left, at.clientY - layer.top);
-    this.#startEditing(box, field, pageEl, "", (text) => this.#applyTextEdit({ page: pageNumber, at: [x, y], text }));
+    const picked = this.#fontPicker(box, field, look, viewport, { newText: true, size: h });
+    this.#startEditing(box, field, pageEl, "", (text) => this.#applyTextEdit({ page: pageNumber, at: [x, y], text,
+      ...picked.choices() }));
   }
 
-  #startEditing(box, field, pageEl, original, apply) {
+  #startEditing(box, field, pageEl, original, apply, restyled = null) {
     let done = false;
     const finish = (keep) => {
       if (done) return;
       done = true;
       if (this.textEditor?.box === box) this.textEditor = null;
-      if (keep && field.value !== original && (original || field.value.trim())) {
+      if (keep && (field.value !== original || restyled?.()) && (original || field.value.trim())) {
         // The typed words stay showing where they go until the page is
         // drawn again with them, so nothing flickers back to the old ones.
         box.classList.add("rd-pending");
@@ -2805,7 +3146,7 @@ export class Reader {
     field.addEventListener("keydown", (e) => {
       e.stopPropagation();
       const multiline = field.tagName === "TEXTAREA";
-      if (e.key === "Enter" && (!multiline || e.ctrlKey || e.metaKey)) { e.preventDefault(); finish(true); }
+      if (e.key === "Enter" && (!multiline || e.ctrlKey || e.metaKey || (field.dataset.enter === "apply" && !e.shiftKey))) { e.preventDefault(); finish(true); }
       if (e.key === "Escape") { e.preventDefault(); finish(false); }
     });
     field.addEventListener("blur", () => setTimeout(() => { if (!done && !box.contains(document.activeElement)) finish(true); }));
@@ -2816,6 +3157,205 @@ export class Reader {
   }
 
   #closeTextEditor(keep) { this.textEditor?.finish(keep); }
+
+  // -- text font picker and reflow --
+  /** The bar above the text editor to choose how the words look: font,
+   *  size, bold, italic, colour and (for more than a word) alignment. The
+   *  field shows the choice as it's made. Returns {choices(): what changed,
+   *  as the server takes it, changed(): whether anything did}. */
+  #fontPicker(box, field, look, viewport, { paragraph = false, newText = false, size = 16 } = {}) {
+    const scale = viewport.scale || 1;
+    const start = {
+      font: "", size: Math.round(((look?.size || size * 0.8) / scale) * 2) / 2,
+      bold: look?.weight === "bold", italic: look?.style === "italic",
+      color: Reader.#hexColour(look?.color || "#000000"), align: "",
+    };
+    const now = { ...start };
+    const own = Reader.#familyOf(look?.fontName || "");
+    const fontSel = el("select", { class: "rd-tf-font", title: "Font", "aria-label": "Font" },
+      el("option", { value: "" }, own ? `${own} (as is)` : "Same font"));
+    const sizeIn = el("input", { class: "rd-tf-size", type: "number", min: "1", max: "500", step: "0.5", value: String(start.size),
+      title: "Size (points)", "aria-label": "Font size in points" });
+    const toggle = (label, title, key) => el("button", { type: "button", class: `rd-tf-btn rd-tf-${key}`, title,
+      "aria-label": title, "aria-pressed": String(now[key]) }, label);
+    const boldBtn = toggle("B", "Bold (Ctrl+B)", "bold"), italicBtn = toggle("I", "Italic (Ctrl+I)", "italic");
+    const colorIn = el("input", { class: "rd-tf-color", type: "color", value: start.color, title: "Colour", "aria-label": "Text colour" });
+    const aligns = [["left", "Align left", "M4 6h16M4 10h10M4 14h16M4 18h10"], ["center", "Centre", "M4 6h16M7 10h10M4 14h16M7 18h10"],
+      ["right", "Align right", "M4 6h16M10 10h10M4 14h16M10 18h10"], ["justify", "Justify", "M4 6h16M4 10h16M4 14h16M4 18h16"]]
+      .map(([value, title, d]) => {
+        const b = el("button", { type: "button", class: "rd-tf-btn rd-tf-align", title, "aria-label": title, "aria-pressed": "false",
+          html: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>` });
+        b.dataset.align = value;
+        return b;
+      });
+    const alignGroup = el("span", { class: "rd-tf-group", role: "group", "aria-label": "Alignment" }, ...aligns);
+    aligns[3].hidden = !paragraph && !newText;  // one line: set within its old width; justifying needs more lines
+    const bar = el("div", { class: "rd-tf-bar", role: "toolbar", "aria-label": "Text look" },
+      fontSel, sizeIn, el("span", { class: "rd-tf-group" }, boldBtn, italicBtn), colorIn, alignGroup);
+    box.append(bar);
+
+    const generic = /serif|times|roman|georgia|garamond|cambria|book|palatino/i.test(own) && !/sans/i.test(own) ? "serif"
+      : /mono|courier|consol/i.test(own) ? "monospace" : "sans-serif";
+    const original = look ? { family: look.family, size: look.size, weight: look.weight, style: look.style, color: look.color } : null;
+    const lineHeight = parseFloat(field.style.lineHeight) || 0;
+    const show = () => {
+      const k = now.size / start.size;
+      const family = now.font ? Reader.#cssFamily(now.font, generic) : original?.family || "";
+      if (look) Object.assign(look, { family, size: original.size * k, weight: now.bold ? "bold" : "", style: now.italic ? "italic" : "" });
+      Object.assign(field.style, {
+        fontFamily: family, fontWeight: now.bold ? "bold" : "normal", fontStyle: now.italic ? "italic" : "normal",
+        color: now.color !== start.color || !original ? now.color : original.color, textAlign: now.align === "justify" ? "justify" : now.align || "",
+      });
+      if (look) field.style.fontSize = `${look.size}px`;
+      else field.style.fontSize = `${Math.max(8, now.size * scale)}px`;
+      if (lineHeight) field.style.lineHeight = `${lineHeight * k}px`;
+      if (now.font || now.bold !== start.bold || now.italic !== start.italic) {
+        field.style.letterSpacing = field.style.wordSpacing = "";  // the page's spacing was for its own font
+      }
+      if (paragraph && lineHeight) field.style.height = `${Math.max(parseFloat(field.style.height) || 0, lineHeight * k * 2)}px`;
+      fit();
+    };
+    // New words: the box grows with the longest line and the number of lines.
+    const fit = () => {
+      if (!newText) return field.dispatchEvent(new Event("input"));
+      const lines = field.value.split("\n");
+      const m = look || { family: getComputedStyle(field).fontFamily, size: parseFloat(field.style.fontSize) || 16 };
+      const w = Math.max(...lines.map((t) => this.#textWidth(t, m)), 0) + m.size;
+      const lh = parseFloat(field.style.lineHeight) || m.size * 1.25;
+      Object.assign(field.style, { width: `${Math.max(look ? look.size * 4 : 160, Math.ceil(w))}px`, height: `${Math.ceil(lh * lines.length + 2)}px` });
+    };
+    if (newText) field.addEventListener("input", fit);
+
+    const press = () => {
+      boldBtn.setAttribute("aria-pressed", String(now.bold));
+      italicBtn.setAttribute("aria-pressed", String(now.italic));
+      for (const b of aligns) b.setAttribute("aria-pressed", String(b.dataset.align === now.align));
+      show();
+    };
+    for (const b of [boldBtn, italicBtn, ...aligns]) b.addEventListener("pointerdown", (e) => e.preventDefault());  // the field keeps the focus
+    boldBtn.addEventListener("click", () => { now.bold = !now.bold; press(); });
+    italicBtn.addEventListener("click", () => { now.italic = !now.italic; press(); });
+    for (const b of aligns) b.addEventListener("click", () => { now.align = now.align === b.dataset.align ? "" : b.dataset.align; press(); });
+    fontSel.addEventListener("change", () => { now.font = fontSel.value; show(); });
+    sizeIn.addEventListener("input", () => {
+      const v = parseFloat(sizeIn.value);
+      if (v >= 1 && v <= 500) { now.size = v; show(); }
+    });
+    colorIn.addEventListener("input", () => { now.color = colorIn.value; show(); });
+    field.addEventListener("keydown", (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key === "b" || key === "i") {
+        e.preventDefault();
+        now[key === "b" ? "bold" : "italic"] = !now[key === "b" ? "bold" : "italic"];
+        press();
+      }
+    });
+    // The bar's own keys: Enter applies, Esc cancels; nothing reaches the reader's shortcuts.
+    bar.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") { e.preventDefault(); this.textEditor?.finish(false); }
+      if (e.key === "Enter" && e.target.tagName !== "BUTTON") { e.preventDefault(); this.textEditor?.finish(true); }
+    });
+    // Leaving the bar for the page is like leaving the field: the change is made.
+    bar.addEventListener("focusout", () => setTimeout(() => {
+      if (box.isConnected && !box.contains(document.activeElement) && this.textEditor?.box === box) this.textEditor.finish(true);
+    }));
+
+    this.#fontChoices().then((choices) => {
+      if (!choices || !fontSel.isConnected) return;
+      const ownKey = Reader.#familyKey(own);
+      const group = (label, names) => {
+        const items = (names || []).filter((n) => Reader.#familyKey(n) !== ownKey);
+        if (items.length) fontSel.append(el("optgroup", { label }, ...items.map((n) => el("option", { value: n }, n))));
+      };
+      group("In this document", choices.document);
+      group("On this computer", choices.installed);
+      group("More on this computer", choices.more);
+      group(choices.pdfa ? "Standard (embedded, PDF/A)" : "Standard", choices.standard);
+    });
+
+    const changes = () => {
+      const out = {};
+      if (now.font) out.font = now.font;
+      if (Math.abs(now.size - start.size) >= 0.25) out.size = now.size;
+      if (now.bold !== start.bold) out.bold = now.bold;
+      if (now.italic !== start.italic) out.italic = now.italic;
+      if (now.color !== start.color) out.color = Reader.#rgb01(now.color);
+      if (now.align) out.align = now.align;
+      return out;
+    };
+    return { choices: changes, changed: () => Object.keys(changes()).length > 0 };
+  }
+
+  /** The fonts to offer (see /api/text/fonts), asked once per version of the document. */
+  async #fontChoices() {
+    const tab = this.activeTab;
+    if (!tab) return null;
+    if (tab.fontChoices?.version !== tab.version) {
+      const ask = async () => {
+        try {
+          const bytes = tab.bytes || await this.#currentBytes();
+          const res = await this.#post("/api/text/fonts", bytes, tab);
+          return res.ok ? await res.json() : null;
+        } catch (e) {
+          return null;  // the editor works without the list: the font as is, size, colour
+        }
+      };
+      tab.fontChoices = { version: tab.version, promise: ask() };
+    }
+    return tab.fontChoices.promise;
+  }
+
+  /** Notes on a change: the font it got when one was picked, a smaller
+   *  size, words that ran on into the next column: [sentence]. */
+  #fontNotes(used) {
+    const notes = [];
+    for (const u of used) {
+      if (u.asked && u.matched === false) {
+        notes.push(u.reason === "pdfa"
+          ? `This is a PDF/A file, which needs every font inside it; ${u.asked} isn't, so ${u.font} was used.`
+          : `${u.asked} can't show those letters in that style here, so ${u.font} was used.`);
+      }
+      if (u.size) notes.push(`The text was made a little smaller (${u.size} pt) to fit.`);
+      if (u.linked) notes.push("What didn't fit in its column runs on at the top of the next one.");
+    }
+    return notes;
+  }
+
+  /** The last change again, its text made a little smaller to fit the page. */
+  async #shrinkToFit(edit) {
+    await this.#undoTextEdit();
+    return this.#applyTextEdit({ ...edit, fit: "shrink" });
+  }
+
+  /** "ABCDEF+TimesNewRomanPS-BoldMT" → "Times New Roman". */
+  static #familyOf(name) {
+    let family = String(name || "").replace(/^[A-Z]{6}\+/, "").split(/[-,]/)[0];
+    family = family.replace(/(PS)?MT$|PS$/, "").replace(/([a-z])([A-Z])/g, "$1 $2");
+    return family.replace(/\s+(Bold|Italic|Oblique|Regular|BoldItalic)$/i, "").trim();
+  }
+
+  static #familyKey(name) { return String(name || "").toLowerCase().replace(/[^a-z0-9]/g, ""); }
+
+  /** A CSS font-family for a family picked in the list. */
+  static #cssFamily(name, generic) {
+    const standard = { helvetica: "Helvetica, Arial, sans-serif", times: '"Times New Roman", Times, serif',
+      courier: '"Courier New", Courier, monospace' }[Reader.#familyKey(name)];
+    return standard || `"${name.replace(/["\\]/g, "")}", ${generic}`;
+  }
+
+  static #hexColour(css) {
+    const m = String(css).match(/\d+(\.\d+)?/g);
+    if (/^#[0-9a-f]{6}$/i.test(css)) return css.toLowerCase();
+    if (!m || m.length < 3) return "#000000";
+    return "#" + m.slice(0, 3).map((v) => Math.max(0, Math.min(255, Math.round(+v))).toString(16).padStart(2, "0")).join("");
+  }
+
+  static #rgb01(hex) {
+    return [1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) / 255 * 1000) / 1000);
+  }
+  // -- end of text font picker and reflow --
 
   /** The view (page, zoom, scroll), to come back to after reloading. */
   #view() {
@@ -2873,8 +3413,8 @@ export class Reader {
         // Say when the words couldn't get the document's own font.
         let used = [];
         try { used = JSON.parse(res.headers.get("X-Pdfm-Fonts") || "[]"); } catch (e) {}
-        const other = used.find((u) => u.kind !== "same");
-        const notes = [];
+        const other = used.find((u) => u.kind !== "same" && !u.asked);
+        const notes = this.#fontNotes(used);
         if (other) {
           notes.push(other.kind === "installed"
             ? `This PDF's copy of the font lacks some of those letters, so ${other.font} from this computer was used.`
@@ -2882,6 +3422,11 @@ export class Reader {
         }
         if (used.some((u) => u.wider)) notes.push("The line is now longer than its column: to wrap it again, rewrite the whole paragraph (Shift+click it).");
         if (used.some((u) => u.taller)) notes.push("The paragraph now takes more lines than before, so it may run into what's below it. Undo with Ctrl+Z.");
+        if (used.some((u) => u.overflow) && !edit.fit) {
+          notes.push("The text no longer fits on the page, so the text below it wasn't moved. Shorten it, or let it shrink a little.");
+          return this.toast(notes.join(" "), 12000, ["Shrink to fit", () => this.#shrinkToFit(edit)]);
+        }
+        if (used.some((u) => u.overflow)) notes.push("Even a little smaller, the text doesn't fit on the page, so the text below it wasn't moved.");
         if (notes.length) this.toast(notes.join(" "), 8000);
       },
     });
@@ -4652,9 +5197,11 @@ export class Reader {
       tool("Add a note", "NOTE", "comment sticky review", "note"), tool("Underline text", "UNDERLINE", "markup", "underline"),
       tool("Strike out text", "STRIKEOUT", "strikethrough delete markup", "strike"),
       tool("Draw a shape", "SHAPE", "rectangle ellipse circle cloud arrow line markup revision", "shapes"),
+      tool("Stamp the page", "STAMPS", "approved draft confidential final received reviewed rubber stamp", "stamp"),
       tool("Edit pictures", "IMAGES", "image photo move resize replace delete logo", "imgedit"),
       tool("Edit links", "LINKS", "hyperlink url web address page add change remove", "link"),
       tool("Sign with a digital ID", "CERTSIGN", "certificate pfx p12 digital signature sign", "badge"),
+      tool("Redact (black out for good)", "REDACT", "redaction black out remove hide censor private confidential", "redact"),
       { icon: "badge", label: "Check the signatures", words: "verify valid certificate signed", run: () => this.#signatureDetails() },
       { icon: "comments", label: "Comments", words: "notes replies review list markup", run: () => { this.#setSidebar(true); this.#showTab("comments"); } },
       { icon: "sign", label: "Sign", words: "signature autograph", run: () => this.sign() },

@@ -42,8 +42,9 @@ from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
                         forms, recipes, redact, scan, search, textedit, update, viewports, markup, pageimages,
-                        formdetect, pdfacheck)
+                        formdetect, pdfacheck, filetools, comments)
 from pdfmanager import certsign
+from pdfmanager import accessibility  # -- accessibility --
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
@@ -131,6 +132,20 @@ OPERATIONS = [
                             ["detect", "Create from headings"],
                             ["clear", "Remove all bookmarks"]]),
                 _f("outline", "", "hidden", "")]},
+    {"id": "labels", "group": "Pages", "label": "Page labels", "files": "pdf",
+     "board": {"mode": "view"},
+     "help": "Number pages the way the book does: i, ii, iii for the front pages, then 1, 2, 3. "
+             "Readers show these labels and go to them (\"page iv\").",
+     "fields": [_f("roman", "Front pages numbered i, ii, iii", "number", 0, min=0,
+                   hint="e.g. 4 for a cover and three pages of contents; 0 for none"),
+                _f("style", "Then number", "select", "1",
+                   choices=[[k, v] for k, v in filetools.STYLE_NAMES.items()]),
+                _f("prefix", "Prefix", "text", "", placeholder="e.g. A-"),
+                _f("start", "Starting at", "number", 1, min=1),
+                _f("custom", "Or write them out", "text", "", placeholder="1: Cover; 2-4: i; 5-: 1",
+                   hint="Each part: the page it starts on, then its first label. "
+                        "Overrides the choices above."),
+                _f("clear", "Remove the page labels", "check", False)]},
     {"id": "rotate", "group": "Pages", "label": "Rotate", "files": "pdf",
      "help": "Click the pages to turn, or leave them all unselected to turn every page.",
      "board": {"mode": "select", "effect": "rotate", "field": "pages", "degrees": "degrees"},
@@ -186,6 +201,10 @@ OPERATIONS = [
                       for p in ("a4", "letter", "a3", "tabloid", "legal")],
                    hint="Used sideways, with two pages on each side. Twice the page size "
                         "keeps the pages as they are: A5 pages on A4 paper, A4 on A3.")]},
+    {"id": "repair", "group": "Optimize", "label": "Repair & fast web view", "files": "pdf",
+     "help": "Mend a damaged PDF (one that won't open, or shows errors), and optimize it so "
+             "the first page shows before the whole file has downloaded.",
+     "fields": [_f("linearize", "Optimize for fast web view", "check", True)]},
     {"id": "compress", "group": "Optimize", "label": "Compress", "files": "pdf",
      "fields": [_f("level", "Compression", "select", "medium",
                    choices=[["low", "Low — lossless"],
@@ -263,13 +282,46 @@ OPERATIONS = [
     {"id": "metadata", "group": "Stamp", "label": "Title & author", "files": "pdf",
      "fields": [_f("title", "Title"), _f("author", "Author"), _f("subject", "Subject"),
                 _f("keywords", "Keywords")]},
+    # -- comments --
+    {"id": "comments", "group": "Stamp", "label": "Comments: summary & export", "files": "pdf",
+     "help": "List the comments of PDFs (notes, highlights, stamps…, with the words they mark "
+             "and the replies) as a PDF to read or print, or as a spreadsheet; or move "
+             "comments between copies of a document with XFDF files (Acrobat reads and "
+             "writes them).",
+     "fields": [_f("mode", "Make", "select", "summary",
+                   choices=[["summary", "A summary (PDF)"], ["csv", "A spreadsheet (CSV)"],
+                            ["export", "A comments file to send (XFDF)"],
+                            ["import", "Add comments from an XFDF file"]]),
+                _f("xfdf", "Comments file (.xfdf)", "file", None, accept=".xfdf,.xml",
+                   show_if={"mode": "import"})]},
+    # -- end of comments --
+    # -- file tools --
+    {"id": "attach", "group": "Stamp", "label": "Attach files", "files": "pdf",
+     "help": "Attach files to PDFs (a spreadsheet, the original Word file, photos), or take "
+             "attached files away. Readers show them in their attachments panel.",
+     "fields": [_f("attach", "Files to attach", "file", None, multiple=True),
+                _f("remove", "Remove attached files", "text", "",
+                   placeholder="names, separated by commas"),
+                _f("remove_all", "Remove all the attached files first", "check", False)]},
     {"id": "encrypt", "group": "Security", "label": "Add password", "files": "pdf",
-     "fields": [_f("new_password", "New password", "password", "", required=True)]},
+     "help": "Protect PDFs with a password to open them, and limit what people can do with "
+             "them: print, copy or change.",
+     "fields": [_f("new_password", "Password to open", "password", "",
+                   hint="Leave it empty to let anyone open the PDF, with the limits below."),
+                _f("printing", "Printing", "select", "high",
+                   choices=[["high", "Allowed"], ["low", "Low quality only"],
+                            ["none", "Not allowed"]]),
+                _f("changes", "Changes", "select", "any",
+                   choices=[[k, v[0].upper() + v[1:]] for k, v in filetools.CHANGES_TEXT.items()]),
+                _f("copy", "Allow copying text and pictures", "check", True),
+                _f("owner_password", "Permissions password", "password", "",
+                   hint="Needed for the limits above, and different from the password to "
+                        "open: it lifts the limits (and removes the protection).")]},
     {"id": "decrypt", "group": "Security", "label": "Remove password", "files": "pdf",
      "help": "Enter the current password in the box above the Run button.", "fields": []},
     {"id": "redact", "group": "Security", "label": "Redact", "files": "pdf", "panel": "redact",
-     "help": "Permanently black out names, numbers or areas. Pages with redactions become "
-             "pictures, so what's under the black boxes is really gone.",
+     "help": "Permanently black out names, numbers or areas. What's under the black boxes "
+             "is taken out of the file for good.",
      "fields": [_f("terms", "Words or phrases", "text", "", placeholder="John Smith, 555-1234",
                    hint="separate several with commas"),
                 _f("emails", "All email addresses", "check", False),
@@ -277,6 +329,13 @@ OPERATIONS = [
                 _f("numbers", "Card, account and ID numbers", "check", False),
                 _f("case_sensitive", "Match upper/lower case", "check", False),
                 _f("whole_words", "Whole words only", "check", False),
+                # -- true redaction --
+                _f("method", "How", "select", "remove",
+                   choices=[["remove", "Remove what's under the boxes — the rest stays searchable"],
+                            ["image", "Turn the pages into pictures — the most thorough"]],
+                   hint="A page that can't be edited safely becomes a picture instead; the "
+                        "notes say which."),
+                # -- end of true redaction --
                 _f("boxes", "", "hidden", "")]},
     {"id": "sanitize", "group": "Security", "label": "Remove hidden data", "files": "pdf",
      "help": "Remove information that travels unseen inside a PDF before you share it.",
@@ -336,6 +395,28 @@ OPERATIONS = [
                    choices=[["auto", "veraPDF if installed"], ["builtin", "ZPDF's own checks"]],
                    hint="veraPDF (free, verapdf.org) checks every rule; ZPDF's own checks "
                         "cover the ones files most often break.")]},
+    # -- accessibility --
+    {"id": "tag", "group": "Convert", "label": "Make accessible (tag)", "files": "pdf",
+     "help": "Tag PDFs for screen readers, like Acrobat's Autotag: headings, paragraphs, lists, "
+             "tables, pictures and links, in reading order (columns too), with the language "
+             "and title set. Running headers and page numbers are left out of what's read. "
+             "The pages look the same.",
+     "fields": [_f("lang", "Language", "text", "auto", placeholder="auto",
+                   hint="auto guesses it from the text; or a code such as en, de, fr, es, it, "
+                        "nl, pt-BR"),
+                _f("title", "Title (optional)", "text", "",
+                   hint="Shown in the window's title bar. Blank: the title the file has, else "
+                        "its first heading."),
+                _f("force", "Replace existing tags", "check", False,
+                   hint="A file that is already tagged keeps its tags unless this is ticked.")]},
+    {"id": "access-check", "group": "Convert", "label": "Check accessibility", "files": "pdf",
+     "action": "Check",
+     "help": "Check PDFs for what keeps screen readers from reading them, like Acrobat's "
+             "Accessibility Checker (the basics of PDF/UA): tags, language, title, picture "
+             "descriptions, tables, headings, links, form fields and more, with how to fix "
+             "each. You get a short report; nothing is changed.",
+     "fields": []},
+    # -- end of accessibility --
     {"id": "from-images", "group": "Convert", "label": "Images → PDF", "files": "images",
      "fields": [_f("size", "Page size", "select", "",
                    choices=[["", "Same as image"]] +
@@ -372,6 +453,29 @@ OPERATIONS = [
                 _f("format", "Format", "select", "xlsx",
                    choices=[["xlsx", "Excel workbook (.xlsx)"], ["csv", "CSV files (zip)"]],
                    hint="A table that continues on the next page is kept as one table.")]},
+    # -- pptx and html --
+    {"id": "to-pptx", "group": "Convert", "label": "PDF → PowerPoint", "files": "pdf",
+     "help": "Turn PDFs into PowerPoint slides (.pptx), one slide per page. No PowerPoint "
+             "needed.",
+     "fields": [_f("mode", "Slides", "select", "editable",
+                   choices=[["editable", "Editable text"], ["pictures", "Pictures of the pages"]],
+                   hint="Editable text: the text becomes text boxes you can change, over the "
+                        "page's pictures and drawings."),
+                _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
+    {"id": "to-html", "group": "Convert", "label": "PDF → HTML", "files": "pdf",
+     "help": "Turn PDFs into a web page (.html) that opens in any browser. Pictures are "
+             "inside the file.",
+     "fields": [_f("mode", "Layout", "select", "flowing",
+                   choices=[["flowing", "Flowing text"], ["exact", "Exact layout"]],
+                   hint="Flowing text fits any screen: headings, paragraphs, lists, tables and "
+                        "pictures. Exact layout keeps each page as it looks."),
+                _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
+    # -- end of pptx and html --
+    # -- web pages --
+    {"id": "web", "group": "Convert", "label": "Web page → PDF", "files": "web", "url_field": "url",
+     "help": "Save a web page as a PDF, as the browser prints it (links keep working): type its "
+             "address, or add saved web pages (.html, .mht). Uses Microsoft Edge or Chrome.",
+     "fields": [_f("url", "Web address", "text", "", placeholder="https://example.com/page")]},
     {"id": "from-office", "group": "Convert", "label": "Office → PDF", "files": "office",
      "help": "Convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF. "
              "Uses Microsoft Office if installed, otherwise LibreOffice.",
@@ -421,7 +525,10 @@ SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "rec
           "encrypt": "protected", "decrypt": "unlocked"}
 SUFFIX.update({"sign-cert": "signed", "verify-sig": "signatures"})  # digital ID signatures
 SUFFIX["pdfa-check"] = "pdfa-check"
+SUFFIX.update({"attach": "attached", "labels": "labelled", "repair": "repaired"})  # file tools
+SUFFIX["comments"] = "comments"
 SUFFIX["to-excel"] = "tables"
+SUFFIX.update({"tag": "tagged", "access-check": "accessibility"})  # -- accessibility --
 
 
 class UserError(Exception):
@@ -546,12 +653,19 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         if not (terms or patterns or boxes):
             raise UserError("enter words to black out, tick a kind of number, or draw boxes "
                             "on the pages")
+        # -- true redaction --
+        method = opts.get("method") or "remove"
+        if method not in redact.METHODS:
+            raise UserError("choose how to redact: remove what's under the boxes, or pictures")
+        # -- end of true redaction --
         found = redact.redact(src, out, terms=terms, patterns=patterns, boxes=boxes,
                               case_sensitive=_bool(opts.get("case_sensitive")),
-                              whole_words=_bool(opts.get("whole_words")), password=password)
+                              whole_words=_bool(opts.get("whole_words")), password=password,
+                              method=method)
         notes.append(f"{src.name}: " + (
             f"blacked out {sum(found.values())} area{'s' if sum(found.values()) != 1 else ''} "
-            f"on page{'s' if len(found) != 1 else ''} {_pages_list(list(found))}" if found
+            f"on page{'s' if len(found) != 1 else ''} {_pages_list(list(found))}"
+            + _redact_extra(found) if found
             else "nothing matched, so nothing was blacked out"))
     elif op == "recipe":
         try:
@@ -601,10 +715,10 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             bates_prefix=opts.get("bates_prefix") or "", bates_start=first,
             bates_digits=_num(opts.get("bates_digits"), int, 6), password=password)
     elif op == "flatten":
-        fields, comments = _bool(opts.get("forms", True)), _bool(opts.get("comments", True))
-        if not fields and not comments:
+        with_fields, with_comments = _bool(opts.get("forms", True)), _bool(opts.get("comments", True))
+        if not with_fields and not with_comments:
             raise UserError("choose form fields, comments or both")
-        archive.flatten(src, out, forms=fields, comments=comments, password=password)
+        archive.flatten(src, out, forms=with_fields, comments=with_comments, password=password)
     elif op == "sanitize":
         counts = archive.sanitize(
             src, out, **{k: _bool(opts.get(k, d)) for k, d in
@@ -628,6 +742,19 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                                  engine=opts.get("engine") or "auto")
         out.write_text(pdfacheck.report(result, src.name), encoding="utf-8")
         notes.append(f"{src.name}: {pdfacheck.summary(result)}")
+    # -- accessibility --
+    elif op == "tag":
+        result = accessibility.autotag(src, out, password=password,
+                                       lang=(opts.get("lang") or "").strip() or None,
+                                       title=(opts.get("title") or "").strip() or None,
+                                       force=_bool(opts.get("force")))
+        notes.append(f"{src.name}: {accessibility.tag_summary(result)}")
+    elif op == "access-check":
+        out = out.with_suffix(".txt")
+        result = accessibility.check(src, password=password)
+        out.write_text(accessibility.report(result, src.name), encoding="utf-8")
+        notes.append(f"{src.name}: {accessibility.summary(result)}")
+    # -- end of accessibility --
     elif op == "verify-sig":
         out = out.with_suffix(".txt")
         found = certsign.verify(src, password, [extra_files["trust"]]
@@ -661,9 +788,74 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         fields = {k: opts.get(k) or None for k in ("title", "author", "subject", "keywords")}
         core.set_metadata(src, out, password, **fields)
     elif op == "encrypt":
-        if not opts.get("new_password"):
-            raise UserError("enter a new password")
-        core.encrypt(src, out, opts["new_password"], password=password)
+        perms = filetools.permissions(opts.get("printing") or "high", opts.get("changes") or "any",
+                                      _bool(opts.get("copy", True)))
+        limited = filetools.restricts(perms)
+        if not opts.get("new_password") and not limited:
+            raise UserError("enter a password to open it, or choose what to limit")
+        core.encrypt(src, out, opts.get("new_password") or "", opts.get("owner_password") or None,
+                     password=password, permissions=perms if limited else None)
+        notes.append(f"{src.name}: " + ("opens with its password" if opts.get("new_password")
+                                       else "anyone can open it")
+                     + (f"; {filetools.describe(perms)}" if limited else ""))
+    # -- comments --
+    elif op == "comments":
+        mode = opts.get("mode") or "summary"
+        if mode == "import":
+            if not extra_files.get("xfdf"):
+                raise UserError("choose the comments file (.xfdf) to add")
+            added, skipped = comments.import_xfdf(src, extra_files["xfdf"], out, password)
+            notes.append(f"{src.name}: added {added} comment{'s' if added != 1 else ''}"
+                         + (f" (couldn't add: {', '.join(skipped)})" if skipped else ""))
+        else:
+            if mode == "export":
+                out = out.with_name(f"{src.stem}.xfdf")
+                n = comments.export_xfdf(src, out, password)
+            else:
+                found = comments.collect(src, password)
+                n = comments.count(found)
+                if mode == "csv":
+                    out = out.with_name(f"{src.stem}_comments.csv")
+                    comments.to_csv(found, out)
+                else:
+                    comments.summary_pdf(found, out, src.name)
+            notes.append(f"{src.name}: {n} comment{'s' if n != 1 else ''}")
+    # -- end of comments --
+    # -- file tools --
+    elif op == "attach":
+        added, removed = filetools.attach(src, out, extra_files.get("attach[]") or [],
+                                          remove=[n for n in (opts.get("remove") or "").split(",")],
+                                          remove_all=_bool(opts.get("remove_all")),
+                                          password=password)
+        now = [a["name"] for a in filetools.attachments(out)]
+        notes.append(f"{src.name}: " + "; ".join(
+            bit for bit in (f"attached {', '.join(added)}" if added else "",
+                            f"removed {', '.join(removed)}" if removed else "") if bit)
+            + (f" (now attached: {', '.join(now)})" if now else " (no attached files now)"))
+    elif op == "labels":
+        if _bool(opts.get("clear")):
+            labels = []
+        elif (opts.get("custom") or "").strip():
+            labels = filetools.parse_labels(opts["custom"])
+        else:
+            roman = _num(opts.get("roman"), int, 0)
+            rest = (opts.get("style") or "1", opts.get("prefix") or "", _num(opts.get("start"), int, 1))
+            labels = ([(1, "i", "", 1)] if roman else []) + [(roman + 1, *rest)]
+            total = len(core.open_pdf(src, password).pages)
+            labels = [lab for lab in labels if lab[0] <= total]
+        filetools.set_page_labels(src, out, labels, password)
+        shown = filetools.page_labels(out)
+        notes.append(f"{src.name}: " + ("page labels removed" if not shown else
+                                        "pages labelled " + ", ".join(shown[:6])
+                                        + ("…" if len(shown) > 6 else "")))
+    elif op == "repair":
+        report = filetools.repair(src, out, linearize=_bool(opts.get("linearize", True)),
+                                  password=password)
+        fixed = len(report["warnings"])
+        notes.append(f"{src.name}: " + (f"mended {fixed} problem{'s' if fixed != 1 else ''}"
+                                        if fixed else "no damage found")
+                     + ("; optimized for fast web view" if report["linearized"] else ""))
+    # -- end of file tools --
     elif op == "decrypt":
         if not password:
             raise UserError("enter the PDF's current password")
@@ -712,9 +904,32 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                          "result, install Microsoft Word.")
     elif op == "to-excel":
         return _to_excel(src, out_dir, opts, password, notes)
+    # -- pptx and html --
+    elif op == "to-pptx":
+        from pdfmanager import slides
+
+        mode = opts.get("mode") or "editable"
+        if mode not in slides.MODES:
+            raise UserError(f"unknown kind of slides {mode!r}")
+        out = out_dir / f"{src.stem}.pptx"
+        made = slides.pdf_to_pptx(src, out, password, _pages(opts), mode=mode)
+        notes.append(f"{src.name}: {made['slides']} slide{'s' if made['slides'] != 1 else ''}")
+    elif op == "to-html":
+        from pdfmanager import webpage
+
+        mode = opts.get("mode") or "flowing"
+        if mode not in webpage.MODES:
+            raise UserError(f"unknown layout {mode!r}")
+        out = out_dir / f"{src.stem}.html"
+        webpage.pdf_to_html(src, out, password, _pages(opts), mode=mode)
+    # -- end of pptx and html --
     elif op == "from-office":
         out = out_dir / f"{src.stem}.pdf"
         office.office_to_pdf(src, out)
+    elif op == "web":
+        out = out_dir / f"{src.stem}.pdf"
+        _, program = office.html_to_pdf(src, out)
+        notes.append(f"{src.name}: printed with {program}")
     else:
         raise UserError(f"unknown operation {op!r}")
     return [out]
@@ -775,6 +990,37 @@ def _redact_request(opts):
     return terms, patterns, boxes
 
 
+# -- true redaction --
+def _redact_extra(report):
+    """What the notes add to "blacked out N areas": pages that became
+    pictures although the content was to be removed, and bookmarks."""
+    pictures = getattr(report, "pictures", {})
+    bits = []
+    if pictures:
+        reasons = sorted(set(pictures.values()))
+        bits.append(f"page{'s' if len(pictures) != 1 else ''} {_pages_list(list(pictures))} "
+                    f"became {'a picture' if len(pictures) == 1 else 'pictures'} "
+                    f"({'; '.join(reasons)})")
+    if getattr(report, "bookmarks", 0):
+        n = report.bookmarks
+        bits.append(f"blacked out the words in {n} bookmark{'s' if n != 1 else ''}")
+    return "".join("; " + b for b in bits)
+
+
+def _redact_boxes(raw):
+    """{0-based page: [(x0, y0, x1, y1)]} from {"1": [[x0, y0, x1, y1]]}."""
+    try:
+        raw = json.loads(raw or "{}")
+        boxes = {int(page) - 1: [tuple(float(v) for v in box) for box in found]
+                 for page, found in raw.items() if found}
+    except (ValueError, TypeError, AttributeError):
+        raise UserError("the boxes drawn on the pages are damaged; draw them again") from None
+    if any(len(box) != 4 for found in boxes.values() for box in found):
+        raise UserError("the boxes drawn on the pages are damaged; draw them again")
+    return boxes
+# -- end of true redaction --
+
+
 def _pages_list(numbers):
     return ", ".join(map(str, numbers)) if len(numbers) <= 12 else f"{len(numbers)} pages"
 
@@ -831,11 +1077,13 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
     for field in spec["fields"]:
         if field.get("required") and not str(opts.get(field["key"]) or "").strip():
             raise UserError(f"please fill in “{field['label']}”")
-    if not files:
-        raise UserError("add at least one file")
+    url_field = spec.get("url_field")
+    if not files and not (url_field and str(opts.get(url_field) or "").strip()):
+        raise UserError("add at least one file" if not url_field else
+                        "type a web address, or add saved web pages")
     if len(files) < spec.get("min", 1):
         raise UserError(f"add at least {spec['min']} files")
-    out_dir = Path(work or files[0].parent) / "out"
+    out_dir = Path(work or (files[0].parent if files else tempfile.mkdtemp(prefix="pdfm-"))) / "out"
     out_dir.mkdir()
     extra_files = extra_files or {}
     protect = None  # the outputs made from a password-protected input
@@ -859,6 +1107,13 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
         changed = [c for c in summary["changes"] if c["kind"] != "same"]
         notes.append(f"{len(changed)} page{'s' if len(changed) != 1 else ''} with differences"
                      if changed else "No differences found.")
+        outputs = [out]
+    elif op == "web" and not files:  # a web address
+        address = opts["url"].strip()
+        name = re.sub(r"[^\w.-]+", "-", re.sub(r"(?i)^https?://(www\.)?", "", address)).strip("-.")[:60]
+        out = out_dir / f"{name or 'page'}.pdf"
+        _, program = office.html_to_pdf(address, out)
+        notes.append(f"{address}: printed with {program}")
         outputs = [out]
     elif op == "from-images":
         out = out_dir / (files[0].stem + ".pdf" if len(files) == 1 else "images.pdf")
@@ -885,11 +1140,17 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
     if not outputs:
         raise UserError("nothing was found to save" + (f" ({'; '.join(notes)})" if notes else ""))
     _protect(protect, password, op)
-    if len(outputs) == 1 and op != "media" and outputs[0].suffix != ".csv":  # CSV: always a ZIP
+    if len(outputs) == 1 and op != "media" and (outputs[0].suffix != ".csv" or op == "comments"):  # CSV tables: a ZIP
         path = outputs[0]
         ctype = {".txt": "text/plain; charset=utf-8",
                  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                 ".xfdf": "application/vnd.adobe.xfdf", ".csv": "text/csv; charset=utf-8",
+                 # -- pptx and html --
+                 ".pptx": "application/vnd.openxmlformats-officedocument.presentationml."
+                          "presentation",
+                 ".html": "text/html; charset=utf-8",
+                 # -- end of pptx and html --
                  }.get(path.suffix, "application/pdf")
         return path.name, path.read_bytes(), ctype
     buf = io.BytesIO()
@@ -1559,20 +1820,32 @@ class Handler(BaseHTTPRequestHandler):
                 return self._outline(body)
             if path == "/api/redact/find":
                 return self._redact_find(body)
+            # -- true redaction --
+            if path == "/api/redact/apply":
+                return self._redact_apply(body)
+            # -- end of true redaction --
             if path == "/api/form/fields":
                 return self._form_fields(body)
             if path == "/api/form/detect":
                 return self._form_detect(body)
             if path == "/api/form/fillable":
                 return self._form_fillable(body)
+            if path in ("/api/comments/summary", "/api/comments/export", "/api/comments/import"):
+                return self._comments(path.rsplit("/", 1)[1], body)
             if path == "/api/text/edit":
                 return self._text_edit(body)
+            # -- text reflow --
+            if path == "/api/text/fonts":
+                return self._text_fonts(body)
+            # -- end of text reflow --
             if path == "/api/pages/arrange":
                 return self._arrange(body)
             if path == "/api/sign/cert":
                 return self._sign_cert(body)
             if path == "/api/sign/verify":
                 return self._sign_verify(body)
+            if path == "/api/accessibility/check":  # -- accessibility --
+                return self._access_check(body)
             if path == "/api/settings":
                 return self._save_settings(body)
             if path == "/api/update/check":
@@ -1637,7 +1910,8 @@ class Handler(BaseHTTPRequestHandler):
                     if name == "files":
                         files.append(path)
                     elif data:  # extra file field, e.g. an ICC profile
-                        extra[name] = path
+                        extra.setdefault(name, path)
+                        extra.setdefault(name + "[]", []).append(path)  # all of them
                 notes = []
                 name, data, ctype = run_operation(op, files, fields, password, extra, work, notes)
                 return {"file": (name, data, ctype, notes, keep)}
@@ -1790,6 +2064,36 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(HTTPStatus.OK, {"boxes": {str(p + 1): [list(b) for b in boxes]
                                                     for p, boxes in found.items()}})
 
+    # -- true redaction --
+    def _redact_apply(self, body):
+        """The reader's Redact tool: remove what's under the marked boxes
+        ("boxes": {"1": [[x0, y0, x1, y1]]} in PDF points from the bottom
+        left of each page); sends back the redacted PDF, and in
+        X-Pdfm-Redacted how many areas, on which pages, and which pages had
+        to become pictures (and why)."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        boxes = _redact_boxes(fields.get("boxes"))
+        if not boxes:
+            raise UserError("mark something to redact first")
+        method = fields.get("method") or "remove"
+        if method not in redact.METHODS:
+            raise UserError("choose how to redact: remove what's under the boxes, or pictures")
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "redacted.pdf"
+            src.write_bytes(uploads[0][2])
+            report = redact.redact(src, out, boxes=boxes, password=password, method=method)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)  # stays protected
+            data = out.read_bytes()
+        summary = {"areas": sum(report.values()), "pages": list(report),
+                   "pictures": {str(k): v for k, v in report.pictures.items()}}
+        return self._send(HTTPStatus.OK, data, "application/pdf",
+                          {"X-Pdfm-Redacted": json.dumps(summary, ensure_ascii=True)})
+    # -- end of true redaction --
+
     def _form_fields(self, body):
         """The form fields already in a PDF, for the Add form fields editor."""
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
@@ -1818,6 +2122,35 @@ class Handler(BaseHTTPRequestHandler):
                     raise UserError("pages should look like 1-2") from None
             found = formdetect.detect(path, fields.get("password") or None, pages=pages)
         return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})
+
+    def _comments(self, what, body):
+        """The reader's comment summary (PDF), XFDF export, or XFDF import
+        (the changed PDF)."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            src.write_bytes(uploads[0][2])
+            out = Path(tmp) / "out"
+            name = fields.get("name") or "document.pdf"
+            if what == "summary":
+                comments.summary_pdf(comments.collect(src, password), out, name)
+                return self._send(HTTPStatus.OK, out.read_bytes(), "application/pdf")
+            if what == "export":
+                n = comments.export_xfdf(src, out, password)
+                return self._send(HTTPStatus.OK, out.read_bytes(), "application/vnd.adobe.xfdf",
+                                  {"X-Pdfm-Count": str(n)})
+            xfdf = next((data for key, _, data in uploads if key == "xfdf"), None)
+            if xfdf is None:
+                raise UserError("choose the comments file (.xfdf) to add")
+            (Path(tmp) / "in.xfdf").write_bytes(xfdf)
+            added, skipped = comments.import_xfdf(src, Path(tmp) / "in.xfdf", out, password)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)  # stays protected
+            return self._send(HTTPStatus.OK, out.read_bytes(), "application/pdf",
+                              {"X-Pdfm-Added": str(added), "X-Pdfm-Skipped": ",".join(skipped)})
 
     def _form_fillable(self, body):
         """The reader's "Make it fillable": the fields of a printed form added
@@ -1896,6 +2229,20 @@ class Handler(BaseHTTPRequestHandler):
         # Which font each change got, for the reader to say so.
         return self._send(HTTPStatus.OK, data, "application/pdf",
                           {"X-Pdfm-Fonts": json.dumps(report, ensure_ascii=True)})
+
+    # -- text reflow --
+    def _text_fonts(self, body):
+        """The fonts the reader's text editor offers: the document's own
+        first, then installed ones, then the standard PDF fonts."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            src.write_bytes(uploads[0][2])
+            choices = textedit.font_choices(src, fields.get("password") or None)
+        return self._send(HTTPStatus.OK, choices)
+    # -- end of text reflow --
 
     def _images_list(self, body):
         """The pictures on the reader's pages (see pageimages.py)."""
@@ -2019,6 +2366,20 @@ class Handler(BaseHTTPRequestHandler):
             data = out.read_bytes()
         return self._send(HTTPStatus.OK, data, "application/pdf",
                           {"X-Pdfm-Signed": json.dumps(result, ensure_ascii=True)})
+
+    # -- accessibility --
+    def _access_check(self, body):
+        """The reader's Check accessibility: accessibility.check's result."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            result = accessibility.check(path, fields.get("password") or None)
+        result.pop("file", None)
+        return self._send(HTTPStatus.OK, result)
+    # -- end of accessibility --
 
     def _sign_verify(self, body):
         """The digital signatures in a PDF, checked: {"signatures": [...]}

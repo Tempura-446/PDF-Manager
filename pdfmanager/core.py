@@ -1150,12 +1150,25 @@ class _Bytes:
         stream.write(self.data)
 
 
-def encrypt(path, output, user_password, owner_password=None, password=None):
+def encrypt(path, output, user_password, owner_password=None, password=None, permissions=None):
     """Protect with AES-256. With pikepdf installed, qpdf does the protecting
     and packs the file into object streams on the way (see ``pack``), so a
     compressed file that is protected again keeps its packing; the
-    unprotected document only passes through memory."""
+    unprotected document only passes through memory.
+
+    ``permissions`` (filetools.permissions) limits what people with the
+    open password (``user_password``, which may be empty: anyone can open
+    it) can do; the permissions password (``owner_password``) lifts the
+    limits, so it must differ from the open password."""
+    from pdfmanager import filetools
+
     reader = open_pdf(path, password)
+    restricted = filetools.restricts(permissions)
+    if restricted and (not owner_password or owner_password == user_password):
+        raise PdfManagerError("to limit printing, copying or changes, set a permissions "
+                              "password different from the password to open it")
+    if not user_password and not owner_password:
+        raise PdfManagerError("enter a password to open it, or choose what to limit")
     owner_password = owner_password or user_password
     try:
         import pikepdf
@@ -1168,21 +1181,43 @@ def encrypt(path, output, user_password, owner_password=None, password=None):
         try:
             with pikepdf.open(plain) as pdf:
                 protected = io.BytesIO()
+                allow = permissions if permissions is not None else pikepdf.Permissions(
+                    modify_assembly=True)
                 pdf.save(protected, encryption=pikepdf.Encryption(
-                             user=user_password, owner=owner_password, aes=True, R=6),
+                             user=user_password or "", owner=owner_password, aes=True, R=6,
+                             allow=allow),
                          object_stream_mode=pikepdf.ObjectStreamMode.generate,
                          compress_streams=True, recompress_flate=False)
             return _write(_Bytes(protected.getvalue()), output)
         except (pikepdf.PdfError, RuntimeError):
             pass  # qpdf can't read pypdf's copy: protect it the pypdf way
     writer = clone_document(reader)
-    writer.encrypt(user_password=user_password, owner_password=owner_password,
-                   algorithm="AES-256")
+    extra = {"permissions_flag": filetools.pypdf_flags(permissions)} if permissions else {}
+    writer.encrypt(user_password=user_password or "", owner_password=owner_password,
+                   algorithm="AES-256", **extra)
     return _write(writer, output)
 
 
 def decrypt(path, output, password):
+    """Remove the protection. A PDF that limits printing, copying or
+    changes needs its permissions password for this (as in Acrobat), not
+    just the password to open it."""
     reader = open_pdf(path, password)
+    try:
+        import pikepdf
+    except ImportError:
+        pikepdf = None
+    if pikepdf is not None and reader.is_encrypted:
+        from pdfmanager import filetools
+
+        try:
+            with pikepdf.open(path, password=password or "") as pdf:
+                if not pdf.owner_password_matched and filetools.restricts(pdf.allow):
+                    raise PdfManagerError(
+                        f"this PDF limits what can be done with it ({filetools.describe(pdf.allow)}):"
+                        " removing its protection needs its permissions password")
+        except pikepdf.PdfError:
+            pass  # qpdf can't read it: pypdf already could
     writer = clone_document(reader)
     return _write(writer, output)
 

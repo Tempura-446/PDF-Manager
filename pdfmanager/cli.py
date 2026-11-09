@@ -15,7 +15,8 @@ from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
                         forms, recipes, redact, scan, search)
-from pdfmanager import certsign, formdetect, pdfacheck
+from pdfmanager import certsign, comments, filetools, formdetect, pdfacheck
+from pdfmanager import accessibility  # -- accessibility --
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -68,10 +69,13 @@ class _Passwords:
     this run, then an interactive prompt. Passwords given on the command
     line end up in shell history, so prompting is preferred."""
 
-    def __init__(self, given):
+    def __init__(self, given, given_first=False):
         found = (("--password", given), (PASSWORD_ENV, os.environ.get(PASSWORD_ENV)))
         self.known = [p for _, p in found if p]
         self.sources = [name for name, p in found if p]
+        # decrypt: a PDF anyone can open but with limits needs its
+        # permissions password, so a given password goes before "".
+        self.given_first = given_first
 
     def for_file(self, path):
         try:
@@ -80,7 +84,7 @@ class _Passwords:
             return None  # let the command report the real error
         if not reader.is_encrypted:
             return None
-        for candidate in ["", *self.known]:
+        for candidate in ([*self.known, ""] if self.given_first else ["", *self.known]):
             if reader.decrypt(candidate):
                 return candidate
         if not sys.stdin.isatty():
@@ -195,8 +199,53 @@ def run_color(a, src, out, pw):
     return core.convert_color(src, out, a.to, a.icc, pw)
 
 
+def _encrypt_limits(a):
+    return filetools.permissions(a.printing, a.changes, not a.no_copy)
+
+
 def run_encrypt(a, src, out, pw):
-    return core.encrypt(src, out, a.user_password, a.owner_password, pw)
+    perms = _encrypt_limits(a)
+    limited = filetools.restricts(perms)
+    core.encrypt(src, out, a.user_password or "", a.owner_password, pw,
+                 permissions=perms if limited else None)
+    return f"{out}  ({filetools.describe(perms)})" if limited else out
+
+
+# -- file tools --
+def run_attach(a, src, out, pw):
+    if a.list or not (a.add or a.remove or a.remove_all):
+        found = filetools.attachments(src, pw)
+        for item in found:
+            size = f"{item['size']:,} bytes" if item["size"] is not None else "damaged"
+            print(f"{item['name']}  ({size})" + (f"  {item['description']}" if item["description"] else ""))
+        if not found:
+            print("no attached files")
+        return None
+    added, removed = filetools.attach(src, out, a.add or [], a.remove or [], a.remove_all, pw,
+                                      description=a.description or "")
+    bits = ([f"attached {', '.join(added)}"] if added else []) + \
+        ([f"removed {', '.join(removed)}"] if removed else [])
+    return f"{out}  ({'; '.join(bits)})"
+
+
+def run_labels(a, src, out, pw):
+    if not a.set and not a.clear:
+        labels = filetools.page_labels(src, pw)
+        print("no page labels" if labels is None else
+              "\n".join(f"{n}: {label}" for n, label in enumerate(labels, 1)))
+        return None
+    filetools.set_page_labels(src, out, [] if a.clear else filetools.parse_labels(a.set), pw)
+    shown = filetools.page_labels(out)
+    return f"{out}  ({'labels removed' if not shown else ', '.join(shown[:8]) + ('…' if len(shown) > 8 else '')})"
+
+
+def run_repair(a, src, out, pw):
+    report = filetools.repair(src, out, linearize=not a.no_linearize, password=pw)
+    for warning in report["warnings"]:
+        print(f"mended: {warning}")
+    return f"{out}  ({len(report['warnings'])} problem(s) mended" + \
+        (", fast web view)" if report["linearized"] else ")")
+# -- end of file tools --
 
 
 def run_decrypt(a, src, out, pw):
@@ -375,6 +424,49 @@ def cmd_verify(a):
 # -- end of digital ID signatures --
 
 
+# -- accessibility --
+
+def run_tag(a, src, out, pw):
+    alt = None
+    if a.alt:
+        try:
+            alt = json.loads(Path(a.alt).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise core.PdfManagerError(f"can't read the descriptions in {a.alt} ({exc})") from None
+        if not isinstance(alt, dict):
+            raise core.PdfManagerError(f'{a.alt} should hold {{"page": ["description", ...]}}')
+    result = accessibility.autotag(src, out, password=pw, lang=a.lang, title=a.title, alt=alt,
+                                   force=a.force)
+    return f"{out}  ({accessibility.tag_summary(result)})"
+
+
+def cmd_check_access(a):
+    inputs = _expand(a.inputs)
+    passwords = _Passwords(a.password)
+    ok, records = True, []
+    for src in inputs:
+        try:
+            result = accessibility.check(src, password=passwords.for_file(src))
+        except (core.PdfManagerError, OSError) as exc:
+            if len(inputs) == 1:
+                raise
+            ok = False
+            message = str(exc)
+            print(f"error: {message if str(src) in message else f'{src}: {message}'}",
+                  file=sys.stderr)
+            continue
+        ok = ok and result["passed"]
+        if a.json:
+            records.append(result)
+        else:
+            print(("\n" if src != inputs[0] else "") + accessibility.report(result, str(src)), end="")
+    if a.json:
+        print(json.dumps(records, indent=2, ensure_ascii=False))
+    return 0 if ok else 1
+
+# -- end of accessibility --
+
+
 def run_bookmarks(a, src, out, pw):
     if a.set and a.detect:
         raise core.PdfManagerError("use --set or --detect, not both")
@@ -445,6 +537,24 @@ def run_to_excel(a, src, out, pw):
     return f"{made['output']}  ({n} table{'s' if n != 1 else ''})"
 
 
+# -- pptx and html --
+def run_to_pptx(a, src, out, pw):
+    from pdfmanager import slides
+
+    made = slides.pdf_to_pptx(src, out, password=pw, pages=a.pages, mode=a.mode)
+    n = made["slides"]
+    return f"{made['output']}  ({n} slide{'s' if n != 1 else ''}, {a.mode})"
+
+
+def run_to_html(a, src, out, pw):
+    from pdfmanager import webpage
+
+    made = webpage.pdf_to_html(src, out, password=pw, pages=a.pages, mode=a.mode)
+    n = made["pages"]
+    return f"{made['output']}  ({n} page{'s' if n != 1 else ''}, {a.mode})"
+# -- end of pptx and html --
+
+
 def cmd_from_office(a):
     failures = 0
     files = _expand(a.inputs)
@@ -470,16 +580,85 @@ def cmd_from_office(a):
     return 1 if failures else 0
 
 
+# -- comments --
+def run_comments(a, src, out, pw):
+    if a.import_xfdf:
+        added, skipped = comments.import_xfdf(src, a.import_xfdf, out, pw)
+        if pw:
+            _reencrypt(out, pw)
+        return f"{out}  (added {added} comment{'s' if added != 1 else ''}" + \
+            (f"; couldn't add {', '.join(skipped)})" if skipped else ")")
+    if a.export:
+        target = Path(a.output) if a.output and not _is_folder(a.output) else out.with_suffix(".xfdf")
+        n = comments.export_xfdf(src, target, pw)
+        return f"{target}  ({n} comment{'s' if n != 1 else ''})"
+    found = comments.collect(src, pw)
+    if a.csv:
+        target = Path(a.output) if a.output and not _is_folder(a.output) else out.with_suffix(".csv")
+        comments.to_csv(found, target)
+        return f"{target}  ({comments.count(found)} comments)"
+    if a.summary:
+        comments.summary_pdf(found, out, Path(src).name)
+        return f"{out}  ({comments.count(found)} comments)"
+    for c in found:  # without options: list them
+        print(f"p. {c['page']}  {c['kind']}" + (f"  {c['author']}" if c["author"] else "")
+              + (f"  “{c['marked']}”" if c["marked"] else "") + (f": {c['text']}" if c["text"] else ""))
+        for r in c["replies"]:
+            print(f"    reply{('  ' + r['author']) if r['author'] else ''}: {r['text']}")
+    if not found:
+        print("no comments")
+    return None
+# -- end of comments --
+
+
+# -- web pages --
+def cmd_web(a):
+    """Print web pages (addresses or saved .html files) to PDF."""
+    failures = 0
+    sources = []
+    for item in a.inputs:
+        sources += [item] if office._web_address(item) else [str(p) for p in _expand([item])]
+    for src in sources:
+        address = office._web_address(src)
+        if a.output and len(sources) == 1:
+            out = Path(a.output)
+        else:
+            folder = Path(a.output) if a.output else (Path.cwd() if address else Path(src).parent)
+            folder.mkdir(parents=True, exist_ok=True)
+            stem = (re.sub(r"[^\w.-]+", "-", re.sub(r"(?i)^https?://(www\.)?", "", address)).strip("-.")[:60]
+                    if address else Path(src).stem) or "page"
+            out = folder / f"{stem}.pdf"
+        try:
+            result, program = office.html_to_pdf(src, out)
+            print(f"{src} -> {result}  ({program})")
+        except (core.PdfManagerError, OSError) as exc:
+            if len(sources) == 1:
+                raise
+            failures += 1
+            print(f"error: {src}: {exc}", file=sys.stderr)
+    return 1 if failures else 0
+# -- end of web pages --
+
+
 def run_redact(a, src, out, pw):
     patterns = list(a.pattern or []) + [redact.PRESETS[p] for p in a.find or []]
     if not (a.text or patterns or a.box):
         raise core.PdfManagerError("say what to redact: --text, --pattern, --find or --box")
+    # -- true redaction --
+    method = getattr(a, "method", None) or "remove"
+    # -- end of true redaction --
     found = redact.redact(src, out, terms=a.text or [], patterns=patterns, boxes=a.box or [],
                           case_sensitive=a.case_sensitive, whole_words=a.whole_words,
-                          dpi=a.dpi, password=pw)
+                          dpi=a.dpi, password=pw, method=method)
     if not found:
         return f"{out}  (nothing found to redact)"
-    return f"{out}  ({sum(found.values())} area(s) on page(s) {', '.join(map(str, found))})"
+    # -- true redaction --
+    extra = "".join(f"; page {page} became a picture ({why})"
+                    for page, why in getattr(found, "pictures", {}).items())
+    if getattr(found, "bookmarks", 0):
+        extra += f"; blacked out the words in {found.bookmarks} bookmark(s)"
+    # -- end of true redaction --
+    return f"{out}  ({sum(found.values())} area(s) on page(s) {', '.join(map(str, found))}{extra})"
 
 
 def run_headers(a, src, out, pw):
@@ -571,6 +750,13 @@ OUTPUTS = {
     "split": ("split", "dir"), "to-images": ("images", "dir"), "extract-media": ("media", "dir"),
 }
 OUTPUTS["sign-cert"] = ("signed", "pdf")  # digital ID signatures
+OUTPUTS.update({"attach": ("attached", "pdf"), "labels": ("labelled", "pdf"),
+                "repair": ("repaired", "pdf")})  # file tools
+OUTPUTS["comments"] = ("comments", "pdf")
+# -- pptx and html --
+OUTPUTS.update({"to-pptx": (None, "pptx"), "to-html": (None, "html")})
+# -- end of pptx and html --
+OUTPUTS["tag"] = ("tagged", "pdf")  # -- accessibility --
 
 
 def _is_batch(patterns, inputs):
@@ -595,14 +781,14 @@ def _output_for(a, src, batch):
     if a.command == "text" and a.output is None:
         return None  # print to the terminal
     src = Path(src)
-    ext = {"docx": ".docx", "xlsx": ".xlsx", "txt": ".txt"}.get(kind, ".pdf")
+    ext = ".pdf" if kind == "pdf" else f".{kind}"  # docx, xlsx, pptx, html, txt
     if kind == "dir":
         base = Path(a.output) if a.output else src.parent
         return base / f"{src.stem}_{suffix}" if (batch or not a.output) else base
     if not batch and not _is_folder(a.output):
         if a.output:
             return Path(a.output)
-        return src.with_suffix(ext) if kind in ("docx", "xlsx") else _default_output(src, suffix)
+        return src.with_suffix(ext) if suffix is None else _default_output(src, suffix)
     if a.output:  # -o is a folder; keep the original file names
         folder = Path(a.output)
         if folder.exists() and not folder.is_dir():
@@ -610,7 +796,7 @@ def _output_for(a, src, batch):
         folder.mkdir(parents=True, exist_ok=True)
         if folder.resolve() != src.parent.resolve():
             return folder / (src.stem + ext)
-    return src.with_suffix(ext) if kind in ("docx", "xlsx") else _default_output(src, suffix, ext)
+    return src.with_suffix(ext) if suffix is None else _default_output(src, suffix, ext)
 
 
 def _check_outputs(plan):
@@ -639,7 +825,9 @@ KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split", 
                     "to-excel",
                     "extract-media",
                     "pdfa"}  # PDF/A doesn't allow encryption
+KEEP_UNENCRYPTED.add("comments")  # a summary, CSV or XFDF; an import protects itself
 KEEP_UNENCRYPTED.add("sign-cert")  # stays protected inside the signed file; re-saving breaks it
+KEEP_UNENCRYPTED |= {"to-pptx", "to-html"}  # -- pptx and html -- (not PDFs)
 
 
 def _reencrypt(out, password):
@@ -651,8 +839,9 @@ def _reencrypt(out, password):
 def run_per_file(a):
     inputs = _expand(a.inputs)
     batch = _is_batch(a.inputs, inputs)
-    passwords = _Passwords(a.password)
-    if a.command == "encrypt" and not a.user_password:
+    passwords = _Passwords(a.password, given_first=a.command == "decrypt")
+    if a.command == "encrypt" and not a.user_password \
+            and not (filetools.restricts(_encrypt_limits(a)) and a.owner_password):
         a.user_password = _ask_new_password()
     plan = [(src, _output_for(a, src, batch)) for src in inputs]
     _check_outputs(plan)
@@ -1061,9 +1250,39 @@ def build_parser():
                     help="convert images through this ICC profile and embed it as the "
                          "output intent (e.g. your printer's CMYK profile)")
 
-    sp = per_file("encrypt", run_encrypt, "password-protect PDFs (AES-256)")
-    sp.add_argument("--user-password", help="password to open (prompted if omitted)")
-    sp.add_argument("--owner-password", help="password for full permissions")
+    sp = per_file("encrypt", run_encrypt, "password-protect PDFs (AES-256), and limit printing, "
+                                          "copying or changes")
+    sp.add_argument("--user-password", help="password to open (prompted if omitted; may be "
+                                            "left out when limits and --owner-password are set)")
+    sp.add_argument("--owner-password", help="permissions password: lifts the limits")
+    sp.add_argument("--printing", choices=filetools.PRINTING, default="high",
+                    help="allow printing (high), low-quality printing only, or none")
+    sp.add_argument("--changes", choices=filetools.CHANGES, default="any",
+                    help="what may be changed: any, comments (and forms, signing), forms "
+                         "(filling in, signing), pages (insert, delete, turn) or none")
+    sp.add_argument("--no-copy", action="store_true", help="don't allow copying text and pictures")
+
+    # -- file tools --
+    sp = per_file("attach", run_attach, "attach files to PDFs, remove them, or list them "
+                                        "(without options)")
+    sp.add_argument("--add", action="append", metavar="FILE", help="a file to attach (repeat)")
+    sp.add_argument("--remove", action="append", metavar="NAME",
+                    help="remove the attached file of this name (repeat)")
+    sp.add_argument("--remove-all", action="store_true", help="remove all attached files")
+    sp.add_argument("--description", help="a description for the files added")
+    sp.add_argument("--list", action="store_true", help="list the attached files")
+
+    sp = per_file("labels", run_labels, "set or remove page labels (i, ii, iii then 1, 2, 3); "
+                                        "without options: list them")
+    sp.add_argument("--set", metavar="SPEC",
+                    help='e.g. "1: Cover; 2-4: i; 5-: 1; 30-: A-1" (the page each part starts on, '
+                         "then its first label)")
+    sp.add_argument("--clear", action="store_true", help="remove the page labels")
+
+    sp = per_file("repair", run_repair, "mend damaged PDFs and optimize them for fast web view")
+    sp.add_argument("--no-linearize", action="store_true",
+                    help="don't optimize for fast web view (just repair)")
+    # -- end of file tools --
 
     per_file("decrypt", run_decrypt, "remove password protection")
 
@@ -1171,7 +1390,7 @@ def build_parser():
     # -- end of digital ID signatures --
 
     sp = per_file("redact", run_redact,
-                  "permanently black out text or areas (redacted pages become images)")
+                  "permanently black out text or areas (what's under them is removed)")
     sp.add_argument("-t", "--text", action="append", metavar="TEXT",
                     help="text to black out (repeat for more)")
     sp.add_argument("--pattern", action="append", metavar="REGEX",
@@ -1182,7 +1401,14 @@ def build_parser():
                     help="black out an area, in points from the bottom-left corner")
     sp.add_argument("--case-sensitive", action="store_true")
     sp.add_argument("--whole-words", action="store_true")
-    sp.add_argument("--dpi", type=_positive(int), default=200, help="resolution of redacted pages")
+    sp.add_argument("--dpi", type=_positive(int), default=200,
+                    help="resolution of pages turned into pictures")
+    # -- true redaction --
+    sp.add_argument("--method", choices=list(redact.METHODS), default="remove",
+                    help="remove: take out what's under the boxes, the rest of the page stays "
+                         "searchable text (default; pages that can't be edited safely become "
+                         "pictures); image: turn every redacted page into a picture")
+    # -- end of true redaction --
 
     sp = per_file("form", run_form,
                   "add fillable form fields (without --field: list the fields already there)")
@@ -1215,6 +1441,30 @@ def build_parser():
     sp.add_argument("--password", help=f"password for encrypted input (better: let pdfm "
                                        f"prompt, or set {PASSWORD_ENV})")
     sp.add_argument("--json", action="store_true", help="print JSON")
+
+    # -- accessibility --
+    sp = per_file("tag", run_tag,
+                  "make PDFs accessible: tag their headings, paragraphs, lists, tables, figures "
+                  "and links for screen readers (like Acrobat's Autotag); the pages look the same")
+    sp.add_argument("--lang", help="the document's language, e.g. en, de, fr-CA (default: "
+                                   "guessed from the text)")
+    sp.add_argument("--title", help="the document's title (default: the one it has, else its "
+                                    "first heading)")
+    sp.add_argument("--alt", metavar="FILE",
+                    help='descriptions of the figures, from a JSON file: {"3": ["the first '
+                         'figure on page 3", "the second"]}')
+    sp.add_argument("--force", action="store_true",
+                    help="replace the tags of a file that is already tagged (otherwise they're "
+                         "kept)")
+
+    sp = other("check-access", cmd_check_access,
+               "check PDFs for what keeps screen readers from reading them (PDF/UA basics, like "
+               "Acrobat's Accessibility Checker; exit code 0 when no file has problems)")
+    sp.add_argument("inputs", nargs="+", metavar="input", help="PDF(s) to check")
+    sp.add_argument("--password", help=f"password for encrypted input (better: let pdfm "
+                                       f"prompt, or set {PASSWORD_ENV})")
+    sp.add_argument("--json", action="store_true", help="print JSON")
+    # -- end of accessibility --
 
     sp = per_file("bookmarks", run_bookmarks,
                   "list, set or detect bookmarks (without options: list them)")
@@ -1258,6 +1508,39 @@ def build_parser():
                         "per table)")
     g.add_argument("--csv", action="store_true",
                    help="write a CSV file per table instead of a workbook")
+
+    sp = per_file("comments", run_comments,
+                  "list the comments in PDFs, or make a summary (PDF), a spreadsheet (CSV) or an "
+                  "XFDF file of them; or add comments from an XFDF file")
+    g = sp.add_mutually_exclusive_group()
+    g.add_argument("--summary", action="store_true", help="a PDF listing the comments page by page")
+    g.add_argument("--csv", action="store_true", help="a spreadsheet of the comments")
+    g.add_argument("--export", action="store_true", help="an XFDF file of the comments (Acrobat reads it)")
+    g.add_argument("--import", dest="import_xfdf", metavar="XFDF", help="add the comments of an XFDF file")
+
+    sp = other("web", cmd_web, "save web pages as PDFs, as the browser prints them (needs "
+                               "Microsoft Edge, Chrome or Chromium)")
+    sp.add_argument("inputs", nargs="+", metavar="address-or-file",
+                    help="web addresses (https://…) or saved web pages (.html, .mht)")
+    sp.add_argument("-o", "--output", help="output file; with several inputs, a folder")
+    # -- pptx and html --
+    sp = per_file("to-pptx", run_to_pptx,
+                  "convert PDFs to PowerPoint presentations (.pptx), a slide per page",
+                  out_help="output .pptx (default: <input>.pptx); with several inputs, a folder")
+    sp.add_argument("-p", "--pages", help=PAGES_HELP)
+    sp.add_argument("--pictures", dest="mode", action="store_const", const="pictures",
+                    default="editable",
+                    help="make each slide a picture of the page (default: editable text boxes "
+                         "over the page's pictures and drawings)")
+
+    sp = per_file("to-html", run_to_html, "convert PDFs to web pages (.html, pictures inside)",
+                  out_help="output .html (default: <input>.html); with several inputs, a folder")
+    sp.add_argument("-p", "--pages", help=PAGES_HELP)
+    sp.add_argument("--exact", dest="mode", action="store_const", const="exact",
+                    default="flowing",
+                    help="keep each page as it looks, text over a picture of the page "
+                         "(default: flowing text with headings, lists, tables and pictures)")
+    # -- end of pptx and html --
 
     sp = other("from-office", cmd_from_office,
                "convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF "

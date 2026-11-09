@@ -9,8 +9,9 @@ into files of a maximum size), compare, extract, reorder, insert blank pages,
 rotate, resize, crop (also trimming white margins automatically), n-up, make
 **booklets** for folded printing, compress (three levels), convert colours
 (grayscale / RGB / CMYK, with ICC profiles), OCR and clean up scans, redact,
-flatten, remove hidden data, convert to PDF/A (and check PDF/A), Word and from Office files or
-images, edit bookmarks, encrypt, watermark and number pages, add headers,
+flatten, remove hidden data, convert to PDF/A (and check PDF/A), make PDFs
+**accessible** (tags for screen readers, and a check like Acrobat's), Word, Excel,
+**PowerPoint** and **HTML**, and from Office files or images, edit bookmarks, encrypt, watermark and number pages, add headers,
 footers and **Bates numbers**, create **fillable forms** (finding a printed
 form's fields by itself), pull out pictures
 and attached files, run several of these in a row as a **recipe**, and
@@ -148,7 +149,9 @@ closed.
   for every page). **Booklet** puts two pages on each sheet in the order
   for a folded, stapled booklet: print it double-sided, flipping on the
   short edge. **Redact** lets you
-  draw boxes to black out, and shows where the words you typed are found.
+  draw boxes to black out, and shows where the words you typed are found;
+  **How** chooses between removing what's under the boxes (the rest of the
+  page stays searchable) and turning the pages into pictures.
 - **Bookmarks** has an editor: rename, indent and reorder bookmarks, or
   detect them from the document's headings.
 - **Recipes** run several tools in a row (for example *Clean up scans →
@@ -187,6 +190,11 @@ closed.
   per table, or all on one sheet, after a Summary sheet) with numbers as
   real numbers, or into CSV files in a ZIP. See
   [Excel (tables)](#excel-tables).
+- **PDF → PowerPoint** makes a slide of each page, with the text in text
+  boxes you can edit over the page's pictures and drawings (or each slide
+  a picture of the page). **PDF → HTML** makes a web page: flowing text
+  that fits any screen, or each page as it looks. No Office needed. See
+  [PowerPoint and HTML](#powerpoint-and-html).
 - **Search PDFs** finds words in every PDF in a folder (and its
   sub-folders). Each result shows the words around the match; click one to
   open that page in the reader with the words highlighted. The text is
@@ -251,6 +259,9 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
 - **Fill in forms** and save a copy with your entries. A printed form with
   nothing to type in (lines, boxes and tick boxes only) gets a bar offering
   **Make it fillable**, which adds its fields right there (also in *Tools*).
+  Forms' own scripts run as in Acrobat: amounts, dates and phone numbers
+  are checked and shown in their format as you type, totals add themselves
+  up, and values out of range are refused.
 - **Annotate and sign** (Tools → Annotate & sign): highlight, underline
   or strike out text, add **notes** (click, type your comment), add text,
   draw, draw **shapes** (rectangle, ellipse, revision cloud, arrow, line;
@@ -261,6 +272,16 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   and shapes are standard PDF annotations with their own appearance, so
   Acrobat and other viewers show them the same, and they print. Use
   *Flatten forms & comments* afterwards to make them part of the page.
+- **Stamps** (Annotate & sign → Stamp): Approved, Not approved, Reviewed,
+  Received, Draft, Final, Confidential, For comment, Void or your own
+  words, with your name and the date if you like. Click where it goes, or
+  drag its size.
+- **Comments tab**: every comment with its replies; **Summary** makes a
+  PDF listing them page by page (with the words each highlight or
+  strike-out marks), **Export** saves them as an XFDF file to send, and
+  **Import** adds comments from one (Acrobat reads and writes XFDF).
+- **Document properties** shows what a protected PDF allows (printing,
+  changes, copying) and the attached files, each with **Save**.
 - **Pictures** (Tools → Annotate & sign → Pictures): every picture on the
   page is outlined; drag one to move it, drag a corner to resize it (it
   keeps its proportions; hold Shift to stretch it), or **Replace** or
@@ -276,6 +297,13 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   who signed it and whether it has been changed since; **Details** lists
   every signature. ZPDF asks before changing a signed document, since
   any change shows up as made after signing.
+- **Redact** (Tools → Annotate & sign → Redact): drag boxes over what
+  should go, or choose **Select words** and select them; marks are
+  outlined in red (click × to remove one). **Apply** asks first, then takes
+  what's under the marks out of the file and draws black boxes: the words,
+  the covered parts of pictures and drawings, and comments or form fields
+  there. The rest of the page stays real text. Undo with Ctrl+Z; it's for
+  good once you save. See [Redaction](#redaction).
 - **Comments** (a tab in the sidebar): every note, highlight, shape and
   other markup in the document, page by page, with its author, date and
   comment and the replies under it. Click one to go to it; add or change
@@ -295,9 +323,27 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   **document's own font** when its copy has every letter needed; otherwise
   the same font installed on your computer (found by name, e.g. Calibri),
   and only then a similar standard font; the reader tells you when it
-  couldn't use the original. The old words are covered with the colour
-  around them (they're still in the file underneath, so use **Redact** to
-  remove text for good). Undo with Ctrl+Z.
+  couldn't use the original. A bar above the text you're editing sets
+  **font, size, bold, italic, colour and alignment** (left, centre, right,
+  justified) for the line, paragraph or new text: the fonts this document
+  uses come first, then fonts installed on your computer, then the
+  standard PDF fonts (Helvetica, Times, Courier). A font from your
+  computer is embedded (only the letters used); in a PDF/A file a standard
+  font is swapped for an embedded one, and the reader says which font was
+  used. **Text flows:** when a rewritten paragraph gets longer or shorter,
+  the paragraphs below it in the same column move down or up to match,
+  with the rules (lines) between them; other columns, pictures and boxes
+  stay where they are, and the column ends at a big gap or at anything
+  that isn't text. If the text would no longer fit on the page, nothing
+  is moved and no words are lost: the reader says so and offers **Shrink
+  to fit** (the paragraph's size comes down a little, to three quarters at
+  most). The last paragraph of a column that no longer fits runs on at the
+  top of the next column on the page (its text moves down to make room),
+  as in linked text boxes; text doesn't run on to the next page. A rewritten
+  paragraph's old words are taken out of the page where they can be;
+  otherwise, as for a changed line, they're covered with the colour around
+  them (still in the file underneath, so use **Redact** to remove text for
+  good). Undo with Ctrl+Z.
 - **Pages:** in the thumbnails, drag pages to reorder them, click with
   Ctrl or Shift to pick several, and turn, duplicate, delete or extract
   them (the buttons on a thumbnail, the bar above them, or right-click).
@@ -444,7 +490,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `compress` | shrink files: `low`, `medium`, `high` | `pdfm compress *.pdf -l high -o small/` |
 | `color` | convert to grayscale, RGB or CMYK | `pdfm color doc.pdf --to cmyk --icc printer.icc` |
 | `ocr` | make scans searchable | `pdfm ocr scan.pdf --language eng+deu` |
-| `encrypt` / `decrypt` | AES-256 password protection | `pdfm encrypt doc.pdf` (prompts) |
+| `encrypt` / `decrypt` | AES-256 password protection, limits on printing, copying, changes | `pdfm encrypt doc.pdf` (prompts) |
 | `metadata` | show or set title/author/subject/keywords | `pdfm metadata doc.pdf --title "Q3 Report"` |
 | `watermark` | stamp text or another PDF | `pdfm watermark doc.pdf -t CONFIDENTIAL` |
 | `number` | add page numbers | `pdfm number doc.pdf --format "Page {n} of {total}"` |
@@ -462,9 +508,18 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `verify` | check the digital signatures in PDFs | `pdfm verify signed.pdf` |
 | `pdfa` | convert to PDF/A for archiving | `pdfm pdfa doc.pdf --level 2` |
 | `check-pdfa` | check whether PDFs meet PDF/A, and what breaks it | `pdfm check-pdfa *.pdf` · `--level 1b` |
+| `tag` | make PDFs accessible: tag them for screen readers | `pdfm tag report.pdf --lang en` |
+| `check-access` | check PDFs for accessibility problems, and how to fix them | `pdfm check-access *.pdf` · `--json` |
 | `to-word` | convert to an editable Word document | `pdfm to-word doc.pdf` |
 | `to-excel` | put the tables into an Excel workbook (or CSV files) | `pdfm to-excel doc.pdf -p 2-5` · `--one-sheet` · `--csv` |
-| `from-office` | convert Word, Excel, PowerPoint, … to PDF | `pdfm from-office report.docx` |
+| `to-pptx` | convert to a PowerPoint presentation, a slide per page | `pdfm to-pptx doc.pdf` · `--pictures` · `-p 1-5` |
+| `to-html` | convert to a web page (one .html file, pictures inside) | `pdfm to-html doc.pdf` · `--exact` |
+| `from-office` | convert Word, Excel, PowerPoint, … (and web pages) to PDF | `pdfm from-office report.docx` |
+| `web` | save web pages as PDFs (as the browser prints them) | `pdfm web https://example.com` |
+| `attach` | attach files to PDFs, remove or list them | `pdfm attach doc.pdf --add data.xlsx` |
+| `labels` | page labels (i, ii, iii then 1, 2, 3) | `pdfm labels doc.pdf --set "1-4: i; 5-: 1"` |
+| `repair` | mend damaged PDFs, fast web view | `pdfm repair broken.pdf` |
+| `comments` | list comments, summary PDF, CSV, XFDF export/import | `pdfm comments doc.pdf --summary` |
 | `recipe` | save and run recipes (several tools in a row) | `pdfm recipe run "Scans" *.pdf` |
 | `from-images` | save pictures as a PDF (photos the right way up, scanners' multi-page TIFFs) | `pdfm from-images *.jpg -o photos.pdf -s a4 --margin 10` |
 | `to-images` | render pages to PNG/JPG | `pdfm to-images doc.pdf --dpi 200 -p 1` |
@@ -593,10 +648,31 @@ headers and footers are ignored. Scans need OCR first.
 `redact` blacks out text (`-t`, repeatable), regular expressions
 (`--pattern`), all email addresses, phone numbers or long numbers
 (`--find emails|phones|numbers`) and areas (`--box PAGE:X0,Y0,X1,Y1` in
-points from the bottom left). Every page with a redaction is replaced by a
-picture of the page with the black boxes burned in, so the text underneath
-is really gone (other pages are untouched). Run OCR afterwards to make those
-pages searchable again; metadata isn't changed, so use `sanitize` too.
+points from the bottom left). What's under the boxes is taken out of the
+file, like Acrobat does, and black boxes are drawn over the places:
+
+- **letters** under a box are dropped from the text (one that's mostly
+  outside a box stays); every other letter stays real, searchable text,
+  exactly where it was;
+- **pictures** get their covered pixels painted black in the picture
+  itself (JPEGs stay JPEGs; a picture covered completely is removed);
+  **drawings** that lie completely under a box are removed (lines that
+  only cross one stay, covered);
+- **comments, links and form fields** touching a box are removed, and so
+  is replacement text in a tagged PDF (`/ActualText`, `/Alt`) that repeats
+  the removed words;
+- bookmark titles have the searched words replaced by `███`.
+
+Pages without redactions are untouched, and something used on several
+pages (a logo, a letterhead) is changed only where it was redacted. Every
+redacted page is checked afterwards: no letter may be left under a box and
+the searched words must be gone. A page that can't be edited safely (text
+in Type3 fonts, vertical text, unusual font encodings, damaged content,
+JPEG 2000 or CMYK JPEG pictures) or fails the check is turned into a picture
+instead, and `redact` says which pages and why. `--method image` turns every
+redacted page into a picture of itself (`--dpi`, default 200), the most
+thorough way; run OCR afterwards to make those pages searchable again.
+Metadata isn't changed, so use `sanitize` too.
 
 ### Archiving and privacy
 
@@ -633,6 +709,63 @@ pages searchable again; metadata isn't changed, so use `sanitize` too.
   layers, tagging (level A) and the size limits. `--engine builtin` always
   uses ZPDF's own checks; `--json` prints the results. The exit code is 0
   when every file passes.
+
+### Accessibility
+
+Screen readers (and reflow on phones, and conversions to Word or HTML) need a
+*tagged* PDF: one that says, next to what's drawn, which text is a heading,
+a paragraph, a list, a table or a link, what each picture shows, and in
+which order it all reads. PDF/UA (ISO 14289) is the standard for that.
+
+- `tag` (the **Make accessible (tag)** tool, like Acrobat's Autotag) adds
+  the tags. It reads each page's layout: headings by their size, weight or
+  numbering ("1.2 Results"; levels never skip), paragraphs, bulleted and
+  numbered lists, tables (the first row becomes header cells), pictures
+  (described by a caption next to them, "Figure 3: …"), links, form fields
+  and comments, in reading order — columns left to right, top to bottom.
+  Running headers, footers and page numbers, borders and backgrounds are
+  marked as decoration, so they aren't read out. It also sets the
+  language (`--lang de`; by default guessed from the text), the title
+  (`--title`; by default the one the file has, else its first heading)
+  and shows it in the window's title bar, makes Tab follow the reading
+  order, and adds bookmarks from the headings to documents over 20 pages
+  that have none. What's drawn on the pages doesn't change.
+  `--alt FILE` gives descriptions for the pictures, from a JSON file:
+  `{"3": ["the first figure on page 3", "the second"]}`. A file that is
+  already tagged keeps its tags (only the language, title and tab order
+  are filled in) unless `--force` is given.
+- `check-access` (the **Check accessibility** tool, like Acrobat's
+  Accessibility Checker; also **Tools → ⋯ → Check accessibility** in the
+  reader) reports what keeps screen readers out, on which pages, and how
+  to fix it:
+
+  ```
+  Tagged: No
+  Language: (not set)
+  Result: 4 problems
+    - The document isn't tagged: screen readers can't tell its headings, …
+      How to fix: Use Make accessible (tag); on the command line, pdfm tag.
+  ```
+
+  It checks that the document is tagged and says so, its language and
+  title (and that the title is shown), security settings that lock screen
+  readers out, scanned pages with no text (they need OCR first), text
+  whose font doesn't say which characters it shows, page content that is
+  neither tagged nor marked as decoration, tags that don't match the
+  content, pictures without a description, tables without header cells or
+  with uneven rows, headings that skip levels, lists not built of items,
+  links, form fields and comments that aren't tagged, links without a
+  description, form fields without a tooltip, the tab order, and bookmarks
+  in documents over 20 pages. Reading order and colour contrast need a
+  person; the report says so. `--json` prints the results; the exit code
+  is 0 when no file has problems. The reader's **Document properties**
+  say whether a PDF is tagged, and its language.
+
+Tagging is automatic, like Acrobat's: check the result, and describe the
+pictures it couldn't (`tag` names the pages). Something drawn several
+times as one piece (a form XObject: a logo on every page, say) is tagged as
+a whole; vector drawings (charts drawn with lines) are marked as
+decoration, not figures.
 
 ### Digital ID signatures
 
@@ -695,6 +828,11 @@ exact look but puts every line in its own text box.
 files to PDF with Microsoft Office or, without it, LibreOffice. Text files
 always work.
 
+`web` saves web pages as PDFs the way the browser prints them, links
+included: `pdfm web https://example.com/page` or a saved page (`.html`,
+`.mht`). It uses Microsoft Edge (on every Windows), Chrome or Chromium; the
+**Web page → PDF** tool does the same in the app.
+
 ### Excel (tables)
 
 `to-excel` finds the tables in a PDF and writes `<name>.xlsx`: a
@@ -720,6 +858,39 @@ accents and € right) into `<name>_tables/`.
   headers on two lines become two rows; two tables side by side without
   lines can come out as one; text in a cell that looks like a formula
   stays text (in CSV files it starts with `'`).
+
+### PowerPoint and HTML
+
+Both work without Microsoft Office or any other program.
+
+`to-pptx` writes `<name>.pptx`, one slide per page (slides have the size
+of most of the pages; pages of another size are scaled to fit, centred).
+By default the text stays **editable**: the slide's background is the page
+drawn without its text, and the text is put back on top in text boxes at
+the same places, with its font (Helvetica becomes Arial, Times becomes
+Times New Roman, Courier becomes Courier New; other fonts keep their name),
+size, bold, italic, colour, alignment and line spacing, and its links. The
+lines of a paragraph are joined, so the text rewraps when you edit it.
+Turned pages and turned text come out turned. The searchable text of an
+OCRed scan stays invisible over the scan. `--pictures` makes each slide
+a picture of the page instead.
+
+`to-html` writes `<name>.html`, a single file with the pictures inside
+and no scripts:
+
+- by default **flowing text** that fits any window: headings (from the
+  text's size), paragraphs (with hyphenated words joined back up), lists,
+  tables (found like `to-excel` finds them), pictures and links, with a
+  marker and an anchor (`#page-3`) where each page starts. Two columns are
+  read one after the other, and running headers and footers are left out;
+- `--exact`: each page as it looks, scaled to the window: the page drawn
+  without its text, with the text on top, so it can be selected, searched
+  and copied.
+
+Limits: tables become text boxes over the drawn table in PowerPoint (not
+PowerPoint tables); in flowing HTML, drawings (charts made of lines)
+are left out unless a page has nothing else; text set in an unusual font
+shows in a similar common font.
 
 ### Recipes
 
@@ -784,6 +955,44 @@ separated by `|`. Names are made unique automatically. `--detect` finds the
 fields of a printed form (lines, boxes and tick boxes to fill in), as well
 as any given with `-f`. Drawing them in the app is easier: **Add form
 fields**.
+
+Text fields can check and format what's typed and add themselves up
+(Acrobat's form scripts, which the reader here runs too). In the app:
+**Format** and **Sum of** when a text field is selected. In a `--fields`
+JSON file:
+
+```json
+[{"type": "text", "page": 1, "rect": [150, 695, 300, 712], "name": "Price", "format": "currency", "currency": "€"},
+ {"type": "text", "page": 1, "rect": [150, 665, 300, 682], "name": "Tax", "format": "amount", "min": 0, "max": 1000},
+ {"type": "text", "page": 1, "rect": [150, 635, 300, 652], "name": "Total", "format": "currency", "currency": "€",
+  "calculate": "sum: Price, Tax"}]
+```
+
+Formats: `number` (with `decimals`), `amount`, `currency`, `percent`, `date`
+(with `"date": "dd/mm/yyyy"`), `phone`, `zip`; `"separators": "1.234,56"`
+for continental numbers. Calculations: `sum`, `average`, `product`, `min`,
+`max` of other fields (the field becomes read-only). `min`/`max` refuse
+values out of range.
+
+### Attachments, page labels, repair, permissions, comments
+
+```bash
+pdfm attach report.pdf --add data.xlsx --add photo.jpg   # attach (same name: replaced)
+pdfm attach report_attached.pdf                          # list
+pdfm attach report_attached.pdf --remove photo.jpg
+pdfm labels book.pdf --set "1: Cover; 2-5: i; 6-: 1; 120-: A-1"
+pdfm repair broken.pdf                                   # mend it; fast web view
+pdfm encrypt report.pdf --owner-password boss --printing low --changes comments --no-copy
+pdfm comments review.pdf                                  # list; --summary, --csv, --export
+pdfm comments clean.pdf --import review_comments.xfdf
+```
+
+`encrypt` without `--user-password` but with limits and `--owner-password`
+makes a PDF anyone can open but not print, copy or change beyond what's
+allowed; the permissions password lifts the limits, and `decrypt` needs it
+for such a file. Page labels: each part gives the page it starts on, then
+its first label (`1`, `i`, `I`, `a`, `A`, with an optional prefix such as
+`A-1` or a plain word such as `Cover`).
 
 ### Searching a folder
 
