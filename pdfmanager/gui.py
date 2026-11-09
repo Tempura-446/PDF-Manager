@@ -42,7 +42,7 @@ from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
                         forms, recipes, redact, scan, search, textedit, update, viewports, markup, pageimages,
-                        formdetect, pdfacheck)
+                        formdetect, pdfacheck, filetools)
 from pdfmanager import certsign
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
@@ -131,6 +131,19 @@ OPERATIONS = [
                             ["detect", "Create from headings"],
                             ["clear", "Remove all bookmarks"]]),
                 _f("outline", "", "hidden", "")]},
+    {"id": "labels", "group": "Pages", "label": "Page labels", "files": "pdf",
+     "help": "Number pages the way the book does: i, ii, iii for the front pages, then 1, 2, 3. "
+             "Readers show these labels and go to them (\"page iv\").",
+     "fields": [_f("roman", "Front pages numbered i, ii, iii", "number", 0, min=0,
+                   hint="e.g. 4 for a cover and three pages of contents; 0 for none"),
+                _f("style", "Then number", "select", "1",
+                   choices=[[k, v] for k, v in filetools.STYLE_NAMES.items()]),
+                _f("prefix", "Prefix", "text", "", placeholder="e.g. A-"),
+                _f("start", "Starting at", "number", 1, min=1),
+                _f("custom", "Or write them out", "text", "", placeholder="1: Cover; 2-4: i; 5-: 1",
+                   hint="Each part: the page it starts on, then its first label. "
+                        "Overrides the choices above."),
+                _f("clear", "Remove the page labels", "check", False)]},
     {"id": "rotate", "group": "Pages", "label": "Rotate", "files": "pdf",
      "help": "Click the pages to turn, or leave them all unselected to turn every page.",
      "board": {"mode": "select", "effect": "rotate", "field": "pages", "degrees": "degrees"},
@@ -186,6 +199,10 @@ OPERATIONS = [
                       for p in ("a4", "letter", "a3", "tabloid", "legal")],
                    hint="Used sideways, with two pages on each side. Twice the page size "
                         "keeps the pages as they are: A5 pages on A4 paper, A4 on A3.")]},
+    {"id": "repair", "group": "Optimize", "label": "Repair & fast web view", "files": "pdf",
+     "help": "Mend a damaged PDF (one that won't open, or shows errors), and optimize it so "
+             "the first page shows before the whole file has downloaded.",
+     "fields": [_f("linearize", "Optimize for fast web view", "check", True)]},
     {"id": "compress", "group": "Optimize", "label": "Compress", "files": "pdf",
      "fields": [_f("level", "Compression", "select", "medium",
                    choices=[["low", "Low — lossless"],
@@ -263,8 +280,28 @@ OPERATIONS = [
     {"id": "metadata", "group": "Stamp", "label": "Title & author", "files": "pdf",
      "fields": [_f("title", "Title"), _f("author", "Author"), _f("subject", "Subject"),
                 _f("keywords", "Keywords")]},
+    # -- file tools --
+    {"id": "attach", "group": "Stamp", "label": "Attach files", "files": "pdf",
+     "help": "Attach files to PDFs (a spreadsheet, the original Word file, photos), or take "
+             "attached files away. Readers show them in their attachments panel.",
+     "fields": [_f("attach", "Files to attach", "file", None, multiple=True),
+                _f("remove", "Remove attached files", "text", "",
+                   placeholder="names, separated by commas"),
+                _f("remove_all", "Remove all the attached files first", "check", False)]},
     {"id": "encrypt", "group": "Security", "label": "Add password", "files": "pdf",
-     "fields": [_f("new_password", "New password", "password", "", required=True)]},
+     "help": "Protect PDFs with a password to open them, and limit what people can do with "
+             "them: print, copy or change.",
+     "fields": [_f("new_password", "Password to open", "password", "",
+                   hint="Leave it empty to let anyone open the PDF, with the limits below."),
+                _f("printing", "Printing", "select", "high",
+                   choices=[["high", "Allowed"], ["low", "Low quality only"],
+                            ["none", "Not allowed"]]),
+                _f("changes", "Changes", "select", "any",
+                   choices=[[k, v[0].upper() + v[1:]] for k, v in filetools.CHANGES_TEXT.items()]),
+                _f("copy", "Allow copying text and pictures", "check", True),
+                _f("owner_password", "Permissions password", "password", "",
+                   hint="Needed for the limits above, and different from the password to "
+                        "open: it lifts the limits (and removes the protection).")]},
     {"id": "decrypt", "group": "Security", "label": "Remove password", "files": "pdf",
      "help": "Enter the current password in the box above the Run button.", "fields": []},
     {"id": "redact", "group": "Security", "label": "Redact", "files": "pdf", "panel": "redact",
@@ -421,6 +458,7 @@ SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "rec
           "encrypt": "protected", "decrypt": "unlocked"}
 SUFFIX.update({"sign-cert": "signed", "verify-sig": "signatures"})  # digital ID signatures
 SUFFIX["pdfa-check"] = "pdfa-check"
+SUFFIX.update({"attach": "attached", "labels": "labelled", "repair": "repaired"})  # file tools
 SUFFIX["to-excel"] = "tables"
 
 
@@ -661,9 +699,51 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         fields = {k: opts.get(k) or None for k in ("title", "author", "subject", "keywords")}
         core.set_metadata(src, out, password, **fields)
     elif op == "encrypt":
-        if not opts.get("new_password"):
-            raise UserError("enter a new password")
-        core.encrypt(src, out, opts["new_password"], password=password)
+        perms = filetools.permissions(opts.get("printing") or "high", opts.get("changes") or "any",
+                                      _bool(opts.get("copy", True)))
+        limited = filetools.restricts(perms)
+        if not opts.get("new_password") and not limited:
+            raise UserError("enter a password to open it, or choose what to limit")
+        core.encrypt(src, out, opts.get("new_password") or "", opts.get("owner_password") or None,
+                     password=password, permissions=perms if limited else None)
+        notes.append(f"{src.name}: " + ("opens with its password" if opts.get("new_password")
+                                       else "anyone can open it")
+                     + (f"; {filetools.describe(perms)}" if limited else ""))
+    # -- file tools --
+    elif op == "attach":
+        added, removed = filetools.attach(src, out, extra_files.get("attach[]") or [],
+                                          remove=[n for n in (opts.get("remove") or "").split(",")],
+                                          remove_all=_bool(opts.get("remove_all")),
+                                          password=password)
+        now = [a["name"] for a in filetools.attachments(out)]
+        notes.append(f"{src.name}: " + "; ".join(
+            bit for bit in (f"attached {', '.join(added)}" if added else "",
+                            f"removed {', '.join(removed)}" if removed else "") if bit)
+            + (f" (now attached: {', '.join(now)})" if now else " (no attached files now)"))
+    elif op == "labels":
+        if _bool(opts.get("clear")):
+            labels = []
+        elif (opts.get("custom") or "").strip():
+            labels = filetools.parse_labels(opts["custom"])
+        else:
+            roman = _num(opts.get("roman"), int, 0)
+            rest = (opts.get("style") or "1", opts.get("prefix") or "", _num(opts.get("start"), int, 1))
+            labels = ([(1, "i", "", 1)] if roman else []) + [(roman + 1, *rest)]
+            total = len(core.open_pdf(src, password).pages)
+            labels = [lab for lab in labels if lab[0] <= total]
+        filetools.set_page_labels(src, out, labels, password)
+        shown = filetools.page_labels(out)
+        notes.append(f"{src.name}: " + ("page labels removed" if not shown else
+                                        "pages labelled " + ", ".join(shown[:6])
+                                        + ("…" if len(shown) > 6 else "")))
+    elif op == "repair":
+        report = filetools.repair(src, out, linearize=_bool(opts.get("linearize", True)),
+                                  password=password)
+        fixed = len(report["warnings"])
+        notes.append(f"{src.name}: " + (f"mended {fixed} problem{'s' if fixed != 1 else ''}"
+                                        if fixed else "no damage found")
+                     + ("; optimized for fast web view" if report["linearized"] else ""))
+    # -- end of file tools --
     elif op == "decrypt":
         if not password:
             raise UserError("enter the PDF's current password")
@@ -1637,7 +1717,8 @@ class Handler(BaseHTTPRequestHandler):
                     if name == "files":
                         files.append(path)
                     elif data:  # extra file field, e.g. an ICC profile
-                        extra[name] = path
+                        extra.setdefault(name, path)
+                        extra.setdefault(name + "[]", []).append(path)  # all of them
                 notes = []
                 name, data, ctype = run_operation(op, files, fields, password, extra, work, notes)
                 return {"file": (name, data, ctype, notes, keep)}

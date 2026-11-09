@@ -635,3 +635,9 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
 .rd-sigitem.modified, .rd-sigitem.invalid { border-left-color: #d52b1e; }
 .rd-sigitem.valid-untrusted { border-left-color: #c77700; }
 .rd-sigitem small { color: var(--muted); }
+
+/* Attached files in Document properties */
+.rd-attached { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 6px; max-width: 520px; }
+.rd-attached li { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.rd-attached li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.rd-attached small { color: var(--muted); }

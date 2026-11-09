@@ -15,7 +15,7 @@ from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
                         forms, recipes, redact, scan, search)
-from pdfmanager import certsign, formdetect, pdfacheck
+from pdfmanager import certsign, filetools, formdetect, pdfacheck
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -68,10 +68,13 @@ class _Passwords:
     this run, then an interactive prompt. Passwords given on the command
     line end up in shell history, so prompting is preferred."""
 
-    def __init__(self, given):
+    def __init__(self, given, given_first=False):
         found = (("--password", given), (PASSWORD_ENV, os.environ.get(PASSWORD_ENV)))
         self.known = [p for _, p in found if p]
         self.sources = [name for name, p in found if p]
+        # decrypt: a PDF anyone can open but with limits needs its
+        # permissions password, so a given password goes before "".
+        self.given_first = given_first
 
     def for_file(self, path):
         try:
@@ -80,7 +83,7 @@ class _Passwords:
             return None  # let the command report the real error
         if not reader.is_encrypted:
             return None
-        for candidate in ["", *self.known]:
+        for candidate in ([*self.known, ""] if self.given_first else ["", *self.known]):
             if reader.decrypt(candidate):
                 return candidate
         if not sys.stdin.isatty():
@@ -195,8 +198,53 @@ def run_color(a, src, out, pw):
     return core.convert_color(src, out, a.to, a.icc, pw)
 
 
+def _encrypt_limits(a):
+    return filetools.permissions(a.printing, a.changes, not a.no_copy)
+
+
 def run_encrypt(a, src, out, pw):
-    return core.encrypt(src, out, a.user_password, a.owner_password, pw)
+    perms = _encrypt_limits(a)
+    limited = filetools.restricts(perms)
+    core.encrypt(src, out, a.user_password or "", a.owner_password, pw,
+                 permissions=perms if limited else None)
+    return f"{out}  ({filetools.describe(perms)})" if limited else out
+
+
+# -- file tools --
+def run_attach(a, src, out, pw):
+    if a.list or not (a.add or a.remove or a.remove_all):
+        found = filetools.attachments(src, pw)
+        for item in found:
+            size = f"{item['size']:,} bytes" if item["size"] is not None else "damaged"
+            print(f"{item['name']}  ({size})" + (f"  {item['description']}" if item["description"] else ""))
+        if not found:
+            print("no attached files")
+        return None
+    added, removed = filetools.attach(src, out, a.add or [], a.remove or [], a.remove_all, pw,
+                                      description=a.description or "")
+    bits = ([f"attached {', '.join(added)}"] if added else []) + \
+        ([f"removed {', '.join(removed)}"] if removed else [])
+    return f"{out}  ({'; '.join(bits)})"
+
+
+def run_labels(a, src, out, pw):
+    if not a.set and not a.clear:
+        labels = filetools.page_labels(src, pw)
+        print("no page labels" if labels is None else
+              "\n".join(f"{n}: {label}" for n, label in enumerate(labels, 1)))
+        return None
+    filetools.set_page_labels(src, out, [] if a.clear else filetools.parse_labels(a.set), pw)
+    shown = filetools.page_labels(out)
+    return f"{out}  ({'labels removed' if not shown else ', '.join(shown[:8]) + ('…' if len(shown) > 8 else '')})"
+
+
+def run_repair(a, src, out, pw):
+    report = filetools.repair(src, out, linearize=not a.no_linearize, password=pw)
+    for warning in report["warnings"]:
+        print(f"mended: {warning}")
+    return f"{out}  ({len(report['warnings'])} problem(s) mended" + \
+        (", fast web view)" if report["linearized"] else ")")
+# -- end of file tools --
 
 
 def run_decrypt(a, src, out, pw):
@@ -571,6 +619,8 @@ OUTPUTS = {
     "split": ("split", "dir"), "to-images": ("images", "dir"), "extract-media": ("media", "dir"),
 }
 OUTPUTS["sign-cert"] = ("signed", "pdf")  # digital ID signatures
+OUTPUTS.update({"attach": ("attached", "pdf"), "labels": ("labelled", "pdf"),
+                "repair": ("repaired", "pdf")})  # file tools
 
 
 def _is_batch(patterns, inputs):
@@ -651,8 +701,9 @@ def _reencrypt(out, password):
 def run_per_file(a):
     inputs = _expand(a.inputs)
     batch = _is_batch(a.inputs, inputs)
-    passwords = _Passwords(a.password)
-    if a.command == "encrypt" and not a.user_password:
+    passwords = _Passwords(a.password, given_first=a.command == "decrypt")
+    if a.command == "encrypt" and not a.user_password \
+            and not (filetools.restricts(_encrypt_limits(a)) and a.owner_password):
         a.user_password = _ask_new_password()
     plan = [(src, _output_for(a, src, batch)) for src in inputs]
     _check_outputs(plan)
@@ -1061,9 +1112,39 @@ def build_parser():
                     help="convert images through this ICC profile and embed it as the "
                          "output intent (e.g. your printer's CMYK profile)")
 
-    sp = per_file("encrypt", run_encrypt, "password-protect PDFs (AES-256)")
-    sp.add_argument("--user-password", help="password to open (prompted if omitted)")
-    sp.add_argument("--owner-password", help="password for full permissions")
+    sp = per_file("encrypt", run_encrypt, "password-protect PDFs (AES-256), and limit printing, "
+                                          "copying or changes")
+    sp.add_argument("--user-password", help="password to open (prompted if omitted; may be "
+                                            "left out when limits and --owner-password are set)")
+    sp.add_argument("--owner-password", help="permissions password: lifts the limits")
+    sp.add_argument("--printing", choices=filetools.PRINTING, default="high",
+                    help="allow printing (high), low-quality printing only, or none")
+    sp.add_argument("--changes", choices=filetools.CHANGES, default="any",
+                    help="what may be changed: any, comments (and forms, signing), forms "
+                         "(filling in, signing), pages (insert, delete, turn) or none")
+    sp.add_argument("--no-copy", action="store_true", help="don't allow copying text and pictures")
+
+    # -- file tools --
+    sp = per_file("attach", run_attach, "attach files to PDFs, remove them, or list them "
+                                        "(without options)")
+    sp.add_argument("--add", action="append", metavar="FILE", help="a file to attach (repeat)")
+    sp.add_argument("--remove", action="append", metavar="NAME",
+                    help="remove the attached file of this name (repeat)")
+    sp.add_argument("--remove-all", action="store_true", help="remove all attached files")
+    sp.add_argument("--description", help="a description for the files added")
+    sp.add_argument("--list", action="store_true", help="list the attached files")
+
+    sp = per_file("labels", run_labels, "set or remove page labels (i, ii, iii then 1, 2, 3); "
+                                        "without options: list them")
+    sp.add_argument("--set", metavar="SPEC",
+                    help='e.g. "1: Cover; 2-4: i; 5-: 1; 30-: A-1" (the page each part starts on, '
+                         "then its first label)")
+    sp.add_argument("--clear", action="store_true", help="remove the page labels")
+
+    sp = per_file("repair", run_repair, "mend damaged PDFs and optimize them for fast web view")
+    sp.add_argument("--no-linearize", action="store_true",
+                    help="don't optimize for fast web view (just repair)")
+    # -- end of file tools --
 
     per_file("decrypt", run_decrypt, "remove password protection")
 

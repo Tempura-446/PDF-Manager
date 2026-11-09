@@ -874,6 +874,9 @@ const ICONS = {
   "verify-sig": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="m9 14 2 2 4-4"/>',
   redact: '<path d="M4 6h16M4 18h9"/><rect x="4" y="10" width="13" height="4" rx="1" fill="currentColor"/>',
   pdfa: '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4"/>',
+  attach: '<path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4L15.5 7"/>',
+  labels: '<path d="M4 4h7l9 9-7 7-9-9z"/><circle cx="8.5" cy="8.5" r="1.5"/>',
+  repair: '<path d="M14.7 6.3a4 4 0 0 0-5.3 5.3L3 18l3 3 6.4-6.4a4 4 0 0 0 5.3-5.3l-2.5 2.5-2.3-.6-.6-2.3z"/>',
   "pdfa-check": '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h5M19 9v3"/><path d="m14 18 2 2 4-4"/>',
   compare: '<rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="16" rx="1.5"/><path d="M6 9h1M17 9h1M6 13h1M16 13h3"/>',
   "to-word": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="m8 11 1.5 6 2.5-4 2.5 4 1.5-6"/>',
@@ -1370,6 +1373,7 @@ const TAGLINES = {
   flatten: "Bake forms and comments into the page", headers: "Titles, dates and Bates numbers", form: "Create fillable forms",
   metadata: "Set the title, author and keywords", encrypt: "Protect with a password", decrypt: "Remove a password",
   redact: "Black out text for good", sanitize: "Remove hidden data and scripts", pdfa: "Convert for long-term archiving", "pdfa-check": "See if a file meets PDF/A, and why not",
+  attach: "Attach files to a PDF, or remove them", labels: "Number pages i, ii, iii then 1, 2, 3", repair: "Mend damaged files; open fast online",
   "sign-cert": "Sign with your certificate (.pfx), like Acrobat", "verify-sig": "See who signed and if anything changed",
   "from-images": "Turn photos and scans into a PDF", "to-images": "Save pages as PNG or JPG", text: "Get the text out",
   media: "Extract pictures and attached files", "to-word": "Convert to an editable Word file", "from-office": "Turn Office documents into PDFs",
@@ -1795,7 +1799,7 @@ function renderForm() {
     } else if (f.kind === "check") {
       input = el("input", { id, name: f.key, type: "checkbox", checked: !!f.default });
     } else if (f.kind === "file") {
-      input = el("input", { id, name: f.key, type: "file", accept: f.accept || "" });
+      input = el("input", { id, name: f.key, type: "file", accept: f.accept || "", multiple: !!f.multiple });
     } else {
       input = el("input", { id, name: f.key, type: f.kind === "number" ? "number" : f.kind === "password" ? "password" : "text",
         value: f.default ?? "", placeholder: f.placeholder || "", min: f.min, max: f.max,
@@ -1886,7 +1890,7 @@ function collectOptions() {
   for (const f of current.fields) {
     const input = $("f-" + f.key);
     if (f.kind === "check") opts[f.key] = input.checked ? "true" : "false";
-    else if (f.kind === "file") { if (input.files[0]) extra[f.key] = input.files[0]; }
+    else if (f.kind === "file") { if (input.files[0]) extra[f.key] = f.multiple ? [...input.files] : input.files[0]; }
     else opts[f.key] = input.value;
   }
   return { opts, extra };
@@ -1909,7 +1913,7 @@ async function run(preview) {
   body.append("op", current.id);
   body.append("password", $("pw").value);
   for (const [k, v] of Object.entries(opts)) body.append(k, v);
-  for (const [k, v] of Object.entries(extra)) body.append(k, v, v.name);
+  for (const [k, v] of Object.entries(extra)) for (const file of [v].flat()) body.append(k, file, file.name);
   for (const it of items) body.append("files", it.file, it.file.name);
   busy(true, current.id === "ocr" ? "Recognising text — this can take a while…" : "Working…");
   try {

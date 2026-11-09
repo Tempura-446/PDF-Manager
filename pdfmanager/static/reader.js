@@ -37,6 +37,15 @@ export async function loadPdfjs() {
   }
 }
 
+/** What a protected PDF allows, from pdf.js's list of allowed permissions. */
+function permissionText(allowed) {
+  const P = pdfjs.PermissionFlag, has = (f) => allowed.includes(f);
+  const printing = has(P.PRINT_HIGH_QUALITY) ? "printing" : has(P.PRINT) ? "low-quality printing only" : "no printing";
+  const changes = has(P.MODIFY_CONTENTS) ? "any changes" : has(P.MODIFY_ANNOTATIONS) ? "commenting, filling in forms and signing"
+    : has(P.FILL_INTERACTIVE_FORMS) ? "filling in forms and signing" : has(P.ASSEMBLE) ? "inserting, deleting and turning pages" : "no changes";
+  return `${printing}, ${changes}, ${has(P.COPY) ? "copying allowed" : "no copying"}`;
+}
+
 /** pdf.js's form fields ({name: [field...]}, a Map since pdf.js 5) as [name, list] pairs. */
 function fieldEntries(fields) {
   return fields instanceof Map ? [...fields.entries()] : Object.entries(fields || {});
@@ -2356,9 +2365,21 @@ export class Reader {
       ["Form", info.IsAcroFormPresent ? "Yes" : info.IsXFAPresent ? "Yes (XFA)" : "No"],
       ["Password protected", this.password ? "Yes" : "No"],
     ].filter(([, v]) => v);
+    // -- limits and attached files --
+    const perms = await this.doc.getPermissions().catch(() => null);
+    if (perms) rows.push(["Limits", permissionText(perms)]);
+    const attached = Object.values((await this.doc.getAttachments().catch(() => null)) || {});
     const dl = el("dl", { class: "rd-props" });
     for (const [k, v] of rows) dl.append(el("dt", {}, k), el("dd", {}, v));
-    await this.#dialog("Document properties", [dl], [["ok", "Close", true]]);
+    const parts = [dl];
+    if (attached.length) {
+      parts.push(el("h3", {}, `Attached files (${attached.length})`), el("ul", { class: "rd-attached" },
+        ...attached.map((a) => el("li", {}, el("span", {}, a.filename, a.description ? el("small", {}, " — " + a.description) : null),
+          el("small", {}, size(a.content?.length || 0)),
+          el("button", { type: "button", class: "rd-btn", onclick: () => this.#saveBytes(a.content, a.filename, () => {}, this.activeTab?.fileId) }, "Save…")))));
+    }
+    // -- end of limits and attached files --
+    await this.#dialog("Document properties", parts, [["ok", "Close", true]]);
   }
 
   toast(message, ms = 4000, action = null) {
