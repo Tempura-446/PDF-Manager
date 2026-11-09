@@ -95,6 +95,7 @@ const ICON = {
   fillable: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h4M7 14h4"/><rect x="13" y="7.5" width="5" height="3" rx=".5"/><rect x="13" y="12.5" width="3" height="3" rx=".5"/>',
   badge: '<path d="M12 2l2.4 1.8 3 .2.9 2.9 2.3 1.9-.9 2.9.9 2.9-2.3 1.9-.9 2.9-3 .2L12 22l-2.4-1.8-3-.2-.9-2.9-2.3-1.9.9-2.9-.9-2.9 2.3-1.9.9-2.9 3-.2z"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/>',
+  redact: '<path d="M4 6h16M4 18h9"/><rect x="4" y="10" width="13" height="4" rx="1" fill="currentColor"/>',
   layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
   rect: '<rect x="4" y="6" width="16" height="12" rx="1"/><circle cx="4" cy="6" r="1.4"/><circle cx="20" cy="18" r="1.4"/>',
   cutout: '<rect x="3" y="4" width="18" height="16" rx="1"/><rect x="9" y="9" width="7" height="6" stroke-dasharray="2 2"/>',
@@ -115,7 +116,7 @@ const COLORS = [["Black", "#000000", "#bdbdbd"], ["Blue", "#1f4fd8", "#80ebff"],
   ["Green", "#1f8a3b", "#53ffbc"], ["Yellow", "#b8860b", "#ffff98"]];
 // Notes, underline, strikeout and shapes: the reader's own tools, written into
 // the file by the server (markup.py) as standard annotations.
-const MARKUP = new Set(["NOTE", "UNDERLINE", "STRIKEOUT", "SHAPE", "IMAGES", "LINKS", "CERTSIGN", "STAMPS"]);
+const MARKUP = new Set(["NOTE", "UNDERLINE", "STRIKEOUT", "SHAPE", "IMAGES", "LINKS", "CERTSIGN", "STAMPS", "REDACT"]);
 // Rubber stamps: their words (markup.py draws them in their colours).
 const STAMPS = ["APPROVED", "NOT APPROVED", "REVIEWED", "RECEIVED", "DRAFT", "FINAL", "CONFIDENTIAL",
   "FOR COMMENT", "VOID"];
@@ -309,6 +310,7 @@ export class Reader {
     this.certSignBtn = el("button", { class: "rd-btn rd-tool compact", type: "button", "data-mode": "CERTSIGN", "aria-pressed": "false",
       title: "Sign with a digital ID (a certificate, .pfx or .p12): drag a box where the signature goes", html: svg("badge") + "<span>Digital ID</span>" });
     this.annotTools.push(this.certSignBtn);
+    this.#buildRedact();  // reader redaction
     this.swatches = COLORS.map(([name, ink, mark], i) => el("button", { class: "rd-swatch", type: "button", title: name, "aria-label": name, "aria-pressed": String(i === 1),
       style: `--ink:${ink};--mark:${mark}`, "data-index": i }));
     this.sizeSelect = el("select", { class: "rd-zoom", "aria-label": "Line thickness or text size" });
@@ -318,8 +320,10 @@ export class Reader {
     this.annotSaveBtn = el("button", { class: "rd-btn primary", type: "button", title: "Save your changes (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
     this.annotCloseBtn = b("x", "Close the annotation tools");
     this.annotbar = el("div", { class: "rd-findbar rd-annotbar", hidden: true, role: "toolbar", "aria-label": "Annotate" },
-      ...this.annotTools.filter((b) => b !== this.certSignBtn), this.signBtn, this.certSignBtn, el("span", { class: "rd-sep" }),
+      ...this.annotTools.filter((b) => b !== this.certSignBtn && b !== this.redactBtn), this.signBtn, this.certSignBtn, this.redactBtn,
+      el("span", { class: "rd-sep" }),
       el("div", { class: "rd-swatches", role: "group", "aria-label": "Colour" }, ...this.swatches), this.shapeSelect, this.stampSelect, this.stampDatedLabel, this.sizeSelect,
+      this.redactHow, this.redactApplyBtn,
       el("span", { class: "rd-sep" }), this.undoBtn, this.redoBtn, this.deleteBtn,
       el("span", { style: "flex:1" }), this.annotSaveBtn, this.annotCloseBtn);
 
@@ -687,7 +691,7 @@ export class Reader {
     if (mod && !isTyping(e) && !this.scalebar.hidden && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")
         && this.#measureUndo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); return; }
     if (mod && e.key.toLowerCase() === "z" && !e.shiftKey && !isTyping(e) && this.activeTab?.undo?.length
-        && (this.textEditMode || this.annotbar.hidden)) { e.preventDefault(); this.#undoTextEdit(); return; }
+        && (this.textEditMode || this.markupMode || this.annotbar.hidden)) { e.preventDefault(); this.#undoTextEdit(); return; }
     if (e.key === "Escape" && !this.ctxMenu.hidden) { this.#closeContextMenu(); return; }
     if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); this.pdfViewer.increaseScale(); return; }
     if (mod && e.key === "-") { e.preventDefault(); this.pdfViewer.decreaseScale(); return; }
@@ -1100,6 +1104,7 @@ export class Reader {
     eventBus.on("pagerendered", ({ pageNumber }) => {
       this.#drawMeasures(pageNumber);
       if (this.markupMode === "IMAGES" || this.markupMode === "LINKS") this.#drawObjectBoxes(pageNumber);
+      this.#drawRedactions(pageNumber);
       if (this.overlay) this.overlay.draw(this.pdfViewer.getPageView(pageNumber - 1), pageNumber).catch(() => {});
     });
     eventBus.on("scalechanging", ({ scale, presetValue }) => {
@@ -1544,6 +1549,7 @@ export class Reader {
     this.#showEditMode(name);
     // Words selected before choosing Underline or Strike out get it straight away.
     if (this.markupMode === "UNDERLINE" || this.markupMode === "STRIKEOUT") this.#markSelection();
+    if (this.markupMode === "REDACT") this.#redactSelection();
     // "Picture" asks for an image file straight away.
     if (create && this.uiManager) setTimeout(() => this.uiManager.updateParams(pdfjs.AnnotationEditorParamsType.CREATE, null), 50);
   }
@@ -1565,6 +1571,7 @@ export class Reader {
     this.sizeSelect.replaceChildren(...sizes.map(([v, label]) => el("option", { value: v, selected: v === chosen }, label)));
     this.sizeSelect.hidden = !sizes.length;
     this.root.querySelector(".rd-swatches").hidden = !key;
+    this.#showRedactBar(name);
   }
 
   #applyAnnotParams() {
@@ -1628,7 +1635,7 @@ export class Reader {
 
   #markupDown(e) {
     const mode = this.markupMode;
-    if (!mode || e.button !== 0 || mode === "UNDERLINE" || mode === "STRIKEOUT") return;
+    if (!mode || e.button !== 0 || mode === "UNDERLINE" || mode === "STRIKEOUT" || (mode === "REDACT" && this.#redactByText())) return;
     if (e.target.closest?.(".rd-notebox, .rd-objbox, .rd-objtools, a, input, textarea, select, button")) return;
     const at = this.#pointOnPage(e);
     if (mode === "IMAGES") { if (at) this.#pickImage(null); return; }  // a click beside the pictures lets go
@@ -1639,6 +1646,7 @@ export class Reader {
     if (mode === "LINKS") { this.#drawLinkBox(e, at); return; }
     if (mode === "CERTSIGN") { this.#dragBox(at, "Drag a box where the signature goes.", (rect) => this.#signWithId(at.n, rect)); return; }
     if (mode === "STAMPS") { this.#placeStamp(at); return; }
+    if (mode === "REDACT") { this.#dragBox(at, "Drag a box over what should be blacked out.", (rect) => this.#addRedactions(at.n, [rect])); return; }
     // SHAPE: drag out the shape; it's drawn on screen until the file has it.
     this.#cancelMarkup();
     const svgEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -1679,6 +1687,10 @@ export class Reader {
     if (!mode) return;
     if (mode === "UNDERLINE" || mode === "STRIKEOUT") {
       if (e.target.closest?.(".rd-container")) setTimeout(() => this.#markSelection(), 0);
+      return;
+    }
+    if (mode === "REDACT") {
+      if (this.#redactByText() && e.target.closest?.(".rd-container")) setTimeout(() => this.#redactSelection(), 0);
       return;
     }
     const d = this.shapeDraft;
@@ -2128,6 +2140,139 @@ export class Reader {
     if (link) await this.#applyMarkup([{ op: "link", page: n, id: link.id, ...where }], "Could not change the link: ");
     else await this.#applyMarkup([{ op: "add", page: n, kind: "link", rect, ...where }], "Could not add the link: ");
   }
+
+  // -- reader redaction --------------------------------------------------------------------
+  // Mark areas to black out (drag boxes, or select words), then Apply sends
+  // them to /api/redact/apply (redact.py, method "remove"): what's under them
+  // is taken out of the file and black boxes are drawn. The marks belong to
+  // the tab and to the version of the document they were made on.
+
+  #buildRedact() {
+    this.redactBtn = el("button", { class: "rd-btn rd-tool", type: "button", "data-mode": "REDACT", "aria-pressed": "false",
+      title: "Redact: mark what should be blacked out for good, then Apply", html: svg("redact") + "<span>Redact</span>" });
+    this.annotTools.push(this.redactBtn);
+    this.redactHow = el("select", { class: "rd-zoom", "aria-label": "How to mark", hidden: true },
+      el("option", { value: "box" }, "Draw boxes"), el("option", { value: "text" }, "Select words"));
+    this.redactHow.value = store.get("pdfm-redact-how", "box");
+    this.redactHow.addEventListener("change", () => {
+      store.set("pdfm-redact-how", this.redactHow.value);
+      this.root.dataset.redact = this.redactHow.value;
+    });
+    this.redactApplyBtn = el("button", { class: "rd-btn primary", type: "button", hidden: true, disabled: true,
+      title: "Black out the marked areas for good", html: svg("redact") + "<span>Apply</span>" });
+    this.redactApplyBtn.addEventListener("click", () => this.#applyRedactions());
+  }
+
+  #redactByText() { return this.redactHow?.value === "text"; }
+
+  /** The tab's marks, {page: [[x0, y0, x1, y1]]} in PDF points; marks made on
+   *  an earlier version of the document are dropped (its pages may have moved). */
+  #redactMarks(tab = this.activeTab) {
+    if (!tab) return {};
+    const version = tab.version || 0;
+    if (tab.redactMarks?.version !== version) tab.redactMarks = { version, pages: {} };
+    return tab.redactMarks.pages;
+  }
+
+  #redactCount(tab = this.activeTab) {
+    return Object.values(this.#redactMarks(tab)).reduce((n, list) => n + list.length, 0);
+  }
+
+  #showRedactBar(name) {
+    const on = name === "REDACT";
+    if (!this.redactHow) return;
+    this.redactHow.hidden = this.redactApplyBtn.hidden = !on;
+    this.root.dataset.redact = on ? this.redactHow.value : "";
+    if (on) this.#showRedactCount();
+    if (on && !this.redactHinted) {
+      this.redactHinted = true;
+      this.toast("Drag boxes over what should go (or choose Select words), then Apply redactions. Click × on a mark to remove it.", 7000);
+    }
+  }
+
+  #showRedactCount() {
+    const n = this.#redactCount();
+    this.redactApplyBtn.disabled = !n;
+    this.redactApplyBtn.querySelector("span").textContent = n ? `Apply (${n})` : "Apply";
+    this.redactApplyBtn.title = n ? `Black out the ${n === 1 ? "marked area" : n + " marked areas"} for good` : "Mark something to black out first";
+  }
+
+  #addRedactions(n, rects) {
+    const list = (this.#redactMarks()[n] ||= []);
+    for (const r of rects) list.push(r.map((v) => Math.round(v * 100) / 100));
+    this.#drawRedactions(n);
+    this.#showRedactCount();
+  }
+
+  /** Red outlines (with a remove button) over the marks on page ``n``. */
+  #drawRedactions(n) {
+    const view = this.pdfViewer?.getPageView(n - 1);
+    if (!view?.div || !view.viewport) return;
+    view.div.querySelectorAll(".rd-redactmark").forEach((x) => x.remove());
+    const list = this.#redactMarks()[n] || [];
+    list.forEach((rect, i) => {
+      const [a, b, c, d] = viewRect(view.viewport, rect);
+      const remove = el("button", { type: "button", class: "rd-redactx", title: "Remove this mark", "aria-label": "Remove this mark", html: svg("x") });
+      remove.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); });
+      remove.addEventListener("click", (e) => {
+        e.stopPropagation();
+        list.splice(i, 1);
+        this.#drawRedactions(n);
+        this.#showRedactCount();
+      });
+      view.div.append(el("div", { class: "rd-redactmark", title: "Marked for redaction",
+        style: `left:${Math.min(a, c)}px;top:${Math.min(b, d)}px;width:${Math.abs(c - a)}px;height:${Math.abs(d - b)}px` }, remove));
+    });
+  }
+
+  /** Mark the selected words (one box per line piece, a little padded). */
+  #redactSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+    const pages = new Map();
+    for (const r of sel.getRangeAt(0).getClientRects()) {
+      if (r.width < 1 || r.height < 1) continue;
+      const at = this.#pointOnPage({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, target: document.body });
+      if (!at || !this.container.contains(at.view.div)) continue;
+      const box = at.view.div.getBoundingClientRect(), dx = box.left + at.view.div.clientLeft, dy = box.top + at.view.div.clientTop;
+      const a = at.view.viewport.convertToPdfPoint(r.left - dx, r.top - dy), b = at.view.viewport.convertToPdfPoint(r.right - dx, r.bottom - dy);
+      const pad = 0.75;
+      const rect = [Math.min(a[0], b[0]) - pad, Math.min(a[1], b[1]) - pad, Math.max(a[0], b[0]) + pad, Math.max(a[1], b[1]) + pad];
+      if (!pages.has(at.n)) pages.set(at.n, []);
+      pages.get(at.n).push(rect);
+    }
+    if (!pages.size) return;
+    sel.removeAllRanges();
+    for (const [n, rects] of pages) this.#addRedactions(n, rects);
+  }
+
+  async #applyRedactions() {
+    const tab = this.activeTab, marks = this.#redactMarks(tab), count = this.#redactCount(tab);
+    if (!tab || !count) { this.toast("Mark something first: drag a box over it, or choose Select words."); return; }
+    const answer = await this.#dialog("Apply redactions?", [
+      el("p", {}, `This removes what's under the ${count === 1 ? "marked area" : count + " marked areas"} for good once you save: `
+        + "the words, the covered parts of pictures, and comments or form fields there. The rest of the page stays as it is."),
+      el("p", {}, "Until then, Undo (Ctrl+Z) brings it back.")],
+      [["cancel", "Cancel"], ["ok", "Apply redactions", true]]);
+    if (answer !== "ok") return;
+    const boxes = Object.fromEntries(Object.entries(marks).filter(([, list]) => list.length));
+    await this.#changeDocument((bytes, t) => this.#post("/api/redact/apply", bytes, t, { boxes: JSON.stringify(boxes) }), {
+      failure: "Could not redact: ",
+      after: (res) => {
+        let done = {};
+        try { done = JSON.parse(res.headers.get("X-Pdfm-Redacted") || "{}"); } catch (e) { /* the default words do */ }
+        const pictures = Object.entries(done.pictures || {});
+        let message = `Blacked out ${done.areas || count} area${(done.areas || count) === 1 ? "" : "s"}.`;
+        if (pictures.length) {
+          message += ` Page${pictures.length === 1 ? "" : "s"} ${pictures.map(([p]) => p).join(", ")} became `
+            + `${pictures.length === 1 ? "a picture" : "pictures"} (${[...new Set(pictures.map(([, why]) => why))].join("; ")}).`;
+        }
+        this.toast(message + " Save to make it permanent.", 8000, ["Save", () => this.save()]);
+      },
+    });
+    if (this.markupMode === "REDACT") this.#showRedactCount();
+  }
+  // -- end of reader redaction --
 
   // ---- digital ID signatures (certsign.py) --------------------------------------------
   /** Sign the document with a digital ID, its signature shown in ``rect`` on page ``n``. */
@@ -4806,6 +4951,7 @@ export class Reader {
       tool("Edit pictures", "IMAGES", "image photo move resize replace delete logo", "imgedit"),
       tool("Edit links", "LINKS", "hyperlink url web address page add change remove", "link"),
       tool("Sign with a digital ID", "CERTSIGN", "certificate pfx p12 digital signature sign", "badge"),
+      tool("Redact (black out for good)", "REDACT", "redaction black out remove hide censor private confidential", "redact"),
       { icon: "badge", label: "Check the signatures", words: "verify valid certificate signed", run: () => this.#signatureDetails() },
       { icon: "comments", label: "Comments", words: "notes replies review list markup", run: () => { this.#setSidebar(true); this.#showTab("comments"); } },
       { icon: "sign", label: "Sign", words: "signature autograph", run: () => this.sign() },

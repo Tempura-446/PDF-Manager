@@ -148,7 +148,9 @@ closed.
   for every page). **Booklet** puts two pages on each sheet in the order
   for a folded, stapled booklet: print it double-sided, flipping on the
   short edge. **Redact** lets you
-  draw boxes to black out, and shows where the words you typed are found.
+  draw boxes to black out, and shows where the words you typed are found;
+  **How** chooses between removing what's under the boxes (the rest of the
+  page stays searchable) and turning the pages into pictures.
 - **Bookmarks** has an editor: rename, indent and reorder bookmarks, or
   detect them from the document's headings.
 - **Recipes** run several tools in a row (for example *Clean up scans →
@@ -289,6 +291,13 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   who signed it and whether it has been changed since; **Details** lists
   every signature. ZPDF asks before changing a signed document, since
   any change shows up as made after signing.
+- **Redact** (Tools → Annotate & sign → Redact): drag boxes over what
+  should go, or choose **Select words** and select them; marks are
+  outlined in red (click × to remove one). **Apply** asks first, then takes
+  what's under the marks out of the file and draws black boxes: the words,
+  the covered parts of pictures and drawings, and comments or form fields
+  there. The rest of the page stays real text. Undo with Ctrl+Z; it's for
+  good once you save. See [Redaction](#redaction).
 - **Comments** (a tab in the sidebar): every note, highlight, shape and
   other markup in the document, page by page, with its author, date and
   comment and the replies under it. Click one to go to it; add or change
@@ -611,10 +620,31 @@ headers and footers are ignored. Scans need OCR first.
 `redact` blacks out text (`-t`, repeatable), regular expressions
 (`--pattern`), all email addresses, phone numbers or long numbers
 (`--find emails|phones|numbers`) and areas (`--box PAGE:X0,Y0,X1,Y1` in
-points from the bottom left). Every page with a redaction is replaced by a
-picture of the page with the black boxes burned in, so the text underneath
-is really gone (other pages are untouched). Run OCR afterwards to make those
-pages searchable again; metadata isn't changed, so use `sanitize` too.
+points from the bottom left). What's under the boxes is taken out of the
+file, like Acrobat does, and black boxes are drawn over the places:
+
+- **letters** under a box are dropped from the text (one that's mostly
+  outside a box stays); every other letter stays real, searchable text,
+  exactly where it was;
+- **pictures** get their covered pixels painted black in the picture
+  itself (JPEGs stay JPEGs; a picture covered completely is removed);
+  **drawings** that lie completely under a box are removed (lines that
+  only cross one stay, covered);
+- **comments, links and form fields** touching a box are removed, and so
+  is replacement text in a tagged PDF (`/ActualText`, `/Alt`) that repeats
+  the removed words;
+- bookmark titles have the searched words replaced by `███`.
+
+Pages without redactions are untouched, and something used on several
+pages (a logo, a letterhead) is changed only where it was redacted. Every
+redacted page is checked afterwards: no letter may be left under a box and
+the searched words must be gone. A page that can't be edited safely (text
+in Type3 fonts, vertical text, unusual font encodings, damaged content,
+JPEG 2000 or CMYK JPEG pictures) or fails the check is turned into a picture
+instead, and `redact` says which pages and why. `--method image` turns every
+redacted page into a picture of itself (`--dpi`, default 200), the most
+thorough way; run OCR afterwards to make those pages searchable again.
+Metadata isn't changed, so use `sanitize` too.
 
 ### Archiving and privacy
 

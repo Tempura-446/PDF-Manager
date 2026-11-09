@@ -582,12 +582,21 @@ def run_redact(a, src, out, pw):
     patterns = list(a.pattern or []) + [redact.PRESETS[p] for p in a.find or []]
     if not (a.text or patterns or a.box):
         raise core.PdfManagerError("say what to redact: --text, --pattern, --find or --box")
+    # -- true redaction --
+    method = getattr(a, "method", None) or "remove"
+    # -- end of true redaction --
     found = redact.redact(src, out, terms=a.text or [], patterns=patterns, boxes=a.box or [],
                           case_sensitive=a.case_sensitive, whole_words=a.whole_words,
-                          dpi=a.dpi, password=pw)
+                          dpi=a.dpi, password=pw, method=method)
     if not found:
         return f"{out}  (nothing found to redact)"
-    return f"{out}  ({sum(found.values())} area(s) on page(s) {', '.join(map(str, found))})"
+    # -- true redaction --
+    extra = "".join(f"; page {page} became a picture ({why})"
+                    for page, why in getattr(found, "pictures", {}).items())
+    if getattr(found, "bookmarks", 0):
+        extra += f"; blacked out the words in {found.bookmarks} bookmark(s)"
+    # -- end of true redaction --
+    return f"{out}  ({sum(found.values())} area(s) on page(s) {', '.join(map(str, found))}{extra})"
 
 
 def run_headers(a, src, out, pw):
@@ -1314,7 +1323,7 @@ def build_parser():
     # -- end of digital ID signatures --
 
     sp = per_file("redact", run_redact,
-                  "permanently black out text or areas (redacted pages become images)")
+                  "permanently black out text or areas (what's under them is removed)")
     sp.add_argument("-t", "--text", action="append", metavar="TEXT",
                     help="text to black out (repeat for more)")
     sp.add_argument("--pattern", action="append", metavar="REGEX",
@@ -1325,7 +1334,14 @@ def build_parser():
                     help="black out an area, in points from the bottom-left corner")
     sp.add_argument("--case-sensitive", action="store_true")
     sp.add_argument("--whole-words", action="store_true")
-    sp.add_argument("--dpi", type=_positive(int), default=200, help="resolution of redacted pages")
+    sp.add_argument("--dpi", type=_positive(int), default=200,
+                    help="resolution of pages turned into pictures")
+    # -- true redaction --
+    sp.add_argument("--method", choices=list(redact.METHODS), default="remove",
+                    help="remove: take out what's under the boxes, the rest of the page stays "
+                         "searchable text (default; pages that can't be edited safely become "
+                         "pictures); image: turn every redacted page into a picture")
+    # -- end of true redaction --
 
     sp = per_file("form", run_form,
                   "add fillable form fields (without --field: list the fields already there)")

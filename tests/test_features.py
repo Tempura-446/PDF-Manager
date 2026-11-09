@@ -514,17 +514,23 @@ def dark_fraction(path, page, box):
     return sum(crop.histogram()[:40]) / (crop.width * crop.height)
 
 
+@pytest.mark.parametrize("method", ["remove", "image"])
 @pytest.mark.parametrize("rotate", [0, 90])
-def test_redact_removes_the_text(tmp_path, rotate):
+def test_redact_removes_the_text(tmp_path, rotate, method):
     src = secret_pdf(tmp_path / "s.pdf", rotate)
     found = redact.redact(src, tmp_path / "out.pdf", terms=["john smith"],
-                          patterns=[redact.PRESETS["emails"]])
+                          patterns=[redact.PRESETS["emails"]], method=method)
     assert found == {1: 2}
     reader = PdfReader(tmp_path / "out.pdf")
-    assert reader.pages[0].extract_text() == ""  # the page is a picture now
+    if method == "image":
+        assert reader.pages[0].extract_text() == ""  # the page is a picture now
+        assert not reader.get_fields()  # the form field on the redacted page is gone
+    else:
+        left = reader.pages[0].extract_text()
+        assert "John" not in left and "example.com" not in left and "Card 4111" in left
+        assert list(reader.get_fields()) == ["ssn"]  # not under a box: stays
     assert reader.pages[0].rotation == rotate
     assert "nobody" in reader.pages[1].extract_text()  # other pages untouched
-    assert not reader.get_fields()  # the form field on the redacted page is gone
     assert dark_fraction(tmp_path / "out.pdf", 0, (102, 702, 170, 710)) > 0.9  # "John Smith"
     assert dark_fraction(tmp_path / "out.pdf", 0, (72, 682, 100, 690)) < 0.5  # "Card"
 
