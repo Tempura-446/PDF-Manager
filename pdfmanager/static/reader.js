@@ -334,13 +334,16 @@ export class Reader {
     this.commentsList = el("div", { class: "rd-comments", "aria-live": "polite" });
     // -- comment summary and XFDF --
     const commentBtn = (label, title, fn) => el("button", { type: "button", class: "rd-linkbtn", title, onclick: fn }, label);
-    this.xfdfInput = el("input", { type: "file", accept: ".xfdf,.xml", hidden: true });
-    this.xfdfInput.addEventListener("change", () => { const f = this.xfdfInput.files[0]; this.xfdfInput.value = ""; if (f) this.#importComments(f); });
+    // (The file box isn't put on the page: the reader has one file box of its own.)
+    const pickXfdf = () => {
+      const input = el("input", { type: "file", accept: ".xfdf,.xml" });
+      input.addEventListener("change", () => { if (input.files[0]) this.#importComments(input.files[0]); });
+      input.click();
+    };
     const commentActions = el("div", { class: "rd-commentactions" },
       commentBtn("Summary", "A PDF listing every comment, page by page", () => this.#commentSummary()),
       commentBtn("Export", "Save the comments as an XFDF file, to send or to add to another copy", () => this.#exportComments()),
-      commentBtn("Import…", "Add comments from an XFDF file (from Acrobat or another copy)", () => this.xfdfInput.click()),
-      this.xfdfInput);
+      commentBtn("Import…", "Add comments from an XFDF file (from Acrobat or another copy)", pickXfdf));
     // -- end of comment summary and XFDF --
     this.commentsPanel = el("div", { class: "rd-panel rd-commentspanel", role: "tabpanel", hidden: true },
       el("label", { class: "rd-authorrow" }, "Comment as", this.authorInput), commentActions, this.commentsList);
@@ -993,6 +996,7 @@ export class Reader {
       };
       this.pdfViewer.setDocument(doc);
       this.linkService.setDocument(doc, null);
+      this.scripting.setDocument(doc).catch(() => {});  // a form without scripts works as before
       // (The viewer hands the document to the find controller itself once the
       // first page is drawn; doing it here too would reset a search started
       // when the pages appear, e.g. from the folder search.)
@@ -1035,15 +1039,20 @@ export class Reader {
     this.eventBus = eventBus;
     this.linkService = new viewer.PDFLinkService({ eventBus, externalLinkTarget: viewer.LinkTarget.BLANK, externalLinkRel: "noopener noreferrer nofollow" });
     this.findController = new viewer.PDFFindController({ eventBus, linkService: this.linkService });
+    // Form scripts (number and date formats, totals, checks — Acrobat's AF
+    // functions) run in pdf.js's sandbox, as in Firefox.
+    this.scripting = new viewer.PDFScriptingManager({ eventBus, sandboxBundleSrc: BASE + "build/pdf.sandbox.min.mjs",
+      wasmUrl: BASE + "wasm/" });
     this.pdfViewer = new viewer.PDFViewer({
       container: this.container, viewer: this.viewerEl, eventBus,
-      linkService: this.linkService, findController: this.findController,
+      linkService: this.linkService, findController: this.findController, scriptingManager: this.scripting,
       annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS,
       annotationEditorMode: pdfjs.AnnotationEditorType.NONE,
       annotationEditorHighlightColors: HIGHLIGHT_COLORS,
       imageResourcesPath: BASE + "web/images/",
     });
     this.linkService.setViewer(this.pdfViewer);
+    this.scripting.setViewer(this.pdfViewer);
     // The window (or the sidebar) changes size: a zoom that fits the page
     // fits it again, as a reader should. What's watched is the area around
     // the pages, not the scrolling box itself: that one narrows when its
@@ -1127,6 +1136,7 @@ export class Reader {
       this.pdfViewer.setDocument(null);
       this.linkService.setDocument(null);
       this.findController.setDocument(null);
+      this.scripting?.setDocument(null).catch(() => {});
       await destroyTask(doc.loadingTask || task);  // pdf.js frees a document through its task
     } else if (task) {
       await destroyTask(task);  // e.g. cancelled at the password prompt: wait for it to be gone

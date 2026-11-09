@@ -7,6 +7,7 @@ thin border, and a tick in a checked box), so it looks the same everywhere,
 and readers draw the text in as it's typed.
 """
 
+import json
 import re
 
 from pypdf.generic import (ArrayObject, DecodedStreamObject, DictionaryObject, FloatObject,
@@ -19,6 +20,12 @@ TYPES = {"text": "Text", "multiline": "Text", "checkbox": "Checkbox", "radio": "
 MULTILINE, REQUIRED = 1 << 12, 1 << 1     # text field flags
 NO_TOGGLE_OFF, RADIO, PUSHBUTTON = 1 << 14, 1 << 15, 1 << 16  # button field flags
 COMBO, EDIT = 1 << 17, 1 << 18            # choice field flags
+READ_ONLY = 1
+
+# Formats for text fields, as Acrobat's form scripts (pdf.js runs them too).
+# The number styles: separators "1,234.56" (0) or "1.234,56" (2).
+FORMATS = ("number", "amount", "currency", "percent", "date", "phone", "zip")
+CALCULATIONS = {"sum": "SUM", "average": "AVG", "product": "PRD", "min": "MIN", "max": "MAX"}
 BORDER = (0.45, 0.45, 0.45)
 TICK = "4"                                # ✔ in ZapfDingbats
 DOT = "l"                                 # ● in ZapfDingbats
@@ -118,6 +125,76 @@ def parse_field(spec):
         elif sep and field["type"] == "dropdown":
             field["options"] = [o for o in rest.split("|") if o.strip()]
     return field
+
+
+def _js(script):
+    return DictionaryObject({NameObject("/S"): NameObject("/JavaScript"),
+                             NameObject("/JS"): TextStringObject(script)})
+
+
+def _js_string(text):
+    return json.dumps(str(text))
+
+
+def _format_scripts(field):
+    """(format script, keystroke script) for a text field's "format"."""
+    kind = str(field.get("format") or "").lower()
+    if not kind:
+        return None
+    if kind not in FORMATS:
+        raise core.PdfManagerError(f"unknown format {kind!r}; use one of {', '.join(FORMATS)}")
+    sep = 2 if str(field.get("separators") or "") in ("1.234,56", "comma", "2") else 0
+    if kind in ("number", "amount", "currency"):
+        decimals = int(field.get("decimals", 0 if kind == "number" else 2))
+        symbol = str(field.get("currency") or ("€" if kind == "currency" else "")) if kind == "currency" else ""
+        before = "true" if not field.get("currency_after") else "false"
+        args = f"{decimals}, {sep}, 0, 0, {_js_string(symbol)}, {before}"
+        return f"AFNumber_Format({args});", f"AFNumber_Keystroke({args});"
+    if kind == "percent":
+        decimals = int(field.get("decimals", 0))
+        return f"AFPercent_Format({decimals}, {sep});", f"AFPercent_Keystroke({decimals}, {sep});"
+    if kind == "date":
+        pattern = str(field.get("date") or "dd/mm/yyyy")
+        if not re.fullmatch(r"[dmyHhMstT/.\-: ,]+", pattern):
+            raise core.PdfManagerError(f"unknown date pattern {pattern!r}; e.g. dd/mm/yyyy")
+        return (f"AFDate_FormatEx({_js_string(pattern)});",
+                f"AFDate_KeystrokeEx({_js_string(pattern)});")
+    special = {"zip": 0, "phone": 2}[kind]
+    return f"AFSpecial_Format({special});", f"AFSpecial_Keystroke({special});"
+
+
+def _calculation(field):
+    """(operation, [field names]) of a calculated field, or None. Takes
+    {"op": "sum", "fields": [...]} or "sum: Price, Tax"."""
+    calc = field.get("calculate")
+    if not calc:
+        return None
+    if isinstance(calc, str):
+        op, _, names = calc.partition(":")
+        calc = {"op": op, "fields": names}
+    op = str(calc.get("op") or "sum").strip().lower()
+    if op not in CALCULATIONS:
+        raise core.PdfManagerError(f"unknown calculation {op!r}; use one of {', '.join(CALCULATIONS)}")
+    names = calc.get("fields") or []
+    if isinstance(names, str):
+        names = names.split(",")
+    names = [" ".join(str(n).split()) for n in names if str(n).strip()]
+    if not names:
+        raise core.PdfManagerError(f"say which fields {field.get('name') or 'a field'} adds up")
+    return CALCULATIONS[op], names
+
+
+def _validation(field):
+    low, high = field.get("min"), field.get("max")
+    if low in (None, "") and high in (None, ""):
+        return None
+    try:
+        lo = float(low) if low not in (None, "") else 0
+        hi = float(high) if high not in (None, "") else 0
+    except (TypeError, ValueError):
+        raise core.PdfManagerError("the smallest and largest values must be numbers") from None
+    return (f"AFRange_Validate({'true' if low not in (None, '') else 'false'}, {lo:g}, "
+            f"{'true' if high not in (None, '') else 'false'}, {hi:g});")
 
 
 def _options(field):
@@ -281,6 +358,7 @@ def add_fields(path, output, fields, border=True, font_size=0, password=None):
         raise core.PdfManagerError("no fields to add: draw boxes on the pages")
 
     groups = {}  # radio group as asked -> {"field": parent, "states": set}
+    calculated = []  # (name, the fields it uses, widget): for the calculation order
     for page_number in sorted(by_page):
         page = writer.pages[page_number - 1]
         rotation = page.rotation % 360
@@ -351,6 +429,23 @@ def add_fields(path, output, fields, border=True, font_size=0, password=None):
             if kind in ("text", "multiline"):
                 size = font_size or (10 if kind == "multiline" else 0)
                 flags |= MULTILINE if kind == "multiline" else 0
+                actions = DictionaryObject()
+                scripts = _format_scripts(field)
+                if scripts:
+                    actions[NameObject("/F")], actions[NameObject("/K")] = _js(scripts[0]), _js(scripts[1])
+                check = _validation(field)
+                if check:
+                    actions[NameObject("/V")] = _js(check)
+                calc = _calculation(field)
+                if calc:
+                    op, sources = calc
+                    actions[NameObject("/C")] = _js(
+                        f"AFSimple_Calculate({_js_string(op)}, new Array("
+                        + ", ".join(_js_string(n) for n in sources) + "));")
+                    flags |= READ_ONLY  # worked out, not typed
+                    calculated.append((name, sources, widget))
+                if actions:
+                    widget[NameObject("/AA")] = actions
                 widget.update({
                     NameObject("/FT"): NameObject("/Tx"),
                     NameObject("/DA"): TextStringObject(f"/Helv {size:g} Tf 0 g"),
@@ -397,5 +492,30 @@ def add_fields(path, output, fields, border=True, font_size=0, password=None):
             ref = writer._add_object(widget)
             annots.append(ref)
             field_list.append(ref)
+    if calculated:
+        _calculation_order(acroform, calculated, writer)
     core._write(writer, output)
     return names
+
+
+def _calculation_order(acroform, calculated, writer):
+    """/CO: calculated fields, each after the ones it uses (a total of
+    subtotals comes last); added to any order the form had."""
+    known = {name for name, _, _ in calculated}
+    done, order = set(), []
+
+    def visit(name, path=()):
+        if name in done or name in path:
+            return
+        entry = next(c for c in calculated if c[0] == name)
+        for used in entry[1]:
+            if used in known:
+                visit(used, path + (name,))
+        done.add(name)
+        order.append(entry)
+
+    for name, _, _ in calculated:
+        visit(name)
+    co = _child(acroform, "/CO", ArrayObject)
+    for _, _, widget in order:
+        co.append(widget.indirect_reference if widget.indirect_reference else widget)

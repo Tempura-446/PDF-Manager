@@ -490,11 +490,31 @@ export class RegionEditor {
       onkeydown: (e) => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); this.overlay.focus({ preventScroll: true }); } },
     });
     this.nameLabel = el("span", {}, "Name");
+    // Text fields: a format (Acrobat's: numbers, money, dates…) and a total.
+    const lang = (navigator.language || "en").toLowerCase();
+    const symbol = lang === "en-gb" ? "£" : /^en(-us|-ca|-au)?$|^es-(mx|us)/.test(lang) ? "$" : "€";
+    const datePattern = /^en(-us)?$/.test(lang) ? "mm/dd/yyyy" : lang.startsWith("ja") || lang.startsWith("zh") ? "yyyy/mm/dd" : "dd/mm/yyyy";
+    this.formats = { "": {}, number: { format: "number" }, amount: { format: "amount" },
+      currency: { format: "currency", currency: symbol }, percent: { format: "percent" },
+      date: { format: "date", date: datePattern }, phone: { format: "phone" }, zip: { format: "zip" } };
+    this.formatSelect = el("select", { class: "re-name", "aria-label": "What can be typed in this field",
+      onchange: () => this.#changeSelected({ format: undefined, currency: undefined, date: undefined, ...this.formats[this.formatSelect.value] }),
+    }, ...[["", "Any text"], ["number", "Number"], ["amount", "Amount (1,234.56)"], ["currency", `Money (${symbol})`],
+      ["percent", "Percent"], ["date", `Date (${datePattern})`], ["phone", "Phone number (US)"], ["zip", "ZIP code (US)"]]
+      .map(([v, label]) => el("option", { value: v }, label)));
+    this.sumInput = el("input", { type: "text", class: "re-name re-short", spellcheck: "false", placeholder: "Price, Tax",
+      "aria-label": "Adds up these fields (their names, separated by commas)",
+      oninput: () => this.#changeSelected({ calculate: this.sumInput.value.trim() ? "sum: " + this.sumInput.value : "" }),
+      onkeydown: (e) => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); this.overlay.focus({ preventScroll: true }); } },
+    });
+    this.textLabel = el("span", { class: "re-textopts" },
+      el("label", { title: "Numbers, money and dates are checked and shown in their format as people type" }, el("span", {}, "Format"), this.formatSelect),
+      el("label", { title: "Fill this field in by itself with the total of other fields" }, el("span", {}, "Sum of"), this.sumInput));
     this.valueLabel = el("label", { title: "What this button gives when it's chosen" }, el("span", {}, "Value"), this.valueInput);
     this.optionsLabel = el("label", { title: "The choices in the list, separated by commas" }, el("span", {}, "Choices"), this.optionsInput);
     // One slot for a radio button's value or a dropdown's choices, which
     // keeps its space: the page mustn't move while a field is clicked.
-    this.extraSlot = el("div", { class: "re-extra" }, this.valueLabel, this.optionsLabel);
+    this.extraSlot = el("div", { class: "re-extra" }, this.valueLabel, this.optionsLabel, this.textLabel);
     this.nameBox = el("div", { class: "re-name-box" },
       el("label", {}, this.nameLabel, this.nameInput), el("label", {}, el("span", {}, "Type"), this.typeSelect),
       this.extraSlot);
@@ -533,7 +553,13 @@ export class RegionEditor {
     this.nameInput.setAttribute("aria-label", kind.type === "radio" ? "Group name (buttons with the same one are a group)" : "Field name");
     this.valueLabel.hidden = kind.type !== "radio";
     this.optionsLabel.hidden = kind.type !== "dropdown";
-    this.extraSlot.style.visibility = kind.type === "radio" || kind.type === "dropdown" ? "" : "hidden";
+    const text = kind.type === "text" || kind.type === "multiline";
+    this.textLabel.hidden = !text;
+    this.extraSlot.style.visibility = kind.type === "radio" || kind.type === "dropdown" || text ? "" : "hidden";
+    if (text) {
+      this.formatSelect.value = kind.format ? (Object.keys(this.formats).find((k) => this.formats[k].format === kind.format) || "") : "";
+      if (document.activeElement !== this.sumInput) this.sumInput.value = String(kind.calculate || "").replace(/^\s*sum\s*:\s*/i, "");
+    }
     if (document.activeElement !== this.valueInput) this.valueInput.value = kind.value || "";
     if (document.activeElement !== this.optionsInput) {
       this.optionsInput.value = Array.isArray(kind.options) ? kind.options.join(", ") : kind.options || "";
