@@ -1067,6 +1067,7 @@ follows. On Windows, from a clean checkout of the commit to release, with
 [GitHub's `gh`](https://cli.github.com) signed in:
 
 ```bash
+winget install --id GitHub.cli          # once, then: gh auth login
 pip install -e ".[test,build]"
 python packaging/release.py --check     # the tests, the app build and its self-test
 python packaging/release.py --dry-run   # also makes the release files in dist/release

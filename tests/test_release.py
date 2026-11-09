@@ -63,11 +63,13 @@ def test_the_zip_is_the_same_every_time(release, tmp_path):
 class Runner:
     """Stands in for git and gh."""
 
-    def __init__(self, dirty="", released=False):
-        self.dirty, self.released, self.commands = dirty, released, []
+    def __init__(self, dirty="", released=False, signed_in=True):
+        self.dirty, self.released, self.signed_in, self.commands = dirty, released, signed_in, []
 
     def __call__(self, cmd, cwd=None, check=True):
         self.commands.append(cmd)
+        if cmd[:3] == ["gh", "auth", "status"] and not self.signed_in:
+            raise release_error("You are not logged into any GitHub hosts")
         if cmd[:3] == ["git", "status", "--porcelain"]:
             return self.dirty
         if cmd[:3] == ["gh", "release", "view"]:
@@ -81,6 +83,35 @@ class Runner:
 
 def release_error(text):
     return RuntimeError(text)
+
+
+@pytest.fixture(autouse=True)
+def gh_installed(release, monkeypatch):
+    monkeypatch.setattr(release.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+
+def test_publishing_needs_gh_installed_and_signed_in_before_the_checks(release, tmp_path, monkeypatch):
+    checked = []
+    monkeypatch.setattr(release, "check", lambda root: checked.append(True) or True)
+    monkeypatch.setattr(release, "third_party_notices", lambda root: "N")
+    monkeypatch.setattr(release, "run", Runner())
+    monkeypatch.setattr(release.shutil, "which", lambda name: None if name == "gh" else f"/usr/bin/{name}")
+    with pytest.raises(release.ReleaseError, match="gh isn't installed.*gh auth login"):
+        release.publish(ROOT, "9.9.9", CHANGELOG, out_dir=tmp_path)
+    monkeypatch.setattr(release.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(release, "run", Runner(signed_in=False))
+    with pytest.raises(release.ReleaseError, match="gh auth login"):
+        release.publish(ROOT, "9.9.9", CHANGELOG, out_dir=tmp_path)
+    assert not checked  # found out before seven minutes of checks
+    # a dry run publishes nothing, so it needs no gh
+    monkeypatch.setattr(release.shutil, "which", lambda name: None if name == "gh" else f"/usr/bin/{name}")
+    monkeypatch.setattr(release, "run", Runner())
+    release.publish(ROOT, "9.9.9", CHANGELOG, out_dir=tmp_path, checks=False, dry_run=True)
+
+
+def test_a_missing_program_is_reported_not_raised(release):
+    with pytest.raises(release.ReleaseError, match="isn't installed"):
+        release.run(["zpdf-no-such-program-here", "--version"])
 
 
 def test_publishing_uploads_to_the_releases_repo_and_tags(release, tmp_path, monkeypatch):

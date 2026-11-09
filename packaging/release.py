@@ -13,13 +13,17 @@ section as notes, and tags the development repository. The app's Update
 button follows those releases (see pdfmanager/update.py).
 
 Run it on Windows (the build and the self-test make the Windows app), from
-a clean checkout of the commit to release, with "gh" signed in ("gh auth
-login"). It refuses a tree with uncommitted changes, a version CHANGELOG.md
+a clean checkout of the commit to release, with GitHub's "gh" installed
+("winget install --id GitHub.cli") and signed in ("gh auth login"). A
+checkout with core.autocrlf (Windows' usual git setting) gives the text
+files CRLF line endings, so its zip's checksum differs from one made on
+Linux from the same commit. It refuses a tree with uncommitted changes, a version CHANGELOG.md
 doesn't describe, and a version that is already published.
 """
 import argparse
 import hashlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -47,8 +51,12 @@ class ReleaseError(Exception):
 
 
 def run(cmd, cwd=None, check=True):
-    """Run a program; its output, or ReleaseError with what it said."""
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    """Run a program; its output, or ReleaseError with what it said (or
+    that it isn't installed)."""
+    try:
+        proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    except OSError as exc:
+        raise ReleaseError(f"{cmd[0]} isn't installed or can't be started ({exc})") from None
     if check and proc.returncode:
         said = (proc.stderr or proc.stdout).strip().splitlines()[-5:]
         raise ReleaseError(f"{' '.join(cmd[:3])} failed: " + " / ".join(said))
@@ -138,6 +146,14 @@ def publish(root, version, changelog, out_dir, checks=True, dry_run=False):
     notes = changelog_section(changelog, version) + "\n" + INSTALL_NOTE.format(version=version)
     tag = f"v{version}"
     if not dry_run:
+        # Found out now, not after the checks: publishing needs gh, signed in.
+        if not shutil.which("gh"):
+            raise ReleaseError("gh isn't installed; install GitHub CLI (winget install --id GitHub.cli) "
+                               "and sign in with gh auth login")
+        try:
+            run(["gh", "auth", "status"], cwd=root)
+        except Exception:
+            raise ReleaseError("gh isn't signed in to GitHub; run gh auth login") from None
         if run(["git", "status", "--porcelain"], cwd=root).strip():
             raise ReleaseError("the checkout has uncommitted changes; release a committed version")
         if run(["git", "tag", "-l", tag], cwd=root).strip():
