@@ -1167,7 +1167,7 @@ def encrypt(path, output, user_password, owner_password=None, password=None, per
     if restricted and (not owner_password or owner_password == user_password):
         raise PdfManagerError("to limit printing, copying or changes, set a permissions "
                               "password different from the password to open it")
-    if not user_password and not restricted:
+    if not user_password and not owner_password:
         raise PdfManagerError("enter a password to open it, or choose what to limit")
     owner_password = owner_password or user_password
     try:

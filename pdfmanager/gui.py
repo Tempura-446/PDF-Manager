@@ -132,6 +132,7 @@ OPERATIONS = [
                             ["clear", "Remove all bookmarks"]]),
                 _f("outline", "", "hidden", "")]},
     {"id": "labels", "group": "Pages", "label": "Page labels", "files": "pdf",
+     "board": {"mode": "view"},
      "help": "Number pages the way the book does: i, ii, iii for the front pages, then 1, 2, 3. "
              "Readers show these labels and go to them (\"page iv\").",
      "fields": [_f("roman", "Front pages numbered i, ii, iii", "number", 0, min=0,
