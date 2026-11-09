@@ -7,10 +7,11 @@
 #      (running it again updates it).
 #   3. Adds Start menu and desktop shortcuts, ZPDF in "Open with" for
 #      PDFs, and an entry in Settings > Apps to uninstall it.
-#   4. Asks whether to add OCR and PDF/A support too (unless -WithOcr or
-#      -NoOcr says): OCRmyPDF in ZPDF's folder, and the Tesseract and
-#      Ghostscript programs with winget. Skipped when they're already there
-#      or winget is missing; it never stops the installation.
+#   4. Asks whether to add Tesseract and Ghostscript too (unless -WithExtras
+#      or -NoExtras says). OCR itself is built in; these add PDF/A output,
+#      turning pages upright and a second OCR engine: OCRmyPDF in ZPDF's
+#      folder, and the two programs with winget. Skipped when they're
+#      already there or winget is missing; it never stops the installation.
 #
 # The app runs with Python's own pythonw.exe, which is signed, so Windows
 # Smart App Control lets it start. This script only uses plain PowerShell
@@ -21,14 +22,17 @@ param(
     [switch]$NoDesktop,   # no desktop shortcut
     [switch]$NoOpenWith,  # don't add to "Open with"
     [switch]$NoLaunch,    # don't start the app at the end
-    [switch]$WithOcr,     # also install OCR and PDF/A support, without asking
-    [switch]$NoOcr        # don't install OCR and PDF/A support, and don't ask
+    # -WithOcr and -NoOcr, the names before 0.14, still work.
+    [Alias("WithOcr")]
+    [switch]$WithExtras,  # also install Tesseract and Ghostscript, without asking
+    [Alias("NoOcr")]
+    [switch]$NoExtras     # don't install Tesseract and Ghostscript, and don't ask
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"  # makes downloads much faster
 $PythonVersion = "3.13.1"
-# winget packages for OCR (Tesseract) and PDF/A (Ghostscript).
+# winget packages for the second OCR engine (Tesseract) and PDF/A (Ghostscript).
 $TesseractId = "UB-Mannheim.TesseractOCR"
 $GhostscriptId = "ArtifexSoftware.GhostScript"
 
@@ -131,11 +135,11 @@ function Install-WithWinget($id, $name) {
     }
 }
 
-function Install-OcrSupport($status) {
+function Install-Extras($status) {
     if (-not $status.OcrMyPdf) {
         Say "Adding OCRmyPDF to ZPDF..."
-        # Just OCRmyPDF (the version pyproject.toml's "ocr" extra asks for): ZPDF
-        # itself is installed already and needn't be built again.
+        # Just OCRmyPDF (the version pyproject.toml's "tesseract" extra asks for):
+        # ZPDF itself is installed already and needn't be built again.
         & $venvPython -m pip install --disable-pip-version-check --quiet "ocrmypdf>=15"
         if ($LASTEXITCODE -ne 0) { Say "Installing OCRmyPDF didn't work (see above)." }
     }
@@ -143,11 +147,11 @@ function Install-OcrSupport($status) {
     if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
         Say "winget isn't available here, so Tesseract and Ghostscript weren't installed."
         Say "Install them by hand if you need them:"
-        if (-not $status.Tesseract) { Say "  OCR:   https://github.com/UB-Mannheim/tesseract/wiki" }
-        if (-not $status.Ghostscript) { Say "  PDF/A: https://ghostscript.com/releases/gsdnld.html" }
+        if (-not $status.Tesseract) { Say "  Tesseract:   https://github.com/UB-Mannheim/tesseract/wiki" }
+        if (-not $status.Ghostscript) { Say "  Ghostscript: https://ghostscript.com/releases/gsdnld.html" }
         return
     }
-    if (-not $status.Tesseract) { Install-WithWinget $TesseractId "Tesseract (for OCR)" | Out-Null }
+    if (-not $status.Tesseract) { Install-WithWinget $TesseractId "Tesseract" | Out-Null }
     if (-not $status.Ghostscript) { Install-WithWinget $GhostscriptId "Ghostscript (for PDF/A)" | Out-Null }
 }
 
@@ -166,7 +170,7 @@ if (-not (Test-Python $venvPython)) {
     if ($LASTEXITCODE -ne 0) { throw "Could not create the app's Python environment." }
 }
 & $venvPython -m pip install --disable-pip-version-check --quiet --upgrade pip
-& $venvPython -m pip install --disable-pip-version-check --quiet --upgrade "$source[app]"
+& $venvPython -m pip install --disable-pip-version-check --quiet --upgrade "$source[app,ocr]"
 if ($LASTEXITCODE -ne 0) { throw "Installing ZPDF's packages failed (see above)." }
 Say "Done"
 
@@ -182,35 +186,35 @@ try {
     $status = Get-OcrStatus
     $complete = $status -and $status.OcrMyPdf -and $status.Tesseract -and $status.Ghostscript
     $wanted = $false
-    if ($complete -or $NoOcr) {
+    if ($complete -or $NoExtras) {
         $wanted = $false
-    } elseif ($WithOcr) {
+    } elseif ($WithExtras) {
         $wanted = $true
     } elseif ($env:CI -or $env:GITHUB_ACTIONS -or $env:TF_BUILD) {
         $wanted = $false  # an automated run: no one to ask
     } else {
         Write-Host ""
-        Write-Host "OCR makes scanned PDFs searchable; PDF/A is for long-term archiving."
-        try { $answer = Read-Host "Also install OCR and PDF/A support? (about 150 MB) [Y/n]" } catch { $answer = "n" }
+        Write-Host "ZPDF's OCR is built in. Two free programs can add more:"
+        try { $answer = Read-Host "Also install Tesseract and Ghostscript? They add PDF/A output, turning pages upright and a second OCR engine (about 150 MB) [Y/n]" } catch { $answer = "n" }
         $wanted = ("$answer".Trim() -notmatch "^(n|no)$")
     }
     if ($complete) {
-        Step "OCR and PDF/A support"
+        Step "Tesseract and Ghostscript"
         Say "Already installed"
     } elseif ($wanted) {
-        Step "Adding OCR and PDF/A support"
+        Step "Adding Tesseract and Ghostscript"
         if (-not $status) { $status = @{ OcrMyPdf = $false; Tesseract = $false; Ghostscript = $false } }
-        Install-OcrSupport $status
+        Install-Extras $status
         $after = Get-OcrStatus
         if ($after) {
-            foreach ($part in @(@("OCRmyPDF", $after.OcrMyPdf), @("Tesseract (OCR)", $after.Tesseract),
+            foreach ($part in @(@("OCRmyPDF", $after.OcrMyPdf), @("Tesseract (second OCR engine)", $after.Tesseract),
                                 @("Ghostscript (PDF/A)", $after.Ghostscript))) {
                 if ($part[1]) { Say "$($part[0]): ready" } else { Say "$($part[0]): not installed" }
             }
         }
     }
 } catch {
-    Say "OCR and PDF/A support wasn't added ($_). ZPDF works without it; run the installer again with -WithOcr to retry."
+    Say "Tesseract and Ghostscript weren't added ($_). ZPDF works without them; run the installer again with -WithExtras to retry."
 }
 
 Write-Host ""

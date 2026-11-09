@@ -45,6 +45,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends tesseract-ocr ghostscript libreoffice-writer-nogui
       - name: Install
-        run: python -m pip install -e ".[test,ocr]"
+        run: python -m pip install -e ".[test,ocr,tesseract]"
       - name: Run the tests that need these programs
         run: python -m pytest -q -rs tests/test_features.py -k "upright or pdfa or libreoffice or ocr" && python -m pytest -q -k ocr

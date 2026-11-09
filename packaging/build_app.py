@@ -8,8 +8,9 @@ Produces, in dist/:
   - macOS:   "ZPDF.app"             (zipped as ZPDF-macos.zip)
   - Linux:   "ZPDF/ZPDF"     (zipped as ZPDF-linux.zip)
 
-The app opens in its own window (pywebview). OCR still needs Tesseract
-installed on the computer; everything else is bundled.
+The app opens in its own window (pywebview). Everything is bundled, OCR's
+built-in engine included; Tesseract and Ghostscript (the second OCR engine,
+upright pages, PDF/A) stay optional programs on the computer.
 """
 
 import platform
@@ -70,6 +71,10 @@ def main():
         "--collect-submodules", "pyhanko",
         "--collect-data", "pyhanko",
         "--collect-submodules", "pyhanko_certvalidator",
+        # OCR's built-in engine: the models ship inside rapidocr as data files,
+        # and onnxruntime keeps its shared libraries beside its Python files.
+        "--collect-all", "rapidocr",
+        "--collect-all", "onnxruntime",
         # Find the package from the source tree: editable installs use import
         # hooks PyInstaller can't follow.
         "--paths", str(ROOT),
