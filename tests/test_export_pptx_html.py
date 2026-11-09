@@ -305,10 +305,10 @@ def test_pptx_scanned_text_stays_invisible(tmp_path):
     with zipfile.ZipFile(out) as zf:
         runs = dict(slide_texts(zf, 1))["Recognised words"]
         assert runs[0]["hidden"]
-    html = webpage.pdf_to_html(path, tmp_path / "scan.html", mode="exact")["output"].read_text()
+    html = webpage.pdf_to_html(path, tmp_path / "scan.html", mode="exact")["output"].read_text(encoding="utf-8")
     assert "color:transparent" in html and "Recognised words" in html
     # Flowing: the text is the content; the scan isn't repeated as a picture.
-    html = webpage.pdf_to_html(path, tmp_path / "scan2.html")["output"].read_text()
+    html = webpage.pdf_to_html(path, tmp_path / "scan2.html")["output"].read_text(encoding="utf-8")
     assert "<p>Recognised words</p>" in html and "<img" not in html
 
 
@@ -435,7 +435,7 @@ def test_html_columns_headers_and_forms(tmp_path):
         " ".join(f"Column 2 line {k} has a longer text in it." for k in range(1, 9))]
     assert paragraphs[2:4] == ["Name: Jane Doe", "Phone: 555 0100"]
     assert doc.all("h1") == ["Chapter 1", "Chapter 2", "Chapter 3"]
-    text = out["output"].read_text()
+    text = out["output"].read_text(encoding="utf-8")
     # the running header and the page numbers in the footer are left out
     assert "ACME Annual Report" not in text
     assert not re.search(r"<p>Page \d</p>", text)
@@ -475,12 +475,12 @@ def test_html_language_pages_and_bad_links(report, tmp_path):
             A=pikepdf.Dictionary(S=pikepdf.Name.URI, URI=pikepdf.String("javascript:alert(1)")))))
         pdf.save(report)
     out = webpage.pdf_to_html(report, tmp_path / "p.html", pages="3,1")["output"]
-    source = out.read_text()
+    source = out.read_text(encoding="utf-8")
     assert '<html lang="de-DE">' in source and "javascript" not in source
     assert [a["id"] for tag, a in parse(out).tags if a.get("id")] == ["page-3", "page-1"]
     # a link to a page that isn't in the file is dropped
     out = webpage.pdf_to_html(report, tmp_path / "q.html", pages="1-2")["output"]
-    assert "#page-3" not in out.read_text()
+    assert "#page-3" not in out.read_text(encoding="utf-8")
 
 
 WORDS = ("Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor "
@@ -543,7 +543,7 @@ def test_tables_lists_and_columns(tmp_path):
     assert doc.all("li") == [" ".join(WORDS[:14]) + ".", "Second item."]
     assert doc.all("th") == ["Name", "Value"]
 
-    exact = webpage.pdf_to_html(src, tmp_path / "x.html", mode="exact")["output"].read_text()
+    exact = webpage.pdf_to_html(src, tmp_path / "x.html", mode="exact")["output"].read_text(encoding="utf-8")
     # bullet and text placed apart; justified lines get their spaces' width
     assert re.search(r'>•</span> </span>\n<span class="f\d+" style="left:[\d.]+%;top:[\d.]+%;'
                      r"font-size:[\d.]+cqw[^\"]*\">Lorem", exact)
@@ -564,7 +564,7 @@ def test_encrypted_input(report, tmp_path):
         assert "Quarterly Report" in dict(slide_texts(zf, 1))
         assert zf.read("ppt/slides/slide1.xml").count(b"<p:bg>") == 1  # its text could be taken out
     html = webpage.pdf_to_html(locked, tmp_path / "x.html", password="secret")["output"]
-    assert "Quarterly Report" in html.read_text()
+    assert "Quarterly Report" in html.read_text(encoding="utf-8")
 
 
 def test_bad_options(report, tmp_path):
@@ -586,7 +586,7 @@ def test_cli(report, tmp_path, capsys):
     assert "(1 slide, pictures)" in capsys.readouterr().out
     assert main(["to-html", str(report), "--exact", "-p", "1"]) == 0
     assert "(1 page, exact)" in capsys.readouterr().out
-    assert 'id="page-1"' in (tmp_path / "report.html").read_text()
+    assert 'id="page-1"' in (tmp_path / "report.html").read_text(encoding="utf-8")
     other = report_pdf(tmp_path / "other.pdf", tmp_path)
     assert main(["to-html", str(report), str(other), "-o", str(tmp_path / "web")]) == 0
     assert sorted(p.name for p in (tmp_path / "web").iterdir()) == ["other.html", "report.html"]

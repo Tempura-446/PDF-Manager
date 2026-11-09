@@ -100,7 +100,7 @@ def test_add_password_tool_and_cli_limits(tmp_path, capsys):
 
 def test_attach_replace_and_remove(tmp_path):
     src = pages_pdf(tmp_path / "a.pdf")
-    (tmp_path / "data.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    (tmp_path / "data.csv").write_text("a,b\n1,2\n", encoding="utf-8", newline="")
     (tmp_path / "notes.txt").write_text("hello", encoding="utf-8")
     added, removed = filetools.attach(src, tmp_path / "b.pdf", [tmp_path / "data.csv",
                                                                 tmp_path / "notes.txt"])
