@@ -1655,6 +1655,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(HTTPStatus.OK, update.public_settings())
         if path == "/api/update":
             return self._send(HTTPStatus.OK, {**update.check(), "can_restart": self._can_restart()})
+        if path == "/api/licence":
+            from pdfmanager import notices
+
+            return self._send(HTTPStatus.OK, notices.licence_text(), "text/plain; charset=utf-8")
+        if path == "/api/notices":
+            from pdfmanager import notices
+
+            return self._send(HTTPStatus.OK, notices.third_party_notices(), "text/plain; charset=utf-8")
         if path == "/api/debug/stacks" and os.environ.get("PDFM_LOG"):
             return self._send(HTTPStatus.OK, _thread_stacks(), "text/plain; charset=utf-8")
         self._error(HTTPStatus.NOT_FOUND, "not found")
