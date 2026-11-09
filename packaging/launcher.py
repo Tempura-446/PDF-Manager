@@ -62,6 +62,16 @@ def self_test(result_file):
             forms.add_fields(form, Path(tmp) / "fillable.pdf", [{**f, "page": 1} for f in found[1]])
             checked = pdfacheck.check(src, engine="builtin")
             assert not checked["passed"] and checked["issues"], "PDF/A check failed"
+            # 0.13.0: tagging for screen readers, PowerPoint and HTML, repair.
+            from pdfmanager import accessibility, filetools, slides, webpage
+
+            accessibility.autotag(src, Path(tmp) / "tagged.pdf")
+            assert accessibility.check(Path(tmp) / "tagged.pdf"), "accessibility check failed"
+            slides.pdf_to_pptx(src, Path(tmp) / "test.pptx")
+            webpage.pdf_to_html(src, Path(tmp) / "test.html")
+            filetools.repair(src, Path(tmp) / "repaired.pdf")
+            for name in ("test.pptx", "test.html", "repaired.pdf"):
+                assert (Path(tmp) / name).stat().st_size, f"{name} is empty"
 
         server, url = gui.make_server()
         Thread(target=server.serve_forever, daemon=True).start()
