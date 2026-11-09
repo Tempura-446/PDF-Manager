@@ -251,6 +251,9 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
 - **Fill in forms** and save a copy with your entries. A printed form with
   nothing to type in (lines, boxes and tick boxes only) gets a bar offering
   **Make it fillable**, which adds its fields right there (also in *Tools*).
+  Forms' own scripts run as in Acrobat: amounts, dates and phone numbers
+  are checked and shown in their format as you type, totals add themselves
+  up, and values out of range are refused.
 - **Annotate and sign** (Tools → Annotate & sign): highlight, underline
   or strike out text, add **notes** (click, type your comment), add text,
   draw, draw **shapes** (rectangle, ellipse, revision cloud, arrow, line;
@@ -261,6 +264,16 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   and shapes are standard PDF annotations with their own appearance, so
   Acrobat and other viewers show them the same, and they print. Use
   *Flatten forms & comments* afterwards to make them part of the page.
+- **Stamps** (Annotate & sign → Stamp): Approved, Not approved, Reviewed,
+  Received, Draft, Final, Confidential, For comment, Void or your own
+  words, with your name and the date if you like. Click where it goes, or
+  drag its size.
+- **Comments tab**: every comment with its replies; **Summary** makes a
+  PDF listing them page by page (with the words each highlight or
+  strike-out marks), **Export** saves them as an XFDF file to send, and
+  **Import** adds comments from one (Acrobat reads and writes XFDF).
+- **Document properties** shows what a protected PDF allows (printing,
+  changes, copying) and the attached files, each with **Save**.
 - **Pictures** (Tools → Annotate & sign → Pictures): every picture on the
   page is outlined; drag one to move it, drag a corner to resize it (it
   keeps its proportions; hold Shift to stretch it), or **Replace** or
@@ -444,7 +457,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `compress` | shrink files: `low`, `medium`, `high` | `pdfm compress *.pdf -l high -o small/` |
 | `color` | convert to grayscale, RGB or CMYK | `pdfm color doc.pdf --to cmyk --icc printer.icc` |
 | `ocr` | make scans searchable | `pdfm ocr scan.pdf --language eng+deu` |
-| `encrypt` / `decrypt` | AES-256 password protection | `pdfm encrypt doc.pdf` (prompts) |
+| `encrypt` / `decrypt` | AES-256 password protection, limits on printing, copying, changes | `pdfm encrypt doc.pdf` (prompts) |
 | `metadata` | show or set title/author/subject/keywords | `pdfm metadata doc.pdf --title "Q3 Report"` |
 | `watermark` | stamp text or another PDF | `pdfm watermark doc.pdf -t CONFIDENTIAL` |
 | `number` | add page numbers | `pdfm number doc.pdf --format "Page {n} of {total}"` |
@@ -464,7 +477,12 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `check-pdfa` | check whether PDFs meet PDF/A, and what breaks it | `pdfm check-pdfa *.pdf` · `--level 1b` |
 | `to-word` | convert to an editable Word document | `pdfm to-word doc.pdf` |
 | `to-excel` | put the tables into an Excel workbook (or CSV files) | `pdfm to-excel doc.pdf -p 2-5` · `--one-sheet` · `--csv` |
-| `from-office` | convert Word, Excel, PowerPoint, … to PDF | `pdfm from-office report.docx` |
+| `from-office` | convert Word, Excel, PowerPoint, … (and web pages) to PDF | `pdfm from-office report.docx` |
+| `web` | save web pages as PDFs (as the browser prints them) | `pdfm web https://example.com` |
+| `attach` | attach files to PDFs, remove or list them | `pdfm attach doc.pdf --add data.xlsx` |
+| `labels` | page labels (i, ii, iii then 1, 2, 3) | `pdfm labels doc.pdf --set "1-4: i; 5-: 1"` |
+| `repair` | mend damaged PDFs, fast web view | `pdfm repair broken.pdf` |
+| `comments` | list comments, summary PDF, CSV, XFDF export/import | `pdfm comments doc.pdf --summary` |
 | `recipe` | save and run recipes (several tools in a row) | `pdfm recipe run "Scans" *.pdf` |
 | `from-images` | save pictures as a PDF (photos the right way up, scanners' multi-page TIFFs) | `pdfm from-images *.jpg -o photos.pdf -s a4 --margin 10` |
 | `to-images` | render pages to PNG/JPG | `pdfm to-images doc.pdf --dpi 200 -p 1` |
@@ -695,6 +713,11 @@ exact look but puts every line in its own text box.
 files to PDF with Microsoft Office or, without it, LibreOffice. Text files
 always work.
 
+`web` saves web pages as PDFs the way the browser prints them, links
+included: `pdfm web https://example.com/page` or a saved page (`.html`,
+`.mht`). It uses Microsoft Edge (on every Windows), Chrome or Chromium; the
+**Web page → PDF** tool does the same in the app.
+
 ### Excel (tables)
 
 `to-excel` finds the tables in a PDF and writes `<name>.xlsx`: a
@@ -784,6 +807,44 @@ separated by `|`. Names are made unique automatically. `--detect` finds the
 fields of a printed form (lines, boxes and tick boxes to fill in), as well
 as any given with `-f`. Drawing them in the app is easier: **Add form
 fields**.
+
+Text fields can check and format what's typed and add themselves up
+(Acrobat's form scripts, which the reader here runs too). In the app:
+**Format** and **Sum of** when a text field is selected. In a `--fields`
+JSON file:
+
+```json
+[{"type": "text", "page": 1, "rect": [150, 695, 300, 712], "name": "Price", "format": "currency", "currency": "€"},
+ {"type": "text", "page": 1, "rect": [150, 665, 300, 682], "name": "Tax", "format": "amount", "min": 0, "max": 1000},
+ {"type": "text", "page": 1, "rect": [150, 635, 300, 652], "name": "Total", "format": "currency", "currency": "€",
+  "calculate": "sum: Price, Tax"}]
+```
+
+Formats: `number` (with `decimals`), `amount`, `currency`, `percent`, `date`
+(with `"date": "dd/mm/yyyy"`), `phone`, `zip`; `"separators": "1.234,56"`
+for continental numbers. Calculations: `sum`, `average`, `product`, `min`,
+`max` of other fields (the field becomes read-only). `min`/`max` refuse
+values out of range.
+
+### Attachments, page labels, repair, permissions, comments
+
+```bash
+pdfm attach report.pdf --add data.xlsx --add photo.jpg   # attach (same name: replaced)
+pdfm attach report_attached.pdf                          # list
+pdfm attach report_attached.pdf --remove photo.jpg
+pdfm labels book.pdf --set "1: Cover; 2-5: i; 6-: 1; 120-: A-1"
+pdfm repair broken.pdf                                   # mend it; fast web view
+pdfm encrypt report.pdf --owner-password boss --printing low --changes comments --no-copy
+pdfm comments review.pdf                                  # list; --summary, --csv, --export
+pdfm comments clean.pdf --import review_comments.xfdf
+```
+
+`encrypt` without `--user-password` but with limits and `--owner-password`
+makes a PDF anyone can open but not print, copy or change beyond what's
+allowed; the permissions password lifts the limits, and `decrypt` needs it
+for such a file. Page labels: each part gives the page it starts on, then
+its first label (`1`, `i`, `I`, `a`, `A`, with an optional prefix such as
+`A-1` or a plain word such as `Cover`).
 
 ### Searching a folder
 
