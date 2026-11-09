@@ -92,7 +92,8 @@ def test_redacted_text_pictures_and_fields_leave_no_trace(tmp_path):
     c.showPage()
     c.save()
     out = tmp_path / "out.pdf"
-    assert redact.redact(src, out, terms=["TOPSECRETWORD"], boxes=["1:72,500,192,580"]) == {1: 2}
+    assert redact.redact(src, out, terms=["TOPSECRETWORD"], boxes=["1:72,500,192,580"],
+                         method="image") == {1: 2}
     left = everything_in(out)
     assert b"TOPSECRETWORD" not in left
     assert b"SSNVALUE123" not in left
@@ -132,7 +133,7 @@ def test_redaction_prunes_the_structure_tree(tmp_path):
         page[NameObject("/StructParents")] = NumberObject(n)
     w.write(src)
     out = tmp_path / "out.pdf"
-    redact.redact(src, out, terms=["TOPSECRETWORD"])
+    redact.redact(src, out, terms=["TOPSECRETWORD"], method="image")
     assert b"TOPSECRETWORD" not in everything_in(out)
     reader = PdfReader(str(out))
     assert "/StructParents" not in reader.pages[0]
@@ -167,7 +168,7 @@ def test_filled_fields_stay_in_the_redacted_picture(tmp_path):
     name, tick = (72, 700, 272, 720), (72, 650, 92, 670)
     before = dark_pixels(src, name), dark_pixels(src, tick)
     out = tmp_path / "out.pdf"
-    assert redact.redact(src, out, terms=["John Smith"]) == {1: 1}
+    assert redact.redact(src, out, terms=["John Smith"], method="image") == {1: 1}
     assert not PdfReader(str(out)).get_fields()  # a picture now, but still showing
     assert dark_pixels(out, name) > 0.8 * before[0] > 0
     assert dark_pixels(out, tick) > 0.8 * before[1] > 0
