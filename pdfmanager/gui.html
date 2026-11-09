@@ -1674,7 +1674,7 @@ PANELS.redact = {
       async sync() {
         const one = items.length === 1;
         host.hidden = !one;
-        $("panel-hint").textContent = one ? "Striped: found by the words and numbers under Options. Black: boxes you drew. Click a box to move, resize or remove it. Every page with a redaction becomes a picture."
+        $("panel-hint").textContent = one ? "Striped: found by the words and numbers under Options. Black: boxes you drew. Click a box to move, resize or remove it. What’s under the boxes is removed for good."
           : "Boxes can be drawn for one file at a time. With several files, the words and numbers under Options are blacked out in each.";
         if (!one) { editor.close(); return; }
         const result = await editor.load(items[0].file, $("pw").value || null);

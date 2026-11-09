@@ -268,8 +268,8 @@ OPERATIONS = [
     {"id": "decrypt", "group": "Security", "label": "Remove password", "files": "pdf",
      "help": "Enter the current password in the box above the Run button.", "fields": []},
     {"id": "redact", "group": "Security", "label": "Redact", "files": "pdf", "panel": "redact",
-     "help": "Permanently black out names, numbers or areas. Pages with redactions become "
-             "pictures, so what's under the black boxes is really gone.",
+     "help": "Permanently black out names, numbers or areas. What's under the black boxes "
+             "is taken out of the file for good.",
      "fields": [_f("terms", "Words or phrases", "text", "", placeholder="John Smith, 555-1234",
                    hint="separate several with commas"),
                 _f("emails", "All email addresses", "check", False),
@@ -277,6 +277,13 @@ OPERATIONS = [
                 _f("numbers", "Card, account and ID numbers", "check", False),
                 _f("case_sensitive", "Match upper/lower case", "check", False),
                 _f("whole_words", "Whole words only", "check", False),
+                # -- true redaction --
+                _f("method", "How", "select", "remove",
+                   choices=[["remove", "Remove what's under the boxes — the rest stays searchable"],
+                            ["image", "Turn the pages into pictures — the most thorough"]],
+                   hint="Pages that can't be edited safely become pictures either way; the "
+                        "notes say which."),
+                # -- end of true redaction --
                 _f("boxes", "", "hidden", "")]},
     {"id": "sanitize", "group": "Security", "label": "Remove hidden data", "files": "pdf",
      "help": "Remove information that travels unseen inside a PDF before you share it.",
@@ -546,12 +553,19 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         if not (terms or patterns or boxes):
             raise UserError("enter words to black out, tick a kind of number, or draw boxes "
                             "on the pages")
+        # -- true redaction --
+        method = opts.get("method") or "remove"
+        if method not in redact.METHODS:
+            raise UserError("choose how to redact: remove what's under the boxes, or pictures")
+        # -- end of true redaction --
         found = redact.redact(src, out, terms=terms, patterns=patterns, boxes=boxes,
                               case_sensitive=_bool(opts.get("case_sensitive")),
-                              whole_words=_bool(opts.get("whole_words")), password=password)
+                              whole_words=_bool(opts.get("whole_words")), password=password,
+                              method=method)
         notes.append(f"{src.name}: " + (
             f"blacked out {sum(found.values())} area{'s' if sum(found.values()) != 1 else ''} "
-            f"on page{'s' if len(found) != 1 else ''} {_pages_list(list(found))}" if found
+            f"on page{'s' if len(found) != 1 else ''} {_pages_list(list(found))}"
+            + _redact_extra(found) if found
             else "nothing matched, so nothing was blacked out"))
     elif op == "recipe":
         try:
@@ -773,6 +787,37 @@ def _redact_request(opts):
     except (ValueError, TypeError, AttributeError):
         raise UserError("the boxes drawn on the pages are damaged; draw them again") from None
     return terms, patterns, boxes
+
+
+# -- true redaction --
+def _redact_extra(report):
+    """What the notes add to "blacked out N areas": pages that became
+    pictures although the content was to be removed, and bookmarks."""
+    pictures = getattr(report, "pictures", {})
+    bits = []
+    if pictures:
+        reasons = sorted(set(pictures.values()))
+        bits.append(f"page{'s' if len(pictures) != 1 else ''} {_pages_list(list(pictures))} "
+                    f"became {'a picture' if len(pictures) == 1 else 'pictures'} "
+                    f"({'; '.join(reasons)})")
+    if getattr(report, "bookmarks", 0):
+        n = report.bookmarks
+        bits.append(f"blacked out the words in {n} bookmark{'s' if n != 1 else ''}")
+    return "".join("; " + b for b in bits)
+
+
+def _redact_boxes(raw):
+    """{0-based page: [(x0, y0, x1, y1)]} from {"1": [[x0, y0, x1, y1]]}."""
+    try:
+        raw = json.loads(raw or "{}")
+        boxes = {int(page) - 1: [tuple(float(v) for v in box) for box in found]
+                 for page, found in raw.items() if found}
+    except (ValueError, TypeError, AttributeError):
+        raise UserError("the boxes drawn on the pages are damaged; draw them again") from None
+    if any(len(box) != 4 for found in boxes.values() for box in found):
+        raise UserError("the boxes drawn on the pages are damaged; draw them again")
+    return boxes
+# -- end of true redaction --
 
 
 def _pages_list(numbers):
@@ -1559,6 +1604,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._outline(body)
             if path == "/api/redact/find":
                 return self._redact_find(body)
+            # -- true redaction --
+            if path == "/api/redact/apply":
+                return self._redact_apply(body)
+            # -- end of true redaction --
             if path == "/api/form/fields":
                 return self._form_fields(body)
             if path == "/api/form/detect":
@@ -1789,6 +1838,36 @@ class Handler(BaseHTTPRequestHandler):
                                      password=fields.get("password") or None)
         return self._send(HTTPStatus.OK, {"boxes": {str(p + 1): [list(b) for b in boxes]
                                                     for p, boxes in found.items()}})
+
+    # -- true redaction --
+    def _redact_apply(self, body):
+        """The reader's Redact tool: remove what's under the marked boxes
+        ("boxes": {"1": [[x0, y0, x1, y1]]} in PDF points from the bottom
+        left of each page); sends back the redacted PDF, and in
+        X-Pdfm-Redacted how many areas, on which pages, and which pages had
+        to become pictures (and why)."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        boxes = _redact_boxes(fields.get("boxes"))
+        if not boxes:
+            raise UserError("mark something to redact first")
+        method = fields.get("method") or "remove"
+        if method not in redact.METHODS:
+            raise UserError("choose how to redact: remove what's under the boxes, or pictures")
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "redacted.pdf"
+            src.write_bytes(uploads[0][2])
+            report = redact.redact(src, out, boxes=boxes, password=password, method=method)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)  # stays protected
+            data = out.read_bytes()
+        summary = {"areas": sum(report.values()), "pages": list(report),
+                   "pictures": {str(k): v for k, v in report.pictures.items()}}
+        return self._send(HTTPStatus.OK, data, "application/pdf",
+                          {"X-Pdfm-Redacted": json.dumps(summary, ensure_ascii=True)})
+    # -- end of true redaction --
 
     def _form_fields(self, body):
         """The form fields already in a PDF, for the Add form fields editor."""
