@@ -1797,6 +1797,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._comments(path.rsplit("/", 1)[1], body)
             if path == "/api/text/edit":
                 return self._text_edit(body)
+            # -- text reflow --
+            if path == "/api/text/fonts":
+                return self._text_fonts(body)
+            # -- end of text reflow --
             if path == "/api/pages/arrange":
                 return self._arrange(body)
             if path == "/api/sign/cert":
@@ -2186,6 +2190,20 @@ class Handler(BaseHTTPRequestHandler):
         # Which font each change got, for the reader to say so.
         return self._send(HTTPStatus.OK, data, "application/pdf",
                           {"X-Pdfm-Fonts": json.dumps(report, ensure_ascii=True)})
+
+    # -- text reflow --
+    def _text_fonts(self, body):
+        """The fonts the reader's text editor offers: the document's own
+        first, then installed ones, then the standard PDF fonts."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            src.write_bytes(uploads[0][2])
+            choices = textedit.font_choices(src, fields.get("password") or None)
+        return self._send(HTTPStatus.OK, choices)
+    # -- end of text reflow --
 
     def _images_list(self, body):
         """The pictures on the reader's pages (see pageimages.py)."""
