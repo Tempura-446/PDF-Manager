@@ -990,13 +990,18 @@ def test_update_install(updates, tmp_path, monkeypatch):
 
     def fake_run(cmd, **kw):
         ran.append(cmd)
-        assert (Path(cmd[-1].replace("[app]", "")) / "pyproject.toml").exists()
+        assert (Path(cmd[-1].replace("[app,ocr]", "")) / "pyproject.toml").exists()
         return type("Done", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
     monkeypatch.setattr(update.subprocess, "run", fake_run)
     assert update.install(python="py") == "9.0.0"
     assert ran[0][:6] == ["py", "-I", "-m", "pip", "install", "--upgrade"]
-    assert ran[0][-1].split("Tempura-446-PDF-Manager-abc123")[1] in ("", "[app]")
+    assert ran[0][-1].split("Tempura-446-PDF-Manager-abc123")[1] in ("", "[app,ocr]")
+    # The app (it has the window library) takes OCR with it: a copy from the
+    # 0.13 installer has no engine yet.
+    monkeypatch.setattr(update, "_has_pywebview", lambda: True)
+    update.install(python="py")
+    assert ran[-1][-1].endswith("[app,ocr]")
     monkeypatch.setattr(update.subprocess, "run", lambda cmd, **kw: type(
         "Failed", (), {"returncode": 1, "stdout": "", "stderr": "ERROR: no space left"})())
     with pytest.raises(core.PdfManagerError, match="no space left"):
