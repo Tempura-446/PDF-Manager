@@ -213,10 +213,16 @@ def _extract(data, target):
     return projects[0]
 
 
-def install(python=None):
+# pip's words when a package has no build for this Python at all.
+_NO_BUILD = re.compile(r"No matching distribution found for (onnxruntime|rapidocr)", re.I)
+
+
+def install(python=None, notes=None):
     """Download the newest version and install it with pip. Returns the
     version installed. The running app keeps the old version until it's
-    started again."""
+    started again. If the OCR engine has no build for this Python, the
+    update is installed without it and ``notes`` (a list) gets a sentence
+    saying so."""
     how = how_installed()
     if how == "source":
         raise core.PdfManagerError("this copy runs from a source folder; update it with git pull")
@@ -246,11 +252,18 @@ def install(python=None):
         # The app brings OCR along, so a copy installed before it was built in
         # gets it with the update; a bare library install stays bare.
         extra = "[app,ocr]" if _has_pywebview() else ""
-        proc = subprocess.run(
-            [python or sys.executable, "-I", "-m", "pip", "install", "--upgrade", "--disable-pip-version-check",
-             "--no-input", f"{project}{extra}"],
-            capture_output=True, text=True, timeout=900,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        proc = _pip_install(python, f"{project}{extra}")
+        if proc.returncode != 0 and extra and _NO_BUILD.search(proc.stderr or proc.stdout or ""):
+            # ONNX Runtime has no build for every Python (none for 3.15 when it
+            # came out): better ZPDF without its OCR engine than no update.
+            progress.say("The OCR engine has no version for this Python; installing without it…")
+            proc = _pip_install(python, f"{project}[app]")
+            if proc.returncode == 0 and notes is not None:
+                notes.append(
+                    f"It was installed without the built-in OCR engine, which has no version for Python "
+                    f"{sys.version_info.major}.{sys.version_info.minor} yet. To get it back, download ZPDF "
+                    "from its releases page and run Install ZPDF.cmd once: it moves ZPDF to a Python the "
+                    "engine supports.")
         if proc.returncode != 0:
             tail = "\n".join((proc.stderr or proc.stdout).strip().splitlines()[-6:])
             raise core.PdfManagerError(f"installing the update failed:\n{tail}")
@@ -259,6 +272,14 @@ def install(python=None):
     except OSError:
         pass
     return version
+
+
+def _pip_install(python, target):
+    return subprocess.run(
+        [python or sys.executable, "-I", "-m", "pip", "install", "--upgrade", "--disable-pip-version-check",
+         "--no-input", target],
+        capture_output=True, text=True, timeout=900,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
 def _has_pywebview():

@@ -157,3 +157,28 @@ def test_build_collects_the_ocr_engine():
     models) and onnxruntime (with its shared libraries)."""
     build = (Path(__file__).resolve().parents[1] / "packaging" / "build_app.py").read_text(encoding="utf-8")
     assert '"--collect-all", "rapidocr"' in build and '"--collect-all", "onnxruntime"' in build
+
+
+def test_installer_picks_a_python_the_ocr_engine_supports():
+    """ONNX Runtime (the built-in OCR engine) has builds for Python 3.10 to
+    3.14 on Windows: a newer Python, like 3.15 when it came out, is passed
+    over (Python 3.13 is installed for ZPDF if nothing else fits), and an
+    existing app environment on one is made again."""
+    text = script()
+    test_python = text[text.index("function Test-Python"):text.index("function Find-Python")]
+    assert "sys.version_info >= (3, 10)" in test_python and "sys.version_info < (3, 15)" in test_python
+    find_python = text[text.index("function Find-Python"):text.index("function Install-Python")]
+    order = re.findall(r'"(3\.1\d)"', find_python)
+    assert order[:2] == ["3.13", "3.12"] and "py.exe" in find_python and "-$version" in find_python
+    assert "if (-not (Test-Python $venvPython))" in text  # an environment on 3.15 is made again
+
+
+def test_installer_finishes_without_ocr_when_it_cant_be_installed():
+    """If the OCR packages have no build for this Python, ZPDF is installed
+    without them (it works, with OCR from Tesseract if that's there) rather
+    than not at all."""
+    text = script()
+    with_ocr = text.index('"$source[app,ocr]"')
+    without = text.index('"$source[app]"', with_ocr)
+    failure = text.index('throw "Installing ZPDF\'s packages failed', with_ocr)
+    assert with_ocr < without < failure

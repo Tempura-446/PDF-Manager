@@ -5,6 +5,7 @@ fields, text edits, Windows set-up and updates."""
 import io
 import json
 import re
+import sys
 import threading
 import zipfile
 from pathlib import Path
@@ -1106,6 +1107,38 @@ def test_update_installs_the_release_after_checking_it(updates, monkeypatch):
     with pytest.raises(core.PdfManagerError, match="damaged"):
         update.install(python="py")
     assert not ran
+
+
+def test_an_update_installs_without_ocr_when_this_python_has_no_engine(updates, monkeypatch):
+    """ONNX Runtime has no build for every Python (none for 3.15 when it came
+    out): the update is installed without the OCR engine, and says so,
+    rather than not at all."""
+    update, github = updates
+    github.release_zip = _release_zip()
+    monkeypatch.setattr(update, "how_installed", lambda: "pip")
+    monkeypatch.setattr(update, "_has_pywebview", lambda: True)
+    ran = []
+
+    def fake_run(cmd, **kw):
+        ran.append(cmd[-1])
+        if cmd[-1].endswith("[app,ocr]"):
+            return type("Failed", (), {"returncode": 1, "stdout": "", "stderr":
+                "ERROR: Could not find a version that satisfies the requirement onnxruntime>=1.17 "
+                "(from pdf-manager[app,ocr]) (from versions: none)\n"
+                "ERROR: No matching distribution found for onnxruntime>=1.17"})()
+        return type("Done", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(update.subprocess, "run", fake_run)
+    notes = []
+    assert update.install(python="py", notes=notes) == "9.0.0"
+    assert ran[0].endswith("[app,ocr]") and ran[1].endswith("[app]")
+    assert notes and "OCR" in notes[0] and "Install ZPDF.cmd" in notes[0]
+    assert f"{sys.version_info.major}.{sys.version_info.minor}" in notes[0]
+    # any other failure still stops the update
+    monkeypatch.setattr(update.subprocess, "run", lambda cmd, **kw: type(
+        "Failed", (), {"returncode": 1, "stdout": "", "stderr": "ERROR: no space left on device"})())
+    with pytest.raises(core.PdfManagerError, match="no space left"):
+        update.install(python="py", notes=[])
 
 
 def test_restart_ends_the_wait():

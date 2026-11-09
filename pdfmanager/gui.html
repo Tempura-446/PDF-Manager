@@ -2229,12 +2229,17 @@ $("update-go").addEventListener("click", async () => {
       bar.firstElementChild.style.width = `${Math.max(8, Math.round(state.fraction * 100))}%`;
       if (state.state !== "running") break;
     }
-    const { version } = await (await api(`/api/job/${job}/result`)).json();  // throws with the error if it failed
+    const { version, note } = await (await api(`/api/job/${job}/result`)).json();  // throws with the error if it failed
     bar.firstElementChild.style.width = "100%";
+    const said = note ? ` ${note}` : "";
     if (!updateInfo.can_restart) {
-      updateStatus("update-status", `Version ${version} is installed. Close ZPDF and open it again to use it.`);
+      updateStatus("update-status", `Version ${version} is installed.${said} Close ZPDF and open it again to use it.`);
       $("update-later").disabled = false; $("update-later").textContent = "Close"; go.hidden = true;
       return;
+    }
+    if (note) {  // give it time to be read before the window goes
+      updateStatus("update-status", `Version ${version} is installed.${said} Starting it in a moment…`);
+      await new Promise((r) => setTimeout(r, 12000));
     }
     updateStatus("update-status", `Version ${version} is installed. Starting it…`);
     restarting = true;
