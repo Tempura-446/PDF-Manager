@@ -616,3 +616,13 @@ def test_tesseract_turns_pages_only_when_it_can(tmp_path, monkeypatch):
         monkeypatch.setattr(ocr, "_tesseract_languages", lambda: set(languages.split()))
         ocr._run_tesseract(tmp_path / "in.pdf", tmp_path / "out.pdf", "eng", False, False, rotate=True)
         assert calls[-1]["rotate_pages"] is expected
+
+
+@needs_builtin
+@pytest.mark.parametrize("script", sorted(ocr.SCRIPT_LANGUAGES))
+def test_every_script_model_is_an_onnx_model_rapidocr_lists(script):
+    # ZPDF runs the models on ONNX Runtime: the address must be of the ONNX
+    # file, not of the same model built for another engine.
+    url, digest = ocr._model_source(script)
+    assert url.endswith(f"/onnx/PP-OCRv5/rec/{script}_PP-OCRv5_rec_mobile.onnx"), url
+    assert len(digest) == 64

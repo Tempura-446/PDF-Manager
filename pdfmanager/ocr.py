@@ -175,13 +175,14 @@ def models_dir():
 
 def _model_source(script):
     """(address, SHA-256) of a script's reading model, from rapidocr's own
-    list of models."""
+    list of models: its ONNX build (the list also has the same models built
+    for other engines, which ONNX Runtime can't load)."""
     import rapidocr
     import yaml
 
     key = f"{script}_PP-OCRv5_rec_mobile"
     listing = yaml.safe_load((Path(rapidocr.__file__).parent / "default_models.yaml").read_text(encoding="utf-8"))
-    stack = [listing]
+    stack = [listing.get("onnxruntime", {}).get("PP-OCRv5", {})]
     while stack:
         node = stack.pop()
         if isinstance(node, dict):
