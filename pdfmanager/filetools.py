@@ -8,6 +8,7 @@ page labels, repairing a damaged file and making it quick to open online.
     repair(path, output, linearize=True) # {"warnings": [...], "linearized": bool}
 """
 
+import functools
 import mimetypes
 import re
 from pathlib import Path
@@ -112,6 +113,18 @@ def attachments(path, password=None):
         return out
 
 
+@functools.lru_cache(maxsize=1)
+def _builtin_types():
+    # Python's own table only: the module-level guess_type also reads the
+    # Windows registry (where Excel registers .csv as application/vnd.ms-excel)
+    # and /etc/mime.types, so the same file would be labelled per computer.
+    return mimetypes.MimeTypes()
+
+
+def _mime_type(name):
+    return _builtin_types().guess_type(name)[0] or "application/octet-stream"
+
+
 def attach(path, output, files=(), remove=(), remove_all=False, password=None, description=""):
     """Attach ``files`` to a PDF (a file of the same name is replaced), after
     taking away the attachments named in ``remove`` (or all of them).
@@ -135,7 +148,7 @@ def attach(path, output, files=(), remove=(), remove_all=False, password=None, d
         for file in files:
             file = Path(file)
             name = file.name
-            mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            mime = _mime_type(name)
             spec = pikepdf.AttachedFileSpec(pdf, file.read_bytes(), filename=name,
                                             description=description or "", mime_type=mime,
                                             relationship=pikepdf.Name.Unspecified)

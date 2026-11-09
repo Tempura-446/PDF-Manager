@@ -98,6 +98,21 @@ def test_add_password_tool_and_cli_limits(tmp_path, capsys):
 # Attached files
 # --------------------------------------------------------------------------
 
+def test_attached_file_type_does_not_depend_on_the_computer(tmp_path, monkeypatch):
+    # On Windows, mimetypes.guess_type reads the registry, where Excel calls
+    # .csv files application/vnd.ms-excel.
+    import mimetypes
+
+    monkeypatch.setattr(mimetypes, "guess_type", lambda *a, **k: ("application/vnd.ms-excel", None))
+    src = pages_pdf(tmp_path / "a.pdf")
+    (tmp_path / "data.csv").write_bytes(b"a,b\n")
+    (tmp_path / "blob.zzq").write_bytes(b"x")
+    filetools.attach(src, tmp_path / "b.pdf", [tmp_path / "data.csv", tmp_path / "blob.zzq"])
+    with pikepdf.open(tmp_path / "b.pdf") as pdf:
+        assert str(pdf.attachments["data.csv"].get_file().mime_type) == "text/csv"
+        assert str(pdf.attachments["blob.zzq"].get_file().mime_type) == "application/octet-stream"
+
+
 def test_attach_replace_and_remove(tmp_path):
     src = pages_pdf(tmp_path / "a.pdf")
     (tmp_path / "data.csv").write_text("a,b\n1,2\n", encoding="utf-8", newline="")
