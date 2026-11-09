@@ -1480,7 +1480,7 @@ export class Reader {
     const editText = name === "EDITTEXT";
     if (editText && !this.textEditHinted) {
       this.textEditHinted = true;
-      this.toast("Click a line to change it, Shift+click for its whole paragraph, or click an empty spot to add words. Old words are covered, not removed — to remove text for good, use Redact.", 8000);
+      this.toast("Click a line to change it, Shift+click for its whole paragraph, or click an empty spot to add words. Old words can stay in the file underneath — to remove text for good, use Redact.", 8000);
     }
     const markup = MARKUP.has(name), custom = editText || markup;
     if (name !== "NONE" || custom) this.measureTool(null);
@@ -2541,7 +2541,7 @@ export class Reader {
       const name = String(real?.name || "").replace(/^[A-Z]{6}\+/, "");
       const bold = !!(real?.bold || real?.black) || /bold|black|heavy|semibold|demi/i.test(name);
       const italic = !!real?.italic || /italic|oblique/i.test(name);
-      const look = { size, left: layer.left + tx[4], baseline: layer.top + tx[5], width: r.width,
+      const look = { size, left: layer.left + tx[4], baseline: layer.top + tx[5], width: r.width, fontName: name,
         weight: bold ? "bold" : "", style: italic ? "italic" : "", ...this.#pageColours(span.closest(".page"), r) };
       // The document's font as pdf.js loaded it shows the words just as on the
       // page, unless it mixed up its letters (fonts cut down for a PDF can
@@ -2751,8 +2751,10 @@ export class Reader {
       this.#openTextEditor(span, pageEl, pageNumber, paragraph ? "line" : "paragraph");
     });
     // The words as shown go along, so only what was changed is drawn again.
+    const picked = this.#fontPicker(box, field, look, viewport, { paragraph: !!paragraph, size: lineH });
     this.#startEditing(box, field, pageEl, original, (text) =>
-      this.#applyTextEdit({ page: pageNumber, rect, text, ...(paragraph ? { paragraph: true } : { old: original }) }));
+      this.#applyTextEdit({ page: pageNumber, rect, text, ...(paragraph ? { paragraph: true } : { old: original }),
+        ...picked.choices() }), picked.changed);
   }
 
   /** New words where the page was clicked; they take the look of the nearest text. */
@@ -2776,22 +2778,27 @@ export class Reader {
     }
     const h = near ? near.h : 16 * viewport.scale;
     const [box, field] = this.#editorBox(pageEl, {
-      left: at.clientX, top: at.clientY, width: look ? Math.max(160, look.size * 8) : 240, height: h + 4, fontSize: Math.max(8, h * 0.8),
+      left: at.clientX, top: at.clientY, width: look ? Math.max(160, look.size * 8) : 240, height: look ? look.size * 1.2 : h + 4,
+      fontSize: Math.max(8, h * 0.8), multiline: true, lineHeight: look ? look.size * 1.2 : null,
       fontFamily: near ? getComputedStyle(near.spans[0].s).fontFamily : "", value: "", look,
-      label: "New text (Enter to add, Esc to cancel)",
-      hint: [el("span", {}, "New text · Enter to add · Esc to cancel")],
+      label: "New text (Enter to add, Shift+Enter for a new line, Esc to cancel)",
+      hint: [el("span", {}, "New text · Enter to add · Shift+Enter new line · Esc to cancel")],
     });
+    field.dataset.enter = "apply";  // Enter adds the words; Shift+Enter starts a new line
+    field.rows = 1;
     const [x, y] = viewport.convertToPdfPoint(at.clientX - layer.left, at.clientY - layer.top);
-    this.#startEditing(box, field, pageEl, "", (text) => this.#applyTextEdit({ page: pageNumber, at: [x, y], text }));
+    const picked = this.#fontPicker(box, field, look, viewport, { newText: true, size: h });
+    this.#startEditing(box, field, pageEl, "", (text) => this.#applyTextEdit({ page: pageNumber, at: [x, y], text,
+      ...picked.choices() }));
   }
 
-  #startEditing(box, field, pageEl, original, apply) {
+  #startEditing(box, field, pageEl, original, apply, restyled = null) {
     let done = false;
     const finish = (keep) => {
       if (done) return;
       done = true;
       if (this.textEditor?.box === box) this.textEditor = null;
-      if (keep && field.value !== original && (original || field.value.trim())) {
+      if (keep && (field.value !== original || restyled?.()) && (original || field.value.trim())) {
         // The typed words stay showing where they go until the page is
         // drawn again with them, so nothing flickers back to the old ones.
         box.classList.add("rd-pending");
@@ -2805,7 +2812,7 @@ export class Reader {
     field.addEventListener("keydown", (e) => {
       e.stopPropagation();
       const multiline = field.tagName === "TEXTAREA";
-      if (e.key === "Enter" && (!multiline || e.ctrlKey || e.metaKey)) { e.preventDefault(); finish(true); }
+      if (e.key === "Enter" && (!multiline || e.ctrlKey || e.metaKey || (field.dataset.enter === "apply" && !e.shiftKey))) { e.preventDefault(); finish(true); }
       if (e.key === "Escape") { e.preventDefault(); finish(false); }
     });
     field.addEventListener("blur", () => setTimeout(() => { if (!done && !box.contains(document.activeElement)) finish(true); }));
@@ -2816,6 +2823,203 @@ export class Reader {
   }
 
   #closeTextEditor(keep) { this.textEditor?.finish(keep); }
+
+  // -- text font picker and reflow --
+  /** The bar above the text editor to choose how the words look: font,
+   *  size, bold, italic, colour and (for more than a word) alignment. The
+   *  field shows the choice as it's made. Returns {choices(): what changed,
+   *  as the server takes it, changed(): whether anything did}. */
+  #fontPicker(box, field, look, viewport, { paragraph = false, newText = false, size = 16 } = {}) {
+    const scale = viewport.scale || 1;
+    const start = {
+      font: "", size: Math.round(((look?.size || size * 0.8) / scale) * 2) / 2,
+      bold: look?.weight === "bold", italic: look?.style === "italic",
+      color: Reader.#hexColour(look?.color || "#000000"), align: "",
+    };
+    const now = { ...start };
+    const own = Reader.#familyOf(look?.fontName || "");
+    const fontSel = el("select", { class: "rd-tf-font", title: "Font", "aria-label": "Font" },
+      el("option", { value: "" }, own ? `${own} (as is)` : "Same font"));
+    const sizeIn = el("input", { class: "rd-tf-size", type: "number", min: "1", max: "500", step: "0.5", value: String(start.size),
+      title: "Size (points)", "aria-label": "Font size in points" });
+    const toggle = (label, title, key) => el("button", { type: "button", class: `rd-tf-btn rd-tf-${key}`, title,
+      "aria-label": title, "aria-pressed": String(now[key]) }, label);
+    const boldBtn = toggle("B", "Bold (Ctrl+B)", "bold"), italicBtn = toggle("I", "Italic (Ctrl+I)", "italic");
+    const colorIn = el("input", { class: "rd-tf-color", type: "color", value: start.color, title: "Colour", "aria-label": "Text colour" });
+    const aligns = [["left", "Align left", "M4 6h16M4 10h10M4 14h16M4 18h10"], ["center", "Centre", "M4 6h16M7 10h10M4 14h16M7 18h10"],
+      ["right", "Align right", "M4 6h16M10 10h10M4 14h16M10 18h10"], ["justify", "Justify", "M4 6h16M4 10h16M4 14h16M4 18h16"]]
+      .map(([value, title, d]) => {
+        const b = el("button", { type: "button", class: "rd-tf-btn rd-tf-align", title, "aria-label": title, "aria-pressed": "false",
+          html: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>` });
+        b.dataset.align = value;
+        return b;
+      });
+    const alignGroup = el("span", { class: "rd-tf-group", role: "group", "aria-label": "Alignment" }, ...aligns);
+    alignGroup.hidden = !paragraph && !newText;
+    const bar = el("div", { class: "rd-tf-bar", role: "toolbar", "aria-label": "Text look" },
+      fontSel, sizeIn, el("span", { class: "rd-tf-group" }, boldBtn, italicBtn), colorIn, alignGroup);
+    box.append(bar);
+
+    const generic = /serif|times|roman|georgia|garamond|cambria|book|palatino/i.test(own) && !/sans/i.test(own) ? "serif"
+      : /mono|courier|consol/i.test(own) ? "monospace" : "sans-serif";
+    const original = look ? { family: look.family, size: look.size, weight: look.weight, style: look.style, color: look.color } : null;
+    const lineHeight = parseFloat(field.style.lineHeight) || 0;
+    const show = () => {
+      const k = now.size / start.size;
+      const family = now.font ? Reader.#cssFamily(now.font, generic) : original?.family || "";
+      if (look) Object.assign(look, { family, size: original.size * k, weight: now.bold ? "bold" : "", style: now.italic ? "italic" : "" });
+      Object.assign(field.style, {
+        fontFamily: family, fontWeight: now.bold ? "bold" : "normal", fontStyle: now.italic ? "italic" : "normal",
+        color: now.color !== start.color || !original ? now.color : original.color, textAlign: now.align === "justify" ? "justify" : now.align || "",
+      });
+      if (look) field.style.fontSize = `${look.size}px`;
+      else field.style.fontSize = `${Math.max(8, now.size * scale)}px`;
+      if (lineHeight) field.style.lineHeight = `${lineHeight * k}px`;
+      if (now.font || now.bold !== start.bold || now.italic !== start.italic) {
+        field.style.letterSpacing = field.style.wordSpacing = "";  // the page's spacing was for its own font
+      }
+      if (paragraph && lineHeight) field.style.height = `${Math.max(parseFloat(field.style.height) || 0, lineHeight * k * 2)}px`;
+      fit();
+    };
+    // New words: the box grows with the longest line and the number of lines.
+    const fit = () => {
+      if (!newText) return field.dispatchEvent(new Event("input"));
+      const lines = field.value.split("\n");
+      const m = look || { family: getComputedStyle(field).fontFamily, size: parseFloat(field.style.fontSize) || 16 };
+      const w = Math.max(...lines.map((t) => this.#textWidth(t, m)), 0) + m.size;
+      const lh = parseFloat(field.style.lineHeight) || m.size * 1.25;
+      Object.assign(field.style, { width: `${Math.max(look ? look.size * 4 : 160, Math.ceil(w))}px`, height: `${Math.ceil(lh * lines.length + 2)}px` });
+    };
+    if (newText) field.addEventListener("input", fit);
+
+    const press = () => {
+      boldBtn.setAttribute("aria-pressed", String(now.bold));
+      italicBtn.setAttribute("aria-pressed", String(now.italic));
+      for (const b of aligns) b.setAttribute("aria-pressed", String(b.dataset.align === now.align));
+      show();
+    };
+    for (const b of [boldBtn, italicBtn, ...aligns]) b.addEventListener("pointerdown", (e) => e.preventDefault());  // the field keeps the focus
+    boldBtn.addEventListener("click", () => { now.bold = !now.bold; press(); });
+    italicBtn.addEventListener("click", () => { now.italic = !now.italic; press(); });
+    for (const b of aligns) b.addEventListener("click", () => { now.align = now.align === b.dataset.align ? "" : b.dataset.align; press(); });
+    fontSel.addEventListener("change", () => { now.font = fontSel.value; show(); });
+    sizeIn.addEventListener("input", () => {
+      const v = parseFloat(sizeIn.value);
+      if (v >= 1 && v <= 500) { now.size = v; show(); }
+    });
+    colorIn.addEventListener("input", () => { now.color = colorIn.value; show(); });
+    field.addEventListener("keydown", (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key === "b" || key === "i") {
+        e.preventDefault();
+        now[key === "b" ? "bold" : "italic"] = !now[key === "b" ? "bold" : "italic"];
+        press();
+      }
+    });
+    // The bar's own keys: Enter applies, Esc cancels; nothing reaches the reader's shortcuts.
+    bar.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") { e.preventDefault(); this.textEditor?.finish(false); }
+      if (e.key === "Enter" && e.target.tagName !== "BUTTON") { e.preventDefault(); this.textEditor?.finish(true); }
+    });
+    // Leaving the bar for the page is like leaving the field: the change is made.
+    bar.addEventListener("focusout", () => setTimeout(() => {
+      if (box.isConnected && !box.contains(document.activeElement) && this.textEditor?.box === box) this.textEditor.finish(true);
+    }));
+
+    this.#fontChoices().then((choices) => {
+      if (!choices || !fontSel.isConnected) return;
+      const ownKey = Reader.#familyKey(own);
+      const group = (label, names) => {
+        const items = (names || []).filter((n) => Reader.#familyKey(n) !== ownKey);
+        if (items.length) fontSel.append(el("optgroup", { label }, ...items.map((n) => el("option", { value: n }, n))));
+      };
+      group("In this document", choices.document);
+      group("On this computer", choices.installed);
+      group("More on this computer", choices.more);
+      group(choices.pdfa ? "Standard (embedded, PDF/A)" : "Standard", choices.standard);
+    });
+
+    const changes = () => {
+      const out = {};
+      if (now.font) out.font = now.font;
+      if (Math.abs(now.size - start.size) >= 0.25) out.size = now.size;
+      if (now.bold !== start.bold) out.bold = now.bold;
+      if (now.italic !== start.italic) out.italic = now.italic;
+      if (now.color !== start.color) out.color = Reader.#rgb01(now.color);
+      if (now.align) out.align = now.align;
+      return out;
+    };
+    return { choices: changes, changed: () => Object.keys(changes()).length > 0 };
+  }
+
+  /** The fonts to offer (see /api/text/fonts), asked once per version of the document. */
+  async #fontChoices() {
+    const tab = this.activeTab;
+    if (!tab) return null;
+    if (tab.fontChoices?.version !== tab.version) {
+      const ask = async () => {
+        try {
+          const bytes = tab.bytes || await this.#currentBytes();
+          const res = await this.#post("/api/text/fonts", bytes, tab);
+          return res.ok ? await res.json() : null;
+        } catch (e) {
+          return null;  // the editor works without the list: the font as is, size, colour
+        }
+      };
+      tab.fontChoices = { version: tab.version, promise: ask() };
+    }
+    return tab.fontChoices.promise;
+  }
+
+  /** Notes on the fonts a change got when one was picked: [sentence]. */
+  #fontNotes(used) {
+    const notes = [];
+    for (const u of used) {
+      if (u.asked && u.matched === false) {
+        notes.push(u.reason === "pdfa"
+          ? `This is a PDF/A file, which needs every font inside it; ${u.asked} isn't, so ${u.font} was used.`
+          : `${u.asked} can't show those letters in that style here, so ${u.font} was used.`);
+      }
+      if (u.size) notes.push(`The text was made a little smaller (${u.size} pt) to fit.`);
+    }
+    return notes;
+  }
+
+  /** The last change again, its text made a little smaller to fit the page. */
+  async #shrinkToFit(edit) {
+    await this.#undoTextEdit();
+    return this.#applyTextEdit({ ...edit, fit: "shrink" });
+  }
+
+  /** "ABCDEF+TimesNewRomanPS-BoldMT" → "Times New Roman". */
+  static #familyOf(name) {
+    let family = String(name || "").replace(/^[A-Z]{6}\+/, "").split(/[-,]/)[0];
+    family = family.replace(/(PS)?MT$|PS$/, "").replace(/([a-z])([A-Z])/g, "$1 $2");
+    return family.replace(/\s+(Bold|Italic|Oblique|Regular|BoldItalic)$/i, "").trim();
+  }
+
+  static #familyKey(name) { return String(name || "").toLowerCase().replace(/[^a-z0-9]/g, ""); }
+
+  /** A CSS font-family for a family picked in the list. */
+  static #cssFamily(name, generic) {
+    const standard = { helvetica: "Helvetica, Arial, sans-serif", times: '"Times New Roman", Times, serif',
+      courier: '"Courier New", Courier, monospace' }[Reader.#familyKey(name)];
+    return standard || `"${name.replace(/["\\]/g, "")}", ${generic}`;
+  }
+
+  static #hexColour(css) {
+    const m = String(css).match(/\d+(\.\d+)?/g);
+    if (/^#[0-9a-f]{6}$/i.test(css)) return css.toLowerCase();
+    if (!m || m.length < 3) return "#000000";
+    return "#" + m.slice(0, 3).map((v) => Math.max(0, Math.min(255, Math.round(+v))).toString(16).padStart(2, "0")).join("");
+  }
+
+  static #rgb01(hex) {
+    return [1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) / 255 * 1000) / 1000);
+  }
+  // -- end of text font picker and reflow --
 
   /** The view (page, zoom, scroll), to come back to after reloading. */
   #view() {
@@ -2873,8 +3077,8 @@ export class Reader {
         // Say when the words couldn't get the document's own font.
         let used = [];
         try { used = JSON.parse(res.headers.get("X-Pdfm-Fonts") || "[]"); } catch (e) {}
-        const other = used.find((u) => u.kind !== "same");
-        const notes = [];
+        const other = used.find((u) => u.kind !== "same" && !u.asked);
+        const notes = this.#fontNotes(used);
         if (other) {
           notes.push(other.kind === "installed"
             ? `This PDF's copy of the font lacks some of those letters, so ${other.font} from this computer was used.`
@@ -2882,6 +3086,11 @@ export class Reader {
         }
         if (used.some((u) => u.wider)) notes.push("The line is now longer than its column: to wrap it again, rewrite the whole paragraph (Shift+click it).");
         if (used.some((u) => u.taller)) notes.push("The paragraph now takes more lines than before, so it may run into what's below it. Undo with Ctrl+Z.");
+        if (used.some((u) => u.overflow) && !edit.fit) {
+          notes.push("The text no longer fits on the page, so the text below it wasn't moved. Shorten it, or let it shrink a little.");
+          return this.toast(notes.join(" "), 12000, ["Shrink to fit", () => this.#shrinkToFit(edit)]);
+        }
+        if (used.some((u) => u.overflow)) notes.push("Even a little smaller, the text doesn't fit on the page, so the text below it wasn't moved.");
         if (notes.length) this.toast(notes.join(" "), 8000);
       },
     });

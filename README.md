@@ -295,9 +295,25 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   **document's own font** when its copy has every letter needed; otherwise
   the same font installed on your computer (found by name, e.g. Calibri),
   and only then a similar standard font; the reader tells you when it
-  couldn't use the original. The old words are covered with the colour
-  around them (they're still in the file underneath, so use **Redact** to
-  remove text for good). Undo with Ctrl+Z.
+  couldn't use the original. A bar above the text you're editing sets
+  **font, size, bold, italic, colour and alignment** (left, centre, right,
+  justified) for the line, paragraph or new text: the fonts this document
+  uses come first, then fonts installed on your computer, then the
+  standard PDF fonts (Helvetica, Times, Courier). A font from your
+  computer is embedded (only the letters used); in a PDF/A file a standard
+  font is swapped for an embedded one, and the reader says which font was
+  used. **Text flows:** when a rewritten paragraph gets longer or shorter,
+  the paragraphs below it in the same column move down or up to match,
+  with the rules (lines) between them; other columns, pictures and boxes
+  stay where they are, and the column ends at a big gap or at anything
+  that isn't text. If the text would no longer fit on the page, nothing
+  is moved and no words are lost: the reader says so and offers **Shrink
+  to fit** (the paragraph's size comes down a little, to three quarters at
+  most). Text doesn't yet flow on into the next column. A rewritten
+  paragraph's old words are taken out of the page where they can be;
+  otherwise, as for a changed line, they're covered with the colour around
+  them (still in the file underneath, so use **Redact** to remove text for
+  good). Undo with Ctrl+Z.
 - **Pages:** in the thumbnails, drag pages to reorder them, click with
   Ctrl or Shift to pick several, and turn, duplicate, delete or extract
   them (the buttons on a thumbnail, the bar above them, or right-click).
