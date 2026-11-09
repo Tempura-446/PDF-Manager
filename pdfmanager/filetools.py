@@ -101,8 +101,6 @@ def pypdf_flags(perms):
 def attachments(path, password=None):
     """The files attached to a PDF (its EmbeddedFiles): [{"name", "size",
     "description"}]."""
-    import pikepdf
-
     with _open(path, password) as pdf:
         out = []
         for name, spec in pdf.attachments.items():

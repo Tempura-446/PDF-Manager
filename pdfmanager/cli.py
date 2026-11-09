@@ -16,6 +16,7 @@ from pypdf import PdfReader
 from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
                         forms, recipes, redact, scan, search)
 from pdfmanager import certsign, comments, filetools, formdetect, pdfacheck
+from pdfmanager import accessibility  # -- accessibility --
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -423,6 +424,49 @@ def cmd_verify(a):
 # -- end of digital ID signatures --
 
 
+# -- accessibility --
+
+def run_tag(a, src, out, pw):
+    alt = None
+    if a.alt:
+        try:
+            alt = json.loads(Path(a.alt).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise core.PdfManagerError(f"can't read the descriptions in {a.alt} ({exc})") from None
+        if not isinstance(alt, dict):
+            raise core.PdfManagerError(f'{a.alt} should hold {{"page": ["description", ...]}}')
+    result = accessibility.autotag(src, out, password=pw, lang=a.lang, title=a.title, alt=alt,
+                                   force=a.force)
+    return f"{out}  ({accessibility.tag_summary(result)})"
+
+
+def cmd_check_access(a):
+    inputs = _expand(a.inputs)
+    passwords = _Passwords(a.password)
+    ok, records = True, []
+    for src in inputs:
+        try:
+            result = accessibility.check(src, password=passwords.for_file(src))
+        except (core.PdfManagerError, OSError) as exc:
+            if len(inputs) == 1:
+                raise
+            ok = False
+            message = str(exc)
+            print(f"error: {message if str(src) in message else f'{src}: {message}'}",
+                  file=sys.stderr)
+            continue
+        ok = ok and result["passed"]
+        if a.json:
+            records.append(result)
+        else:
+            print(("\n" if src != inputs[0] else "") + accessibility.report(result, str(src)), end="")
+    if a.json:
+        print(json.dumps(records, indent=2, ensure_ascii=False))
+    return 0 if ok else 1
+
+# -- end of accessibility --
+
+
 def run_bookmarks(a, src, out, pw):
     if a.set and a.detect:
         raise core.PdfManagerError("use --set or --detect, not both")
@@ -712,6 +756,7 @@ OUTPUTS["comments"] = ("comments", "pdf")
 # -- pptx and html --
 OUTPUTS.update({"to-pptx": (None, "pptx"), "to-html": (None, "html")})
 # -- end of pptx and html --
+OUTPUTS["tag"] = ("tagged", "pdf")  # -- accessibility --
 
 
 def _is_batch(patterns, inputs):
@@ -1396,6 +1441,30 @@ def build_parser():
     sp.add_argument("--password", help=f"password for encrypted input (better: let pdfm "
                                        f"prompt, or set {PASSWORD_ENV})")
     sp.add_argument("--json", action="store_true", help="print JSON")
+
+    # -- accessibility --
+    sp = per_file("tag", run_tag,
+                  "make PDFs accessible: tag their headings, paragraphs, lists, tables, figures "
+                  "and links for screen readers (like Acrobat's Autotag); the pages look the same")
+    sp.add_argument("--lang", help="the document's language, e.g. en, de, fr-CA (default: "
+                                   "guessed from the text)")
+    sp.add_argument("--title", help="the document's title (default: the one it has, else its "
+                                    "first heading)")
+    sp.add_argument("--alt", metavar="FILE",
+                    help='descriptions of the figures, from a JSON file: {"3": ["the first '
+                         'figure on page 3", "the second"]}')
+    sp.add_argument("--force", action="store_true",
+                    help="replace the tags of a file that is already tagged (otherwise they're "
+                         "kept)")
+
+    sp = other("check-access", cmd_check_access,
+               "check PDFs for what keeps screen readers from reading them (PDF/UA basics, like "
+               "Acrobat's Accessibility Checker; exit code 0 when no file has problems)")
+    sp.add_argument("inputs", nargs="+", metavar="input", help="PDF(s) to check")
+    sp.add_argument("--password", help=f"password for encrypted input (better: let pdfm "
+                                       f"prompt, or set {PASSWORD_ENV})")
+    sp.add_argument("--json", action="store_true", help="print JSON")
+    # -- end of accessibility --
 
     sp = per_file("bookmarks", run_bookmarks,
                   "list, set or detect bookmarks (without options: list them)")

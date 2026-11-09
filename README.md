@@ -9,7 +9,8 @@ into files of a maximum size), compare, extract, reorder, insert blank pages,
 rotate, resize, crop (also trimming white margins automatically), n-up, make
 **booklets** for folded printing, compress (three levels), convert colours
 (grayscale / RGB / CMYK, with ICC profiles), OCR and clean up scans, redact,
-flatten, remove hidden data, convert to PDF/A (and check PDF/A), Word, Excel,
+flatten, remove hidden data, convert to PDF/A (and check PDF/A), make PDFs
+**accessible** (tags for screen readers, and a check like Acrobat's), Word, Excel,
 **PowerPoint** and **HTML**, and from Office files or images, edit bookmarks, encrypt, watermark and number pages, add headers,
 footers and **Bates numbers**, create **fillable forms** (finding a printed
 form's fields by itself), pull out pictures
@@ -507,6 +508,8 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `verify` | check the digital signatures in PDFs | `pdfm verify signed.pdf` |
 | `pdfa` | convert to PDF/A for archiving | `pdfm pdfa doc.pdf --level 2` |
 | `check-pdfa` | check whether PDFs meet PDF/A, and what breaks it | `pdfm check-pdfa *.pdf` · `--level 1b` |
+| `tag` | make PDFs accessible: tag them for screen readers | `pdfm tag report.pdf --lang en` |
+| `check-access` | check PDFs for accessibility problems, and how to fix them | `pdfm check-access *.pdf` · `--json` |
 | `to-word` | convert to an editable Word document | `pdfm to-word doc.pdf` |
 | `to-excel` | put the tables into an Excel workbook (or CSV files) | `pdfm to-excel doc.pdf -p 2-5` · `--one-sheet` · `--csv` |
 | `to-pptx` | convert to a PowerPoint presentation, a slide per page | `pdfm to-pptx doc.pdf` · `--pictures` · `-p 1-5` |
@@ -706,6 +709,63 @@ Metadata isn't changed, so use `sanitize` too.
   layers, tagging (level A) and the size limits. `--engine builtin` always
   uses ZPDF's own checks; `--json` prints the results. The exit code is 0
   when every file passes.
+
+### Accessibility
+
+Screen readers (and reflow on phones, and conversions to Word or HTML) need a
+*tagged* PDF: one that says, next to what's drawn, which text is a heading,
+a paragraph, a list, a table or a link, what each picture shows, and in
+which order it all reads. PDF/UA (ISO 14289) is the standard for that.
+
+- `tag` (the **Make accessible (tag)** tool, like Acrobat's Autotag) adds
+  the tags. It reads each page's layout: headings by their size, weight or
+  numbering ("1.2 Results"; levels never skip), paragraphs, bulleted and
+  numbered lists, tables (the first row becomes header cells), pictures
+  (described by a caption next to them, "Figure 3: …"), links, form fields
+  and comments, in reading order — columns left to right, top to bottom.
+  Running headers, footers and page numbers, borders and backgrounds are
+  marked as decoration, so they aren't read out. It also sets the
+  language (`--lang de`; by default guessed from the text), the title
+  (`--title`; by default the one the file has, else its first heading)
+  and shows it in the window's title bar, makes Tab follow the reading
+  order, and adds bookmarks from the headings to documents over 20 pages
+  that have none. What's drawn on the pages doesn't change.
+  `--alt FILE` gives descriptions for the pictures, from a JSON file:
+  `{"3": ["the first figure on page 3", "the second"]}`. A file that is
+  already tagged keeps its tags (only the language, title and tab order
+  are filled in) unless `--force` is given.
+- `check-access` (the **Check accessibility** tool, like Acrobat's
+  Accessibility Checker; also **Tools → ⋯ → Check accessibility** in the
+  reader) reports what keeps screen readers out, on which pages, and how
+  to fix it:
+
+  ```
+  Tagged: No
+  Language: (not set)
+  Result: 4 problems
+    - The document isn't tagged: screen readers can't tell its headings, …
+      How to fix: Use Make accessible (tag); on the command line, pdfm tag.
+  ```
+
+  It checks that the document is tagged and says so, its language and
+  title (and that the title is shown), security settings that lock screen
+  readers out, scanned pages with no text (they need OCR first), text
+  whose font doesn't say which characters it shows, page content that is
+  neither tagged nor marked as decoration, tags that don't match the
+  content, pictures without a description, tables without header cells or
+  with uneven rows, headings that skip levels, lists not built of items,
+  links, form fields and comments that aren't tagged, links without a
+  description, form fields without a tooltip, the tab order, and bookmarks
+  in documents over 20 pages. Reading order and colour contrast need a
+  person; the report says so. `--json` prints the results; the exit code
+  is 0 when no file has problems. The reader's **Document properties**
+  say whether a PDF is tagged, and its language.
+
+Tagging is automatic, like Acrobat's: check the result, and describe the
+pictures it couldn't (`tag` names the pages). Something drawn several
+times as one piece (a form XObject: a logo on every page, say) is tagged as
+a whole; vector drawings (charts drawn with lines) are marked as
+decoration, not figures.
 
 ### Digital ID signatures
 

@@ -44,6 +44,7 @@ from pdfmanager import (__version__, archive, compare, core, office, organize, o
                         forms, recipes, redact, scan, search, textedit, update, viewports, markup, pageimages,
                         formdetect, pdfacheck, filetools, comments)
 from pdfmanager import certsign
+from pdfmanager import accessibility  # -- accessibility --
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
@@ -394,6 +395,28 @@ OPERATIONS = [
                    choices=[["auto", "veraPDF if installed"], ["builtin", "ZPDF's own checks"]],
                    hint="veraPDF (free, verapdf.org) checks every rule; ZPDF's own checks "
                         "cover the ones files most often break.")]},
+    # -- accessibility --
+    {"id": "tag", "group": "Convert", "label": "Make accessible (tag)", "files": "pdf",
+     "help": "Tag PDFs for screen readers, like Acrobat's Autotag: headings, paragraphs, lists, "
+             "tables, pictures and links, in reading order (columns too), with the language "
+             "and title set. Running headers and page numbers are left out of what's read. "
+             "The pages look the same.",
+     "fields": [_f("lang", "Language", "text", "auto", placeholder="auto",
+                   hint="auto guesses it from the text; or a code such as en, de, fr, es, it, "
+                        "nl, pt-BR"),
+                _f("title", "Title (optional)", "text", "",
+                   hint="Shown in the window's title bar. Blank: the title the file has, else "
+                        "its first heading."),
+                _f("force", "Replace existing tags", "check", False,
+                   hint="A file that is already tagged keeps its tags unless this is ticked.")]},
+    {"id": "access-check", "group": "Convert", "label": "Check accessibility", "files": "pdf",
+     "action": "Check",
+     "help": "Check PDFs for what keeps screen readers from reading them, like Acrobat's "
+             "Accessibility Checker (the basics of PDF/UA): tags, language, title, picture "
+             "descriptions, tables, headings, links, form fields and more, with how to fix "
+             "each. You get a short report; nothing is changed.",
+     "fields": []},
+    # -- end of accessibility --
     {"id": "from-images", "group": "Convert", "label": "Images → PDF", "files": "images",
      "fields": [_f("size", "Page size", "select", "",
                    choices=[["", "Same as image"]] +
@@ -505,6 +528,7 @@ SUFFIX["pdfa-check"] = "pdfa-check"
 SUFFIX.update({"attach": "attached", "labels": "labelled", "repair": "repaired"})  # file tools
 SUFFIX["comments"] = "comments"
 SUFFIX["to-excel"] = "tables"
+SUFFIX.update({"tag": "tagged", "access-check": "accessibility"})  # -- accessibility --
 
 
 class UserError(Exception):
@@ -718,6 +742,19 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                                  engine=opts.get("engine") or "auto")
         out.write_text(pdfacheck.report(result, src.name), encoding="utf-8")
         notes.append(f"{src.name}: {pdfacheck.summary(result)}")
+    # -- accessibility --
+    elif op == "tag":
+        result = accessibility.autotag(src, out, password=password,
+                                       lang=(opts.get("lang") or "").strip() or None,
+                                       title=(opts.get("title") or "").strip() or None,
+                                       force=_bool(opts.get("force")))
+        notes.append(f"{src.name}: {accessibility.tag_summary(result)}")
+    elif op == "access-check":
+        out = out.with_suffix(".txt")
+        result = accessibility.check(src, password=password)
+        out.write_text(accessibility.report(result, src.name), encoding="utf-8")
+        notes.append(f"{src.name}: {accessibility.summary(result)}")
+    # -- end of accessibility --
     elif op == "verify-sig":
         out = out.with_suffix(".txt")
         found = certsign.verify(src, password, [extra_files["trust"]]
@@ -1807,6 +1844,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._sign_cert(body)
             if path == "/api/sign/verify":
                 return self._sign_verify(body)
+            if path == "/api/accessibility/check":  # -- accessibility --
+                return self._access_check(body)
             if path == "/api/settings":
                 return self._save_settings(body)
             if path == "/api/update/check":
@@ -2327,6 +2366,20 @@ class Handler(BaseHTTPRequestHandler):
             data = out.read_bytes()
         return self._send(HTTPStatus.OK, data, "application/pdf",
                           {"X-Pdfm-Signed": json.dumps(result, ensure_ascii=True)})
+
+    # -- accessibility --
+    def _access_check(self, body):
+        """The reader's Check accessibility: accessibility.check's result."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            result = accessibility.check(path, fields.get("password") or None)
+        result.pop("file", None)
+        return self._send(HTTPStatus.OK, result)
+    # -- end of accessibility --
 
     def _sign_verify(self, body):
         """The digital signatures in a PDF, checked: {"signatures": [...]}

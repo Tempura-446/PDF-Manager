@@ -109,6 +109,7 @@ const ICON = {
   stamp: '<path d="M9 3h6l-1 7h4a2 2 0 0 1 2 2v3H4v-3a2 2 0 0 1 2-2h4z"/><path d="M5 19h14"/>',
   comments: '<path d="M4 5h13v9H9l-3 3v-3H4z"/><path d="M17 9h3v8h-2v3l-3-3h-4"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
+  access: '<circle cx="12" cy="4.5" r="1.8"/><path d="M5 8.5l7 1.5 7-1.5M12 10v4.5M12 14.5 8.5 21M12 14.5l3.5 6.5"/>',  // -- accessibility --
 };
 
 // Annotation colours (highlights use the pale versions, as on paper).
@@ -460,6 +461,7 @@ export class Reader {
       this.#menuItem("badge", "Sign with a digital ID…", () => this.useTool("CERTSIGN")),
       this.#menuItem("fillable", "Make it fillable (find the form's fields)", () => this.makeFillable()),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
+      this.#menuItem("access", "Check accessibility", () => this.checkAccessibility()),  // -- accessibility --
       this.#menuItem("x", "Close this document", () => this.closeTab()),
     ];
     if (this.onEdit && this.tools.length) {
@@ -2628,12 +2630,17 @@ export class Reader {
       return d ? d.toLocaleString() : "";
     };
     const size = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+    // -- accessibility -- tagged: says so (MarkInfo) or has a structure tree (pdf.js gives MarkInfo as a Map)
+    const mark = await this.doc.getMarkInfo().catch(() => null);
+    const tagged = (mark instanceof Map ? mark.get("Marked") : mark?.Marked) || !!(await page.getStructTree().catch(() => null));
+    // -- end of accessibility --
     const rows = [
       ["File", this.activeTab?.path || this.name], ["File size", size(this.bytes?.length ?? this.activeTab?.size ?? 0)],
       ["Title", metadata?.get("dc:title") || info.Title], ["Author", info.Author], ["Subject", info.Subject],
       ["Keywords", info.Keywords], ["Created", date(info.CreationDate)], ["Modified", date(info.ModDate)],
       ["Application", info.Creator], ["PDF producer", info.Producer], ["PDF version", info.PDFFormatVersion],
       ["Pages", String(this.doc.numPages)],
+      ["Tagged (accessible)", tagged ? "Yes" : "No"], ["Language", info.Language || "Not set"],  // -- accessibility --
       ["Page size", `${(w / 72 * 25.4).toFixed(0)} × ${(h / 72 * 25.4).toFixed(0)} mm (${(w / 72).toFixed(2)} × ${(h / 72).toFixed(2)} in)`],
       ["Fast web view", info.IsLinearized ? "Yes" : "No"],
       ["Form", info.IsAcroFormPresent ? "Yes" : info.IsXFAPresent ? "Yes (XFA)" : "No"],
@@ -2655,6 +2662,38 @@ export class Reader {
     // -- end of limits and attached files --
     await this.#dialog("Document properties", parts, [["ok", "Close", true]]);
   }
+
+  // -- accessibility --
+  /** Check accessibility: what keeps screen readers out of this document,
+   *  and how to fix it (accessibility.py), in a dialog. */
+  async checkAccessibility() {
+    const tab = this.activeTab;
+    if (!tab || !this.doc) return;
+    this.toast("Checking accessibility…", 120000);
+    let result;
+    try {
+      const body = new FormData();
+      body.append("file", new Blob([await this.#fullBytes()], { type: "application/pdf" }), "file.pdf");
+      body.append("password", tab.password || "");
+      const res = await fetch("/api/accessibility/check", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+      result = await res.json();
+    } catch (e) {
+      this.toast("Couldn't check accessibility: " + (e.message || e));
+      return;
+    }
+    this.toastEl?.remove();
+    const pages = (list) => list.length ? ` (page${list.length > 1 ? "s" : ""} ${list.slice(0, 10).join(", ")}${list.length > 10 ? "…" : ""})` : "";
+    const items = result.issues.map((i) => el("li", { class: "rd-sigitem invalid" },
+      el("b", {}, i.message + pages(i.pages)), el("small", {}, "How to fix: " + i.fix)));
+    const body = [el("p", {}, result.passed ? "No problems found." : `${result.issues.length} problem${result.issues.length > 1 ? "s" : ""} found.`)];
+    if (items.length) body.push(el("ul", { class: "rd-siglist" }, ...items));
+    body.push(el("p", { class: "rd-muted", style: "margin-top: 16px" }, result.note));
+    const fix = !result.passed && this.onEdit && this.tools.some(([id]) => id === "tag");
+    const answer = await this.#dialog("Accessibility", body, [...(fix ? [["tag", "Make accessible…"]] : []), ["ok", "Close", true]]);
+    if (answer === "tag") this.#edit("tag");
+  }
+  // -- end of accessibility --
 
   toast(message, ms = 4000, action = null) {
     if (!message) return;
