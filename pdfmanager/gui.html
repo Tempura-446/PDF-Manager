@@ -800,8 +800,9 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
     <label class="dlg-field"><span>GitHub repository</span><input type="text" id="set-repo" spellcheck="false" autocomplete="off" placeholder="owner/name"></label>
     <label class="dlg-field"><span>GitHub token <em id="set-token-state"></em></span>
       <input type="password" id="set-token" autocomplete="off" spellcheck="false" placeholder="paste a token to change it"></label>
-    <p class="dlg-hint">The repository is private, so checking for updates needs a token that can read it:
-      on GitHub, <em>Settings → Developer settings → Fine-grained tokens</em>, give it access to this repository
+    <p class="dlg-hint">New versions come from ZPDF's releases on GitHub (Tempura-446/ZPDF-releases): nothing to set up.
+      The token is only for a development copy that follows the private repository (Tempura-446/PDF-Manager):
+      on GitHub, <em>Settings → Developer settings → Fine-grained tokens</em>, give it access to that repository
       with <em>Contents: Read-only</em>. It's kept on this computer only.
       <button type="button" class="link-btn" id="set-token-clear">Forget the token</button></p>
     <p class="dlg-status" id="set-status" aria-live="polite"></p>

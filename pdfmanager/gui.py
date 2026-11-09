@@ -2191,7 +2191,7 @@ class Handler(BaseHTTPRequestHandler):
             repo = str(data["repo"] or "").strip().strip("/")
             if repo and not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
                 raise UserError("the repository should look like owner/name")
-            changes["update_repo"] = "" if repo == update.REPO else repo
+            changes["update_repo"] = "" if repo == update.RELEASES else repo
         if data.get("token"):
             changes["github_token"] = str(data["token"]).strip()
         if data.get("clear_token"):

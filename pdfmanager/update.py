@@ -1,15 +1,20 @@
 """Updates: see whether a newer ZPDF is on GitHub and install it.
 
-The newest version is the one in pdfmanager/__init__.py on the
-repository's default branch. A private repository needs a GitHub token
-that can read it (a fine-grained token with read access to its contents),
-entered in the app's Settings. It's kept in settings.json in the app's
-data folder.
+Friends' copies follow the releases published on the public releases
+repository (RELEASES): the newest release is the newest version, and it
+is installed from its zip after the zip's SHA-256 matches the checksum
+published beside it. No GitHub account or token is needed.
 
-Installing downloads that branch and installs it with pip into the Python
-the app runs with, so it works for the Windows installer's copy (and any
-other pip install). A copy running from a git checkout is updated with
-git, and the standalone app by downloading it again.
+A development copy can follow the private development repository (REPO)
+instead, chosen in Settings: the newest version is then the one in
+pdfmanager/__init__.py on its default branch, read with a GitHub token
+(fine-grained, read access to its contents) kept in settings.json in the
+app's data folder.
+
+Either way the download is installed with pip into the Python the app runs
+with, so it works for the Windows installer's copy (and any other pip
+install). A copy running from a git checkout is updated with git, and the
+standalone app by downloading it again.
 """
 
 import io
@@ -28,7 +33,8 @@ from pathlib import Path
 from pdfmanager import __version__, core, progress
 from pdfmanager.appdata import data_dir, write_private
 
-REPO = "Tempura-446/PDF-Manager"
+REPO = "Tempura-446/PDF-Manager"          # development: a branch, read with a token
+RELEASES = "Tempura-446/ZPDF-releases"    # friends: published releases, public
 API = "https://api.github.com"
 CHECK_EVERY = 12 * 3600  # seconds
 TIMEOUT = 20
@@ -62,7 +68,7 @@ def save_settings(**changes):
 def public_settings():
     """Settings for the page (never the token itself)."""
     data = settings()
-    return {"repo": data.get("update_repo") or REPO, "token_set": bool(data.get("github_token")),
+    return {"repo": data.get("update_repo") or RELEASES, "token_set": bool(data.get("github_token")),
             "check": data.get("check_updates", True), "how": how_installed()}
 
 
@@ -83,10 +89,10 @@ def how_installed():
     return "pip"
 
 
-def _request(path, raw=False):
+def _request(path, raw=False, accept=None):
     data = settings()
     req = urllib.request.Request(path if path.startswith("http") else API + path)
-    req.add_header("Accept", "application/vnd.github.raw" if raw else "application/vnd.github+json")
+    req.add_header("Accept", accept or ("application/vnd.github.raw" if raw else "application/vnd.github+json"))
     req.add_header("User-Agent", f"pdf-manager/{__version__}")
     req.add_header("X-GitHub-Api-Version", "2022-11-28")
     if data.get("github_token"):
@@ -99,6 +105,10 @@ def _open(req):
     try:
         return urllib.request.urlopen(req, timeout=TIMEOUT)
     except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403, 404) and not _follows_branch():
+            if exc.code == 404:
+                raise core.PdfManagerError(f"no release of ZPDF is published on {_repo()} yet") from None
+            raise core.PdfManagerError("GitHub turned the check away (too many checks?); try again later") from None
         if exc.code in (401, 403, 404):
             token = bool(settings().get("github_token"))
             raise core.PdfManagerError(
@@ -112,11 +122,21 @@ def _open(req):
 
 
 def _repo():
-    return settings().get("update_repo") or REPO
+    return settings().get("update_repo") or RELEASES
+
+
+def _follows_branch():
+    """Whether this copy follows the development repository's branch rather
+    than published releases."""
+    return _repo() == REPO
 
 
 def latest_version():
-    """(version, branch) on GitHub."""
+    """(version, where to get it) on GitHub: the branch name for the
+    development repository, else the newest release's assets
+    ({"zip": url, "sha256": url})."""
+    if not _follows_branch():
+        return _latest_release()
     repo = _repo()
     with _open(_request(f"/repos/{repo}")) as res:
         branch = json.load(res).get("default_branch") or "main"
@@ -126,6 +146,19 @@ def latest_version():
     if not found:
         raise core.PdfManagerError("can't find the version number on GitHub")
     return found.group(1), branch
+
+
+def _latest_release():
+    with _open(_request(f"/repos/{_repo()}/releases/latest")) as res:
+        release = json.load(res)
+    version = str(release.get("tag_name") or "").lstrip("vV")
+    if not parse_version(version):
+        raise core.PdfManagerError("the newest release on GitHub has no version number")
+    assets = {a.get("name"): a.get("url") for a in release.get("assets") or ()}
+    name = f"ZPDF-{version}-windows.zip"
+    if not assets.get(name) or not assets.get(name + ".sha256"):
+        raise core.PdfManagerError(f"the release of version {version} on GitHub is missing {name} or its checksum")
+    return version, {"zip": assets[name], "sha256": assets[name + ".sha256"]}
 
 
 def _cache_file():
@@ -190,11 +223,22 @@ def install(python=None):
     if how == "frozen":
         raise core.PdfManagerError("download the new standalone app from GitHub to update it")
     progress.say("Finding the newest version…")
-    version, branch = latest_version()
+    version, source = latest_version()
     progress.say(f"Downloading version {version}…")
     progress.check()
-    with _open(_request(f"/repos/{_repo()}/zipball/{branch}")) as res:
-        data = res.read()
+    if isinstance(source, dict):  # a published release: the zip, checked against its checksum
+        with _open(_request(source["zip"], accept="application/octet-stream")) as res:
+            data = res.read()
+        with _open(_request(source["sha256"], accept="application/octet-stream")) as res:
+            published = res.read().decode("ascii", "replace").split()
+        import hashlib
+
+        if not published or hashlib.sha256(data).hexdigest() != published[0].lower():
+            raise core.PdfManagerError(
+                f"the download of version {version} came out damaged (its checksum doesn't match); try again")
+    else:
+        with _open(_request(f"/repos/{_repo()}/zipball/{source}")) as res:
+            data = res.read()
     progress.check()
     with tempfile.TemporaryDirectory(prefix="pdfm-update-") as tmp:
         project = _extract(data, tmp)
