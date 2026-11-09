@@ -133,6 +133,17 @@ def test_a_longer_paragraph_pushes_the_ones_below_it_down(tmp_path):
     assert _rule_y(out) == pytest.approx(_rule_y(src) - 12, abs=0.05)
 
 
+def test_a_paragraph_in_the_right_column_moves_only_that_column(tmp_path):
+    src, out = columns(tmp_path / "two.pdf"), tmp_path / "out.pdf"
+    report = edit(src, out, {"rect": [318, 685, 540, 710], "paragraph": True,
+                             "text": "Right column lines 0 and 1 are now one paragraph that is long enough to need "
+                                     "three or four lines in this column."})
+    assert report["moved"] == 10
+    assert [L for L in letters(out) if L[1] < 315] == [L for L in letters(src) if L[1] < 315]
+    grown = where(src, "Right column line 2")[1] - where(out, "Right column line 2")[1]
+    assert grown > 11 and where(src, "Right column line 11")[1] - where(out, "Right column line 11")[1] == grown
+
+
 def test_a_shorter_paragraph_pulls_the_ones_below_it_up(tmp_path):
     src, out = columns(tmp_path / "two.pdf"), tmp_path / "out.pdf"
     report = edit(src, out, {"rect": FIRST_RECT, "text": "Alpha is short now.", "paragraph": True})
@@ -402,9 +413,12 @@ def test_a_one_line_change_still_keeps_every_letter_where_it_was(tmp_path):
 # -- how the new words look ------------------------------------------------------------------------
 
 def test_picking_an_installed_font_size_colour_and_alignment(tmp_path):
-    family = next(iter(fonts.installed_families()[0] + fonts.installed_families()[1]), None)
+    common, more = fonts.installed_families()
+    bold_faces = {fonts.family_key(e[7]) for e in fonts._font_index() if e[3] and not e[4]}
+    family = next((f for f in common + more if fonts.family_key(f) in bold_faces
+                   and fonts.installed_family(f, True, False, "Pickedwordsinachosenlook")), None)
     if family is None:
-        pytest.skip("no TrueType fonts installed")
+        pytest.skip("no TrueType font with a bold face installed")
     src, out = columns(tmp_path / "two.pdf"), tmp_path / "out.pdf"
     report = edit(src, out, {"rect": FIRST_RECT, "text": "Picked words in a chosen look", "paragraph": True,
                              "font": family, "size": 14, "bold": True, "color": [0.8, 0.1, 0.1], "align": "right"})
