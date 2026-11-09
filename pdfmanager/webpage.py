@@ -29,6 +29,7 @@ PICTURE_DPI = 150
 PX = 4 / 3  # CSS pixels per point
 # Where a line's baseline sits in a CSS box with line-height 1, in font sizes.
 CSS_BASELINE = {"Arial": 0.85, "Times New Roman": 0.84, "Courier New": 0.77}
+SPACE_WIDTH = {"Arial": 0.278, "Times New Roman": 0.25, "Courier New": 0.6}  # font sizes
 CSS_FONTS = {"Arial": "Arial,'Liberation Sans',Helvetica,sans-serif",
              "Times New Roman": "'Times New Roman','Liberation Serif',Times,serif",
              "Courier New": "'Courier New','Liberation Mono',Courier,monospace"}
@@ -138,33 +139,31 @@ def _exact(doc):
         for line in page.lines if doc.has_background(index) else []:
             size, family = line.size, line.family
             k = CSS_BASELINE.get(family, 0.85)
-            x, y = layout.to_page(line.angle, line.x0, line.base - k * size)
-            style = (f"left:{_num(x / w * 100)}%;top:{_num(y / h * 100)}%;"
-                     f"font-size:{_num(size / w * 100)}cqw")
-            if line.angle:
-                style += f";transform:rotate({line.angle}deg)"
-            runs = []
-            for text, c in line.runs():
-                css = []
-                if abs(c.size - size) > 0.05:
-                    css.append(f"font-size:{_num(c.size / w * 100)}cqw")
-                if c.bold:
-                    css.append("font-weight:bold")
-                if c.italic:
-                    css.append("font-style:italic")
-                if c.hidden:
-                    css.append("color:transparent")
-                elif c.color != (0, 0, 0):
-                    css.append(f"color:#{layout.hex_color(c.color)}")
-                cls = f' class="{font_class(c.family)}"' if c.family != family else ""
-                attr = f' style="{";".join(css)}"' if css else ""
-                piece = f"<span{cls}{attr}>{_e(text)}</span>" if cls or attr else _e(text)
-                href = _href(page.links[c.link] if c.link is not None else None, numbers)
-                if href:
-                    linked.add(c.link)
-                    piece = f'<a href="{_e(href)}">{piece}</a>'
-                runs.append(piece)
-            parts.append(f'<span class="{font_class(family)}" style="{style}">{"".join(runs)}</span>')
+            # A span for each part of the line between wide white space (a
+            # bullet and its text, cells of a table), placed where it starts.
+            pieces = line.pieces()
+            for n_piece, (start, end) in enumerate(pieces):
+                x, y = layout.to_page(line.angle, line.chars[start].x0, line.base - k * size)
+                style = (f"left:{_num(x / w * 100)}%;top:{_num(y / h * 100)}%;"
+                         f"font-size:{_num(size / w * 100)}cqw")
+                if line.angle:
+                    style += f";transform:rotate({line.angle}deg)"
+                # Spaces as wide as in the PDF (justified text).
+                chars = line.chars[start:end]
+                spaces = sum(1 for c in chars[1:] if c.space)
+                if spaces and family in SPACE_WIDTH:
+                    natural = sum(c.x1 - c.x0 for c in chars) + spaces * SPACE_WIDTH[family] * size
+                    extra = (chars[-1].x1 - chars[0].x0 - natural) / spaces
+                    if abs(extra) > 0.2:
+                        style += f";word-spacing:{_num(extra / w * 100)}cqw"
+                runs = []
+                for text, c in line.runs(start, end):
+                    runs.append(_exact_run(text, c, size, w, family, font_class, page, numbers,
+                                           linked))
+                if n_piece < len(pieces) - 1:
+                    runs.append(" ")  # copied text keeps the space
+                parts.append(f'<span class="{font_class(family)}" style="{style}">'
+                             f'{"".join(runs)}</span>')
         for i, link in enumerate(page.links):
             href = _href(link, numbers)
             if href and i not in linked:  # a link on a picture: a clickable area
@@ -177,6 +176,28 @@ def _exact(doc):
         pages.append("\n".join(parts))
     css = "".join(f".{cls}{{font-family:{_font_stack(family)}}}\n" for family, cls in fonts.items())
     return doc.title, "<main>\n" + "\n".join(pages) + "\n</main>", css
+
+
+def _exact_run(text, c, size, w, family, font_class, page, numbers, linked):
+    css = []
+    if abs(c.size - size) > 0.05:
+        css.append(f"font-size:{_num(c.size / w * 100)}cqw")
+    if c.bold:
+        css.append("font-weight:bold")
+    if c.italic:
+        css.append("font-style:italic")
+    if c.hidden:
+        css.append("color:transparent")
+    elif c.color != (0, 0, 0):
+        css.append(f"color:#{layout.hex_color(c.color)}")
+    cls = f' class="{font_class(c.family)}"' if c.family != family else ""
+    attr = f' style="{";".join(css)}"' if css else ""
+    piece = f"<span{cls}{attr}>{_e(text)}</span>" if cls or attr else _e(text)
+    href = _href(page.links[c.link] if c.link is not None else None, numbers)
+    if href:
+        linked.add(c.link)
+        piece = f'<a href="{_e(href)}">{piece}</a>'
+    return piece
 
 
 # --------------------------------------------------------------------------
@@ -344,7 +365,7 @@ def _flowing(doc, tables):
         items = _page_items(doc, page, tables.get(index, []))
         read.append((page, items))
         for line in page.lines:
-            sizes[round(line.size)] = sizes.get(round(line.size), 0) + len(line.chars)
+            sizes[round(line.main_size)] = sizes.get(round(line.main_size), 0) + len(line.chars)
         for key in {_edge_key(line, page) for line in page.lines} - {None}:
             keys[key] = keys.get(key, 0) + 1
     body = max(sizes, key=sizes.get) if sizes else 12
@@ -397,7 +418,7 @@ def _page_items(doc, page, page_tables):
     for block in page.blocks:
         cut = table_boxes and any(in_table(ln) for ln in block.lines)
         if cut or all(len(p) == 1 for p in block.paragraphs) or \
-                any(id(ln) in pieces for ln in block.lines):
+                sum(id(ln) in pieces for ln in block.lines) * 2 > len(block.lines):
             # A line at a time: what a table leaves of a block, lines that
             # are paragraphs of their own, and labels beside their values
             # (then read row by row).
@@ -509,7 +530,7 @@ class _Writer:
         return re.sub(r"</(strong|em|code)>(\s*)<\1>", r"\2", html_text).strip()
 
     def _level(self, lines):
-        size = max(ln.size for ln in lines)
+        size = max(ln.main_size for ln in lines)
         text = " ".join(ln.text for ln in lines)
         if len(text) > 200 or len(lines) > 3:
             return 0
@@ -577,6 +598,18 @@ class _Writer:
             self._close_list()
             tag, body = "p", self._inline(segments)
         if not body:
+            return
+        last = self.out[-1] if self.out else ""
+        if (tag == "p" and text[:1].islower() and last.startswith("<p>")
+                and not re.search(r"[.!?:;\"”’)\]]</p>$", last)):
+            # The rest of a paragraph that went on in the next column.
+            joined = last[:-4]
+            if re.search(r"[^\W\d_]-$", joined):
+                joined = joined[:-1]
+            else:
+                joined += " "
+            self.out[-1] = joined + body + "</p>"
+            self.last_line = None
             return
         closing = f"</{tag}>"
         self.out.append(f"<{tag}>{body}{closing}")

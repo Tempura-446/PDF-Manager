@@ -483,6 +483,73 @@ def test_html_language_pages_and_bad_links(report, tmp_path):
     assert "#page-3" not in out.read_text()
 
 
+WORDS = ("Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor "
+         "incididunt ut labore et dolore magna aliqua ut enim ad minim veniam quis nostrud "
+         "exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat").split()
+
+
+def article_pdf(path):
+    """Two justified columns (the second paragraph goes on in the second
+    column), a bulleted list with a hanging indent, and a small ruled table
+    whose cells are close together."""
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_JUSTIFY
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import (BaseDocTemplate, Frame, ListFlowable, ListItem,
+                                    PageTemplate, Paragraph, Table, TableStyle)
+
+    body = ParagraphStyle("body", fontName="Times-Roman", fontSize=10, leading=12,
+                          alignment=TA_JUSTIFY, spaceAfter=6)
+    words = WORDS
+    doc = BaseDocTemplate(str(path), pagesize=A4)
+    width = (A4[0] - 120) / 2
+    doc.addPageTemplates([PageTemplate(frames=[
+        Frame(50, 400, width, 380, id="left"), Frame(70 + width, 400, width, 380, id="right")])])
+    table = Table([["Name", "Value"], ["Alpha", "1"]])
+    table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+                               ("FONT", (0, 0), (-1, -1), "Helvetica", 10)]))
+    story = [Paragraph(" ".join(words * 3) + ".", body),
+             Paragraph(" ".join(words * 5) + " the end.", body),
+             ListFlowable([ListItem(Paragraph(" ".join(words[:14]) + ".", body)),
+                           ListItem(Paragraph("Second item.", body))], bulletType="bullet",
+                          bulletFontSize=10), table]
+    doc.build(story)
+    return path
+
+
+def test_tables_lists_and_columns(tmp_path):
+    src = article_pdf(tmp_path / "article.pdf")
+    out = slides.pdf_to_pptx(src, tmp_path / "a.pptx")["output"]
+    with zipfile.ZipFile(out) as zf:
+        texts = dict(slide_texts(zf, 1))
+        root = xml_part(zf, "ppt/slides/slide1.xml")
+    # The table's cells are text boxes of their own, though close together.
+    assert {"Name", "Value", "Alpha", "1"} <= set(texts)
+    # A list item: the bullet, a tab, the text, with a hanging indent.
+    item = next(p for p in root.iter(A + "p")
+                if "".join(t.text for t in p.iter(A + "t")).startswith("•\tLorem"))
+    props = item.find(A + "pPr")
+    assert int(props.get("indent")) < 0 < int(props.get("marL"))
+    # Justified paragraphs stay justified.
+    aligns = {p.find(A + "pPr").get("algn") for p in root.iter(A + "p")
+              if len("".join(t.text for t in p.iter(A + "t"))) > 200}
+    assert aligns == {"just"}
+
+    html = webpage.pdf_to_html(src, tmp_path / "a.html")["output"]
+    doc = parse(html)
+    paragraphs = doc.all("p")
+    # The paragraph that goes on in the second column is one paragraph.
+    assert paragraphs[1].endswith("commodo consequat the end.") and len(paragraphs) == 2
+    assert doc.all("li") == [" ".join(WORDS[:14]) + ".", "Second item."]
+    assert doc.all("th") == ["Name", "Value"]
+
+    exact = webpage.pdf_to_html(src, tmp_path / "x.html", mode="exact")["output"].read_text()
+    # bullet and text placed apart; justified lines get their spaces' width
+    assert re.search(r'>•</span> </span>\n<span class="f\d+" style="left:[\d.]+%;top:[\d.]+%;'
+                     r"font-size:[\d.]+cqw[^\"]*\">Lorem", exact)
+    assert "word-spacing:" in exact
+
+
 # -- passwords, errors, the command line and the app -------------------------------------
 
 def test_encrypted_input(report, tmp_path):

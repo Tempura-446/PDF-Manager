@@ -35,7 +35,7 @@ EMU = 12700                     # per point
 MIN_SLIDE, MAX_SLIDE = 72, 56 * 72
 BACKGROUND_DPI = 150
 PICTURE_DPI = 200
-SLACK = 1.03                    # text boxes are this much wider than the text, for other fonts' widths
+SLACK = 1.03                    # text boxes in other fonts are this much wider than the text
 
 _BAD = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff￾￿]")
 NS = ('xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
@@ -245,11 +245,17 @@ def _run(text, char, scale, link_rids, lang):
             f'<a:cs typeface={face}/>{link}</a:rPr><a:t>{_x(text)}</a:t></a:r>')
 
 
-def _paragraph_runs(lines):
-    """The runs of a paragraph's lines, joined with spaces (none after a hyphen)."""
+def _paragraph_runs(lines, marker=None):
+    """The runs of a paragraph's lines, joined with spaces (none after a
+    hyphen). ``marker``: a list item's marker ends at this character of the
+    first line, followed by a tab."""
     runs = []
     for k, line in enumerate(lines):
-        pieces = [[t, c] for t, c in line.runs()]
+        if k == 0 and marker:
+            pieces = [[t, c] for t, c in line.runs(0, marker)]
+            pieces += [["\t", line.chars[marker - 1]]] + [[t, c] for t, c in line.runs(marker)]
+        else:
+            pieces = [[t, c] for t, c in line.runs()]
         if k and pieces and runs and not runs[-1][0].endswith("-"):
             runs[-1][0] += " "
         runs += pieces
@@ -269,7 +275,13 @@ def _text_box(slide, block, place, scale, link_rids, lang):
     top = block.lines[0].base - first
     height = (block.lines[-1].base - block.lines[0].base) + first + descent * size
     width = block.x1 - block.x0
-    extra = width * (SLACK - 1) + 0.15 * size
+    # Room for text that comes out a little wider than in the PDF (another
+    # font; kerning and rounding even in the fonts made to the same widths:
+    # Arial, Times New Roman, Courier New). Too little room pushes the last
+    # word of a line down and the paragraph out of its box; too much lets a
+    # short word move up a line, which does less harm.
+    standard = all(c.family in layout.METRICS for ln in block.lines for c in ln.chars)
+    extra = width * ((1.01 if standard else SLACK) - 1) + 0.3
     x0 = block.x0 - (extra if block.align == "r" else extra / 2 if block.align == "ctr" else 0)
     width += extra
     cx, cy = layout.to_page(block.angle, x0 + width / 2, top + height / 2)
@@ -279,14 +291,17 @@ def _text_box(slide, block, place, scale, link_rids, lang):
     wrap = "square" if any(len(p) > 1 for p in block.paragraphs) else "none"
     paragraphs = []
     for para in block.paragraphs:
-        indent = ""
+        indent, marker = "", None
         if block.align in ("l", "just"):
             first_x = para[0].x0 - block.x0
             rest_x = min(ln.x0 for ln in para[1:]) - block.x0 if len(para) > 1 else first_x
+            found = para[0].marker()
+            if found:  # a hanging indent: the marker, a tab, the text
+                marker, rest_x = found[0], found[1] - block.x0
             if first_x > 0.5 or rest_x > 0.5:
                 indent = f' marL="{_emu(rest_x * scale)}" indent="{_emu((first_x - rest_x) * scale)}"'
         algn = block.align if not (block.align == "just" and len(para) == 1) else "l"
-        runs = "".join(_run(t, c, scale, link_rids, lang) for t, c in _paragraph_runs(para))
+        runs = "".join(_run(t, c, scale, link_rids, lang) for t, c in _paragraph_runs(para, marker))
         end = max(100, int(round(para[-1].size * scale * 100)))
         paragraphs.append(
             f'<a:p><a:pPr algn="{algn}"{indent}><a:lnSpc>{line_spacing}</a:lnSpc>'

@@ -16,6 +16,7 @@ degrees clockwise. Invisible text (the searchable layer of an OCRed scan)
 is read, marked ``hidden``.
 """
 
+import bisect
 import ctypes
 import io
 import math
@@ -130,7 +131,7 @@ class Line:
                 and char.x0 >= self.x0 - 0.4 * size and char.x0 - self.x1 <= GAP * size)
 
     def add(self, char):
-        if not char.space and char.x0 - self.x1 > 0.45 * max(char.size, self.size):
+        if not char.space and char.x0 - self.x1 > 0.25 * max(char.size, self.size):
             char.space = True
         self.chars.append(char)
         self.x0, self.x1 = min(self.x0, char.x0), max(self.x1, char.x1)
@@ -158,10 +159,11 @@ class Line:
     def text(self):
         return "".join((" " if c.space and i else "") + c.text for i, c in enumerate(self.chars))
 
-    def runs(self):
-        """[(text, a Char with the run's look)]: the line in runs of the same look."""
+    def runs(self, start=0, end=None):
+        """[(text, a Char with the run's look)]: the line (or its characters
+        ``start`` to ``end``) in runs of the same look."""
         out = []
-        for i, c in enumerate(self.chars):
+        for i, c in enumerate(self.chars[start:end]):
             text = (" " if c.space and i else "") + c.text
             if out and out[-1][1].style() == c.style():
                 out[-1][0] += text
@@ -171,6 +173,37 @@ class Line:
             else:
                 out.append([text, c])
         return [(t, c) for t, c in out if t]
+
+    def pieces(self, gap=0.8):
+        """(start, end) of the parts of the line between white space wider
+        than ``gap`` font sizes (more than a space between words)."""
+        out, start = [], 0
+        for k in range(1, len(self.chars)):
+            c = self.chars[k]
+            if c.space and c.x0 - self.chars[k - 1].x1 > gap * self.main_size:
+                out.append((start, k))
+                start = k
+        return out + [(start, len(self.chars))]
+
+    def marker(self):
+        """When the line starts with a list marker (a bullet, "1.", "a)")
+        set apart from its text: (index of the text's first character, its
+        x). Otherwise None."""
+        if not LIST_ITEM.match(self.text):
+            return None
+        for k in range(1, len(self.chars)):
+            c = self.chars[k]
+            if c.space:
+                return (k, c.x0) if c.x0 - self.chars[k - 1].x1 > 0.5 * self.main_size else None
+        return None
+
+    @property
+    def main_size(self):
+        """The size of most of the line's characters."""
+        counts = {}
+        for c in self.chars:
+            counts[round(c.size, 1)] = counts.get(round(c.size, 1), 0) + 1
+        return max(counts, key=counts.get)
 
     @property
     def family(self):
@@ -241,7 +274,7 @@ class Block:
             listed = bool(LIST_ITEM.match(line.text))
             indented = (line.x0 - prev.x0 > 0.8 * size and prev.x0 - self.x0 < 0.5 * size
                         and not LIST_ITEM.match(cur[0].text))
-            resized = abs(line.size - prev.size) > 0.05 * prev.size
+            resized = abs(line.main_size - prev.main_size) > 0.05 * prev.main_size
             if fits or listed or indented or resized:
                 paragraphs.append(cur)
                 cur = []
@@ -274,7 +307,7 @@ class Block:
         return self.lines[-1].bottom
 
 
-def _merge_pieces(lines):
+def _merge_pieces(lines, rules=None):
     """Join pieces of one line that the PDF drew separately (or out of order)."""
     lines.sort(key=lambda ln: (ln.angle, ln.base, ln.x0))
     out = []
@@ -282,7 +315,8 @@ def _merge_pieces(lines):
         for prev in reversed(out[-8:]):
             size = max(prev.size, line.size)
             if (prev.angle == line.angle and abs(prev.base - line.base) <= 0.2 * size
-                    and -0.3 * size <= line.x0 - prev.x1 <= 0.6 * size):
+                    and -0.3 * size <= line.x0 - prev.x1 <= 0.6 * size
+                    and not _ruled_between(rules, prev, line.chars[0])):
                 prev.merge(line)
                 break
         else:
@@ -290,16 +324,34 @@ def _merge_pieces(lines):
     return out
 
 
-def lines_of(chars):
-    """Characters (in the order the PDF draws them) → lines."""
+def _ruled_between(rules, line, char):
+    """Whether a drawn upright line (a table's border) separates ``char``
+    from the end of ``line`` (upright text only)."""
+    if not rules or line.angle != 0:
+        return False
+    xs = rules[0]
+    lo, hi = sorted((line.x1, char.x0))
+    for k in range(bisect.bisect_left(xs, lo - 0.5), bisect.bisect_right(xs, hi + 0.5)):
+        _, y0, y1 = rules[1][k]
+        if y0 - 1 <= char.base <= y1 + 1:
+            return True
+    return False
+
+
+def lines_of(chars, rules=()):
+    """Characters (in the order the PDF draws them) → lines. ``rules``:
+    upright lines drawn on the page, [(x, top, bottom)]: text on both sides
+    of one is in two cells of a table, not one line."""
+    rules = sorted(rules)
+    rules = ([r[0] for r in rules], rules) if rules else None
     lines, cur = [], None
     for char in chars:
-        if cur is not None and cur.accepts(char):
+        if cur is not None and cur.accepts(char) and not _ruled_between(rules, cur, char):
             cur.add(char)
         else:
             cur = Line(char)
             lines.append(cur)
-    return _merge_pieces(lines)
+    return _merge_pieces(lines, rules)
 
 
 def blocks_of(lines):
@@ -382,12 +434,12 @@ class Page:
     ``chars``, ``lines``, ``blocks``, ``links`` ([{"box", "uri" or "page"}]),
     ``images`` (boxes of the pictures on it), ``geometry``."""
 
-    def __init__(self, number, geometry, chars, links, images):
+    def __init__(self, number, geometry, chars, links, images, rules=()):
         self.number, self.geometry = number, geometry
         self.width, self.height = geometry.width, geometry.height
         self.images = images
         self.chars, self.links = chars, links
-        self.lines = lines_of(chars)
+        self.lines = lines_of(chars, rules)
         self.blocks = blocks_of(self.lines)
 
 
@@ -510,6 +562,7 @@ class Document:
             finally:
                 textpage.close()
             images = _images(page, geometry)
+            rules = _rules(page, geometry)
         finally:
             page.close()
         for link_index, link in enumerate(links):
@@ -518,7 +571,7 @@ class Document:
                 cx, cy = (c.box[0] + c.box[2]) / 2, (c.box[1] + c.box[3]) / 2
                 if x0 - 1 <= cx <= x1 + 1 and y0 - 1 <= cy <= y1 + 1:
                     c.link = link_index
-        return Page(index + 1, geometry, chars, links, images)
+        return Page(index + 1, geometry, chars, links, images, rules)
 
     def size(self, index):
         """(width, height) of page ``index`` as shown."""
@@ -553,6 +606,7 @@ def _chars(textpage, geometry):
     flags = ctypes.c_int()
     rgba = [ctypes.c_uint() for _ in range(4)]
     matrix = raw.FS_MATRIX()
+    loose = raw.FS_RECTF()
     ox, oy = ctypes.c_double(), ctypes.c_double()
     fonts = {}
     for i in range(count):
@@ -599,10 +653,16 @@ def _chars(textpage, geometry):
         px, py = geometry.point(ox.value, oy.value)
         c = Char()
         c.text, c.box, c.size, c.angle = ch, box, size, angle
-        # From where the glyph starts (its origin), not its ink: text set at
-        # the same place starts at the same origin.
+        # From where the glyph starts (its origin) to where the next one
+        # would (its advance), not its ink: text set at the same place starts
+        # at the same origin, and a line is as wide as when it was set.
         start = px * u[0] + py * u[1]
         c.x0, c.x1 = min(along), max(along)
+        if raw.FPDFText_GetLooseCharBox(textpage, i, ctypes.byref(loose)):
+            lbox = geometry.box(loose.left, loose.bottom, loose.right, loose.top)
+            span = [qx * u[0] + qy * u[1] for qx in (lbox[0], lbox[2]) for qy in (lbox[1], lbox[3])]
+            if max(span) - min(span) > 0.05 and abs(min(span) - start) < 0.5 * size:
+                c.x0, c.x1 = start, max(span)
         if c.x1 - c.x0 < 0.05:  # an empty box (a glyph without outline)
             c.x0, c.x1 = start, start + size * 0.3
         elif abs(start - c.x0) < 0.5 * size:
@@ -634,6 +694,27 @@ def _images(page, geometry, smallest=24):
         if x1 - x0 >= smallest and y1 - y0 >= smallest:
             boxes.append((x0, y0, x1, y1))
     return boxes
+
+
+def _rules(page, geometry):
+    """Upright lines drawn on a page (table borders, the sides of boxes):
+    [(x, top, bottom)]."""
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as raw
+
+    rules = []
+    for obj in page.get_objects(filter=[raw.FPDF_PAGEOBJ_PATH], max_depth=3):
+        try:
+            x0, y0, x1, y1 = geometry.box(*obj.get_bounds())
+        except pdfium.PdfiumError:
+            continue
+        if y1 - y0 < 4:
+            continue
+        if x1 - x0 <= 3:
+            rules.append(((x0 + x1) / 2, y0, y1))
+        elif raw.FPDFPath_CountSegments(obj) in (4, 5):  # a rectangle: its two sides
+            rules += [(x0, y0, y1), (x1, y0, y1)]
+    return rules
 
 
 _SAFE_URI = re.compile(r"^(https?|mailto|ftp|tel):", re.I)
