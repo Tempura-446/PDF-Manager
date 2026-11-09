@@ -218,7 +218,12 @@ OPERATIONS = [
                             ["cmyk", "CMYK (print)"]]),
                 _f("icc", "ICC profile (optional)", "file", None, accept=".icc,.icm")]},
     {"id": "ocr", "group": "Optimize", "label": "Make searchable (OCR)", "files": "pdf",
-     "fields": [_f("language", "Language(s)", "text", "eng", placeholder="eng+deu"),
+     "help": "The built-in engine reads English, most European languages, Chinese and "
+             "Japanese without a language choice. Tesseract needs its language codes.",
+     "fields": [_f("engine", "Engine", "select", "auto",
+                   choices=[["auto", "Automatic (built-in when installed, else Tesseract)"],
+                            ["builtin", "Built-in"], ["tesseract", "Tesseract"]]),
+                _f("language", "Language(s) for Tesseract", "text", "eng", placeholder="eng+deu"),
                 _f("deskew", "Straighten crooked scans", "check", False),
                 _f("force", "Redo pages that already have text", "check", False)]},
     {"id": "clean", "group": "Optimize", "label": "Clean up scans", "files": "pdf",
@@ -623,7 +628,7 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
     elif op == "ocr":
         core.ocr(src, out, language=opts.get("language") or "eng",
                  force=_bool(opts.get("force")), deskew=_bool(opts.get("deskew")),
-                 password=password)
+                 password=password, engine=opts.get("engine") or "auto")
     elif op == "clean":
         auto_rotate = _bool(opts.get("auto_rotate"))
         if auto_rotate and not scan.find_tesseract():

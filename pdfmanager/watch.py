@@ -26,7 +26,8 @@ class WatchSettings:
     remove_blank: bool = False    # drop blank pages
     auto_rotate: bool = False     # turn pages upright (needs Tesseract)
     ocr: bool = False
-    ocr_language: str = "eng"
+    ocr_language: str = "eng"     # for the Tesseract engine
+    ocr_engine: str = "auto"      # auto, builtin or tesseract (see core.ocr)
     recipe: list = None           # steps of a recipe to run (see recipes.py)
     skip_duplicates: bool = False
     keep_originals: bool = True   # move originals to <inbox>/originals instead of deleting
@@ -76,7 +77,7 @@ def process_file(path, settings, known_hashes=None):
             scan.clean(work, work, remove_blank=settings.remove_blank,
                        auto_rotate=settings.auto_rotate)
         if settings.ocr:
-            core.ocr(work, work, language=settings.ocr_language)
+            core.ocr(work, work, language=settings.ocr_language, engine=settings.ocr_engine)
         if settings.recipe:
             recipes.run(settings.recipe, work, work)
         if settings.compress:
