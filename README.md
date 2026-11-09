@@ -1068,6 +1068,8 @@ follows. On Windows, from a clean checkout of the commit to release, with
 
 ```bash
 winget install --id GitHub.cli          # once, then: gh auth login
+git config user.name "Your Name"        # once: the version tag carries these
+git config user.email you@example.com
 pip install -e ".[test,build]"
 python packaging/release.py --check     # the tests, the app build and its self-test
 python packaging/release.py --dry-run   # also makes the release files in dist/release

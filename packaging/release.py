@@ -14,7 +14,8 @@ button follows those releases (see pdfmanager/update.py).
 
 Run it on Windows (the build and the self-test make the Windows app), from
 a clean checkout of the commit to release, with GitHub's "gh" installed
-("winget install --id GitHub.cli") and signed in ("gh auth login"). A
+("winget install --id GitHub.cli") and signed in ("gh auth login"), and
+git's user.name and user.email set (the version tag carries them). A
 checkout with core.autocrlf (Windows' usual git setting) gives the text
 files CRLF line endings, so its zip's checksum differs from one made on
 Linux from the same commit. It refuses a tree with uncommitted changes, a version CHANGELOG.md
@@ -154,6 +155,10 @@ def publish(root, version, changelog, out_dir, checks=True, dry_run=False):
             run(["gh", "auth", "status"], cwd=root)
         except Exception:
             raise ReleaseError("gh isn't signed in to GitHub; run gh auth login") from None
+        # The version tag is signed with git's name and email.
+        if not all(run(["git", "config", key], cwd=root, check=False).strip() for key in ("user.name", "user.email")):
+            raise ReleaseError('git has no name or email to tag the version with; run once in the repository: '
+                               'git config user.name "Your Name" and git config user.email you@example.com')
         if run(["git", "status", "--porcelain"], cwd=root).strip():
             raise ReleaseError("the checkout has uncommitted changes; release a committed version")
         if run(["git", "tag", "-l", tag], cwd=root).strip():
@@ -172,10 +177,20 @@ def publish(root, version, changelog, out_dir, checks=True, dry_run=False):
     files = [zip_path, sha_path, notes_path]
     if dry_run:
         return files
-    run(["gh", "release", "create", tag, str(zip_path), str(sha_path), "--repo", RELEASES,
-         "--title", f"ZPDF {version}", "--notes-file", str(notes_path)], cwd=root)
+    # Tag first: it is local and can't half-succeed. The upload is the step
+    # that makes the release public; only the push comes after it.
     run(["git", "tag", "-a", tag, "-m", f"ZPDF {version}"], cwd=root)
-    run(["git", "push", "origin", tag], cwd=root)
+    try:
+        run(["gh", "release", "create", tag, str(zip_path), str(sha_path), "--repo", RELEASES,
+             "--title", f"ZPDF {version}", "--notes-file", str(notes_path)], cwd=root)
+    except Exception as exc:
+        run(["git", "tag", "-d", tag], cwd=root, check=False)
+        raise ReleaseError(str(exc)) from None
+    try:
+        run(["git", "push", "origin", tag], cwd=root)
+    except Exception as exc:
+        raise ReleaseError(f"ZPDF {version} is published on {RELEASES}, but pushing its tag failed ({exc}); "
+                           f"push it with: git push origin {tag}") from None
     return files
 
 
@@ -195,7 +210,8 @@ def main(argv=None):
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         files = publish(ROOT, version, changelog, args.out, checks=not args.skip_checks, dry_run=args.dry_run)
     except ReleaseError as exc:
-        print(f"\nNot released: {exc}", file=sys.stderr)
+        said = str(exc)
+        print(("\n" if " is published on " in said else "\nNot released: ") + said, file=sys.stderr)
         return 1
     print("\n" + "\n".join(str(f) for f in files))
     print(f"\nMade the release files for {version}; nothing was published." if args.dry_run
