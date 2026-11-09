@@ -21,7 +21,9 @@ organize, rename, de-duplicate, **search** and watch whole folders of PDFs.
 
 ### Easiest on Windows: the installer
 
-1. On GitHub, **Code → Download ZIP**, and unzip it (right-click → *Extract All*).
+1. Download **ZPDF-<version>-windows.zip** from the newest release on
+   [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases/latest)
+   (no GitHub account needed), and unzip it (right-click → *Extract All*).
 2. In the unzipped folder, double-click **Install ZPDF.cmd**. If
    Windows asks, choose *More info → Run anyway* (it's a plain text script:
    you can read what it does in `packaging/windows/install.ps1`).
@@ -54,13 +56,9 @@ PowerShell commands, so it also works where Smart App Control limits scripts.
 
 ### The standalone app
 
-Download **ZPDF-windows.zip** or **ZPDF-linux.zip** from the
-latest run of the [Build app](../../actions/workflows/build-app.yml)
-workflow (open the run, then *Artifacts*), unzip it, and double-click
-**ZPDF**. Nothing else to install: OCR is built in (Tesseract and
-Ghostscript, below, stay optional).
-
-To build it yourself, including on a Mac:
+A single folder with **ZPDF.exe** in it, for trying ZPDF without
+installing it. It isn't published (Smart App Control blocks unsigned
+programs like it); build it yourself, including on Linux or a Mac:
 
 ```bash
 pip install -e ".[build]"
@@ -222,14 +220,16 @@ closed.
 - Only **one copy** runs: opening a PDF from Explorer (or starting the app
   again) brings the running app to the front with the file in the reader
   (in the Edge window, the file opens in a new window of the running app).
-- **Updates:** when there's a newer version on GitHub, an **Update** button
-  appears in the sidebar; it downloads and installs it and starts the app
-  again. The repository is private, so the check needs a GitHub token that
-  can read it: in **Settings** (the gear at the bottom of the sidebar),
-  paste a fine-grained token with *Contents: Read-only* access to this
-  repository. It's kept on your computer only, and the check can be turned
-  off there. (A copy running from a git checkout is updated with `git
-  pull`, the standalone app by downloading it again.)
+- **Updates:** when a newer version is published on
+  [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases), an
+  **Update** button appears in the sidebar; it downloads it, checks it
+  against its published SHA-256, installs it and starts the app again.
+  Nothing to set up. The check can be turned off in **Settings** (the gear
+  at the bottom of the sidebar), which also has an **About** section with
+  the licence and the third-party notices. A development copy can follow
+  the private repository's branch instead, with a GitHub token entered
+  there. (A copy running from a git checkout is updated with `git pull`,
+  the standalone app by building it again.)
 
 Everything runs on your own computer. The app's built-in server only
 listens on `127.0.0.1` and requires a random token that only the app
@@ -1052,14 +1052,32 @@ pip install -e ".[test]"
 pytest
 ```
 
-GitHub Actions runs the suite on Linux (Python 3.10 and 3.13) and Windows,
-plus a job with Tesseract, Ghostscript and LibreOffice for the tests that
-need those programs, and a **Windows end-to-end** job: it installs the app
-with `Install ZPDF.cmd` (with PowerShell limited the way Smart App
-Control limits it), starts it like its Start menu shortcut, uses tools and
-the reader in both kinds of window (its own window and the Edge window),
-opens a second file from "outside", restarts it as after an update, closes
-it and checks that nothing is left running, then uninstalls it.
+The workflows in `.github/workflows` describe a fuller run (Linux and
+Windows, a job with Tesseract, Ghostscript and LibreOffice, and a Windows
+end-to-end job that installs, uses, updates and uninstalls the app), but
+GitHub Actions doesn't run on this account, so releases are checked
+locally instead (below).
+
+## Releasing
+
+Releases are published on
+[ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases), the
+public repository friends download from and the app's **Update** button
+follows. On Windows, from a clean checkout of the commit to release, with
+[GitHub's `gh`](https://cli.github.com) signed in:
+
+```bash
+pip install -e ".[test,build]"
+python packaging/release.py --check     # the tests, the app build and its self-test
+python packaging/release.py --dry-run   # also makes the release files in dist/release
+python packaging/release.py             # checks, makes and publishes, and tags the version
+```
+
+The version is the one in `pdfmanager/__init__.py`, and `CHANGELOG.md`
+needs a section for it: that section becomes the release notes. The
+release is `ZPDF-<version>-windows.zip` (the installer, the source it
+installs from, the licence and the third-party notices) with a SHA-256
+file beside it, which the Update button checks before installing.
 
 ## Licence
 
