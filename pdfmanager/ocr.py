@@ -12,11 +12,13 @@ through its language packs, and for PDF/A output straight from OCR.
 import importlib.util
 import logging
 import math
+import os
 import statistics
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 
-from pdfmanager import core, scan
+from pdfmanager import core, scan, textlayer
 from pdfmanager.textlayer import Word
 
 __all__ = ["Word", "Line", "ENGINES", "choose_engine", "recognise", "reading_order", "text_of", "skew_angle"]
@@ -107,7 +109,9 @@ def _quad(points):
 
 def recognise(image):
     """The lines of text in a PIL image, each with its words."""
-    result = _engine()(_array(image))
+    # Every switch is named each time: the engine keeps the last call's
+    # settings, and skew_angle() runs it with the detector alone.
+    result = _engine()(_array(image), use_det=True, use_cls=True, use_rec=True)
     if not result.txts:
         return []
     lines = []
@@ -178,3 +182,182 @@ def skew_angle(image):
         return 0.0
     angle = statistics.median(angles)
     return 0.0 if abs(angle) < MIN_SKEW else round(angle, 2)
+
+
+# -- running OCR on a file ------------------------------------------------------
+
+def page_has_text(page):
+    """Whether a page already has selectable text (then it is left alone
+    unless ``force`` says otherwise, as OCRmyPDF's skip-text does)."""
+    try:
+        return bool(page.extract_text().strip())
+    except Exception:  # a page too damaged to read is treated as a scan
+        return False
+
+
+def run(path, output, language="eng", force=False, deskew=False, password=None, engine="auto"):
+    """Add a searchable text layer to the scanned pages of ``path``; see
+    ``core.ocr``."""
+    from pdfmanager import progress
+
+    chosen = choose_engine(engine)
+    source = Path(path)
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    tmp_in = None
+    if core.open_pdf(path, password).is_encrypted:  # also a plain error for a damaged file
+        # Neither engine opens encrypted files; give them a decrypted copy.
+        tmp_in = output.with_name(output.name + ".src.tmp.pdf")
+        core.decrypt(path, tmp_in, password or "")
+        source = tmp_in
+    tmp_out = output.with_name(output.name + ".tmp.pdf")
+    progress.say("recognising text (this can take a while)")
+    try:
+        if chosen == "tesseract":
+            _run_tesseract(source, tmp_out, language, force, deskew)
+        else:
+            _run_builtin(source, tmp_out, force, deskew)
+        os.replace(tmp_out, output)
+    finally:
+        for tmp in (tmp_in, tmp_out):
+            if tmp is not None and tmp.exists():
+                tmp.unlink()
+    return output
+
+
+def _run_tesseract(source, output, language, force, deskew):
+    try:
+        import ocrmypdf
+        from ocrmypdf.exceptions import ExitCodeException, MissingDependencyError
+    except ImportError:
+        raise core.PdfManagerError(
+            "OCR with Tesseract needs OCRmyPDF and the Tesseract program: pip install "
+            f"pdf-manager[tesseract], then install Tesseract ({TESSERACT_LINK})") from None
+    scan.add_programs_to_path()  # Tesseract and Ghostscript where installers put them
+    try:
+        ocrmypdf.ocr(str(source), str(output), language=language.split("+"),
+                     skip_text=not force, force_ocr=force, deskew=deskew, progress_bar=False)
+    except MissingDependencyError as exc:
+        raise core.PdfManagerError(f"OCR is missing a program: {exc}") from None
+    except ExitCodeException as exc:
+        raise core.PdfManagerError(f"OCR failed: {exc}") from None
+
+
+def _run_builtin(source, output, force, deskew):
+    import pypdfium2 as pdfium
+    from PIL import Image
+    from pypdf import PdfWriter, Transformation
+
+    from pdfmanager import progress
+
+    writer = PdfWriter(clone_from=str(source))
+    rasterised = False
+    with core.PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(str(source))
+        try:
+            total = len(doc)
+            for i in range(total):
+                progress.report(i, total, "page")
+                page = writer.pages[i]
+                if not force and page_has_text(page):
+                    continue
+                image = doc[i].render(scale=RENDER_DPI / 72).to_pil()
+                if deskew:
+                    angle = skew_angle(image)
+                    if angle:
+                        # Turn the picture straight, and the page with it, so
+                        # the words and the page stay in step.
+                        image = image.rotate(-angle, resample=Image.BICUBIC, fillcolor="white")
+                        _turn_page(page, -angle, Transformation)
+                try:
+                    lines = recognise(image)
+                except Exception as exc:  # ONNX Runtime trouble: say which page
+                    raise core.PdfManagerError(f"OCR failed on page {i + 1}: {exc}") from None
+                if force:
+                    _rasterise(writer, page, image)
+                    rasterised = True
+                words = [w for line in lines for w in line.words]
+                if words:
+                    textlayer.add_text_layer(writer, page, words, image.size, RENDER_DPI)
+        finally:
+            doc.close()
+    writer.write(str(output))
+    if rasterised:
+        _drop_unused_objects(output)
+
+
+def _drop_unused_objects(path):
+    """Rewrite ``path`` without the objects nothing refers to any more:
+    pypdf writes out every object it was given, replaced page pictures and
+    old fonts included."""
+    import pikepdf
+
+    tmp = path.with_name(path.name + ".gc.pdf")
+    with pikepdf.open(str(path)) as pdf:
+        pdf.save(str(tmp), object_stream_mode=pikepdf.ObjectStreamMode.generate)
+    os.replace(tmp, path)
+
+
+def _turn_page(page, angle, Transformation):
+    """Rotate the page's content by ``angle`` degrees (counter-clockwise)
+    about the centre of its crop box, in display orientation."""
+    box = page.cropbox
+    cx, cy = (float(box.left) + float(box.right)) / 2, (float(box.bottom) + float(box.top)) / 2
+    # A counter-clockwise turn of the displayed page is the same turn of the
+    # page's own content for 0 and 180 degrees of /Rotate, the opposite one
+    # for 90 and 270 (the display axes are swapped).
+    turn = angle if (page.rotation or 0) % 180 == 0 else -angle
+    page.add_transformation(Transformation().translate(-cx, -cy).rotate(turn).translate(cx, cy))
+
+
+def _rasterise(writer, page, image):
+    """Replace the page's content with ``image`` (its render), dropping
+    whatever text layer it had, so a wrong one is not kept beside the new.
+    The page keeps its boxes, /Rotate and annotations: the picture is drawn
+    through the same matrix the text layer uses."""
+    import io
+    import zlib
+
+    from pypdf import Transformation
+    from pypdf.generic import DictionaryObject, NameObject, NumberObject, StreamObject
+
+    grey = image.convert("L")
+    histogram = grey.histogram()
+    middling = sum(histogram[32:224]) / (grey.width * grey.height)
+    xobj = StreamObject()
+    if middling < 0.02 and grey.getextrema()[0] < 32:
+        # Black and white: a bit per pixel, as the scanner would store it.
+        bits = grey.point(lambda v: 255 if v > 127 else 0).convert("1")
+        xobj.set_data(zlib.compress(bits.tobytes(), 9))
+        xobj[NameObject("/Filter")] = NameObject("/FlateDecode")
+        xobj[NameObject("/ColorSpace")] = NameObject("/DeviceGray")
+        xobj[NameObject("/BitsPerComponent")] = NumberObject(1)
+    else:
+        colour = image.convert("RGB") if image.mode not in ("L", "RGB") else image
+        if colour.mode == "RGB" and _looks_grey(colour):
+            colour = grey
+        buf = io.BytesIO()
+        colour.save(buf, "JPEG", quality=85, optimize=True)
+        xobj.set_data(buf.getvalue())
+        xobj[NameObject("/Filter")] = NameObject("/DCTDecode")
+        xobj[NameObject("/ColorSpace")] = NameObject("/DeviceGray" if colour.mode == "L" else "/DeviceRGB")
+        xobj[NameObject("/BitsPerComponent")] = NumberObject(8)
+    xobj[NameObject("/Type")] = NameObject("/XObject")
+    xobj[NameObject("/Subtype")] = NameObject("/Image")
+    xobj[NameObject("/Width")] = NumberObject(image.width)
+    xobj[NameObject("/Height")] = NumberObject(image.height)
+    display_w, display_h = textlayer._display_size(page)
+    to_page = textlayer.image_to_page_matrix(page, image.size, RENDER_DPI)
+    ctm = Transformation().scale(display_w, display_h).transform(Transformation(to_page)).ctm
+    content = StreamObject()
+    content.set_data(("q " + " ".join(f"{v:.4f}" for v in ctm) + " cm /Im0 Do Q").encode())
+    page[NameObject("/Contents")] = writer._add_object(content)
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/XObject"): DictionaryObject({NameObject("/Im0"): writer._add_object(xobj)})})
+
+
+def _looks_grey(image, sample=200):
+    """Whether an RGB image is grey all over (then it is stored as grey)."""
+    small = image.resize((sample, sample))
+    r, g, b = (band.getdata() for band in small.split())
+    return all(abs(x - y) < 8 and abs(y - z) < 8 for x, y, z in zip(r, g, b))

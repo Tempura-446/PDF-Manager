@@ -1,8 +1,8 @@
 """The invisible text layer OCR puts over a scanned page.
 
 Each recognised word is set in text render mode 3 (invisible) exactly over
-its place on the scan, so the page looks unchanged while search, select,
-copy and PDF -> Excel work. The words use one "glyphless" font per file: a
+its place on the scan, followed by a zero-width space, so the page looks
+unchanged while search, select, copy and PDF -> Excel work. The words use one "glyphless" font per file: a
 Type0 font with Identity-H encoding where every character's CID is its own
 UCS-2 code, a ToUnicode map that says so, and every CID drawn with glyph 0
 of an embedded TrueType font. That makes any character extractable (pypdf,
@@ -74,7 +74,11 @@ def _glyphless_font(writer):
         BaseFont=NameObject("/GlyphLessFont"),
         CIDSystemInfo=_dict(Registry=_text("Adobe"), Ordering=_text("Identity"),
                             Supplement=NumberObject(0)),
-        FontDescriptor=descriptor, DW=NumberObject(GLYPH_WIDTH), CIDToGIDMap=cid_to_gid))
+        FontDescriptor=descriptor, DW=NumberObject(GLYPH_WIDTH), CIDToGIDMap=cid_to_gid,
+        # A space takes no room: each word ends with one so that text
+        # extraction always splits words there, whatever the gap between
+        # their boxes on the page.
+        W=ArrayObject([NumberObject(0x20), ArrayObject([NumberObject(0)])])))
     to_unicode = _stream(writer, b"\n".join([
         b"/CIDInit /ProcSet findresource begin",
         b"12 dict begin",
@@ -168,7 +172,7 @@ def add_text_layer(writer, page, words, image_size, dpi):
         if matrix is None:
             continue
         parts.append(b" ".join(f"{v:.4f}".rstrip("0").rstrip(".").encode() for v in matrix)
-                     + b" Tm <" + _encode(word.text).hex().encode() + b"> Tj")
+                     + b" Tm <" + _encode(word.text + " ").hex().encode() + b"> Tj")
         written += 1
     if not written:
         return 0

@@ -341,7 +341,7 @@ def test_ocr(tmp_path):
     im.save(tmp_path / "scan.png", dpi=(200, 200))
     scan = core.images_to_pdf([tmp_path / "scan.png"], tmp_path / "scan.pdf")
     assert core.extract_text(scan).strip() == ""
-    out = core.ocr(scan, tmp_path / "ocr.pdf")
+    out = core.ocr(scan, tmp_path / "ocr.pdf", engine="tesseract")
     assert "12345" in core.extract_text(out)
 
 
@@ -356,8 +356,8 @@ def test_ocr_missing_dependency_message(tmp_path, monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    with pytest.raises(core.PdfManagerError, match="pip install ocrmypdf"):
-        core.ocr(make_pdf(tmp_path / "a.pdf"), tmp_path / "b.pdf")
+    with pytest.raises(core.PdfManagerError, match=r"pip install pdf-manager\[tesseract\]"):
+        core.ocr(make_pdf(tmp_path / "a.pdf"), tmp_path / "b.pdf", engine="tesseract")
 
 
 # -- GUI server ------------------------------------------------------------
