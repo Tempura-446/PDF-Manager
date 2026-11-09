@@ -26,7 +26,15 @@ A4_300 = (2480, 3508)
 
 
 def _font(size, serif=False, font_path=None):
-    names = [font_path] if font_path else (["DejaVuSerif.ttf", "DejaVuSans.ttf"] if serif else ["DejaVuSans.ttf"])
+    """DejaVu where the computer has it (Linux), else reportlab's Vera, the
+    font DejaVu Sans grew from, which ships with ZPDF everywhere: the pages,
+    and so the accuracy figures the tests check, are alike on every
+    computer. (Pillow's own fallback font reads differently.)"""
+    import reportlab
+
+    vera = str(Path(reportlab.__file__).parent / "fonts" / "Vera.ttf")
+    names = [font_path] if font_path else (
+        ["DejaVuSerif.ttf", "DejaVuSans.ttf", vera] if serif else ["DejaVuSans.ttf", vera])
     for name in names:
         try:
             return ImageFont.truetype(name, size)

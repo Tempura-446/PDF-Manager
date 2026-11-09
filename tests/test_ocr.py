@@ -626,3 +626,22 @@ def test_every_script_model_is_an_onnx_model_rapidocr_lists(script):
     url, digest = ocr._model_source(script)
     assert url.endswith(f"/onnx/PP-OCRv5/rec/{script}_PP-OCRv5_rec_mobile.onnx"), url
     assert len(digest) == 64
+
+
+def test_test_pages_look_alike_on_every_computer(monkeypatch):
+    # Windows has no DejaVu: the pages fall back to reportlab's Vera (the
+    # font DejaVu Sans grew from), never to Pillow's own, which reads
+    # differently and moved the accuracy figures the tests check.
+    from PIL import ImageFont
+
+    real = ImageFont.truetype
+
+    def no_dejavu(name, *args, **kwargs):
+        if "DejaVu" in str(name):
+            raise OSError("cannot open resource")
+        return real(name, *args, **kwargs)
+
+    monkeypatch.setattr(ImageFont, "truetype", no_dejavu)
+    for serif in (False, True):
+        font = ocrpages._font(40, serif=serif)
+        assert str(getattr(font, "path", "")).endswith("Vera.ttf"), font
