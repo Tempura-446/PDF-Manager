@@ -16,9 +16,10 @@ per page on a CPU (1 to 2 s against 0.5 s on a 4-core box).
 ## What ships
 
 - A **built-in engine**: PaddleOCR's PP-OCR models run by the `rapidocr`
-  package on ONNX Runtime. Pure pip, Apache 2.0, about 95 MB (ONNX Runtime
-  63 MB, the default detection, recognition and orientation models 31 MB,
-  shipped inside the rapidocr wheel so nothing is downloaded at run time).
+  package on ONNX Runtime. Pure pip, Apache 2.0, about 175 MB on disk
+  (OpenCV 72 MB, ONNX Runtime 63 MB, the default detection, recognition and
+  orientation models 31 MB, shipped inside the rapidocr wheel so nothing is
+  downloaded at run time).
   One multilingual model reads English and 40+ Latin-script languages,
   Chinese and Japanese without a language choice.
 - ZPDF's **own text layer writer**: invisible text placed over each
@@ -94,29 +95,30 @@ core.ocr(path, output, language, force, deskew, password, engine="auto")
 
 ### `textlayer.py`
 
-- `page_layer(lines, image_w, image_h, page_w, page_h, rotation, skew) -> PageObject`:
-  a reportlab canvas of `page_w × page_h` points with text render mode 3
-  (invisible). Each line's text is drawn along the line's baseline (the
-  bottom edge of its box, so skewed text on an un-deskewed page is still
-  selected along the words), with the font size chosen so the text's width
-  matches the box width (as hOCR renderers do), and the box's bottom-left as
-  the origin. Lines whose text contains spaces are drawn word by word, each
-  word placed by the proportion of the line's characters before it, so a
-  double-click selects one word and search hits land on the word.
+- `add_text_layer(page, words, image_size, dpi, skew=0.0)`: merges an
+  invisible text layer (text render mode 3) onto a pypdf page. `words` are
+  `ocr.Word`s with quadrilaterals in image pixels; RapidOCR returns a box
+  per word (`return_word_box`), so each word is set in its own box and a
+  double-click selects one word. A word is set along its box's bottom edge
+  (so skewed text on an un-deskewed page is still selected along the
+  words), with `Tm` scaling one unit of text height to the box height and
+  the width to the box width.
 - Coordinates: image pixels → display points (× 72/dpi) → page space:
   undo the page's `/Rotate` and move to the crop box origin, then undo the
-  deskew rotation about the page centre. The layer is merged with pypdf's
-  `merge_transformed_page`. Tests cover pages with `/Rotate 90` and a
+  deskew rotation about the page centre (`image_to_page_matrix(page,
+  image_size, dpi, skew)`). The layer is merged with pypdf's
+  `merge_transformed_page`. Tests cover all four `/Rotate` values and a
   shifted crop box.
-- Fonts: Latin text whose characters are all in WinAnsi uses Helvetica.
-  Anything else uses an embedded TrueType font (reportlab's bundled
-  Vera.ttf) with reportlab's ToUnicode map, so pypdf, pdfplumber and pdf.js
-  extract the recognised characters even for glyphs the font does not have
-  (our reader does not ship pdf.js's predefined CMaps, so non-embedded CID
-  fonts are not an option). If Vera's ToUnicode turns out not to cover
-  missing glyphs, the fallback is a Type0 font built with pikepdf: Identity-H
-  encoding, one glyph, and a generated ToUnicode CMap, the way Tesseract's
-  PDF renderer does it. A test with Chinese text decides which.
+- Font: one "glyphless" Type0 font per document, written with pypdf's
+  generic objects (no reportlab): Identity-H encoding, each character's
+  CID is its UCS-2 code (characters outside the BMP become U+FFFD), a
+  ToUnicode CMap that maps the whole range to itself, a CIDToGIDMap sending
+  every CID to glyph 0, default width 500, and reportlab's bundled Vera.ttf
+  embedded as the font file so the font is embedded (PDF/A conversion later
+  keeps working). Checked: reportlab's own TrueType embedding gives nulls
+  for glyphs the font lacks, and the reader does not ship pdf.js's
+  predefined CMaps, so non-embedded CID fonts would not extract there.
+  This is what Tesseract's PDF renderer does.
 
 ### GUI, CLI, watch folder
 
