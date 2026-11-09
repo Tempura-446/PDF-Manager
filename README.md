@@ -9,8 +9,8 @@ into files of a maximum size), compare, extract, reorder, insert blank pages,
 rotate, resize, crop (also trimming white margins automatically), n-up, make
 **booklets** for folded printing, compress (three levels), convert colours
 (grayscale / RGB / CMYK, with ICC profiles), OCR and clean up scans, redact,
-flatten, remove hidden data, convert to PDF/A (and check PDF/A), Word and from Office files or
-images, edit bookmarks, encrypt, watermark and number pages, add headers,
+flatten, remove hidden data, convert to PDF/A (and check PDF/A), Word, Excel,
+**PowerPoint** and **HTML**, and from Office files or images, edit bookmarks, encrypt, watermark and number pages, add headers,
 footers and **Bates numbers**, create **fillable forms** (finding a printed
 form's fields by itself), pull out pictures
 and attached files, run several of these in a row as a **recipe**, and
@@ -189,6 +189,11 @@ closed.
   per table, or all on one sheet, after a Summary sheet) with numbers as
   real numbers, or into CSV files in a ZIP. See
   [Excel (tables)](#excel-tables).
+- **PDF → PowerPoint** makes a slide of each page, with the text in text
+  boxes you can edit over the page's pictures and drawings (or each slide
+  a picture of the page). **PDF → HTML** makes a web page: flowing text
+  that fits any screen, or each page as it looks. No Office needed. See
+  [PowerPoint and HTML](#powerpoint-and-html).
 - **Search PDFs** finds words in every PDF in a folder (and its
   sub-folders). Each result shows the words around the match; click one to
   open that page in the reader with the words highlighted. The text is
@@ -486,6 +491,8 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `check-pdfa` | check whether PDFs meet PDF/A, and what breaks it | `pdfm check-pdfa *.pdf` · `--level 1b` |
 | `to-word` | convert to an editable Word document | `pdfm to-word doc.pdf` |
 | `to-excel` | put the tables into an Excel workbook (or CSV files) | `pdfm to-excel doc.pdf -p 2-5` · `--one-sheet` · `--csv` |
+| `to-pptx` | convert to a PowerPoint presentation, a slide per page | `pdfm to-pptx doc.pdf` · `--pictures` · `-p 1-5` |
+| `to-html` | convert to a web page (one .html file, pictures inside) | `pdfm to-html doc.pdf` · `--exact` |
 | `from-office` | convert Word, Excel, PowerPoint, … (and web pages) to PDF | `pdfm from-office report.docx` |
 | `web` | save web pages as PDFs (as the browser prints them) | `pdfm web https://example.com` |
 | `attach` | attach files to PDFs, remove or list them | `pdfm attach doc.pdf --add data.xlsx` |
@@ -773,6 +780,39 @@ accents and € right) into `<name>_tables/`.
   headers on two lines become two rows; two tables side by side without
   lines can come out as one; text in a cell that looks like a formula
   stays text (in CSV files it starts with `'`).
+
+### PowerPoint and HTML
+
+Both work without Microsoft Office or any other program.
+
+`to-pptx` writes `<name>.pptx`, one slide per page (slides have the size
+of most of the pages; pages of another size are scaled to fit, centred).
+By default the text stays **editable**: the slide's background is the page
+drawn without its text, and the text is put back on top in text boxes at
+the same places, with its font (Helvetica becomes Arial, Times becomes
+Times New Roman, Courier becomes Courier New; other fonts keep their name),
+size, bold, italic, colour, alignment and line spacing, and its links. The
+lines of a paragraph are joined, so the text rewraps when you edit it.
+Turned pages and turned text come out turned. The searchable text of an
+OCRed scan stays invisible over the scan. `--pictures` makes each slide
+a picture of the page instead.
+
+`to-html` writes `<name>.html`, a single file with the pictures inside
+and no scripts:
+
+- by default **flowing text** that fits any window: headings (from the
+  text's size), paragraphs (with hyphenated words joined back up), lists,
+  tables (found like `to-excel` finds them), pictures and links, with a
+  marker and an anchor (`#page-3`) where each page starts. Two columns are
+  read one after the other, and running headers and footers are left out;
+- `--exact`: each page as it looks, scaled to the window: the page drawn
+  without its text, with the text on top, so it can be selected, searched
+  and copied.
+
+Limits: tables become text boxes over the drawn table in PowerPoint (not
+PowerPoint tables); in flowing HTML, drawings (charts made of lines)
+are left out unless a page has nothing else; text set in an unusual font
+shows in a similar common font.
 
 ### Recipes
 

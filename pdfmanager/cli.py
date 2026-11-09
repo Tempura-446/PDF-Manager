@@ -493,6 +493,24 @@ def run_to_excel(a, src, out, pw):
     return f"{made['output']}  ({n} table{'s' if n != 1 else ''})"
 
 
+# -- pptx and html --
+def run_to_pptx(a, src, out, pw):
+    from pdfmanager import slides
+
+    made = slides.pdf_to_pptx(src, out, password=pw, pages=a.pages, mode=a.mode)
+    n = made["slides"]
+    return f"{made['output']}  ({n} slide{'s' if n != 1 else ''}, {a.mode})"
+
+
+def run_to_html(a, src, out, pw):
+    from pdfmanager import webpage
+
+    made = webpage.pdf_to_html(src, out, password=pw, pages=a.pages, mode=a.mode)
+    n = made["pages"]
+    return f"{made['output']}  ({n} page{'s' if n != 1 else ''}, {a.mode})"
+# -- end of pptx and html --
+
+
 def cmd_from_office(a):
     failures = 0
     files = _expand(a.inputs)
@@ -691,6 +709,9 @@ OUTPUTS["sign-cert"] = ("signed", "pdf")  # digital ID signatures
 OUTPUTS.update({"attach": ("attached", "pdf"), "labels": ("labelled", "pdf"),
                 "repair": ("repaired", "pdf")})  # file tools
 OUTPUTS["comments"] = ("comments", "pdf")
+# -- pptx and html --
+OUTPUTS.update({"to-pptx": (None, "pptx"), "to-html": (None, "html")})
+# -- end of pptx and html --
 
 
 def _is_batch(patterns, inputs):
@@ -715,14 +736,14 @@ def _output_for(a, src, batch):
     if a.command == "text" and a.output is None:
         return None  # print to the terminal
     src = Path(src)
-    ext = {"docx": ".docx", "xlsx": ".xlsx", "txt": ".txt"}.get(kind, ".pdf")
+    ext = ".pdf" if kind == "pdf" else f".{kind}"  # docx, xlsx, pptx, html, txt
     if kind == "dir":
         base = Path(a.output) if a.output else src.parent
         return base / f"{src.stem}_{suffix}" if (batch or not a.output) else base
     if not batch and not _is_folder(a.output):
         if a.output:
             return Path(a.output)
-        return src.with_suffix(ext) if kind in ("docx", "xlsx") else _default_output(src, suffix)
+        return src.with_suffix(ext) if suffix is None else _default_output(src, suffix)
     if a.output:  # -o is a folder; keep the original file names
         folder = Path(a.output)
         if folder.exists() and not folder.is_dir():
@@ -730,7 +751,7 @@ def _output_for(a, src, batch):
         folder.mkdir(parents=True, exist_ok=True)
         if folder.resolve() != src.parent.resolve():
             return folder / (src.stem + ext)
-    return src.with_suffix(ext) if kind in ("docx", "xlsx") else _default_output(src, suffix, ext)
+    return src.with_suffix(ext) if suffix is None else _default_output(src, suffix, ext)
 
 
 def _check_outputs(plan):
@@ -761,6 +782,7 @@ KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split", 
                     "pdfa"}  # PDF/A doesn't allow encryption
 KEEP_UNENCRYPTED.add("comments")  # a summary, CSV or XFDF; an import protects itself
 KEEP_UNENCRYPTED.add("sign-cert")  # stays protected inside the signed file; re-saving breaks it
+KEEP_UNENCRYPTED |= {"to-pptx", "to-html"}  # -- pptx and html -- (not PDFs)
 
 
 def _reencrypt(out, password):
@@ -1432,6 +1454,24 @@ def build_parser():
     sp.add_argument("inputs", nargs="+", metavar="address-or-file",
                     help="web addresses (https://…) or saved web pages (.html, .mht)")
     sp.add_argument("-o", "--output", help="output file; with several inputs, a folder")
+    # -- pptx and html --
+    sp = per_file("to-pptx", run_to_pptx,
+                  "convert PDFs to PowerPoint presentations (.pptx), a slide per page",
+                  out_help="output .pptx (default: <input>.pptx); with several inputs, a folder")
+    sp.add_argument("-p", "--pages", help=PAGES_HELP)
+    sp.add_argument("--pictures", dest="mode", action="store_const", const="pictures",
+                    default="editable",
+                    help="make each slide a picture of the page (default: editable text boxes "
+                         "over the page's pictures and drawings)")
+
+    sp = per_file("to-html", run_to_html, "convert PDFs to web pages (.html, pictures inside)",
+                  out_help="output .html (default: <input>.html); with several inputs, a folder")
+    sp.add_argument("-p", "--pages", help=PAGES_HELP)
+    sp.add_argument("--exact", dest="mode", action="store_const", const="exact",
+                    default="flowing",
+                    help="keep each page as it looks, text over a picture of the page "
+                         "(default: flowing text with headings, lists, tables and pictures)")
+    # -- end of pptx and html --
 
     sp = other("from-office", cmd_from_office,
                "convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF "
