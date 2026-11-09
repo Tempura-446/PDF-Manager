@@ -281,7 +281,7 @@ OPERATIONS = [
                 _f("method", "How", "select", "remove",
                    choices=[["remove", "Remove what's under the boxes — the rest stays searchable"],
                             ["image", "Turn the pages into pictures — the most thorough"]],
-                   hint="Pages that can't be edited safely become pictures either way; the "
+                   hint="A page that can't be edited safely becomes a picture instead; the "
                         "notes say which."),
                 # -- end of true redaction --
                 _f("boxes", "", "hidden", "")]},
