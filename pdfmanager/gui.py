@@ -45,6 +45,7 @@ from pdfmanager import (__version__, archive, compare, core, office, organize, o
                         formdetect, pdfacheck, filetools, comments)
 from pdfmanager import certsign
 from pdfmanager import accessibility  # -- accessibility --
+from pdfmanager import ocr  # which OCR engines are installed
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
@@ -218,7 +219,15 @@ OPERATIONS = [
                             ["cmyk", "CMYK (print)"]]),
                 _f("icc", "ICC profile (optional)", "file", None, accept=".icc,.icm")]},
     {"id": "ocr", "group": "Optimize", "label": "Make searchable (OCR)", "files": "pdf",
-     "fields": [_f("language", "Language(s)", "text", "eng", placeholder="eng+deu"),
+     "help": "The built-in engine reads English, most European languages, Chinese and "
+             "Japanese as they are. For Russian, Ukrainian, Korean, Arabic, Persian, Hindi, Thai, "
+             "Greek, Tamil or Telugu, enter its code (rus, ukr, kor, ara, fas, hin, tha, ell, tam, "
+             "tel): its reading model is fetched once. Tesseract needs the codes of all languages.",
+     "fields": [_f("engine", "Engine", "select", "auto",
+                   choices=[["auto", "Automatic (built-in when installed, else Tesseract)"],
+                            ["builtin", "Built-in"], ["tesseract", "Tesseract"]]),
+                _f("language", "Language(s)", "text", "eng", placeholder="eng+rus"),
+                _f("rotate", "Turn sideways and upside-down pages upright", "check", True),
                 _f("deskew", "Straighten crooked scans", "check", False),
                 _f("force", "Redo pages that already have text", "check", False)]},
     {"id": "clean", "group": "Optimize", "label": "Clean up scans", "files": "pdf",
@@ -228,7 +237,7 @@ OPERATIONS = [
                    choices=[["low", "Strict — only completely empty pages"],
                             ["medium", "Normal — allows a few specks"],
                             ["high", "Generous — also nearly empty pages"]]),
-                _f("auto_rotate", "Turn pages upright (needs Tesseract)", "check", False)]},
+                _f("auto_rotate", "Turn pages upright", "check", False)]},
     {"id": "watermark", "live": True, "group": "Stamp", "label": "Watermark", "files": "pdf",
      "fields": [_f("text", "Text", "text", "CONFIDENTIAL", required=True),
                 _f("opacity", "Opacity", "range", 0.15, min=0.05, max=1, step=0.05, unit="%"),
@@ -623,12 +632,13 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
     elif op == "ocr":
         core.ocr(src, out, language=opts.get("language") or "eng",
                  force=_bool(opts.get("force")), deskew=_bool(opts.get("deskew")),
-                 password=password)
+                 password=password, engine=opts.get("engine") or "auto",
+                 rotate=_bool(opts.get("rotate", True)))
     elif op == "clean":
         auto_rotate = _bool(opts.get("auto_rotate"))
-        if auto_rotate and not scan.find_tesseract():
-            raise UserError("turning pages upright needs the Tesseract program; install it "
-                            "(see the OCR tool) or untick that option")
+        if auto_rotate and not (scan.find_tesseract() or ocr.builtin_available()):
+            raise UserError("turning pages upright needs the built-in OCR engine or the "
+                            "Tesseract program; install one (see the OCR tool) or untick that option")
         report = scan.clean(src, out, remove_blank=_bool(opts.get("remove_blank", True)),
                             sensitivity=opts.get("sensitivity") or "medium",
                             auto_rotate=auto_rotate, password=password)

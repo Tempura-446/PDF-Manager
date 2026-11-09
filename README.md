@@ -35,14 +35,17 @@ administrator rights are needed, and you can delete the unzipped folder
 afterwards. Running it again updates the installed copy (or use the
 **Update** button, below).
 
-At the end it asks whether to add **OCR and PDF/A support** (about 150 MB):
-OCRmyPDF, plus the Tesseract and Ghostscript programs installed with
-winget (`UB-Mannheim.TesseractOCR`, `ArtifexSoftware.GhostScript`; Windows
-may ask for permission, as they install for all users). It doesn't ask when
-they're already there, and skips the programs when winget is missing.
-`Install ZPDF.cmd -WithOcr` adds them without asking, `-NoOcr` never does.
-ZPDF finds both programs where their installers put them, also when they
-aren't on the PATH.
+OCR is built in, so scanned PDFs can be made searchable right away. At
+the end the installer asks whether to add **Tesseract and Ghostscript** too
+(about 150 MB): they add PDF/A output, turning scanned pages upright and a
+second OCR engine. OCRmyPDF goes into ZPDF's folder and the two programs are
+installed with winget (`UB-Mannheim.TesseractOCR`,
+`ArtifexSoftware.GhostScript`; Windows may ask for permission, as they
+install for all users). It doesn't ask when they're already there, and skips
+the programs when winget is missing. `Install ZPDF.cmd -WithExtras` adds
+them without asking, `-NoExtras` never does (the older `-WithOcr` and
+`-NoOcr` still work). ZPDF finds both programs where their installers put
+them, also when they aren't on the PATH.
 
 The app runs with Python's own `pythonw.exe`, which is signed by the Python
 Software Foundation, so Windows **Smart App Control** lets it start (it may
@@ -54,7 +57,8 @@ PowerShell commands, so it also works where Smart App Control limits scripts.
 Download **ZPDF-windows.zip** or **ZPDF-linux.zip** from the
 latest run of the [Build app](../../actions/workflows/build-app.yml)
 workflow (open the run, then *Artifacts*), unzip it, and double-click
-**ZPDF**. Nothing else to install (OCR still needs Tesseract, below).
+**ZPDF**. Nothing else to install: OCR is built in (Tesseract and
+Ghostscript, below, stay optional).
 
 To build it yourself, including on a Mac:
 
@@ -68,21 +72,31 @@ python packaging/build_app.py      # result in dist/
 Requires Python 3.10 or newer.
 
 ```bash
-pip install -e ".[app]"     # everything + the desktop window
-pip install -e ".[all]"     # the same, plus OCR
-pip install -e .            # without the desktop window (the app opens in your browser)
+pip install -e ".[all]"     # everything: the desktop window, OCR and the Tesseract engine's OCRmyPDF
+pip install -e ".[app,ocr]" # the desktop window and OCR
+pip install -e ".[app]"     # without OCR (about 175 MB less)
+pip install -e .            # without the desktop window too (the app opens in your browser)
 ```
 
 On Linux the desktop window also needs a web engine: `pip install "pywebview[qt]"`
 (or the GTK packages, see the [pywebview docs](https://pywebview.flowrl.com/guide/installation.html)).
 Without it, the app opens in your browser instead.
 
-OCR also needs the [Tesseract](https://tesseract-ocr.github.io/tessdoc/Installation.html)
-program (`brew install tesseract`, `sudo apt install tesseract-ocr`, or the
-Windows installer). A few tools use other free programs if you have them:
-turning scanned pages upright uses Tesseract, PDF/A uses
-[Ghostscript](https://ghostscript.com/releases/gsdnld.html), and Office →
-PDF uses Microsoft Office or [LibreOffice](https://www.libreoffice.org).
+OCR is built in: no programs to install. The model ZPDF ships with reads
+English, most European languages, Chinese and Japanese without a language
+setting; for Russian, Ukrainian, Korean, Arabic, Persian, Hindi, Thai, Greek,
+Tamil or Telugu, give its code (`rus`, `kor`, `ara`, …) and that script's
+reading model is fetched once (about 10 MB, checked against its published
+checksum). It turns sideways and upside-down pages upright, reads
+multi-column pages column by column and keeps table rows together.
+[Tesseract](https://tesseract-ocr.github.io/tessdoc/Installation.html) stays
+as a second OCR engine, for the scripts the built-in one has no model for
+and for PDF/A output straight from OCR: `pip install -e ".[tesseract]"` adds
+OCRmyPDF, and the program itself comes with `brew install tesseract`,
+`sudo apt install tesseract-ocr`, or the Windows installer. A few tools use
+other free programs if you have them: PDF/A uses
+[Ghostscript](https://ghostscript.com/releases/gsdnld.html), and Office → PDF
+uses Microsoft Office or [LibreOffice](https://www.libreoffice.org).
 
 ## Desktop app
 
@@ -489,7 +503,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `booklet` | arrange pages for a folded, saddle-stitched booklet | `pdfm booklet zine.pdf` · `-s letter` |
 | `compress` | shrink files: `low`, `medium`, `high` | `pdfm compress *.pdf -l high -o small/` |
 | `color` | convert to grayscale, RGB or CMYK | `pdfm color doc.pdf --to cmyk --icc printer.icc` |
-| `ocr` | make scans searchable | `pdfm ocr scan.pdf --language eng+deu` |
+| `ocr` | make scans searchable | `pdfm ocr scan.pdf` (Russian: `--language rus`; Tesseract: `--engine tesseract`) |
 | `encrypt` / `decrypt` | AES-256 password protection, limits on printing, copying, changes | `pdfm encrypt doc.pdf` (prompts) |
 | `metadata` | show or set title/author/subject/keywords | `pdfm metadata doc.pdf --title "Q3 Report"` |
 | `watermark` | stamp text or another PDF | `pdfm watermark doc.pdf -t CONFIDENTIAL` |

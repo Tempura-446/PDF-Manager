@@ -101,7 +101,9 @@ def script():
 def test_installer_offers_ocr_and_pdfa_programs():
     text = script()
     params = re.search(r"param\((.*?)\n\)", text, re.S).group(1)
-    assert "[switch]$WithOcr" in params and "[switch]$NoOcr" in params
+    assert "[switch]$WithExtras" in params and "[switch]$NoExtras" in params
+    # The old switch names keep working, so instructions written for 0.13 still do.
+    assert '[Alias("WithOcr")]' in params and '[Alias("NoOcr")]' in params
     assert '"UB-Mannheim.TesseractOCR"' in text and '"ArtifexSoftware.GhostScript"' in text
     assert "about 150 MB" in text
     # Asked once, and never in an automated run (the Windows end-to-end job).
@@ -138,11 +140,20 @@ def test_installer_parses():
     assert out.returncode == 0 and not out.stdout.strip(), out.stdout + out.stderr
 
 
-def test_installer_adds_the_ocrmypdf_the_ocr_extra_asks_for():
-    """Adding OCR installs only OCRmyPDF (ZPDF isn't built again), in the
-    version pyproject.toml's "ocr" extra names."""
+def test_installer_installs_the_app_with_ocr_and_adds_ocrmypdf_from_the_tesseract_extra():
+    """ZPDF is installed with its built-in OCR engine ([app,ocr]); the optional
+    step adds only OCRmyPDF (ZPDF isn't built again), in the version
+    pyproject.toml's "tesseract" extra names."""
+    text = script()
     pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
-    extra = re.search(r'^ocr = \[([^\]]*)\]', pyproject, re.M).group(1)  # (tomllib is 3.11+)
-    wanted = re.findall(r'pip install [^\n]*"(ocrmypdf[^"]*)"', script())
+    extra = re.search(r'^tesseract = \[([^\]]*)\]', pyproject, re.M).group(1)  # (tomllib is 3.11+)
+    assert re.search(r'pip install [^\n]*"\$source\[app,ocr\]"', text)
+    wanted = re.findall(r'pip install [^\n]*"(ocrmypdf[^"]*)"', text)
     assert wanted and [f'"{w}"' for w in wanted] == re.findall(r'"ocrmypdf[^"]*"', extra)
-    assert "[app,ocr]" not in script()
+
+
+def test_build_collects_the_ocr_engine():
+    """The standalone app bundles the built-in engine: rapidocr (with its
+    models) and onnxruntime (with its shared libraries)."""
+    build = (Path(__file__).resolve().parents[1] / "packaging" / "build_app.py").read_text(encoding="utf-8")
+    assert '"--collect-all", "rapidocr"' in build and '"--collect-all", "onnxruntime"' in build

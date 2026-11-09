@@ -4,7 +4,8 @@ the right way up.
 Blank pages are found by rendering each page small and measuring how much
 of it is dark ("ink"), ignoring a thin border where scanners often leave
 shadows. Page orientation comes from Tesseract's orientation detection
-(``tesseract --psm 0``), so auto-rotate needs the Tesseract program.
+(``tesseract --psm 0``) when Tesseract is installed, else from the built-in
+OCR engine (ocr.page_orientation), so auto-rotate needs one of the two.
 """
 
 import os
@@ -163,11 +164,13 @@ def detect_rotation(path, password=None, pages=None, dpi=150):
     not upright. Pages without enough text to tell are left out."""
     import pypdfium2 as pdfium
 
+    from pdfmanager import ocr
+
     tesseract = find_tesseract()
-    if not tesseract:
+    if not tesseract and not ocr.builtin_available():
         raise core.PdfManagerError(
-            "auto-rotate needs the Tesseract program "
-            "(https://tesseract-ocr.github.io/tessdoc/Installation.html)")
+            "turning pages upright needs the built-in OCR engine (pip install pdf-manager[ocr]) "
+            "or the Tesseract program (https://tesseract-ocr.github.io/tessdoc/Installation.html)")
     turns = {}
     with tempfile.TemporaryDirectory(prefix="pdfm-osd-") as tmp:
         images = []
@@ -187,9 +190,17 @@ def detect_rotation(path, password=None, pages=None, dpi=150):
                 doc.close()
         for n, (i, image) in enumerate(images):
             progress.report(n, len(images), "checking which way up, page")
-            angle, confidence = _osd(tesseract, image)
-            if angle and confidence >= MIN_CONFIDENCE:
-                turns[i] = angle
+            if tesseract:
+                angle, confidence = _osd(tesseract, image)
+                if angle and confidence >= MIN_CONFIDENCE:
+                    turns[i] = angle
+            else:
+                from PIL import Image
+
+                with Image.open(image) as picture:
+                    turn = ocr.page_orientation(picture.convert("L"))  # counter-clockwise
+                if turn:
+                    turns[i] = (360 - turn) % 360
     return turns
 
 

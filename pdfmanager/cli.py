@@ -17,6 +17,7 @@ from pdfmanager import (__version__, archive, compare, core, imaging, office, or
                         forms, recipes, redact, scan, search)
 from pdfmanager import certsign, comments, filetools, formdetect, pdfacheck
 from pdfmanager import accessibility  # -- accessibility --
+from pdfmanager import ocr  # the OCR engine ids
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -279,7 +280,8 @@ def run_number(a, src, out, pw):
 
 
 def run_ocr(a, src, out, pw):
-    return core.ocr(src, out, language=a.language, force=a.force, deskew=a.deskew, password=pw)
+    return core.ocr(src, out, language=a.language, force=a.force, deskew=a.deskew, password=pw,
+                    engine=a.engine, rotate=not a.keep_orientation)
 
 
 def run_clean(a, src, out, pw):
@@ -1067,7 +1069,7 @@ def cmd_watch(a):
         inbox=a.inbox, dest=a.dest, by=a.by, rename=a.rename, compress=a.compress,
         remove_blank=a.clean, auto_rotate=a.rotate,
         recipe=recipes.get(a.recipe)["steps"] if a.recipe else None,
-        ocr=a.ocr, ocr_language=a.language, skip_duplicates=a.skip_duplicates,
+        ocr=a.ocr, ocr_language=a.language, ocr_engine=a.engine, skip_duplicates=a.skip_duplicates,
         keep_originals=not a.delete_originals)
     if a.once:
         state = watch.once(settings, settle=min(a.interval, 2))
@@ -1327,8 +1329,16 @@ def build_parser():
     sp.add_argument("--bates-digits", type=int, default=6, help="digits (default: 6)")
     sp.add_argument("-p", "--pages", help=PAGES_HELP + " (default: all)")
 
-    sp = per_file("ocr", run_ocr, "make scanned PDFs searchable (needs OCRmyPDF + Tesseract)")
-    sp.add_argument("--language", default="eng", help="Tesseract language(s), e.g. eng+deu")
+    sp = per_file("ocr", run_ocr, "make scanned PDFs searchable")
+    sp.add_argument("--engine", choices=ocr.ENGINES, default="auto",
+                    help="auto (default: the built-in engine when installed, else Tesseract), "
+                         "builtin or tesseract")
+    sp.add_argument("--language", default="eng",
+                    help="language(s) as Tesseract codes, e.g. eng+deu; the built-in engine reads "
+                         "English, European languages, Chinese and Japanese as they are, and "
+                         "fetches a model once for rus, ukr, kor, ara, fas, hin, tha, ell, tam, tel")
+    sp.add_argument("--keep-orientation", action="store_true",
+                    help="don't turn sideways or upside-down pages upright")
     sp.add_argument("--force", action="store_true", help="redo pages that already have text")
     sp.add_argument("--deskew", action="store_true", help="straighten crooked scans")
 
@@ -1625,8 +1635,9 @@ def build_parser():
     sp.add_argument("--rotate", action="store_true",
                     help="turn sideways/upside-down pages upright (needs Tesseract)")
     sp.add_argument("--ocr", action="store_true", help="make scans searchable")
+    sp.add_argument("--engine", choices=ocr.ENGINES, default="auto", help="OCR engine (see pdfm ocr)")
     sp.add_argument("--recipe", metavar="NAME", help="run a saved recipe on each file")
-    sp.add_argument("--language", default="eng", help="OCR language(s)")
+    sp.add_argument("--language", default="eng", help="OCR language(s) (see pdfm ocr)")
     sp.add_argument("--skip-duplicates", action="store_true",
                     help="don't process files identical to one already in --dest")
     sp.add_argument("--delete-originals", action="store_true",

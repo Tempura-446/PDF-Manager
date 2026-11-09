@@ -705,3 +705,103 @@ def test_recipes_endpoints(app):
         listing = json.loads(res.read())
     assert listing["recipes"][0]["name"] == "Share" and "ocr" in listing["step_ops"]
     assert post(base, token, "/api/recipes/delete", json_body={"name": "Share"}) == {"recipes": []}
+
+
+# -- OCR engine choice -----------------------------------------------------
+
+def _fake_ocr(seen):
+    def fake(src, out, **kw):
+        seen.update(kw)
+        Path(out).write_bytes(Path(src).read_bytes())
+        return Path(out)
+    return fake
+
+
+def test_ocr_tool_offers_an_engine_choice_and_passes_it_on(tmp_path, monkeypatch):
+    spec = next(op for op in gui.OPERATIONS if op["id"] == "ocr")
+    engine = next(f for f in spec["fields"] if f["key"] == "engine")
+    assert engine["default"] == "auto"
+    assert [c[0] for c in engine["choices"]] == ["auto", "builtin", "tesseract"]
+    assert "language" in [f["key"] for f in spec["fields"]]
+    seen = {}
+    monkeypatch.setattr(core, "ocr", _fake_ocr(seen))
+    src = text_pdf(tmp_path / "a.pdf")
+    gui.run_operation("ocr", [src], {"engine": "builtin", "language": "", "force": "true"})
+    assert seen["engine"] == "builtin" and seen["language"] == "eng" and seen["force"] is True
+
+
+def test_watch_and_cli_pass_the_ocr_engine(tmp_path, monkeypatch):
+    from pdfmanager import watch
+
+    seen = {}
+    monkeypatch.setattr(core, "ocr", _fake_ocr(seen))
+    settings = watch.WatchSettings(inbox=tmp_path / "in", dest=tmp_path / "out", ocr=True,
+                                   ocr_engine="tesseract")
+    assert settings.ocr_engine == "tesseract"
+    src = text_pdf(tmp_path / "a.pdf")
+    assert main(["ocr", str(src), "-o", str(tmp_path / "o.pdf"), "--engine", "tesseract",
+                 "--language", "deu"]) == 0
+    assert seen["engine"] == "tesseract" and seen["language"] == "deu"
+    with pytest.raises(SystemExit):
+        main(["ocr", str(src), "--engine", "abbyy"])
+
+
+def test_watch_folder_uses_the_chosen_engine(tmp_path, monkeypatch):
+    from pdfmanager import watch
+
+    seen = {}
+    monkeypatch.setattr(core, "ocr", _fake_ocr(seen))
+    inbox, dest = tmp_path / "in", tmp_path / "out"
+    inbox.mkdir()
+    text_pdf(inbox / "a.pdf")
+    watch.once(watch.WatchSettings(inbox=inbox, dest=dest, ocr=True, ocr_engine="builtin"), settle=0)
+    assert seen["engine"] == "builtin"
+
+
+def test_recipe_step_accepts_the_engine_option(tmp_path, monkeypatch):
+    from pdfmanager import recipes
+
+    seen = {}
+    monkeypatch.setattr(core, "ocr", _fake_ocr(seen))
+    recipes.run([{"op": "ocr", "options": {"engine": "builtin"}}], text_pdf(tmp_path / "a.pdf"),
+                tmp_path / "o.pdf")
+    assert seen["engine"] == "builtin"
+
+
+def test_ocr_turns_pages_upright_unless_told_not_to(tmp_path, monkeypatch):
+    spec = next(op for op in gui.OPERATIONS if op["id"] == "ocr")
+    rotate = next(f for f in spec["fields"] if f["key"] == "rotate")
+    assert rotate["default"] is True
+    seen = {}
+    monkeypatch.setattr(core, "ocr", _fake_ocr(seen))
+    for n, (opts, expected) in enumerate([({}, True), ({"rotate": "false"}, False)]):
+        (tmp_path / str(n)).mkdir()
+        gui.run_operation("ocr", [text_pdf(tmp_path / str(n) / "a.pdf")], opts)
+        assert seen["rotate"] is expected
+    src = text_pdf(tmp_path / "a.pdf")
+    main(["ocr", str(src), "-o", str(tmp_path / "o.pdf")])
+    assert seen["rotate"] is True
+    main(["ocr", str(src), "-o", str(tmp_path / "o.pdf"), "--keep-orientation"])
+    assert seen["rotate"] is False
+
+
+def test_pages_are_turned_upright_without_tesseract(tmp_path, monkeypatch):
+    from pdfmanager import ocr
+
+    if not ocr.builtin_available():
+        pytest.skip("needs the built-in OCR engine")
+    monkeypatch.setattr(scan, "find_tesseract", lambda: None)
+    src = scan_pdf(tmp_path / "scan.pdf", [scan_page(), scan_page(90), scan_page(180)])
+    report = scan.clean(src, tmp_path / "out.pdf", remove_blank=False, auto_rotate=True)
+    assert report["rotated"] == {2: 90, 3: 180}
+    assert scan.detect_rotation(tmp_path / "out.pdf") == {}
+
+
+def test_turning_pages_upright_needs_one_engine_or_the_other(tmp_path, monkeypatch):
+    from pdfmanager import ocr
+
+    monkeypatch.setattr(scan, "find_tesseract", lambda: None)
+    monkeypatch.setattr(ocr, "builtin_available", lambda: False)
+    src = scan_pdf(tmp_path / "scan.pdf", [scan_page()])
+    with pytest.raises(core.PdfManagerError, match=r"pdf-manager\[ocr\].*Tesseract"):
+        scan.detect_rotation(src)

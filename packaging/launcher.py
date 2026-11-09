@@ -2,7 +2,8 @@
 
 ``"ZPDF" --self-test RESULT_FILE`` checks that the bundle is complete
 (PDF reading and writing, rendering, compression, signing, tables, form
-fields, the PDF/A check, the window library and the built-in server)
+fields, the PDF/A check, OCR's built-in engine, the window library and the
+built-in server)
 without opening a window, writes "ok" or the error to RESULT_FILE and exits
 with 0 or 1. The build workflow runs it on every build.
 """
@@ -72,6 +73,28 @@ def self_test(result_file):
             filetools.repair(src, Path(tmp) / "repaired.pdf")
             for name in ("test.pptx", "test.html", "repaired.pdf"):
                 assert (Path(tmp) / name).stat().st_size, f"{name} is empty"
+            # 0.14.0: OCR's built-in engine, with its models and ONNX Runtime's
+            # libraries, reads a scan of the test text.
+            from PIL import Image, ImageDraw, ImageFont
+
+            picture = Image.new("L", (600, 200), 255)
+            try:
+                font = ImageFont.truetype("DejaVuSans.ttf", 48)
+            except OSError:
+                try:
+                    font = ImageFont.load_default(size=48)
+                except TypeError:  # Pillow before 10.1 has only the one small size
+                    font = ImageFont.load_default()
+            ImageDraw.Draw(picture).text((40, 70), "ZPDF self-test", font=font, fill=0)
+            picture.save(Path(tmp) / "scan.png", dpi=(300, 300))
+            scanned = core.images_to_pdf([Path(tmp) / "scan.png"], Path(tmp) / "scan.pdf")
+            core.ocr(scanned, Path(tmp) / "ocr.pdf", engine="builtin")
+            assert "ZPDF" in core.extract_text(Path(tmp) / "ocr.pdf"), "OCR read nothing from the scan"
+            # Language models are fetched from the addresses in rapidocr's own
+            # list, which must be in the bundle.
+            from pdfmanager import ocr
+
+            assert ocr._model_source("korean")[0].endswith(".onnx"), "rapidocr's model list is missing"
 
         server, url = gui.make_server()
         Thread(target=server.serve_forever, daemon=True).start()

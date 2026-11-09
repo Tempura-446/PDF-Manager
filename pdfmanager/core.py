@@ -1678,49 +1678,24 @@ def _page_image(im):
     return im
 
 
-def ocr(path, output, language="eng", force=False, deskew=False, password=None):
+def ocr(path, output, language="eng", force=False, deskew=False, password=None, engine="auto",
+        rotate=True):
     """Add a searchable, selectable text layer to scanned pages.
 
-    Needs the optional ``ocrmypdf`` package and the Tesseract program.
-    Pages that already have text are left alone unless ``force`` is set, in
-    which case they are rasterised and recognised again. ``language`` uses
-    Tesseract codes, joined with '+' for several (e.g. "eng+deu")."""
-    try:
-        import ocrmypdf
-        from ocrmypdf.exceptions import ExitCodeException, MissingDependencyError
-    except ImportError:
-        raise PdfManagerError(
-            "OCR needs OCRmyPDF and Tesseract: pip install ocrmypdf, then install "
-            "Tesseract (https://tesseract-ocr.github.io/tessdoc/Installation.html)"
-        ) from None
-    source = Path(path)
-    tmp_in = None
-    if open_pdf(path, password).is_encrypted:  # also a plain error for a damaged file
-        # OCRmyPDF can't open encrypted files; give it a decrypted copy.
-        tmp_in = Path(output).with_name(Path(output).name + ".src.tmp.pdf")
-        decrypt(path, tmp_in, password or "")
-        source = tmp_in
-    output = Path(output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    tmp_out = output.with_name(output.name + ".tmp.pdf")
-    from pdfmanager import scan  # scan uses this module
+    ``engine`` is "auto" (the built-in engine when it is installed, else
+    Tesseract), "builtin" (PP-OCR through rapidocr; needs the ``ocr`` extra)
+    or "tesseract" (OCRmyPDF and the Tesseract program; the ``tesseract``
+    extra). Pages that already have text are left alone unless ``force`` is
+    set, in which case they are rasterised and recognised again.
+    ``language`` uses Tesseract's codes, joined with '+' for several (e.g.
+    "eng+deu"); the built-in engine reads English, most European languages,
+    Chinese and Japanese unasked, and fetches a reading model once for
+    Russian, Korean, Arabic, Hindi and other scripts (see ocr.script_for).
+    ``rotate`` turns sideways and upside-down pages upright."""
+    from pdfmanager import ocr as _ocr  # it uses this module
 
-    scan.add_programs_to_path()  # Tesseract and Ghostscript where installers put them
-    progress.say("recognising text (this can take a while)")
-    try:
-        ocrmypdf.ocr(str(source), str(tmp_out), language=language.split("+"),
-                     skip_text=not force, force_ocr=force, deskew=deskew,
-                     progress_bar=False)
-        os.replace(tmp_out, output)
-    except MissingDependencyError as exc:
-        raise PdfManagerError(f"OCR is missing a program: {exc}") from None
-    except ExitCodeException as exc:
-        raise PdfManagerError(f"OCR failed: {exc}") from None
-    finally:
-        for tmp in (tmp_in, tmp_out):
-            if tmp is not None and tmp.exists():
-                tmp.unlink()
-    return output
+    return _ocr.run(path, output, language=language, force=force, deskew=deskew,
+                    password=password, engine=engine, rotate=rotate)
 
 
 # pdfium is not thread-safe: every use of pypdfium2 must hold this lock

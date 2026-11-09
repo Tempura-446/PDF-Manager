@@ -199,7 +199,9 @@ def install(python=None):
     with tempfile.TemporaryDirectory(prefix="pdfm-update-") as tmp:
         project = _extract(data, tmp)
         progress.say(f"Installing version {version}…")
-        extra = "[app]" if _has_pywebview() else ""
+        # The app brings OCR along, so a copy installed before it was built in
+        # gets it with the update; a bare library install stays bare.
+        extra = "[app,ocr]" if _has_pywebview() else ""
         proc = subprocess.run(
             [python or sys.executable, "-I", "-m", "pip", "install", "--upgrade", "--disable-pip-version-check",
              "--no-input", f"{project}{extra}"],
