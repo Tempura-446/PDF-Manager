@@ -96,8 +96,11 @@ class _FontInfo:
             codes = fonts.pdf_font_codes(font)
         except Exception:  # noqa: BLE001 - a font dictionary we can't read
             codes = {}
-        self.spaces = {code for letter, code in codes.items() if letter.isspace()}
-        if self.size == 1:
+        # Spaces as the font maps them: in a font cut down for a PDF, byte 32
+        # is often a letter (word spacing still applies to it, as PDF says).
+        letters = {code for letter, code in codes.items() if not letter.isspace()}
+        self.spaces = {code for letter, code in codes.items() if letter.isspace() and code not in letters}
+        if self.size == 1 and not codes:
             self.spaces.add(b" ")
 
     @staticmethod

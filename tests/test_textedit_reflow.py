@@ -294,6 +294,45 @@ def _rows_of(path, x_max):
         doc.close()
 
 
+def test_lines_in_a_font_whose_byte_32_is_a_letter_move_too(tmp_path):
+    """Office programs cut fonts down and number the letters anew: byte 32
+    can be "S" (word spacing still applies to it). Such a line still moves,
+    letter for letter."""
+    from pypdf.generic import ArrayObject, DictionaryObject, FloatObject, NumberObject
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    widths = [stringWidth(chr(c), "Helvetica", 1000) for c in range(32, 127)]
+    widths[0], widths[ord("S") - 32] = widths[ord("S") - 32], widths[0]  # "S" and the space swap codes
+    writer = PdfWriter()
+    page = writer.add_blank_page(612, 792)
+    swapped = writer._add_object(DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/ABCDEF+Helvetica"),
+        NameObject("/FirstChar"): NumberObject(32), NameObject("/LastChar"): NumberObject(126),
+        NameObject("/Widths"): ArrayObject([FloatObject(w) for w in widths]),
+        NameObject("/Encoding"): DictionaryObject({NameObject("/Differences"): ArrayObject(
+            [NumberObject(32), NameObject("/S"), NumberObject(83), NameObject("/space")])})}))
+    plain = writer._add_object(DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica"), NameObject("/Encoding"): NameObject("/WinAnsiEncoding")}))
+    page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject(
+        {NameObject("/F1"): plain, NameObject("/F2"): swapped})})
+    stream = DecodedStreamObject()
+    stream.set_data(b"BT /F1 10 Tf 72 700 Td (A first paragraph of two lines that is) Tj 0 -12 Td (about to grow.) Tj ET\n"
+                    b"BT /F2 10 Tf 2 Tw 72 668 Td (\x20alesSgrewSinS\x20pringSandS\x20ummer) Tj ET")
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    src, out = tmp_path / "swap.pdf", tmp_path / "out.pdf"
+    writer.write(str(src))
+    assert "SalesgrewinSpringandSummer" in text_of(src)
+    report = edit(src, out, {"rect": [70, 684, 300, 710], "paragraph": True,
+                             "text": "A first paragraph of two lines that is about to grow by a whole line or so."})
+    assert report["moved"] == 1
+    before = [L for L in letters(src) if L[2] < 680]
+    after = [L for L in letters(out) if L[2] < 670]  # under the paragraph, now three lines
+    assert [c for c, *_ in after] == [c for c, *_ in before]
+    assert all(abs(a[1] - b[1]) < 0.01 and abs((b[2] - a[2]) - 12) < 0.01 for a, b in zip(after, before))
+
+
 def test_flow_can_be_turned_off(tmp_path):
     src, out = columns(tmp_path / "two.pdf"), tmp_path / "out.pdf"
     report = edit(src, out, {"rect": FIRST_RECT, "text": LONGER, "paragraph": True, "flow": False})

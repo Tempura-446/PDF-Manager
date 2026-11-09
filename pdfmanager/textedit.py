@@ -46,14 +46,18 @@ def _raw():
     return raw
 
 
-def _chars(textpage, rect):
+def _chars(textpage, rect, across=None):
     """Indices of the letters whose middle is inside ``rect``."""
     x0, y0, x1, y1 = rect
     # Up and down a little give (the box comes from the screen); along the
-    # line hardly any, or a full stop of the next words would come too.
+    # line hardly any, or a full stop of the next words would come too. A
+    # paragraph's box gets ``across`` points: a fifth of its height would
+    # reach into the lines above and below it.
     slack_x, slack_y = 1.0, max(1.0, (y1 - y0) * 0.2)
     if y1 - y0 > x1 - x0:  # a line running up or down the page
         slack_x, slack_y = max(1.0, (x1 - x0) * 0.2), 1.0
+    if across is not None:
+        slack_y = min(slack_y, across)
     found = []
     for i in range(textpage.count_chars()):
         left, bottom, right, top = textpage.get_charbox(i, loose=True)
@@ -947,7 +951,7 @@ class _Page:
         paragraphs below it in its column move up or down by the change in
         its height (see textflow), unless ``opts`` has "flow": False."""
         opts = opts or {}
-        chars = _chars(self.textpage, rect)
+        chars = _chars(self.textpage, rect, across=3.0)
         rows = [r for r in (_letters(self.textpage, row, self.cache, self.hidden) for row in _rows(self.textpage, chars)) if r]
         if not rows:
             return self.line(rect, text, None, opts)
