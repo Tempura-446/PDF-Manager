@@ -874,6 +874,7 @@ const ICONS = {
   "verify-sig": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="m9 14 2 2 4-4"/>',
   redact: '<path d="M4 6h16M4 18h9"/><rect x="4" y="10" width="13" height="4" rx="1" fill="currentColor"/>',
   pdfa: '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4"/>',
+  web: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
   attach: '<path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4L15.5 7"/>',
   labels: '<path d="M4 4h7l9 9-7 7-9-9z"/><circle cx="8.5" cy="8.5" r="1.5"/>',
   repair: '<path d="M14.7 6.3a4 4 0 0 0-5.3 5.3L3 18l3 3 6.4-6.4a4 4 0 0 0 5.3-5.3l-2.5 2.5-2.3-.6-.6-2.3z"/>',
@@ -1200,16 +1201,17 @@ async function select(id) {
   formOp = id;
   const folder = current.files === null;
   $("files-card").hidden = folder;
-  $("pw-box").hidden = folder || current.files === "images" || current.files === "office";
+  $("pw-box").hidden = folder || current.files === "images" || current.files === "office" || current.files === "web";
   const previews = folder && current.preview !== false;
   $("preview").hidden = !previews;
   $("run-label").textContent = current.action || (folder ? "Apply" : "Run");
   $("run").classList.toggle("secondary", previews);
   $("preview").classList.toggle("secondary", !previews);
-  $("file-input").accept = { images: "image/*", office: OFFICE_ACCEPT }[current.files] || ".pdf,application/pdf";
+  $("file-input").accept = { images: "image/*", office: OFFICE_ACCEPT, web: WEB_ACCEPT }[current.files] || ".pdf,application/pdf";
   $("drop-hint").textContent = {
     images: "JPG, PNG, TIFF… one page per image, in this order",
-    office: "Word, Excel, PowerPoint, OpenDocument, RTF or text files",
+    office: "Word, Excel, PowerPoint, OpenDocument, RTF, text or web page files",
+    web: "Saved web pages (.html, .mht) — or type an address under Options",
     pdf2: current.id === "compare" ? "Two PDFs: the original first, then the changed version" : "Two PDFs: front sides first, then back sides",
   }[current.files] || (current.id === "merge" ? "Add PDFs in the order to combine them" : "One or more PDFs");
   if (keep) return;
@@ -1219,9 +1221,11 @@ async function select(id) {
 }
 function defaultHelp(op) { return op.files === "pdf" ? "Add one or more PDFs. Several files come back together as a ZIP." : ""; }
 function isPdf(f) { return f.type === "application/pdf" || /\.pdf$/i.test(f.name); }
-const OFFICE_ACCEPT = ".doc,.docx,.docm,.dot,.dotx,.rtf,.odt,.wpd,.txt,.xls,.xlsx,.xlsm,.xlsb,.ods,.csv,.ppt,.pptx,.pptm,.pps,.ppsx,.odp";
+const WEB_ACCEPT = ".html,.htm,.xhtml,.mht,.mhtml";
+const OFFICE_ACCEPT = ".html,.htm,.xhtml,.mht,.mhtml,.doc,.docx,.docm,.dot,.dotx,.rtf,.odt,.wpd,.txt,.xls,.xlsx,.xlsm,.xlsb,.ods,.csv,.ppt,.pptx,.pptm,.pps,.ppsx,.odp";
 function isOffice(f) { const ext = (f.name.match(/\.[^.]+$/) || [""])[0].toLowerCase(); return ext && OFFICE_ACCEPT.split(",").includes(ext); }
-function accepts(kind) { return kind === "images" ? isImage : kind === "office" ? isOffice : isPdf; }
+function isWeb(f) { const ext = (f.name.match(/\.[^.]+$/) || [""])[0].toLowerCase(); return ext && WEB_ACCEPT.split(",").includes(ext); }
+function accepts(kind) { return kind === "images" ? isImage : kind === "office" ? isOffice : kind === "web" ? isWeb : isPdf; }
 function isImage(f) { return f.type.startsWith("image/"); }
 
 // ---- files -------------------------------------------------------------------
@@ -1237,7 +1241,7 @@ function addFiles(list) {
   }
   renderFiles();
   clearMessages();
-  if (rejected) showError(`${plural(rejected, "file")} skipped — only ${{ images: "images", office: "Word, Excel, PowerPoint, OpenDocument, RTF or text files" }[current.files] || "PDFs"} can be used here.`);
+  if (rejected) showError(`${plural(rejected, "file")} skipped — only ${{ images: "images", office: "Word, Excel, PowerPoint, OpenDocument, RTF, text or web page files", web: "saved web pages (.html, .mht)" }[current.files] || "PDFs"} can be used here.`);
 }
 
 async function inspect(it) {
@@ -1318,7 +1322,9 @@ function updateSummary() {
     return;
   }
   const need = current.files === "pdf2" ? 2 : current.min || 1;
-  const ready = items.length >= need;
+  // A tool that can work from an address instead (Web page → PDF).
+  const typed = current.url_field && ($("f-" + current.url_field)?.value || "").trim();
+  const ready = items.length >= need || !!typed;
   const done = ready && !$("result").hidden;
   $("summary").textContent = done ? "Done · change anything and run again, or start over"
     : ready ? `Ready · ${plural(items.length, "file")}`
@@ -1373,7 +1379,7 @@ const TAGLINES = {
   flatten: "Bake forms and comments into the page", headers: "Titles, dates and Bates numbers", form: "Create fillable forms",
   metadata: "Set the title, author and keywords", encrypt: "Protect with a password", decrypt: "Remove a password",
   redact: "Black out text for good", sanitize: "Remove hidden data and scripts", pdfa: "Convert for long-term archiving", "pdfa-check": "See if a file meets PDF/A, and why not",
-  attach: "Attach files to a PDF, or remove them", labels: "Number pages i, ii, iii then 1, 2, 3", repair: "Mend damaged files; open fast online",
+  web: "Save a web page as a PDF", attach: "Attach files to a PDF, or remove them", labels: "Number pages i, ii, iii then 1, 2, 3", repair: "Mend damaged files; open fast online",
   "sign-cert": "Sign with your certificate (.pfx), like Acrobat", "verify-sig": "See who signed and if anything changed",
   "from-images": "Turn photos and scans into a PDF", "to-images": "Save pages as PNG or JPG", text: "Get the text out",
   media: "Extract pictures and attached files", "to-word": "Convert to an editable Word file", "from-office": "Turn Office documents into PDFs",
@@ -1827,6 +1833,7 @@ function renderForm() {
   updateVisibility();
 }
 $("form").addEventListener("input", updateVisibility);
+$("form").addEventListener("input", () => { if (current?.url_field) updateSummary(); });
 function fmtRange(f, v) {
   const n = Number(v);
   return f.unit === "%" ? Math.round(n * 100) + "%" : f.unit ? `${Math.round(n)}${f.unit}` : String(v);
@@ -1906,7 +1913,8 @@ async function run(preview) {
   clearMessages();
   if (current.files === null) return runFolder(!preview);
   const need = current.files === "pdf2" ? 2 : current.min || 1;
-  if (items.length < need) { showError(need === 1 ? "Add a file first." : `Add ${current.files === "pdf2" ? "exactly 2" : "at least " + need} files.`); return; }
+  const typedAddress = current.url_field && ($("f-" + current.url_field)?.value || "").trim();
+  if (items.length < need && !typedAddress) { showError(need === 1 ? (current.url_field ? "Type a web address, or add a saved web page." : "Add a file first.") : `Add ${current.files === "pdf2" ? "exactly 2" : "at least " + need} files.`); return; }
   if (missingField()) return;
   const { opts, extra } = collectOptions();
   const body = new FormData();

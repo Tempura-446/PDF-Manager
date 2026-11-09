@@ -518,6 +518,35 @@ def cmd_from_office(a):
     return 1 if failures else 0
 
 
+# -- web pages --
+def cmd_web(a):
+    """Print web pages (addresses or saved .html files) to PDF."""
+    failures = 0
+    sources = []
+    for item in a.inputs:
+        sources += [item] if office._web_address(item) else [str(p) for p in _expand([item])]
+    for src in sources:
+        address = office._web_address(src)
+        if a.output and len(sources) == 1:
+            out = Path(a.output)
+        else:
+            folder = Path(a.output) if a.output else (Path.cwd() if address else Path(src).parent)
+            folder.mkdir(parents=True, exist_ok=True)
+            stem = (re.sub(r"[^\w.-]+", "-", re.sub(r"(?i)^https?://(www\.)?", "", address)).strip("-.")[:60]
+                    if address else Path(src).stem) or "page"
+            out = folder / f"{stem}.pdf"
+        try:
+            result, program = office.html_to_pdf(src, out)
+            print(f"{src} -> {result}  ({program})")
+        except (core.PdfManagerError, OSError) as exc:
+            if len(sources) == 1:
+                raise
+            failures += 1
+            print(f"error: {src}: {exc}", file=sys.stderr)
+    return 1 if failures else 0
+# -- end of web pages --
+
+
 def run_redact(a, src, out, pw):
     patterns = list(a.pattern or []) + [redact.PRESETS[p] for p in a.find or []]
     if not (a.text or patterns or a.box):
@@ -1339,6 +1368,12 @@ def build_parser():
                         "per table)")
     g.add_argument("--csv", action="store_true",
                    help="write a CSV file per table instead of a workbook")
+
+    sp = other("web", cmd_web, "save web pages as PDFs, as the browser prints them (needs "
+                               "Microsoft Edge, Chrome or Chromium)")
+    sp.add_argument("inputs", nargs="+", metavar="address-or-file",
+                    help="web addresses (https://…) or saved web pages (.html, .mht)")
+    sp.add_argument("-o", "--output", help="output file; with several inputs, a folder")
 
     sp = other("from-office", cmd_from_office,
                "convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF "

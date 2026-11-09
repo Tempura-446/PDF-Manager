@@ -409,6 +409,11 @@ OPERATIONS = [
                 _f("format", "Format", "select", "xlsx",
                    choices=[["xlsx", "Excel workbook (.xlsx)"], ["csv", "CSV files (zip)"]],
                    hint="A table that continues on the next page is kept as one table.")]},
+    # -- web pages --
+    {"id": "web", "group": "Convert", "label": "Web page → PDF", "files": "web", "url_field": "url",
+     "help": "Save a web page as a PDF, as the browser prints it (links keep working): type its "
+             "address, or add saved web pages (.html, .mht). Uses Microsoft Edge or Chrome.",
+     "fields": [_f("url", "Web address", "text", "", placeholder="https://example.com/page")]},
     {"id": "from-office", "group": "Convert", "label": "Office → PDF", "files": "office",
      "help": "Convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF. "
              "Uses Microsoft Office if installed, otherwise LibreOffice.",
@@ -795,6 +800,10 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
     elif op == "from-office":
         out = out_dir / f"{src.stem}.pdf"
         office.office_to_pdf(src, out)
+    elif op == "web":
+        out = out_dir / f"{src.stem}.pdf"
+        _, program = office.html_to_pdf(src, out)
+        notes.append(f"{src.name}: printed with {program}")
     else:
         raise UserError(f"unknown operation {op!r}")
     return [out]
@@ -911,11 +920,13 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
     for field in spec["fields"]:
         if field.get("required") and not str(opts.get(field["key"]) or "").strip():
             raise UserError(f"please fill in “{field['label']}”")
-    if not files:
-        raise UserError("add at least one file")
+    url_field = spec.get("url_field")
+    if not files and not (url_field and str(opts.get(url_field) or "").strip()):
+        raise UserError("add at least one file" if not url_field else
+                        "type a web address, or add saved web pages")
     if len(files) < spec.get("min", 1):
         raise UserError(f"add at least {spec['min']} files")
-    out_dir = Path(work or files[0].parent) / "out"
+    out_dir = Path(work or (files[0].parent if files else tempfile.mkdtemp(prefix="pdfm-"))) / "out"
     out_dir.mkdir()
     extra_files = extra_files or {}
     protect = None  # the outputs made from a password-protected input
@@ -939,6 +950,13 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
         changed = [c for c in summary["changes"] if c["kind"] != "same"]
         notes.append(f"{len(changed)} page{'s' if len(changed) != 1 else ''} with differences"
                      if changed else "No differences found.")
+        outputs = [out]
+    elif op == "web" and not files:  # a web address
+        address = opts["url"].strip()
+        name = re.sub(r"[^\w.-]+", "-", re.sub(r"(?i)^https?://(www\.)?", "", address)).strip("-.")[:60]
+        out = out_dir / f"{name or 'page'}.pdf"
+        _, program = office.html_to_pdf(address, out)
+        notes.append(f"{address}: printed with {program}")
         outputs = [out]
     elif op == "from-images":
         out = out_dir / (files[0].stem + ".pdf" if len(files) == 1 else "images.pdf")

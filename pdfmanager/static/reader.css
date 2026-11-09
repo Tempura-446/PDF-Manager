@@ -641,3 +641,9 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
 .rd-attached li { display: flex; align-items: center; gap: 10px; font-size: 13px; }
 .rd-attached li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .rd-attached small { color: var(--muted); }
+
+/* Stamps */
+.rd-markup[data-markup="stamps"] .page { cursor: copy; }
+.rd-markup[data-markup="stamps"] .annotationLayer, .rd-markup[data-markup="stamps"] .textLayer { pointer-events: none; }
+.rd-stampdraft { border-radius: 6px; }
+.rd-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }

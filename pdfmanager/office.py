@@ -33,6 +33,7 @@ WORD_TYPES = {".doc", ".docx", ".docm", ".dot", ".dotx", ".rtf", ".odt", ".wpd",
 EXCEL_TYPES = {".xls", ".xlsx", ".xlsm", ".xlsb", ".ods", ".csv"}
 POWERPOINT_TYPES = {".ppt", ".pptx", ".pptm", ".pps", ".ppsx", ".odp"}
 OFFICE_TYPES = WORD_TYPES | EXCEL_TYPES | POWERPOINT_TYPES
+HTML_TYPES = {".html", ".htm", ".xhtml", ".mht", ".mhtml"}
 TO_WORD_ENGINES = ("auto", "word", "basic", "layout")
 TIMEOUT = 300
 
@@ -498,10 +499,12 @@ def text_to_pdf(path, output):
 
 
 def office_to_pdf(path, output):
-    """Convert a Word, Excel, PowerPoint, OpenDocument, RTF or text file to
-    PDF. Returns (output, program used)."""
+    """Convert a Word, Excel, PowerPoint, OpenDocument, RTF, text or web
+    page (.html) file to PDF. Returns (output, program used)."""
     path, output = Path(path), Path(output)
     suffix = path.suffix.lower()
+    if suffix in HTML_TYPES:
+        return html_to_pdf(path, output)
     if suffix not in OFFICE_TYPES:
         raise core.PdfManagerError(
             f"{path.name}: can't convert {suffix or 'this'} files (try Word, Excel, PowerPoint, "
@@ -519,3 +522,132 @@ def office_to_pdf(path, output):
     raise core.PdfManagerError(
         f"converting {suffix} files needs Microsoft Office or LibreOffice "
         "(free: https://www.libreoffice.org)")
+
+
+# --------------------------------------------------------------------------
+# Web pages -> PDF
+# --------------------------------------------------------------------------
+
+def find_browser():
+    """A Chromium-based browser to print web pages with: Edge (on every
+    Windows), Chrome or Chromium; or None."""
+    for name in ("msedge", "microsoft-edge", "google-chrome", "chrome", "chromium",
+                 "chromium-browser"):
+        found = shutil.which(name)
+        if found:
+            return found
+    candidates = []
+    if sys.platform == "win32":
+        for base in (os.environ.get("PROGRAMFILES(X86)"), os.environ.get("PROGRAMFILES"),
+                     os.environ.get("LOCALAPPDATA")):
+            if base:
+                candidates += [Path(base) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+                               Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe"]
+    elif sys.platform == "darwin":
+        candidates += [Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+                       Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+                       Path("/Applications/Chromium.app/Contents/MacOS/Chromium")]
+    else:  # Playwright's Chromium, where it's installed (development, CI)
+        pw = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "/opt/pw-browsers")
+        candidates += sorted(pw.glob("chromium_headless_shell-*/chrome-headless-shell-*/chrome-headless-shell"))
+        candidates += sorted(pw.glob("chromium-*/chrome-linux*/chrome"))
+    for path in candidates:
+        if path.is_file():
+            return str(path)
+    return None
+
+
+def _web_address(source):
+    """A web address as typed ("example.com/page") -> a full one, or None
+    when ``source`` is a file."""
+    text = str(source).strip()
+    if re.match(r"(?i)^https?://", text):
+        return text
+    if Path(text).suffix.lower() in HTML_TYPES or Path(text).exists():
+        return None  # a file name
+    if re.match(r"(?i)^(www\.)?[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?(/\S*)?$", text):
+        return "https://" + text
+    return None
+
+
+def _print_with(command, target, timeout):
+    """Run the browser until ``target`` is a whole PDF. A browser can stay
+    open after printing (waiting on the network, its updater), so it's
+    closed once the file is complete rather than waited for."""
+    import time
+
+    try:
+        proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except OSError as exc:
+        raise core.PdfManagerError(f"the browser could not start: {exc}") from None
+    deadline, last = time.monotonic() + timeout, -1
+    try:
+        while time.monotonic() < deadline:
+            done = proc.poll() is not None
+            if target.exists():
+                size = target.stat().st_size
+                if size == last and size > 100:
+                    with open(target, "rb") as f:
+                        f.seek(max(0, size - 1024))
+                        if b"%%EOF" in f.read():
+                            return
+                last = size
+            if done:
+                break
+            time.sleep(0.25)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        try:
+            err = proc.communicate(timeout=10)[1] or b""
+        except subprocess.TimeoutExpired:
+            err = b""
+    if target.exists() and target.stat().st_size > 100:
+        return
+    detail = " ".join(err.decode("utf-8", "replace").split())[-300:]
+    raise core.PdfManagerError("the page couldn't be printed"
+                               + (" (it took too long)" if time.monotonic() >= deadline else "")
+                               + (f": {detail}" if detail else ""))
+
+
+def html_to_pdf(source, output, timeout=120):
+    """Print a web page (an address, or a saved .html/.mht file) to PDF the
+    way the browser prints it: with a Chromium browser (Edge, Chrome), else
+    LibreOffice (simpler layout). Returns (output, program used)."""
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    address = _web_address(source)
+    if address is None:
+        path = Path(source)
+        if not path.is_file():
+            raise core.PdfManagerError(f"{source} is neither a web address nor a file")
+        if path.suffix.lower() not in HTML_TYPES:
+            raise core.PdfManagerError(f"{path.name} isn't a web page (.html, .htm, .mht)")
+        address = path.resolve().as_uri()
+    elif re.match(r"(?i)^https?://(localhost|127\.|0\.0\.0\.0|\[?::1)", address):
+        raise core.PdfManagerError("addresses on this computer (localhost) can't be printed")
+    browser = find_browser()
+    if browser:
+        with tempfile.TemporaryDirectory(prefix="pdfm-web-") as tmp:
+            target = Path(tmp) / "page.pdf"
+            shell = "headless-shell" in Path(browser).name
+            command = [browser, "--headless" if shell else "--headless=new", "--disable-gpu",
+                       "--no-first-run", "--no-default-browser-check", "--disable-extensions",
+                       "--disable-sync", "--disable-background-networking",
+                       "--disable-component-update", "--no-pdf-header-footer",
+                       "--run-all-compositor-stages-before-draw", "--virtual-time-budget=10000",
+                       f"--user-data-dir={Path(tmp) / 'profile'}", f"--print-to-pdf={target}"]
+            if sys.platform.startswith("linux") and hasattr(os, "geteuid") and os.geteuid() == 0:
+                command.append("--no-sandbox")  # Chromium refuses to run as root otherwise
+            command.append(address)
+            _print_with(command, target, timeout)
+            shutil.move(str(target), str(output))
+        stem = Path(browser).stem.lower()
+        return output, ("Microsoft Edge" if "edge" in stem else
+                        "Google Chrome" if "google" in str(browser).lower() else "Chromium")
+    if address.startswith("file:") and find_libreoffice():
+        _libreoffice(Path(source), output, "pdf:writer_web_pdf_Export")
+        return output, "LibreOffice"
+    raise core.PdfManagerError("printing web pages needs Microsoft Edge, Google Chrome or "
+                               "Chromium (saved .html files: or LibreOffice)")

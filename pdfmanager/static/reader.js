@@ -105,6 +105,7 @@ const ICON = {
   underline: '<path d="M7 4v6a5 5 0 0 0 10 0V4"/><path d="M5 20h14"/>',
   strike: '<path d="M16 6.5C15 5 13.6 4.5 12 4.5c-2.2 0-4 1.2-4 3.2 0 1.5 1 2.4 2.6 3"/><path d="M4 12h16"/><path d="M8 17.5c1 1.4 2.4 2 4 2 2.3 0 4-1.3 4-3.3 0-.8-.3-1.5-.8-2"/>',
   shapes: '<rect x="3" y="11" width="9" height="9" rx="1"/><circle cx="16" cy="8" r="5"/>',
+  stamp: '<path d="M9 3h6l-1 7h4a2 2 0 0 1 2 2v3H4v-3a2 2 0 0 1 2-2h4z"/><path d="M5 19h14"/>',
   comments: '<path d="M4 5h13v9H9l-3 3v-3H4z"/><path d="M17 9h3v8h-2v3l-3-3h-4"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
 };
@@ -114,7 +115,10 @@ const COLORS = [["Black", "#000000", "#bdbdbd"], ["Blue", "#1f4fd8", "#80ebff"],
   ["Green", "#1f8a3b", "#53ffbc"], ["Yellow", "#b8860b", "#ffff98"]];
 // Notes, underline, strikeout and shapes: the reader's own tools, written into
 // the file by the server (markup.py) as standard annotations.
-const MARKUP = new Set(["NOTE", "UNDERLINE", "STRIKEOUT", "SHAPE", "IMAGES", "LINKS", "CERTSIGN"]);
+const MARKUP = new Set(["NOTE", "UNDERLINE", "STRIKEOUT", "SHAPE", "IMAGES", "LINKS", "CERTSIGN", "STAMPS"]);
+// Rubber stamps: their words (markup.py draws them in their colours).
+const STAMPS = ["APPROVED", "NOT APPROVED", "REVIEWED", "RECEIVED", "DRAFT", "FINAL", "CONFIDENTIAL",
+  "FOR COMMENT", "VOID"];
 const SHAPES = [["rect", "Rectangle"], ["ellipse", "Ellipse"], ["cloud", "Cloud"], ["arrow", "Arrow"], ["line", "Line"]];
 const KIND_NAMES = { Text: "Note", FreeText: "Text", Highlight: "Highlight", Underline: "Underline", StrikeOut: "Strikeout",
   Squiggly: "Squiggly", Square: "Rectangle", Circle: "Ellipse", Line: "Line", Polygon: "Shape", PolyLine: "Lines",
@@ -279,7 +283,7 @@ export class Reader {
       tool("pointer", "Select", "NONE"), tool("highlight", "Highlight", "HIGHLIGHT"),
       tool("underline", "Underline", "UNDERLINE"), tool("strike", "Strike out", "STRIKEOUT"),
       tool("note", "Note", "NOTE"), tool("text", "Text", "FREETEXT"),
-      tool("draw", "Draw", "INK"), tool("shapes", "Shapes", "SHAPE"), tool("image", "Picture", "STAMP"),
+      tool("draw", "Draw", "INK"), tool("shapes", "Shapes", "SHAPE"), tool("stamp", "Stamp", "STAMPS"), tool("image", "Picture", "STAMP"),
       tool("edittext", "Edit text", "EDITTEXT"), tool("imgedit", "Pictures", "IMAGES"), tool("link", "Links", "LINKS"),
     ];
     const tip = (mode, title) => { this.annotTools.find((b) => b.dataset.mode === mode).title = title; };
@@ -290,6 +294,13 @@ export class Reader {
     tip("SHAPE", "Draw a rectangle, ellipse, cloud, arrow or line: drag on the page (Shift: square, circle, 45°)");
     tip("IMAGES", "Edit the pictures on the page: drag to move, drag a corner to resize (Shift: freely), replace or delete");
     tip("LINKS", "Edit links: click one to change where it goes or delete it; drag a box to add one");
+    tip("STAMPS", "Stamp the page (Approved, Draft…): click where it goes, or drag its size");
+    this.stampSelect = el("select", { class: "rd-zoom", "aria-label": "Stamp", hidden: true },
+      ...STAMPS.map((v) => el("option", { value: v }, v[0] + v.slice(1).toLowerCase())), el("option", { value: "" }, "Your own words…"));
+    this.stampSelect.value = store.get("pdfm-stamp", "APPROVED");
+    this.stampDated = el("input", { type: "checkbox", checked: store.get("pdfm-stamp-dated", true) });
+    this.stampDatedLabel = el("label", { class: "rd-check", hidden: true, title: "Add your name and the date and time under the words" },
+      this.stampDated, "Name and date");
     this.shapeSelect = el("select", { class: "rd-zoom", "aria-label": "Shape", hidden: true },
       ...SHAPES.map(([v, label]) => el("option", { value: v }, label)));
     this.shapeSelect.value = store.get("pdfm-shape", "rect");
@@ -308,7 +319,7 @@ export class Reader {
     this.annotCloseBtn = b("x", "Close the annotation tools");
     this.annotbar = el("div", { class: "rd-findbar rd-annotbar", hidden: true, role: "toolbar", "aria-label": "Annotate" },
       ...this.annotTools.filter((b) => b !== this.certSignBtn), this.signBtn, this.certSignBtn, el("span", { class: "rd-sep" }),
-      el("div", { class: "rd-swatches", role: "group", "aria-label": "Colour" }, ...this.swatches), this.shapeSelect, this.sizeSelect,
+      el("div", { class: "rd-swatches", role: "group", "aria-label": "Colour" }, ...this.swatches), this.shapeSelect, this.stampSelect, this.stampDatedLabel, this.sizeSelect,
       el("span", { class: "rd-sep" }), this.undoBtn, this.redoBtn, this.deleteBtn,
       el("span", { style: "flex:1" }), this.annotSaveBtn, this.annotCloseBtn);
 
@@ -1529,6 +1540,7 @@ export class Reader {
       : name === "SHAPE" ? [[1, "Thin"], [2, "Medium"], [4, "Thick"], [8, "Heavy"]] : [];
     const key = { FREETEXT: "text", INK: "ink", HIGHLIGHT: "mark", SHAPE: "shape", NOTE: "note", UNDERLINE: "line", STRIKEOUT: "line" }[name];
     this.shapeSelect.hidden = name !== "SHAPE";
+    this.stampSelect.hidden = this.stampDatedLabel.hidden = name !== "STAMPS";
     const chosen = this.annotParams?.size?.[key] ?? (key === "shape" ? 2 : undefined);
     this.sizeSelect.replaceChildren(...sizes.map(([v, label]) => el("option", { value: v, selected: v === chosen }, label)));
     this.sizeSelect.hidden = !sizes.length;
@@ -1606,6 +1618,7 @@ export class Reader {
     if (mode === "NOTE") { this.#openNoteBox(at); return; }
     if (mode === "LINKS") { this.#drawLinkBox(e, at); return; }
     if (mode === "CERTSIGN") { this.#dragBox(at, "Drag a box where the signature goes.", (rect) => this.#signWithId(at.n, rect)); return; }
+    if (mode === "STAMPS") { this.#placeStamp(at); return; }
     // SHAPE: drag out the shape; it's drawn on screen until the file has it.
     this.#cancelMarkup();
     const svgEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -1660,6 +1673,48 @@ export class Reader {
       : { op: "add", page, kind, rect: [start.pt[0], start.pt[1], end.pt[0], end.pt[1]], color, width };
     this.#applyMarkup([change]).finally(() => d.el.remove());
   }
+
+  // -- stamps --
+  /** A stamp where the page was clicked (the usual size), or in the box
+   *  dragged out. */
+  #placeStamp(at) {
+    const view = at.view, draft = el("div", { class: "rd-linkdraft rd-stampdraft", style: `left:${at.x}px;top:${at.y}px;width:0;height:0` });
+    view.div.append(draft);
+    const box = view.div.getBoundingClientRect(), ox = box.left + view.div.clientLeft, oy = box.top + view.div.clientTop;
+    let end = [at.x, at.y];
+    const move = (ev) => {
+      end = [ev.clientX - ox, ev.clientY - oy];
+      Object.assign(draft.style, { left: Math.min(at.x, end[0]) + "px", top: Math.min(at.y, end[1]) + "px",
+        width: Math.abs(end[0] - at.x) + "px", height: Math.abs(end[1] - at.y) + "px" });
+    };
+    const up = async () => {
+      window.removeEventListener("pointermove", move);
+      draft.remove();
+      const dated = this.stampDated.checked, s = view.viewport.scale;
+      let a = [at.x, at.y], b = end;
+      if (Math.abs(end[0] - at.x) < 12 || Math.abs(end[1] - at.y) < 8) {  // a click: the usual size, centred there
+        const w = 160 * s, h = (dated ? 50 : 42) * s;
+        a = [at.x - w / 2, at.y - h / 2]; b = [at.x + w / 2, at.y + h / 2];
+      }
+      let label = this.stampSelect.value;
+      if (!label) {
+        const words = el("input", { type: "text", value: store.get("pdfm-stamp-own", ""), placeholder: "e.g. PAID", "aria-label": "Stamp words", maxlength: "60" });
+        setTimeout(() => words.focus(), 0);
+        if (await this.#dialog("Your own stamp", [el("label", { class: "rd-field" }, "Words on the stamp", words)],
+          [["cancel", "Cancel"], ["ok", "Stamp", true]]) !== "ok" || !words.value.trim()) return;
+        label = words.value.trim();
+        store.set("pdfm-stamp-own", label);
+      }
+      store.set("pdfm-stamp", this.stampSelect.value);
+      store.set("pdfm-stamp-dated", dated);
+      const p = view.viewport.convertToPdfPoint(...a), q = view.viewport.convertToPdfPoint(...b);
+      const rect = [Math.min(p[0], q[0]), Math.min(p[1], q[1]), Math.max(p[0], q[0]), Math.max(p[1], q[1])];
+      this.#applyMarkup([{ op: "add", page: at.n, kind: "stamp", rect, label, dated }], "Could not stamp the page: ");
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up, { once: true });
+  }
+  // -- end of stamps --
 
   /** Underline or strike out the selected words. */
   #markSelection() {
@@ -4673,6 +4728,7 @@ export class Reader {
       tool("Add a note", "NOTE", "comment sticky review", "note"), tool("Underline text", "UNDERLINE", "markup", "underline"),
       tool("Strike out text", "STRIKEOUT", "strikethrough delete markup", "strike"),
       tool("Draw a shape", "SHAPE", "rectangle ellipse circle cloud arrow line markup revision", "shapes"),
+      tool("Stamp the page", "STAMPS", "approved draft confidential final received reviewed rubber stamp", "stamp"),
       tool("Edit pictures", "IMAGES", "image photo move resize replace delete logo", "imgedit"),
       tool("Edit links", "LINKS", "hyperlink url web address page add change remove", "link"),
       tool("Sign with a digital ID", "CERTSIGN", "certificate pfx p12 digital signature sign", "badge"),

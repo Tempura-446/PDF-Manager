@@ -18,6 +18,8 @@ A change is a dict:
     {"op": "delete", "page": 1, "id": "12R"}                  (with its popup and replies)
     {"op": "add", "page": 1, "kind": "link", "rect": [...], "url": "https://..." | "to_page": 3}
     {"op": "link", "page": 1, "id": "12R", "url": "..." | "to_page": 3}   (where a link goes)
+    {"op": "add", "page": 1, "kind": "stamp", "rect": [...], "label": "APPROVED",
+     "dated": true}                     (a rubber stamp; dated adds "by NAME, DATE")
 
 ``add`` also takes "color" ("#rrggbb"), "width" (points, shapes) and
 "text" (the comment). ``id`` is pdf.js's id of an annotation in the file
@@ -35,7 +37,8 @@ from pypdf.generic import (ArrayObject, BooleanObject, DecodedStreamObject, Dict
 
 from pdfmanager import core
 
-KINDS = ("note", "underline", "strikeout", "rect", "ellipse", "cloud", "line", "arrow", "measure", "link")
+KINDS = ("note", "underline", "strikeout", "rect", "ellipse", "cloud", "line", "arrow", "measure", "link",
+         "stamp")
 DEFAULT_COLORS = {"note": "#f5c400", "underline": "#1f4fd8", "strikeout": "#d52b1e"}
 PRINT = 4  # annotation flag: printed with the page
 NOTE_SIZE = 20
@@ -176,6 +179,14 @@ def _add(writer, page, page_ref, change, author):
             annots = page["/Annots"]
         annots.get_object().append(ref)
         return ref
+    if kind == "stamp":
+        added = [_stamp(writer, page, page_ref, change, author)]
+        annots = page.get("/Annots")
+        if annots is None:
+            page[NameObject("/Annots")] = ArrayObject()
+            annots = page["/Annots"]
+        annots.get_object().extend(added)
+        return added[0]
     if kind == "measure":
         added = _measure(writer, page_ref, change, author)
         annots = page.get("/Annots")
@@ -283,6 +294,77 @@ def _add(writer, page, page_ref, change, author):
     return added[0]
 
 
+# ---- rubber stamps ----------------------------------------------------------------
+
+# Acrobat's names for its standard stamps, so other readers recognise them.
+STAMP_NAMES = {"APPROVED": "/Approved", "NOT APPROVED": "/NotApproved", "DRAFT": "/Draft",
+               "FINAL": "/Final", "CONFIDENTIAL": "/Confidential", "FOR COMMENT": "/ForComment",
+               "EXPERIMENTAL": "/Experimental", "EXPIRED": "/Expired", "AS IS": "/AsIs",
+               "SOLD": "/Sold", "TOP SECRET": "/TopSecret", "DEPARTMENTAL": "/Departmental",
+               "NOT FOR PUBLIC RELEASE": "/NotForPublicRelease",
+               "FOR PUBLIC RELEASE": "/ForPublicRelease"}
+STAMP_COLORS = {"APPROVED": "#1f8a3b", "FINAL": "#1f8a3b", "RECEIVED": "#1f4fd8",
+                "REVIEWED": "#1f4fd8", "FOR COMMENT": "#1f4fd8", "DRAFT": "#d52b1e",
+                "NOT APPROVED": "#d52b1e", "CONFIDENTIAL": "#d52b1e", "VOID": "#d52b1e"}
+
+
+def _stamp(writer, page, page_ref, change, author):
+    """A rubber stamp: the label in bold capitals in a rounded frame, with
+    "by NAME, DATE" under it when ``dated``. Drawn upright as the page is
+    shown, whatever the page's /Rotate."""
+    label = " ".join(str(change.get("label") or "").split()).upper()[:60]
+    if not label:
+        raise core.PdfManagerError("a stamp needs words, e.g. APPROVED")
+    x0, y0, x1, y1 = _rect(change.get("rect") or ())
+    if x1 - x0 < 8 or y1 - y0 < 8:
+        raise core.PdfManagerError("draw the stamp bigger")
+    color = _color(change.get("color"), STAMP_COLORS.get(label, "#d52b1e"))
+    turn = int(page.get("/Rotate", 0) or 0) % 360
+    w, h = (y1 - y0, x1 - x0) if turn in (90, 270) else (x1 - x0, y1 - y0)
+    # Local drawing space: (0, 0)-(w, h) upright on screen -> the page.
+    matrix = {0: (1, 0, 0, 1, x0, y0), 90: (0, 1, -1, 0, x1, y0), 180: (-1, 0, 0, -1, x1, y1),
+              270: (0, -1, 1, 0, x0, y1)}[turn]
+    sub = ""
+    if change.get("dated"):
+        when = time.strftime("%d %b %Y, %H:%M")
+        sub = f"by {author}, {when}" if author else when
+    line = max(1.0, min(w, h) * 0.05)
+    inset = line / 2 + 0.5
+    r = min(w, h) * 0.18
+    f = _fmt
+    frame = (f"{f(inset + r)} {f(inset)} m {f(w - inset - r)} {f(inset)} l "
+             f"{f(w - inset)} {f(inset)} {f(w - inset)} {f(inset + r)} v "
+             f"{f(w - inset)} {f(h - inset - r)} l {f(w - inset)} {f(h - inset)} {f(w - inset - r)} {f(h - inset)} y "
+             f"{f(inset + r)} {f(h - inset)} l {f(inset)} {f(h - inset)} {f(inset)} {f(h - inset - r)} v "
+             f"{f(inset)} {f(inset + r)} l {f(inset)} {f(inset)} {f(inset + r)} {f(inset)} y h")
+    room = w - 2 * (inset + line * 2)
+    main_size = min((h * (0.5 if sub else 0.62)), room / max(1.0, _text_width(label, 1, "Helvetica-Bold")))
+    sub_size = min(h * 0.17, room / max(1.0, _text_width(sub, 1))) if sub else 0
+    block = main_size * 0.72 + (sub_size * 1.25 if sub else 0)
+    base = (h - block) / 2 + (sub_size * 1.25 if sub else 0)
+    parts = [f"q {' '.join(_fmt(v) for v in matrix)} cm {_rgb(color)} {_rgb(color, False)} {f(line)} w",
+             frame + " S",
+             f"BT /HelvB {f(main_size)} Tf 1 0 0 1 "
+             f"{f((w - _text_width(label, main_size, 'Helvetica-Bold')) / 2)} {f(base)} Tm "
+             f"{_pdf_text(label)} Tj ET"]
+    if sub:
+        parts.append(f"BT /Helv {f(sub_size)} Tf 1 0 0 1 {f((w - _text_width(sub, sub_size)) / 2)} "
+                     f"{f(base - sub_size * 1.25)} Tm {_pdf_text(sub)} Tj ET")
+    parts.append("Q")
+    fonts = DictionaryObject({NameObject("/Font"): DictionaryObject({
+        NameObject(name): DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject(base_font),
+            NameObject("/Encoding"): NameObject("/WinAnsiEncoding")})
+        for name, base_font in (("/Helv", "/Helvetica"), ("/HelvB", "/Helvetica-Bold"))})})
+    rect = [x0, y0, x1, y1]
+    annot = _base(writer, page_ref, "/Stamp", rect, color, author, str(change.get("text") or ""))
+    annot[NameObject("/Name")] = NameObject(STAMP_NAMES.get(label, "/" + re.sub(r"\W+", "", label.title()) or "/Draft"))
+    annot[NameObject("/Subj")] = TextStringObject(label.title())
+    annot[NameObject("/AP")] = _appearance(writer, rect, " ".join(parts), fonts)
+    return writer._add_object(annot)
+
+
 # ---- measurements (the reader's Scale bar), as measurement annotations ----------
 
 LABEL_SIZE = 9  # points
@@ -303,10 +385,10 @@ def _pdf_text(text):
     return "(" + "".join(chr(b) if b not in (0x28, 0x29, 0x5C) else "\\" + chr(b) for b in raw) + ")"
 
 
-def _text_width(text, size):
+def _text_width(text, size, font="Helvetica"):
     from reportlab.pdfbase.pdfmetrics import stringWidth
 
-    return stringWidth(str(text).encode("cp1252", "replace").decode("cp1252"), "Helvetica", size)
+    return stringWidth(str(text).encode("cp1252", "replace").decode("cp1252"), font, size)
 
 
 def _label(x, y, lines, color, size=LABEL_SIZE):
