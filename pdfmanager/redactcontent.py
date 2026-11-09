@@ -18,11 +18,17 @@ Like Acrobat, this module edits the page's own content instead:
 Shared objects are never changed in place: anything edited is a new
 object, so other pages that use the original keep it. Pages using
 something this can't safely edit (Type3 fonts, vertical text, unusual
-font encodings, damaged content, JPEG 2000 pictures) raise
+font encodings, damaged content, JPEG 2000 or CMYK JPEG pictures) raise
 :class:`Unsupported`; :func:`remove` then leaves them to the picture
 method. After editing, :func:`remove` checks every page with pdfium: no
 letter may remain under a box, the searched words must be gone and the
-remaining letters must not have moved.
+remaining letters must not have moved. Edited pictures are decoded again
+to check the covered pixels really are black.
+
+Not removed (covered by the black box only): drawings that reach outside
+a box keep their whole shape, shadings and pattern cells are left as they
+are, and a font keeps the shapes of all its letters (not which were used
+where).
 """
 
 import io
@@ -1026,7 +1032,10 @@ class Scrubber:
     def _inline(self, ins, state, resources, out, added, marked):
         try:
             image = ins.iimage
-            raw = image.read_raw_bytes()
+            if hasattr(image, "read_raw_bytes"):
+                raw = image.read_raw_bytes()
+            else:  # pikepdf before 9.x
+                raw = bytes(image._data._inline_image_raw_bytes())
             info = image.obj
             stream = pikepdf.Stream(self.pdf, b"")
             stream.write(raw, filter=info.get("/Filter"), decode_parms=info.get("/DecodeParms"))

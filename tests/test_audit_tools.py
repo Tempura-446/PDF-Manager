@@ -143,7 +143,8 @@ def test_redaction_prunes_the_structure_tree(tmp_path):
     assert reader.pages[1].extract_text().strip() == "second page plain"
 
 
-def test_black_boxes_land_on_the_text_with_an_oversized_cropbox(tmp_path):
+@pytest.mark.parametrize("method", ["remove", "image"])
+def test_black_boxes_land_on_the_text_with_an_oversized_cropbox(tmp_path, method):
     src = tmp_path / "crop.pdf"
     c = canvas.Canvas(str(src), pagesize=(612, 792))
     c.setFont("Helvetica", 14)
@@ -154,10 +155,11 @@ def test_black_boxes_land_on_the_text_with_an_oversized_cropbox(tmp_path):
     w.pages[0][NameObject("/CropBox")] = RectangleObject([-50, -50, 662, 842])
     w.write(src)
     out = tmp_path / "out.pdf"
-    assert redact.redact(src, out, terms=["SECRET WORD"]) == {1: 1}
-    page = PdfReader(str(out)).pages[0]
-    assert [float(v) for v in page.mediabox] == [0, 0, 612, 792]  # what readers showed
-    assert [float(v) for v in page.cropbox] == [0, 0, 612, 792]
+    assert redact.redact(src, out, terms=["SECRET WORD"], method=method) == {1: 1}
+    if method == "image":
+        page = PdfReader(str(out)).pages[0]
+        assert [float(v) for v in page.mediabox] == [0, 0, 612, 792]  # what readers showed
+        assert [float(v) for v in page.cropbox] == [0, 0, 612, 792]
     words = (72, 700, 160, 710)
     assert dark_pixels(out, words) > 0.9 * 88 * 10
     assert dark_pixels(out, (72, 650, 160, 660)) == 0  # blank paper below is untouched

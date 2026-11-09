@@ -281,6 +281,38 @@ def test_part_of_a_picture_is_painted_black(tmp_path, jpeg):
     assert "Caption under the picture" in text(out)
 
 
+def test_a_scan_with_hidden_ocr_text(tmp_path):
+    """A scanned page: a JPEG of the page with invisible OCR words over it.
+    The word goes from both; the rest stays searchable."""
+    scan = Image.new("RGB", (850, 1100), "white")
+    from PIL import ImageDraw
+
+    ImageDraw.Draw(scan).rectangle([100, 120, 400, 160], fill=(40, 40, 40))  # "ink" of the word
+    buf = io.BytesIO()
+    scan.save(buf, "JPEG", quality=90)
+    buf.seek(0)
+    src = tmp_path / "scan.pdf"
+    c = canvas.Canvas(str(src), pagesize=(612, 792))
+    c.drawImage(ImageReader(buf), 0, 0, 612, 792)
+    t = c.beginText(72, 680)
+    t.setTextRenderMode(3)  # invisible, as OCR programs write it
+    t.setFont("Helvetica", 20)
+    t.textLine("Confidential Smith report")
+    c.drawText(t)
+    c.showPage()
+    c.save()
+    out = tmp_path / "out.pdf"
+    report = redact.redact(src, out, terms=["Smith"])
+    assert report.pictures == {}
+    assert "Smith" not in text(out) and "Confidential" in text(out) and "report" in text(out)
+    [(picture, kind)] = images_on(out).values()
+    assert "DCTDecode" in kind
+    [box] = redact.find_text(src, ["Smith"])[0]
+    x, y = (box[0] + box[2]) / 2 * 850 / 612, (792 - (box[1] + box[3]) / 2) * 1100 / 792
+    assert max(picture.getpixel((int(x), int(y)))) < 40
+    assert min(picture.getpixel((700, 900))) > 230  # paper elsewhere stays white
+
+
 def test_a_covered_picture_is_dropped(tmp_path):
     src = picture_pdf(tmp_path / "p.pdf")
     out = tmp_path / "out.pdf"
