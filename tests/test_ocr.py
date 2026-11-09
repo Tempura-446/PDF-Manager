@@ -1,4 +1,6 @@
 """OCR: the built-in engine, the Tesseract engine, and choosing between them."""
+from pathlib import Path
+
 import pytest
 from PIL import Image
 
@@ -84,6 +86,10 @@ import pdfplumber  # noqa: E402
 from pypdf import PdfReader, PdfWriter  # noqa: E402
 
 from pdfmanager import progress, textlayer  # noqa: E402
+
+
+# What the model returns for a page with nothing on it.
+_NOTHING_READ = type("Nothing", (), {"txts": None, "boxes": None, "scores": None, "word_results": None})()
 
 
 def clean_scan(tmp_path, name="scan.pdf"):
@@ -178,7 +184,9 @@ def test_force_keeps_a_turned_page_as_it_was(tmp_path):
     w.pages[0].rotate(90)
     turned = tmp_path / "turned.pdf"
     w.write(turned)
-    out = core.ocr(turned, tmp_path / "out.pdf", engine="builtin", force=True)
+    # rotate=False: the page is shown sideways and must stay so (with it on,
+    # it is turned upright: see test_a_page_shown_sideways_is_turned_back)
+    out = core.ocr(turned, tmp_path / "out.pdf", engine="builtin", force=True, rotate=False)
     page = PdfReader(out).pages[0]
     assert page.rotation == 90 and page.mediabox == PdfReader(turned).pages[0].mediabox
     assert "Northwind" in page.extract_text()
@@ -250,11 +258,11 @@ def test_builtin_cancel_leaves_no_output(tmp_path, monkeypatch):
     both = core.merge([scan, scan], tmp_path / "both.pdf")
     job = progress.Job()
 
-    def cancel_after_first(image):
+    def cancel_after_first(image, script=None):
         job.cancel()
-        return []
+        return _NOTHING_READ
 
-    monkeypatch.setattr(ocr, "recognise", cancel_after_first)
+    monkeypatch.setattr(ocr, "_read", cancel_after_first)
     job.run(core.ocr, both, tmp_path / "out.pdf", engine="builtin")
     assert job.state == "cancelled"
     assert not (tmp_path / "out.pdf").exists() and not list(tmp_path.glob("*.tmp*"))
@@ -276,14 +284,14 @@ def test_other_pdfium_users_are_not_locked_out_while_recognising(tmp_path, monke
     scan = clean_scan(tmp_path)
     free = []
 
-    def recognise_checking_the_lock(image):
+    def read_checking_the_lock(image, script=None):
         got = core.PDFIUM_LOCK.acquire(blocking=False)
         if got:
             core.PDFIUM_LOCK.release()
         free.append(got)
-        return []
+        return _NOTHING_READ
 
-    monkeypatch.setattr(ocr, "recognise", recognise_checking_the_lock)
+    monkeypatch.setattr(ocr, "_read", read_checking_the_lock)
     core.ocr(scan, tmp_path / "out.pdf", engine="builtin")
     assert free == [True]
 
@@ -309,7 +317,7 @@ def test_builtin_counts_as_available_only_when_it_imports(monkeypatch):
 def test_engine_trouble_is_reported_plainly(tmp_path, monkeypatch):
     scan = clean_scan(tmp_path)
 
-    def broken_engine():
+    def broken_engine(script=None):
         raise RuntimeError("DLL load failed")
 
     monkeypatch.setattr(ocr, "_engine", broken_engine)
@@ -339,11 +347,11 @@ def test_auto_leaves_other_scripts_to_tesseract(monkeypatch):
     monkeypatch.setattr(ocr, "tesseract_available", lambda: True)
     assert ocr.choose_engine("auto", "eng+deu") == "builtin"
     assert ocr.choose_engine("auto", "chi_sim") == "builtin"
-    assert ocr.choose_engine("auto", "rus") == "tesseract"
-    assert ocr.choose_engine("auto", "eng+ara") == "tesseract"
+    assert ocr.choose_engine("auto", "heb") == "tesseract"
+    assert ocr.choose_engine("auto", "eng+kor+ara") == "tesseract"
     monkeypatch.setattr(ocr, "tesseract_available", lambda: False)
-    assert ocr.choose_engine("auto", "rus") == "builtin"  # the best there is
-    assert ocr.choose_engine("builtin", "rus") == "builtin"  # asked for by name
+    assert ocr.choose_engine("auto", "heb") == "builtin"  # the best there is
+    assert ocr.choose_engine("builtin", "heb") == "builtin"  # asked for by name
 
 
 def test_core_ocr_lets_the_language_choose_the_engine(tmp_path, monkeypatch):
@@ -354,7 +362,7 @@ def test_core_ocr_lets_the_language_choose_the_engine(tmp_path, monkeypatch):
     monkeypatch.setattr(ocr, "_run_builtin", lambda *a, **k: used.append("builtin"))
     monkeypatch.setattr(ocr.os, "replace", lambda a, b: None)
     scan = ocrpages.scan_pdf(Image.new("L", (100, 100), 255), tmp_path / "s.pdf", dpi=72)
-    core.ocr(scan, tmp_path / "o.pdf", language="rus")
+    core.ocr(scan, tmp_path / "o.pdf", language="heb")
     core.ocr(scan, tmp_path / "o2.pdf", language="eng")
     assert used == ["tesseract", "builtin"]
 
@@ -377,3 +385,234 @@ def test_huge_pages_are_rendered_no_larger_than_the_cap():
     assert ocr.render_scale(595, 842) == pytest.approx(ocr.RENDER_DPI / 72)
     scale = ocr.render_scale(5000, 7000)   # an E-size drawing
     assert 7000 * scale <= ocr.MAX_RENDER_SIDE and 7000 * scale > ocr.MAX_RENDER_SIDE - 1
+
+
+# -- beyond Acrobat: tables, small print, page orientation, columns, scripts ---
+
+def _end_to_end(tmp_path, image, **options):
+    scan = ocrpages.scan_pdf(image, tmp_path / "scan.pdf")
+    out = core.ocr(scan, tmp_path / "out.pdf", engine="builtin", **options)
+    return out, core.extract_text(out)
+
+
+@needs_builtin
+def test_a_ruled_table_is_read_exactly(tmp_path):
+    # The model's per-line flip check took a lone "6" for an upside-down "9".
+    image, truth = ocrpages.ruled_table()
+    _, text = _end_to_end(tmp_path, image)
+    assert ocrpages.cer(truth, text) == 0, text
+
+
+@needs_builtin
+def test_7pt_print_is_read(tmp_path):
+    image, truth = ocrpages.small_print()
+    _, text = _end_to_end(tmp_path, image)
+    assert ocrpages.cer(truth, text) < 0.01
+
+
+@needs_builtin
+@pytest.mark.parametrize("turned, turn_back", [(90, 270), (180, 180), (270, 90)])
+def test_page_orientation_says_how_to_turn_a_page_upright(turned, turn_back):
+    image, _ = ocrpages.letter()
+    assert ocr.page_orientation(image.rotate(turned, expand=True)) == turn_back
+
+
+@needs_builtin
+def test_an_upright_or_empty_page_needs_no_turn():
+    image, _ = ocrpages.letter()
+    assert ocr.page_orientation(image) == 0
+    assert ocr.page_orientation(Image.new("L", (800, 1100), 255)) == 0
+
+
+@needs_builtin
+@pytest.mark.parametrize("turned", [90, 180, 270])
+def test_sideways_and_upside_down_pages_are_turned_upright(tmp_path, turned):
+    image, truth = ocrpages.letter()
+    out, text = _end_to_end(tmp_path, image.rotate(turned, expand=True))
+    assert ocrpages.cer(truth, text) < 0.01
+    import pypdfium2 as pdfium
+    doc = pdfium.PdfDocument(str(out))
+    shown = doc[0].render(scale=0.5).to_pil().convert("L")
+    doc.close()
+    assert shown.width < shown.height  # displayed as the portrait letter it is
+    assert ocr.page_orientation(shown.resize((shown.width * 2, shown.height * 2))) == 0
+
+
+@needs_builtin
+def test_a_page_shown_sideways_is_turned_back(tmp_path):
+    # An upright scan whose page says /Rotate 90: turned back to 0, not 360.
+    scan = clean_scan(tmp_path)
+    w = PdfWriter(clone_from=str(scan))
+    w.pages[0].rotate(90)
+    turned = tmp_path / "turned.pdf"
+    w.write(turned)
+    out = core.ocr(turned, tmp_path / "out.pdf", engine="builtin")
+    page = PdfReader(out).pages[0]
+    assert page.rotation == 0 and "Northwind" in page.extract_text()
+
+
+@needs_builtin
+def test_turning_pages_can_be_switched_off(tmp_path):
+    image, _ = ocrpages.letter()
+    out, _ = _end_to_end(tmp_path, image.rotate(180), rotate=False)
+    assert PdfReader(out).pages[0].rotation == 0
+
+
+@needs_builtin
+def test_upright_pages_are_not_checked_for_orientation(tmp_path, monkeypatch):
+    def not_needed(*args, **kwargs):
+        raise AssertionError("an upright page was checked")
+
+    monkeypatch.setattr(ocr, "page_orientation", not_needed)
+    image, _ = ocrpages.letter()
+    _end_to_end(tmp_path, image)
+
+
+@needs_builtin
+def test_two_columns_are_read_column_by_column(tmp_path):
+    image, truth = ocrpages.two_columns()
+    _, text = _end_to_end(tmp_path, image)
+    assert ocrpages.cer(truth, text) < 0.01, text
+
+
+def _line(text, x0, y0, x1, y1):
+    words, x, step = [], x0, (x1 - x0) / max(len(text), 1)
+    for word in text.split():
+        w1 = x + step * len(word)
+        words.append(ocr.Word(word, [(x, y0), (w1, y0), (w1, y1), (x, y1)]))
+        x = w1 + step
+    return ocr.Line(text, [(x0, y0), (x1, y0), (x1, y1), (x0, y1)], 1.0, words)
+
+
+def test_reading_order_follows_columns_under_a_heading():
+    lines = [_line("Heading across both columns", 200, 100, 1800, 160)]
+    for i in range(6):
+        y = 300 + i * 60
+        lines.append(_line(f"left column line {i} with several words", 200, y, 1150, y + 40))
+        lines.append(_line(f"right column line {i} with several words", 1250, y, 2200, y + 40))
+    lines.append(_line("A footer that spans the page width", 200, 800, 2200, 840))
+    text = ocr.text_of(ocr.reading_order(lines)).splitlines()
+    assert text[0] == "Heading across both columns"
+    assert text[1:7] == [f"left column line {i} with several words" for i in range(6)]
+    assert text[7:13] == [f"right column line {i} with several words" for i in range(6)]
+    assert text[13] == "A footer that spans the page width"
+
+
+def test_reading_order_keeps_table_rows_together():
+    lines = []
+    for r, row in enumerate(ocrpages.TABLE):
+        for c, cell in enumerate(row):
+            if cell:
+                x = [270, 1070, 1370, 1820][c]
+                lines.append(_line(cell, x, 420 + r * 90, x + 30 * len(cell), 460 + r * 90))
+    text = ocr.text_of(ocr.reading_order(lines))
+    assert text.splitlines() == [" ".join(c for c in row if c) for row in ocrpages.TABLE]
+
+
+def test_language_codes_pick_a_reading_model():
+    assert ocr.script_for("eng") is None and ocr.script_for("eng+deu+chi_sim+jpn") is None
+    assert ocr.script_for("rus") == "eslav" and ocr.script_for("eng+ukr") == "eslav"
+    assert ocr.script_for("bul") == "cyrillic"
+    assert ocr.script_for("kor") == "korean"
+    assert ocr.script_for("ara+eng") == "arabic" and ocr.script_for("fas") == "arabic"
+    assert ocr.script_for("hin") == "devanagari"
+    assert ocr.script_for("tha") == "th" and ocr.script_for("ell") == "el"
+    assert ocr.script_for("tam") == "ta" and ocr.script_for("tel") == "te"
+    for unreadable in ("heb", "kor+ara", "amh"):
+        with pytest.raises(ValueError):
+            ocr.script_for(unreadable)
+
+
+def test_auto_reads_more_scripts_itself(monkeypatch):
+    monkeypatch.setattr(ocr, "builtin_available", lambda: True)
+    monkeypatch.setattr(ocr, "tesseract_available", lambda: True)
+    assert ocr.choose_engine("auto", "rus") == "builtin"
+    assert ocr.choose_engine("auto", "kor") == "builtin"
+    assert ocr.choose_engine("auto", "heb") == "tesseract"
+    assert ocr.choose_engine("auto", "kor+ara") == "tesseract"
+
+
+@pytest.fixture
+def stand_in_models(tmp_path, monkeypatch):
+    """Language models 'downloaded' from a local copy of the bundled model
+    (the real ones come from the internet), into a scratch folder."""
+    import hashlib
+
+    import rapidocr
+
+    stand_in = Path(rapidocr.__file__).parent / "models" / "PP-OCRv6_rec_small.onnx"
+    digest = hashlib.sha256(stand_in.read_bytes()).hexdigest()
+    fetched = []
+    monkeypatch.setattr(ocr, "models_dir", lambda: tmp_path / "models")
+    monkeypatch.setattr(ocr, "_model_source", lambda script: (f"https://example.invalid/{script}.onnx", digest))
+
+    def fetch(url, target):
+        fetched.append(url)
+        target.write_bytes(stand_in.read_bytes())
+
+    monkeypatch.setattr(ocr, "_fetch", fetch)
+    ocr.reset()
+    yield fetched
+    ocr.reset()
+
+
+@needs_builtin
+def test_a_language_model_is_fetched_once_and_used(tmp_path, stand_in_models):
+    image, _ = ocrpages.letter()
+    for _ in range(2):
+        lines = ocr.recognise(image, script="eslav")
+        assert "committee" in ocr.text_of(lines)
+    assert stand_in_models == ["https://example.invalid/eslav.onnx"]
+    assert (tmp_path / "models" / "eslav.onnx").exists()
+
+
+@needs_builtin
+def test_a_damaged_download_is_refused(tmp_path, stand_in_models, monkeypatch):
+    monkeypatch.setattr(ocr, "_fetch", lambda url, target: target.write_bytes(b"not a model"))
+    with pytest.raises(core.PdfManagerError, match="damaged"):
+        ocr.recognise(ocrpages.letter()[0], script="korean")
+    assert not list((tmp_path / "models").glob("*"))
+
+
+@needs_builtin
+def test_no_internet_for_a_language_model_says_what_to_do(stand_in_models, monkeypatch):
+    def offline(url, target):
+        raise OSError("Network is unreachable")
+
+    monkeypatch.setattr(ocr, "_fetch", offline)
+    with pytest.raises(core.PdfManagerError, match="Korean.*internet.*Tesseract"):
+        ocr.recognise(ocrpages.letter()[0], script="korean")
+
+
+@needs_builtin
+def test_auto_turns_to_tesseract_when_a_language_model_cannot_be_fetched(tmp_path, stand_in_models, monkeypatch):
+    def offline(url, target):
+        raise OSError("Network is unreachable")
+
+    monkeypatch.setattr(ocr, "_fetch", offline)
+    monkeypatch.setattr(ocr, "tesseract_available", lambda: True)
+    used = []
+    monkeypatch.setattr(ocr, "_run_tesseract", lambda source, output, *a, **k: used.append("tesseract") or Path(output).write_bytes(Path(source).read_bytes()))
+    scan = ocrpages.scan_pdf(ocrpages.letter()[0], tmp_path / "scan.pdf")
+    core.ocr(scan, tmp_path / "out.pdf", language="rus")
+    assert used == ["tesseract"]
+
+
+def test_tesseract_turns_pages_only_when_it_can(tmp_path, monkeypatch):
+    # OCRmyPDF's page turning needs Tesseract's osd data; without it, OCR
+    # must still work, just without turning pages.
+    import sys
+    import types
+
+    calls = []
+    fake = types.ModuleType("ocrmypdf")
+    fake.ocr = lambda *a, **k: calls.append(k)
+    exceptions = types.ModuleType("ocrmypdf.exceptions")
+    exceptions.ExitCodeException = exceptions.MissingDependencyError = type("E", (Exception,), {})
+    monkeypatch.setitem(sys.modules, "ocrmypdf", fake)
+    monkeypatch.setitem(sys.modules, "ocrmypdf.exceptions", exceptions)
+    monkeypatch.setattr(ocr.scan, "add_programs_to_path", lambda: None)
+    for languages, expected in (("eng\nosd", True), ("eng", False)):
+        monkeypatch.setattr(ocr, "_tesseract_languages", lambda: set(languages.split()))
+        ocr._run_tesseract(tmp_path / "in.pdf", tmp_path / "out.pdf", "eng", False, False, rotate=True)
+        assert calls[-1]["rotate_pages"] is expected

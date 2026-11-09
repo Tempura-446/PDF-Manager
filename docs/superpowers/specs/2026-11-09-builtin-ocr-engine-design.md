@@ -37,17 +37,38 @@ per page on a CPU (1 to 2 s against 0.5 s on a 4-core box).
 - A **regression benchmark** in the tests: synthetic pages with known text,
   asserting error-rate ceilings for the built-in engine.
 
+## Added after the comparison with Acrobat
+
+A harder test pack (two columns, a ruled table, 7 pt print, a phone photo,
+sideways and upside-down pages, mixed scripts) showed four gaps, closed here:
+
+- The model's per-line flip check is off: on short crops it misread a lone
+  "6" as "9" and garbled 7 pt print. Whole pages are turned instead.
+- Page orientation: when a page's first reading runs down the page or is
+  mostly low-confidence, `ocr.page_orientation` reads a 1200 px copy both
+  ways round and the page gets the /Rotate that shows it upright (option
+  `rotate`, on by default; `--keep-orientation` on the command line).
+  Upright pages pay nothing. Clean up scans uses the same check when
+  Tesseract is not installed.
+- Reading order: the page is cut at its widest empty stretch, across
+  between blocks, or down between columns of running text (several words a
+  line, lines filling their column), recursively; table columns are not
+  prose, so tables still read row by row.
+- Scripts: PP-OCRv5 reading models for Russian/Ukrainian/Belarusian,
+  other Cyrillic, Korean, Arabic/Persian/Urdu, Devanagari, Thai, Greek,
+  Tamil and Telugu, chosen from Tesseract language codes, fetched once into
+  ZPDF's data folder from the address and SHA-256 in rapidocr's model list.
+  With engine `auto`, a language with no model, or two different scripts on
+  one page, goes to Tesseract when installed, and so does a page whose model
+  cannot be fetched.
+
 ## Not in this version
 
-- Page orientation (sideways or upside-down pages) still uses Tesseract in
-  the "Clean up scans" tool. A built-in orientation check is a follow-up.
-- Column-aware reading order. Lines are ordered top to bottom, left to
-  right; two-column pages copy in row order.
 - GPU and vision-language document parsers (PaddleOCR-VL and the like).
   They lead the layout benchmarks but need a GPU or tens of seconds per
   page. Possible later as an optional "best quality" engine.
-- Korean, Arabic, Cyrillic, Thai and other scripts the default model does
-  not cover. Tesseract with its language packs covers them as before.
+- Scripts with no PP-OCR model (Hebrew, Amharic, Georgian, ...), and two
+  different script models on one page. Tesseract covers them as before.
 - PDF/A output from the built-in engine. Run the PDF/A tool after OCR (a
   recipe can chain them), or choose the Tesseract engine.
 

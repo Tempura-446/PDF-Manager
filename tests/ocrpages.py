@@ -115,3 +115,83 @@ def missing_words(truth, text):
         if word in want:
             want.remove(word)
     return len(want) / max(len(_norm(truth).split()), 1)
+
+
+# -- harder pages: the cases Acrobat is known for ------------------------------
+
+BODY = ("The committee met on Tuesday to review the quarterly accounts and the draft budget for "
+        "next year. Members agreed that the maintenance reserve should rise by four percent, and asked "
+        "the treasurer to circulate revised figures before the next meeting on 18 March. The proposal to "
+        "replace the boiler in the east wing was deferred until a second quotation has been received. "
+        "Correspondence from the council regarding parking permits was noted, and the secretary will "
+        "reply confirming that residents support the scheme in principle.").split()
+
+
+def _wrap(words, font, width):
+    lines, current = [], ""
+    for word in words:
+        trial = (current + " " + word).strip()
+        if font.getlength(trial) > width and current:
+            lines.append(current)
+            current = word
+        else:
+            current = trial
+    return lines + [current]
+
+
+def _draw_lines(im, x, y, lines, font, gap=1.55):
+    draw = ImageDraw.Draw(im)
+    for line in lines:
+        draw.text((x, y), line, font=font, fill=0)
+        y += int(font.size * gap)
+    return y
+
+
+def letter():
+    """A plain one-column letter: (image, true text)."""
+    font = _font(42)
+    lines = _wrap(BODY, font, 1950)
+    im = Image.new("L", A4_300, 255)
+    _draw_lines(im, 260, 300, lines, font)
+    return im, "\n".join(lines)
+
+
+def two_columns():
+    """A heading over two columns of prose: (image, true text in reading order)."""
+    font = _font(36, serif=True)
+    left, right = _wrap(BODY[:45], font, 1000), _wrap(BODY[45:], font, 1000)
+    im = Image.new("L", A4_300, 255)
+    ImageDraw.Draw(im).text((260, 200), "Minutes of the Residents' Committee", font=_font(56), fill=0)
+    _draw_lines(im, 220, 380, left, font)
+    _draw_lines(im, 1300, 380, right, font)
+    return im, "Minutes of the Residents' Committee\n" + "\n".join(left + right)
+
+
+TABLE = [["Item", "Qty", "Unit price", "Amount"], ["Copper tubing", "14", "3.75", "52.50"],
+         ["Brass fittings", "6", "12.40", "74.40"], ["Solder 500 g", "2", "9.95", "19.90"],
+         ["PTFE tape", "10", "0.85", "8.50"], ["Pipe clips", "40", "0.22", "8.80"],
+         ["Subtotal", "", "", "164.10"], ["VAT 20%", "", "", "32.82"], ["Total due", "", "", "196.92"]]
+
+
+def ruled_table():
+    """An invoice table with ruled cells: (image, true text, row by row)."""
+    im = Image.new("L", A4_300, 255)
+    draw, font = ImageDraw.Draw(im), _font(38)
+    xs, top, height = [250, 1050, 1350, 1800, 2230], 400, 90
+    for r, row in enumerate(TABLE):
+        for c, cell in enumerate(row):
+            draw.text((xs[c] + 20, top + r * height + 22), cell, font=font, fill=0)
+    for r in range(len(TABLE) + 1):
+        draw.line([(xs[0], top + r * height), (xs[-1], top + r * height)], fill=0, width=4)
+    for x in xs:
+        draw.line([(x, top), (x, top + len(TABLE) * height)], fill=0, width=4)
+    return im, "\n".join(" ".join(c for c in row if c) for row in TABLE)
+
+
+def small_print():
+    """Two paragraphs of 7 pt print (29 px at 300 dpi): (image, true text)."""
+    font = _font(29, serif=True)
+    lines = _wrap(BODY * 2, font, 2000)
+    im = Image.new("L", A4_300, 255)
+    _draw_lines(im, 240, 300, lines, font, gap=1.35)
+    return im, "\n".join(lines)

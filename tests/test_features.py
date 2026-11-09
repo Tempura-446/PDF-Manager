@@ -766,3 +766,42 @@ def test_recipe_step_accepts_the_engine_option(tmp_path, monkeypatch):
     recipes.run([{"op": "ocr", "options": {"engine": "builtin"}}], text_pdf(tmp_path / "a.pdf"),
                 tmp_path / "o.pdf")
     assert seen["engine"] == "builtin"
+
+
+def test_ocr_turns_pages_upright_unless_told_not_to(tmp_path, monkeypatch):
+    spec = next(op for op in gui.OPERATIONS if op["id"] == "ocr")
+    rotate = next(f for f in spec["fields"] if f["key"] == "rotate")
+    assert rotate["default"] is True
+    seen = {}
+    monkeypatch.setattr(core, "ocr", _fake_ocr(seen))
+    for n, (opts, expected) in enumerate([({}, True), ({"rotate": "false"}, False)]):
+        (tmp_path / str(n)).mkdir()
+        gui.run_operation("ocr", [text_pdf(tmp_path / str(n) / "a.pdf")], opts)
+        assert seen["rotate"] is expected
+    src = text_pdf(tmp_path / "a.pdf")
+    main(["ocr", str(src), "-o", str(tmp_path / "o.pdf")])
+    assert seen["rotate"] is True
+    main(["ocr", str(src), "-o", str(tmp_path / "o.pdf"), "--keep-orientation"])
+    assert seen["rotate"] is False
+
+
+def test_pages_are_turned_upright_without_tesseract(tmp_path, monkeypatch):
+    from pdfmanager import ocr
+
+    if not ocr.builtin_available():
+        pytest.skip("needs the built-in OCR engine")
+    monkeypatch.setattr(scan, "find_tesseract", lambda: None)
+    src = scan_pdf(tmp_path / "scan.pdf", [scan_page(), scan_page(90), scan_page(180)])
+    report = scan.clean(src, tmp_path / "out.pdf", remove_blank=False, auto_rotate=True)
+    assert report["rotated"] == {2: 90, 3: 180}
+    assert scan.detect_rotation(tmp_path / "out.pdf") == {}
+
+
+def test_turning_pages_upright_needs_one_engine_or_the_other(tmp_path, monkeypatch):
+    from pdfmanager import ocr
+
+    monkeypatch.setattr(scan, "find_tesseract", lambda: None)
+    monkeypatch.setattr(ocr, "builtin_available", lambda: False)
+    src = scan_pdf(tmp_path / "scan.pdf", [scan_page()])
+    with pytest.raises(core.PdfManagerError, match=r"pdf-manager\[ocr\].*Tesseract"):
+        scan.detect_rotation(src)

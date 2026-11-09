@@ -82,16 +82,21 @@ On Linux the desktop window also needs a web engine: `pip install "pywebview[qt]
 (or the GTK packages, see the [pywebview docs](https://pywebview.flowrl.com/guide/installation.html)).
 Without it, the app opens in your browser instead.
 
-OCR is built in: no programs to install, and one model reads English, most
-European languages, Chinese and Japanese without a language setting.
+OCR is built in: no programs to install. The model ZPDF ships with reads
+English, most European languages, Chinese and Japanese without a language
+setting; for Russian, Ukrainian, Korean, Arabic, Persian, Hindi, Thai, Greek,
+Tamil or Telugu, give its code (`rus`, `kor`, `ara`, …) and that script's
+reading model is fetched once (about 10 MB, checked against its published
+checksum). It turns sideways and upside-down pages upright, reads
+multi-column pages column by column and keeps table rows together.
 [Tesseract](https://tesseract-ocr.github.io/tessdoc/Installation.html) stays
-as a second OCR engine, for other scripts through its language packs and for
-PDF/A output straight from OCR: `pip install -e ".[tesseract]"` adds
+as a second OCR engine, for the scripts the built-in one has no model for
+and for PDF/A output straight from OCR: `pip install -e ".[tesseract]"` adds
 OCRmyPDF, and the program itself comes with `brew install tesseract`,
 `sudo apt install tesseract-ocr`, or the Windows installer. A few tools use
-other free programs if you have them: turning scanned pages upright uses
-Tesseract, PDF/A uses [Ghostscript](https://ghostscript.com/releases/gsdnld.html),
-and Office → PDF uses Microsoft Office or [LibreOffice](https://www.libreoffice.org).
+other free programs if you have them: PDF/A uses
+[Ghostscript](https://ghostscript.com/releases/gsdnld.html), and Office → PDF
+uses Microsoft Office or [LibreOffice](https://www.libreoffice.org).
 
 ## Desktop app
 
@@ -498,7 +503,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `booklet` | arrange pages for a folded, saddle-stitched booklet | `pdfm booklet zine.pdf` · `-s letter` |
 | `compress` | shrink files: `low`, `medium`, `high` | `pdfm compress *.pdf -l high -o small/` |
 | `color` | convert to grayscale, RGB or CMYK | `pdfm color doc.pdf --to cmyk --icc printer.icc` |
-| `ocr` | make scans searchable | `pdfm ocr scan.pdf` (Tesseract: `--engine tesseract --language eng+deu`) |
+| `ocr` | make scans searchable | `pdfm ocr scan.pdf` (Russian: `--language rus`; Tesseract: `--engine tesseract`) |
 | `encrypt` / `decrypt` | AES-256 password protection, limits on printing, copying, changes | `pdfm encrypt doc.pdf` (prompts) |
 | `metadata` | show or set title/author/subject/keywords | `pdfm metadata doc.pdf --title "Q3 Report"` |
 | `watermark` | stamp text or another PDF | `pdfm watermark doc.pdf -t CONFIDENTIAL` |

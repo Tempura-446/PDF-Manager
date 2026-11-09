@@ -2,12 +2,16 @@
 
 The built-in engine runs PaddleOCR's PP-OCR models (through the rapidocr
 package, on ONNX Runtime). It reads degraded scans better than Tesseract,
-reads English, most European languages, Chinese and Japanese with one model
-and no language setting, and needs nothing installed beside ZPDF. Its text
-layer is ZPDF's own (textlayer.py).
+reads English, most European languages, Chinese and Japanese with the model
+it ships with and no language setting, and needs nothing installed beside
+ZPDF. Russian, Korean, Arabic, Hindi, Thai, Greek, Tamil and Telugu each
+have a reading model of their own, fetched once (and checked) the first time
+a page in that script is read. It turns sideways and upside-down pages
+upright and reads multi-column pages column by column. Its text layer is
+ZPDF's own (textlayer.py).
 
-Tesseract, through OCRmyPDF, stays as the second engine: for other scripts
-through its language packs, and for PDF/A output straight from OCR.
+Tesseract, through OCRmyPDF, stays as the second engine: for the scripts
+the built-in engine has no model for, and for PDF/A output straight from OCR.
 """
 import importlib.util
 import logging
@@ -21,20 +25,38 @@ from pathlib import Path
 from pdfmanager import core, scan, textlayer
 from pdfmanager.textlayer import Word
 
-__all__ = ["Word", "Line", "ENGINES", "choose_engine", "recognise", "reading_order", "text_of", "skew_angle"]
+__all__ = ["Word", "Line", "ENGINES", "choose_engine", "script_for", "recognise", "reading_order",
+           "text_of", "skew_angle", "page_orientation"]
 
 ENGINES = ("auto", "builtin", "tesseract")
 MIN_CONFIDENCE = 0.3   # words and lines the model is less sure of than this are dropped
 RENDER_DPI = 300
 MAX_RENDER_SIDE = 6000  # pixels; a 300 dpi A0 drawing would be 14000 and gain nothing (the model works at 2000)
 
-# Tesseract's codes for the languages the built-in model reads. With engine
-# "auto", a language outside this set goes to Tesseract when it is there.
+# Tesseract's codes for the languages the model ZPDF ships with reads.
 BUILTIN_LANGUAGES = frozenset("""
     afr aze bos cat ces chi_sim chi_tra cym dan deu eng est eus fin fra gle glg hrv hun ind isl
     ita jpn kur lat lav lit ltz mlt mri msa nld nor oci pol por que roh ron slk slv spa sqi srp_latn
     swa swe tgl tur uzb vie equ osd
 """.split())
+# The scripts with a reading model of their own (PP-OCRv5, fetched on first
+# use), by Tesseract's language codes. With engine "auto", a language that is
+# in neither list goes to Tesseract when it is there.
+SCRIPT_LANGUAGES = {
+    "eslav": "rus ukr bel",
+    "cyrillic": "bul srp mkd kaz kir mon tgk tat bak chv uzb_cyrl aze_cyrl",
+    "korean": "kor kor_vert",
+    "arabic": "ara fas urd uig pus snd",
+    "devanagari": "hin mar nep san",
+    "th": "tha",
+    "el": "ell grc",
+    "ta": "tam",
+    "te": "tel",
+}
+SCRIPT_NAMES = {"eslav": "Russian", "cyrillic": "Cyrillic", "korean": "Korean", "arabic": "Arabic",
+                "devanagari": "Devanagari", "th": "Thai", "el": "Greek", "ta": "Tamil", "te": "Telugu"}
+_SCRIPT_OF = {code: script for script, codes in SCRIPT_LANGUAGES.items() for code in codes.split()}
+
 MIN_SKEW = 0.3         # degrees; smaller tilts are left alone
 MIN_SKEW_BOXES = 3     # wide text boxes needed to trust a skew estimate
 
@@ -74,16 +96,54 @@ def tesseract_available():
     return bool(importlib.util.find_spec("ocrmypdf")) and bool(scan.find_tesseract())
 
 
+def _codes(language):
+    return [code.strip() for code in (language or "").split("+") if code.strip()]
+
+
+def script_for(language):
+    """Which reading model the built-in engine needs for ``language``
+    (Tesseract codes joined with '+'): None for the one it ships with, or
+    the name of a script model. ValueError when it has none for a language,
+    or the languages need two different script models (a page is read with
+    one); English and the other languages of the shipped model mix with any
+    script, as each script model reads Latin letters and digits too."""
+    scripts = []
+    for code in _codes(language):
+        if code in BUILTIN_LANGUAGES:
+            continue
+        script = _SCRIPT_OF.get(code)
+        if script is None:
+            raise ValueError(f"no built-in reading model for {code!r}")
+        if script not in scripts:
+            scripts.append(script)
+    if len(scripts) > 1:
+        raise ValueError("one page is read with one script model: " + " and ".join(scripts))
+    return scripts[0] if scripts else None
+
+
+def _best_script(language):
+    """script_for(), or for languages it refuses the first script it knows
+    (the built-in engine asked for by name does what it can)."""
+    try:
+        return script_for(language)
+    except ValueError:
+        return next((_SCRIPT_OF[c] for c in _codes(language) if c in _SCRIPT_OF), None)
+
+
 def choose_engine(engine, language="eng"):
     """'builtin' or 'tesseract' for ``engine`` (one of ENGINES), or a
     PdfManagerError saying what to install. ``language`` (Tesseract codes)
-    matters for "auto": a script the built-in model cannot read, such as
-    Russian or Arabic, goes to Tesseract when it is installed."""
+    matters for "auto": a language the built-in engine has no reading model
+    for, such as Hebrew, goes to Tesseract when it is installed."""
     if engine not in ENGINES:
         raise core.PdfManagerError(f"unknown OCR engine {engine!r}; choose auto, builtin or tesseract")
     if engine == "auto":
-        wanted = {code.strip() for code in (language or "").split("+") if code.strip()}
-        if builtin_available() and (wanted <= BUILTIN_LANGUAGES or not tesseract_available()):
+        try:
+            script_for(language)
+            readable = True
+        except ValueError:
+            readable = False
+        if builtin_available() and (readable or not tesseract_available()):
             return "builtin"
         if tesseract_available():
             return "tesseract"
@@ -101,34 +161,115 @@ def choose_engine(engine, language="eng"):
 
 # -- the built-in engine -------------------------------------------------------
 
-_engine_lock = threading.Lock()   # building the instance
-_call_lock = threading.Lock()     # using it: it keeps the last call's settings
-_engine_instance = None
+_engine_lock = threading.Lock()   # building the instances
+_call_lock = threading.Lock()     # using them: each keeps the last call's settings
+_engines = {}                     # script (None: the shipped model) -> RapidOCR
 
 
-def _engine():
-    """The one RapidOCR instance (its models take about a second to load)."""
-    global _engine_instance
+def models_dir():
+    """Where fetched reading models are kept: ZPDF's own folder for this user."""
+    from pdfmanager import appdata
+
+    return appdata.data_dir() / "ocr-models"
+
+
+def _model_source(script):
+    """(address, SHA-256) of a script's reading model, from rapidocr's own
+    list of models."""
+    import rapidocr
+    import yaml
+
+    key = f"{script}_PP-OCRv5_rec_mobile"
+    listing = yaml.safe_load((Path(rapidocr.__file__).parent / "default_models.yaml").read_text(encoding="utf-8"))
+    stack = [listing]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            entry = node.get(key)
+            if isinstance(entry, dict) and entry.get("model_dir") and entry.get("SHA256"):
+                return entry["model_dir"], entry["SHA256"].lower()
+            stack.extend(node.values())
+    raise core.PdfManagerError(f"this rapidocr has no {SCRIPT_NAMES.get(script, script)} reading model")
+
+
+def _fetch(url, target):
+    import urllib.request
+
+    with urllib.request.urlopen(url, timeout=60) as response, open(target, "wb") as out:
+        while True:
+            chunk = response.read(1 << 16)
+            if not chunk:
+                break
+            out.write(chunk)
+
+
+def _sha256(path):
+    import hashlib
+
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _language_model(script):
+    """The path of a script's reading model, fetched and checked on first use."""
+    from pdfmanager import progress
+
+    name = SCRIPT_NAMES.get(script, script)
+    url, digest = _model_source(script)
+    target = models_dir() / f"{script}.onnx"
+    if target.exists() and _sha256(target) == digest:
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    part = target.with_name(target.name + ".part")
+    progress.say(f"getting the {name} reading model (once, about 10 MB)")
+    try:
+        _fetch(url, part)
+    except Exception as exc:
+        part.unlink(missing_ok=True)
+        raise core.PdfManagerError(
+            f"couldn't get the {name} reading model ({exc}); connect to the internet once so "
+            "ZPDF can fetch it, or choose the Tesseract engine") from None
+    if _sha256(part) != digest:
+        part.unlink(missing_ok=True)
+        raise core.PdfManagerError(
+            f"the {name} reading model came down damaged; try again, or choose the Tesseract engine")
+    os.replace(part, target)
+    return target
+
+
+def _engine(script=None):
+    """The RapidOCR instance for a script (None: the model ZPDF ships with).
+    Models take about a second to load, so each is made once."""
     with _engine_lock:
-        if _engine_instance is None:
+        if script not in _engines:
+            params = {"Global.return_word_box": True}
+            if script is not None:
+                from rapidocr import ModelType, OCRVersion
+
+                params.update({"Rec.ocr_version": OCRVersion.PPOCRV5, "Rec.lang_type": script,
+                               "Rec.model_type": ModelType.MOBILE,
+                               "Rec.model_path": str(_language_model(script))})
             try:
                 from rapidocr import RapidOCR
 
-                _engine_instance = RapidOCR(params={"Global.return_word_box": True})
+                _engines[script] = RapidOCR(params=params)
             except Exception as exc:  # a broken install, or model files missing from a build
                 raise core.PdfManagerError(
                     "OCR's built-in engine could not start; reinstall it (pip install "
                     f"pdf-manager[ocr]) or choose the Tesseract engine ({exc})") from None
             # It announces every model it loads; only trouble is worth hearing.
             logging.getLogger("RapidOCR").setLevel(logging.WARNING)
-        return _engine_instance
+        return _engines[script]
 
 
 def reset():
-    """Forget the loaded engine and what was learnt about its install (tests)."""
-    global _engine_instance, _builtin_imports
+    """Forget the loaded engines and what was learnt about the install (tests)."""
+    global _builtin_imports
     with _engine_lock:
-        _engine_instance = None
+        _engines.clear()
         _builtin_imports = None
 
 
@@ -142,13 +283,24 @@ def _quad(points):
     return [(float(x), float(y)) for x, y in points]
 
 
-def recognise(image):
-    """The lines of text in a PIL image, each with its words."""
-    # Every switch is named each time: the engine keeps the last call's
-    # settings, and skew_angle() runs it with the detector alone.
-    engine = _engine()
+def _read(image, script=None):
+    """The model's raw result for an image. Every switch is named each
+    time: an engine keeps the last call's settings, and skew_angle() runs
+    the detector alone. The per-line flip check stays off: on short crops it
+    guesses wrong (a lone "6" became "9", 7 pt print turned to nonsense), and
+    whole pages are turned upright by page_orientation() instead."""
+    engine = _engine(script)
     with _call_lock:
-        result = engine(_array(image), use_det=True, use_cls=True, use_rec=True)
+        return engine(_array(image), use_det=True, use_cls=False, use_rec=True)
+
+
+def recognise(image, script=None):
+    """The lines of text in a PIL image, each with its words, in reading
+    order. ``script``: see script_for()."""
+    return _lines(_read(image, script))
+
+
+def _lines(result):
     if not result.txts:
         return []
     lines = []
@@ -220,15 +372,68 @@ def _rows(lines):
     return [sorted(row["lines"], key=lambda l: min(x for x, _ in l.quad)) for row in rows]
 
 
+def _bbox(line):
+    xs, ys = [x for x, _ in line.quad], [y for _, y in line.quad]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _gaps(spans):
+    """The empty stretches between ``spans`` ((start, end) pairs) along one
+    axis: (width, where to cut) for each."""
+    gaps, reach = [], None
+    for start, end in sorted(spans):
+        if reach is not None and start > reach:
+            gaps.append((start - reach, (start + reach) / 2))
+        reach = end if reach is None else max(reach, end)
+    return gaps
+
+
+def _prose(lines):
+    """Whether lines read like a column of running text, not table cells:
+    several words a line, and lines that fill most of their column."""
+    if len(lines) < 2:
+        return False
+    boxes = [_bbox(line) for line in lines]
+    width = max(b[2] for b in boxes) - min(b[0] for b in boxes)
+    words = statistics.median(len(line.text.split()) for line in lines)
+    filled = statistics.median(b[2] - b[0] for b in boxes)
+    return words >= 3 and filled >= 0.5 * width
+
+
+def _layout(lines):
+    """``lines`` as rows in reading order. The page is cut at its widest
+    empty stretch, again and again: across, between blocks (a heading, the
+    body, a footer); or down, between columns of running text, which are then
+    read one after the other. Table columns are not prose, so a table is cut
+    across into its rows, each read left to right."""
+    if len(lines) < 2:
+        return _rows(lines)
+    boxes = {id(line): _bbox(line) for line in lines}
+    down = [(width, cut) for width, cut in _gaps([(b[0], b[2]) for b in boxes.values()])
+            if _prose([l for l in lines if boxes[id(l)][2] <= cut])
+            and _prose([l for l in lines if boxes[id(l)][0] >= cut])]
+    across = _gaps([(b[1], b[3]) for b in boxes.values()])
+    if down and (not across or max(down)[0] >= max(across)[0]):
+        cut = max(down)[1]
+        return (_layout([l for l in lines if boxes[id(l)][2] <= cut])
+                + _layout([l for l in lines if boxes[id(l)][0] >= cut]))
+    if across:
+        cut = max(across)[1]
+        return (_layout([l for l in lines if boxes[id(l)][3] <= cut])
+                + _layout([l for l in lines if boxes[id(l)][1] >= cut]))
+    return _rows(lines)
+
+
 def reading_order(lines):
-    """``lines`` in reading order: rows top to bottom, left to right within a row."""
-    return [line for row in _rows(lines) for line in row]
+    """``lines`` in reading order: blocks top to bottom, columns of running
+    text one after the other, and rows left to right."""
+    return [line for row in _layout(lines) for line in row]
 
 
 def text_of(lines):
     """The recognised text as a reader gets it: words separated by spaces,
-    one line per row of the page."""
-    return "\n".join(" ".join(w.text for line in row for w in line.words) for row in _rows(lines))
+    one line per row, columns one after the other."""
+    return "\n".join(" ".join(w.text for line in row for w in line.words) for row in _layout(lines))
 
 
 def skew_angle(image):
@@ -252,6 +457,78 @@ def skew_angle(image):
     return 0.0 if abs(angle) < MIN_SKEW else round(angle, 2)
 
 
+ORIENTATION_SIDE = 1200   # pixels; the long side of the copy page_orientation() reads
+SURE_SCORE = 0.8          # how sure of a line the model must be for it to count there
+
+
+def _box_size(box):
+    (x0, y0), (x1, y1), (x2, y2), _ = _quad(box)
+    return math.hypot(x1 - x0, y1 - y0), math.hypot(x2 - x1, y2 - y1)
+
+
+def _reading_score(engine, image):
+    """How much text the model reads with confidence in ``image``, upright:
+    the characters of the lines it is sure of, in boxes wider than tall."""
+    with _call_lock:
+        result = engine(_array(image), use_det=True, use_cls=False, use_rec=True)
+    score = 0.0
+    for text, box, sure in zip(result.txts or (), result.boxes if result.boxes is not None else (),
+                               result.scores or ()):
+        width, height = _box_size(box)
+        if sure >= SURE_SCORE and width > height:
+            score += sure * len(text)
+    return score
+
+
+def page_orientation(image, script=None):
+    """How far to turn ``image`` (degrees counter-clockwise: 0, 90, 180 or
+    270) so that its text reads upright; 0 when it already does, or when
+    there is too little text to tell. The shape of the text boxes says
+    whether the lines run across or down the page, and reading both ways
+    round says which way up."""
+    small = image.copy()
+    small.thumbnail((ORIENTATION_SIDE, ORIENTATION_SIDE))
+    engine = _engine(script)
+    with _call_lock:
+        boxes = engine(_array(small), use_det=True, use_cls=False, use_rec=False).boxes
+    across = down = 0.0
+    for box in boxes if boxes is not None else ():
+        width, height = _box_size(box)
+        if width > 1.2 * height:
+            across += width
+        elif height > 1.2 * width:
+            down += height
+    if not across and not down:
+        return 0
+    candidates = (90, 270) if down > across else (0, 180)
+    scores = {turn: _reading_score(engine, small.rotate(turn, expand=True)) for turn in candidates}
+    best, other = sorted(candidates, key=scores.get, reverse=True)
+    if scores[best] < 20 or scores[best] < 1.5 * scores[other]:
+        return 0
+    return best
+
+
+def _reads_wrong_way(result):
+    """Whether a page's first reading suggests it is sideways or upside
+    down: its text boxes run down the page, or the model is unsure of most
+    of what it read (upside-down text reads as low-confidence nonsense)."""
+    texts, scores = result.txts or (), result.scores or ()
+    boxes = result.boxes if result.boxes is not None else ()
+    across = down = 0.0
+    for box in boxes:
+        width, height = _box_size(box)
+        if width > 1.2 * height:
+            across += width
+        elif height > 1.2 * width:
+            down += height
+    if down > across:
+        return True
+    chars = sum(len(t) for t in texts)
+    if not chars:
+        return False
+    return sum(s * len(t) for t, s in zip(texts, scores)) / chars < 0.75
+
+
 # -- running OCR on a file ------------------------------------------------------
 
 def page_has_text(page):
@@ -263,12 +540,22 @@ def page_has_text(page):
         return False
 
 
-def run(path, output, language="eng", force=False, deskew=False, password=None, engine="auto"):
+def run(path, output, language="eng", force=False, deskew=False, password=None, engine="auto",
+        rotate=True):
     """Add a searchable text layer to the scanned pages of ``path``; see
     ``core.ocr``."""
     from pdfmanager import progress
 
     chosen = choose_engine(engine, language)
+    script = _best_script(language) if chosen == "builtin" else None
+    if script is not None:
+        try:
+            _language_model(script)  # fetched now, before the file is touched
+        except core.PdfManagerError:
+            if engine != "auto" or not tesseract_available():
+                raise
+            progress.say(f"the {SCRIPT_NAMES[script]} reading model can't be fetched; using Tesseract")
+            chosen, script = "tesseract", None
     source = Path(path)
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -282,9 +569,9 @@ def run(path, output, language="eng", force=False, deskew=False, password=None, 
     progress.say("recognising text (this can take a while)")
     try:
         if chosen == "tesseract":
-            _run_tesseract(source, tmp_out, language, force, deskew)
+            _run_tesseract(source, tmp_out, language, force, deskew, rotate)
         else:
-            _run_builtin(source, tmp_out, force, deskew)
+            _run_builtin(source, tmp_out, force, deskew, rotate, script)
         os.replace(tmp_out, output)
     finally:
         for tmp in (tmp_in, tmp_out):
@@ -293,7 +580,7 @@ def run(path, output, language="eng", force=False, deskew=False, password=None, 
     return output
 
 
-def _run_tesseract(source, output, language, force, deskew):
+def _run_tesseract(source, output, language, force, deskew, rotate=True):
     try:
         import ocrmypdf
         from ocrmypdf.exceptions import ExitCodeException, MissingDependencyError
@@ -302,13 +589,32 @@ def _run_tesseract(source, output, language, force, deskew):
             "OCR with Tesseract needs OCRmyPDF and the Tesseract program: pip install "
             f"pdf-manager[tesseract], then install Tesseract ({TESSERACT_LINK})") from None
     scan.add_programs_to_path()  # Tesseract and Ghostscript where installers put them
+    # Turning pages needs Tesseract's orientation data, which not every
+    # install has; without it OCR still runs, the pages just stay as they are.
+    rotate = rotate and "osd" in _tesseract_languages()
     try:
         ocrmypdf.ocr(str(source), str(output), language=language.split("+"),
-                     skip_text=not force, force_ocr=force, deskew=deskew, progress_bar=False)
+                     skip_text=not force, force_ocr=force, deskew=deskew, rotate_pages=rotate,
+                     progress_bar=False)
     except MissingDependencyError as exc:
         raise core.PdfManagerError(f"OCR is missing a program: {exc}") from None
     except ExitCodeException as exc:
         raise core.PdfManagerError(f"OCR failed: {exc}") from None
+
+
+def _tesseract_languages():
+    """The language data the Tesseract program has (empty when it can't say)."""
+    import subprocess
+
+    program = scan.find_tesseract()
+    if not program:
+        return set()
+    try:
+        out = subprocess.run([program, "--list-langs"], capture_output=True, text=True, timeout=30,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    return {line.strip() for line in (out.stdout + out.stderr).splitlines()[1:] if line.strip()}
 
 
 def render_scale(width_pt, height_pt):
@@ -318,7 +624,7 @@ def render_scale(width_pt, height_pt):
     return min(RENDER_DPI / 72, MAX_RENDER_SIDE / longest)
 
 
-def _run_builtin(source, output, force, deskew):
+def _run_builtin(source, output, force, deskew, rotate=True, script=None):
     import pypdfium2 as pdfium
     from PIL import Image
     from pypdf import PdfWriter, Transformation
@@ -344,6 +650,18 @@ def _run_builtin(source, output, force, deskew):
                 scale = render_scale(pdfium_page.get_width(), pdfium_page.get_height())
                 image = pdfium_page.render(scale=scale).to_pil()
             try:
+                lines = None
+                if rotate:
+                    first = _read(image, script)
+                    turn = page_orientation(image, script) if _reads_wrong_way(first) else 0
+                    if turn:
+                        # Show the page the right way up, as Acrobat does:
+                        # /Rotate turns it clockwise, the picture turned the
+                        # other way round.
+                        image = image.rotate(turn, expand=True)
+                        _set_rotation(page, (page.rotation or 0) + 360 - turn)
+                    else:
+                        lines = _lines(first)
                 if deskew:
                     angle = skew_angle(image)
                     if angle:
@@ -351,7 +669,9 @@ def _run_builtin(source, output, force, deskew):
                         # the words and the page stay in step.
                         image = image.rotate(-angle, resample=Image.BICUBIC, fillcolor="white")
                         _turn_page(page, -angle, Transformation)
-                lines = recognise(image)
+                        lines = None
+                if lines is None:
+                    lines = recognise(image, script)
             except progress.Cancelled:
                 raise
             except Exception as exc:  # engine trouble: say which page
@@ -380,6 +700,12 @@ def _drop_unused_objects(path):
     with pikepdf.open(str(path)) as pdf:
         pdf.save(str(tmp), object_stream_mode=pikepdf.ObjectStreamMode.generate)
     os.replace(tmp, path)
+
+
+def _set_rotation(page, degrees):
+    from pypdf.generic import NameObject, NumberObject
+
+    page[NameObject("/Rotate")] = NumberObject(degrees % 360)
 
 
 def _turn_page(page, angle, Transformation):

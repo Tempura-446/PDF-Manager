@@ -24,9 +24,9 @@ class WatchSettings:
     rename: str = None            # rename pattern (see organize.format_name)
     compress: str = None          # compression level
     remove_blank: bool = False    # drop blank pages
-    auto_rotate: bool = False     # turn pages upright (needs Tesseract)
+    auto_rotate: bool = False     # turn pages upright (built-in OCR engine or Tesseract)
     ocr: bool = False
-    ocr_language: str = "eng"     # for the Tesseract engine
+    ocr_language: str = "eng"     # Tesseract codes (see core.ocr)
     ocr_engine: str = "auto"      # auto, builtin or tesseract (see core.ocr)
     recipe: list = None           # steps of a recipe to run (see recipes.py)
     skip_duplicates: bool = False

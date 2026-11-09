@@ -281,7 +281,7 @@ def run_number(a, src, out, pw):
 
 def run_ocr(a, src, out, pw):
     return core.ocr(src, out, language=a.language, force=a.force, deskew=a.deskew, password=pw,
-                    engine=a.engine)
+                    engine=a.engine, rotate=not a.keep_orientation)
 
 
 def run_clean(a, src, out, pw):
@@ -1333,7 +1333,12 @@ def build_parser():
     sp.add_argument("--engine", choices=ocr.ENGINES, default="auto",
                     help="auto (default: the built-in engine when installed, else Tesseract), "
                          "builtin or tesseract")
-    sp.add_argument("--language", default="eng", help="Tesseract language(s), e.g. eng+deu")
+    sp.add_argument("--language", default="eng",
+                    help="language(s) as Tesseract codes, e.g. eng+deu; the built-in engine reads "
+                         "English, European languages, Chinese and Japanese as they are, and "
+                         "fetches a model once for rus, ukr, kor, ara, fas, hin, tha, ell, tam, tel")
+    sp.add_argument("--keep-orientation", action="store_true",
+                    help="don't turn sideways or upside-down pages upright")
     sp.add_argument("--force", action="store_true", help="redo pages that already have text")
     sp.add_argument("--deskew", action="store_true", help="straighten crooked scans")
 
@@ -1632,7 +1637,7 @@ def build_parser():
     sp.add_argument("--ocr", action="store_true", help="make scans searchable")
     sp.add_argument("--engine", choices=ocr.ENGINES, default="auto", help="OCR engine (see pdfm ocr)")
     sp.add_argument("--recipe", metavar="NAME", help="run a saved recipe on each file")
-    sp.add_argument("--language", default="eng", help="OCR language(s) for Tesseract")
+    sp.add_argument("--language", default="eng", help="OCR language(s) (see pdfm ocr)")
     sp.add_argument("--skip-duplicates", action="store_true",
                     help="don't process files identical to one already in --dest")
     sp.add_argument("--delete-originals", action="store_true",

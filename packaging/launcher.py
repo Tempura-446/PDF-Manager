@@ -90,6 +90,11 @@ def self_test(result_file):
             scanned = core.images_to_pdf([Path(tmp) / "scan.png"], Path(tmp) / "scan.pdf")
             core.ocr(scanned, Path(tmp) / "ocr.pdf", engine="builtin")
             assert "ZPDF" in core.extract_text(Path(tmp) / "ocr.pdf"), "OCR read nothing from the scan"
+            # Language models are fetched from the addresses in rapidocr's own
+            # list, which must be in the bundle.
+            from pdfmanager import ocr
+
+            assert ocr._model_source("korean")[0].endswith(".onnx"), "rapidocr's model list is missing"
 
         server, url = gui.make_server()
         Thread(target=server.serve_forever, daemon=True).start()
