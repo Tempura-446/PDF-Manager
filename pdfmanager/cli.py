@@ -15,7 +15,7 @@ from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
                         forms, recipes, redact, scan, search)
-from pdfmanager import certsign, filetools, formdetect, pdfacheck
+from pdfmanager import certsign, comments, filetools, formdetect, pdfacheck
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -518,6 +518,37 @@ def cmd_from_office(a):
     return 1 if failures else 0
 
 
+# -- comments --
+def run_comments(a, src, out, pw):
+    if a.import_xfdf:
+        added, skipped = comments.import_xfdf(src, a.import_xfdf, out, pw)
+        if pw:
+            _reencrypt(out, pw)
+        return f"{out}  (added {added} comment{'s' if added != 1 else ''}" + \
+            (f"; couldn't add {', '.join(skipped)})" if skipped else ")")
+    if a.export:
+        target = Path(a.output) if a.output and not _is_folder(a.output) else out.with_suffix(".xfdf")
+        n = comments.export_xfdf(src, target, pw)
+        return f"{target}  ({n} comment{'s' if n != 1 else ''})"
+    found = comments.collect(src, pw)
+    if a.csv:
+        target = Path(a.output) if a.output and not _is_folder(a.output) else out.with_suffix(".csv")
+        comments.to_csv(found, target)
+        return f"{target}  ({comments.count(found)} comments)"
+    if a.summary:
+        comments.summary_pdf(found, out, Path(src).name)
+        return f"{out}  ({comments.count(found)} comments)"
+    for c in found:  # without options: list them
+        print(f"p. {c['page']}  {c['kind']}" + (f"  {c['author']}" if c["author"] else "")
+              + (f"  “{c['marked']}”" if c["marked"] else "") + (f": {c['text']}" if c["text"] else ""))
+        for r in c["replies"]:
+            print(f"    reply{('  ' + r['author']) if r['author'] else ''}: {r['text']}")
+    if not found:
+        print("no comments")
+    return None
+# -- end of comments --
+
+
 # -- web pages --
 def cmd_web(a):
     """Print web pages (addresses or saved .html files) to PDF."""
@@ -650,6 +681,7 @@ OUTPUTS = {
 OUTPUTS["sign-cert"] = ("signed", "pdf")  # digital ID signatures
 OUTPUTS.update({"attach": ("attached", "pdf"), "labels": ("labelled", "pdf"),
                 "repair": ("repaired", "pdf")})  # file tools
+OUTPUTS["comments"] = ("comments", "pdf")
 
 
 def _is_batch(patterns, inputs):
@@ -718,6 +750,7 @@ KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split", 
                     "to-excel",
                     "extract-media",
                     "pdfa"}  # PDF/A doesn't allow encryption
+KEEP_UNENCRYPTED.add("comments")  # a summary, CSV or XFDF; an import protects itself
 KEEP_UNENCRYPTED.add("sign-cert")  # stays protected inside the signed file; re-saving breaks it
 
 
@@ -1368,6 +1401,15 @@ def build_parser():
                         "per table)")
     g.add_argument("--csv", action="store_true",
                    help="write a CSV file per table instead of a workbook")
+
+    sp = per_file("comments", run_comments,
+                  "list the comments in PDFs, or make a summary (PDF), a spreadsheet (CSV) or an "
+                  "XFDF file of them; or add comments from an XFDF file")
+    g = sp.add_mutually_exclusive_group()
+    g.add_argument("--summary", action="store_true", help="a PDF listing the comments page by page")
+    g.add_argument("--csv", action="store_true", help="a spreadsheet of the comments")
+    g.add_argument("--export", action="store_true", help="an XFDF file of the comments (Acrobat reads it)")
+    g.add_argument("--import", dest="import_xfdf", metavar="XFDF", help="add the comments of an XFDF file")
 
     sp = other("web", cmd_web, "save web pages as PDFs, as the browser prints them (needs "
                                "Microsoft Edge, Chrome or Chromium)")

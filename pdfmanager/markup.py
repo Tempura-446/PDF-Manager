@@ -309,6 +309,10 @@ STAMP_COLORS = {"APPROVED": "#1f8a3b", "FINAL": "#1f8a3b", "RECEIVED": "#1f4fd8"
 
 
 def _stamp(writer, page, page_ref, change, author):
+    return writer._add_object(stamp_annotation(writer, page, page_ref, change, author))
+
+
+def stamp_annotation(writer, page, page_ref, change, author):
     """A rubber stamp: the label in bold capitals in a rounded frame, with
     "by NAME, DATE" under it when ``dated``. Drawn upright as the page is
     shown, whatever the page's /Rotate."""
@@ -362,7 +366,7 @@ def _stamp(writer, page, page_ref, change, author):
     annot[NameObject("/Name")] = NameObject(STAMP_NAMES.get(label, "/" + re.sub(r"\W+", "", label.title()) or "/Draft"))
     annot[NameObject("/Subj")] = TextStringObject(label.title())
     annot[NameObject("/AP")] = _appearance(writer, rect, " ".join(parts), fonts)
-    return writer._add_object(annot)
+    return annot
 
 
 # ---- measurements (the reader's Scale bar), as measurement annotations ----------

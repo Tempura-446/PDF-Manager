@@ -332,8 +332,18 @@ export class Reader {
     this.authorInput = el("input", { type: "text", class: "rd-author", placeholder: "Your name", "aria-label": "Your name on comments",
       value: store.get("pdfm-author", "") });
     this.commentsList = el("div", { class: "rd-comments", "aria-live": "polite" });
+    // -- comment summary and XFDF --
+    const commentBtn = (label, title, fn) => el("button", { type: "button", class: "rd-linkbtn", title, onclick: fn }, label);
+    this.xfdfInput = el("input", { type: "file", accept: ".xfdf,.xml", hidden: true });
+    this.xfdfInput.addEventListener("change", () => { const f = this.xfdfInput.files[0]; this.xfdfInput.value = ""; if (f) this.#importComments(f); });
+    const commentActions = el("div", { class: "rd-commentactions" },
+      commentBtn("Summary", "A PDF listing every comment, page by page", () => this.#commentSummary()),
+      commentBtn("Export", "Save the comments as an XFDF file, to send or to add to another copy", () => this.#exportComments()),
+      commentBtn("Import…", "Add comments from an XFDF file (from Acrobat or another copy)", () => this.xfdfInput.click()),
+      this.xfdfInput);
+    // -- end of comment summary and XFDF --
     this.commentsPanel = el("div", { class: "rd-panel rd-commentspanel", role: "tabpanel", hidden: true },
-      el("label", { class: "rd-authorrow" }, "Comment as", this.authorInput), this.commentsList);
+      el("label", { class: "rd-authorrow" }, "Comment as", this.authorInput), commentActions, this.commentsList);
     this.thumbsList = el("ol", { class: "rd-thumbs", role: "listbox", "aria-multiselectable": "true", "aria-label": "Pages" });
     this.selected = new Set();
     this.outlineList = el("ul", { class: "rd-outline" });
@@ -1791,6 +1801,60 @@ export class Reader {
     }
     list.replaceChildren(...fresh, ...top.map((it) => this.#commentCard(it)));
   }
+
+  // -- comment summary and XFDF --
+  async #commentRequest(what, extra = null) {
+    await this.chain;
+    const tab = this.activeTab;
+    const body = new FormData();
+    body.append("file", new Blob([await this.#currentBytes()], { type: "application/pdf" }), "file.pdf");
+    body.append("password", tab?.password || "");
+    body.append("name", this.name || "document.pdf");
+    if (extra) body.append("xfdf", extra, extra.name);
+    const res = await fetch(`/api/comments/${what}`, { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    return res;
+  }
+
+  /** A PDF listing the comments, opened in a new tab. */
+  async #commentSummary() {
+    if (!this.doc) return;
+    try {
+      const res = await this.#commentRequest("summary");
+      const stem = (this.name || "document").replace(/\.pdf$/i, "");
+      await this.openBytes(new Uint8Array(await res.arrayBuffer()), `${stem} — comments.pdf`);
+    } catch (e) { this.toast("Couldn't make the summary: " + (e.message || e)); }
+  }
+
+  async #exportComments() {
+    if (!this.doc) return;
+    try {
+      const res = await this.#commentRequest("export");
+      const n = Number(res.headers.get("X-Pdfm-Count")) || 0;
+      if (!n) { this.toast("This document has no comments to export."); return; }
+      const stem = (this.name || "document").replace(/\.pdf$/i, "");
+      await this.#saveBytes(new Uint8Array(await res.arrayBuffer()), `${stem}.xfdf`, () => {}, this.activeTab?.fileId);
+    } catch (e) { this.toast("Couldn't export the comments: " + (e.message || e)); }
+  }
+
+  #importComments(file) {
+    return this.#changeDocument(async (bytes, tab) => {
+      const body = new FormData();
+      body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
+      body.append("password", tab.password || "");
+      body.append("xfdf", file, file.name);
+      return fetch("/api/comments/import", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
+    }, {
+      failure: "Couldn't add the comments: ",
+      after: (res) => {
+        const n = Number(res.headers.get("X-Pdfm-Added")) || 0, skipped = res.headers.get("X-Pdfm-Skipped");
+        this.toast(n ? `Added ${n} comment${n === 1 ? "" : "s"}${skipped ? ` (some kinds couldn't be added: ${skipped})` : ""}.`
+          : "Nothing to add: these comments are already here.");
+        this.#listComments();
+      },
+    });
+  }
+  // -- end of comment summary and XFDF --
 
   #commentCard(it, isReply = false) {
     const date = (raw) => {

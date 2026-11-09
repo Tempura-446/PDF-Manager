@@ -42,7 +42,7 @@ from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
                         forms, recipes, redact, scan, search, textedit, update, viewports, markup, pageimages,
-                        formdetect, pdfacheck, filetools)
+                        formdetect, pdfacheck, filetools, comments)
 from pdfmanager import certsign
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
@@ -280,6 +280,19 @@ OPERATIONS = [
     {"id": "metadata", "group": "Stamp", "label": "Title & author", "files": "pdf",
      "fields": [_f("title", "Title"), _f("author", "Author"), _f("subject", "Subject"),
                 _f("keywords", "Keywords")]},
+    # -- comments --
+    {"id": "comments", "group": "Stamp", "label": "Comments: summary & export", "files": "pdf",
+     "help": "List the comments of PDFs (notes, highlights, stamps…, with the words they mark "
+             "and the replies) as a PDF to read or print, or as a spreadsheet; or move "
+             "comments between copies of a document with XFDF files (Acrobat reads and "
+             "writes them).",
+     "fields": [_f("mode", "Make", "select", "summary",
+                   choices=[["summary", "A summary (PDF)"], ["csv", "A spreadsheet (CSV)"],
+                            ["export", "A comments file to send (XFDF)"],
+                            ["import", "Add comments from an XFDF file"]]),
+                _f("xfdf", "Comments file (.xfdf)", "file", None, accept=".xfdf,.xml",
+                   show_if={"mode": "import"})]},
+    # -- end of comments --
     # -- file tools --
     {"id": "attach", "group": "Stamp", "label": "Attach files", "files": "pdf",
      "help": "Attach files to PDFs (a spreadsheet, the original Word file, photos), or take "
@@ -464,6 +477,7 @@ SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "rec
 SUFFIX.update({"sign-cert": "signed", "verify-sig": "signatures"})  # digital ID signatures
 SUFFIX["pdfa-check"] = "pdfa-check"
 SUFFIX.update({"attach": "attached", "labels": "labelled", "repair": "repaired"})  # file tools
+SUFFIX["comments"] = "comments"
 SUFFIX["to-excel"] = "tables"
 
 
@@ -644,10 +658,10 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             bates_prefix=opts.get("bates_prefix") or "", bates_start=first,
             bates_digits=_num(opts.get("bates_digits"), int, 6), password=password)
     elif op == "flatten":
-        fields, comments = _bool(opts.get("forms", True)), _bool(opts.get("comments", True))
-        if not fields and not comments:
+        with_fields, with_comments = _bool(opts.get("forms", True)), _bool(opts.get("comments", True))
+        if not with_fields and not with_comments:
             raise UserError("choose form fields, comments or both")
-        archive.flatten(src, out, forms=fields, comments=comments, password=password)
+        archive.flatten(src, out, forms=with_fields, comments=with_comments, password=password)
     elif op == "sanitize":
         counts = archive.sanitize(
             src, out, **{k: _bool(opts.get(k, d)) for k, d in
@@ -714,6 +728,29 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         notes.append(f"{src.name}: " + ("opens with its password" if opts.get("new_password")
                                        else "anyone can open it")
                      + (f"; {filetools.describe(perms)}" if limited else ""))
+    # -- comments --
+    elif op == "comments":
+        mode = opts.get("mode") or "summary"
+        if mode == "import":
+            if not extra_files.get("xfdf"):
+                raise UserError("choose the comments file (.xfdf) to add")
+            added, skipped = comments.import_xfdf(src, extra_files["xfdf"], out, password)
+            notes.append(f"{src.name}: added {added} comment{'s' if added != 1 else ''}"
+                         + (f" (couldn't add: {', '.join(skipped)})" if skipped else ""))
+        else:
+            if mode == "export":
+                out = out.with_name(f"{src.stem}.xfdf")
+                n = comments.export_xfdf(src, out, password)
+            else:
+                found = comments.collect(src, password)
+                n = comments.count(found)
+                if mode == "csv":
+                    out = out.with_name(f"{src.stem}_comments.csv")
+                    comments.to_csv(found, out)
+                else:
+                    comments.summary_pdf(found, out, src.name)
+            notes.append(f"{src.name}: {n} comment{'s' if n != 1 else ''}")
+    # -- end of comments --
     # -- file tools --
     elif op == "attach":
         added, removed = filetools.attach(src, out, extra_files.get("attach[]") or [],
@@ -983,11 +1020,12 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
     if not outputs:
         raise UserError("nothing was found to save" + (f" ({'; '.join(notes)})" if notes else ""))
     _protect(protect, password, op)
-    if len(outputs) == 1 and op != "media" and outputs[0].suffix != ".csv":  # CSV: always a ZIP
+    if len(outputs) == 1 and op != "media" and (outputs[0].suffix != ".csv" or op == "comments"):  # CSV tables: a ZIP
         path = outputs[0]
         ctype = {".txt": "text/plain; charset=utf-8",
                  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                 ".xfdf": "application/vnd.adobe.xfdf", ".csv": "text/csv; charset=utf-8",
                  }.get(path.suffix, "application/pdf")
         return path.name, path.read_bytes(), ctype
     buf = io.BytesIO()
@@ -1663,6 +1701,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._form_detect(body)
             if path == "/api/form/fillable":
                 return self._form_fillable(body)
+            if path in ("/api/comments/summary", "/api/comments/export", "/api/comments/import"):
+                return self._comments(path.rsplit("/", 1)[1], body)
             if path == "/api/text/edit":
                 return self._text_edit(body)
             if path == "/api/pages/arrange":
@@ -1917,6 +1957,35 @@ class Handler(BaseHTTPRequestHandler):
                     raise UserError("pages should look like 1-2") from None
             found = formdetect.detect(path, fields.get("password") or None, pages=pages)
         return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})
+
+    def _comments(self, what, body):
+        """The reader's comment summary (PDF), XFDF export, or XFDF import
+        (the changed PDF)."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            src.write_bytes(uploads[0][2])
+            out = Path(tmp) / "out"
+            name = fields.get("name") or "document.pdf"
+            if what == "summary":
+                comments.summary_pdf(comments.collect(src, password), out, name)
+                return self._send(HTTPStatus.OK, out.read_bytes(), "application/pdf")
+            if what == "export":
+                n = comments.export_xfdf(src, out, password)
+                return self._send(HTTPStatus.OK, out.read_bytes(), "application/vnd.adobe.xfdf",
+                                  {"X-Pdfm-Count": str(n)})
+            xfdf = next((data for key, _, data in uploads if key == "xfdf"), None)
+            if xfdf is None:
+                raise UserError("choose the comments file (.xfdf) to add")
+            (Path(tmp) / "in.xfdf").write_bytes(xfdf)
+            added, skipped = comments.import_xfdf(src, Path(tmp) / "in.xfdf", out, password)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)  # stays protected
+            return self._send(HTTPStatus.OK, out.read_bytes(), "application/pdf",
+                              {"X-Pdfm-Added": str(added), "X-Pdfm-Skipped": ",".join(skipped)})
 
     def _form_fillable(self, body):
         """The reader's "Make it fillable": the fields of a printed form added
