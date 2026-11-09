@@ -26,6 +26,7 @@ import os
 import re
 import zipfile
 from pathlib import Path
+from urllib.parse import quote
 from xml.sax.saxutils import escape, quoteattr
 
 from pdfmanager import core, layout, progress
@@ -271,7 +272,7 @@ def _text_box(slide, block, place, scale, link_rids, lang):
     # baseline is a line spacing less the descent below the top of the box.
     spacing = block.spacing or round(size * 1.2, 2)
     first = spacing - (descent - 0.025) * size
-    line_spacing = f'<a:spcPts val="{max(0, int(round(spacing * scale * 100)))}"/>'
+    line_spacing = f'<a:spcPts val="{min(158400, max(0, int(round(spacing * scale * 100))))}"/>'
     top = block.lines[0].base - first
     height = (block.lines[-1].base - block.lines[0].base) + first + descent * size
     width = block.x1 - block.x0
@@ -400,7 +401,8 @@ def _write_slides(z, doc, editable):
             link_rids = {}
             for i, link in enumerate(page.links):
                 if "uri" in link:
-                    target = slide.rel("hyperlink", link["uri"], external=True)
+                    uri = quote(link["uri"], safe=":/?#[]@!$&'()*+,;=%~")  # spaces, accents
+                    target = slide.rel("hyperlink", uri, external=True)
                     link_rids[i] = f'<a:hlinkClick r:id="{target}">{_LINK_COLOR}</a:hlinkClick>'
                 elif link["page"] in numbers:
                     target = slide.rel("slide", f"slide{numbers[link['page']]}.xml")
