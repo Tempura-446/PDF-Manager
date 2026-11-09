@@ -1,4 +1,5 @@
-"""Fillable forms: add text boxes, checkboxes and signature fields to a PDF.
+"""Fillable forms: add text boxes, checkboxes, radio buttons, dropdowns and
+signature fields to a PDF.
 
 The fields are standard PDF form fields, so they can be filled in with any
 PDF reader, including this app's. Each field gets its own appearance (a
@@ -6,16 +7,21 @@ thin border, and a tick in a checked box), so it looks the same everywhere,
 and readers draw the text in as it's typed.
 """
 
+import re
+
 from pypdf.generic import (ArrayObject, DecodedStreamObject, DictionaryObject, FloatObject,
                            NameObject, NumberObject, TextStringObject)
 
 from pdfmanager import core
 
-TYPES = {"text": "Text", "multiline": "Text", "checkbox": "Checkbox", "signature": "Signature"}
+TYPES = {"text": "Text", "multiline": "Text", "checkbox": "Checkbox", "radio": "Group",
+         "dropdown": "Dropdown", "signature": "Signature"}
 MULTILINE, REQUIRED = 1 << 12, 1 << 1     # text field flags
-RADIO, PUSHBUTTON = 1 << 15, 1 << 16      # button field flags
+NO_TOGGLE_OFF, RADIO, PUSHBUTTON = 1 << 14, 1 << 15, 1 << 16  # button field flags
+COMBO, EDIT = 1 << 17, 1 << 18            # choice field flags
 BORDER = (0.45, 0.45, 0.45)
 TICK = "4"                                # ✔ in ZapfDingbats
+DOT = "l"                                 # ● in ZapfDingbats
 MIN_SIZE = 4                              # points
 
 
@@ -67,7 +73,7 @@ def _kind(field):
     if ft == "/Sig":
         return "signature"
     if ft == "/Ch":
-        return "choice"
+        return "dropdown" if flags & COMBO else "list"
     return "other"
 
 
@@ -93,7 +99,9 @@ def existing_fields(path, password=None):
 
 
 def parse_field(spec):
-    """'TYPE:PAGE:X0,Y0,X1,Y1[:NAME]' (from the command line) -> field dict."""
+    """'TYPE:PAGE:X0,Y0,X1,Y1[:NAME]' (from the command line) -> field dict.
+    A radio button's NAME is GROUP=VALUE ("size=Large"); a dropdown's is
+    NAME=CHOICE|CHOICE|... ("Country=France|Spain")."""
     try:
         kind, page, coords, *name = spec.split(":", 3)
         x0, y0, x1, y1 = (float(v) for v in coords.split(","))
@@ -103,8 +111,40 @@ def parse_field(spec):
             f"invalid field {spec!r}; use TYPE:PAGE:X0,Y0,X1,Y1[:NAME], e.g. "
             "text:1:72,700,300,720:Name (points from the bottom left)") from None
     if name:
-        field["name"] = name[0]
+        name, sep, rest = name[0].partition("=")
+        field["name"] = name
+        if sep and field["type"] == "radio":
+            field["value"] = rest
+        elif sep and field["type"] == "dropdown":
+            field["options"] = [o for o in rest.split("|") if o.strip()]
     return field
+
+
+def _options(field):
+    """A dropdown's choices: a list, or text with one per line or comma."""
+    raw = field.get("options") or []
+    if isinstance(raw, str):
+        raw = re.split(r"[\n,]", raw)
+    seen, out = set(), []
+    for option in raw:
+        option = " ".join(str(option).split())
+        if option and option not in seen:
+            seen.add(option)
+            out.append(option)
+    return out
+
+
+def _state_name(value, taken):
+    """A radio button's on-state name (its export value): the button's
+    label, distinct within its group ("Off" is the off state)."""
+    value = " ".join(str(value or "").split()) or "Choice"
+    if value.lower() == "off":
+        value = "Off choice"
+    name, n = value, 2
+    while name in taken:
+        name, n = f"{value} {n}", n + 1
+    taken.add(name)
+    return name
 
 
 def _unique(name, taken, label):
@@ -156,6 +196,28 @@ def _border(width, height, border):
     return f"q {r} {g} {b} RG 1 w 0.5 0.5 {width - 1:.2f} {height - 1:.2f} re S Q\n"
 
 
+def _circle(cx, cy, r, op):
+    """A circle as four Bezier curves, then ``op`` (S strokes, f fills)."""
+    k = 0.5523 * r
+    return (f"{cx + r:.2f} {cy:.2f} m "
+            f"{cx + r:.2f} {cy + k:.2f} {cx + k:.2f} {cy + r:.2f} {cx:.2f} {cy + r:.2f} c "
+            f"{cx - k:.2f} {cy + r:.2f} {cx - r:.2f} {cy + k:.2f} {cx - r:.2f} {cy:.2f} c "
+            f"{cx - r:.2f} {cy - k:.2f} {cx - k:.2f} {cy - r:.2f} {cx:.2f} {cy - r:.2f} c "
+            f"{cx + k:.2f} {cy - r:.2f} {cx + r:.2f} {cy - k:.2f} {cx + r:.2f} {cy:.2f} c {op}\n")
+
+
+def _radio_look(width, height, border):
+    """(off, on) appearances of a round button."""
+    cx, cy = width / 2, height / 2
+    r = max(1.0, min(width, height) / 2 - 0.75)
+    ring = ""
+    if border:
+        rr, gg, bb = BORDER
+        ring = f"q {rr} {gg} {bb} RG 1 w " + _circle(cx, cy, r, "S") + "Q\n"
+    dot = "q 0 g " + _circle(cx, cy, max(0.8, r * 0.45), "f") + "Q\n"
+    return ring, ring + dot
+
+
 def _fonts(writer, acroform):
     """The form's default fonts (Helvetica for text, ZapfDingbats for ticks)."""
     fonts = _child(_child(acroform, "/DR", DictionaryObject), "/Font", DictionaryObject)
@@ -176,9 +238,12 @@ def _fonts(writer, acroform):
 def add_fields(path, output, fields, border=True, font_size=0, password=None):
     """Add form fields to a PDF. ``fields`` is a list of {"page" (1-based),
     "rect": [x0, y0, x1, y1] in PDF points, "type": text/multiline/
-    checkbox/signature, "name" (optional), "required" (optional)}.
-    ``font_size`` 0 fits single-line text to its box. Returns the names
-    given to the new fields (made unique if a name was taken)."""
+    checkbox/radio/dropdown/signature, "name" (optional), "required"
+    (optional)}. Radio buttons with the same name are one group, each with
+    its own "value"; a dropdown has "options" (a list, or text with one per
+    line) and "editable" (also takes typed text). ``font_size`` 0 fits
+    single-line text to its box. Returns the names given to the new fields
+    (made unique if a name was taken)."""
     reader = core.open_pdf(path, password)
     root = reader.trailer["/Root"]
     if "/AcroForm" in root and "/XFA" in root["/AcroForm"].get_object():
@@ -207,10 +272,15 @@ def add_fields(path, output, fields, border=True, font_size=0, password=None):
         rect = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
         if rect[2] - rect[0] < MIN_SIZE or rect[3] - rect[1] < MIN_SIZE:
             raise core.PdfManagerError(f"a field on page {page} is too small")
+        if kind == "dropdown" and not _options(field) and not field.get("editable"):
+            label = field.get("name") or "a dropdown"
+            raise core.PdfManagerError(f"{label} on page {page} has no choices: add them, "
+                                       "separated by commas")
         by_page.setdefault(page, []).append((kind, rect, field))
     if not by_page:
         raise core.PdfManagerError("no fields to add: draw boxes on the pages")
 
+    groups = {}  # radio group as asked -> {"field": parent, "states": set}
     for page_number in sorted(by_page):
         page = writer.pages[page_number - 1]
         rotation = page.rotation % 360
@@ -219,8 +289,6 @@ def add_fields(path, output, fields, border=True, font_size=0, password=None):
             page[NameObject("/Tabs")] = NameObject("/R")  # Tab moves along rows
         # In reading order, so Tab goes from field to field down the page.
         for kind, rect, field in sorted(by_page[page_number], key=lambda f: (-f[1][3], f[1][0])):
-            name = _unique(field.get("name"), taken, TYPES[kind])
-            names.append(name)
             width, height = rect[2] - rect[0], rect[3] - rect[1]
             if rotation in (90, 270):
                 width, height = height, width
@@ -230,23 +298,71 @@ def add_fields(path, output, fields, border=True, font_size=0, password=None):
                 NameObject("/Rect"): ArrayObject(_num(v) for v in rect),
                 NameObject("/F"): NumberObject(4),  # printed
                 NameObject("/P"): page.indirect_reference,
-                NameObject("/T"): TextStringObject(name),
             })
             mk = DictionaryObject()
-            if border:
+            edged = field.get("border", border)  # (a found field sits on the form's own line)
+            if edged:
                 mk[NameObject("/BC")] = ArrayObject(_num(c) for c in BORDER)
                 widget[NameObject("/BS")] = DictionaryObject(
                     {NameObject("/W"): NumberObject(1), NameObject("/S"): NameObject("/S")})
             if rotation:
                 mk[NameObject("/R")] = NumberObject(rotation)
             flags = REQUIRED if field.get("required") else 0
-            frame = _border(width, height, border)
+            frame = _border(width, height, edged)
+            target = widget  # where the field's own entries go (a radio group: its parent)
+            if kind == "radio":
+                asked = " ".join(str(field.get("name") or "").split())
+                group = groups.get(asked)
+                if group is None:
+                    name = _unique(asked, taken, TYPES[kind])
+                    names.append(name)
+                    parent = DictionaryObject({
+                        NameObject("/FT"): NameObject("/Btn"),
+                        NameObject("/Ff"): NumberObject(RADIO | NO_TOGGLE_OFF | flags),
+                        NameObject("/T"): TextStringObject(name),
+                        NameObject("/TU"): TextStringObject(name),  # what screen readers say
+                        NameObject("/V"): NameObject("/Off"),
+                        NameObject("/Kids"): ArrayObject(),
+                    })
+                    group = groups[asked] = {"ref": writer._add_object(parent), "states": set()}
+                    field_list.append(group["ref"])
+                state = _state_name(field.get("value"), group["states"])
+                off, on = _radio_look(width, height, edged)
+                mk[NameObject("/CA")] = TextStringObject(DOT)
+                widget.update({
+                    NameObject("/Parent"): group["ref"],
+                    NameObject("/AS"): NameObject("/Off"),
+                    NameObject("/AP"): DictionaryObject({NameObject("/N"): DictionaryObject({
+                        NameObject("/" + state): _stream(writer, width, height, on, rotation),
+                        NameObject("/Off"): _stream(writer, width, height, off, rotation),
+                    })}),
+                })
+                if mk:
+                    widget[NameObject("/MK")] = mk
+                ref = writer._add_object(widget)
+                group["ref"].get_object()["/Kids"].append(ref)
+                annots.append(ref)
+                continue
+
+            name = _unique(field.get("name"), taken, TYPES[kind])
+            names.append(name)
+            widget[NameObject("/T")] = TextStringObject(name)
+            widget[NameObject("/TU")] = TextStringObject(name)  # what screen readers say
             if kind in ("text", "multiline"):
                 size = font_size or (10 if kind == "multiline" else 0)
                 flags |= MULTILINE if kind == "multiline" else 0
                 widget.update({
                     NameObject("/FT"): NameObject("/Tx"),
                     NameObject("/DA"): TextStringObject(f"/Helv {size:g} Tf 0 g"),
+                    NameObject("/AP"): DictionaryObject({NameObject("/N"): _stream(
+                        writer, width, height, frame + "/Tx BMC EMC\n", rotation)}),
+                })
+            elif kind == "dropdown":
+                flags |= COMBO | (EDIT if field.get("editable") else 0)
+                widget.update({
+                    NameObject("/FT"): NameObject("/Ch"),
+                    NameObject("/Opt"): ArrayObject(TextStringObject(o) for o in _options(field)),
+                    NameObject("/DA"): TextStringObject(f"/Helv {font_size or 0:g} Tf 0 g"),
                     NameObject("/AP"): DictionaryObject({NameObject("/N"): _stream(
                         writer, width, height, frame + "/Tx BMC EMC\n", rotation)}),
                 })
@@ -275,7 +391,7 @@ def add_fields(path, output, fields, border=True, font_size=0, password=None):
                 acroform[NameObject("/SigFlags")] = NumberObject(
                     int(acroform.get("/SigFlags", 0)) | 1)
             if flags:
-                widget[NameObject("/Ff")] = NumberObject(flags)
+                target[NameObject("/Ff")] = NumberObject(flags)
             if mk:
                 widget[NameObject("/MK")] = mk
             ref = writer._add_object(widget)

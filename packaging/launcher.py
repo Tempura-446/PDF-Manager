@@ -1,9 +1,10 @@
 """Entry point for the standalone app built by build_app.py.
 
 ``"ZPDF" --self-test RESULT_FILE`` checks that the bundle is complete
-(PDF reading and writing, rendering, compression, the window library and
-the built-in server) without opening a window, writes "ok" or the error to
-RESULT_FILE and exits with 0 or 1. The build workflow runs it on every build.
+(PDF reading and writing, rendering, compression, signing, tables, form
+fields, the PDF/A check, the window library and the built-in server)
+without opening a window, writes "ok" or the error to RESULT_FILE and exits
+with 0 or 1. The build workflow runs it on every build.
 """
 import multiprocessing
 import sys
@@ -40,6 +41,27 @@ def self_test(result_file):
             assert info["pages"] == 1 and info["thumb"], f"inspect failed: {info}"
             core.compress(src, Path(tmp) / "small.pdf", level="high")
             core.convert_color(src, Path(tmp) / "gray.pdf", "gray")
+            # The libraries the later tools need: pyHanko (signing), pdfplumber
+            # and openpyxl (PDF -> Excel), pikepdf (the PDF/A check), pypdfium2
+            # and Pillow (finding form fields).
+            importlib.import_module("pyhanko.sign.signers")
+            importlib.import_module("pyhanko.sign.validation")
+            from pdfmanager import certsign, formdetect, forms, pdfacheck, tables
+
+            assert certsign and tables.find_tables(src) == [], "table finding failed"
+            importlib.import_module("openpyxl").Workbook()
+            form = Path(tmp) / "form.pdf"
+            c = canvas.Canvas(str(form))
+            c.drawString(72, 700, "Name:")
+            c.line(120, 698, 400, 698)
+            c.rect(72, 650, 10, 10)
+            c.drawString(88, 651, "I agree")
+            c.save()
+            found = formdetect.detect(form)
+            assert len(found.get(1, [])) == 2, f"form fields not found: {found}"
+            forms.add_fields(form, Path(tmp) / "fillable.pdf", [{**f, "page": 1} for f in found[1]])
+            checked = pdfacheck.check(src, engine="builtin")
+            assert not checked["passed"] and checked["issues"], "PDF/A check failed"
 
         server, url = gui.make_server()
         Thread(target=server.serve_forever, daemon=True).start()
@@ -47,7 +69,8 @@ def self_test(result_file):
         page = urllib.request.urlopen(base).read()
         # The reader and its bundled pdf.js must be in the bundle too.
         for asset in ("static/reader.js", "static/pdfjs.js", "static/pages.js", "static/regions.js",
-                      "static/bookmarks.js", "static/recipes.js", "static/files.js", "static/measure.js", "static/snap.js", "static/pdfjs/build/pdf.min.mjs",
+                      "static/bookmarks.js", "static/recipes.js", "static/files.js", "static/measure.js", "static/snap.js",
+                      "static/overlay.js", "static/pdfjs/build/pdf.min.mjs",
                       "static/pdfjs/build/pdf.worker.min.mjs", "static/pdfjs/web/pdf_viewer.mjs"):
             assert urllib.request.urlopen(base + asset).status == 200, f"missing {asset}"
         server.shutdown()

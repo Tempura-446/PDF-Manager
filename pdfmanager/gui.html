@@ -205,7 +205,7 @@ main > .action-bar { max-width: none; width: auto; }
 
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px 22px; margin-bottom: 16px; }
 .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-.card-head h3 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.005em; }
+.card-head h2, .card-head h3 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.005em; }
 .card-head .sub { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 
 /* Drop zone */
@@ -369,6 +369,11 @@ select.re-name { width: auto; }
 .re-name { width: 200px; height: 34px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
 .re-field { background: color-mix(in srgb, var(--page-accent) 14%, transparent); border: 1.5px solid var(--page-accent); cursor: move; }
 .re-field[data-type="checkbox"] { background: color-mix(in srgb, var(--page-ok) 16%, transparent); border-color: var(--page-ok); }
+.re-field[data-type="radio"] { background: color-mix(in srgb, var(--page-ok) 16%, transparent); border-color: var(--page-ok); border-radius: 50%; }
+.re-field[data-type="dropdown"] { border-right-width: 6px; }
+.re-short { width: 150px; }
+.re-extra { display: inline-flex; min-width: 220px; }
+.re-extra label { display: inline-flex; align-items: center; gap: 8px; }
 .re-field[data-type="signature"] { background: color-mix(in srgb, var(--page-warn) 14%, transparent); border-color: var(--page-warn); border-bottom-width: 2.5px; }
 .re-field.selected { outline: 2px solid var(--page-accent); outline-offset: 1px; }
 .re-field .re-handle { border-color: var(--page-accent); }
@@ -565,11 +570,13 @@ td { word-break: break-all; }
 .home-drop strong { font-size: 14px; }
 .home h2 { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin: 4px 0 12px; }
 .home-recent { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
-.home-recent li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); cursor: pointer; transition: box-shadow var(--t), transform var(--t), border-color var(--t); min-width: 0; }
-.home-recent li:hover { box-shadow: var(--shadow-lift); transform: translateY(-1px); border-color: var(--border-strong); }
+.home-recent li { min-width: 0; display: flex; }
+.home-recent .recent-item { flex: 1; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); cursor: pointer; transition: box-shadow var(--t), transform var(--t), border-color var(--t); min-width: 0; font: inherit; color: inherit; text-align: left; }
+.home-recent .recent-item:hover { box-shadow: var(--shadow-lift); transform: translateY(-1px); border-color: var(--border-strong); }
+.home-recent .recent-item:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .home-recent .ricon { width: 36px; height: 36px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; flex: none; }
-.home-recent .rname { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.home-recent .rsub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.home-recent .rname { display: block; font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.home-recent .rsub { display: block; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .home-recent .rbody { min-width: 0; flex: 1; }
 .home-group { margin-bottom: 24px; }
 .home-group-title { margin: 0 0 10px; font-size: 16px; font-weight: 600; color: var(--text); }
@@ -701,7 +708,7 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
 
     <section class="card" id="files-card">
       <div class="card-head">
-        <h3>Files</h3>
+        <h2>Files</h2>
         <span class="sub" id="files-sub"></span>
       </div>
       <div class="file-grid" id="file-grid" hidden></div>
@@ -715,7 +722,7 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
 
     <section class="card" id="pages-card" hidden>
       <div class="card-head">
-        <h3>Pages</h3>
+        <h2>Pages</h2>
         <span class="sub" id="pages-sub"></span>
       </div>
       <div id="page-board"></div>
@@ -724,7 +731,7 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
 
     <section class="card" id="panel-card" hidden>
       <div class="card-head">
-        <h3 id="panel-title"></h3>
+        <h2 id="panel-title"></h2>
         <span class="sub" id="panel-sub"></span>
       </div>
       <div id="panel-host"></div>
@@ -732,7 +739,7 @@ body.nav-drawer.reader-mode:has(.rd.reading)::after {
     </section>
 
     <section class="card" id="options-card">
-      <div class="card-head"><h3>Options</h3></div>
+      <div class="card-head"><h2>Options</h2></div>
       <div class="opts-body"><div class="opts-main">
       <form id="form" class="fields" autocomplete="off"></form>
       <details class="pw" id="pw-box">
@@ -867,6 +874,7 @@ const ICONS = {
   "verify-sig": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="m9 14 2 2 4-4"/>',
   redact: '<path d="M4 6h16M4 18h9"/><rect x="4" y="10" width="13" height="4" rx="1" fill="currentColor"/>',
   pdfa: '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4"/>',
+  "pdfa-check": '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h5M19 9v3"/><path d="m14 18 2 2 4-4"/>',
   compare: '<rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="16" rx="1.5"/><path d="M6 9h1M17 9h1M6 13h1M16 13h3"/>',
   "to-word": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="m8 11 1.5 6 2.5-4 2.5 4 1.5-6"/>',
   "to-excel": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14.5h18M9 9v11M15 9v11"/>',
@@ -917,6 +925,8 @@ function clearMessages() { $("error").hidden = true; $("result").hidden = true; 
 // Each window of the app tells the server it's there, so closing one window
 // doesn't stop the app while another is still open.
 const pageId = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).slice(0, 36);
+/** "smooth", unless the system asks for less motion. */
+function smoothScroll() { return matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"; }
 async function api(path, options = {}) {
   const res = await fetch(path, { ...options, headers: { "X-Pdfm-Token": token, "X-Pdfm-Page": pageId, ...(options.headers || {}) } });
   if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
@@ -1253,7 +1263,7 @@ function renderFiles() {
   const ordered = current && (current.id === "merge" || current.files === "pdf2" || current.files === "images");
   items.forEach((it, i) => {
     const thumb = el("div", { class: "thumb" });
-    if (it.loading) thumb.append(el("span", { class: "loading", "aria-label": "Loading preview" }));
+    if (it.loading) thumb.append(el("span", { class: "loading", role: "img", "aria-label": "Loading preview" }));
     else if (it.thumb) thumb.append(el("img", { src: it.thumb, alt: "" }));
     else thumb.append(icon(it.locked ? "lock" : "file"));
     const sub = el("div", { class: "file-sub" });
@@ -1324,7 +1334,7 @@ function startOver() {
   clearMessages();
   renderFiles();
   updateSummary();
-  document.querySelector("main").scrollIntoView({ block: "start", behavior: "smooth" });
+  document.querySelector("main").scrollIntoView({ block: "start", behavior: smoothScroll() });
 }
 
 const drop = $("drop");
@@ -1359,7 +1369,7 @@ const TAGLINES = {
   clean: "Drop blank pages and straighten scans", watermark: "Stamp text or a logo on every page", number: "Add page numbers",
   flatten: "Bake forms and comments into the page", headers: "Titles, dates and Bates numbers", form: "Create fillable forms",
   metadata: "Set the title, author and keywords", encrypt: "Protect with a password", decrypt: "Remove a password",
-  redact: "Black out text for good", sanitize: "Remove hidden data and scripts", pdfa: "Convert for long-term archiving",
+  redact: "Black out text for good", sanitize: "Remove hidden data and scripts", pdfa: "Convert for long-term archiving", "pdfa-check": "See if a file meets PDF/A, and why not",
   "sign-cert": "Sign with your certificate (.pfx), like Acrobat", "verify-sig": "See who signed and if anything changed",
   "from-images": "Turn photos and scans into a PDF", "to-images": "Save pages as PNG or JPG", text: "Get the text out",
   media: "Extract pictures and attached files", "to-word": "Convert to an editable Word file", "from-office": "Turn Office documents into PDFs",
@@ -1402,7 +1412,7 @@ async function renderHome() {
       el("p", {}, "Read a PDF, or pick a tool to change one. Everything runs on this computer; nothing is sent anywhere."),
       el("div", { class: "home-actions" },
         el("button", { type: "button", class: "btn", onclick: () => input.click() }, icon("reader"), "Open a PDF"),
-        el("button", { type: "button", class: "btn secondary", onclick: () => toolsHeading.scrollIntoView({ behavior: "smooth", block: "start" }) }, "Browse the tools"))),
+        el("button", { type: "button", class: "btn secondary", onclick: () => toolsHeading.scrollIntoView({ behavior: smoothScroll(), block: "start" }) }, "Browse the tools"))),
     drop, input);
   const pinnedIds = favTools();
   const toolCard = (op) => {
@@ -1432,10 +1442,13 @@ async function renderHome() {
   try {
     const { files } = await (await api("/api/recent")).json();
     if (!inHome() || !files.length) return;
-    recentFiles.replaceChildren(...files.slice(0, 8).map((f) => el("li", { role: "button", tabindex: "0", title: f.path,
-      onclick: () => openInReaderById([f.id]), onkeydown: (e) => { if (e.key === "Enter") openInReaderById([f.id]); } },
+    // The end of the path is what tells files apart ("Taxes › 2024"), so
+    // that is what shows; the whole path is on hover.
+    const shortFolder = (folder) => (folder || "").split(/[\\/]+/).filter(Boolean).slice(-2).join(" › ") || folder;
+    recentFiles.replaceChildren(...files.slice(0, 8).map((f) => el("li", {}, el("button", { type: "button", class: "recent-item", title: f.path,
+      onclick: () => openInReaderById([f.id]) },
       el("span", { class: "ricon" }, icon("reader")),
-      el("span", { class: "rbody" }, el("div", { class: "rname" }, f.name), el("div", { class: "rsub" }, `${whenText((f.opened || 0) * 1000)} · ${f.folder}`)))));
+      el("span", { class: "rbody" }, el("span", { class: "rname" }, f.name), el("span", { class: "rsub" }, `${whenText((f.opened || 0) * 1000)} · ${shortFolder(f.folder)}`))))));
     filesSection.hidden = false;
   } catch (e) { /* no recent files to show */ }
 }
@@ -1679,13 +1692,21 @@ PANELS.form = {
   title: "Pages", sub: "Drag or click where people should type, tick or sign",
   async setup(host) {
     const { RegionEditor } = await import("/static/regions.js");
-    const editor = new RegionEditor(host, { mode: "form", onChange: (fields) => { const f = $("f-fields"); if (f) f.value = JSON.stringify(fields); } });
+    const editor = new RegionEditor(host, {
+      mode: "form", onChange: (fields) => { const f = $("f-fields"); if (f) f.value = JSON.stringify(fields); },
+      async detect() {
+        const body = new FormData();
+        body.append("file", items[0].file, items[0].file.name);
+        body.append("password", $("pw").value);
+        return (await (await api("/api/form/detect", { method: "POST", body })).json()).fields;
+      },
+    });
     return {
       async sync() {
         host.hidden = !items.length;
         $("panel-hint").textContent = items.length > 1
           ? "The fields drawn on the first file are added to each file (useful for copies of the same blank form)."
-          : "Choose a field type, then drag a box on the page — or just click for a box of the usual size. Click a field to move, resize, rename or remove it. Striped: fields already in the file.";
+          : "Find fields adds the lines, boxes and tick boxes of a printed form. Or choose a field type, then drag a box on the page — or just click for a box of the usual size. Radio buttons added one after another are one group. Click a field to move, resize, rename or remove it. Striped: fields already in the file.";
         if (!items.length) { editor.close(); return; }
         const result = await editor.load(items[0].file, $("pw").value || null);
         if (result === "password" || result === "wrong-password") $("pw-box").open = true;
@@ -1952,7 +1973,7 @@ async function showResult(name, blob, resultId, note = "") {
       note ? el("div", { class: "result-note" }, ...note.split("\n").map((line) => el("div", {}, line))) : null, actions));
   $("result").hidden = false;
   updateSummary();
-  $("result").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  $("result").scrollIntoView({ behavior: smoothScroll(), block: "nearest" });
   const auto = actions.querySelector("a[data-auto]");
   if (auto) auto.click();  // browsers without a Save dialog: download straight away
   if (/\.pdf$/i.test(name)) {

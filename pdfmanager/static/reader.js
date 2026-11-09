@@ -37,6 +37,11 @@ export async function loadPdfjs() {
   }
 }
 
+/** pdf.js's form fields ({name: [field...]}, a Map since pdf.js 5) as [name, list] pairs. */
+function fieldEntries(fields) {
+  return fields instanceof Map ? [...fields.entries()] : Object.entries(fields || {});
+}
+
 const ICON = {
   sidebar: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
   open: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
@@ -78,6 +83,7 @@ const ICON = {
   screen: '<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
   note: '<path d="M4 5h16v11H10l-4 4v-4H4z"/><path d="M8 9h8M8 12h5"/>',
   imgedit: '<rect x="3" y="3" width="14" height="14" rx="2"/><path d="m3 13 4-4 6 6"/><path d="M14 20h7M17.5 16.5v7" transform="translate(-1 -3)"/>',
+  fillable: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h4M7 14h4"/><rect x="13" y="7.5" width="5" height="3" rx=".5"/><rect x="13" y="12.5" width="3" height="3" rx=".5"/>',
   badge: '<path d="M12 2l2.4 1.8 3 .2.9 2.9 2.3 1.9-.9 2.9.9 2.9-2.3 1.9-.9 2.9-3 .2L12 22l-2.4-1.8-3-.2-.9-2.9-2.3-1.9.9-2.9-.9-2.9 2.3-1.9.9-2.9 3-.2z"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/>',
   layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
@@ -354,6 +360,14 @@ export class Reader {
       this.sigText, sigMore, el("span", { style: "flex:1" }), sigClose);
     sigMore.addEventListener("click", () => this.#signatureDetails());
     sigClose.addEventListener("click", () => { this.sigbar.hidden = true; });
+    // A printed form with nothing to type in: offer to add its fields.
+    const formMake = el("button", { class: "rd-btn primary", type: "button", html: svg("fillable") + "<span>Make it fillable</span>" });
+    const formClose = el("button", { class: "rd-btn", type: "button", title: "Hide", "aria-label": "Hide", html: svg("x") });
+    this.formText = el("span", { class: "rd-sigstatus" });
+    this.formbar = el("div", { class: "rd-findbar rd-formbar", hidden: true, role: "status" }, el("span", { class: "rd-sigicon", html: svg("fillable") }),
+      this.formText, formMake, el("span", { style: "flex:1" }), formClose);
+    formMake.addEventListener("click", () => this.makeFillable());
+    formClose.addEventListener("click", () => { this.formbar.hidden = true; if (this.activeTab) this.activeTab.formHint = "hidden"; });
     const overlayClose = el("button", { class: "rd-btn", type: "button", title: "Stop comparing", "aria-label": "Stop comparing", html: svg("x") });
     this.overlaybar = el("div", { class: "rd-findbar rd-overlaybar", hidden: true, role: "toolbar", "aria-label": "Compare revisions" },
       el("span", { class: "rd-overlay-title" }, "Comparing with ", this.overlayName),
@@ -369,7 +383,7 @@ export class Reader {
       this.#drawOverlays();
     });
     overlayClose.addEventListener("click", () => this.closeCompare());
-    this.root.append(toolbar, this.tray, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.overlaybar, this.sigbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.fileInput);
+    this.root.append(toolbar, this.tray, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.overlaybar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.fileInput);
     // A drawing in progress takes every click in the window as the next
     // stroke; end it first when the tabs, toolbar or menu are used. This
     // listens on the window before pdf.js does, so it runs first.
@@ -407,6 +421,7 @@ export class Reader {
       this.#menuItem("save", this.activeTab?.fileId ? "Save as…" : this.#edited() ? "Save a copy with your changes…" : "Save a copy…", () => this.saveCopy()),
       this.#menuItem("layers", this.overlay ? "Stop comparing revisions" : "Compare with another revision…", () => (this.overlay ? this.closeCompare() : this.compareRevision())),
       this.#menuItem("badge", "Sign with a digital ID…", () => this.useTool("CERTSIGN")),
+      this.#menuItem("fillable", "Make it fillable (find the form's fields)", () => this.makeFillable()),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
       this.#menuItem("x", "Close this document", () => this.closeTab()),
     ];
@@ -966,6 +981,7 @@ export class Reader {
       this.#listComments();
       this.#loadMeasures();
       this.#checkSignatures();
+      this.#checkForm();
       doc.getPageLabels().then((labels) => {
         if (doc !== this.doc || !labels) return;
         // Only use labels that differ from plain page numbers.
@@ -1041,6 +1057,7 @@ export class Reader {
     });
     eventBus.on("pagechanging", ({ pageNumber }) => { this.#updatePage(); this.#remember(); this.#refreshScale(); if (this.measureMode) this.#geometry(pageNumber); });
     eventBus.on("pagesloaded", () => this.#refreshScale());
+    eventBus.on("annotationlayerrendered", ({ source }) => this.#nameFields(source?.div?.querySelector(".annotationLayer")));
     eventBus.on("pagerendered", ({ pageNumber }) => {
       this.#drawMeasures(pageNumber);
       if (this.markupMode === "IMAGES" || this.markupMode === "LINKS") this.#drawObjectBoxes(pageNumber);
@@ -2022,6 +2039,69 @@ export class Reader {
   }
 
   /** A signed document says so (and whether the signatures hold) in a bar. */
+  /** Form fields' names for screen readers: pdf.js leaves its inputs
+   *  unnamed (it puts the tooltip on the box around them). */
+  async #nameFields(layer) {
+    const doc = this.doc;
+    if (!doc || !layer) return;
+    if (!this.fieldNames || this.fieldNames.doc !== doc) {
+      const names = new Map();
+      try {
+        for (const [name, list] of fieldEntries(await doc.getFieldObjects())) {
+          for (const f of list) names.set(f.id, f.type === "radiobutton" && f.exportValues ? `${name}: ${f.exportValues}` : name);
+        }
+      } catch (e) { /* unnamed then */ }
+      this.fieldNames = { doc, names };
+    }
+    for (const input of layer.querySelectorAll("input, select, textarea")) {
+      if (input.getAttribute("aria-label") || input.labels?.length) continue;
+      const box = input.closest("[data-annotation-id]");
+      const label = box?.title || this.fieldNames.names.get(input.dataset.elementId || box?.dataset.annotationId);
+      if (label) input.setAttribute("aria-label", label);
+    }
+  }
+
+  /** A printed form with no fields to type in (lines, boxes, tick boxes on
+   *  its first pages): offer to make it fillable. */
+  async #checkForm() {
+    const doc = this.doc, tab = this.activeTab;
+    this.formbar.hidden = true;
+    if (!doc || !tab || tab.formHint === "hidden" || tab.formHint === "has-fields" || tab.formHint === "checking") return;
+    tab.formHint ||= "checking";
+    try {
+      // (Fields first: also after "Make it fillable" reloads the document.)
+      if (fieldEntries(await doc.getFieldObjects()).length) { tab.formHint = "has-fields"; return; }
+      if (tab.formHint === "show") { if (doc === this.doc) this.#showFormHint(tab); return; }
+      if (tab.formHint !== "checking" || !tab.bytes || tab.bytes.length > 30e6) { tab.formHint = "none"; return; }
+      const res = await this.#post("/api/form/detect", tab.bytes, tab, { pages: "1-2" });
+      if (!res.ok) { tab.formHint = "none"; return; }
+      const found = Object.values((await res.json()).fields || {}).flat();
+      tab.formHint = found.length >= 3 ? "show" : "none";
+      if (tab.formHint === "show" && doc === this.doc && tab === this.activeTab) this.#showFormHint(tab);
+    } catch (e) {
+      tab.formHint = "none";
+    }
+  }
+
+  #showFormHint(tab) {
+    this.formText.textContent = "This looks like a form to fill in, but you can't type in it yet.";
+    this.formbar.hidden = false;
+  }
+
+  /** Add the fields of a printed form, so it can be filled in here. */
+  makeFillable() {
+    if (!this.doc) return;
+    this.formbar.hidden = true;
+    return this.#changeDocument((bytes, tab) => this.#post("/api/form/fillable", bytes, tab), {
+      failure: "Couldn't make it fillable: ",
+      after: (res) => {
+        const n = Number(res.headers.get("X-Pdfm-Fields")) || 0;
+        if (this.activeTab) this.activeTab.formHint = "has-fields";
+        this.toast(`Added ${n} place${n === 1 ? "" : "s"} to fill in: click one to type or tick, then save. Add form fields (All tools) can fine-tune them.`);
+      },
+    });
+  }
+
   async #checkSignatures() {
     const doc = this.doc, tab = this.activeTab;
     this.sigbar.hidden = true;

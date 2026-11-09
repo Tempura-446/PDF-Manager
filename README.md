@@ -9,9 +9,10 @@ into files of a maximum size), compare, extract, reorder, insert blank pages,
 rotate, resize, crop (also trimming white margins automatically), n-up, make
 **booklets** for folded printing, compress (three levels), convert colours
 (grayscale / RGB / CMYK, with ICC profiles), OCR and clean up scans, redact,
-flatten, remove hidden data, convert to PDF/A, Word and from Office files or
+flatten, remove hidden data, convert to PDF/A (and check PDF/A), Word and from Office files or
 images, edit bookmarks, encrypt, watermark and number pages, add headers,
-footers and **Bates numbers**, create **fillable forms**, pull out pictures
+footers and **Bates numbers**, create **fillable forms** (finding a printed
+form's fields by itself), pull out pictures
 and attached files, run several of these in a row as a **recipe**, and
 organize, rename, de-duplicate, **search** and watch whole folders of PDFs.
 
@@ -156,11 +157,21 @@ closed.
 - Folder tools (organize, rename, find duplicates) have **Browse…**
   buttons in the app window and always let you **Preview** before
   anything changes.
-- **Add form fields** makes a fillable form: pick a field type (text,
-  multi-line text, checkbox, signature), then drag a box on the page or
-  just click for a box of the usual size. Click a field to move, resize,
-  rename or remove it. Fields already in the file are shown striped. The
-  fields work in any PDF reader, including the one here.
+- **Add form fields** makes a fillable form. **Find fields** adds them
+  where a printed form has something to fill in: a line to write on
+  ("Name ______", drawn lines, underscores or dots), an empty box or table
+  cell (also one with a small caption at the top), or a tick box. Each
+  field is named after the words next to it ("Name:" gives "Name"), a line
+  labelled "Signature" becomes a signature field, and a row of ○ choices
+  becomes a group of radio buttons. It works on scanned forms too
+  (named Text 1, Text 2… unless the scan has had OCR). Check what it found,
+  then add more: pick a field type (text, multi-line text, checkbox, radio
+  button, dropdown, signature) and drag a box on the page or just click for
+  a box of the usual size. Radio buttons added one after another make one
+  group (each with its own value); a dropdown takes its choices separated by
+  commas. Click a field to move, resize, rename or remove it. Fields already
+  in the file are shown striped. The fields work in any PDF reader,
+  including the one here.
 - **Sign with a digital ID** signs PDFs with your certificate (a .pfx or
   .p12 file), like Acrobat: visible in a corner of a page (showing your
   name, the date and the reason) or invisible, optionally with a time from
@@ -237,7 +248,9 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   Ctrl/⌘ + mouse wheel or pinch to zoom around the pointer.
 - **Find** (Ctrl+F) with highlighting, match case and whole words.
 - **Select and copy text**; links work (web links open in your browser).
-- **Fill in forms** and save a copy with your entries.
+- **Fill in forms** and save a copy with your entries. A printed form with
+  nothing to type in (lines, boxes and tick boxes only) gets a bar offering
+  **Make it fillable**, which adds its fields right there (also in *Tools*).
 - **Annotate and sign** (Tools → Annotate & sign): highlight, underline
   or strike out text, add **notes** (click, type your comment), add text,
   draw, draw **shapes** (rectangle, ellipse, revision cloud, arrow, line;
@@ -436,7 +449,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `watermark` | stamp text or another PDF | `pdfm watermark doc.pdf -t CONFIDENTIAL` |
 | `number` | add page numbers | `pdfm number doc.pdf --format "Page {n} of {total}"` |
 | `headers` | headers, footers and Bates numbers | `pdfm headers *.pdf --bottom-right "{bates}" --bates ABC` |
-| `form` | add fillable form fields (or list them) | `pdfm form doc.pdf -f text:1:72,700,300,720:Name` |
+| `form` | add fillable form fields, or find a printed form's (or list them) | `pdfm form doc.pdf --detect` |
 | `extract-media` | save the pictures and attached files | `pdfm extract-media doc.pdf` |
 | `text` | extract text | `pdfm text doc.pdf -o doc.txt` |
 | `clean` | remove blank pages, turn pages upright | `pdfm clean scan.pdf --rotate` |
@@ -448,6 +461,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `sign-cert` | sign with a digital ID (.pfx/.p12), visible or invisible | `pdfm sign-cert doc.pdf --pfx me.pfx --page last --reason "Approved"` |
 | `verify` | check the digital signatures in PDFs | `pdfm verify signed.pdf` |
 | `pdfa` | convert to PDF/A for archiving | `pdfm pdfa doc.pdf --level 2` |
+| `check-pdfa` | check whether PDFs meet PDF/A, and what breaks it | `pdfm check-pdfa *.pdf` · `--level 1b` |
 | `to-word` | convert to an editable Word document | `pdfm to-word doc.pdf` |
 | `to-excel` | put the tables into an Excel workbook (or CSV files) | `pdfm to-excel doc.pdf -p 2-5` · `--one-sheet` · `--csv` |
 | `from-office` | convert Word, Excel, PowerPoint, … to PDF | `pdfm from-office report.docx` |
@@ -593,7 +607,32 @@ pages searchable again; metadata isn't changed, so use `sanitize` too.
   JavaScript and actions that launch programs, and attached files;
   `--comments` also removes comments. Form fields are kept.
 - `pdfa` converts to PDF/A-1b, -2b (default) or -3b with Ghostscript:
-  fonts embedded, colours tied to sRGB, no encryption or scripts.
+  fonts embedded, colours tied to sRGB, no encryption or scripts. The
+  result is checked straight away (below).
+- `check-pdfa` (the **Check PDF/A** tool) says whether files meet PDF/A
+  and, if not, what breaks it, on which pages, with the clause of the
+  standard (ISO 19005):
+
+  ```
+  Checked against: PDF/A-2b (the file doesn't say it's PDF/A)
+  Result: FAILS
+    [6.2.11.4] The font Helvetica isn't embedded. (page 1)
+    [6.6.4] The file has no XMP metadata, so it doesn't say it's PDF/A.
+  ```
+
+  It checks against the level the file claims (else PDF/A-2b), or the one
+  given with `--level` (1a, 1b, 2a, 2b, 2u, 3a, 3b, 3u). With **veraPDF**
+  installed (free, from verapdf.org; the reference checker), ZPDF uses it
+  and every rule of the standard is checked. Without it, ZPDF's own checks
+  cover the rules files most often break: the file's header and trailer,
+  encryption, XMP metadata and the PDF/A claim, document details matching
+  the metadata, fonts embedded (and Unicode text for levels A and U),
+  colours with an output intent profile, transparency, pictures, LZW and
+  external streams, annotations (printable, not hidden, with their own
+  look), JavaScript and other forbidden actions, forms, attached files,
+  layers, tagging (level A) and the size limits. `--engine builtin` always
+  uses ZPDF's own checks; `--json` prints the results. The exit code is 0
+  when every file passes.
 
 ### Digital ID signatures
 
@@ -731,10 +770,20 @@ pdfm form application.pdf -f text:1:72,700,300,720:Name -f checkbox:1:72,650,84,
 pdfm form application_form.pdf        # list the fields
 ```
 
-Fields are `text`, `multiline`, `checkbox` or `signature`, with their page
-and box in points from the bottom-left corner (`--fields FILE` reads a JSON
-list). Names are made unique automatically. Drawing them in the app is
-easier: **Add form fields**.
+```bash
+pdfm form printed.pdf --detect        # add the fields of a printed form
+pdfm form survey.pdf -f radio:1:72,600,84,612:Size=Small -f radio:1:120,600,132,612:Size=Large \
+                     -f dropdown:1:72,560,220,580:Country=France|Spain|Italy
+```
+
+Fields are `text`, `multiline`, `checkbox`, `radio`, `dropdown` or
+`signature`, with their page and box in points from the bottom-left corner
+(`--fields FILE` reads a JSON list). Radio buttons with the same name are
+one group; each one's value follows `=`. A dropdown's choices follow `=`,
+separated by `|`. Names are made unique automatically. `--detect` finds the
+fields of a printed form (lines, boxes and tick boxes to fill in), as well
+as any given with `-f`. Drawing them in the app is easier: **Add form
+fields**.
 
 ### Searching a folder
 
