@@ -628,7 +628,9 @@ def _text_direction(textpage):
     x, y = ctypes.c_double(), ctypes.c_double()
     last = None
     for i in range(min(textpage.count_chars(), 1500)):
-        if raw.FPDFText_IsGenerated(textpage, i) == 1 or chr(raw.FPDFText_GetUnicode(textpage, i)).isspace():
+        code = raw.FPDFText_GetUnicode(textpage, i)
+        if raw.FPDFText_IsGenerated(textpage, i) == 1 or not 32 < code < 0x110000 \
+                or chr(code).isspace():
             last = None
             continue
         raw.FPDFText_GetCharOrigin(textpage, i, ctypes.byref(x), ctypes.byref(y))
@@ -982,11 +984,16 @@ def _continues(block, line, right_edge):
     if line.x1 < block.box[0] - size or line.x0 > max(l.x1 for l in block.lines) + size:
         return False
     if block.kind == "li":
-        return block.text_x - 0.6 * size <= line.x0 <= block.text_x + 3 * size
+        # wrapped lines line up with the item's text, or (without a hanging
+        # indent) with its number or bullet
+        if not block.label_x - 0.6 * size <= line.x0 <= block.text_x + 3 * size:
+            return False
     # a short line ending a sentence ends its paragraph
     if last.x1 < right_edge - max(2.5 * size, 0.12 * (right_edge - block.box[0])) \
             and re.search(r"[.!?:;\"”’)]$", last.text):
         return False
+    if block.kind == "li":
+        return True
     if line.x0 > last.x0 + 0.8 * size:
         return False  # an indented first line starts a paragraph
     if line.x0 < last.x0 - 0.8 * size and len(block.lines) >= 2:
@@ -1963,6 +1970,12 @@ def _clear_tags(pdf):
                 del annot["/StructParent"]
 
 
+def _step(done, pages, what):
+    """Progress: reading the pages, then tagging them (two passes)."""
+    progress.report(fraction_in_part=done / (2 * max(pages, 1)))
+    progress.say(f"{what} page {done % max(pages, 1) + 1} of {pages}")
+
+
 def _tag_pages(pdf, path, password, alt, result):
     """Read every page's layout and tag it. Returns (top-level elements in
     reading order, per-page writing info, text sample for the language)."""
@@ -1973,7 +1986,7 @@ def _tag_pages(pdf, path, password, alt, result):
         doc = _open_pdfium(path, password)
         try:
             for i, page in enumerate(pdf.pages):
-                progress.report(i, len(pdf.pages) * 2, "page")
+                _step(i, len(pdf.pages), "reading")
                 obj = page.obj
                 pdfium_page = doc[i]
                 textpage = pdfium_page.get_textpage()
@@ -2013,7 +2026,7 @@ def _tag_pages(pdf, path, password, alt, result):
         plumber = None
     try:
         for i, page in enumerate(pdf.pages):
-            progress.report(len(pdf.pages) + i, len(pdf.pages) * 2, "page")
+            _step(len(pdf.pages) + i, len(pdf.pages), "tagging")
             info = pages[i]
             obj = page.obj
             resources = _inherited(obj, "/Resources") or pikepdf.Dictionary()
