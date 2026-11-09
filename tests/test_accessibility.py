@@ -274,6 +274,31 @@ def test_pages_look_the_same_after_tagging(tagged, report_pdf, tmp_path):
     assert result["elements"]["H1"] == 3 and result["elements"]["L"] == 1  # turned: read upright
 
 
+def test_pages_drawn_as_one_form_are_tagged_inside_it(report_pdf, tmp_path):
+    """Some programs draw each page as a single form XObject: a form drawn
+    once is tagged inside, with its own /StructParents and MCRs naming it."""
+    src = tmp_path / "forms.pdf"
+    with pikepdf.open(report_pdf) as original, pikepdf.new() as pdf:
+        for page in original.pages:
+            pdf.add_blank_page(page_size=(float(page.mediabox[2]), float(page.mediabox[3])))
+            pdf.pages[-1].add_overlay(page)
+        pdf.save(src)
+    out = tmp_path / "forms_tagged.pdf"
+    result = accessibility.autotag(src, out)
+    assert same_look(src, out) == []
+    assert result["elements"]["H1"] == 3 and result["elements"]["Table"] == 1
+    with pikepdf.open(out) as pdf:
+        form = next(iter(pdf.pages[0].Resources.XObject.values()))
+        assert "/StructParents" in form and b"/MCID 0" in form.read_bytes()
+        assert b"BDC" not in pdf.pages[0].Contents.read_bytes()  # the form isn't wrapped
+        heading = next(e for _, s, _, e in tree(pdf) if s == "H2")
+        mcr = kids(heading)[0]
+        assert mcr.Type == "/MCR" and mcr.Stm.objgen == form.objgen
+        parents = accessibility._number_tree(pdf.Root.StructTreeRoot.ParentTree, {})
+        assert parents[int(form.StructParents)][int(mcr.MCID)].objgen == heading.objgen
+    assert accessibility.check(out)["passed"]
+
+
 def test_existing_marked_content_optional_content_and_inline_images(tmp_path):
     src = tmp_path / "marked.pdf"
     pdf = pikepdf.new()

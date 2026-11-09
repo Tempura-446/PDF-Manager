@@ -40,9 +40,12 @@ Tagging (``autotag``), page by page:
     (shown in the window's title bar: DisplayDocTitle) and a tab order that
     follows the structure (/Tabs /S).
 
-Content drawn inside a form XObject is tagged as a whole, where the page
-draws the form. A file that is already tagged keeps its tags (only the
-language, title and tab order are filled in) unless ``force`` is given.
+A form XObject drawn once (some programs draw each page as one) is tagged
+inside, with its own /StructParents; one drawn several times is tagged as
+a whole where it's drawn. Vector drawings (charts made of lines) are marked
+as decoration, not figures. A file that is already tagged keeps its tags
+(only the language, title and tab order are filled in) unless ``force`` is
+given.
 
 Checking (``check``) covers the basics of PDF/UA that Acrobat's checker
 looks at (see RULES). Reading order and colour contrast can only be judged
@@ -333,23 +336,27 @@ def _standard_font(name):
 
 class _Unit:
     """One thing a content stream draws: a run of text, a picture, a path,
-    a form XObject or a shading; instructions ``start``..``end``."""
+    a form XObject or a shading; instructions ``start``..``end`` of
+    ``stream`` (None: the page's own content; else a form XObject drawn on
+    the page, tagged inside: see _single_use_forms)."""
 
-    __slots__ = ("kind", "start", "end", "box", "blank", "in_text", "key")
+    __slots__ = ("kind", "start", "end", "box", "blank", "in_text", "key", "stream", "xobj")
 
-    def __init__(self, kind, start, end, box, blank=False, in_text=False):
+    def __init__(self, kind, start, end, box, blank=False, in_text=False, stream=None):
         self.kind, self.start, self.end, self.box = kind, start, end, box
         self.blank, self.in_text, self.key = blank, in_text, None
+        self.stream, self.xobj = stream, None
 
 
 class _Scanner:
     """Walks a content stream keeping the graphics and text state, and lists
     what it draws (``_Unit``s, boxes in the stream's own coordinates)."""
 
-    def __init__(self, resources, fonts, forms):
+    def __init__(self, resources, fonts, forms, inside=()):
         self.resources = resources
         self.fonts = fonts      # cache: font object -> _Font
         self.forms = forms      # cache: form object -> has pictures
+        self.inside = inside    # forms to tag inside rather than as a whole
 
     def _font(self, name):
         try:
@@ -367,19 +374,21 @@ class _Scanner:
         except (AttributeError, KeyError, TypeError, ValueError):
             return None
 
-    def run(self, instructions):
+    def run(self, instructions, ctm=(1, 0, 0, 1, 0, 0), ts=None, stream=None):
+        """The units ``instructions`` draw; a form's content is followed with
+        the transformation and text state it is drawn with."""
         import pikepdf
 
         units = []
-        ctm = (1, 0, 0, 1, 0, 0)
-        ts = {"font": None, "size": 0.0, "tc": 0.0, "tw": 0.0, "th": 1.0, "tl": 0.0, "rise": 0.0}
+        ts = ts or {"font": None, "size": 0.0, "tc": 0.0, "tw": 0.0, "th": 1.0, "tl": 0.0,
+                    "rise": 0.0}
         stack = []
         tm = tlm = (1, 0, 0, 1, 0, 0)
         in_text = False
         path_start, points = None, []
         for i, ins in enumerate(instructions):
             if isinstance(ins, pikepdf.ContentStreamInlineImage):
-                units.append(_Unit("image", i, i, _box_through(ctm, (0, 0, 1, 1))))
+                units.append(_Unit("image", i, i, _box_through(ctm, (0, 0, 1, 1)), stream=stream))
                 continue
             op = str(ins.operator)
             args = ins.operands
@@ -401,7 +410,7 @@ class _Scanner:
                     if op != "n":
                         start = path_start if path_start is not None else i
                         box = _bbox(points) if points else _box_through(ctm, (0, 0, 0, 0))
-                        units.append(_Unit("path", start, i, box))
+                        units.append(_Unit("path", start, i, box, stream=stream))
                     path_start, points = None, []
                     continue
                 if path_start is not None:
@@ -448,12 +457,12 @@ class _Scanner:
                         tm = tlm
                     pieces = args[0] if op == "TJ" and args else args[-1:] if args else []
                     box, tm, blank = self._show(pieces, ts, tm, ctm)
-                    units.append(_Unit("text", i, i, box, blank, in_text))
+                    units.append(_Unit("text", i, i, box, blank, in_text, stream))
                 elif op == "Do" and args:
                     xobj = self._xobject(args[0])
                     subtype = str(xobj.get("/Subtype", "")) if xobj is not None else ""
                     if subtype == "/Image":
-                        units.append(_Unit("image", i, i, _box_through(ctm, (0, 0, 1, 1))))
+                        units.append(_Unit("image", i, i, _box_through(ctm, (0, 0, 1, 1)), stream=stream))
                     elif subtype == "/Form":
                         matrix = xobj.get("/Matrix")
                         m = tuple(_num(v) for v in matrix) if matrix is not None and len(matrix) == 6 \
@@ -462,12 +471,26 @@ class _Scanner:
                         if len(bbox) < 4:
                             bbox = [0, 0, 0, 0]
                         box = _box_through(_mul(m, ctm), bbox)
+                        inner = None
+                        if stream is None and xobj.is_indirect and xobj.objgen in self.inside:
+                            try:
+                                inner = pikepdf.parse_content_stream(xobj)
+                            except (pikepdf.PdfError, ValueError, TypeError):
+                                inner = None
+                        if inner is not None:
+                            unit = _Unit("tagged-form", i, i, box)
+                            unit.xobj = xobj
+                            units.append(unit)
+                            sub = _Scanner(xobj.get("/Resources") or self.resources, self.fonts,
+                                           self.forms)
+                            units += sub.run(inner, _mul(m, ctm), dict(ts), xobj)
+                            continue
                         kind = "form-image" if _form_has_images(xobj, self.forms) else "form"
-                        units.append(_Unit(kind, i, i, box))
+                        units.append(_Unit(kind, i, i, box, stream=stream))
                     else:
-                        units.append(_Unit("form", i, i, _box_through(ctm, (0, 0, 1, 1))))
+                        units.append(_Unit("form", i, i, _box_through(ctm, (0, 0, 1, 1)), stream=stream))
                 elif op == "sh":
-                    units.append(_Unit("shading", i, i, None))
+                    units.append(_Unit("shading", i, i, None, stream=stream))
             except (TypeError, ValueError, IndexError, ZeroDivisionError, AttributeError):
                 continue
         return units
@@ -494,6 +517,54 @@ class _Scanner:
         m = _mul(tm, ctm)
         box = _box_through(m, (min(0, x), rise - 0.25 * fs, max(0, x), rise + 0.8 * fs))
         return box, _mul((1, 0, 0, 1, x, 0), tm), blank
+
+
+DO_NAMES = re.compile(rb"/([^\s/\[\]()<>{}%]+)\s+Do\b")
+
+
+def _single_use_forms(pdf):
+    """Form XObjects drawn exactly once, straight from a page: these are
+    tagged inside (with their own /StructParents), so that a page drawn as
+    one form, as some programs and page imports do, still gets headings,
+    paragraphs and tables. Forms drawn more often are tagged as a whole
+    where they're drawn: the same MCIDs can't belong to two places."""
+    import pikepdf
+
+    drawn, owners, from_page = Counter(), Counter(), set()
+    seen = set()
+
+    def scan(data, resources, page_level, depth):
+        xobjects = resources.get("/XObject") if isinstance(resources, pikepdf.Dictionary) else None
+        if not isinstance(xobjects, pikepdf.Dictionary):
+            return
+        for _, xobj in xobjects.items():
+            if isinstance(xobj, pikepdf.Stream) and xobj.is_indirect:
+                owners[xobj.objgen] += 1
+        for name in DO_NAMES.findall(data):
+            xobj = xobjects.get("/" + name.decode("latin-1"))
+            if not isinstance(xobj, pikepdf.Stream) or str(xobj.get("/Subtype", "")) != "/Form" \
+                    or not xobj.is_indirect:
+                continue
+            drawn[xobj.objgen] += 1
+            if page_level:
+                from_page.add(xobj.objgen)
+            if xobj.objgen not in seen and depth < 8:
+                seen.add(xobj.objgen)
+                try:
+                    scan(xobj.read_bytes(), xobj.get("/Resources"), False, depth + 1)
+                except pikepdf.PdfError:
+                    continue
+
+    for page in pdf.pages:
+        contents = page.obj.get("/Contents")
+        streams = list(contents) if isinstance(contents, pikepdf.Array) else \
+            [contents] if contents is not None else []
+        try:
+            data = b"\n".join(c.read_bytes() for c in streams if isinstance(c, pikepdf.Stream))
+        except pikepdf.PdfError:
+            continue
+        scan(data, _inherited(page.obj, "/Resources"), True, 0)
+    return {key for key in from_page if drawn[key] == 1 and owners[key] == 1}
 
 
 def _form_has_images(xobj, cache, depth=0):
@@ -1076,6 +1147,7 @@ ARTIFACT = ("artifact", None)
 ARTIFACT_HEADER = ("artifact", "Header")
 ARTIFACT_FOOTER = ("artifact", "Footer")
 ARTIFACT_BACKGROUND = ("artifact", "Background")
+UNMARKED = ("unmarked", None)   # a form tagged inside: not wrapped where it's drawn
 
 
 class _Targets:
@@ -1452,6 +1524,8 @@ class _PageTagger:
                         if _overlap(box, fbox) >= 0.9 * max(_area(box), 0.01) and _area(box) > 0:
                             unit.key = fig
                             break
+            elif unit.kind == "tagged-form":
+                unit.key = UNMARKED
             elif unit.kind == "form":
                 box = view.rect(unit.box) if unit.box else (0, 0, w, h)
                 key = self.targets.best(box)
@@ -1545,12 +1619,14 @@ def _walk(elements):
 # Writing marked content
 # --------------------------------------------------------------------------
 
-def _rewrite(instructions, units, open_mc):
+def _rewrite(instructions, units, open_mc, on_form=None):
     """The content stream with each unit wrapped in marked content for its
     key. Marked content that only tagged (anything but optional content,
     /OC) is dropped: the new tags replace it. ``open_mc(key)`` gives the
     BDC/BMC instruction for a key (and allocates its MCID). Marked content
-    nests inside text objects and saved graphics states (BT/ET, q/Q)."""
+    nests inside text objects and saved graphics states (BT/ET, q/Q). A
+    form tagged inside (key UNMARKED) is drawn outside any marked content,
+    after ``on_form(unit)`` has tagged its own content."""
     import pikepdf
 
     starts = {u.start: u for u in units}
@@ -1567,6 +1643,13 @@ def _rewrite(instructions, units, open_mc):
     i, n = 0, len(instructions)
     while i < n:
         unit = starts.get(i)
+        if unit is not None and unit.key is UNMARKED:
+            close()
+            if on_form is not None:
+                on_form(unit)
+            out.extend(instructions[unit.start:unit.end + 1])
+            i = unit.end + 1
+            continue
         if unit is not None:
             key = unit.key if unit.key is not None else ARTIFACT
             if key is not current:
@@ -1920,7 +2003,9 @@ def _tag_pages(pdf, path, password, alt, result):
 
     from pdfmanager import tables
 
-    fonts, forms, stripped = {}, {}, set()
+    fonts, forms = {}, {}
+    inside = _single_use_forms(pdf)
+    stripped = set(inside)  # their old marks go when they're tagged inside
     elements, infos = [], []
     try:
         plumber = tables._open(path, password)
@@ -1938,7 +2023,7 @@ def _tag_pages(pdf, path, password, alt, result):
                 result["untagged_pages"].append(i + 1)
                 infos.append(None)
                 continue
-            units = _Scanner(resources, fonts, forms).run(instructions)
+            units = _Scanner(resources, fonts, forms, inside).run(instructions)
             found = []
             if plumber is not None and _may_have_tables(info["segs"], units):
                 try:
@@ -1959,6 +2044,10 @@ def _tag_pages(pdf, path, password, alt, result):
             elements.extend(tagger.elements)
             infos.append({"units": units, "tagger": tagger})
             _strip_xobjects((resources.get("/XObject") or {}), stripped)
+            for unit in units:
+                if unit.kind == "tagged-form":  # the forms these draw are tagged as a whole
+                    _strip_xobjects((unit.xobj.get("/Resources") or {}).get("/XObject") or {},
+                                    stripped)
     finally:
         if plumber is not None:
             plumber.close()
@@ -1974,38 +2063,67 @@ def _write_tree(pdf, elements, pages_info):
     import pikepdf
 
     Name, Dictionary, Array = pikepdf.Name, pikepdf.Dictionary, pikepdf.Array
-    parent_tree = []          # [(key, value)]
+    parent_tree = []          # [(key, [element of each MCID] or ("annot", element))]
     next_key = 0
+    drawn = [0]               # the order content is drawn in, for ordering the kids
     for i, page in enumerate(pdf.pages):
         info = pages_info["infos"][i]
         if info is None:
             continue
         instructions = pikepdf.parse_content_stream(page)
-        mcids = []    # element of each MCID on this page
+        count = [0]    # MCIDs are numbered across the page and the forms tagged inside
+        owners = {}    # stream (None: the page) -> {MCID: element}
 
-        def open_mc(key, mcids=mcids):
-            if isinstance(key, _Elem):
-                mcid = len(mcids)
-                mcids.append(key)
-                key.add(("mcid", mcid))
-                return pikepdf.ContentStreamInstruction(
-                    [Name("/" + key.S), Dictionary(MCID=mcid)], pikepdf.Operator("BDC"))
-            if key[1] in ("Header", "Footer"):
-                props = Dictionary(Type=Name.Pagination, Subtype=Name("/" + key[1]))
-                return pikepdf.ContentStreamInstruction([Name.Artifact, props],
-                                                        pikepdf.Operator("BDC"))
-            if key[1] == "Background":
-                return pikepdf.ContentStreamInstruction(
-                    [Name.Artifact, Dictionary(Type=Name.Background)], pikepdf.Operator("BDC"))
-            return pikepdf.ContentStreamInstruction([Name.Artifact], pikepdf.Operator("BMC"))
+        def opener(stream, count=count, owners=owners):
+            mine = owners.setdefault(stream.objgen if stream is not None else None, {})
+
+            def open_mc(key):
+                if isinstance(key, _Elem):
+                    mcid = count[0]
+                    count[0] += 1
+                    drawn[0] += 1
+                    mine[mcid] = key
+                    key.add(("mcid", mcid, drawn[0], stream))
+                    return pikepdf.ContentStreamInstruction(
+                        [Name("/" + key.S), Dictionary(MCID=mcid)], pikepdf.Operator("BDC"))
+                if key[1] in ("Header", "Footer"):
+                    props = Dictionary(Type=Name.Pagination, Subtype=Name("/" + key[1]))
+                    return pikepdf.ContentStreamInstruction([Name.Artifact, props],
+                                                            pikepdf.Operator("BDC"))
+                if key[1] == "Background":
+                    return pikepdf.ContentStreamInstruction(
+                        [Name.Artifact, Dictionary(Type=Name.Background)], pikepdf.Operator("BDC"))
+                return pikepdf.ContentStreamInstruction([Name.Artifact], pikepdf.Operator("BMC"))
+            return open_mc
+
+        inner = {}
+        for unit in info["units"]:
+            if unit.stream is not None:
+                inner.setdefault(unit.stream.objgen, []).append(unit)
+        forms = []
+
+        def on_form(unit, inner=inner, opener=opener, forms=forms):
+            form = unit.xobj
+            new = _rewrite(pikepdf.parse_content_stream(form), inner.get(form.objgen, []),
+                           opener(form))
+            form.write(pikepdf.unparse_content_stream(new))
+            forms.append(form)
 
         # (written now that headings have their levels: the tag names H1...)
-        new = _rewrite(instructions, info["units"], open_mc)
+        new = _rewrite(instructions, [u for u in info["units"] if u.stream is None],
+                       opener(None), on_form)
         page.obj.Contents = pdf.make_stream(pikepdf.unparse_content_stream(new))
-        if mcids:
-            page.obj.StructParents = next_key
-            parent_tree.append((next_key, ("mcids", i, mcids)))
-            next_key += 1
+        # The page's entry also names what its forms hold (their MCIDs don't
+        # clash with its own): pdf.js finds a page's tags from that entry only.
+        owners["page"] = {m: e for found in owners.values() for m, e in found.items()}
+        for stream, key in [(page.obj, "page")] + [(form, form.objgen) for form in forms]:
+            if "/StructParents" in stream:
+                del stream["/StructParents"]
+            mine = owners.get(key)
+            if mine:
+                stream.StructParents = next_key
+                parent_tree.append((next_key, [mine.get(m) for m in range(max(mine) + 1)]))
+                next_key += 1
         tagger = info["tagger"]
         annots = page.obj.get("/Annots")
         made = [(index, elem) for index, _, elem in tagger.annot_elems] + \
@@ -2062,9 +2180,9 @@ def _write_tree(pdf, elements, pages_info):
         if elem.inline:
             def order(kid):
                 if isinstance(kid, tuple) and kid[0] == "mcid":
-                    return (0, kid[1])
+                    return (0, kid[2])
                 if isinstance(kid, _Elem):
-                    first = _first_mcid(kid)
+                    first = _first_drawn(kid)
                     return (0, first + 0.5) if first is not None else (1, 0)
                 return (1, 0)
             kids = sorted(kids, key=order)
@@ -2072,8 +2190,11 @@ def _write_tree(pdf, elements, pages_info):
         for kid in kids:
             if isinstance(kid, _Elem):
                 out.append(build(kid, d))
-            elif kid[0] == "mcid":
+            elif kid[0] == "mcid" and kid[3] is None:
                 out.append(kid[1])
+            elif kid[0] == "mcid":  # in a form XObject drawn on the page
+                out.append(Dictionary(Type=Name.MCR, Pg=pages[elem.page].obj, Stm=kid[3],
+                                      MCID=kid[1]))
             elif kid[0] == "objr-ref":
                 out.append(Dictionary(Type=Name.OBJR, Obj=kid[1], Pg=pages[elem.page].obj))
         d.K = out
@@ -2086,8 +2207,9 @@ def _write_tree(pdf, elements, pages_info):
     nums = Array()
     for key, value in parent_tree:
         nums.append(key)
-        if value[0] == "mcids":
-            nums.append(Array([elem.ref if elem.ref is not None else doc for elem in value[2]]))
+        if isinstance(value, list):
+            nums.append(Array([elem.ref if elem is not None and elem.ref is not None else None
+                               for elem in value]))
         else:
             nums.append(value[1].ref if value[1].ref is not None else doc)
     tree.ParentTree = pdf.make_indirect(Dictionary(Nums=nums))
@@ -2096,11 +2218,12 @@ def _write_tree(pdf, elements, pages_info):
     return root_elem.kids
 
 
-def _first_mcid(elem):
-    found = [k[1] for k in elem.kids if isinstance(k, tuple) and k[0] == "mcid"]
+def _first_drawn(elem):
+    """When the first content of an element (or its kids) is drawn."""
+    found = [k[2] for k in elem.kids if isinstance(k, tuple) and k[0] == "mcid"]
     for kid in elem.kids:
         if isinstance(kid, _Elem):
-            sub = _first_mcid(kid)
+            sub = _first_drawn(kid)
             if sub is not None:
                 found.append(sub)
     return min(found) if found else None

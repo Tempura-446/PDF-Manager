@@ -689,9 +689,10 @@ which order it all reads. PDF/UA (ISO 14289) is the standard for that.
   say whether a PDF is tagged, and its language.
 
 Tagging is automatic, like Acrobat's: check the result, and describe the
-pictures it couldn't (`tag` names the pages). Content inside a form
-XObject is tagged as a whole; vector drawings (charts drawn with lines)
-are marked as decoration, not figures.
+pictures it couldn't (`tag` names the pages). Something drawn several
+times as one piece (a form XObject: a logo on every page, say) is tagged as
+a whole; vector drawings (charts drawn with lines) are marked as
+decoration, not figures.
 
 ### Digital ID signatures
 
