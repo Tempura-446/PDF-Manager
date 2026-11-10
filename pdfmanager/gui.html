@@ -50,6 +50,9 @@
   --tint-a: #dfe6f5;
   --tint-b: #f3e4de;
   --glass: rgb(255 255 255 / .72);
+  /* The rim of a frosted surface: its edge, and a faint light along its top. */
+  --glass-edge: var(--border);
+  --glass-hi: inset 0 1px 0 rgb(255 255 255 / .55);
   --ok: #1b7f4f;
   --ok-soft: #e0f2e8;
   --warn: #8a5a00;
@@ -81,7 +84,8 @@
     --text: #eef0f3; --text-2: #c9ced6; --muted: #a4acb8; --faint: #8c95a1;
     --border: #2c3138; --border-strong: #3d444d;
     --accent: #5cc9c4; --accent-hover: #7fd8d3; --accent-text: #0f1114; --accent-soft: #17302f; --accent-ring: rgb(92 201 196 / .3);
-    --seal: #ef5a4c; --seal-ink: #14171c; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(29 33 38 / .72);
+    --seal: #ef5a4c; --seal-ink: #14171c; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(43 49 57 / .84);
+    --glass-edge: rgb(255 255 255 / .13); --glass-hi: inset 0 1px 0 rgb(255 255 255 / .08);
     --ok: #5fd09a; --ok-soft: #173326; --warn: #e6b65e; --warn-soft: #3a2d10; --err: #f28c7e; --err-soft: #3f1f1b;
     --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 10px 28px rgb(0 0 0 / .45); --shadow-lift: 0 2px 6px rgb(0 0 0 / .45), 0 16px 40px rgb(0 0 0 / .5);
     --shadow-pop: 0 2px 6px rgb(0 0 0 / .5), 0 20px 48px rgb(0 0 0 / .55); --float: 0 2px 6px rgb(0 0 0 / .5), 0 20px 48px rgb(0 0 0 / .55);
@@ -94,7 +98,8 @@
   --text: #eef0f3; --text-2: #c9ced6; --muted: #a4acb8; --faint: #8c95a1;
   --border: #2c3138; --border-strong: #3d444d;
   --accent: #5cc9c4; --accent-hover: #7fd8d3; --accent-text: #0f1114; --accent-soft: #17302f; --accent-ring: rgb(92 201 196 / .3);
-  --seal: #ef5a4c; --seal-ink: #14171c; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(29 33 38 / .72);
+  --seal: #ef5a4c; --seal-ink: #14171c; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(43 49 57 / .84);
+    --glass-edge: rgb(255 255 255 / .13); --glass-hi: inset 0 1px 0 rgb(255 255 255 / .08);
   --ok: #5fd09a; --ok-soft: #173326; --warn: #e6b65e; --warn-soft: #3a2d10; --err: #f28c7e; --err-soft: #3f1f1b;
   --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 10px 28px rgb(0 0 0 / .45); --shadow-lift: 0 2px 6px rgb(0 0 0 / .45), 0 16px 40px rgb(0 0 0 / .5);
   --shadow-pop: 0 2px 6px rgb(0 0 0 / .5), 0 20px 48px rgb(0 0 0 / .55); --float: 0 2px 6px rgb(0 0 0 / .5), 0 20px 48px rgb(0 0 0 / .55);
@@ -161,9 +166,9 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
   position: fixed; top: 10px; bottom: 10px; left: 72px; z-index: 50; width: min(360px, calc(100vw - 88px));
   display: flex; flex-direction: column; background: var(--surface); color: var(--text);
   border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--float); overflow: hidden;
-  animation: fly-in calc(var(--t) * 1.6) var(--ease);
+  animation: fly-in calc(var(--t) * 1.25) var(--ease);  /* 200 ms */
 }
-@keyframes fly-in { from { opacity: 0; transform: translateX(-10px); } }
+@keyframes fly-in { from { opacity: 0; transform: translate(-8px, 4px); } }
 .fly-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 18px 20px 6px; }
 .fly-head h2 { margin: 0; font: 400 28px/1.1 var(--display); letter-spacing: 0; }
 .fly-head span { color: var(--muted); font-size: 12px; font-family: var(--mono); }
@@ -202,10 +207,10 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 .app-dialog[open] { animation: pop-in calc(var(--t) * 1.4) var(--ease); }
 @keyframes pop-in { from { opacity: 0; transform: translateY(-6px) scale(.99); } }
 /* Command palette (Ctrl+K): frosted, as it's only there for a moment. */
-.palette { border: 1px solid var(--border); border-radius: var(--radius-lg); color: var(--text); padding: 0;
+.palette { border: 1px solid var(--glass-edge); border-radius: var(--radius-lg); color: var(--text); padding: 0;
   background: var(--glass); -webkit-backdrop-filter: blur(22px) saturate(1.5); backdrop-filter: blur(22px) saturate(1.5);
-  width: min(620px, calc(100vw - 32px)); margin: 12vh auto auto; box-shadow: var(--float); overflow: hidden; }
-.palette[open] { animation: pop-in calc(var(--t) * 1.4) var(--ease); }
+  width: min(620px, calc(100vw - 32px)); margin: 12vh auto auto; box-shadow: var(--glass-hi), var(--float); overflow: hidden; }
+.palette[open] { animation: pop-in calc(var(--t) * 1.25) var(--ease); }  /* 200 ms */
 .palette::backdrop { background: rgb(20 23 28 / .22); background: color-mix(in srgb, var(--bg) 40%, transparent); }
 .palette-search { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
 .palette-search svg { color: var(--muted); }
@@ -288,6 +293,24 @@ main > .action-bar { max-width: none; width: auto; }
 .drop.compact .drop-icon svg { width: 16px; height: 16px; }
 .drop.compact small { display: none; }
 .drop.compact strong { font-size: 14px; font-weight: 600; color: var(--text-2); }
+.drop-choose { display: none; }
+/* Tools that start from several files (or from images, Office files, web pages):
+   before any file is added, the page is the tool's name and line and one big
+   drop area, as on the start screen; the options and Run come with the files. */
+body.drop-first:not(.has-files) #files-card { background: none; border-color: transparent; box-shadow: none; padding: 0; }
+body.drop-first:not(.has-files) #files-card .card-head { display: none; }
+body.drop-first:not(.has-files) #drop {
+  min-height: min(48vh, 400px); padding: 48px 24px; gap: 10px; border-radius: 22px; background: var(--surface); box-shadow: var(--shadow);
+}
+body.drop-first:not(.has-files) #drop:hover, body.drop-first:not(.has-files) #drop.over { background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface)); }
+body.drop-first:not(.has-files) #drop .drop-icon { width: 58px; height: 58px; margin-bottom: 8px; }
+body.drop-first:not(.has-files) #drop .drop-icon svg { width: 26px; height: 26px; }
+body.drop-first:not(.has-files) #drop strong { font: 400 clamp(26px, 3.2vw, 34px)/1.15 var(--display); letter-spacing: 0; text-wrap: balance; max-width: 22ch; }
+body.drop-first:not(.has-files) #drop small { font-size: 14px; max-width: 52ch; text-wrap: balance; }
+body.drop-first:not(.has-files) .drop-choose { display: inline-flex; margin-top: 12px; }
+body.drop-first.opts-later:not(.has-files) #options-card, body.drop-first.opts-later:not(.has-files) .action-bar { display: none; }
+body.drop-first.has-files #files-card { animation: fade-in calc(var(--t) * 1.6) var(--ease); }
+body.drop-first.opts-later.has-files #options-card, body.drop-first.opts-later.has-files .action-bar { animation: rise calc(var(--t) * 2) var(--ease); }
 
 /* File cards */
 .file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 12px; margin-bottom: 14px; }
@@ -598,7 +621,7 @@ details.pw summary svg { width: 15px; height: 15px; }
 .message.err { background: var(--err-soft); color: var(--err); }
 .message.info { background: var(--surface-2); color: var(--muted); }
 .result { display: flex; gap: 18px; align-items: center; border-color: color-mix(in srgb, var(--ok) 38%, var(--border)); background: linear-gradient(180deg, color-mix(in srgb, var(--ok-soft) 55%, var(--surface)), var(--surface) 70%); }
-.result:not([hidden]) { animation: rise calc(var(--t) * 2.4) var(--ease); }  /* a result arriving */
+.result:not([hidden]), #result-table:not([hidden]) { animation: rise calc(var(--t) * 2.4) var(--ease); }  /* a result arriving */
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
 .result .thumb { width: 96px; flex: none; border: 0; border-radius: 3px; box-shadow: var(--shadow-page); }
 .result-body { flex: 1; min-width: 0; }
@@ -703,15 +726,16 @@ td { word-break: break-all; }
 .fp-ico { display: grid; place-items: center; color: var(--accent); }
 .fp-go { color: var(--faint); transition: transform var(--t) var(--ease); }
 .fp-card-head[aria-expanded="true"] .fp-go { transform: rotate(90deg); }
-.fp-opts { border-top: 1px solid var(--border); padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 12px; outline: none;
-  animation: fp-open calc(var(--t) * 1.8) var(--ease); }
-@keyframes fp-open { from { opacity: 0; transform: translateY(-6px); } }
+.fp-opts { border-top: 1px solid var(--border); padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 12px; outline: none; }
+.fp-opts.sliding { overflow: hidden; }  /* opening or closing (fpSlide): its height follows, nothing below jumps */
 .fp-opts.wide { grid-column: 1 / -1; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); margin-bottom: 2px; }
 .fp .fields { grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .fp .field.check { padding-bottom: 0; align-self: start; }
 .fp .field label { font-size: 12.5px; margin-bottom: 4px; }
 .fp .field input[type=text], .fp .field input[type=number], .fp .field input[type=password], .fp .field select { height: 36px; }
 .fp .field input[type=file] { width: 100%; }
+/* A choice too long for the panel's width: a little smaller type, tighter padding (the tool page is unchanged). */
+.fp .field.fp-long select { font-size: 12.5px; letter-spacing: -0.005em; padding-left: 9px; padding-right: 24px; background-position: right 12px center, right 7px center; }
 .fp .empty-note { font-size: 13px; }
 .fp-hint { margin: 0; font-size: 13px; color: var(--muted); }
 .fp-actions { display: flex; gap: 8px; }
@@ -726,7 +750,10 @@ td { word-break: break-all; }
 .fp-done { display: flex; gap: 10px; align-items: flex-start; color: var(--muted); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
 .fp-done > svg.i { color: var(--ok); margin-top: 1px; }
 .fp-done b { color: var(--text); font-weight: 600; }
-.fp-note .fp-done { padding: 10px 12px; border-radius: var(--radius); background: color-mix(in srgb, var(--ok-soft) 60%, var(--surface)); }
+.fp-note .fp-done { padding: 10px 12px; border-radius: var(--radius); background: color-mix(in srgb, var(--ok-soft) 60%, var(--surface)); line-height: 1.65; }
+/* The link back to the original: its focus ring hugs the words instead of crossing the line above. */
+.fp-done .link-btn { padding: 0 2px; margin: 0 -2px; border-radius: 4px; line-height: 1.3; }
+.fp-done .link-btn:focus-visible { outline-offset: 0; }
 .fp-note:empty { display: none; }
 .fp-line { margin-top: 2px; }
 .fp-said .saving { color: var(--ok); font-weight: 600; }
@@ -858,6 +885,7 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
         <span class="drop-icon"><svg class="i" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg></span>
         <strong id="drop-title">Drop files here or click to choose</strong>
         <small id="drop-hint"></small>
+        <button type="button" class="btn seal drop-choose" id="drop-choose"><svg class="i btn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V5M7 10l5-5 5 5M5 19h14"/></svg>Choose files</button>
       </label>
     </section>
 
@@ -1140,7 +1168,30 @@ async function load() {
 
 // Saving with the computer's own dialogs in a browser window (static/files.js).
 let filesLib = null;
-import("/static/files.js").then((m) => { filesLib = m; }).catch(() => {});
+const filesReady = import("/static/files.js").then((m) => { filesLib = m; }).catch(() => {});
+
+// ---- toasts and motion ------------------------------------------------------------
+/** The motion token (--t) in ms, times ``k``: 0 when the system asks for less motion. */
+function motionMs(k = 1) { return (parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--t")) || 0) * k; }
+/** Take ``node`` away with its leaving animation (.out), or at once with no motion. */
+function fadeAway(node) {
+  const ms = motionMs(1.5);
+  if (!ms) { node.remove(); return; }
+  node.classList.add("out");
+  setTimeout(() => node.remove(), ms + 40);
+}
+let toastEl = null, toastTimer = 0;
+/** A short note that rises in and fades out: the reader's own toast in the
+ *  reader, the same look (.toast) on the start screen and the tool pages. */
+function appToast(message, ms = 4000) {
+  if (!message) return;
+  if (inReader() && reader) { reader.toast(message, ms); return; }
+  toastEl?.remove();
+  const t = toastEl = el("div", { class: "toast", role: "status" }, el("span", {}, message));
+  document.body.append(t);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => fadeAway(t), ms);
+}
 
 // ---- reader -----------------------------------------------------------------
 let reader = null;
@@ -1164,6 +1215,8 @@ async function ensureReader() {
     onCommands: () => openPalette(),
     onHome: () => select("home"),
     onChange: () => fpSync(),
+    recent: (host) => fillRecent(host, { onEmpty: () => { const box = host.closest(".rd-recent"); if (box) box.hidden = true; } }),
+    onFormHint: (tab) => { if (fp.tab === tab) fpSuggest(); },
   });
   return reader;
 }
@@ -1182,7 +1235,7 @@ const COMMON_TOOLS = [["split", "Split"], ["sign-cert", "Sign"], ["to-word", "To
   ["to-excel", "To Excel"], ["encrypt", "Add a password"]];
 /** Tools that run in the panel: one PDF in, nothing to draw or arrange on the pages. */
 const runsInPanel = (op) => !!op && op.files === "pdf" && !op.board && !op.panel && !((op.min || 1) >= 2);
-const fp = { tab: null, key: "", seq: 0, timer: 0, items: new Map(), open: null };
+const fp = { tab: null, key: "", seq: 0, timer: 0, items: new Map(), open: null, facts: null, grid: new Map() };
 const capital = (text) => String(text || "").replace(/^./, (c) => c.toUpperCase());
 
 /** The facts as chips: factsLine's parts, "tagged" too; what needs doing stands out. */
@@ -1233,6 +1286,8 @@ async function fpFacts(tab, key) {
 function fpRender(tab) {
   fp.tab = tab;
   fp.items = new Map();
+  fp.grid = new Map();  // the common tools' own items, while a suggestion card stands in for one
+  fp.facts = null;
   fp.open = null;
   fp.name = el("h2", { class: "fp-name", id: "fp-name" }, tab.name);
   fp.chips = el("div", { class: "fp-facts", role: "list", "aria-label": "About this file", "aria-busy": "true" },
@@ -1267,18 +1322,55 @@ function fpShowFacts(facts) {
   fp.chips.removeAttribute("aria-busy");
   fp.chips.hidden = !chips.length;
   fp.chips.replaceChildren(...chips.map((c) => el("span", { class: "fp-fact" + (c.flag ? " flag" : ""), role: "listitem" }, c.text)));
-  // Suggestions: three at most, tools this app has; the open one stays as it is.
-  const list = fp.sug.querySelector(".fp-list");
-  const wanted = (facts?.suggestions || []).filter((s) => ops.some((o) => o.id === s.op && o.files === "pdf")).slice(0, 3);
+  fp.facts = facts;
+  fpSuggest();
+}
+
+// Suggestions, most useful first, three at most: the server's (from the facts)
+// and the reader's own "Make it fillable" (a printed form it found on the first pages).
+const SUGGESTION_ORDER = ["ocr", "compress", "fillable", "verify-sig", "sign-cert", "repair"];
+const FILLABLE = { op: "fillable", title: "Make it fillable", why: "It looks like a form you can't type in yet" };
+function fpSuggest() {
+  if (!fp.tab || !fp.sug) return;
+  const list = fp.sug.querySelector(".fp-list"), chosen = fp.chosen.querySelector(".fp-list");
+  const known = (s) => s.op === "fillable" || ops.some((o) => o.id === s.op && o.files === "pdf");
+  const rank = (s) => { const i = SUGGESTION_ORDER.indexOf(s.op); return i < 0 ? SUGGESTION_ORDER.length : i; };
+  const all = [...(fp.facts?.suggestions || [])];
+  if (reader.looksLikeFlatForm(fp.tab)) all.push(FILLABLE);
+  const wanted = all.filter(known).sort((a, b) => rank(a) - rank(b)).slice(0, 3);
+  // The open one stays as it is; one already chosen (from the palette) isn't repeated.
   const cards = wanted.map((s) => {
+    if (s.op === "fillable") return list.querySelector('.fp-card[data-op="fillable"]') || fpFillableCard(s);
     const had = fp.items.get(s.op);
     if (had && had.home === list) return had.card;
-    if (had) return null;  // already among the tools below
+    if (had && had.home === chosen) return null;
+    if (had) {  // one of the common tools below: the card stands in for it while it's suggested
+      if (fp.open === had) fpCollapse(had, false);
+      had.box?.remove(); had.box = null;
+      fp.grid.set(s.op, had);
+    }
     return fpCard(ops.find((o) => o.id === s.op), s.title, s.why, list);
   }).filter(Boolean);
-  for (const old of [...list.children]) if (!cards.includes(old)) { fpForget(old.dataset.op); old.remove(); }
+  for (const old of [...list.children]) {
+    if (cards.includes(old)) continue;
+    const id = old.dataset.op;
+    if (id !== "fillable") {
+      fpForget(id);
+      const own = fp.grid.get(id);
+      if (own) { fp.items.set(id, own); fp.grid.delete(id); }
+    }
+    old.remove();
+  }
   list.replaceChildren(...cards);
   fp.sug.hidden = !cards.length;
+}
+
+/** "Make it fillable": the same as the reader's bar button (which stays). */
+function fpFillableCard(s) {
+  const head = el("button", { type: "button", class: "fp-card-head", "data-op": "fillable", title: "Find the form's fields so it can be filled in here",
+    onclick: () => reader.makeFillable() },
+    el("span", { class: "fp-ico" }, icon("form")), el("span", {}, el("strong", {}, s.title), el("span", {}, s.why)), icon("right", "i fp-go"));
+  return el("div", { class: "fp-card", "data-op": "fillable", "data-open": "false" }, head);
 }
 
 /** A card: the tool's name and why, opening to its options. */
@@ -1298,7 +1390,10 @@ function fpItem(op, btn, home, card = null) {
   if (runsInPanel(op)) {
     btn.setAttribute("aria-expanded", "false");
     btn.setAttribute("aria-controls", `fp-opts-${op.id}`);
-    btn.addEventListener("click", () => (fp.open === item ? fpCollapse(item, true) : fpExpand(item)));
+    btn.addEventListener("click", () => {
+      const now = fp.items.get(op.id) || item;  // a suggestion card may stand in for a common tool
+      if (fp.open === now) fpCollapse(now, true); else fpExpand(now);
+    });
   } else {
     btn.title = `${op.label}: opens in its own page with this file`;
     btn.addEventListener("click", () => reader.editWith(op.id));
@@ -1312,19 +1407,38 @@ function fpExpand(item, focus = true) {
   if (!item.box) item.box = fpOptions(item);
   if (item.card) { if (item.box.parentNode !== item.card) item.card.append(item.box); }
   else if (item.btn.nextElementSibling !== item.box) item.btn.after(item.box);  // the whole row under its button
-  item.box.hidden = false;
-  item.btn.setAttribute("aria-expanded", "true");
-  item.card?.setAttribute("data-open", "true");
+  fpSlide(item.box, true);
+  fpExpanded(item, true);
   fp.open = item;
-  if (focus) (item.box.querySelector("input:not([type=hidden]), select, textarea, button") || item.box).focus();
+  if (focus) (item.box.querySelector("input:not([type=hidden]), select, textarea, button") || item.box).focus({ preventScroll: true });
 }
 function fpCollapse(item, focus) {
   if (!item.box) return;
-  item.box.hidden = true;
-  item.btn.setAttribute("aria-expanded", "false");
-  item.card?.setAttribute("data-open", "false");
+  fpSlide(item.box, false);
+  fpExpanded(item, false);
   if (fp.open === item) fp.open = null;
   if (focus) item.btn.focus();
+}
+/** Every button that opens these options says whether they're open. */
+function fpExpanded(item, open) {
+  item.btn.setAttribute("aria-expanded", String(open));
+  item.card?.setAttribute("data-open", String(open));
+  for (const b of reader.side.querySelectorAll(`[aria-controls="fp-opts-${item.op.id}"]`)) b.setAttribute("aria-expanded", String(open));
+}
+/** Open or close a tool's options smoothly: the height follows, so what is
+ *  below moves rather than jumps. At once when the system asks for less motion. */
+function fpSlide(box, open) {
+  for (const a of box.getAnimations()) a.cancel();
+  box.classList.remove("sliding");
+  const ms = motionMs(1.8);
+  if (!ms || !box.animate || (!open && box.hidden)) { box.hidden = !open; return; }
+  box.hidden = false;
+  const cs = getComputedStyle(box);
+  const full = { height: box.offsetHeight + "px", paddingTop: cs.paddingTop, paddingBottom: cs.paddingBottom, opacity: 1 };
+  const none = { height: "0px", paddingTop: "0px", paddingBottom: "0px", opacity: 0 };
+  box.classList.add("sliding");
+  const run = box.animate(open ? [none, full] : [full, none], { duration: ms, easing: "cubic-bezier(.2, .8, .2, 1)" });
+  run.onfinish = () => { box.classList.remove("sliding"); if (!open) box.hidden = true; };
 }
 
 /** A tool's options (the tool page's fields), Run, and what came of it. */
@@ -1332,6 +1446,10 @@ function fpOptions(item) {
   const { op } = item, prefix = `fp-${op.id}-`;
   const form = el("form", { class: "fields fp-form", autocomplete: "off", novalidate: true });
   renderFields(op, form, prefix, "Nothing to choose here: just run it.");
+  // A choice too long for the panel ("Any changes except extracting pages"): smaller type there.
+  for (const sel of form.querySelectorAll("select")) {
+    if (Math.max(0, ...[...sel.options].map((o) => o.textContent.length)) > 30) sel.closest(".field")?.classList.add("fp-long");
+  }
   form.addEventListener("input", () => updateVisibility(op, form, prefix));
   form.addEventListener("submit", (e) => { e.preventDefault(); fpRun(item); });
   const runBtn = el("button", { type: "button", class: "btn seal fp-run" }, el("span", { class: "spinner" }),
@@ -1675,6 +1793,9 @@ async function select(id) {
   const readerMode = current.files === "reader", homeMode = current.files === "home";
   document.body.classList.toggle("reader-mode", readerMode);
   document.body.classList.toggle("home-mode", homeMode);
+  const first = !readerMode && !homeMode && dropFirst(current);
+  document.body.classList.toggle("drop-first", first);
+  document.body.classList.toggle("opts-later", first && !current.url_field);  // (Web page → PDF: an address can do instead of files)
   $("home-host").hidden = !homeMode;
   if (reader && !readerMode) reader.hide();
   try { localStorage.setItem("pdfm-op", id); } catch (e) {}
@@ -1686,7 +1807,7 @@ async function select(id) {
   $("brand").setAttribute("aria-current", String(homeMode));
   $("tool-icon").replaceChildren(icon(id));
   $("title").textContent = current.label;
-  showHelp(current.help || defaultHelp(current));
+  showHelp(current.help || defaultHelp(current) || (dropFirst(current) ? TAGLINES[id] || "" : ""));
   document.title = homeMode ? "ZPDF" : current.label + " — ZPDF";
   if (homeMode) { renderHome(); return; }
   if (readerMode) {
@@ -1714,7 +1835,7 @@ async function select(id) {
     web: "Saved web pages (.html, .mht) — or type an address under Options",
     pdf2: current.id === "compare" ? "Two PDFs: the original first, then the changed version" : "Two PDFs: front sides first, then back sides",
   }[current.files] || (current.id === "merge" ? "Add PDFs in the order to combine them" : "One or more PDFs");
-  if (keep) return;
+  if (keep) { syncDropFirst(); return; }
   const want = accepts(current.files);
   items = items.filter((it) => want(it.file));
   renderForm(); renderFiles(); clearMessages();
@@ -1740,6 +1861,25 @@ $("help-more").addEventListener("click", () => {
   $("help-more").textContent = open ? "Less" : "More about this";
 });
 function defaultHelp(op) { return op.files === "pdf" ? "Add one or more PDFs. Several files come back together as a ZIP." : ""; }
+/** Tools that start from several files, or from files that aren't a PDF
+ *  (images, Office files, web pages): their page opens on one big drop area.
+ *  (Folder tools start from a folder typed under Options: no files at all.) */
+function dropFirst(op) { return !!op && typeof op.files === "string" && op.files !== "home" && op.files !== "reader" && (op.files !== "pdf" || (op.min || 1) >= 2); }
+const NUMBER_WORDS = ["", "one", "two", "three", "four", "five"];
+/** What the big drop area asks for, in the tool's own words. */
+function dropText(op) {
+  if (op.files === "pdf2") return op.id === "compare" ? "Drop the two versions to compare" : "Drop the two scans to interleave";
+  if (op.files === "images") return "Drop photos or scans to turn into a PDF";
+  if (op.files === "office") return "Drop Office documents to turn into PDFs";
+  if (op.files === "web") return "Drop saved web pages to turn into PDFs";
+  return `Drop ${NUMBER_WORDS[op.min] || op.min} or more PDFs to ${(op.action || op.label).toLowerCase()}`;
+}
+/** The page's state for the drop-first tools: files or not yet. */
+function syncDropFirst() {
+  document.body.classList.toggle("has-files", items.length > 0);
+  const first = dropFirst(current) && !inReader() && !inHome();
+  $("drop-title").textContent = items.length ? "Add more files" : first ? dropText(current) : "Drop files here or click to choose";
+}
 function isPdf(f) { return f.type === "application/pdf" || /\.pdf$/i.test(f.name); }
 const WEB_ACCEPT = ".html,.htm,.xhtml,.mht,.mhtml";
 const OFFICE_ACCEPT = ".html,.htm,.xhtml,.mht,.mhtml,.doc,.docx,.docm,.dot,.dotx,.rtf,.odt,.wpd,.txt,.xls,.xlsx,.xlsm,.xlsb,.ods,.csv,.ppt,.pptx,.pptm,.pps,.ppsx,.odp";
@@ -1821,7 +1961,7 @@ function renderFiles() {
   });
   grid.hidden = items.length === 0;
   $("drop").classList.toggle("compact", items.length > 0);
-  $("drop-title").textContent = items.length ? "Add more files" : "Drop files here or click to choose";
+  syncDropFirst();
   const pages = items.reduce((n, it) => n + (it.pages || 0), 0);
   const size = items.reduce((n, it) => n + it.file.size, 0);
   $("files-sub").textContent = items.length ? `${plural(items.length, "file")}${pages ? " · " + plural(pages, "page") : ""} · ${humanSize(size)}` : "";
@@ -1868,6 +2008,7 @@ function startOver() {
 
 const drop = $("drop");
 $("file-input").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
+$("drop-choose").addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); $("file-input").click(); });
 const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
 ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { if (hasFiles(e)) { e.preventDefault(); drop.classList.add("over"); } }));
 ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, () => drop.classList.remove("over")));
@@ -1982,26 +2123,60 @@ async function renderHome() {
     el("section", { class: "start-sec", "aria-label": "Start from several files" }, el("span", { class: "lbl" }, "Start from several files"), multi)));
   host.replaceChildren(...parts);
   host.hidden = false;
-  const empty = () => recentList.replaceChildren(el("p", { class: "start-empty" }, "PDFs you open show up here."));
-  let files;
-  try { ({ files } = await (await api("/api/recent")).json()); } catch (e) { files = []; }
-  if (!inHome()) return;
-  if (!files.length) { empty(); return; }
-  recentList.replaceChildren(...files.slice(0, 8).map((f) => {
-    const line = factsLine(f.facts);
-    const flag = !!(f.facts && (f.facts.error || (f.facts.scanned && !f.facts.has_text)));
-    const row = el("div", { class: "recent-row" },
-      el("button", { type: "button", class: "recent-open", title: f.path, onclick: () => openInReaderById([f.id]) },
-        el("span", {}, el("span", { class: "recent-name" }, f.name), line ? el("span", { class: "recent-facts" + (flag ? " flag" : "") }, line) : null),
-        el("span", { class: "recent-when" }, whenText((f.opened || 0) * 1000))),
-      el("button", { type: "button", class: "chip-btn recent-x", title: "Remove from Recent", "aria-label": `Remove ${f.name} from Recent`,
+  await fillRecent(recentList, { emptyText: "PDFs you open show up here.", still: inHome });
+}
+
+// ---- Recent files: one list, on the start screen and under the reader's "Open a PDF" ----
+const RECENT_ROWS = 10;
+/** Recent files, newest first: those opened from this computer by path (the
+ *  server's list, with each file's facts) and, in a browser, those opened
+ *  with its Open dialog or dropped (by browser file handle: a name and a time). */
+async function recentEntries() {
+  let server = [], handles = [];
+  try { ({ files: server } = await (await api("/api/recent")).json()); } catch (e) { server = []; }
+  await filesReady;
+  if (filesLib && filesLib.canOpen) handles = await filesLib.recentHandles().catch(() => []);
+  return [
+    ...(server || []).map((f) => ({ key: "path:" + f.path, name: f.name, title: f.path, facts: f.facts, opened: (f.opened || 0) * 1000,
+      open: () => openInReaderById([f.id]), forget: () => jsonApi("/api/recent/forget", { path: f.path }) })),
+    ...handles.map((h) => ({ key: "handle:" + h.key, name: h.name, title: h.name, facts: null, opened: h.opened,
+      open: async () => {
+        const file = await filesLib.fileFromHandle(h.handle);  // (asks to read it again: from the click)
+        if (!file) { appToast(`“${h.name}” can't be opened any more. It may have been moved or deleted.`, 6000); return; }
+        filesLib.rememberHandle(h.handle);
+        await select("reader");
+        await reader.openFile(file);
+      },
+      forget: () => filesLib.forgetHandle(h.key) })),
+  ].sort((a, b) => b.opened - a.opened).slice(0, RECENT_ROWS);
+}
+/** Fill ``host`` with the Recent rows: the name, what ZPDF knows about the file
+ *  (factsLine), when it was opened; a click opens it, × forgets it (everywhere:
+ *  both places read the same lists). Resolves to the number of rows. */
+async function fillRecent(host, { emptyText = "", onEmpty = null, still = () => true } = {}) {
+  host.classList.add("recent-list");
+  const entries = await recentEntries();
+  if (!still()) return 0;
+  const empty = () => { host.replaceChildren(...(emptyText ? [el("p", { class: "start-empty" }, emptyText)] : [])); onEmpty?.(); };
+  if (!entries.length) { empty(); return 0; }
+  host.replaceChildren(...entries.map((e) => {
+    const line = factsLine(e.facts);
+    const flag = !!(e.facts && (e.facts.error || (e.facts.scanned && !e.facts.has_text)));
+    const row = el("div", { class: "recent-row", "data-key": e.key },
+      el("button", { type: "button", class: "recent-open", title: e.title, onclick: () => e.open() },
+        el("span", {}, el("span", { class: "recent-name" }, e.name), line ? el("span", { class: "recent-facts" + (flag ? " flag" : "") }, line) : null),
+        el("span", { class: "recent-when" }, whenText(e.opened))),
+      el("button", { type: "button", class: "chip-btn recent-x", title: "Remove from Recent", "aria-label": `Remove ${e.name} from Recent`,
         onclick: async () => {
-          try { await jsonApi("/api/recent/forget", { path: f.path }); } catch (e) { /* stays listed */ return; }
+          try { await e.forget(); } catch (err) { appToast("Couldn't remove it from Recent: " + (err.message || err)); return; }
+          const next = row.nextElementSibling || row.previousElementSibling;
           row.remove();
-          if (!recentList.children.length) empty();
+          if (!host.querySelector(".recent-row")) empty(); else next?.querySelector(".recent-x")?.focus();
+          appToast(`Removed ${e.name} from Recent`, 2500);
         } }, icon("x")));
     return row;
   }));
+  return entries.length;
 }
 
 // ---- page board (the page tools) ---------------------------------------------------
@@ -2539,6 +2714,7 @@ function saveControls(blob, name, resultId, href, said, { onError = showError, d
         const path = await window.pywebview.api.save_result(resultId, name);
         if (!path) return;
         said(el("span", { class: "saving" }, "Saved"), ` to ${path}`);
+        appToast(`Saved to ${path}`);
         if (!reveal) save.after(reveal = el("button", { class: "btn secondary", type: "button", "data-reveal": "" }, icon("folder"), "Show in folder"));
         reveal.onclick = () => window.pywebview.api.reveal(path);
       } catch (e) { onError(String(e.message || e)); }
@@ -2551,7 +2727,7 @@ function saveControls(blob, name, resultId, href, said, { onError = showError, d
     save.addEventListener("click", async () => {
       try {
         const saved = await filesLib.saveAs(blob, name);
-        if (saved) said(el("span", { class: "saving" }, "Saved"), ` as ${saved}`);
+        if (saved) { said(el("span", { class: "saving" }, "Saved"), ` as ${saved}`); appToast(`Saved as ${saved}`); }
       } catch (e) { onError("Could not save: " + (e.message || e)); }
     });
     return [save, el("a", { class: "btn secondary", href, download: name }, "Download")];

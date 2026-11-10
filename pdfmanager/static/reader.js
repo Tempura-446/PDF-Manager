@@ -19,6 +19,16 @@ import { Overlay } from "./overlay.js";
 let snap = null;  // snapping to a drawing's lines (snap.js); the reader works without it
 const snapReady = import("./snap.js").then((m) => { snap = m; }, () => {});
 
+/** Take ``node`` away with its leaving animation (the .out class), or at once
+ *  when motion is reduced (the --t token is 0 then). */
+export function fadeOut(node) {
+  if (!node.isConnected) return;
+  const t = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--t")) || 0;
+  if (!t) { node.remove(); return; }
+  node.classList.add("out");
+  setTimeout(() => node.remove(), t * 1.5 + 40);
+}
+
 let pdfjs = null;   // pdf.js display API
 let viewer = null;  // pdf.js viewer components
 
@@ -179,7 +189,7 @@ const store = {
 };
 
 export class Reader {
-  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange } = {}) {
+  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint } = {}) {
     this.host = host;
     this.token = token;
     this.isDesktop = isDesktop || (() => false);
@@ -190,6 +200,8 @@ export class Reader {
     this.onCommands = onCommands;
     this.onHome = onHome;
     this.onChange = onChange;  // the open documents or the shown one changed (the app's file panel follows)
+    this.recent = recent;  // (host) => fills host with the app's Recent list (the start screen's), resolves to how many
+    this.onFormHint = onFormHint;  // (tab) => the "looks like a form" check came out for tab, or was dismissed
     // Everything that changes which document is shown runs one after the
     // other (see #serial): two loads at once would show the wrong tab or
     // trip over the shared worker.
@@ -367,7 +379,7 @@ export class Reader {
         this.emptyOpenBtn,
         el("p", { class: "keys" }, "Ctrl+K commands · T file panel · E edit text · M measure · Ctrl+F find · N / P pages")),
       this.recentBox = el("section", { class: "rd-recent", hidden: true, "aria-label": "Recent files" },
-        el("h3", {}, "Recent"), this.recentList = el("ul", {})));
+        el("h3", {}, "Recent"), this.recentList = el("div", {})));
     this.main = el("div", { class: "rd-main" }, this.container, this.loading, this.empty, this.measPanel);
     // The file panel: beside the pages in a wide window, over them (with a
     // scrim) in a narrow one. The app puts its content in.
@@ -400,7 +412,10 @@ export class Reader {
     this.formbar = el("div", { class: "rd-findbar rd-formbar", hidden: true, role: "status" }, el("span", { class: "rd-sigicon", html: svg("fillable") }),
       this.formText, formMake, el("span", { style: "flex:1" }), formClose);
     formMake.addEventListener("click", () => this.makeFillable());
-    formClose.addEventListener("click", () => { this.formbar.hidden = true; if (this.activeTab) this.activeTab.formHint = "hidden"; });
+    formClose.addEventListener("click", () => {
+      this.formbar.hidden = true;
+      if (this.activeTab) { this.activeTab.formHint = "hidden"; this.onFormHint?.(this.activeTab); }
+    });
     const overlayClose = el("button", { class: "rd-btn", type: "button", title: "Stop comparing", "aria-label": "Stop comparing", html: svg("x") });
     this.overlaybar = el("div", { class: "rd-findbar rd-overlaybar", hidden: true, role: "toolbar", "aria-label": "Compare revisions" },
       el("span", { class: "rd-overlay-title" }, "Comparing with ", this.overlayName),
@@ -758,47 +773,13 @@ export class Reader {
   }
 
   // ---- recent files ---------------------------------------------------------------
-  /** Fill the start screen's Recent list: files opened from this computer by
-   *  path (desktop window, "Open with") and by browser handle. */
+  /** Under "Open a PDF": the app's Recent list, the same rows as on its start
+   *  screen (files opened by path, with their facts, and by browser handle). */
   async refreshRecent() {
-    let server = [];
-    try {
-      const res = await fetch("/api/recent", { headers: { "X-Pdfm-Token": this.token } });
-      if (res.ok) server = (await res.json()).files;
-    } catch (e) { /* offline or an old server */ }
-    const handles = files.canOpen ? await files.recentHandles() : [];
-    const entries = [
-      ...server.map((f) => ({ name: f.name, where: f.folder, path: f.path, opened: (f.opened || 0) * 1000,
-        open: () => this.openById(f.id), forget: () => this.#forgetRecent({ path: f.path }) })),
-      ...handles.map((h) => ({ name: h.name, where: "", opened: h.opened,
-        open: async () => {
-          const file = await files.fileFromHandle(h.handle);
-          if (!file) { this.toast(`“${h.name}” can't be opened any more. It may have been moved or deleted.`); return; }
-          files.rememberHandle(h.handle);
-          await this.openFile(file);
-        },
-        forget: async () => { await files.forgetHandle(h.key); this.refreshRecent(); } })),
-    ].sort((a, b) => b.opened - a.opened).slice(0, 15);
-    const when = (t) => {
-      if (!t) return "";
-      const d = new Date(t), today = new Date();
-      const days = Math.round((new Date(today.toDateString()) - new Date(d.toDateString())) / 86400000);
-      const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      return days === 0 ? `Today ${time}` : days === 1 ? `Yesterday ${time}` : d.toLocaleDateString();
-    };
-    this.recentList.replaceChildren(...entries.map((e) => el("li", {},
-      el("button", { type: "button", class: "rd-recent-open", title: e.path || e.name, onclick: () => e.open() },
-        el("span", { class: "rd-recent-icon", html: svg("book") }),
-        el("span", { class: "rd-recent-text" }, el("strong", {}, e.name), el("small", {}, [e.where, when(e.opened)].filter(Boolean).join(" · ")))),
-      el("button", { type: "button", class: "rd-btn rd-recent-x", title: "Remove from Recent", "aria-label": `Remove ${e.name} from Recent`, html: svg("x"), onclick: () => e.forget() }))));
-    this.recentBox.hidden = !entries.length;
-  }
-
-  async #forgetRecent(data) {
-    try {
-      await fetch("/api/recent/forget", { method: "POST", headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/json" }, body: JSON.stringify(data) });
-    } catch (e) { /* ignore */ }
-    this.refreshRecent();
+    if (!this.recent) { this.recentBox.hidden = true; return; }
+    let count = 0;
+    try { count = await this.recent(this.recentList); } catch (e) { count = 0; }
+    this.recentBox.hidden = !count || !!this.doc;
   }
 
   /** Open a file the server knows by id; ``goto`` = {page, find} shows a
@@ -2419,6 +2400,7 @@ export class Reader {
       const found = Object.values((await res.json()).fields || {}).flat();
       tab.formHint = found.length >= 3 ? "show" : "none";
       if (tab.formHint === "show" && doc === this.doc && tab === this.activeTab) this.#showFormHint(tab);
+      if (tab.formHint === "show") this.onFormHint?.(tab);
     } catch (e) {
       tab.formHint = "none";
     }
@@ -2429,6 +2411,10 @@ export class Reader {
     this.formbar.hidden = false;
   }
 
+  /** Whether ``tab`` looks like a printed form with nothing to type in yet
+   *  (what the "Make it fillable" bar is shown for). */
+  looksLikeFlatForm(tab = this.activeTab) { return !!tab && tab.formHint === "show"; }
+
   /** Add the fields of a printed form, so it can be filled in here. */
   makeFillable() {
     if (!this.doc) return;
@@ -2437,7 +2423,7 @@ export class Reader {
       failure: "Couldn't make it fillable: ",
       after: (res) => {
         const n = Number(res.headers.get("X-Pdfm-Fields")) || 0;
-        if (this.activeTab) this.activeTab.formHint = "has-fields";
+        if (this.activeTab) { this.activeTab.formHint = "has-fields"; this.onFormHint?.(this.activeTab); }
         this.toast(`Added ${n} place${n === 1 ? "" : "s"} to fill in: click one to type or tick, then save. Add form fields (All tools) can fine-tune them.`);
       },
     });
@@ -2763,7 +2749,7 @@ export class Reader {
     this.root.append(t);
     this.toastEl = t;
     clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => t.remove(), ms);
+    this.toastTimer = setTimeout(() => fadeOut(t), ms);
   }
 
   // ---- changing words on the page ----------------------------------------------------
