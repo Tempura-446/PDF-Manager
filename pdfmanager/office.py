@@ -91,6 +91,8 @@ _PS_PREFIX = "$ErrorActionPreference = 'Stop'\n"
 
 PS_PDF_TO_WORD = _PS_PREFIX + r"""
 $word = New-Object -ComObject Word.Application
+$word.AutomationSecurity = 3  # msoAutomationSecurityForceDisable: no macros
+$word.WordBasic.DisableAutoMacros(1)
 $word.Visible = $false
 $word.DisplayAlerts = 0
 try {
@@ -103,6 +105,8 @@ try {
 PS_TO_PDF = {
     "word": _PS_PREFIX + r"""
 $app = New-Object -ComObject Word.Application
+$app.AutomationSecurity = 3  # msoAutomationSecurityForceDisable: no macros
+$app.WordBasic.DisableAutoMacros(1)
 $app.Visible = $false
 $app.DisplayAlerts = 0
 try {
@@ -113,6 +117,9 @@ try {
 """,
     "excel": _PS_PREFIX + r"""
 $app = New-Object -ComObject Excel.Application
+$app.AutomationSecurity = 3  # msoAutomationSecurityForceDisable: no macros
+$app.EnableEvents = $false   # no Workbook_Open
+$app.AskToUpdateLinks = $false
 $app.Visible = $false
 $app.DisplayAlerts = $false
 try {
@@ -123,6 +130,7 @@ try {
 """,
     "powerpoint": _PS_PREFIX + r"""
 $app = New-Object -ComObject PowerPoint.Application
+$app.AutomationSecurity = 3  # msoAutomationSecurityForceDisable: no macros
 try {
   $show = $app.Presentations.Open($env:PDFM_IN, -1, 0, 0)
   $show.SaveAs($env:PDFM_OUT, 32)
@@ -144,8 +152,17 @@ def _run(command, env=None, what="the conversion"):
     return result
 
 
+def powershell_exe():
+    """PowerShell by its full path on Windows: a bare name can be found in
+    the current folder first."""
+    if sys.platform == "win32":
+        root = os.environ.get("SystemRoot") or r"C:\Windows"
+        return "\\".join([root.rstrip("\\"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"])
+    return "powershell"
+
+
 def _powershell(script, src, dst, what):
-    result = _run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+    result = _run([powershell_exe(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                    "-Command", script],
                   env={"PDFM_IN": str(Path(src).resolve()), "PDFM_OUT": str(Path(dst).resolve())},
                   what=what)
@@ -611,6 +628,29 @@ def _print_with(command, target, timeout):
                                + (f": {detail}" if detail else ""))
 
 
+# A saved page is printed with no scripts, frames or objects, and only its
+# own kind of files (pictures, styles, fonts): a page someone sent can't put
+# other files of this computer into the PDF. (Chromium already keeps .mht
+# archives to themselves, with scripts off.)
+_LOCAL_PAGE_POLICY = ("default-src 'none'; img-src data: file:; style-src 'unsafe-inline' file:; "
+                      "font-src data: file:")
+
+
+def _locked_copy(page, copy):
+    """A copy of ``page`` at ``copy`` that starts with the policy above and a
+    <base> pointing at the page's folder, so its own pictures still show."""
+    data = page.read_bytes()
+    head = (f'<meta http-equiv="Content-Security-Policy" content="{_LOCAL_PAGE_POLICY}">'
+            f'<base href="{page.resolve().parent.as_uri()}/">')
+    for bom, codec in ((b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")):
+        if data.startswith(bom):
+            copy.write_bytes(bom + head.encode(codec) + data[len(bom):])
+            return copy
+    bom = b"\xef\xbb\xbf" if data.startswith(b"\xef\xbb\xbf") else b""
+    copy.write_bytes(bom + head.encode("ascii") + data[len(bom):])
+    return copy
+
+
 def html_to_pdf(source, output, timeout=120):
     """Print a web page (an address, or a saved .html/.mht file) to PDF the
     way the browser prints it: with a Chromium browser (Edge, Chrome), else
@@ -625,12 +665,17 @@ def html_to_pdf(source, output, timeout=120):
         if path.suffix.lower() not in HTML_TYPES:
             raise core.PdfManagerError(f"{path.name} isn't a web page (.html, .htm, .mht)")
         address = path.resolve().as_uri()
+        local = path
     elif re.match(r"(?i)^https?://(localhost|127\.|0\.0\.0\.0|\[?::1)", address):
         raise core.PdfManagerError("addresses on this computer (localhost) can't be printed")
+    else:
+        local = None
     browser = find_browser()
     if browser:
         with tempfile.TemporaryDirectory(prefix="pdfm-web-") as tmp:
             target = Path(tmp) / "page.pdf"
+            if local is not None and local.suffix.lower() in (".html", ".htm", ".xhtml"):
+                address = _locked_copy(local, Path(tmp) / f"page{local.suffix.lower()}").as_uri()
             shell = "headless-shell" in Path(browser).name
             command = [browser, "--headless" if shell else "--headless=new", "--disable-gpu",
                        "--no-first-run", "--no-default-browser-check", "--disable-extensions",

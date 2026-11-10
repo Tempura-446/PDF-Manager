@@ -230,6 +230,12 @@ closed.
   the private repository's branch instead, with a GitHub token entered
   there. (A copy running from a git checkout is updated with `git pull`,
   the standalone app by building it again.)
+- **Reporting a problem:** an unexpected error shows a short error ID.
+  ZPDF keeps a small log (`logs/zpdf.log` in its data folder: the tools
+  run, how long they took, errors) with document names and your user
+  folder left out. **Settings › About › Copy diagnostics** copies the
+  version, setup and recent log lines to paste into a message; **Open log
+  folder** shows the log itself.
 
 Everything runs on your own computer. The app's built-in server only
 listens on `127.0.0.1` and requires a random token that only the app
@@ -1050,7 +1056,14 @@ organize.organize("inbox", by="author", dest="library", move=True, duplicates="s
 ```bash
 pip install -e ".[test]"
 pytest
+pytest --perf      # also the performance limits (a few minutes; the release check runs them)
 ```
+
+`tests/test_robustness.py` runs every tool on a set of broken and hostile
+PDFs (`tests/badpdfs.py`): each must work or stop with a message, never
+crash or hang. The performance limits (`tests/test_perf.py`) check that
+memory follows a file's size rather than its page count (merge, compress,
+OCR) and that a 200 MB file reaches the reader in pieces.
 
 The workflows in `.github/workflows` describe a fuller run (Linux and
 Windows, a job with Tesseract, Ghostscript and LibreOffice, and a Windows
@@ -1071,7 +1084,7 @@ winget install --id GitHub.cli          # once, then: gh auth login
 git config user.name "Your Name"        # once: the version tag carries these
 git config user.email you@example.com
 pip install -e ".[test,build]"
-python packaging/release.py --check     # the tests, the app build and its self-test
+python packaging/release.py --check     # the tests (with --perf), the app build and its self-test
 python packaging/release.py --dry-run   # also makes the release files in dist/release
 python packaging/release.py             # checks, makes and publishes, and tags the version
 ```

@@ -45,6 +45,7 @@ from pdfmanager import (__version__, archive, compare, core, office, organize, o
                         formdetect, pdfacheck, filetools, comments)
 from pdfmanager import certsign
 from pdfmanager import accessibility  # -- accessibility --
+from pdfmanager import applog
 from pdfmanager import ocr  # which OCR engines are installed
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
@@ -1077,10 +1078,72 @@ def _flatten_outputs(outputs, out_dir):
     return flat
 
 
+def _damaged_errors():
+    """The errors the PDF libraries raise for a file they can't make sense
+    of: a damaged file is the file's problem, told plainly, not a crash."""
+    import pikepdf
+    import pypdfium2
+    from PIL import Image
+    from pypdf.errors import PyPdfError
+
+    return (PyPdfError, pikepdf.PdfError, pypdfium2.PdfiumError, Image.DecompressionBombError)
+
+
+def _plainly(exc):
+    from PIL import Image
+
+    if isinstance(exc, Image.DecompressionBombError):
+        return UserError("a page is too large to work with (it would make an image of hundreds of "
+                         "millions of pixels)")
+    reason = " ".join(str(exc).split())[:160]
+    return UserError("the PDF is damaged or unusual and couldn't be processed"
+                     + (f" ({reason})" if reason else ""))
+
+
 def run_operation(op, files, opts, password=None, extra_files=None, work=None, notes=None):
     """Run ``op`` on uploaded ``files`` (paths in the temporary folder
     ``work``). Returns (filename, bytes, content type) for the download;
     messages for the user are appended to ``notes``."""
+    try:
+        try:
+            return _run_operation(op, files, opts, password, extra_files, work, notes)
+        except _damaged_errors() as exc:
+            raise _plainly(exc) from None
+    except EXPECTED_ERRORS as exc:
+        tidy = _tidy(str(exc), work)
+        if tidy == str(exc):
+            raise
+        raise (type(exc)(tidy) if _rebuildable(exc) else UserError(tidy)) from None
+
+
+def _rebuildable(exc):
+    try:
+        return str(type(exc)("x")) == "x"
+    except Exception:
+        return False
+
+
+def _tidy(message, work):
+    """``message`` naming files, not the app's working folder: the uploads
+    sit in <work>/in/<n>/<name> and the results in <work>/out/..."""
+    if not work:
+        return message
+    for folder in {str(Path(work)), str(Path(work).resolve())}:
+        message = re.sub(re.escape(folder) + r"[\\/](?:in[\\/]\d+|out)[\\/]", "", message)
+        message = message.replace(folder, "")
+    return message
+
+
+def _check_pages(op, files, password):
+    """Each PDF has a page to work on (Repair is for files that don't open)."""
+    if op == "repair" or OPS[op].get("files") not in ("pdf", "pdf2"):
+        return
+    for path in files:
+        if Path(path).suffix.lower() == ".pdf" and not len(core.open_pdf(path, password).pages):
+            raise UserError(f"{Path(path).name} has no pages")
+
+
+def _run_operation(op, files, opts, password=None, extra_files=None, work=None, notes=None):
     spec = OPS.get(op)
     if spec is None:
         raise UserError(f"unknown operation {op!r}")
@@ -1093,6 +1156,7 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
                         "type a web address, or add saved web pages")
     if len(files) < spec.get("min", 1):
         raise UserError(f"add at least {spec['min']} files")
+    _check_pages(op, files, password)
     out_dir = Path(work or (files[0].parent if files else tempfile.mkdtemp(prefix="pdfm-"))) / "out"
     out_dir.mkdir()
     extra_files = extra_files or {}
@@ -1219,6 +1283,14 @@ PREVIEW_PAGES = 40  # longer documents are previewed from their first pages only
 
 
 def preview_operation(op, data, filename, opts, password=None, width=960):
+    """See _preview_operation; a damaged file gives a plain message, not a crash."""
+    try:
+        return _preview_operation(op, data, filename, opts, password, width)
+    except _damaged_errors() as exc:
+        raise _plainly(exc) from None
+
+
+def _preview_operation(op, data, filename, opts, password=None, width=960):
     """What ``op`` makes of the first page(s) of a PDF (``data``): page 1 of
     the result as PNG bytes, ``width`` pixels wide."""
     if op not in PREVIEW_OPS:
@@ -1251,6 +1323,14 @@ def preview_operation(op, data, filename, opts, password=None, width=960):
 
 
 def inspect_pdf(path, password=None):
+    """See _inspect_pdf; a damaged file gives a plain message, not a crash."""
+    try:
+        return _inspect_pdf(path, password)
+    except _damaged_errors() as exc:
+        raise _plainly(exc) from None
+
+
+def _inspect_pdf(path, password=None):
     """Page count, size label and a first-page thumbnail (data URL) for the
     file cards and the result preview."""
     try:
@@ -1532,15 +1612,9 @@ def _download_headers(name):
 
 
 def _log(message):
-    """Opt-in trail of what the app does (PDFM_LOG=1 writes app.log in the
-    app's data folder), for troubleshooting start-up and shutdown."""
-    if not os.environ.get("PDFM_LOG"):
-        return
-    try:
-        with open(data_dir() / "app.log", "a", encoding="utf-8") as fh:
-            fh.write(f"{time.strftime('%H:%M:%S')} [{os.getpid()}] {message}\n")
-    except OSError:
-        pass
+    """What the app does around starting and closing, in its log (see
+    applog.py; names of files are scrubbed out there)."""
+    applog.log.info(message)
 
 
 def _thread_stacks():
@@ -1655,6 +1729,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(HTTPStatus.OK, update.public_settings())
         if path == "/api/update":
             return self._send(HTTPStatus.OK, {**update.check(), "can_restart": self._can_restart()})
+        if path == "/api/diagnostics":
+            return self._send(HTTPStatus.OK, applog.diagnostics(), "text/plain; charset=utf-8")
         if path == "/api/licence":
             from pdfmanager import notices
 
@@ -1899,6 +1975,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._job_or_now(folder_job)
             if path.startswith("/api/job/"):
                 return self._job(path, "POST")
+            if path == "/api/logs/open":
+                applog.open_folder()
+                return self._send(HTTPStatus.OK, {"ok": True})
             if path == "/api/recent/forget":
                 data = json.loads(body or b"{}")
                 RecentFiles.forget(data.get("path") if not data.get("all") else None)
@@ -1907,8 +1986,7 @@ class Handler(BaseHTTPRequestHandler):
         except EXPECTED_ERRORS as exc:
             return self._error(HTTPStatus.BAD_REQUEST, str(exc))
         except Exception as exc:  # report, don't kill the server
-            return self._error(HTTPStatus.INTERNAL_SERVER_ERROR,
-                               f"{type(exc).__name__}: {exc}")
+            return self._error(HTTPStatus.INTERNAL_SERVER_ERROR, applog.unexpected(exc))
 
     def _run(self, body):
         """Run a tool. With "X-Pdfm-Async: 1" the tool runs as a background
@@ -1935,7 +2013,18 @@ class Handler(BaseHTTPRequestHandler):
                         extra.setdefault(name, path)
                         extra.setdefault(name + "[]", []).append(path)  # all of them
                 notes = []
-                name, data, ctype = run_operation(op, files, fields, password, extra, work, notes)
+                started, outcome = time.monotonic(), "failed"
+                try:
+                    name, data, ctype = run_operation(op, files, fields, password, extra, work, notes)
+                    outcome = "done"
+                except progress.Cancelled:
+                    outcome = "cancelled"
+                    raise
+                except EXPECTED_ERRORS as exc:
+                    outcome = f"stopped: {exc}"
+                    raise
+                finally:
+                    applog.tool_run(op, files, time.monotonic() - started, outcome)
                 return {"file": (name, data, ctype, notes, keep)}
             finally:
                 self.work.remove(work)
@@ -2201,8 +2290,9 @@ class Handler(BaseHTTPRequestHandler):
         changes = {}
         if "repo" in data:
             repo = str(data["repo"] or "").strip().strip("/")
-            if repo and not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
-                raise UserError("the repository should look like owner/name")
+            if repo and repo not in (update.RELEASES, update.REPO):
+                # Updates install whatever the repository publishes: only ZPDF's own.
+                raise UserError(f"updates come from {update.RELEASES} (or {update.REPO} for development)")
             changes["update_repo"] = "" if repo == update.RELEASES else repo
         if data.get("token"):
             changes["github_token"] = str(data["token"]).strip()
@@ -2474,6 +2564,8 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None):
     openable files ``server.RequestHandlerClass.opened``. ``open_paths``
     are PDFs to show in the reader straight away. With ``port`` 0, the
     ``prefer``red port is tried first, then any free port."""
+    applog.setup()
+    applog.install()
     token = secrets.token_urlsafe(24)
     opened = OpenFiles()
     open_ids = [opened.add(p) for p in open_paths]
@@ -2798,7 +2890,8 @@ def reveal_in_file_manager(path):
 
     path = Path(path)
     if sys.platform == "win32":
-        subprocess.Popen(["explorer", "/select,", str(path)])
+        explorer = str(Path(os.environ.get("SystemRoot") or r"C:\Windows") / "explorer.exe")
+        subprocess.Popen([explorer, "/select,", str(path)])
     elif sys.platform == "darwin":
         subprocess.Popen(["open", "-R", str(path)])
     else:
@@ -2980,7 +3073,7 @@ def _profile_processes(profile, exe=None):
                   "ForEach-Object { $_.ProcessId }")
         started = time.monotonic()
         try:
-            out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            out = subprocess.run([office.powershell_exe(), "-NoProfile", "-NonInteractive", "-Command", script],
                                  capture_output=True, text=True, timeout=20,
                                  env={**os.environ, "PDFM_PROFILE_RE": pattern},
                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -3052,6 +3145,8 @@ def launch(open_paths=(), port=0):
     an Edge/Chrome app window, else a browser tab. Returns once closed. If
     the app is already running, it gets the files instead."""
     _startup.acquire()
+    applog.setup()
+    applog.started(update.how_installed())
     _log(f"launch: {list(map(str, open_paths))} port {port}")
     try:
         if not port and forward_to_running_app(open_paths):

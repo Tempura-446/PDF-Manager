@@ -600,7 +600,10 @@ def _run_tesseract(source, output, language, force, deskew, rotate=True):
     except MissingDependencyError as exc:
         raise core.PdfManagerError(f"OCR is missing a program: {exc}") from None
     except ExitCodeException as exc:
-        raise core.PdfManagerError(f"OCR failed: {exc}") from None
+        said = " ".join(str(exc).split()) or (
+            f"OCRmyPDF couldn't process the file (exit code {getattr(exc, 'exit_code', '?')}); "
+            "it may be damaged, or try the built-in engine")
+        raise core.PdfManagerError(f"OCR failed: {said}") from None
 
 
 def _tesseract_languages():

@@ -59,7 +59,12 @@ class Job:
             with self.lock:
                 self.state = "cancelled"
         except Exception as exc:  # reported to the page
-            message = str(exc) if isinstance(exc, self.expected) else f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, self.expected):
+                message = str(exc)
+            elif report_unexpected is not None:
+                message = report_unexpected(exc)
+            else:
+                message = f"{type(exc).__name__}: {exc}"
             with self.lock:
                 self.state, self.error = "failed", message
         finally:
@@ -74,6 +79,10 @@ class Job:
         self.thread.start()
         return self
 
+
+# Called with an unexpected exception from a job; returns what to tell the
+# user (the app sets it to applog.unexpected, which logs the details).
+report_unexpected = None
 
 _job = contextvars.ContextVar("pdfm_job", default=None)
 # The current part of the job: (start, end) of the bar and a label.

@@ -4,6 +4,28 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.16.0
+
+- When something goes wrong, the message carries a short error ID, and
+  ZPDF keeps a log of what happened (the tools run, how long they took, and
+  errors), with document names and your user folder left out. Settings ›
+  About › Copy diagnostics copies the details needed to report a problem;
+  Open log folder shows the log.
+- Damaged and unusual PDFs (cut short, broken cross-references, looping
+  page trees, bad pictures and fonts, no pages, empty or oddly rotated
+  pages) now get a plain message from every tool instead of an unexpected
+  error, and messages name your file rather than ZPDF's working folder.
+  Every tool is tested on a set of such files.
+- Security: converting Word, Excel and PowerPoint files never runs their
+  macros; a saved web page can't pull other files from your PC into the
+  PDF it's printed to; Ghostscript runs in its safe mode; the file catalog
+  can't turn a document title into a spreadsheet formula; Settings only
+  accepts ZPDF's own update repositories; Windows programs are started by
+  their full path.
+- Performance limits: checks that memory follows a file's size, not its
+  page count, for merging, compressing and OCR, and that a 200 MB file
+  reaches the reader in pieces. They run when a version is released.
+
 ## 0.15.1
 
 - Updating or installing on a PC whose newest Python is one the built-in OCR

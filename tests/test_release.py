@@ -196,12 +196,16 @@ def test_a_dry_run_makes_the_files_but_publishes_nothing(release, tmp_path, monk
 def test_the_checks_stop_at_the_first_failure(release, tmp_path, monkeypatch):
     calls = []
 
+    commands = []
+
     def fake_step(name, cmd, cwd):
         calls.append(name)
+        commands.append(cmd)
         return name != "tests"
 
     monkeypatch.setattr(release, "_step", fake_step)
     assert release.check(ROOT) is False and calls == ["tests"]
+    assert "--perf" in commands[0], "a release is checked against the performance limits too"
     calls.clear()
     monkeypatch.setattr(release, "_step", lambda name, cmd, cwd: calls.append(name) or True)
     monkeypatch.setattr(release, "_self_test", lambda root: (calls.append("self-test") or True))
