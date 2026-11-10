@@ -211,3 +211,60 @@ def test_facts_and_suggestions_for_a_file_the_page_holds(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# -- found in the real window (Windows check of 0.19.0) -----------------------------------
+
+def test_a_scan_with_no_text_isnt_taken_for_a_form_at_a_glance(tmp_path, monkeypatch):
+    """The reader's quick look for a form to make fillable: on a scan nobody
+    can type in yet, the lines it finds (a contents page's dot leaders) aren't a form."""
+    import uuid
+
+    from pdfmanager import formdetect, gui
+
+    monkeypatch.setattr(formdetect, "detect", lambda *a, **k: {1: [{"type": "text", "rect": [1, 2, 3, 4]}]})
+    srv, url = gui.make_server()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base, token = url.split("/#token=")
+
+    def detect(path, quick):
+        boundary = uuid.uuid4().hex
+        body = b""
+        if quick:
+            body += f'--{boundary}\r\nContent-Disposition: form-data; name="pages"\r\n\r\n1-2\r\n'.encode()
+        body += (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.pdf"\r\n'
+                 "Content-Type: application/pdf\r\n\r\n").encode() + path.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+        req = urllib.request.Request(base + "/api/form/detect", data=body, headers={
+            "X-Pdfm-Token": token, "Content-Type": f"multipart/form-data; boundary={boundary}"})
+        with urllib.request.urlopen(req, timeout=30) as res:
+            return json.loads(res.read())["fields"]
+
+    try:
+        scan, plain = scan_pdf(tmp_path / "scan.pdf"), text_pdf(tmp_path / "plain.pdf")
+        assert detect(scan, quick=True) == {}, "no form banner on a bare scan"
+        assert detect(plain, quick=True) != {}
+        assert detect(scan, quick=False) != {}, "asked for outright (Add form fields), it still looks"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_bringing_the_window_forward_on_windows_never_waits_on_the_window(monkeypatch):
+    """A file handed to the running app froze its window when the server
+    thread called into the window's own thread. On Windows the window is
+    raised through the system instead."""
+    from pdfmanager import gui
+
+    called = []
+
+    class Window:
+        title = "ZPDF"
+
+        def __getattr__(self, name):
+            called.append(name)
+            raise AssertionError(f"window.{name} used from the server's thread")
+
+    monkeypatch.setattr(gui.sys, "platform", "win32")
+    monkeypatch.setattr(gui, "_win32_bring_forward", lambda title: called.append(("system", title)) or True)
+    gui._raise_window(Window())
+    assert called == [("system", "ZPDF")]

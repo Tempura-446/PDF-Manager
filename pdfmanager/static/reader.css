@@ -66,6 +66,7 @@
 /* ---- The file panel: beside the pages from 1100 px, over them below that ---- */
 .rd-side {
   flex: none; width: 340px; margin: 12px 12px 12px 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-gutter: stable;  /* its buttons keep their width when a form makes it scroll */
   background: var(--surface); color: var(--text); border-radius: var(--radius-lg); box-shadow: var(--float);
   scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent;
 }
@@ -326,7 +327,7 @@
 .rd-recent li:hover .rd-recent-x, .rd-recent-x:focus-visible { opacity: 1; }
 
 /* ---- Document tabs ---- */
-.rd-tabbar { display: flex; align-items: flex-end; gap: 3px; padding: 8px 10px 0; background: color-mix(in srgb, var(--sidebar) 70%, transparent); border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: thin; }
+.rd-tabbar { display: flex; align-items: flex-end; gap: 3px; padding: 8px 10px 0; background: color-mix(in srgb, var(--sidebar) 70%, transparent); border-bottom: 1px solid var(--border); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
 .rd-doctab {
   display: flex; align-items: center; max-width: 220px; min-width: 110px; border: 1px solid transparent; border-bottom: 0; border-radius: 10px 10px 0 0; color: var(--muted);
   transition: background var(--t) var(--ease), color var(--t) var(--ease);

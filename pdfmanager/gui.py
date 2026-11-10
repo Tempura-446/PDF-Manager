@@ -228,8 +228,8 @@ OPERATIONS = [
              "Greek, Tamil or Telugu, enter its code (rus, ukr, kor, ara, fas, hin, tha, ell, tam, "
              "tel): its reading model is fetched once. Tesseract needs the codes of all languages.",
      "fields": [_f("engine", "Engine", "select", "auto",
-                   choices=[["auto", "Automatic (built-in when installed, else Tesseract)"],
-                            ["builtin", "Built-in"], ["tesseract", "Tesseract"]]),
+                   choices=[["auto", "Automatic"], ["builtin", "Built-in"], ["tesseract", "Tesseract"]],
+                   hint="Automatic: the built-in engine when it's installed, else Tesseract."),
                 _f("language", "Language(s)", "text", "eng", placeholder="eng+rus"),
                 _f("rotate", "Turn sideways and upside-down pages upright", "check", True),
                 _f("deskew", "Straighten crooked scans", "check", False),
@@ -2256,6 +2256,12 @@ class Handler(BaseHTTPRequestHandler):
                     pages = range(int(first), int(last or first) + 1)
                 except ValueError:
                     raise UserError("pages should look like 1-2") from None
+            if pages is not None:
+                # The quick look, unasked: a scan nobody can type in yet isn't
+                # offered as a form (a contents page's dot leaders look like one).
+                seen = filefacts.facts(path, fields.get("password") or None)
+                if seen.get("scanned") and not seen.get("has_text"):
+                    return self._send(HTTPStatus.OK, {"fields": {}})
             found = formdetect.detect(path, fields.get("password") or None, pages=pages)
         return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})
 
@@ -3152,8 +3158,48 @@ def _close_browser(proc, profile, exe=None):
             pass
 
 
+def _win32_bring_forward(title):
+    """Bring this program's window called ``title`` to the front through
+    Windows itself: nothing is asked of the window's own thread. True when
+    a window was found."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    mine = os.getpid()
+    found = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def each(hwnd, _):
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == mine and user32.IsWindowVisible(hwnd):
+            text = ctypes.create_unicode_buffer(512)
+            user32.GetWindowTextW(hwnd, text, 512)
+            if text.value == title:
+                found.append(hwnd)
+        return True
+
+    user32.EnumWindows(each, 0)
+    for hwnd in found:
+        if user32.IsIconic(hwnd):
+            user32.ShowWindowAsync(hwnd, 9)  # SW_RESTORE, without waiting for the window
+        user32.SetForegroundWindow(hwnd)
+    return bool(found)
+
+
 def _raise_window(window):
-    """Bring the pywebview window to the front (a file was handed to it)."""
+    """Bring the pywebview window to the front (a file was handed to it).
+    This runs on the server's thread. On Windows the window is raised
+    through the system: pywebview's own calls wait for the window's thread,
+    and the window froze when that thread was busy opening the file."""
+    if sys.platform == "win32":
+        try:
+            if _win32_bring_forward(window.title):
+                return
+        except Exception:  # noqa: BLE001 - raising the window is a courtesy
+            return
+        return
     try:
         window.restore()
         window.show()
