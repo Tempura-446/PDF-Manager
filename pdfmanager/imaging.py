@@ -69,9 +69,10 @@ def _xobjects(resources):
     return xobjs.get_object() if xobjs is not None else {}
 
 
-def _walk_images(content_owner, resources, pdf, ctm, sizes, depth=0):
+def _walk_images(content_owner, resources, pdf, ctm, sizes, depth=0, uses=None):
     """Record the largest drawn size (in points) of every image XObject,
-    keyed by object number. Recurses into form XObjects."""
+    keyed by object number, and in ``uses`` how many times each is drawn.
+    Recurses into form XObjects."""
     if depth > 10:
         return
     try:
@@ -103,15 +104,17 @@ def _walk_images(content_owner, resources, pdf, ctm, sizes, depth=0):
                 key = getattr(ref, "idnum", id(obj))
                 old = sizes.get(key, (0, 0))
                 sizes[key] = (max(old[0], w), max(old[1], h))
+                if uses is not None:
+                    uses[key] = uses.get(key, 0) + 1
             elif subtype == "/Form":
                 matrix = tuple(float(x) for x in obj.get("/Matrix", _IDENTITY))
                 _walk_images(obj, obj.get("/Resources", resources), pdf,
-                             _mul(matrix, ctm), sizes, depth + 1)
+                             _mul(matrix, ctm), sizes, depth + 1, uses)
 
 
-def image_display_sizes(page, pdf):
+def image_display_sizes(page, pdf, uses=None):
     sizes = {}
-    _walk_images(page, page.get("/Resources"), pdf, _IDENTITY, sizes)
+    _walk_images(page, page.get("/Resources"), pdf, _IDENTITY, sizes, uses=uses)
     return sizes
 
 
@@ -400,14 +403,127 @@ def deflate_plain_streams(writer, min_size=64):
     return changed
 
 
-def downsample_images(writer, max_dpi, jpeg_quality):
-    """Downsample/re-encode images. Returns (images changed, bytes saved)."""
-    changed = saved = 0
+# Scanned pages (see scanlayers.py), by compression level: the background's
+# resolution and JPEG quality, then the ink colour picture's.
+SCAN_LAYERS = {"medium": (150, 50, 37, 40), "high": (100, 40, 25, 35)}
+SCAN_COVERS = 0.80     # of its page, for a picture to be the page's scan
+SCAN_MIN_DPI = 150     # below this there is no sharpness to keep
+SCAN_ALLOWANCE = 1.10  # layers may be this much larger than the usual result
+
+
+def _scan_dpi(obj, drawn, page, uses):
+    """The resolution a picture is shown at when it is its page's scan (it
+    fills the page, is drawn once, and is a plain grey or colour picture),
+    else None."""
+    if uses != 1 or _skip(obj) or "/SMask" in obj or "/Mask" in obj:
+        return None
+    if obj.get("/BitsPerComponent", 8) != 8:
+        return None
+    width, height = int(obj.get("/Width", 0)), int(obj.get("/Height", 0))
+    drawn_w, drawn_h = drawn
+    if min(width, height, drawn_w, drawn_h) <= 0:
+        return None
+    had = "/CropBox" in page
+    box = page.cropbox
+    area = abs(float(box.width) * float(box.height))
+    if not had and "/CropBox" in page:  # pypdf writes down the box it worked out
+        del page["/CropBox"]
+    if drawn_w * drawn_h < SCAN_COVERS * area:
+        return None
+    dpi = max(width / (drawn_w / 72), height / (drawn_h / 72))
+    return dpi if dpi >= SCAN_MIN_DPI else None
+
+
+def _jpeg(image, quality):
+    buf = io.BytesIO()
+    image.save(buf, "JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
+def _scan_layers(image, dpi, settings):
+    """The layers of a scan, encoded: (layers, mask data, mask is Group 4,
+    background JPEG, ink JPEG), or None when the page isn't a text scan."""
+    from pdfmanager import scanlayers
+
+    background_dpi, background_quality, ink_dpi, ink_quality = settings
+    layers = scanlayers.split(image, dpi, background_dpi, ink_dpi)
+    if layers is None:
+        return None
+    mask = scanlayers.group4(layers.mask)
+    fax = mask is not None
+    if not fax:
+        mask = zlib.compress(layers.mask.tobytes(), 9)
+    return layers, mask, fax, _jpeg(layers.background, background_quality), _jpeg(layers.ink, ink_quality)
+
+
+def _picture_object(writer, image, data, **entries):
+    stream = StreamObject()
+    stream._data = data
+    stream.update({
+        NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Image"),
+        NameObject("/Width"): NumberObject(image.width), NameObject("/Height"): NumberObject(image.height),
+        NameObject("/Length"): NumberObject(len(data))})
+    for key, value in entries.items():
+        stream[NameObject("/" + key)] = value
+    return writer._add_object(stream)
+
+
+_IMAGE_KEYS = ("/Width", "/Height", "/ColorSpace", "/BitsPerComponent", "/Filter", "/DecodeParms", "/Decode",
+               "/Intent", "/Interpolate", "/ImageMask", "/Mask", "/SMask", "/SMaskInData", "/Alternates",
+               "/Name", "/StructParent", "/ID", "/OPI", "/Metadata", "/OC")
+
+
+def _store_layers(writer, obj, encoded):
+    """Turn the scan picture ``obj`` into a form that draws its layers: the
+    background, then the ink colour picture through the text shape. The
+    object stays the one the page draws, so it lands where the scan did."""
+    layers, mask, fax, background, ink = encoded
+    eight, one = NumberObject(8), NumberObject(1)
+
+    def space(image):
+        return NameObject("/DeviceGray" if image.mode == "L" else "/DeviceRGB")
+
+    if fax:
+        packing = {"Filter": NameObject("/CCITTFaxDecode"),
+                   "DecodeParms": DictionaryObject({NameObject("/K"): NumberObject(-1),
+                                                    NameObject("/Columns"): NumberObject(layers.mask.width),
+                                                    NameObject("/Rows"): NumberObject(layers.mask.height)})}
+    else:
+        packing = {"Filter": NameObject("/FlateDecode")}
+    from pypdf.generic import BooleanObject
+
+    shape = _picture_object(writer, layers.mask, mask, ImageMask=BooleanObject(True), BitsPerComponent=one,
+                            **packing)
+    paper = _picture_object(writer, layers.background, background, ColorSpace=space(layers.background),
+                            BitsPerComponent=eight, Filter=NameObject("/DCTDecode"))
+    colour = _picture_object(writer, layers.ink, ink, ColorSpace=space(layers.ink), BitsPerComponent=eight,
+                             Filter=NameObject("/DCTDecode"), Mask=shape)
+    for key in _IMAGE_KEYS:
+        if key in obj:
+            del obj[key]
+    data = zlib.compress(b"q /Bg Do /Fg Do Q", 9)
+    obj.update({
+        NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Form"),
+        NameObject("/BBox"): ArrayObject([NumberObject(v) for v in (0, 0, 1, 1)]),
+        NameObject("/Resources"): DictionaryObject({NameObject("/XObject"): DictionaryObject({
+            NameObject("/Bg"): paper, NameObject("/Fg"): colour})}),
+        NameObject("/Filter"): NameObject("/FlateDecode"), NameObject("/Length"): NumberObject(len(data))})
+    obj._data = data
+    if hasattr(obj, "decoded_self"):
+        obj.decoded_self = None
+
+
+def downsample_images(writer, max_dpi, jpeg_quality, scan_layers=None):
+    """Downsample/re-encode images. With ``scan_layers`` (a SCAN_LAYERS
+    entry), a page's scan is kept as a sharp text shape over a small
+    background when that is no larger. Returns (images changed, bytes
+    saved, scanned pages kept sharp)."""
+    changed = saved = sharp = 0
     done = set()
     # A picture used on several pages is resized for the largest of them.
-    sizes = {}
+    sizes, uses = {}, {}
     for page in writer.pages:
-        for key, (w, h) in image_display_sizes(page, writer).items():
+        for key, (w, h) in image_display_sizes(page, writer, uses).items():
             old = sizes.get(key, (0, 0))
             sizes[key] = (max(old[0], w), max(old[1], h))
     for number, page in enumerate(writer.pages):
@@ -424,6 +540,7 @@ def downsample_images(writer, max_dpi, jpeg_quality):
                 if dpi > max_dpi * 1.1:
                     factor = max_dpi / dpi
                     target = (max(1, round(width * factor)), max(1, round(height * factor)))
+            scan_dpi = _scan_dpi(obj, (drawn_w, drawn_h), page, uses.get(key, 0)) if scan_layers else None
             try:
                 image = _flatten(_decode(obj, target))
             except Exception:
@@ -434,13 +551,25 @@ def downsample_images(writer, max_dpi, jpeg_quality):
                 # shortcut, indistinguishable from Lanczos all the way.
                 image = image.resize(target, Image.LANCZOS, reducing_gap=3.0)
             data, filt, space, extra = _encode(image, jpeg_quality)
+            usual = min(len(data), original)
+            if scan_dpi:
+                try:
+                    # Decoded again, whole: the text shape wants every pixel.
+                    encoded = _scan_layers(_flatten(_decode(obj)), scan_dpi, scan_layers)
+                    size = sum(len(part) for part in (encoded[1], encoded[3], encoded[4])) if encoded else None
+                    if size is not None and size < original and size <= SCAN_ALLOWANCE * usual:
+                        _store_layers(writer, obj, encoded)
+                        changed, saved, sharp = changed + 1, saved + original - size, sharp + 1
+                        continue
+                except Exception:  # the engine never fails a compression
+                    pass
             if len(data) >= original:
                 continue
             _resize_smask(obj, image.size)
             _store(obj, image, data, filt, space, extra)
             changed += 1
             saved += original - len(data)
-    return changed, saved
+    return changed, saved, sharp
 
 
 # --------------------------------------------------------------------------

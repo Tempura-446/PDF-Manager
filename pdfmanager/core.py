@@ -1056,7 +1056,8 @@ def _finish_compression(writer):
         writer.compress_identical_objects(remove_identicals=True, remove_orphans=True)
 
 
-def compress(path, output, level="medium", image_quality=None, max_dpi=None, password=None):
+def compress(path, output, level="medium", image_quality=None, max_dpi=None, password=None,
+             sharp_scans=True, notes=None):
     """Reduce file size.
 
     ``level`` is a preset:
@@ -1068,12 +1069,19 @@ def compress(path, output, level="medium", image_quality=None, max_dpi=None, pas
                   ("large" is accepted as an alias)
     ``image_quality`` (1-95) and ``max_dpi`` override the preset's values.
     Images are only replaced when the new version is smaller.
+
+    With ``sharp_scans`` (medium and high), a scanned page keeps its text
+    at full resolution: the scan becomes a black-and-white text shape over
+    a low-resolution background (see scanlayers.py), when that is no
+    larger than the usual result. ``notes`` (a list) is told how many
+    pages that was done for.
     """
     try:
         level = imaging.normalize_level(level)
     except ValueError as exc:
         raise PdfManagerError(str(exc)) from None
     preset_dpi, preset_quality = imaging.COMPRESSION_LEVELS[level]
+    asked_dpi, asked_quality = max_dpi, image_quality
     max_dpi = preset_dpi if max_dpi is None else max_dpi
     image_quality = preset_quality if image_quality is None else image_quality
     if image_quality is not None and not 1 <= image_quality <= 95:
@@ -1086,7 +1094,12 @@ def compress(path, output, level="medium", image_quality=None, max_dpi=None, pas
     try:
         imaging.unwrap_ascii(writer)  # first: everything after reads the streams
         if max_dpi or image_quality:
-            imaging.downsample_images(writer, max_dpi, image_quality or 85)
+            layers = imaging.SCAN_LAYERS.get(level) if sharp_scans else None
+            if layers:
+                layers = (asked_dpi or layers[0], asked_quality or layers[1], *layers[2:])
+            sharp = imaging.downsample_images(writer, max_dpi, image_quality or 85, layers)[2]
+            if sharp and notes is not None:
+                notes.append(f"{sharp} scanned page{'s' if sharp != 1 else ''} kept sharp")
         _finish_compression(writer)
     except PyPdfError as exc:  # a stream pypdf can't rewrite
         raise PdfManagerError(f"can't rewrite {path} ({exc})") from None
