@@ -39,8 +39,8 @@ afterwards. Running it again updates the installed copy (or use the
 
 OCR is built in, so scanned PDFs can be made searchable right away. At
 the end the installer asks whether to add **Tesseract and Ghostscript** too
-(about 150 MB): they add PDF/A output, turning scanned pages upright and a
-second OCR engine. OCRmyPDF goes into ZPDF's folder and the two programs are
+(about 150 MB): they add a second OCR engine and, for the few files ZPDF
+can't make PDF/A itself, a second PDF/A converter. OCRmyPDF goes into ZPDF's folder and the two programs are
 installed with winget (`UB-Mannheim.TesseractOCR`,
 `ArtifexSoftware.GhostScript`; Windows may ask for permission, as they
 install for all users). It doesn't ask when they're already there, and skips
@@ -92,8 +92,9 @@ as a second OCR engine, for the scripts the built-in one has no model for
 and for PDF/A output straight from OCR: `pip install -e ".[tesseract]"` adds
 OCRmyPDF, and the program itself comes with `brew install tesseract`,
 `sudo apt install tesseract-ocr`, or the Windows installer. A few tools use
-other free programs if you have them: PDF/A uses
-[Ghostscript](https://ghostscript.com/releases/gsdnld.html), and Office → PDF
+other free programs if you have them: PDF/A turns to
+[Ghostscript](https://ghostscript.com/releases/gsdnld.html) for files ZPDF
+can't convert itself, and Office → PDF
 uses Microsoft Office or [LibreOffice](https://www.libreoffice.org).
 
 ## Desktop app
@@ -714,9 +715,19 @@ Metadata isn't changed, so use `sanitize` too.
 - `sanitize` removes the document details (author, title, dates, XMP),
   JavaScript and actions that launch programs, and attached files;
   `--comments` also removes comments. Form fields are kept.
-- `pdfa` converts to PDF/A-1b, -2b (default) or -3b with Ghostscript:
-  fonts embedded, colours tied to sRGB, no encryption or scripts. The
-  result is checked straight away (below).
+- `pdfa` converts to PDF/A-1b, -2b (default) or -3b: fonts embedded,
+  colours tied to sRGB, no encryption or scripts. ZPDF does it itself,
+  with nothing else to install, and leaves the pages as they are: it adds
+  the PDF/A mark and the colour profile, sets links to print, brings CMYK
+  colours to RGB and takes out what PDF/A forbids. A font that isn't in
+  the file (Helvetica, Times, Courier in older PDFs) is embedded from the
+  computer's own font of the same letter widths (Arial, Times New Roman,
+  Courier New), so no line moves. What it can't put right (a font with no
+  such stand-in, transparency in PDF/A-1) goes to Ghostscript when that is
+  installed, and otherwise stops with a message saying what stood in the
+  way. `--engine builtin` or `--engine ghostscript` picks one. The result
+  is checked straight away (below) with ZPDF's own checks; for a full
+  check against the standard, use veraPDF.
 - `check-pdfa` (the **Check PDF/A** tool) says whether files meet PDF/A
   and, if not, what breaks it, on which pages, with the clause of the
   standard (ISO 19005):

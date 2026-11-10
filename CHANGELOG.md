@@ -4,6 +4,22 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.17.0
+
+- PDF/A without Ghostscript. ZPDF now converts to PDF/A-1b, -2b and -3b
+  itself: it adds what the standard asks for (the PDF/A mark, an sRGB
+  colour profile, printing links), takes out what it forbids (scripts,
+  protection, attachments in parts 1 and 2) and leaves the pages as they
+  are. Scans and files made by browsers and Office need nothing else.
+- Fonts that aren't in the file (Helvetica, Times, Courier in older PDFs)
+  are embedded from the computer's own: Arial, Times New Roman and
+  Courier New have the same letter widths, so no line moves. A font
+  without such a stand-in stops the conversion with a message naming it.
+- Ghostscript, when installed, is still used for a file ZPDF can't put
+  right alone, and `pdfm pdfa --engine ghostscript` asks for it by name.
+- Every converted file is checked with ZPDF's own PDF/A checks before it
+  is handed over.
+
 ## 0.16.0
 
 - Compress keeps scanned text sharp. At Medium and High, a scanned page is

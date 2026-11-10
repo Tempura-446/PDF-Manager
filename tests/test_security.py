@@ -133,7 +133,7 @@ def test_ghostscript_always_runs_in_safe_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(archive, "find_ghostscript", lambda: "gs")
     monkeypatch.setattr(archive.subprocess, "run", fake_run)
     with pytest.raises((Stop, core.PdfManagerError)):
-        archive.to_pdfa(src, tmp_path / "out.pdf")
+        archive.to_pdfa(src, tmp_path / "out.pdf", engine="ghostscript")
     assert seen and "-dSAFER" in seen[0]
 
 

@@ -32,6 +32,11 @@ def self_test(result_file):
 
         from pdfmanager import core, gui
 
+        def pdfacheck_builtin(path):
+            from pdfmanager import pdfacheck
+
+            return pdfacheck.check(path, level="2b", engine="builtin")
+
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "test.pdf"
             c = canvas.Canvas(str(src))
@@ -55,6 +60,15 @@ def self_test(result_file):
             core.compress(scanned, Path(tmp) / "scan-small.pdf", level="high", notes=sharp)
             assert sharp and b"/CCITTFaxDecode" in (Path(tmp) / "scan-small.pdf").read_bytes(), \
                 f"scan compression not used: {sharp}"
+            # The built-in PDF/A engine, on that scan and on a page of a standard font
+            # (embedded from Windows' own Arial).
+            from pdfmanager import archive
+
+            for name in ("scan-small.pdf", "test.pdf"):
+                made, how = archive.to_pdfa(Path(tmp) / name, Path(tmp) / ("a-" + name), engine="builtin",
+                                            with_engine=True)
+                again = pdfacheck_builtin(made)
+                assert how == "builtin" and again["passed"], f"PDF/A of {name} failed: {again['issues']}"
             core.convert_color(src, Path(tmp) / "gray.pdf", "gray")
             # The libraries the later tools need: pyHanko (signing), pdfplumber
             # and openpyxl (PDF -> Excel), pikepdf (the PDF/A check), pypdfium2

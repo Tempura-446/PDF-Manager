@@ -726,13 +726,15 @@ def _forms(resources, seen, depth=0):
             yield from _forms(obj.get("/Resources"), seen, depth + 1)
 
 
-def convert_colors(writer, target, icc_profile=None):
-    """Convert all simple colours and images to ``target``. Returns the
-    number of images converted."""
+def convert_colors(writer, target, icc_profile=None, images="all"):
+    """Convert all simple colours and images to ``target``. With ``images``
+    "cmyk", only CMYK pictures are converted and the others stay as they
+    are, byte for byte. Returns the number of images converted."""
+    only_cmyk = images == "cmyk"
     if target not in COLOR_TARGETS:
         raise ValueError(f"colour target must be one of {', '.join(COLOR_TARGETS)}")
     transform = _icc_transform(icc_profile, target) if icc_profile else None
-    images = 0
+    count = 0
     done_images, done_forms = set(), set()
     for number, page in enumerate(writer.pages):
         progress.report(number, len(writer.pages), "page")
@@ -764,15 +766,18 @@ def convert_colors(writer, target, icc_profile=None):
                 continue
             done_images.add(key)
             try:
-                image = _convert_image(_decode(obj), target, transform)
+                image = _decode(obj)
+                if only_cmyk and image.mode != "CMYK":
+                    continue
+                image = _convert_image(image, target, transform)
             except Exception:
                 continue
             data, filt, space, extra = _encode(image, 90 if _was_jpeg(obj) else None)
             _store(obj, image, data, filt, space, extra)
-            images += 1
+            count += 1
     if icc_profile:
         _add_output_intent(writer, icc_profile, target)
-    return images
+    return count
 
 
 def _add_output_intent(writer, profile_path, target):
