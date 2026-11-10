@@ -428,7 +428,7 @@ def to_pdfa(path, output, level="2", password=None):
             "[{Catalog} <</OutputIntents [ {OutputIntent_PDFA} ]>> /PUT pdfmark\n",
             encoding="ascii")
         result = tmp / "out.pdf"
-        command = [gs, f"-dPDFA={level}", "-dBATCH", "-dNOPAUSE", "-dQUIET", "-dNOOUTERSAVE",
+        command = [gs, "-dSAFER", f"-dPDFA={level}", "-dBATCH", "-dNOPAUSE", "-dQUIET", "-dNOOUTERSAVE",
                    "-dPDFACompatibilityPolicy=1", "-sColorConversionStrategy=RGB",
                    "-sProcessColorModel=DeviceRGB", "-sDEVICE=pdfwrite",
                    f"--permit-file-read={tmp.as_posix()}/", f"-sOutputFile={result}",

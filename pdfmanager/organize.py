@@ -270,6 +270,12 @@ def rename(directory, pattern="{date:%Y-%m-%d} {title}", recursive=False, dry_ru
     return plan
 
 
+def _csv_safe(text):
+    from pdfmanager.tables import _csv_safe as safe
+
+    return safe(str(text))
+
+
 def catalog(directory, output, recursive=False):
     """Write a CSV inventory of the PDFs in ``directory``."""
     output = Path(output)
@@ -279,6 +285,7 @@ def catalog(directory, output, recursive=False):
         writer = csv.writer(fh)
         writer.writerow(["file", "pages", "size_bytes", "title", "author", "date", "error"])
         for r in rows:
-            writer.writerow([r["path"], r["pages"], r["bytes"], r["title"] or "",
-                             r["author"] or "", f"{r['date']:%Y-%m-%d}", r["error"] or ""])
+            # Titles and authors come from the files: never a formula in Excel.
+            writer.writerow([r["path"], r["pages"], r["bytes"], _csv_safe(r["title"] or ""),
+                             _csv_safe(r["author"] or ""), f"{r['date']:%Y-%m-%d}", r["error"] or ""])
     return output, len(rows)

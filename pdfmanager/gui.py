@@ -2211,8 +2211,9 @@ class Handler(BaseHTTPRequestHandler):
         changes = {}
         if "repo" in data:
             repo = str(data["repo"] or "").strip().strip("/")
-            if repo and not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
-                raise UserError("the repository should look like owner/name")
+            if repo and repo not in (update.RELEASES, update.REPO):
+                # Updates install whatever the repository publishes: only ZPDF's own.
+                raise UserError(f"updates come from {update.RELEASES} (or {update.REPO} for development)")
             changes["update_repo"] = "" if repo == update.RELEASES else repo
         if data.get("token"):
             changes["github_token"] = str(data["token"]).strip()
@@ -2810,7 +2811,8 @@ def reveal_in_file_manager(path):
 
     path = Path(path)
     if sys.platform == "win32":
-        subprocess.Popen(["explorer", "/select,", str(path)])
+        explorer = str(Path(os.environ.get("SystemRoot") or r"C:\Windows") / "explorer.exe")
+        subprocess.Popen([explorer, "/select,", str(path)])
     elif sys.platform == "darwin":
         subprocess.Popen(["open", "-R", str(path)])
     else:
@@ -2992,7 +2994,7 @@ def _profile_processes(profile, exe=None):
                   "ForEach-Object { $_.ProcessId }")
         started = time.monotonic()
         try:
-            out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            out = subprocess.run([office.powershell_exe(), "-NoProfile", "-NonInteractive", "-Command", script],
                                  capture_output=True, text=True, timeout=20,
                                  env={**os.environ, "PDFM_PROFILE_RE": pattern},
                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
