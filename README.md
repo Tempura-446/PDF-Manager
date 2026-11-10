@@ -841,8 +841,11 @@ location, and one of:
 `to-word` converts with Microsoft Word when it's installed (the most
 editable result), otherwise with the built-in converter (paragraphs,
 headings and pictures in reading order; tables and columns become plain
-paragraphs). `--engine layout` uses LibreOffice instead, which keeps the
-exact look but puts every line in its own text box.
+paragraphs). If Word fails or doesn't finish in time (a minute plus two
+seconds a page), the built-in converter is used and the result says so;
+`--engine word` insists on Word and waits up to five minutes. `--engine
+layout` uses LibreOffice instead, which keeps the exact look but puts every
+line in its own text box.
 
 `from-office` converts Word, Excel, PowerPoint, OpenDocument, RTF and text
 files to PDF with Microsoft Office or, without it, LibreOffice. Text files

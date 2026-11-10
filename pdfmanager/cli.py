@@ -520,10 +520,11 @@ def run_form(a, src, out, pw):
 
 
 def run_to_word(a, src, out, pw):
-    result, engine = office.pdf_to_word(src, out, engine=a.engine, password=pw)
+    notes = []
+    result, engine = office.pdf_to_word(src, out, engine=a.engine, password=pw, notes=notes)
     how = {"word": "Microsoft Word", "basic": "built-in converter",
            "layout": "LibreOffice, exact layout"}[engine]
-    return f"{result}  ({how})"
+    return f"{result}  ({how})" + "".join(f"\n  note: {note}" for note in notes)
 
 
 def run_to_excel(a, src, out, pw):

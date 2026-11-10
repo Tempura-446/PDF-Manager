@@ -909,8 +909,9 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         core.extract_text(src, out, None, password)
     elif op == "to-word":
         out = out_dir / f"{src.stem}.docx"
-        _, engine = office.pdf_to_word(src, out, opts.get("engine") or "auto", password)
-        if engine == "basic" and (opts.get("engine") or "auto") == "auto":
+        said = len(notes)
+        _, engine = office.pdf_to_word(src, out, opts.get("engine") or "auto", password, notes=notes)
+        if engine == "basic" and (opts.get("engine") or "auto") == "auto" and len(notes) == said:
             notes.append("Converted with the built-in converter. For a more editable "
                          "result, install Microsoft Word.")
     elif op == "to-excel":

@@ -35,7 +35,7 @@ def test_programs_are_started_by_their_full_windows_path(monkeypatch):
     monkeypatch.setenv("SystemRoot", r"C:\Windows")
     assert office.powershell_exe().lower() == r"c:\windows\system32\windowspowershell\v1.0\powershell.exe"
     seen = []
-    monkeypatch.setattr(office, "_run", lambda command, env=None, what="": seen.append(command) or
+    monkeypatch.setattr(office, "_run", lambda command, env=None, what="", timeout=None: seen.append(command) or
                         type("R", (), {"returncode": 1, "stderr": "x", "stdout": ""})())
     with pytest.raises(core.PdfManagerError):
         office._powershell("Write-Host", "a.docx", "b.pdf", "test")

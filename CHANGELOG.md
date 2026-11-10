@@ -25,6 +25,13 @@ also the notes of its release on
 - Performance limits: checks that memory follows a file's size, not its
   page count, for merging, compressing and OCR, and that a 200 MB file
   reaches the reader in pieces. They run when a version is released.
+- PDF → Word with "Best available": if Microsoft Word fails or doesn't
+  finish (on some PCs it never does when another program drives it), ZPDF's
+  own converter is used instead and the result says so, rather than a wait
+  of five minutes and an error. A Word that doesn't answer is closed, not
+  left running out of sight.
+- Web page → PDF no longer fails when Edge hands the printing to a browser
+  process of its own and that one finishes a moment later.
 
 ## 0.15.1
 
