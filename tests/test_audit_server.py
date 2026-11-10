@@ -172,7 +172,14 @@ def test_an_unsendable_header_fails_before_the_status_line(app, tmp_path, monkey
     pdf = text_pdf(tmp_path / "a.pdf").read_bytes()
     body, headers = multipart({"op": "rotate", "degrees": "90"}, [("files", "a.pdf", pdf)])
     status, _, data = call(base, token, "/api/run", body, headers)
-    assert status == 500 and "X-Pdfm-Filename" in json.loads(data)["error"]
+    error = json.loads(data)["error"]
+    assert status == 500 and "Something went wrong (error " in error
+    # the details are in the log, under the error's id
+    from pdfmanager import applog
+
+    error_id = error.split("(error ", 1)[1][:4]
+    logged = (applog.log_dir() / "zpdf.log").read_text(encoding="utf-8")
+    assert error_id in logged and "X-Pdfm-Filename" in logged
 
 
 def test_ascii_stand_in_for_a_name_with_nothing_ascii_in_it():

@@ -116,7 +116,9 @@ def test_failed_job_reports_the_error():
     assert job.snapshot()["error"] == "no good"
     job = progress.Job()
     job.run(lambda: 1 / 0)
-    assert job.snapshot()["error"].startswith("ZeroDivisionError")
+    error = job.snapshot()["error"]
+    # unexpected: an id for the user, the details in the log (see applog.py)
+    assert error.startswith("ZeroDivisionError") or "Something went wrong (error " in error
 
 
 def test_tools_run_as_jobs(app, tmp_path):
@@ -966,12 +968,13 @@ def updates(tmp_path, monkeypatch):
 
 def test_the_tests_keep_updates_offline_and_out_of_the_users_folder(monkeypatch):
     """Outside the update tests (which bring a fake GitHub), checking for
-    updates asks nobody and writes nothing in the user's own ZPDF folder."""
-    from pdfmanager import appdata, update
+    updates asks nobody, and nothing writes in the user's own ZPDF folder."""
+    from conftest import REAL_DATA_DIR
+    from pdfmanager import applog, update
 
-    users_folder = appdata._data_dir().resolve()
-    assert users_folder not in Path(update.data_dir()).resolve().parents
-    assert Path(update.data_dir()).resolve() != users_folder
+    users_folder = Path(REAL_DATA_DIR()).resolve()
+    for folder in (update.data_dir(), applog.log_dir(), gui.data_dir()):
+        assert users_folder not in Path(folder).resolve().parents and Path(folder).resolve() != users_folder
 
     def no_network(*args, **kwargs):
         raise AssertionError("a test asked GitHub")

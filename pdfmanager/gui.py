@@ -45,6 +45,7 @@ from pdfmanager import (__version__, archive, compare, core, office, organize, o
                         formdetect, pdfacheck, filetools, comments)
 from pdfmanager import certsign
 from pdfmanager import accessibility  # -- accessibility --
+from pdfmanager import applog
 from pdfmanager import ocr  # which OCR engines are installed
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
@@ -1532,15 +1533,9 @@ def _download_headers(name):
 
 
 def _log(message):
-    """Opt-in trail of what the app does (PDFM_LOG=1 writes app.log in the
-    app's data folder), for troubleshooting start-up and shutdown."""
-    if not os.environ.get("PDFM_LOG"):
-        return
-    try:
-        with open(data_dir() / "app.log", "a", encoding="utf-8") as fh:
-            fh.write(f"{time.strftime('%H:%M:%S')} [{os.getpid()}] {message}\n")
-    except OSError:
-        pass
+    """What the app does around starting and closing, in its log (see
+    applog.py; names of files are scrubbed out there)."""
+    applog.log.info(message)
 
 
 def _thread_stacks():
@@ -1655,6 +1650,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(HTTPStatus.OK, update.public_settings())
         if path == "/api/update":
             return self._send(HTTPStatus.OK, {**update.check(), "can_restart": self._can_restart()})
+        if path == "/api/diagnostics":
+            return self._send(HTTPStatus.OK, applog.diagnostics(), "text/plain; charset=utf-8")
         if path == "/api/licence":
             from pdfmanager import notices
 
@@ -1899,6 +1896,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._job_or_now(folder_job)
             if path.startswith("/api/job/"):
                 return self._job(path, "POST")
+            if path == "/api/logs/open":
+                applog.open_folder()
+                return self._send(HTTPStatus.OK, {"ok": True})
             if path == "/api/recent/forget":
                 data = json.loads(body or b"{}")
                 RecentFiles.forget(data.get("path") if not data.get("all") else None)
@@ -1907,8 +1907,7 @@ class Handler(BaseHTTPRequestHandler):
         except EXPECTED_ERRORS as exc:
             return self._error(HTTPStatus.BAD_REQUEST, str(exc))
         except Exception as exc:  # report, don't kill the server
-            return self._error(HTTPStatus.INTERNAL_SERVER_ERROR,
-                               f"{type(exc).__name__}: {exc}")
+            return self._error(HTTPStatus.INTERNAL_SERVER_ERROR, applog.unexpected(exc))
 
     def _run(self, body):
         """Run a tool. With "X-Pdfm-Async: 1" the tool runs as a background
@@ -1935,7 +1934,18 @@ class Handler(BaseHTTPRequestHandler):
                         extra.setdefault(name, path)
                         extra.setdefault(name + "[]", []).append(path)  # all of them
                 notes = []
-                name, data, ctype = run_operation(op, files, fields, password, extra, work, notes)
+                started, outcome = time.monotonic(), "failed"
+                try:
+                    name, data, ctype = run_operation(op, files, fields, password, extra, work, notes)
+                    outcome = "done"
+                except progress.Cancelled:
+                    outcome = "cancelled"
+                    raise
+                except EXPECTED_ERRORS as exc:
+                    outcome = f"stopped: {exc}"
+                    raise
+                finally:
+                    applog.tool_run(op, files, time.monotonic() - started, outcome)
                 return {"file": (name, data, ctype, notes, keep)}
             finally:
                 self.work.remove(work)
@@ -2474,6 +2484,8 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None):
     openable files ``server.RequestHandlerClass.opened``. ``open_paths``
     are PDFs to show in the reader straight away. With ``port`` 0, the
     ``prefer``red port is tried first, then any free port."""
+    applog.setup()
+    applog.install()
     token = secrets.token_urlsafe(24)
     opened = OpenFiles()
     open_ids = [opened.add(p) for p in open_paths]
@@ -3052,6 +3064,8 @@ def launch(open_paths=(), port=0):
     an Edge/Chrome app window, else a browser tab. Returns once closed. If
     the app is already running, it gets the files instead."""
     _startup.acquire()
+    applog.setup()
+    applog.started(update.how_installed())
     _log(f"launch: {list(map(str, open_paths))} port {port}")
     try:
         if not port and forward_to_running_app(open_paths):
