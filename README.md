@@ -1050,7 +1050,14 @@ organize.organize("inbox", by="author", dest="library", move=True, duplicates="s
 ```bash
 pip install -e ".[test]"
 pytest
+pytest --perf      # also the performance limits (a few minutes; the release check runs them)
 ```
+
+`tests/test_robustness.py` runs every tool on a set of broken and hostile
+PDFs (`tests/badpdfs.py`): each must work or stop with a message, never
+crash or hang. The performance limits (`tests/test_perf.py`) check that
+memory follows a file's size rather than its page count (merge, compress,
+OCR) and that a 200 MB file reaches the reader in pieces.
 
 The workflows in `.github/workflows` describe a fuller run (Linux and
 Windows, a job with Tesseract, Ghostscript and LibreOffice, and a Windows
@@ -1071,7 +1078,7 @@ winget install --id GitHub.cli          # once, then: gh auth login
 git config user.name "Your Name"        # once: the version tag carries these
 git config user.email you@example.com
 pip install -e ".[test,build]"
-python packaging/release.py --check     # the tests, the app build and its self-test
+python packaging/release.py --check     # the tests (with --perf), the app build and its self-test
 python packaging/release.py --dry-run   # also makes the release files in dist/release
 python packaging/release.py             # checks, makes and publishes, and tags the version
 ```

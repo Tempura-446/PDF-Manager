@@ -1,6 +1,7 @@
 """Check, package and publish a ZPDF release for friends to download.
 
-    python packaging/release.py --check      run the checks only (the tests, the build, the self-test)
+    python packaging/release.py --check      run the checks only (the tests with the performance
+                                             limits, the build, the self-test)
     python packaging/release.py --dry-run    the checks, then the release files, without publishing
     python packaging/release.py              the checks, the files, then publish
 
@@ -134,9 +135,10 @@ def _self_test(root):
 
 def check(root=ROOT):
     """The checks a release must pass, in order, stopping at the first
-    failure: the full test suite, the app build, the built app's self-test."""
+    failure: the full test suite with the performance limits (--perf, a few
+    minutes more), the app build, the built app's self-test."""
     python = sys.executable
-    return (_step("tests", [python, "-m", "pytest", "-q", "-p", "no:cacheprovider"], root)
+    return (_step("tests", [python, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--perf"], root)
             and _step("build", [python, str(root / "packaging" / "build_app.py")], root)
             and _self_test(root))
 

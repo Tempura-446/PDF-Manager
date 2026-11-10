@@ -1,6 +1,7 @@
 """Settings shared by every test: nothing reaches the user's own ZPDF folder
 (settings, recent files, recipes, the search index, the log, the update
-cache, OCR models), and nothing checks GitHub for updates.
+cache, OCR models), and nothing checks GitHub for updates. Also the
+--perf option, which runs the performance limits (test_perf.py).
 
 ZPDF finds its folder through appdata._data_dir(), so pointing that at a
 scratch folder covers every module. Updates are switched off in the scratch
@@ -11,6 +12,24 @@ import pytest
 from pdfmanager import appdata
 
 REAL_DATA_DIR = appdata._data_dir  # before any test points it elsewhere (test_more checks it)
+
+
+def pytest_addoption(parser):
+    parser.addoption("--perf", action="store_true",
+                     help="also run the performance limits (test_perf.py); the release check does")
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "perf: a performance limit, run only with --perf")
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--perf"):
+        return
+    skip = pytest.mark.skip(reason="a performance limit: run with --perf")
+    for item in items:
+        if "perf" in item.keywords:
+            item.add_marker(skip)
 
 
 def _scratch(folder):
