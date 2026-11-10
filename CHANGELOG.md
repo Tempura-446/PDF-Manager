@@ -7,9 +7,12 @@ also the notes of its release on
 ## 0.18.0
 
 - PDF → Word's built-in converter reads pages the way the other exports
-  do. Columns come out one after the other (they were read straight
-  across), headings are headings, tables are real Word tables, lists keep
-  their items, and bold, italic and links are kept.
+  do. Columns of text come out one after the other where they were read
+  straight across, headings are headings, tables are real Word tables,
+  lists keep their items, and bold, italic and links are kept. Documents
+  made of text, tables and scans convert well; heavily designed pages
+  (brochures with panels, illustrations made of many small drawings) are
+  better than before but not yet right everywhere.
 - Scanned pages that have been made searchable convert properly: the
   built-in converter added stray letters to their words ("committee e
   met on Tuesday y") and flattened their tables.
