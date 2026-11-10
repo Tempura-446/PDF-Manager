@@ -149,7 +149,7 @@ def suggestions(found):
                else "Reduce its pictures for sending or storing")
         out.append({"op": "compress", "title": "Make it smaller", "why": why})
     if found.get("signatures"):
-        out.append({"op": "verify", "title": "Check its signatures",
+        out.append({"op": "verify-sig", "title": "Check its signatures",
                     "why": "See who signed it and whether it was changed afterwards"})
     return out[:3]
 

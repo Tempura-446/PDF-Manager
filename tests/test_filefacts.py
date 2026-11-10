@@ -169,7 +169,7 @@ def test_suggestions_follow_the_facts():
     assert ops({**base, "scanned": True, "has_text": False}) == ["ocr"]
     assert ops({**base, "scanned": True, "has_text": False, "size": 4_100_000}) == ["ocr", "compress"]
     assert ops({**base, "size": 9_000_000}) == ["compress"]
-    assert ops({**base, "signatures": 2}) == ["verify"]
+    assert ops({**base, "signatures": 2}) == ["verify-sig"]
     assert ops({"size": 10, "pages": None, "protected": True}) == []
     assert ops({"size": 10, "pages": None, "error": "can't be read"}) == ["repair"]
     for found in filefacts.suggestions({**base, "scanned": True, "has_text": False, "size": 4_100_000}):
@@ -180,7 +180,9 @@ def test_every_suggested_tool_exists():
     from pdfmanager import gui
 
     known = {op["id"] for op in gui.OPERATIONS}
-    assert {"ocr", "compress", "verify", "repair"} <= known
+    base = {"size": 9_000_000, "pages": 3, "scanned": True, "has_text": False, "signatures": 1}
+    offered = ops(base) + ops({"size": 1, "pages": None, "error": "can't be read"})
+    assert set(offered) == {"ocr", "compress", "verify-sig", "repair"} and set(offered) <= known
 
 
 def test_facts_and_suggestions_for_a_file_the_page_holds(tmp_path):
