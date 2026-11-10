@@ -3,8 +3,10 @@
 PDF → Word (.docx), by the first available of:
   * Microsoft Word (Windows): opens the PDF and reflows it into an editable
     document, the best result;
-  * the built-in converter: paragraphs, headings and pictures in reading
-    order (tables and columns become plain paragraphs);
+  * the built-in converter: headings, paragraphs, lists, tables and
+    pictures in reading order, columns one after the other, with bold,
+    italic and links kept. It reads the page as PDF → HTML does
+    (webpage.flow), scanned pages with a text layer included;
   * LibreOffice ("layout" engine): keeps the exact look, but every line
     becomes a separate text box.
 
@@ -305,126 +307,12 @@ def pdf_to_word(path, output, engine="auto", password=None, notes=None):
         return basic_docx(src, output), "basic"
 
 
-def _page_content(page, textpage):
-    """Lines of text and pictures on a page, top to bottom:
-    ("text", top, font size, bold, text) and ("image", top, PIL image, width_pt)."""
-    import pypdfium2 as pdfium
-    import pypdfium2.raw as raw
-
-    height = page.get_height()
-    runs = []
-    for i in range(textpage.count_rects()):
-        left, bottom, right, top = textpage.get_rect(i)
-        text = textpage.get_text_bounded(left, bottom, right, top)
-        if not text.strip():
-            continue
-        index = textpage.get_index((left + right) / 2, (bottom + top) / 2, 2, 2)
-        size, bold = top - bottom, False
-        if index is not None and index >= 0:
-            size = raw.FPDFText_GetFontSize(textpage, index) or size
-            bold = raw.FPDFText_GetFontWeight(textpage, index) >= 600
-        runs.append([height - top, round(size, 1), bold, left, text.strip(), top - bottom])
-    runs.sort(key=lambda r: (round(r[0] / 3), r[3]))
-    lines = []
-    for top, size, bold, left, text, h in runs:
-        last = lines[-1] if lines else None
-        if last and abs(last[1] - top) < max(h, last[5]) * 0.5:
-            last[4] += " " + text
-            last[2] = max(last[2], size)
-            last[3] = last[3] and bold
-        else:
-            lines.append(["text", top, size, bold, text, h])
-    content = [tuple(line[:5]) for line in lines]
-    for obj in page.get_objects(filter=[raw.FPDF_PAGEOBJ_IMAGE], max_depth=2):
-        try:
-            left, bottom, right, top = obj.get_bounds()
-            if right - left < 24 or top - bottom < 24:
-                continue  # rules, bullets, tiny decorations
-            image = obj.get_bitmap(render=True).to_pil().convert("RGB")
-        except (pdfium.PdfiumError, OSError, ValueError):
-            continue
-        content.append(("image", height - top, image, right - left))
-    content.sort(key=lambda item: item[1])
-    return content
-
-
-def _paragraphs(content, body):
-    """Join lines into paragraphs. Yields ("p", text, level) — level 1-3 for
-    headings, 0 for body text — and ("image", PIL image, width_pt)."""
-    para, para_size, para_bottom = [], 0, None
-    for item in content:
-        if item[0] == "image":
-            if para:
-                yield ("p", " ".join(para), 0)
-                para = []
-            yield ("image", item[2], item[3])
-            continue
-        _, top, size, bold, text = item
-        level = (1 if size > body * 1.5 else 2 if size > body * 1.2 else
-                 3 if size > body * 1.08 or (bold and len(text) <= 80 and text[-1:] not in ".,;:")
-                 else 0)
-        if level:
-            if para:
-                yield ("p", " ".join(para), 0)
-                para = []
-            yield ("p", text, level)
-            para_bottom = top + size
-            continue
-        gap = top - para_bottom if para_bottom is not None else 0
-        if para and (gap > para_size * 0.9 or abs(size - para_size) > 0.6):
-            yield ("p", " ".join(para), 0)
-            para = []
-        if para and para[-1].endswith("-") and text[:1].islower():
-            para[-1] = para[-1][:-1] + text  # re-join a hyphenated word
-        else:
-            para.append(text)
-        para_size, para_bottom = size, top + size
-    if para:
-        yield ("p", " ".join(para), 0)
-
-
 def basic_docx(path, output, password=None):
     """The built-in PDF → Word conversion (see the module docstring)."""
-    import pypdfium2 as pdfium
+    from pdfmanager import webpage
 
-    blocks = []  # per page
-    with core.PDFIUM_LOCK:
-        doc = pdfium.PdfDocument(str(path), password=password)
-        try:
-            pages = []
-            heights = {}
-            for number, page in enumerate(doc):
-                progress.report(number, len(doc), "page")
-                textpage = page.get_textpage()
-                content = _page_content(page, textpage)
-                textpage.close()
-                if not any(c[0] == "text" for c in content) and not any(c[0] == "image" for c in content):
-                    # e.g. vector drawings only: keep the page as a picture
-                    content = [("image", 0, page.render(scale=2).to_pil().convert("RGB"),
-                                page.get_width())]
-                pages.append((content, page.get_height()))
-                for c in content:
-                    if c[0] == "text":
-                        heights[c[2]] = heights.get(c[2], 0) + len(c[4])
-        finally:
-            doc.close()
-    body = max(heights, key=heights.get) if heights else 12
-    # Running headers and footers (the same text near the top or bottom of
-    # most pages, page numbers included) don't belong in the flowing text.
-    def edge_key(item, height):
-        if item[0] == "text" and (item[1] < height * 0.08 or item[1] > height * 0.9):
-            return re.sub(r"\d+", "#", item[4].lower())
-        return None
-
-    counts = {}
-    for content, height in pages:
-        for key in {edge_key(c, h) for c, h in ((c, height) for c in content)} - {None}:
-            counts[key] = counts.get(key, 0) + 1
-    repeated = {k for k, n in counts.items() if len(pages) >= 3 and n >= len(pages) * 0.6}
-    for content, height in pages:
-        content = [c for c in content if edge_key(c, height) not in repeated]
-        blocks.append(list(_paragraphs(content, body)))
-    return _write_docx(blocks, output, title=Path(path).stem)
+    title, pages = webpage.flow(path, password)
+    return _write_docx(pages, output, title=title)
 
 
 # -- a minimal .docx writer -------------------------------------------------------------
@@ -461,7 +349,13 @@ def _styles():
             'w:cs="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr>'
             '<w:spacing w:after="160" w:line="264" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>'
             '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>'
-            + heading + '</w:styles>')
+            + heading +
+            '<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/>'
+            '<w:basedOn w:val="Normal"/><w:uiPriority w:val="34"/><w:qFormat/>'
+            '<w:pPr><w:spacing w:after="60"/><w:ind w:left="454" w:hanging="340"/></w:pPr></w:style>'
+            '<w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/>'
+            '<w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style>'
+            '</w:styles>')
 
 
 def _image_xml(rid, n, cx, cy):
@@ -481,21 +375,90 @@ def _image_xml(rid, n, cx, cy):
 _XML_BAD = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f￾￿]")
 
 
+def _text_xml(text):
+    return f'<w:t xml:space="preserve">{escape(_XML_BAD.sub("", text))}</w:t>'
+
+
+def _runs_xml(segments, links, heading, link_id):
+    """The runs of a paragraph: bold, italic and typewriter type as on the
+    page, links to the web as links."""
+    out, open_link = [], None
+    for text, char in segments:
+        if not text:
+            continue
+        look = ""
+        if char.bold and not heading:
+            look += "<w:b/>"
+        if char.italic:
+            look += "<w:i/>"
+        if char.family == "Courier New":
+            look += '<w:rFonts w:ascii="Courier New" w:hAnsi="Courier New" w:cs="Courier New"/>'
+        link = links[char.link] if char.link is not None and char.link < len(links) else None
+        uri = link.get("uri") if link else None
+        if uri != open_link:
+            if open_link:
+                out.append("</w:hyperlink>")
+            if uri:
+                out.append(f'<w:hyperlink r:id="{link_id(uri)}">')
+            open_link = uri
+        if uri:
+            look = '<w:rStyle w:val="Hyperlink"/>' + look
+        out.append(f"<w:r>{f'<w:rPr>{look}</w:rPr>' if look else ''}{_text_xml(text)}</w:r>")
+    if open_link:
+        out.append("</w:hyperlink>")
+    return "".join(out)
+
+
+def _table_xml(rows, width_twips):
+    columns = max(len(row) for row in rows)
+    each = width_twips // max(1, columns)
+    edge = "".join(f'<w:{side} w:val="single" w:sz="4" w:space="0" w:color="808080"/>'
+                   for side in ("top", "left", "bottom", "right", "insideH", "insideV"))
+    out = [f'<w:tbl><w:tblPr><w:tblW w:w="{each * columns}" w:type="dxa"/><w:tblBorders>{edge}</w:tblBorders>'
+           '<w:tblCellMar><w:left w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar>'
+           '</w:tblPr><w:tblGrid>' + f'<w:gridCol w:w="{each}"/>' * columns + '</w:tblGrid>']
+    for number, row in enumerate(rows):
+        cells = list(row) + [""] * (columns - len(row))
+        look = "<w:rPr><w:b/></w:rPr>" if number == 0 else ""
+        out.append("<w:tr>" + ("<w:trPr><w:tblHeader/></w:trPr>" if number == 0 else "") + "".join(
+            f'<w:tc><w:tcPr><w:tcW w:w="{each}" w:type="dxa"/></w:tcPr><w:p><w:pPr><w:spacing w:after="0"/>'
+            f'</w:pPr><w:r>{look}{_text_xml(str(cell or ""))}</w:r></w:p></w:tc>' for cell in cells) + "</w:tr>")
+    out.append("</w:tbl><w:p/>")  # Word wants a paragraph after a table
+    return "".join(out)
+
+
 def _write_docx(pages, output, title=""):
+    """A .docx from the items of each page (webpage.flow)."""
     emu_per_pt, max_width_pt = 12700, 451  # A4 with 2.5 cm margins
     body, rels, media = [], [], []
     picture = 0
-    for number, blocks in enumerate(pages):
+    link_ids = {}
+
+    def link_id(uri):
+        if uri not in link_ids:
+            link_ids[uri] = f"rIdLink{len(link_ids) + 1}"
+            rels.append(f'<Relationship Id="{link_ids[uri]}" Type="http://schemas.openxmlformats.org/'
+                        f'officeDocument/2006/relationships/hyperlink" Target="{escape(uri, {chr(34): "&quot;"})}" '
+                        'TargetMode="External"/>')
+        return link_ids[uri]
+
+    for number, items in enumerate(pages):
         if number:
             body.append('<w:p><w:r><w:br w:type="page"/></w:r></w:p>')
-        for block in blocks:
-            if block[0] == "p":
-                _, text, level = block
-                style = f'<w:pPr><w:pStyle w:val="Heading{level}"/></w:pPr>' if level else ""
-                text = escape(_XML_BAD.sub("", text))
-                body.append(f'<w:p>{style}<w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>')
+        for item in items:
+            kind = item["kind"]
+            if kind in ("heading", "paragraph", "item"):
+                style = (f"Heading{item['level']}" if kind == "heading" else
+                         "ListParagraph" if kind == "item" else "")
+                runs = _runs_xml(item["segments"], item.get("links") or [], kind == "heading", link_id)
+                if runs:
+                    body.append("<w:p>" + (f'<w:pPr><w:pStyle w:val="{style}"/></w:pPr>' if style else "")
+                                + runs + "</w:p>")
+            elif kind == "table":
+                if item["rows"]:
+                    body.append(_table_xml(item["rows"], int(max_width_pt * 20)))
             else:
-                _, image, width_pt = block
+                image = item["image"].convert("RGB")
                 picture += 1
                 buf = io.BytesIO()
                 image.save(buf, "JPEG", quality=88)
@@ -504,7 +467,7 @@ def _write_docx(pages, output, title=""):
                 rid = f"rIdImg{picture}"
                 rels.append(f'<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/'
                             f'officeDocument/2006/relationships/image" Target="media/{name}"/>')
-                width = min(width_pt, max_width_pt)
+                width = min(item["width"], max_width_pt)
                 height = width * image.height / image.width
                 body.append(_image_xml(rid, picture, int(width * emu_per_pt), int(height * emu_per_pt)))
     document = (
