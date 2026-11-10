@@ -4,6 +4,18 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.18.0
+
+- PDF → Word's built-in converter reads pages the way the other exports
+  do. Columns come out one after the other (they were read straight
+  across), headings are headings, tables are real Word tables, lists keep
+  their items, and bold, italic and links are kept.
+- Scanned pages that have been made searchable convert properly: the
+  built-in converter added stray letters to their words ("committee e
+  met on Tuesday y") and flattened their tables.
+- In the HTML export too, an ordinary line of a scanned page is no longer
+  taken for a heading because its recognised size differs a little.
+
 ## 0.17.0
 
 - PDF/A without Ghostscript. ZPDF now converts to PDF/A-1b, -2b and -3b

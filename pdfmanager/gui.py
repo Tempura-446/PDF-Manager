@@ -450,7 +450,7 @@ OPERATIONS = [
      "help": "Turn PDFs into editable Word documents (.docx).",
      "fields": [_f("engine", "Converter", "select", "auto",
                    choices=[["auto", "Best available (Microsoft Word if installed)"],
-                            ["basic", "Built-in — paragraphs, headings and pictures"],
+                            ["basic", "Built-in — headings, paragraphs, lists, tables and pictures"],
                             ["layout", "Exact layout — needs LibreOffice; text in boxes"],
                             ["word", "Microsoft Word only"]],
                    hint="Microsoft Word gives the most editable result. The built-in "

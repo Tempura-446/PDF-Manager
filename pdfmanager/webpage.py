@@ -356,7 +356,22 @@ def _edge_key(line, page):
     return None
 
 
-def _flowing(doc, tables):
+def flow(path, password=None, pages=None):
+    """The document as the flowing web page has it, for another writer:
+    (title, [the items of each page in reading order]). An item is a dict:
+    {"kind": "heading", "level": 1-3, "segments"}, {"kind": "paragraph",
+    "segments"}, {"kind": "item", "segments"} (a list item, marker and
+    all), {"kind": "table", "rows"} or {"kind": "image", "image", "width"
+    (points)}. "segments" is [(text, layout.Char with its look)], and
+    "links" the page's links a Char's ``link`` indexes."""
+    tables = _tables(path, password, pages)
+    with layout.Document(path, password, pages) as doc:
+        collected = []
+        title, _ = _flowing(doc, tables, collected)
+    return title or Path(path).stem, collected
+
+
+def _flowing(doc, tables, collected=None):
     read = []
     sizes, keys = {}, {}
     for n, index in enumerate(doc.indices):
@@ -386,6 +401,8 @@ def _flowing(doc, tables):
             else:
                 writer.image(item.value, item.box)
         out += writer.finish()
+        if collected is not None:
+            collected.append(writer.items)
         title = title or writer.first_heading
     return doc.title or title, "<main>\n" + "\n".join(out) + "\n</main>"
 
@@ -474,6 +491,9 @@ class _Writer:
         self.body, self.bold_body, self.numbers, self.page = body, bold_body, numbers, page
         self.out, self.list_kind, self.first_heading = [], None, ""
         self.last_line = None  # (index in out, line, closing tag, heading): to join pieces
+        # The same content, not as HTML, for the other writers (PDF → Word):
+        # {"kind": "heading"|"paragraph"|"item"|"table"|"image", ...}; see flow().
+        self.items, self._item_at = [], {}
 
     # -- text -----------------------------------------------------------------
 
@@ -538,7 +558,10 @@ class _Writer:
             return 1
         if size > self.body * 1.2:
             return 2
-        if size > self.body * 1.08:
+        # Recognised text (a scan's hidden layer) is sized from its boxes,
+        # a little differently line by line: only a clear step up counts.
+        recognised = all(c.hidden for ln in lines for c in ln.chars)
+        if size > self.body * 1.08 and not recognised:
             return 3
         bold = all(c.bold for ln in lines for c in ln.chars)
         if bold and not self.bold_body and len(lines) == 1 and len(text) <= 80 \
@@ -573,6 +596,7 @@ class _Writer:
             index, _, closing, heading = self.last_line
             self.out[index] = (self.out[index][:-len(closing)] + " "
                                + self._inline(segments, heading) + closing)
+            self._item_at[index]["segments"] += [(" ", segments[0][1])] + list(segments)
             self.last_line = (index, first, closing, heading)
             return
         level = self._level(lines)
@@ -592,6 +616,7 @@ class _Writer:
                     start = f' start="{int(marker.group(1))}"'
                 self.out.append(f"<{kind}{start}>")
                 self.list_kind = kind
+            whole = segments
             segments = _drop_marker(segments, marker.end())
             tag, body = "li", self._inline(segments)
         else:
@@ -604,15 +629,24 @@ class _Writer:
                 and not re.search(r"[.!?:;\"”’)\]]</p>$", last)):
             # The rest of a paragraph that went on in the next column.
             joined = last[:-4]
+            earlier = self._item_at[len(self.out) - 1]["segments"]
             if re.search(r"[^\W\d_]-$", joined):
                 joined = joined[:-1]
+                earlier[-1] = (earlier[-1][0].rstrip()[:-1], earlier[-1][1])
             else:
                 joined += " "
+                earlier.append((" ", segments[0][1]))
+            earlier += list(segments)
             self.out[-1] = joined + body + "</p>"
             self.last_line = None
             return
         closing = f"</{tag}>"
         self.out.append(f"<{tag}>{body}{closing}")
+        item = {"kind": "heading" if level else "item" if tag == "li" else "paragraph", "level": level,
+                "segments": [(t, c) for t, c in (whole if tag == "li" else segments)],
+                "links": self.page.links}
+        self.items.append(item)
+        self._item_at[len(self.out) - 1] = item
         self.last_line = ((len(self.out) - 1, lines[0], closing, bool(level))
                           if len(lines) == 1 else None)
 
@@ -625,6 +659,7 @@ class _Writer:
         body = "".join("<tr>" + "".join(f"<td>{_e(cell)}</td>" for cell in row) + "</tr>"
                        for row in rows[1:])
         self.out.append(f"<table>\n<thead><tr>{head}</tr></thead>\n<tbody>{body}</tbody>\n</table>")
+        self.items.append({"kind": "table", "rows": rows})
 
     def image(self, image, box):
         self._close_list()
@@ -632,6 +667,7 @@ class _Writer:
         w, h = (box[2] - box[0]) * PX, (box[3] - box[1]) * PX
         self.out.append(f'<figure><img src="{_data_uri(image)}" width="{round(w)}" '
                         f'height="{round(h)}" alt="Picture on page {self.page.number}"></figure>')
+        self.items.append({"kind": "image", "image": image, "width": box[2] - box[0]})
 
     def finish(self):
         self._close_list()

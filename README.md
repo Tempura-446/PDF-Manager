@@ -862,9 +862,12 @@ location, and one of:
 ### Word and Office
 
 `to-word` converts with Microsoft Word when it's installed (the most
-editable result), otherwise with the built-in converter (paragraphs,
-headings and pictures in reading order; tables and columns become plain
-paragraphs). If Word fails or doesn't finish in time (a minute plus two
+editable result), otherwise with the built-in converter: headings,
+paragraphs, lists, tables and pictures in reading order, columns one
+after the other, with bold, italic and links kept. It reads pages the
+same way as the HTML and PowerPoint exports and the screen-reader
+tagging, and a scanned page that has been made searchable converts from
+its recognised text. If Word fails or doesn't finish in time (a minute plus two
 seconds a page), the built-in converter is used and the result says so;
 `--engine word` insists on Word and waits up to five minutes. `--engine
 layout` uses LibreOffice instead, which keeps the exact look but puts every
