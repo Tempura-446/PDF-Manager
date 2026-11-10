@@ -46,10 +46,13 @@ if (-not (Test-Path (Join-Path $source "pyproject.toml"))) {
 $appDir = Join-Path $env:LOCALAPPDATA "PDF Manager\app"
 $venv = Join-Path $appDir "venv"
 
+# A 64-bit Python 3.10 to 3.14: ONNX Runtime (the built-in OCR engine) has
+# Windows builds for those. A newer Python, like 3.15 when it came out, is
+# passed over until the engine supports it.
 function Test-Python($exe) {
     if (-not $exe -or -not (Test-Path $exe)) { return $false }
     try {
-        $ok = & $exe -c "import sys; print(int(sys.version_info >= (3, 10) and sys.maxsize > 2**32))" 2>$null
+        $ok = & $exe -c "import sys; print(int(sys.version_info >= (3, 10) and sys.version_info < (3, 15) and sys.maxsize > 2**32))" 2>$null
         return ($LASTEXITCODE -eq 0 -and "$ok".Trim() -eq "1")
     } catch { return $false }
 }
@@ -57,10 +60,14 @@ function Test-Python($exe) {
 function Find-Python {
     $candidates = @()
     if (Get-Command py.exe -ErrorAction SilentlyContinue) {
-        try {
-            $found = & py.exe -3 -c "import sys; print(sys.executable)" 2>$null
-            if ($LASTEXITCODE -eq 0) { $candidates += "$found".Trim() }
-        } catch { }
+        # The versions ZPDF is tested with first; "py -3" alone picks the
+        # newest Python, which the OCR engine may not support yet.
+        foreach ($version in @("3.13", "3.12", "3.14", "3.11", "3.10")) {
+            try {
+                $found = & py.exe "-$version" -c "import sys; print(sys.executable)" 2>$null
+                if ($LASTEXITCODE -eq 0) { $candidates += "$found".Trim() }
+            } catch { }
+        }
     }
     foreach ($cmd in @(Get-Command python.exe -All -ErrorAction SilentlyContinue)) {
         # Skip the Microsoft Store shortcut that only opens the Store.
@@ -157,7 +164,7 @@ function Install-Extras($status) {
 
 Write-Host "ZPDF installer" -ForegroundColor Cyan
 
-Step "Looking for Python 3.10 or newer"
+Step "Looking for Python 3.10 to 3.14"
 $python = Find-Python
 if ($python) { Say "Found $python" } else { $python = Install-Python; Say "Installed $python" }
 
@@ -171,6 +178,12 @@ if (-not (Test-Python $venvPython)) {
 }
 & $venvPython -m pip install --disable-pip-version-check --quiet --upgrade pip
 & $venvPython -m pip install --disable-pip-version-check --quiet --upgrade "$source[app,ocr]"
+if ($LASTEXITCODE -ne 0) {
+    # Most likely the OCR engine has no build for this Python: better ZPDF
+    # without it (OCR then uses Tesseract, if installed) than no ZPDF.
+    Say "Installing with the built-in OCR engine didn't work (see above); installing ZPDF without it..."
+    & $venvPython -m pip install --disable-pip-version-check --quiet --upgrade "$source[app]"
+}
 if ($LASTEXITCODE -ne 0) { throw "Installing ZPDF's packages failed (see above)." }
 Say "Done"
 

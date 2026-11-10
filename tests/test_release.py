@@ -63,11 +63,16 @@ def test_the_zip_is_the_same_every_time(release, tmp_path):
 class Runner:
     """Stands in for git and gh."""
 
-    def __init__(self, dirty="", released=False, signed_in=True):
+    def __init__(self, dirty="", released=False, signed_in=True, identity=True, fail=None):
         self.dirty, self.released, self.signed_in, self.commands = dirty, released, signed_in, []
+        self.identity, self.fail = identity, fail or ()
 
     def __call__(self, cmd, cwd=None, check=True):
         self.commands.append(cmd)
+        if tuple(cmd[:3]) in self.fail:
+            raise release_error(f"{' '.join(cmd[:3])} failed: simulated")
+        if cmd[:2] == ["git", "config"]:
+            return "Someone\n" if self.identity else ""
         if cmd[:3] == ["gh", "auth", "status"] and not self.signed_in:
             raise release_error("You are not logged into any GitHub hosts")
         if cmd[:3] == ["git", "status", "--porcelain"]:
@@ -107,6 +112,40 @@ def test_publishing_needs_gh_installed_and_signed_in_before_the_checks(release, 
     monkeypatch.setattr(release.shutil, "which", lambda name: None if name == "gh" else f"/usr/bin/{name}")
     monkeypatch.setattr(release, "run", Runner())
     release.publish(ROOT, "9.9.9", CHANGELOG, out_dir=tmp_path, checks=False, dry_run=True)
+
+
+def test_publishing_needs_a_git_name_and_email_before_the_checks(release, tmp_path, monkeypatch):
+    checked = []
+    monkeypatch.setattr(release, "check", lambda root: checked.append(True) or True)
+    monkeypatch.setattr(release, "third_party_notices", lambda root: "N")
+    runner = Runner(identity=False)
+    monkeypatch.setattr(release, "run", runner)
+    with pytest.raises(release.ReleaseError, match='git config user.name.*git config user.email'):
+        release.publish(ROOT, "9.9.9", CHANGELOG, out_dir=tmp_path)
+    assert not checked and not any(c[:3] == ["gh", "release", "create"] for c in runner.commands)
+
+
+def test_the_tag_is_made_before_the_upload_and_removed_if_it_fails(release, tmp_path, monkeypatch):
+    monkeypatch.setattr(release, "third_party_notices", lambda root: "N")
+    runner = Runner(fail={("gh", "release", "create")})
+    monkeypatch.setattr(release, "run", runner)
+    with pytest.raises(release.ReleaseError, match="gh release create failed"):
+        release.publish(ROOT, "9.9.9", CHANGELOG, out_dir=tmp_path, checks=False)
+    tagged = runner.commands.index(["git", "tag", "-a", "v9.9.9", "-m", "ZPDF 9.9.9"])
+    uploaded = next(i for i, c in enumerate(runner.commands) if c[:3] == ["gh", "release", "create"])
+    assert tagged < uploaded
+    assert ["git", "tag", "-d", "v9.9.9"] in runner.commands
+    assert ["git", "push", "origin", "v9.9.9"] not in runner.commands
+
+
+def test_a_failed_push_after_publishing_says_it_is_published(release, tmp_path, monkeypatch):
+    monkeypatch.setattr(release, "third_party_notices", lambda root: "N")
+    monkeypatch.setattr(release, "run", Runner(fail={("git", "push", "origin")}))
+    with pytest.raises(release.ReleaseError) as caught:
+        release.publish(ROOT, "9.9.9", CHANGELOG, out_dir=tmp_path, checks=False)
+    said = str(caught.value)
+    assert "is published on" in said and "git push origin v9.9.9" in said
+    assert not said.startswith("Not released")
 
 
 def test_a_missing_program_is_reported_not_raised(release):

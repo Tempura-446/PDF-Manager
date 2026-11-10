@@ -4,6 +4,18 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.15.1
+
+- Updating or installing on a PC whose newest Python is one the built-in OCR
+  engine has no version for yet (Python 3.15 when it came out) failed. The
+  installer now picks Python 3.10 to 3.14, installing Python 3.13 for ZPDF
+  if there's none, and moves an existing ZPDF onto it. If the OCR engine
+  still can't be installed, ZPDF is installed or updated without it and
+  says so, rather than not at all.
+- Publishing a release checks first that GitHub's gh is installed and
+  signed in and that git has a name and email for the version tag, and says
+  plainly if the release went out but its tag didn't.
+
 ## 0.15.0
 
 - Releases for friends: each version is published on ZPDF-releases as one

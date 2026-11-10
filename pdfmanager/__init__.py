@@ -1,3 +1,3 @@
 """ZPDF: merge, split, resize, organize and otherwise manage PDF files."""
 
-__version__ = "0.15.0"
+__version__ = "0.15.1"

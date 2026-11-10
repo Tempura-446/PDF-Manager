@@ -1870,7 +1870,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(HTTPStatus.OK, {**update.check(force=True),
                                                   "can_restart": self._can_restart()})
             if path == "/api/update/install":
-                return self._job_or_now(lambda: {"json": {"version": update.install()}})
+                def install():
+                    notes = []
+                    return {"json": {"version": update.install(notes=notes), "note": " ".join(notes)}}
+
+                return self._job_or_now(install)
             if path == "/api/update/restart":
                 return self._restart()
             if path == "/api/recipes/save":
