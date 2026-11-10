@@ -1072,8 +1072,8 @@ def compress(path, output, level="medium", image_quality=None, max_dpi=None, pas
 
     With ``sharp_scans`` (medium and high), a scanned page keeps its text
     at full resolution: the scan becomes a black-and-white text shape over
-    a low-resolution background (see scanlayers.py), when that is no
-    larger than the usual result. ``notes`` (a list) is told how many
+    a low-resolution background (see scanlayers.py), when that is at most
+    a tenth larger than the usual result. ``notes`` (a list) is told how many
     pages that was done for.
     """
     try:

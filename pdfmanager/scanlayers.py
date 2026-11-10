@@ -64,33 +64,26 @@ def _neighbours(flags):
     return total
 
 
-def _cells(values, size, how):
-    """``values`` (2-D) reduced over cells of ``size`` pixels with ``how``."""
-    h, w = values.shape
-    rows, cols = -(-h // size), -(-w // size)
-    padded = np.full((rows * size, cols * size), np.nan, np.float32)
-    padded[:h, :w] = values
-    return how(padded.reshape(rows, size, cols, size), axis=(1, 3))
-
-
 def _block_mean(pixels, keep, size):
-    """The picture reduced ``size`` times, each block the mean of its
-    pixels where ``keep`` is set; blocks with none are filled in from the
-    blocks around them."""
+    """The picture (uint8, rows x columns x bands) reduced ``size`` times,
+    each block the mean of its pixels where ``keep`` is set; blocks with
+    none are filled in from the blocks around them. Worked a band at a
+    time in whole numbers: a page is many millions of pixels."""
     h, w = keep.shape
     rows, cols = -(-h // size), -(-w // size)
     bands = pixels.shape[2]
-    values = np.zeros((rows * size, cols * size, bands), np.float32)
-    values[:h, :w] = pixels
-    weight = np.zeros((rows * size, cols * size), np.float32)
-    weight[:h, :w] = keep
-    total = (values * weight[..., None]).reshape(rows, size, cols, size, bands).sum((1, 3))
-    count = weight.reshape(rows, size, cols, size).sum((1, 3))
+    edge = ((0, rows * size - h), (0, cols * size - w))
+    kept = np.pad(keep, edge)
+    count = kept.reshape(rows, size, cols, size).sum((1, 3), dtype=np.uint32)
     have = count > 0
-    out = np.where(have[..., None], total / np.maximum(count, 1)[..., None], 0)
+    out = np.zeros((rows, cols, bands), np.float32)
+    for band in range(bands):
+        values = np.where(kept, np.pad(pixels[..., band], edge), 0)
+        total = values.reshape(rows, size, cols, size).sum((1, 3), dtype=np.uint32)
+        out[..., band] = np.where(have, total / np.maximum(count, 1), 0)
     if not have.any():
-        out[:] = values[:h, :w].reshape(-1, bands).mean(0)
-        have[:] = True
+        out[:] = pixels.reshape(-1, bands).mean(0)
+        have = np.ones_like(have)
     while not have.all():
         padded = np.pad(out * have[..., None], ((1, 1), (1, 1), (0, 0)))
         known = np.pad(have, 1).astype(np.float32)
@@ -105,6 +98,17 @@ def _block_mean(pixels, keep, size):
         have |= new
     out = out.clip(0, 255).astype(np.uint8)
     return Image.fromarray(out[..., 0], "L") if bands == 1 else Image.fromarray(out, "RGB")
+
+
+def _cell_means(values, size):
+    """Mean of ``values`` (2-D, bool or uint8) over cells of ``size`` pixels;
+    cells cut off by the edge count what there is of them."""
+    h, w = values.shape
+    rows, cols = -(-h // size), -(-w // size)
+    edge = ((0, rows * size - h), (0, cols * size - w))
+    total = np.pad(values, edge).reshape(rows, size, cols, size).sum((1, 3), dtype=np.uint32)
+    count = np.pad(np.ones((h, w), bool), edge).reshape(rows, size, cols, size).sum((1, 3), dtype=np.uint32)
+    return total / np.maximum(count, 1)
 
 
 def split(image, dpi, background_dpi, ink_dpi):
@@ -129,13 +133,20 @@ def split(image, dpi, background_dpi, ink_dpi):
     # The paper's brightness around each point: the brightest nearby, smoothed.
     small = grey.resize((max(1, grey.width // 8), max(1, grey.height // 8)), Image.BILINEAR)
     paper = small.filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.GaussianBlur(4))
-    paper = np.asarray(paper.resize(grey.size, Image.BILINEAR), np.float32)
-    values = np.asarray(grey, np.float32)
-    ink = values < paper - np.maximum(INK_MARGIN, INK_SHARE * paper)
-    ink &= _neighbours(ink) >= NEIGHBOURS
+    paper = np.asarray(paper.resize(grey.size, Image.BILINEAR))
+    # Ink: darker than the paper by the margin. (In whole numbers: 16 bits hold it.)
+    limit = paper.astype(np.int16) - np.maximum(INK_MARGIN, (INK_SHARE * paper).astype(np.int16))
+    dark = np.asarray(grey) < limit
+    del limit
+    # Specks: fewer neighbours than a stroke has. A stroke is thinner on a
+    # coarser scan (one pixel at 150 dpi), so the number goes with the
+    # resolution; too high and thin strokes and decimal points go too.
+    needed = max(1, int(NEIGHBOURS * (dpi / MASK_DPI) ** 2))
+    ink = dark & (_neighbours(dark) >= needed)
 
     cell = max(4, round(dpi * CELL_INCH))
-    picture = (_cells(ink, cell, np.nanmean) > PICTURE_INK) | (_cells(paper, cell, np.nanmean) < PICTURE_DARK)
+    picture = (_cell_means(ink, cell) > PICTURE_INK) | (_cell_means(paper, cell) < PICTURE_DARK)
+    del paper
     picture_share = float(picture.mean())
     if picture_share > PICTURE_PAGE:
         return None
@@ -146,10 +157,16 @@ def split(image, dpi, background_dpi, ink_dpi):
     if share == 0 or share > MAX_INK:
         return None
 
-    pixels = np.asarray(image, np.float32)
+    pixels = np.asarray(image)
     if pixels.ndim == 2:
         pixels = pixels[..., None]
-    background = _block_mean(pixels, ~_grown(ink, 2), max(1, round(dpi / background_dpi)))
+    # The background is the paper: what isn't ink or the soft edge around
+    # it. Dark pixels that didn't make it into the text shape and don't
+    # touch it (a dropped dot, a hairline) stay in the background: what is
+    # dark on the scan is in one layer or the other, never painted over.
+    paper_like = ~_grown(ink, 2) | (dark & ~_grown(ink, 1))
+    background = _block_mean(pixels, paper_like, max(1, round(dpi / background_dpi)))
+    del paper_like, dark
     colour = _block_mean(pixels, ink, max(1, round(dpi / ink_dpi)))
     mask = Image.fromarray(np.where(ink, 0, 255).astype(np.uint8), "L").convert("1", dither=Image.NONE)
     return Layers(mask, background, colour, picture_share)

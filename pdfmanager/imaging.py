@@ -409,6 +409,10 @@ SCAN_LAYERS = {"medium": (150, 50, 37, 40), "high": (100, 40, 25, 35)}
 SCAN_COVERS = 0.80     # of its page, for a picture to be the page's scan
 SCAN_MIN_DPI = 150     # below this there is no sharpness to keep
 SCAN_ALLOWANCE = 1.10  # layers may be this much larger than the usual result
+# The engine holds a page in memory several times over (about 25 bytes a
+# pixel): a larger scan than this, as it would be worked on, is left to
+# the usual way. 40 million is an A2 sheet at 300 dpi, about 1 GB.
+SCAN_MAX_PIXELS = 40_000_000
 
 
 def _scan_dpi(obj, drawn, page, uses):
@@ -431,7 +435,14 @@ def _scan_dpi(obj, drawn, page, uses):
     if drawn_w * drawn_h < SCAN_COVERS * area:
         return None
     dpi = max(width / (drawn_w / 72), height / (drawn_h / 72))
-    return dpi if dpi >= SCAN_MIN_DPI else None
+    if dpi < SCAN_MIN_DPI:
+        return None
+    from pdfmanager import scanlayers
+
+    worked = min(1.0, scanlayers.MASK_DPI / dpi)
+    if width * height * worked * worked > SCAN_MAX_PIXELS:
+        return None
+    return dpi
 
 
 def _jpeg(image, quality):
@@ -470,7 +481,7 @@ def _picture_object(writer, image, data, **entries):
 
 _IMAGE_KEYS = ("/Width", "/Height", "/ColorSpace", "/BitsPerComponent", "/Filter", "/DecodeParms", "/Decode",
                "/Intent", "/Interpolate", "/ImageMask", "/Mask", "/SMask", "/SMaskInData", "/Alternates",
-               "/Name", "/StructParent", "/ID", "/OPI", "/Metadata", "/OC")
+               "/ID", "/OPI")  # not /OC, /StructParent, /Metadata, /Name: a form carries those too
 
 
 def _store_layers(writer, obj, encoded):

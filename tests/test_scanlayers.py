@@ -57,7 +57,8 @@ def test_text_goes_to_the_shape_and_paper_to_the_background():
     assert layers.mask.size == page.size and layers.mask.mode == "1"
     assert 0.005 < _ink(layers).mean() < 0.10
     assert layers.background.width == round(2480 * 100 / 300)
-    assert np.asarray(layers.background.convert("L")).min() > 200, "ink is left in the paper"
+    # (A stray dark dot that isn't part of the text shape may show faintly; the text may not.)
+    assert (np.asarray(layers.background.convert("L")) < 200).mean() < 0.001, "ink is left in the paper"
 
 
 def test_a_scan_above_300_dpi_gets_a_300_dpi_shape():
@@ -409,6 +410,9 @@ def test_without_group4_the_result_is_still_no_larger(tmp_path, monkeypatch):
     monkeypatch.setattr(scanlayers, "group4", lambda mask: None)
     out = core.compress(src, tmp_path / "out.pdf", level="high")
     assert "/CCITTFaxDecode" not in filters(out)
+    with pikepdf.open(out) as pdf:
+        shapes = [o for o in pdf.objects if isinstance(o, pikepdf.Stream) and o.get("/ImageMask")]
+        assert len(shapes) == 1 and shapes[0].Filter == "/FlateDecode", "the text shape, packed with Flate"
     assert out.stat().st_size <= plain.stat().st_size * 1.10 and difference(src, out) < 8
 
 
@@ -483,3 +487,106 @@ def test_pdfm_watch_has_the_switch():
                                                  "--no-sharp-scans"])
     assert parser_args.sharp_scans is False
     assert cli.build_parser().parse_args(["watch", "in", "--dest", "out"]).sharp_scans is True
+
+
+# -- found by the final review ------------------------------------------------------------
+
+def small_print(dpi, points, serif=False, blur=0.0):
+    """The invoice at ``dpi`` in ``points`` type: thin strokes, decimal points."""
+    size = (round(8.27 * dpi), round(11.69 * dpi))
+    page = Image.new("L", size, 255)
+    draw = ImageDraw.Draw(page)
+    font = ocrpages._font(round(points * dpi / 72), serif)
+    y = dpi
+    for line in ocrpages.TEXT.splitlines():
+        draw.text((dpi, y), line, font=font, fill=0)
+        y += round(points * dpi / 72 * 1.6)
+    return page.filter(ImageFilter.GaussianBlur(blur)) if blur else page
+
+
+LOW_DPI = [(150, 8, False, 0.0), (150, 9, False, 0.6), (200, 7, True, 0.0), (200, 9, False, 0.6)]
+
+
+@pytest.mark.parametrize("dpi, points, serif, blur", LOW_DPI)
+def test_no_ink_is_lost_at_office_scanner_resolutions(tmp_path, dpi, points, serif, blur):
+    """Every dark pixel of the scan is still dark on the page: a decimal
+    point dropped from the text shape and painted over with paper changes
+    what a number says."""
+    page = small_print(dpi, points, serif, blur)
+    src = scan(page, tmp_path / "s.pdf", dpi=dpi)
+    notes = []
+    out = core.compress(src, tmp_path / "out.pdf", level="high", notes=notes)
+    if not notes:
+        return  # left to the usual way: nothing to lose
+    before = np.asarray(render(src, dpi).convert("L"), int)
+    after = np.asarray(render(out, dpi).convert("L").resize(before.shape[::-1]), int)
+    dark = before < 100
+    assert dark.sum() > 1000
+    assert (after[dark] > 200).mean() < 0.005, "ink of the scan renders as paper"
+
+
+@pytest.mark.skipif(not ocr.builtin_available(), reason="needs the built-in OCR engine")
+@pytest.mark.parametrize("dpi, points, serif, blur", LOW_DPI)
+def test_small_print_reads_as_well_at_office_scanner_resolutions(tmp_path, dpi, points, serif, blur):
+    def cer(path):
+        lines = ocr.recognise(render(path, 300))
+        return ocrpages.cer(ocrpages.TEXT, ocr.text_of(ocr.reading_order(lines)))
+
+    src = scan(small_print(dpi, points, serif, blur), tmp_path / "s.pdf", dpi=dpi)
+    sharp = core.compress(src, tmp_path / "sharp.pdf", level="high")
+    plain = core.compress(src, tmp_path / "plain.pdf", level="high", sharp_scans=False)
+    assert cer(sharp) <= cer(plain) + 0.005
+
+
+def test_a_dropped_speck_stays_in_the_background():
+    page = Image.new("L", (600, 800), 255)
+    draw = ImageDraw.Draw(page)
+    for row in range(20):
+        draw.line((100, 100 + row * 30, 400, 100 + row * 30), fill=0, width=4)   # ink
+    draw.point((110, 150), fill=0)                        # a lone pixel right by it
+    layers = scanlayers.split(page, 300, 300, 25)
+    assert layers.mask.getpixel((110, 150)) != 0, "a lone pixel is a speck"
+    assert layers.background.getpixel((110, 150)) < 100, "but it isn't painted over with paper"
+    assert layers.background.getpixel((250, 115)) > 200, "the paper between the lines is clean"
+
+
+def test_the_engine_is_light_on_memory():
+    import tracemalloc
+
+    page = colour_page()
+    tracemalloc.start()
+    try:
+        scanlayers.split(page, 300, 100, 25)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 30 * page.width * page.height, f"{peak / 2 ** 20:.0f} MB for an A4 page"
+
+
+def test_a_scan_too_large_to_work_on_is_compressed_the_usual_way(tmp_path, monkeypatch):
+    src = scan(ocrpages.render(), tmp_path / "s.pdf")
+    plain = core.compress(src, tmp_path / "plain.pdf", level="high", sharp_scans=False)
+    monkeypatch.setattr(imaging, "SCAN_MAX_PIXELS", 8_000_000)   # the page is 8.7 million
+    called = []
+    monkeypatch.setattr(scanlayers, "split", lambda *a, **k: called.append(1))
+    out = core.compress(src, tmp_path / "out.pdf", level="high")
+    assert not called and out.stat().st_size == plain.stat().st_size
+    # A 600 dpi scan is worked on at 300: counted as it will be worked on.
+    monkeypatch.setattr(imaging, "SCAN_MAX_PIXELS", 9_000_000)
+    big = scan(ocrpages.render().resize((4960, 7016)), tmp_path / "big.pdf", dpi=600)
+    monkeypatch.undo()
+    monkeypatch.setattr(imaging, "SCAN_MAX_PIXELS", 9_000_000)
+    assert FAX in core.compress(big, tmp_path / "big-out.pdf", level="high").read_bytes()
+
+
+def test_what_a_form_may_carry_stays_on_it(tmp_path):
+    src = scan(ocrpages.render(), tmp_path / "s.pdf")
+    with pikepdf.open(src, allow_overwriting_input=True) as pdf:
+        picture = pdf.pages[0].Resources.XObject.Im
+        picture.OC = pdf.make_indirect(pikepdf.Dictionary(Type=pikepdf.Name.OCG, Name=pikepdf.String("Scan")))
+        picture.StructParent = 7
+        pdf.save()
+    out = core.compress(src, tmp_path / "out.pdf", level="high")
+    with pikepdf.open(out) as pdf:
+        form = pdf.pages[0].Resources.XObject.Im
+        assert form.Subtype == "/Form" and str(form.OC.Name) == "Scan" and int(form.StructParent) == 7
