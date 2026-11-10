@@ -117,13 +117,16 @@ on Linux) and the app uses the Edge window from then on. Delete that file
 to try the native window again. The app stops by itself when its window is
 closed.
 
-- The app opens on a **Home** screen: open or drop PDFs to read them, go
-  back to the tools you pinned or used recently, reopen a recent file, or
-  pick any tool from the list with a line about each.
-- **Pin** the tools you use most (the ☆ Pin button by a tool's name, or the
-  star on its card on Home): they stay at the top of the sidebar and Home,
-  above a few you used lately. In a narrower window the
-  sidebar becomes a rail of icons; on a phone it's a menu.
+- The app opens on a **start screen**: open or drop PDFs to read them, or
+  reopen a recent file. Each recent file says what it is: its pages and
+  size, and whether it is scanned, searchable, protected, signed or a
+  form.
+- The tools are behind a slim **rail** at the side: Read, Pages, Convert,
+  Protect and All. The search box at the top (**Ctrl+K**, or **/**) finds
+  any tool by name or by what it does.
+- **Pin** the tools you use most (the ☆ Pin button by a tool's name): they
+  show first under All and on the start screen. In a narrow window the
+  rail becomes a strip along the top.
 - Drop files anywhere on the window. Each file shows a **preview of its
   first page**, its page count and size; drag the cards to change the
   order (for merging, interleaving and images).
@@ -216,17 +219,16 @@ closed.
 - **Save…** opens the computer's own Save dialog, also in the Edge window.
 - Password-protected PDFs: enter the password once under the options;
   results stay protected with the same password.
-- Light and dark themes follow your system, or pick one at the bottom of
-  the sidebar.
+- Light and dark themes follow your system, or pick one in **Settings**.
 - Only **one copy** runs: opening a PDF from Explorer (or starting the app
   again) brings the running app to the front with the file in the reader
   (in the Edge window, the file opens in a new window of the running app).
 - **Updates:** when a newer version is published on
   [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases), an
-  **Update** button appears in the sidebar; it downloads it, checks it
+  **Update** button appears on the rail; it downloads it, checks it
   against its published SHA-256, installs it and starts the app again.
   Nothing to set up. The check can be turned off in **Settings** (the gear
-  at the bottom of the sidebar), which also has an **About** section with
+  at the bottom of the rail), which also has an **About** section with
   the licence and the third-party notices. A development copy can follow
   the private repository's branch instead, with a GitHub token entered
   there. (A copy running from a git checkout is updated with `git pull`,
@@ -245,17 +247,25 @@ computers can't use it.
 
 ## PDF reader
 
-Open **PDF reader** at the top of the sidebar, run `pdfm view report.pdf`,
+Choose **Read** on the rail, run `pdfm view report.pdf`,
 or open a PDF with the standalone app ("Open with…" → ZPDF, or drop
 the file on the app). It is built on [pdf.js](https://mozilla.github.io/pdf.js/),
 the engine behind Firefox's PDF viewer, bundled with the app so it works offline.
 
 - **Distraction-free:** an open document gets the whole window. The toolbar
-  keeps only the page number, zoom and the thumbnails button; **Tools** (or
-  the T key) pulls out the rest (open, find, annotate and sign, rotate,
-  print, save, more), and **All tools** in it slides out the app's tool list.
+  keeps the page number, zoom, find, annotate and sign, and **More** (open,
+  rotate, print, save, properties, "Edit with" any tool).
   The **Home** button (top left) goes back to the tools; your documents stay
   open in the reader.
+- **The file panel** at the right says what the shown file is (pages, size,
+  scanned or not, signed, a form, protected), suggests what it may need
+  (make a scan searchable, make a big file smaller, check its signatures)
+  and offers common tools. A tool opens its options right there; **Run**
+  works on the open file and opens the result in a new tab beside it (a
+  Word or Excel file is offered to save instead). Tools that work on the
+  page itself (crop, redact, arranging pages) open their own page with the
+  file. The panel button in the toolbar, or the T key, shows or hides it;
+  in a window narrower than 1100 px it comes over the page when asked for.
 - **Save** and **Undo** appear in the toolbar as soon as a document has
   changes not saved yet. **Save** (Ctrl+S) writes them into the file you
   opened (safely: to a new file next to it that then takes its place; if

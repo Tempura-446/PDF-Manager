@@ -53,6 +53,7 @@ function fieldEntries(fields) {
 
 const ICON = {
   sidebar: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
+  panel: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
   open: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   prev: '<path d="m15 18-6-6 6-6"/>', next: '<path d="m9 18 6-6-6-6"/>',
   up: '<path d="m18 15-6-6-6 6"/>', down: '<path d="m6 9 6 6 6-6"/>',
@@ -178,7 +179,7 @@ const store = {
 };
 
 export class Reader {
-  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome } = {}) {
+  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange } = {}) {
     this.host = host;
     this.token = token;
     this.isDesktop = isDesktop || (() => false);
@@ -188,6 +189,7 @@ export class Reader {
     this.onAllTools = onAllTools;
     this.onCommands = onCommands;
     this.onHome = onHome;
+    this.onChange = onChange;  // the open documents or the shown one changed (the app's file panel follows)
     // Everything that changes which document is shown runs one after the
     // other (see #serial): two loads at once would show the wrong tab or
     // trip over the shared worker.
@@ -225,16 +227,22 @@ export class Reader {
     this.scaleBtn = el("button", { class: "rd-btn rd-scale-btn", type: "button", disabled: true, "aria-expanded": "false",
       title: "Drawing scale, true-size zoom and measuring (M to measure)", html: svg("ruler") + "<span>Scale</span>" });
     this.scaleLabel = this.scaleBtn.querySelector("span");
-    this.toolsBtn = el("button", { class: "rd-btn rd-tools-btn", type: "button", title: "Show the tools (T)", "aria-expanded": "false",
-      html: svg("sliders") + "<span>Tools</span>" + svg("down") });
+    // The file panel at the right (the app fills it: this file's facts and tools).
+    this.panelBtn = b("panel", "File panel", { class: "rd-btn rd-panel-btn", "aria-expanded": "false", "aria-controls": "rd-side" });
+    this.panelBtn.title = "Show or hide the file panel (T)";
     // Changes not saved yet: Save and Undo come out where they're seen.
     this.saveNowBtn = el("button", { class: "rd-btn primary rd-savenow", type: "button", hidden: true,
       title: "Save your changes (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
     this.undoNowBtn = b("undo", "Undo the last change (Ctrl+Z)", { hidden: true });
     this.homeBtn = this.onHome ? b("home", "Home: all of ZPDF's tools (your documents stay open)") : null;
 
-    // The toolbar keeps what reading needs; everything else waits in the
-    // tray under it until Tools pulls it out.
+    const t = (name, label, title, attrs = {}) => el("button", { class: "rd-btn rd-labelled", type: "button", title, html: svg(name) + `<span>${label}</span>`, ...attrs });
+    this.findBtn = b("search", "Find in document (Ctrl+F)", { "aria-pressed": "false" });
+    this.annotateBtn = t("pen", "Annotate & sign", "Annotate and sign", { "aria-pressed": "false" });
+    this.moreBtn = b("more", "More", { "aria-haspopup": "menu", "aria-expanded": "false" });
+
+    // The toolbar keeps what reading needs; the More menu has the rest, and
+    // the file panel this file's tools.
     const toolbar = el("div", { class: "rd-toolbar", role: "toolbar", "aria-label": "Reader" },
       el("div", { class: "rd-group" }, this.homeBtn, this.sidebarBtn),
       this.titleEl,
@@ -243,25 +251,8 @@ export class Reader {
       el("span", { class: "rd-sep" }),
       el("div", { class: "rd-group rd-zoomgroup" }, this.zoomOutBtn, this.zoomInput, this.zoomMenuBtn, this.zoomInBtn),
       el("span", { class: "rd-sep" }),
-      this.undoNowBtn, this.saveNowBtn, this.scaleBtn, this.toolsBtn);
-
-    // Tools tray
-    const t = (name, label, title, attrs = {}) => el("button", { class: "rd-btn rd-tray-btn", type: "button", title, html: svg(name) + `<span>${label}</span>`, ...attrs });
-    this.openBtn = t("open", "Open", "Open a PDF (Ctrl+O)");
-    this.findBtn = t("search", "Find", "Find in document (Ctrl+F)", { "aria-pressed": "false" });
-    this.annotateBtn = t("pen", "Annotate & sign", "Annotate and sign", { "aria-pressed": "false" });
-    this.rotCcwBtn = b("ccw", "Rotate counter-clockwise (Shift+R)");
-    this.rotCwBtn = b("cw", "Rotate clockwise (R)");
-    this.printBtn = t("print", "Print", "Print (Ctrl+P)");
-    this.saveBtn = t("save", "Save", "Save (Ctrl+S); Save as: Ctrl+Shift+S");
-    this.moreBtn = b("more", "More", { "aria-haspopup": "menu", "aria-expanded": "false" });
-    this.appToolsBtn = this.onAllTools ? t("grid", "All tools", "Show every ZPDF tool") : null;
-    this.commandsBtn = this.onCommands ? t("command", "Commands", "Search every command and tool (Ctrl+K)") : null;
-    this.tray = el("div", { class: "rd-tray", role: "toolbar", "aria-label": "Tools", hidden: true },
-      this.openBtn, this.findBtn, this.annotateBtn,
-      el("span", { class: "rd-sep" }), this.rotCcwBtn, this.rotCwBtn,
-      el("span", { class: "rd-sep" }), this.printBtn, this.saveBtn, this.moreBtn,
-      el("span", { style: "flex:1" }), this.commandsBtn, this.appToolsBtn);
+      this.undoNowBtn, this.saveNowBtn, this.scaleBtn,
+      el("div", { class: "rd-group" }, this.findBtn, this.annotateBtn, this.moreBtn, this.panelBtn));
 
     // Find bar
     this.findInput = el("input", { type: "search", placeholder: "Find in document", "aria-label": "Find in document", autocomplete: "off", spellcheck: "false" });
@@ -374,11 +365,15 @@ export class Reader {
         el("h2", {}, "Read a PDF"),
         el("p", {}, "Drop a PDF here, or open one from your computer."),
         this.emptyOpenBtn,
-        el("p", { class: "keys" }, "Ctrl+K commands · T tools · E edit text · M measure · Ctrl+F find · N / P pages")),
+        el("p", { class: "keys" }, "Ctrl+K commands · T file panel · E edit text · M measure · Ctrl+F find · N / P pages")),
       this.recentBox = el("section", { class: "rd-recent", hidden: true, "aria-label": "Recent files" },
         el("h3", {}, "Recent"), this.recentList = el("ul", {})));
     this.main = el("div", { class: "rd-main" }, this.container, this.loading, this.empty, this.measPanel);
-    this.body = el("div", { class: "rd-body" }, this.sidebar, this.main);
+    // The file panel: beside the pages in a wide window, over them (with a
+    // scrim) in a narrow one. The app puts its content in.
+    this.side = el("aside", { class: "rd-side", id: "rd-side", role: "region", "aria-label": "This file", hidden: true });
+    this.sideScrim = el("div", { class: "rd-side-scrim", hidden: true });
+    this.body = el("div", { class: "rd-body" }, this.sidebar, this.main, this.sideScrim, this.side);
 
     this.menu = el("div", { class: "rd-menu", role: "menu", hidden: true });
     this.ctxMenu = el("div", { class: "rd-menu rd-ctxmenu", role: "menu", hidden: true, "aria-label": "Page" });
@@ -421,11 +416,11 @@ export class Reader {
       this.#drawOverlays();
     });
     overlayClose.addEventListener("click", () => this.closeCompare());
-    this.root.append(toolbar, this.tray, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.overlaybar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.fileInput);
+    this.root.append(toolbar, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.overlaybar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.fileInput);
     // A drawing in progress takes every click in the window as the next
     // stroke; end it first when the tabs, toolbar or menu are used. This
     // listens on the window before pdf.js does, so it runs first.
-    const outside = [this.tabbar, toolbar, this.tray, this.scalebar, this.menu, this.ctxMenu];
+    const outside = [this.tabbar, toolbar, this.side, this.scalebar, this.menu, this.ctxMenu];
     window.addEventListener("pointerdown", (e) => {
       if (!outside.some((area) => area.contains(e.target))) return;
       this.#finishEditing();
@@ -448,7 +443,14 @@ export class Reader {
   #renderMenu() {
     const has = !!this.doc;
     const spread = this.pdfViewer && this.pdfViewer.spreadMode !== viewer.SpreadMode.NONE;
+    // (Open and the commands work without a document too.)
+    const always = [this.#menuItem("open", "Open a PDF…", () => this.chooseFile()),
+      ...(this.onCommands ? [this.#menuItem("command", "Search commands and tools…", () => this.onCommands())] : [])];
     const items = [
+      ...always,
+      el("hr"),
+      this.#menuItem("cw", "Rotate the view clockwise", () => this.rotate(90)),
+      this.#menuItem("ccw", "Rotate the view counter-clockwise", () => this.rotate(-90)),
       this.#menuItem("spread", "Two-page view", () => this.toggleSpread(), spread),
       this.#menuItem("hand", "Hand tool (drag to scroll)", () => this.toggleHand(), this.container.classList.contains("hand")),
       this.#menuItem("moon", "Dark pages", () => this.toggleDarkPages(), this.container.classList.contains("dark")),
@@ -468,14 +470,14 @@ export class Reader {
       items.push(el("hr"), el("div", { class: "label" }, "Edit with"));
       for (const [id, label] of this.tools) items.push(this.#menuItem("tool", label, () => this.#edit(id)));
     }
-    for (const item of items) if (item.tagName === "BUTTON") item.disabled = !has;
+    for (const item of items) if (item.tagName === "BUTTON" && !always.includes(item)) item.disabled = !has;
     this.menu.replaceChildren(...items);
   }
 
   #toggleMenu() {
     if (!this.menu.hidden) return this.#closeMenu();
     this.#renderMenu();
-    // Open under the More button, wherever the tray put it.
+    // Open under the More button.
     const at = this.moreBtn.getBoundingClientRect(), box = this.root.getBoundingClientRect();
     this.menu.style.top = `${at.bottom - box.top + 6}px`;
     this.menu.hidden = false;
@@ -542,7 +544,6 @@ export class Reader {
 
   // ---- events -----------------------------------------------------------------
   #wire() {
-    this.openBtn.addEventListener("click", () => this.chooseFile());
     this.emptyOpenBtn.addEventListener("click", () => this.chooseFile());
     this.fileInput.addEventListener("change", () => { const f = this.fileInput.files[0]; this.fileInput.value = ""; if (f) this.openFile(f); });
     this.sidebarBtn.addEventListener("click", () => this.toggleSidebar());
@@ -568,18 +569,19 @@ export class Reader {
     this.zoomMenuBtn.addEventListener("click", () => this.#toggleZoomMenu());
     document.addEventListener("pointerdown", (e) => { if (!this.zoomMenu.hidden && !this.zoomMenu.contains(e.target) && !this.zoomMenuBtn.contains(e.target)) this.#closeZoomMenu(); });
     this.scaleBtn.addEventListener("click", () => this.toggleScaleBar());
-    this.rotCwBtn.addEventListener("click", () => this.rotate(90));
-    this.rotCcwBtn.addEventListener("click", () => this.rotate(-90));
     this.findBtn.addEventListener("click", () => (this.findbar.hidden ? this.openFind() : this.closeFind()));
     this.moreBtn.addEventListener("click", () => this.#toggleMenu());
-    this.toolsBtn.addEventListener("click", () => this.toggleTray());
+    this.panelBtn.addEventListener("click", () => this.togglePanel());
+    this.sideScrim.addEventListener("click", () => this.setPanel(false, { focus: true }));
+    // A narrow window shows the panel over the pages; it closes on Escape.
+    this.side.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !this.#panelDocked() && !document.querySelector("dialog[open]")) { e.preventDefault(); e.stopPropagation(); this.setPanel(false, { focus: true }); }
+    });
+    this.wideQuery = matchMedia("(min-width: 1100px)");
+    this.wideQuery.addEventListener("change", () => this.#applyPanel());
     this.saveNowBtn.addEventListener("click", () => this.save());
     this.undoNowBtn.addEventListener("click", () => this.#undoLast());
     this.homeBtn?.addEventListener("click", () => this.onHome());
-    this.printBtn.addEventListener("click", () => this.print());
-    this.saveBtn.addEventListener("click", () => this.save());
-    if (this.appToolsBtn) this.appToolsBtn.addEventListener("click", () => this.onAllTools());
-    if (this.commandsBtn) this.commandsBtn.addEventListener("click", () => this.onCommands());
     document.addEventListener("pointerdown", (e) => { if (!this.menu.hidden && !this.menu.contains(e.target) && e.target !== this.moreBtn && !this.moreBtn.contains(e.target)) this.#closeMenu(); });
     this.thumbsTab.addEventListener("click", () => this.#showTab("thumbs"));
     this.outlineTab.addEventListener("click", () => this.#showTab("outline"));
@@ -687,6 +689,7 @@ export class Reader {
     if (e.key === "Escape" && !this.menu.hidden) { this.#closeMenu(); this.moreBtn.focus(); return; }
     if (e.key === "Escape" && !this.zoomMenu.hidden) { this.#closeZoomMenu(); this.zoomMenuBtn.focus(); return; }
     if (!this.doc) return;
+    if (e.key === "Escape" && this.panelOpen && !this.#panelDocked()) { e.preventDefault(); this.setPanel(false, { focus: true }); return; }
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
     if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); this.print(); return; }
     if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); if (e.shiftKey) this.saveCopy(); else this.save(); return; }
@@ -708,14 +711,13 @@ export class Reader {
     }
     if (e.key === "Escape" && this.markupMode === "IMAGES" && this.pickedImage) { this.#pickImage(null); return; }
     if (e.key === "Escape" && this.editMode && this.editMode !== "NONE") { this.#setEditMode("NONE"); return; }
-    if (e.key === "Escape" && !this.tray.hidden) { this.toggleTray(false); return; }
     const v = this.pdfViewer;
     switch (e.key) {
       case "n": case "j": v.nextPage(); break;
       case "p": case "k": v.previousPage(); break;
       case "r": this.rotate(90); break;
       case "R": this.rotate(-90); break;
-      case "t": this.toggleTray(); break;
+      case "t": this.togglePanel(); break;
       case "e": this.useTool(this.textEditMode ? "NONE" : "EDITTEXT"); break;
       case "m": this.measureTool(this.measureMode === "distance" ? null : "distance"); break;
       case "Home": v.currentPageNumber = 1; break;
@@ -840,6 +842,42 @@ export class Reader {
     return this.#serial(() => this.#openBytesNow(bytes, name, password, goto, file));
   }
 
+  /** A tool's result: a new tab right after ``beside`` (the tab it was made
+   *  from, which stays open as it was), shown. Resolves with the new tab, or
+   *  null if it couldn't be opened. */
+  openResult(bytes, name, password, beside) {
+    return this.#serial(async () => {
+      await this.#openBytesNow(bytes, name, password, null, null);
+      const tab = this.activeTab;
+      if (!tab || tab.name !== name) return null;
+      const at = this.tabs.indexOf(beside);
+      if (at >= 0 && this.tabs.indexOf(tab) !== at + 1) {
+        this.tabs.splice(this.tabs.indexOf(tab), 1);
+        this.tabs.splice(at + 1, 0, tab);
+        this.#renderTabs();
+      }
+      const wrap = this.tabEls?.get(tab.id)?.wrap;  // it slides in, once
+      wrap?.classList.add("rd-new");
+      wrap?.addEventListener("animationend", () => wrap.classList.remove("rd-new"), { once: true });
+      return tab;
+    });
+  }
+
+  /** What the shown tab holds now, its unsaved changes included (for a tool
+   *  run on it); the tab itself stays as it is, unsaved changes and all. */
+  async currentBytes() {
+    await this.chain;
+    if (!this.doc) return null;
+    return await this.#currentBytes();
+  }
+
+  /** Whether the file on this computer holds what ``tab`` shows (opened from
+   *  there, nothing changed since it was last saved). */
+  isPristine(tab = this.activeTab) { return !!(tab && tab.fileId && !tab.dirty); }
+
+  /** Switch to an open tab (e.g. back to the one a result was made from). */
+  showTab(tab) { return this.#switchTo(tab); }
+
   /** ``file``: where a document opened from this computer lives (fileId,
    *  path, stamp, size; url when it's read in pieces, bytes then null). */
   async #openBytesNow(bytes, name, password, goto, file = null) {
@@ -944,6 +982,7 @@ export class Reader {
     const current = [...this.tabbar.children].filter((n) => n !== this.addTabBtn);
     if (current.length !== order.length || current.some((n, i) => n !== order[i])) this.tabbar.replaceChildren(...order, this.addTabBtn);
     else if (!this.addTabBtn.isConnected) this.tabbar.append(this.addTabBtn);
+    this.onChange?.();
   }
 
   #showEmpty() {
@@ -954,12 +993,13 @@ export class Reader {
     this.pageInput.value = "";
     this.pageCount.textContent = "";
     for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
-      this.zoomInput, this.zoomMenuBtn, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.annotateBtn, this.scaleBtn]) c.disabled = true;
+      this.zoomInput, this.zoomMenuBtn, this.findBtn, this.annotateBtn, this.scaleBtn]) c.disabled = true;
     this.zoomInput.value = "";
     this.sidebar.hidden = true;
     this.root.classList.remove("reading");
     if (this.active) document.title = "PDF reader — ZPDF";
     this.refreshRecent();
+    this.onChange?.();
   }
 
   /** Show ``tab``'s document in the viewer. Returns false if it couldn't be
@@ -1011,10 +1051,10 @@ export class Reader {
       document.title = tab.name + " — ZPDF";
       this.empty.hidden = true;
       for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
-        this.zoomInput, this.zoomMenuBtn, this.rotCcwBtn, this.rotCwBtn, this.findBtn, this.annotateBtn, this.scaleBtn]) c.disabled = false;
+        this.zoomInput, this.zoomMenuBtn, this.findBtn, this.annotateBtn, this.scaleBtn]) c.disabled = false;
       this.pageCount.textContent = `of ${doc.numPages}`;
       this.root.classList.add("reading");
-      this.toggleTray(store.get("pdfm-reader-tray", false), false);
+      this.#applyPanel();
       this.#setSidebar(store.get("pdfm-reader-sidebar", false));
       this.#buildThumbs();
       this.#buildOutline();
@@ -1202,14 +1242,30 @@ export class Reader {
     else this.toast("Full screen isn't available here.");
   }
 
-  /** Pull the tools tray out (or put it away); ``open`` defaults to the other way. */
-  toggleTray(open = this.tray.hidden, remember = true) {
-    if (!open) this.#closeMenu();
-    this.tray.hidden = !open;
-    this.toolsBtn.setAttribute("aria-expanded", String(open));
-    this.toolsBtn.title = open ? "Hide the tools (T)" : "Show the tools (T)";
-    if (remember) store.set("pdfm-reader-tray", open);
+  // ---- the file panel (its content comes from the app) ----------------------------
+  /** In a window 1100 px wide or more the panel sits beside the pages and
+   *  stays open or closed as it was left ("pdfm-file-panel"); narrower, it
+   *  comes over the pages when asked for and goes again. */
+  #panelDocked() { return !this.wideQuery || this.wideQuery.matches; }
+  get panelOpen() { return this.#panelDocked() ? store.get("pdfm-file-panel", true) !== false : !!this.overlayOpen; }
+  #applyPanel() {
+    const docked = this.#panelDocked(), open = this.panelOpen;
+    this.side.hidden = !open;
+    this.side.classList.toggle("overlay", !docked);
+    this.sideScrim.hidden = !(open && !docked);
+    this.panelBtn.setAttribute("aria-expanded", String(open));
   }
+  /** Open or close the panel; ``focus``: move the focus into it (opening) or
+   *  back to the page (closing). */
+  setPanel(open, { focus = false } = {}) {
+    const had = this.side.contains(document.activeElement);
+    if (this.#panelDocked()) store.set("pdfm-file-panel", !!open);
+    else this.overlayOpen = !!open;
+    this.#applyPanel();
+    if (open && focus) (this.side.querySelector("button, [href], input, select, [tabindex]:not([tabindex='-1'])") || this.side).focus?.();
+    if (!open && (focus || had)) (this.doc ? this.panelBtn : this.container).focus({ preventScroll: true });
+  }
+  togglePanel() { this.setPanel(!this.panelOpen, { focus: !this.#panelDocked() }); }
 
   // ---- sidebar: thumbnails and bookmarks ----------------------------------------
   toggleSidebar() { this.#setSidebar(this.sidebar.hidden); store.set("pdfm-reader-sidebar", !this.sidebar.hidden); }

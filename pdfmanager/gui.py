@@ -42,7 +42,7 @@ from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
                         forms, recipes, redact, scan, search, textedit, update, viewports, markup, pageimages,
-                        formdetect, pdfacheck, filetools, comments)
+                        formdetect, pdfacheck, filetools, comments, filefacts)
 from pdfmanager import certsign
 from pdfmanager import accessibility  # -- accessibility --
 from pdfmanager import applog
@@ -228,8 +228,8 @@ OPERATIONS = [
              "Greek, Tamil or Telugu, enter its code (rus, ukr, kor, ara, fas, hin, tha, ell, tam, "
              "tel): its reading model is fetched once. Tesseract needs the codes of all languages.",
      "fields": [_f("engine", "Engine", "select", "auto",
-                   choices=[["auto", "Automatic (built-in when installed, else Tesseract)"],
-                            ["builtin", "Built-in"], ["tesseract", "Tesseract"]]),
+                   choices=[["auto", "Automatic"], ["builtin", "Built-in"], ["tesseract", "Tesseract"]],
+                   hint="Automatic: the built-in engine when it's installed, else Tesseract."),
                 _f("language", "Language(s)", "text", "eng", placeholder="eng+rus"),
                 _f("rotate", "Turn sideways and upside-down pages upright", "check", True),
                 _f("deskew", "Straighten crooked scans", "check", False),
@@ -1131,7 +1131,7 @@ def _tidy(message, work):
     if not work:
         return message
     for folder in {str(Path(work)), str(Path(work).resolve())}:
-        message = re.sub(re.escape(folder) + r"[\\/](?:in[\\/]\d+|out)[\\/]", "", message)
+        message = re.sub(re.escape(folder) + r"[\\/](?:in[\\/]o?\d+|out)[\\/]", "", message)
         message = message.replace(folder, "")
     return message
 
@@ -1507,6 +1507,7 @@ STATIC_TYPES = {
     ".mjs": "text/javascript", ".js": "text/javascript", ".css": "text/css",
     ".svg": "image/svg+xml", ".gif": "image/gif", ".png": "image/png",
     ".wasm": "application/wasm", ".json": "application/json",
+    ".woff2": "font/woff2",  # the interface's fonts (static/fonts)
 }
 
 
@@ -1723,6 +1724,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._open_file(path[len("/api/file/"):])
         if path.startswith("/api/job/"):
             return self._job(path, "GET")
+        if path.startswith("/api/facts/"):
+            target = self.opened.get(path[len("/api/facts/"):]) if self.opened is not None else None
+            if target is None or not target.is_file():
+                return self._error(HTTPStatus.NOT_FOUND, "that file is no longer available")
+            found = filefacts.remembered(target)
+            return self._send(HTTPStatus.OK, {**found, "suggestions": filefacts.suggestions(found)})
         if path == "/api/recent":
             return self._recent()
         if path == "/api/events":
@@ -1861,7 +1868,8 @@ class Handler(BaseHTTPRequestHandler):
             path = Path(item["path"])
             if path.is_file() and self.opened is not None:
                 files.append({"id": self.opened.add(path), "name": path.name, "path": str(path),
-                              "folder": str(path.parent), "opened": item.get("opened")})
+                              "folder": str(path.parent), "opened": item.get("opened"),
+                              "facts": filefacts.remembered(path)})
         return self._send(HTTPStatus.OK, {"files": files})
 
     def do_POST(self):
@@ -1892,6 +1900,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._run(body)
             if path == "/api/inspect":
                 return self._inspect(body)
+            if path == "/api/facts":
+                return self._facts(body)
             if path == "/api/preview":
                 fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
                 if not uploads:
@@ -1998,11 +2008,24 @@ class Handler(BaseHTTPRequestHandler):
         op = fields.pop("op", "")
         password = fields.pop("password", "") or None
         keep = self.headers.get("X-Pdfm-Keep") == "1"
+        # "ids": files that are already open (see OpenFiles), to work on
+        # without the page sending them back. They come before any uploads.
+        opened = []
+        for key in [k for k in fields.pop("ids", "").split(",") if k.strip()] if "ids" in fields else []:
+            path = self.opened.get(key.strip()) if self.opened is not None else None
+            if path is None or not path.is_file():
+                return self._error(HTTPStatus.BAD_REQUEST, "that file is no longer available; open it again")
+            opened.append(path)
 
         def work_on():
             work = self.work.make()
             try:
                 files, extra = [], {}
+                for index, source in enumerate(opened):
+                    # A copy: tools never touch the file the reader has open.
+                    folder = work / "in" / f"o{index:03d}"
+                    folder.mkdir(parents=True)
+                    files.append(Path(shutil.copy2(source, folder / _safe_name(source.name))))
                 for index, (name, filename, data) in enumerate(uploads):
                     # One folder per upload keeps original names without clashes.
                     folder = work / "in" / f"{index:03d}"
@@ -2233,6 +2256,12 @@ class Handler(BaseHTTPRequestHandler):
                     pages = range(int(first), int(last or first) + 1)
                 except ValueError:
                     raise UserError("pages should look like 1-2") from None
+            if pages is not None:
+                # The quick look, unasked: a scan nobody can type in yet isn't
+                # offered as a form (a contents page's dot leaders look like one).
+                seen = filefacts.facts(path, fields.get("password") or None)
+                if seen.get("scanned") and not seen.get("has_text"):
+                    return self._send(HTTPStatus.OK, {"fields": {}})
             found = formdetect.detect(path, fields.get("password") or None, pages=pages)
         return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})
 
@@ -2511,6 +2540,17 @@ class Handler(BaseHTTPRequestHandler):
                 trust[0].write_bytes(named["trust"])
             found = certsign.verify(path, fields.get("password") or None, trust)
         return self._send(HTTPStatus.OK, {"signatures": found})
+
+    def _facts(self, body):
+        """What a file the page holds is (see filefacts), and what to offer for it."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            found = filefacts.facts(path, fields.get("password") or None)
+        return self._send(HTTPStatus.OK, {**found, "suggestions": filefacts.suggestions(found)})
 
     def _inspect(self, body):
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
@@ -3118,8 +3158,48 @@ def _close_browser(proc, profile, exe=None):
             pass
 
 
+def _win32_bring_forward(title):
+    """Bring this program's window called ``title`` to the front through
+    Windows itself: nothing is asked of the window's own thread. True when
+    a window was found."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    mine = os.getpid()
+    found = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def each(hwnd, _):
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == mine and user32.IsWindowVisible(hwnd):
+            text = ctypes.create_unicode_buffer(512)
+            user32.GetWindowTextW(hwnd, text, 512)
+            if text.value == title:
+                found.append(hwnd)
+        return True
+
+    user32.EnumWindows(each, 0)
+    for hwnd in found:
+        if user32.IsIconic(hwnd):
+            user32.ShowWindowAsync(hwnd, 9)  # SW_RESTORE, without waiting for the window
+        user32.SetForegroundWindow(hwnd)
+    return bool(found)
+
+
 def _raise_window(window):
-    """Bring the pywebview window to the front (a file was handed to it)."""
+    """Bring the pywebview window to the front (a file was handed to it).
+    This runs on the server's thread. On Windows the window is raised
+    through the system: pywebview's own calls wait for the window's thread,
+    and the window froze when that thread was busy opening the file."""
+    if sys.platform == "win32":
+        try:
+            if _win32_bring_forward(window.title):
+                return
+        except Exception:  # noqa: BLE001 - raising the window is a courtesy
+            return
+        return
     try:
         window.restore()
         window.show()

@@ -132,15 +132,15 @@ def window_handles(title_part="ZPDF"):
 
 def exercise(page, pdf):
     """Use the app: run a tool, then read the PDF in the reader."""
-    page.wait_for_selector('.tools button[data-op="rotate"]', timeout=30000)
+    page.wait_for_selector('.tools button[data-op="rotate"]', state="attached", timeout=30000)
     log("app page:", page.title())
-    page.click('.tools button[data-op="rotate"]')
+    page.dispatch_event('.tools button[data-op="rotate"]', 'click')
     page.set_input_files("#file-input", str(pdf))
     page.wait_for_selector(".file-card", timeout=30000)
     page.click("#run")
     page.wait_for_selector(".result-actions", timeout=60000)
     log("tool result:", " ".join(page.inner_text("#result").split())[:120])
-    page.click('.tools button[data-op="reader"]')
+    page.dispatch_event('.tools button[data-op="reader"]', 'click')
     page.set_input_files("#reader-host input[type=file]", str(pdf))
     page.wait_for_selector(".page canvas", timeout=60000)
     page.wait_for_function("() => document.querySelector('.rd-title')?.textContent.includes('.pdf')")
@@ -282,7 +282,7 @@ def run(mode):
             browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{PORT}")
             # The new copy's page has a new token.
             page = wait_for(lambda: app_page(browser, not_token=token), 30, "the restarted app page")
-            page.wait_for_selector('.tools button[data-op="rotate"]', timeout=30000)
+            page.wait_for_selector('.tools button[data-op="rotate"]', state="attached", timeout=30000)
             # Close the window like a person would (the app window's only page).
             page.close()
         else:

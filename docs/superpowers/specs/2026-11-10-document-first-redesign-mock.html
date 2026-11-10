@@ -1,0 +1,290 @@
+<title>ZPDF Layered Mock</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Instrument+Serif&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: three layers. A softly tinted backdrop, the document lying on it, and panels floating above; frosted glass only on what appears briefly (palette, toast). Seal red is spent on the Z and the one action that matters. */
+:root {
+  --desk: #e9ebee; --chrome: #f7f8f9; --card: #ffffff; --ink: #14171c; --soft: #5b6470; --faint: #8b93a0; --line: #d9dde3;
+  --seal: #d4382c; --seal-ink: #ffffff; --teal: #0d6b6b; --teal-soft: #dff0ef; --paper: #fffdf8; --paper-ink: #2a2a2a; --ok: #1b7f4f;
+  --shadow: 0 1px 2px rgba(20,23,28,.06), 0 8px 24px rgba(20,23,28,.08); --tint-a: #dfe6f5; --tint-b: #f3e4de; --glass: rgba(255,255,255,.72); --float: 0 2px 6px rgba(20,23,28,.06), 0 18px 44px rgba(20,23,28,.14);
+  --ui: "Instrument Sans", "Segoe UI", system-ui, sans-serif; --display: "Instrument Serif", Georgia, serif; --mono: "JetBrains Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --desk: #0f1114; --chrome: #171a1e; --card: #1d2126; --ink: #eef0f3; --soft: #a4acb8; --faint: #6f7783; --line: #2c3138;
+  --seal: #ef5a4c; --seal-ink: #14171c; --teal: #5cc9c4; --teal-soft: #17302f; --paper: #f4f1e8; --paper-ink: #2a2a2a; --ok: #5fd09a;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.45); --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgba(29,33,38,.72); --float: 0 2px 6px rgba(0,0,0,.5), 0 20px 48px rgba(0,0,0,.55); color-scheme: dark } }
+:root[data-theme="dark"] {
+  --desk: #0f1114; --chrome: #171a1e; --card: #1d2126; --ink: #eef0f3; --soft: #a4acb8; --faint: #6f7783; --line: #2c3138;
+  --seal: #ef5a4c; --seal-ink: #14171c; --teal: #5cc9c4; --teal-soft: #17302f; --paper: #f4f1e8; --paper-ink: #2a2a2a; --ok: #5fd09a;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.45); --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgba(29,33,38,.72); --float: 0 2px 6px rgba(0,0,0,.5), 0 20px 48px rgba(0,0,0,.55); color-scheme: dark }
+* { box-sizing: border-box; }
+body { background: var(--desk) radial-gradient(900px 600px at 12% 0%, var(--tint-a), transparent 70%), var(--desk); background-image: radial-gradient(900px 600px at 10% -5%, var(--tint-a), transparent 70%), radial-gradient(800px 560px at 95% 105%, var(--tint-b), transparent 70%); background-color: var(--desk); background-attachment: fixed; color: var(--ink); font: 14px/1.5 var(--ui);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 20px 40px; }
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.note { max-width: 1180px; margin: 0 auto 14px; display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; justify-content: space-between; color: var(--soft); }
+.note b { color: var(--ink); font-weight: 600; }
+.switch { display: flex; background: var(--chrome); border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
+.switch button { border: 0; background: none; padding: 6px 14px; border-radius: 999px; color: var(--soft); }
+.switch button[aria-pressed="true"] { background: var(--ink); color: var(--chrome); }
+/* the app window */
+.app { position: relative; max-width: 1180px; margin: 0 auto; background: color-mix(in srgb, var(--chrome) 78%, transparent); border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--float); overflow: hidden; display: grid; grid-template-columns: 60px minmax(0, 1fr); }
+.rail { border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 0; }
+.z { width: 36px; height: 36px; border-radius: 11px; box-shadow: 0 6px 16px color-mix(in srgb, var(--seal) 40%, transparent); background: var(--seal); color: var(--seal-ink); display: grid; place-items: center; font: 400 24px/1 var(--display); margin-bottom: 10px; }
+.rail button { width: 44px; border: 0; background: none; border-radius: 10px; padding: 7px 0 5px; display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10px; color: var(--soft); }
+.rail button { transition: background .15s, color .15s; }
+.rail button[aria-current="true"] { background: var(--card); color: var(--ink); box-shadow: var(--shadow); }
+.rail svg, .ico { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.main { display: flex; flex-direction: column; min-width: 0; }
+.top { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); min-width: 0; }
+.tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; }
+.tab { border: 1px solid transparent; background: none; border-radius: 9px; padding: 6px 10px; color: var(--soft); white-space: nowrap; display: flex; gap: 8px; align-items: center; }
+.tab[aria-selected="true"] { background: var(--card); border-color: transparent; color: var(--ink); box-shadow: var(--shadow); }
+.tab.new { animation: slide .45s cubic-bezier(.2,.8,.2,1); }
+@keyframes slide { from { opacity: 0; transform: translateX(-14px); } }
+.tab i { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); }
+.find { cursor: pointer; margin-left: auto; flex: none; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--card); border-radius: 9px; padding: 6px 10px; color: var(--faint); }
+.find kbd { font: 500 11px var(--mono); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
+.work { display: grid; grid-template-columns: minmax(0, 1fr) 340px; min-height: 620px; }
+.desk { position: relative; background: none; padding: 26px 22px; display: flex; gap: 16px; justify-content: center; min-width: 0; }
+.thumbs { display: flex; flex-direction: column; gap: 10px; flex: none; }
+.thumb { width: 46px; height: 62px; background: var(--paper); border-radius: 3px; box-shadow: var(--shadow); opacity: .55; }
+.thumb.on { opacity: 1; outline: 2px solid var(--teal); outline-offset: 2px; }
+.sheet { background: var(--paper); color: var(--paper-ink); width: min(100%, 440px); aspect-ratio: 210 / 297; box-shadow: var(--float); border-radius: 3px; padding: 9% 9% 0; font: 11px/1.7 var(--mono); transform: rotate(-.35deg); overflow: hidden; }
+.sheet h4 { font: 400 26px/1.1 var(--display); margin: 0 0 14px; }
+.sheet table { width: 100%; border-collapse: collapse; margin: 12px 0; font: inherit; }
+.sheet td { padding: 2px 0; border-bottom: 1px solid rgba(0,0,0,.12); }
+.sheet td + td { text-align: right; font-variant-numeric: tabular-nums; }
+.stamp { display: inline-block; margin-top: 16px; border: 2px solid #c2362b; color: #c2362b; padding: 2px 12px; border-radius: 4px; font: 600 14px var(--ui); letter-spacing: .12em; transform: rotate(-6deg); }
+.side { margin: 12px 12px 12px 0; background: var(--card); border-radius: 18px; box-shadow: var(--float); padding: 20px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.fname { font: 400 27px/1.1 var(--display); margin: 0; overflow-wrap: anywhere; }
+.facts { display: flex; flex-wrap: wrap; gap: 6px; }
+.fact { font: 500 11.5px var(--mono); color: var(--soft); border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; }
+.fact.flag { color: var(--teal); border-color: transparent; background: var(--teal-soft); }
+.lbl { font: 600 11px var(--ui); letter-spacing: .09em; text-transform: uppercase; color: var(--faint); }
+.sug { background: color-mix(in srgb, var(--desk) 45%, var(--card)); border: 1px solid transparent; border-radius: 14px; overflow: hidden; transition: border-color .2s, background .2s; }
+.sug[data-open="true"] { border-color: var(--line); background: var(--card); }
+.sug .opts { animation: open .28s cubic-bezier(.2,.8,.2,1); }
+@keyframes open { from { opacity: 0; transform: translateY(-6px); } }
+.sug > button { width: 100%; border: 0; background: none; text-align: left; padding: 12px 14px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+.sug strong { display: block; font-weight: 600; }
+.sug span { color: var(--soft); font-size: 13px; }
+.sug .go { color: var(--faint); transition: transform .15s; }
+.sug[data-open="true"] .go { transform: rotate(90deg); }
+.opts { border-top: 1px solid var(--line); padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
+.seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { flex: 1; border: 0; background: none; padding: 6px 0; color: var(--soft); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--chrome); }
+.check { display: flex; gap: 8px; align-items: center; color: var(--soft); }
+.run { border: 0; background: var(--seal); color: var(--seal-ink); font-weight: 600; border-radius: 11px; box-shadow: 0 6px 16px color-mix(in srgb, var(--seal) 32%, transparent); transition: transform .12s; padding: 9px 14px; display: flex; gap: 8px; align-items: center; justify-content: center; }
+.bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.run:active { transform: scale(.98); }
+.bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--teal), color-mix(in srgb, var(--teal) 40%, var(--card)), var(--teal)); background-size: 200% 100%; animation: shimmer 1s linear infinite; transition: width 1.1s ease; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+.done { display: flex; gap: 10px; align-items: flex-start; color: var(--soft); }
+.done b { color: var(--ink); }
+.done svg { color: var(--ok); margin-top: 2px; }
+.more { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.more button { border: 1px solid var(--line); background: none; border-radius: 11px; transition: background .15s, transform .12s; padding: 8px 10px; text-align: left; display: flex; gap: 8px; align-items: center; color: var(--ink); }
+.more button:hover, .tab:hover, .rail button:hover { background: var(--card); }
+.all { border: 0; background: none; color: var(--teal); text-align: left; padding: 0; font-weight: 500; }
+/* brief surfaces: frosted */
+.toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); background: var(--glass); -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4); border: 1px solid var(--line); border-radius: 999px; padding: 9px 10px 9px 16px; display: flex; gap: 12px; align-items: center; box-shadow: var(--float); white-space: nowrap; animation: rise .4s cubic-bezier(.2,.8,.2,1); }
+.toast button { border: 0; background: var(--ink); color: var(--chrome); border-radius: 999px; padding: 4px 12px; }
+@keyframes rise { from { opacity: 0; transform: translate(-50%, 12px); } }
+.scrim { position: absolute; inset: 0; background: color-mix(in srgb, var(--desk) 35%, transparent); display: grid; place-items: start center; padding: 70px 16px 0; z-index: 5; animation: fade .18s; }
+@keyframes fade { from { opacity: 0; } }
+.palette { width: min(100%, 520px); background: var(--glass); -webkit-backdrop-filter: blur(22px) saturate(1.5); backdrop-filter: blur(22px) saturate(1.5); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--float); overflow: hidden; animation: open .22s cubic-bezier(.2,.8,.2,1); }
+.palette input { width: 100%; border: 0; background: none; padding: 16px 18px; font: 500 16px var(--ui); color: var(--ink); outline: none; border-bottom: 1px solid var(--line); }
+.palette ul { list-style: none; margin: 0; padding: 6px; max-height: 300px; overflow: auto; }
+.palette li { display: flex; justify-content: space-between; gap: 12px; padding: 9px 12px; border-radius: 10px; }
+.palette li[aria-selected="true"] { background: color-mix(in srgb, var(--teal) 16%, transparent); }
+.palette li small { color: var(--faint); }
+/* home */
+.home { padding: 34px clamp(16px, 5vw, 56px) 40px; display: flex; flex-direction: column; gap: 28px; min-height: 620px; }
+.home h2 { font: 400 clamp(30px, 5vw, 44px)/1.05 var(--display); margin: 0; text-wrap: balance; }
+.drop { border: 1.5px dashed var(--faint); border-radius: 22px; box-shadow: var(--shadow); padding: 30px 20px; display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; color: var(--soft); background: var(--card); }
+.cols { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 28px; }
+.recent { display: flex; flex-direction: column; }
+.recent button { border: 0; border-top: 1px solid var(--line); background: none; padding: 11px 4px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; text-align: left; align-items: baseline; }
+.recent button:hover { background: var(--card); }
+.recent em { font: 400 12px var(--mono); color: var(--faint); font-style: normal; white-space: nowrap; }
+.recent small { display: block; color: var(--soft); font-size: 12.5px; }
+.multi { display: flex; flex-direction: column; gap: 8px; }
+.multi button { border: 0; box-shadow: var(--shadow); background: var(--card); border-radius: 14px; padding: 11px 13px; text-align: left; display: flex; gap: 11px; align-items: center; }
+.multi span { color: var(--soft); font-size: 12.5px; display: block; }
+@media (max-width: 860px) { .work { grid-template-columns: 1fr; } .side { margin: 0 12px 12px; } .cols { grid-template-columns: 1fr; } .thumbs { display: none; } .find span { display: none; } }
+@media (max-width: 520px) { .app { grid-template-columns: 1fr; } .rail { flex-direction: row; justify-content: center; border-right: 0; border-bottom: 1px solid var(--line); padding: 8px; } .z { margin: 0 8px 0 0; } .desk { padding: 14px; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="note">
+  <span><b>Direction A, layered.</b> Press Run, then try the search box or Ctrl+K. Everything here is a mock with example files.</span>
+  <div class="switch" role="group" aria-label="Which screen">
+    <button id="show-file" aria-pressed="true">A file is open</button>
+    <button id="show-home" aria-pressed="false">Start screen</button>
+  </div>
+</div>
+
+<div class="app">
+  <nav class="rail" aria-label="Sections">
+    <div class="z" aria-hidden="true">Z</div>
+    <button aria-current="true"><svg viewBox="0 0 24 24"><path d="M4 5h7v14H4zM13 5h7v14h-7z"/></svg>Read</button>
+    <button><svg viewBox="0 0 24 24"><rect x="5" y="3" width="11" height="15" rx="1.5"/><path d="M9 21h9a1 1 0 0 0 1-1V8"/></svg>Pages</button>
+    <button><svg viewBox="0 0 24 24"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg>Convert</button>
+    <button><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Protect</button>
+    <button><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg>All</button>
+  </nav>
+
+  <div class="main">
+    <div class="top">
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" aria-selected="true"><i></i>invoice-scan.pdf</button>
+        <button class="tab" role="tab" aria-selected="false">Lease 2024.pdf</button>
+        <button class="tab" role="tab" aria-selected="false" id="newtab" hidden><i></i>invoice-scan compressed.pdf</button>
+      </div>
+      <div class="find" id="find" role="button" tabindex="0" aria-label="Search tools"><svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-4-4"/></svg><span>Search 60 tools</span><kbd>Ctrl K</kbd></div>
+    </div>
+
+    <div class="work" id="file">
+      <div class="desk">
+        <div class="thumbs" aria-hidden="true"><div class="thumb on"></div><div class="thumb"></div><div class="thumb"></div><div class="thumb"></div></div>
+        <div class="sheet" aria-label="Page 1 of the scanned invoice">
+          <h4>Invoice 2024-0117</h4>
+          Northwind Traders Ltd<br>12 Harbour Street, Portsmouth PO1 3AX<br>14 March 2024
+          <table>
+            <tr><td>Copper tubing × 14</td><td>52.50</td></tr>
+            <tr><td>Brass fittings × 6</td><td>74.40</td></tr>
+            <tr><td>Solder (500 g) × 2</td><td>19.90</td></tr>
+            <tr><td>VAT 20%</td><td>29.36</td></tr>
+            <tr><td><b>Total due</b></td><td><b>176.16</b></td></tr>
+          </table>
+          Payment within 30 days.<br><span class="stamp">PAID</span>
+        </div>
+        <div class="toast" id="toast" hidden><span>Saved <b>invoice-scan compressed.pdf</b></span><button id="toast-open">Show</button></div>
+      </div>
+
+      <aside class="side">
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <h1 class="fname">invoice-scan.pdf</h1>
+          <div class="facts"><span class="fact">12 pages</span><span class="fact">4.1 MB</span><span class="fact flag">scanned, no text yet</span><span class="fact">not protected</span></div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <span class="lbl">Suggested for this file</span>
+          <div class="sug" data-open="false" id="s-ocr">
+            <button aria-expanded="false"><svg class="ico" viewBox="0 0 24 24"><path d="M4 8V5h3M20 8V5h-3M4 16v3h3M20 16v3h-3M8 10h8M8 14h5"/></svg><div><strong>Make it searchable</strong><span>Read the text so you can search and copy it</span></div><svg class="ico go" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></button>
+          </div>
+          <div class="sug" data-open="true" id="s-zip">
+            <button aria-expanded="true"><svg class="ico" viewBox="0 0 24 24"><path d="M8 4v16M16 4v16M4 9l4 3-4 3M20 9l-4 3 4 3"/></svg><div><strong>Make it smaller</strong><span id="est">About 4.1 MB → 0.4 MB, text kept sharp</span></div><svg class="ico go" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></button>
+            <div class="opts" id="zip-opts">
+              <div class="seg" role="group" aria-label="How small">
+                <button data-v="1.6" aria-pressed="false">Lossless</button><button data-v="0.9" aria-pressed="false">Smaller</button><button data-v="0.4" aria-pressed="true">Smallest</button>
+              </div>
+              <label class="check"><input type="checkbox" id="sharp" checked> Keep scanned text sharp</label>
+              <button class="run" id="run"><svg class="ico" viewBox="0 0 24 24"><path d="m7 5 11 7-11 7z"/></svg>Run</button>
+              <div class="bar" id="bar" hidden><i></i></div>
+              <div class="done" id="done" hidden><svg class="ico" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg><div><b id="done-size">0.4 MB</b>, 90% smaller. Opened beside the original as <b>invoice-scan compressed.pdf</b>.</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <span class="lbl">Or do something else</span>
+          <div class="more">
+            <button><svg class="ico" viewBox="0 0 24 24"><path d="M12 4v16M5 9l7-5 7 5"/></svg>Split</button>
+            <button><svg class="ico" viewBox="0 0 24 24"><path d="M4 17c4-8 6 6 9-2s4 3 7-1"/></svg>Sign</button>
+            <button><svg class="ico" viewBox="0 0 24 24"><path d="M6 4h9l4 4v12H6z"/><path d="M9 13h6M9 16h6"/></svg>To Word</button>
+            <button><svg class="ico" viewBox="0 0 24 24"><path d="M5 7h14v12H5zM9 7V4h6v3"/></svg>Archive (PDF/A)</button>
+            <button><svg class="ico" viewBox="0 0 24 24"><path d="M5 5h14v14H5zM5 10h14M10 5v14"/></svg>To Excel</button>
+            <button><svg class="ico" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Add a password</button>
+          </div>
+          <button class="all">All 60 tools →</button>
+        </div>
+      </aside>
+    </div>
+
+    <div class="scrim" id="scrim" hidden>
+      <div class="palette" role="dialog" aria-label="Search tools">
+        <input id="q" placeholder="What do you want to do with this file?" autocomplete="off">
+        <ul id="hits"></ul>
+      </div>
+    </div>
+
+    <div class="home" id="home" hidden>
+      <h2>Open a PDF and ZPDF shows you what it can do with it.</h2>
+      <div class="drop"><svg class="ico" style="width:26px;height:26px" viewBox="0 0 24 24"><path d="M12 16V5M7 10l5-5 5 5M5 19h14"/></svg><div><b style="color:var(--ink)">Drop PDFs here</b>, or choose them from your computer.<br>Nothing leaves this PC.</div><button class="run">Open a PDF</button></div>
+      <div class="cols">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <span class="lbl">Recent</span>
+          <div class="recent">
+            <button><div>invoice-scan.pdf<small>12 pages · scanned, no text yet</small></div><em>today 09:14</em></button>
+            <button><div>Lease 2024.pdf<small>31 pages · signed · protected</small></div><em>yesterday</em></button>
+            <button><div>Site plan rev C.pdf<small>1 page · A1 drawing · scale 1:100</small></div><em>6 Nov</em></button>
+            <button><div>Tax return 2025.pdf<small>8 pages · form, 42 fields</small></div><em>2 Nov</em></button>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <span class="lbl">Start from several files</span>
+          <div class="multi">
+            <button><svg class="ico" viewBox="0 0 24 24"><path d="M7 4v6a5 5 0 0 0 5 5v5M17 4v6a5 5 0 0 1-5 5"/></svg><div>Merge<span>Several PDFs into one</span></div></button>
+            <button><svg class="ico" viewBox="0 0 24 24"><rect x="4" y="5" width="7" height="14" rx="1"/><rect x="13" y="5" width="7" height="14" rx="1"/></svg><div>Compare<span>What changed between two versions</span></div></button>
+            <button><svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-4-4"/></svg><div>Search a folder<span>Find words across all its PDFs</span></div></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+function screen(file) {
+  $("file").hidden = !file; $("home").hidden = file;
+  $("show-file").setAttribute("aria-pressed", file); $("show-home").setAttribute("aria-pressed", !file);
+}
+$("show-file").onclick = () => screen(true);
+$("show-home").onclick = () => screen(false);
+document.querySelectorAll("#home .recent button, #home .drop .run").forEach((b) => b.onclick = () => screen(true));
+document.querySelectorAll(".sug > button").forEach((head) => head.onclick = () => {
+  const card = head.parentElement, open = card.dataset.open !== "true";
+  card.dataset.open = open; head.setAttribute("aria-expanded", open);
+  const opts = card.querySelector(".opts"); if (opts) opts.hidden = !open;
+});
+let size = 0.4;
+function estimate() {
+  const sharp = $("sharp").checked;
+  $("est").textContent = "About 4.1 MB → " + size + " MB" + (sharp && size < 1.6 ? ", text kept sharp" : "");
+}
+document.querySelectorAll(".seg button").forEach((b) => b.onclick = () => {
+  document.querySelectorAll(".seg button").forEach((o) => o.setAttribute("aria-pressed", o === b));
+  size = Number(b.dataset.v); estimate(); $("done").hidden = true;
+});
+$("sharp").onchange = estimate;
+$("run").onclick = () => {
+  const bar = $("bar"), fill = bar.firstElementChild;
+  $("done").hidden = true; bar.hidden = false; fill.style.width = "0";
+  requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.width = "100%"; }));
+  setTimeout(() => {
+    bar.hidden = true; $("done").hidden = false; $("newtab").hidden = false; $("newtab").classList.add("new"); $("toast").hidden = false;
+    $("done-size").textContent = size + " MB";
+    $("done").lastElementChild.childNodes[1].textContent = ", " + Math.round((1 - size / 4.1) * 100) + "% smaller. Opened beside the original as ";
+  }, 1250);
+};
+$("toast-open").onclick = () => { $("toast").hidden = true; };
+const TOOLS = [["Make it searchable", "OCR"], ["Make it smaller", "Compress"], ["Split into files", "Pages"], ["Extract pages", "Pages"], ["Rotate pages", "Pages"], ["Sign", "Protect"], ["Add a password", "Protect"], ["Redact", "Protect"], ["Convert to Word", "Convert"], ["Convert to Excel", "Convert"], ["Archive as PDF/A", "Convert"], ["Add page numbers", "Layout"], ["Merge with other PDFs", "Combine"], ["Compare with another version", "Combine"]];
+function hits() {
+  const q = $("q").value.trim().toLowerCase();
+  const found = TOOLS.filter(([n, g]) => !q || (n + " " + g).toLowerCase().includes(q)).slice(0, 7);
+  $("hits").replaceChildren(...found.map(([n, g], i) => { const li = document.createElement("li"); li.setAttribute("aria-selected", i === 0); li.append(n); const s = document.createElement("small"); s.textContent = g; li.append(s); return li; }));
+}
+function palette(open) { $("scrim").hidden = !open; if (open) { $("q").value = ""; hits(); $("q").focus(); } }
+$("find").onclick = () => palette(true);
+$("find").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); palette(true); } };
+$("q").oninput = hits;
+$("scrim").onclick = (e) => { if (e.target === $("scrim")) palette(false); };
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); palette($("scrim").hidden); }
+  else if (e.key === "Escape") palette(false);
+});
+</script>
