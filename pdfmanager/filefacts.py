@@ -129,6 +129,31 @@ def facts(path, password=None):
         return {"size": size, "pages": None, "error": "can't be read"}
 
 
+BIG = 1_000_000  # bytes from which making a file smaller is worth offering
+
+
+def suggestions(found):
+    """What to offer for a file with these facts, most useful first:
+    [{"op": tool id, "title", "why"}], three at most."""
+    if found.get("error"):
+        return [{"op": "repair", "title": "Repair it",
+                 "why": "This file can't be read as it is; a repair often brings it back"}]
+    if found.get("pages") is None:
+        return []  # locked: nothing to offer before its password
+    out = []
+    if found.get("scanned") and not found.get("has_text"):
+        out.append({"op": "ocr", "title": "Make it searchable",
+                    "why": "Read the text so you can search and copy it"})
+    if found.get("size", 0) >= BIG:
+        why = ("Scanned pages shrink a lot, and their text stays sharp" if found.get("scanned")
+               else "Reduce its pictures for sending or storing")
+        out.append({"op": "compress", "title": "Make it smaller", "why": why})
+    if found.get("signatures"):
+        out.append({"op": "verify", "title": "Check its signatures",
+                    "why": "See who signed it and whether it was changed afterwards"})
+    return out[:3]
+
+
 def _store():
     return appdata.data_dir() / "filefacts.json"
 

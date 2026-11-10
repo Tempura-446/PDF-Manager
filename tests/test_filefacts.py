@@ -154,3 +154,58 @@ def test_the_start_screen_gets_facts_with_its_recent_files(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# -- what to suggest for a file -----------------------------------------------------------
+
+def ops(facts):
+    return [s["op"] for s in filefacts.suggestions(facts)]
+
+
+def test_suggestions_follow_the_facts():
+    base = {"size": 200_000, "pages": 3, "protected": False, "scanned": False, "has_text": True,
+            "form_fields": 0, "signatures": 0, "tagged": False, "pdfa": None}
+    assert ops(base) == []
+    assert ops({**base, "scanned": True, "has_text": False}) == ["ocr"]
+    assert ops({**base, "scanned": True, "has_text": False, "size": 4_100_000}) == ["ocr", "compress"]
+    assert ops({**base, "size": 9_000_000}) == ["compress"]
+    assert ops({**base, "signatures": 2}) == ["verify"]
+    assert ops({"size": 10, "pages": None, "protected": True}) == []
+    assert ops({"size": 10, "pages": None, "error": "can't be read"}) == ["repair"]
+    for found in filefacts.suggestions({**base, "scanned": True, "has_text": False, "size": 4_100_000}):
+        assert set(found) == {"op", "title", "why"} and found["title"][0].isupper() and len(found["why"]) > 10
+
+
+def test_every_suggested_tool_exists():
+    from pdfmanager import gui
+
+    known = {op["id"] for op in gui.OPERATIONS}
+    assert {"ocr", "compress", "verify", "repair"} <= known
+
+
+def test_facts_and_suggestions_for_a_file_the_page_holds(tmp_path):
+    """A file dropped onto the window has no id: the page sends it to be looked at."""
+    import uuid
+
+    from pdfmanager import gui
+
+    src = scan_pdf(tmp_path / "scan.pdf")
+    srv, url = gui.make_server()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base, token = url.split("/#token=")
+    try:
+        boundary = uuid.uuid4().hex
+        body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="scan.pdf"\r\n'
+                "Content-Type: application/pdf\r\n\r\n").encode() + src.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+        req = urllib.request.Request(base + "/api/facts", data=body, headers={
+            "X-Pdfm-Token": token, "Content-Type": f"multipart/form-data; boundary={boundary}"})
+        with urllib.request.urlopen(req, timeout=30) as res:
+            found = json.loads(res.read())
+        assert found["scanned"] and [s["op"] for s in found["suggestions"]] == ["ocr"]
+        key = srv.RequestHandlerClass.opened.add(src)
+        req = urllib.request.Request(base + f"/api/facts/{key}", headers={"X-Pdfm-Token": token})
+        with urllib.request.urlopen(req, timeout=30) as res:
+            assert [s["op"] for s in json.loads(res.read())["suggestions"]] == ["ocr"]
+    finally:
+        srv.shutdown()
+        srv.server_close()

@@ -1131,7 +1131,7 @@ def _tidy(message, work):
     if not work:
         return message
     for folder in {str(Path(work)), str(Path(work).resolve())}:
-        message = re.sub(re.escape(folder) + r"[\\/](?:in[\\/]\d+|out)[\\/]", "", message)
+        message = re.sub(re.escape(folder) + r"[\\/](?:in[\\/]o?\d+|out)[\\/]", "", message)
         message = message.replace(folder, "")
     return message
 
@@ -1728,7 +1728,8 @@ class Handler(BaseHTTPRequestHandler):
             target = self.opened.get(path[len("/api/facts/"):]) if self.opened is not None else None
             if target is None or not target.is_file():
                 return self._error(HTTPStatus.NOT_FOUND, "that file is no longer available")
-            return self._send(HTTPStatus.OK, filefacts.remembered(target))
+            found = filefacts.remembered(target)
+            return self._send(HTTPStatus.OK, {**found, "suggestions": filefacts.suggestions(found)})
         if path == "/api/recent":
             return self._recent()
         if path == "/api/events":
@@ -1899,6 +1900,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._run(body)
             if path == "/api/inspect":
                 return self._inspect(body)
+            if path == "/api/facts":
+                return self._facts(body)
             if path == "/api/preview":
                 fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
                 if not uploads:
@@ -2005,11 +2008,24 @@ class Handler(BaseHTTPRequestHandler):
         op = fields.pop("op", "")
         password = fields.pop("password", "") or None
         keep = self.headers.get("X-Pdfm-Keep") == "1"
+        # "ids": files that are already open (see OpenFiles), to work on
+        # without the page sending them back. They come before any uploads.
+        opened = []
+        for key in [k for k in fields.pop("ids", "").split(",") if k.strip()] if "ids" in fields else []:
+            path = self.opened.get(key.strip()) if self.opened is not None else None
+            if path is None or not path.is_file():
+                return self._error(HTTPStatus.BAD_REQUEST, "that file is no longer available; open it again")
+            opened.append(path)
 
         def work_on():
             work = self.work.make()
             try:
                 files, extra = [], {}
+                for index, source in enumerate(opened):
+                    # A copy: tools never touch the file the reader has open.
+                    folder = work / "in" / f"o{index:03d}"
+                    folder.mkdir(parents=True)
+                    files.append(Path(shutil.copy2(source, folder / _safe_name(source.name))))
                 for index, (name, filename, data) in enumerate(uploads):
                     # One folder per upload keeps original names without clashes.
                     folder = work / "in" / f"{index:03d}"
@@ -2518,6 +2534,17 @@ class Handler(BaseHTTPRequestHandler):
                 trust[0].write_bytes(named["trust"])
             found = certsign.verify(path, fields.get("password") or None, trust)
         return self._send(HTTPStatus.OK, {"signatures": found})
+
+    def _facts(self, body):
+        """What a file the page holds is (see filefacts), and what to offer for it."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            found = filefacts.facts(path, fields.get("password") or None)
+        return self._send(HTTPStatus.OK, {**found, "suggestions": filefacts.suggestions(found)})
 
     def _inspect(self, body):
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
