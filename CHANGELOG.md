@@ -15,6 +15,11 @@ also the notes of its release on
   met on Tuesday y") and flattened their tables.
 - In the HTML export too, an ordinary line of a scanned page is no longer
   taken for a heading because its recognised size differs a little.
+- Designed pages read better in the Word and HTML exports: a grid of
+  features (a heading over a paragraph, side by side) is read one feature
+  at a time, two columns of sentences aren't turned into a table, the
+  labels inside a screenshot stay in the picture, page numbers are left
+  out, and a bold sentence or a number is no longer a heading.
 
 ## 0.17.0
 

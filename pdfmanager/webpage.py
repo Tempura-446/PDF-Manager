@@ -26,6 +26,7 @@ from pdfmanager import core, layout, progress
 
 MODES = ("flowing", "exact")
 PICTURE_DPI = 150
+LABELS = 6  # lines of text on a picture from which they are its labels, not the page's text
 PX = 4 / 3  # CSS pixels per point
 # Where a line's baseline sits in a CSS box with line-height 1, in font sizes.
 CSS_BASELINE = {"Arial": 0.85, "Times New Roman": 0.84, "Courier New": 0.77}
@@ -253,6 +254,9 @@ def _table_like(table):
     if table["kind"] == "ruled":
         return True
     rows = table["rows"]
+    cells = [cell for row in rows for cell in row if cell]
+    if cells and sum(len(str(cell).split()) for cell in cells) >= 5 * len(cells):
+        return False  # sentences side by side: columns of text, not a table
     return sum(1 for row in rows if sum(1 for cell in row if cell) >= 2) >= 0.8 * len(rows)
 
 
@@ -285,12 +289,27 @@ def _reading_order(items, size=12):
     groups = _split(items, 1, 1.8 * size)
     if not groups:
         groups = _split(items, 0, 6)
-        if groups and _rows_line_up(groups):
+        if groups and _rows_line_up(groups) and not _columns_of_prose(groups):
             groups = None  # a form or a table: labels and values side by side, read row by row
     groups = groups or _split(items, 1, 0.5)
     if not groups:
         return sorted(items, key=lambda i: (i.box[1], i.box[0]))
     return [item for group in groups for item in _reading_order(group, size)]
+
+
+def _is_prose(item):
+    """A block of running text: several lines, or one long one."""
+    if item.kind != "block":
+        return False
+    lines = item.value.lines
+    return len(lines) >= 2 or len(lines[0].text.split()) >= 6
+
+
+def _columns_of_prose(groups):
+    """Whether two or more of the groups hold running text: columns to read
+    one after the other (a grid of features, each a heading over its
+    paragraph, lines up row by row just as a form does)."""
+    return sum(1 for group in groups if any(_is_prose(item) for item in group)) >= 2
 
 
 def _rows_line_up(groups):
@@ -320,6 +339,8 @@ def _row_pieces(lines):
                 break
             left, right = (a, b) if a.x0 <= b.x0 else (b, a)
             gap = right.x0 - left.x1
+            if min(len(a.text.split()), len(b.text.split())) >= 5:
+                continue  # two lines of running text: columns, however far apart
             if gap > 0 and gap > 0.5 * min(a.x1 - a.x0, b.x1 - b.x0):
                 pieces.update((id(a), id(b)))
     return pieces
@@ -354,6 +375,14 @@ def _edge_key(line, page):
     if y1 < page.height * 0.09 or y0 > page.height * 0.91:
         return re.sub(r"\d+", "#", " ".join(line.text.lower().split()))
     return None
+
+
+_PAGE_NUMBER = re.compile(r"(?i)^(page\s*)?\d{1,4}(\s*(/|of)\s*\d{1,4})?$")
+
+
+def _page_number(line, page):
+    """A line at the very top or bottom of a page that is only its number."""
+    return _edge_key(line, page) is not None and bool(_PAGE_NUMBER.match(" ".join(line.text.split())))
 
 
 def flow(path, password=None, pages=None):
@@ -393,7 +422,8 @@ def _flowing(doc, tables, collected=None):
         writer = _Writer(body, bold_body, numbers, page)
         for item in items:
             if item.kind == "block":
-                lines = [ln for ln in item.value.lines if _edge_key(ln, page) not in repeated]
+                lines = [ln for ln in item.value.lines
+                         if _edge_key(ln, page) not in repeated and not _page_number(ln, page)]
                 if lines:
                     writer.block(item.value, lines)
             elif item.kind == "table":
@@ -431,8 +461,31 @@ def _page_items(doc, page, page_tables):
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
         return any(b[0] - 2 <= cx <= b[2] + 2 and b[1] - 2 <= cy <= b[3] + 2 for b in table_boxes)
 
-    pieces = _row_pieces(page.lines)
+    # The words inside a picture (the labels of an app in a screenshot, of a
+    # diagram) are part of it: they stay in the picture, not in the text.
+    pictures = _merge_boxes(page.images)
+    scanned = page.chars and all(c.hidden for c in page.chars)
+    labelled, inside = set(), set()
+    for box in pictures:
+        if scanned or (box[2] - box[0]) * (box[3] - box[1]) > page.width * page.height * 0.6:
+            continue
+        within = []
+        for line in page.lines:
+            x0, y0, x1, y1 = layout.box_on_page(line.angle, line.x0, line.top, line.x1, line.bottom)
+            if box[0] <= (x0 + x1) / 2 <= box[2] and box[1] <= (y0 + y1) / 2 <= box[3]:
+                within.append(line)
+        if len(within) >= LABELS:
+            labelled.add(box)
+            inside.update(map(id, within))
+
+    pieces = _row_pieces([ln for ln in page.lines if id(ln) not in inside])
     for block in page.blocks:
+        if inside and any(id(ln) in inside for ln in block.lines):
+            for line in block.lines:
+                if id(line) not in inside and not (table_boxes and in_table(line)):
+                    part = layout.Block(line).finish()
+                    items.append(_Item("block", _block_box(part), part))
+            continue
         cut = table_boxes and any(in_table(ln) for ln in block.lines)
         if cut or all(len(p) == 1 for p in block.paragraphs) or \
                 sum(id(ln) in pieces for ln in block.lines) * 2 > len(block.lines):
@@ -445,8 +498,6 @@ def _page_items(doc, page, page_tables):
                     items.append(_Item("block", _block_box(part), part))
         else:
             items.append(_Item("block", _block_box(block), block))
-    pictures = _merge_boxes(page.images)
-    scanned = page.chars and all(c.hidden for c in page.chars)
     if not page.chars and not pictures:
         # Drawings only (or an empty page): the whole page as a picture,
         # unless it is blank.
@@ -455,11 +506,17 @@ def _page_items(doc, page, page_tables):
             items.append(_Item("image", (0, 0, page.width, page.height), image))
     elif pictures:
         rendered = doc.render(page.number - 1, PICTURE_DPI, without_text=True)
+        with_words = None
         scale = PICTURE_DPI / 72
         for box in pictures:
             if scanned and (box[2] - box[0]) * (box[3] - box[1]) > page.width * page.height * 0.6:
                 continue  # an OCRed scan: its text is the content
-            crop = rendered.crop(tuple(int(round(v * scale)) for v in box))
+            source = rendered
+            if box in labelled:
+                if with_words is None:
+                    with_words = doc.render(page.number - 1, PICTURE_DPI)
+                source = with_words
+            crop = source.crop(tuple(int(round(v * scale)) for v in box))
             items.append(_Item("image", box, crop))
     # Read in the direction of most of the text (a page of turned text is
     # read along its lines).
@@ -552,7 +609,7 @@ class _Writer:
     def _level(self, lines):
         size = max(ln.main_size for ln in lines)
         text = " ".join(ln.text for ln in lines)
-        if len(text) > 200 or len(lines) > 3:
+        if len(text) > 200 or len(lines) > 3 or not any(ch.isalpha() for ch in text):
             return 0
         if size > self.body * 1.5:
             return 1
@@ -564,7 +621,7 @@ class _Writer:
         if size > self.body * 1.08 and not recognised:
             return 3
         bold = all(c.bold for ln in lines for c in ln.chars)
-        if bold and not self.bold_body and len(lines) == 1 and len(text) <= 80 \
+        if bold and not self.bold_body and len(lines) == 1 and len(text) <= 80 and len(text.split()) <= 9 \
                 and text[-1:] not in ".,;:" and not layout.LIST_ITEM.match(text):
             return 3
         return 0
