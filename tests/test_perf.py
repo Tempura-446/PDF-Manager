@@ -107,6 +107,20 @@ def test_ocr_memory_does_not_grow_with_the_pages(tmp_path):
     _check_growth("ocr", small, large, tmp_path, seconds_each=15 * 60)
 
 
+def test_compressing_scans_keeps_memory_to_a_page(tmp_path):
+    """The scan compression engine works on one page's picture at a time."""
+    sys.path.insert(0, str(HERE))
+    import ocrpages
+
+    page = ocrpages.render().convert("RGB")  # A4 at 300 dpi, in colour
+    buf = io.BytesIO()
+    page.save(buf, "JPEG", quality=85)
+    scan = buf.getvalue()
+    small, large = (_image_pages(tmp_path / f"colour-scan-{n}.pdf", n, lambda i: scan, *page.size)
+                    for n in (3, 15))
+    _check_growth("compress-scan", small, large, tmp_path, seconds_each=15 * 10)
+
+
 def test_a_large_file_is_read_in_pieces_not_whole(tmp_path):
     """The reader gets a 200 MB file in pieces: a piece from its end comes
     at once, and sending all of it never holds more than a little of it."""

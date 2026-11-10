@@ -87,10 +87,28 @@ def available():
 # Running Office and LibreOffice
 # --------------------------------------------------------------------------
 
-_PS_PREFIX = "$ErrorActionPreference = 'Stop'\n"
+# Start-Office makes the program and writes down which process it is (the
+# file named by PDFM_PIDS), so that one, and no Word the user has open, can
+# be stopped if it never answers: a stopped script leaves its Word running.
+# (No double quotes in these scripts: they travel on a command line.)
+_PS_PREFIX = r"""$ErrorActionPreference = 'Stop'
+function Start-Office($progId, $exe) {
+  $named = 'Name=' + [char]39 + $exe + [char]39
+  $before = @()
+  try { $before = @(Get-CimInstance Win32_Process -Filter $named | ForEach-Object { $_.ProcessId }) } catch {}
+  $app = New-Object -ComObject $progId
+  try {
+    $mine = @(Get-CimInstance Win32_Process -Filter $named |
+      Where-Object { ($before -notcontains $_.ProcessId) -and ($_.CommandLine -match 'automation') } |
+      ForEach-Object { $_.ProcessId })
+    if ($env:PDFM_PIDS -and $mine.Count) { Set-Content -LiteralPath $env:PDFM_PIDS -Value ($mine -join ' ') }
+  } catch {}
+  return ,$app
+}
+"""
 
 PS_PDF_TO_WORD = _PS_PREFIX + r"""
-$word = New-Object -ComObject Word.Application
+$word = Start-Office 'Word.Application' 'WINWORD.EXE'
 $word.AutomationSecurity = 3  # msoAutomationSecurityForceDisable: no macros
 $word.WordBasic.DisableAutoMacros(1)
 $word.Visible = $false
@@ -104,7 +122,7 @@ try {
 
 PS_TO_PDF = {
     "word": _PS_PREFIX + r"""
-$app = New-Object -ComObject Word.Application
+$app = Start-Office 'Word.Application' 'WINWORD.EXE'
 $app.AutomationSecurity = 3  # msoAutomationSecurityForceDisable: no macros
 $app.WordBasic.DisableAutoMacros(1)
 $app.Visible = $false
@@ -116,7 +134,7 @@ try {
 } finally { $app.Quit() }
 """,
     "excel": _PS_PREFIX + r"""
-$app = New-Object -ComObject Excel.Application
+$app = Start-Office 'Excel.Application' 'EXCEL.EXE'
 $app.AutomationSecurity = 3  # msoAutomationSecurityForceDisable: no macros
 $app.EnableEvents = $false   # no Workbook_Open
 $app.AskToUpdateLinks = $false
@@ -129,7 +147,7 @@ try {
 } finally { $app.Quit() }
 """,
     "powerpoint": _PS_PREFIX + r"""
-$app = New-Object -ComObject PowerPoint.Application
+$app = Start-Office 'PowerPoint.Application' 'POWERPNT.EXE'
 $app.AutomationSecurity = 3  # msoAutomationSecurityForceDisable: no macros
 try {
   $show = $app.Presentations.Open($env:PDFM_IN, -1, 0, 0)
@@ -140,32 +158,67 @@ try {
 }
 
 
-def _run(command, env=None, what="the conversion"):
+class TookTooLong(core.PdfManagerError):
+    """A program didn't finish in time and was stopped."""
+
+
+def _run(command, env=None, what="the conversion", timeout=None):
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=TIMEOUT,
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout or TIMEOUT,
                                 env={**os.environ, **(env or {})},
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except subprocess.TimeoutExpired:
-        raise core.PdfManagerError(f"{what} took too long and was stopped") from None
+        raise TookTooLong(f"{what} took too long and was stopped") from None
     except OSError as exc:
         raise core.PdfManagerError(f"{what} could not start: {exc}") from None
     return result
+
+
+def _system_exe(name):
+    """A Windows program by its full path: a bare name can be found in the
+    current folder first."""
+    root = os.environ.get("SystemRoot") or r"C:\Windows"
+    return "\\".join([root.rstrip("\\"), "System32", name])
+
+
+def _stop_processes(pids):
+    """Stop the processes (Windows): an Office program a script started and
+    that never answered."""
+    for pid in pids:
+        try:
+            subprocess.run([_system_exe("taskkill.exe"), "/F", "/T", "/PID", str(int(pid))],
+                           capture_output=True, timeout=30,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
 
 
 def powershell_exe():
     """PowerShell by its full path on Windows: a bare name can be found in
     the current folder first."""
     if sys.platform == "win32":
-        root = os.environ.get("SystemRoot") or r"C:\Windows"
-        return "\\".join([root.rstrip("\\"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"])
+        return _system_exe("WindowsPowerShell\\v1.0\\powershell.exe")
     return "powershell"
 
 
-def _powershell(script, src, dst, what):
-    result = _run([powershell_exe(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                   "-Command", script],
-                  env={"PDFM_IN": str(Path(src).resolve()), "PDFM_OUT": str(Path(dst).resolve())},
-                  what=what)
+def _powershell(script, src, dst, what, timeout=None):
+    """Run an Office script. If it doesn't finish in time, the Office program
+    it started is stopped too, not left running out of sight."""
+    with tempfile.TemporaryDirectory(prefix="pdfm-office-") as tmp:
+        started = Path(tmp) / "started.txt"
+        try:
+            result = _run([powershell_exe(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                           "-Command", script],
+                          env={"PDFM_IN": str(Path(src).resolve()), "PDFM_OUT": str(Path(dst).resolve()),
+                               "PDFM_PIDS": str(started)},
+                          what=what, timeout=timeout)
+        except TookTooLong:
+            try:
+                pids = started.read_text(encoding="utf-8-sig", errors="replace").split()
+            except OSError:
+                pids = []
+            _stop_processes(pids)
+            raise
     if result.returncode or not Path(dst).exists():
         detail = " ".join((result.stderr or result.stdout).split())[:300]
         raise core.PdfManagerError(f"{what} failed: {detail or 'no output'}")
@@ -199,22 +252,54 @@ def _libreoffice(src, dst, target, import_filter=None):
 # PDF → Word
 # --------------------------------------------------------------------------
 
-def pdf_to_word(path, output, engine="auto", password=None):
+# Set when Word didn't finish importing a PDF: on some computers it never
+# does when it's automated. "Best available" then uses ZPDF's own converter
+# for the rest of this run of the app instead of waiting each time.
+_word_stalled = False
+
+
+def _word_time_limit(pages):
+    """Seconds Word gets to import a PDF of ``pages`` pages when it was
+    chosen for the user ("Best available")."""
+    return min(TIMEOUT, 60 + 2 * pages)
+
+
+def pdf_to_word(path, output, engine="auto", password=None, notes=None):
     """Convert a PDF to an editable Word document. Returns (output, engine
-    used): "word", "basic" or "layout"."""
+    used): "word", "basic" or "layout". With "auto", Word is used when it's
+    installed; if it fails or doesn't finish, ZPDF's own converter is used
+    and ``notes`` (a list) is told why."""
+    global _word_stalled
     if engine not in TO_WORD_ENGINES:
         raise core.PdfManagerError(f"engine must be one of {', '.join(TO_WORD_ENGINES)}")
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="pdfm-word-") as tmp:
         src = Path(path)
-        if core.open_pdf(path, password).is_encrypted:
+        reader = core.open_pdf(path, password)
+        if reader.is_encrypted:
             src = Path(tmp) / "input.pdf"
             core.decrypt(path, src, password or "")
-        if engine == "word" or (engine == "auto" and has_word()):
+        if engine == "word":
             if not has_word():
                 raise core.PdfManagerError("Microsoft Word isn't installed on this computer")
             return _powershell(PS_PDF_TO_WORD, src, output, "Microsoft Word"), "word"
+        if engine == "auto" and has_word() and not _word_stalled:
+            try:
+                pages = len(reader.pages)
+            except Exception:  # an unusual file: Word gets the shortest time
+                pages = 0
+            try:
+                return _powershell(PS_PDF_TO_WORD, src, output, "Microsoft Word",
+                                   timeout=_word_time_limit(pages)), "word"
+            except core.PdfManagerError as exc:
+                _word_stalled = _word_stalled or isinstance(exc, TookTooLong)
+                output.unlink(missing_ok=True)
+                if notes is not None:
+                    notes.append(f"{exc}, so the built-in converter was used instead."[:400])
+        elif engine == "auto" and has_word() and notes is not None:
+            notes.append("Microsoft Word didn't finish a conversion earlier, so the built-in "
+                         "converter was used. Choose \"Microsoft Word only\" to try Word again.")
         if engine == "layout":
             return _libreoffice(src, output, "docx:MS Word 2007 XML", "writer_pdf_import"), "layout"
         return basic_docx(src, output), "basic"
@@ -587,10 +672,47 @@ def _web_address(source):
     return None
 
 
-def _print_with(command, target, timeout):
+def _profile_in_use(profile):
+    """Whether a browser is still running on ``profile`` (its user data
+    folder): Chromium keeps a lock file there while it runs."""
+    if profile is None:
+        return False
+    for name in ("lockfile", "SingletonLock"):  # Windows; Linux and macOS
+        try:
+            os.lstat(profile / name)
+            return True
+        except FileNotFoundError:
+            continue
+        except OSError:  # there, and held too tightly to look at
+            return True
+    return False
+
+
+def _whole_pdf(target):
+    """Whether the file at ``target`` ends as a PDF does."""
+    try:
+        size = target.stat().st_size
+        if size <= 100:
+            return False
+        with open(target, "rb") as f:
+            f.seek(max(0, size - 1024))
+            return b"%%EOF" in f.read()
+    except OSError:  # not there, or still being written
+        return False
+
+
+# After the program that was started ends well, how long the PDF may still
+# take to appear: Edge can hand the work to a browser of its own and leave.
+HANDED_OVER = 10
+
+
+def _print_with(command, target, timeout, profile=None):
     """Run the browser until ``target`` is a whole PDF. A browser can stay
     open after printing (waiting on the network, its updater), so it's
-    closed once the file is complete rather than waited for."""
+    closed once the file is complete rather than waited for. And the
+    program that was started can end before the PDF is written, having
+    handed the printing to a browser running apart from it: the file is
+    waited for as long as a browser is using ``profile``."""
     import time
 
     try:
@@ -598,34 +720,70 @@ def _print_with(command, target, timeout):
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except OSError as exc:
         raise core.PdfManagerError(f"the browser could not start: {exc}") from None
-    deadline, last = time.monotonic() + timeout, -1
+    deadline, last, ended = time.monotonic() + timeout, -1, None
     try:
         while time.monotonic() < deadline:
-            done = proc.poll() is not None
             if target.exists():
                 size = target.stat().st_size
-                if size == last and size > 100:
-                    with open(target, "rb") as f:
-                        f.seek(max(0, size - 1024))
-                        if b"%%EOF" in f.read():
-                            return
+                if size == last and _whole_pdf(target):
+                    return
                 last = size
-            if done:
-                break
+            if proc.poll() is not None:
+                ended = ended or time.monotonic()
+                if proc.returncode or not (time.monotonic() - ended < HANDED_OVER or _profile_in_use(profile)):
+                    break
             time.sleep(0.25)
     finally:
         if proc.poll() is None:
             proc.kill()
         try:
             err = proc.communicate(timeout=10)[1] or b""
-        except subprocess.TimeoutExpired:
+        except (subprocess.TimeoutExpired, ValueError):
             err = b""
-    if target.exists() and target.stat().st_size > 100:
+    if _whole_pdf(target):
         return
     detail = " ".join(err.decode("utf-8", "replace").split())[-300:]
     raise core.PdfManagerError("the page couldn't be printed"
                                + (" (it took too long)" if time.monotonic() >= deadline else "")
                                + (f": {detail}" if detail else ""))
+
+
+def _stop_browsers_using(folder):
+    """Stop any browser still running with ``folder`` (its name, which is
+    random, so no other program has it) on its command line (Windows): one
+    that was handed the printing isn't reached by stopping the program that
+    was started."""
+    if sys.platform != "win32":
+        return
+    script = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and "
+              "$_.CommandLine.Contains($env:PDFM_DIR) -and $_.ProcessId -ne $PID } | "
+              "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }")
+    try:
+        subprocess.run([powershell_exe(), "-NoProfile", "-NonInteractive", "-Command", script],
+                       env={**os.environ, "PDFM_DIR": Path(folder).name}, capture_output=True, timeout=60,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _remove_browser_folder(folder):
+    """Delete the browser's scratch folder. A browser still closing keeps
+    files in it open for a moment (on Windows they can't be deleted then):
+    it's stopped and the folder tried again, and a folder that still can't
+    go is left to the system's own clean-up rather than failing the print."""
+    import time
+
+    for attempt in range(6):
+        try:
+            shutil.rmtree(folder)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if attempt == 0:
+                _stop_browsers_using(folder)
+            time.sleep(0.5)
+    shutil.rmtree(folder, ignore_errors=True)
 
 
 # A saved page is printed with no scripts, frames or objects, and only its
@@ -672,22 +830,25 @@ def html_to_pdf(source, output, timeout=120):
         local = None
     browser = find_browser()
     if browser:
-        with tempfile.TemporaryDirectory(prefix="pdfm-web-") as tmp:
-            target = Path(tmp) / "page.pdf"
+        tmp = Path(tempfile.mkdtemp(prefix="pdfm-web-"))
+        try:
+            target, profile = tmp / "page.pdf", tmp / "profile"
             if local is not None and local.suffix.lower() in (".html", ".htm", ".xhtml"):
-                address = _locked_copy(local, Path(tmp) / f"page{local.suffix.lower()}").as_uri()
+                address = _locked_copy(local, tmp / f"page{local.suffix.lower()}").as_uri()
             shell = "headless-shell" in Path(browser).name
             command = [browser, "--headless" if shell else "--headless=new", "--disable-gpu",
                        "--no-first-run", "--no-default-browser-check", "--disable-extensions",
                        "--disable-sync", "--disable-background-networking",
                        "--disable-component-update", "--no-pdf-header-footer",
                        "--run-all-compositor-stages-before-draw", "--virtual-time-budget=10000",
-                       f"--user-data-dir={Path(tmp) / 'profile'}", f"--print-to-pdf={target}"]
+                       f"--user-data-dir={profile}", f"--print-to-pdf={target}"]
             if sys.platform.startswith("linux") and hasattr(os, "geteuid") and os.geteuid() == 0:
                 command.append("--no-sandbox")  # Chromium refuses to run as root otherwise
             command.append(address)
-            _print_with(command, target, timeout)
+            _print_with(command, target, timeout, profile)
             shutil.move(str(target), str(output))
+        finally:
+            _remove_browser_folder(tmp)
         stem = Path(browser).stem.lower()
         return output, ("Microsoft Edge" if "edge" in stem else
                         "Google Chrome" if "google" in str(browser).lower() else "Chromium")

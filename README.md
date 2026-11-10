@@ -590,6 +590,18 @@ so a large photo shown small is reduced while small images are left alone.
 An image is only replaced if the new version is smaller. `--image-quality`
 and `--max-dpi` override a level's settings.
 
+**Scanned pages keep their text sharp.** At `medium` and `high`, a page
+that is one scanned picture isn't simply reduced, which would blur its
+text. It is split into a black-and-white text shape at the scan's full
+resolution (up to 300 DPI), the paper behind it at low resolution, and a
+small picture of the ink's colour, so stamps and pen stay in colour. The
+file comes out about as small as plain `high`, with the text as sharp as
+the scan. Photographs inside a scan stay whole, a page that is mostly
+photograph is compressed the usual way, and so is any page where the
+split wouldn't be smaller. The invisible OCR text, links and comments
+are untouched. Turn it off with the **Keep scanned text sharp** box in
+the app or `--no-sharp-scans`; `low` never uses it.
+
 At every level the result is then repacked with [qpdf](https://qpdf.readthedocs.io)
 (through pikepdf, installed with ZPDF): the many small objects a PDF
 is made of go into compressed object streams. It's lossless and takes a
@@ -841,8 +853,11 @@ location, and one of:
 `to-word` converts with Microsoft Word when it's installed (the most
 editable result), otherwise with the built-in converter (paragraphs,
 headings and pictures in reading order; tables and columns become plain
-paragraphs). `--engine layout` uses LibreOffice instead, which keeps the
-exact look but puts every line in its own text box.
+paragraphs). If Word fails or doesn't finish in time (a minute plus two
+seconds a page), the built-in converter is used and the result says so;
+`--engine word` insists on Word and waits up to five minutes. `--engine
+layout` uses LibreOffice instead, which keeps the exact look but puts every
+line in its own text box.
 
 `from-office` converts Word, Excel, PowerPoint, OpenDocument, RTF and text
 files to PDF with Microsoft Office or, without it, LibreOffice. Text files

@@ -17,6 +17,9 @@ SLOW_ON_MANY_PAGES = {"ocr", "clean", "to-images", "to-word", "to-excel", "to-pp
                       "access-check", "autocrop", "redact", "compare", "pdfa", "pdfa-check", "text", "media",
                       "form", "compress", "color", "sanitize", "flatten"}
 REQUIRED = {"pages": "1", "order": "1"}
+# ZPDF's own code is what's swept, not the programs it can hand a file to: on
+# a PC with Word, "Best available" would run Word on every file.
+FIXED = {"to-word": {"engine": "basic"}}
 
 TOOLS = [op for op in gui.OPERATIONS if op.get("files") in ("pdf", "pdf2")]
 
@@ -39,6 +42,7 @@ def _options(op):
             opts[field["key"]] = ("true" if value else "false") if isinstance(value, bool) else str(value)
         if field.get("required") and not opts.get(field["key"]):
             opts[field["key"]] = REQUIRED.get(field["key"], "1")
+    opts.update(FIXED.get(op["id"], {}))
     return opts
 
 

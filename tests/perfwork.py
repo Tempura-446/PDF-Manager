@@ -53,6 +53,11 @@ def main(work, src, out, data):
         core.merge([src, src], out)
     elif work == "compress":
         core.compress(src, out, level="high")
+    elif work == "compress-scan":
+        kept = []
+        core.compress(src, out, level="high", notes=kept)
+        if not kept:
+            raise SystemExit("the scanned pages weren't kept sharp")
     elif work == "ocr":
         core.ocr(src, out, engine="builtin")
     else:

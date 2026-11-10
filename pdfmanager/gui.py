@@ -213,7 +213,10 @@ OPERATIONS = [
                             ["medium", "Medium — recommended"],
                             ["high", "High — smallest file"]],
                    hint="Low keeps every image as is. Medium reduces images to 150 DPI "
-                        "(good for screen and office printing); High to 96 DPI.")]},
+                        "(good for screen and office printing); High to 96 DPI."),
+                _f("sharp_scans", "Keep scanned text sharp", "check", True,
+                   hint="Scanned pages keep their text at full sharpness; only the paper "
+                        "behind it is reduced.")]},
     {"id": "color", "group": "Optimize", "label": "Convert colours", "files": "pdf",
      "fields": [_f("to", "Convert to", "select", "gray",
                    choices=[["gray", "Grayscale"], ["rgb", "RGB (screen)"],
@@ -626,7 +629,8 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                          f"{'are' if many else 'is'} blank and {'were' if many else 'was'} "
                          f"left as {'they are' if many else 'it is'}")
     elif op == "compress":
-        core.compress(src, out, level=opts.get("level") or "medium", password=password)
+        core.compress(src, out, level=opts.get("level") or "medium", password=password,
+                      sharp_scans=_bool(opts.get("sharp_scans", True)), notes=notes)
     elif op == "color":
         icc = extra_files.get("icc")
         core.convert_color(src, out, opts.get("to") or "gray", icc, password)
@@ -909,8 +913,9 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         core.extract_text(src, out, None, password)
     elif op == "to-word":
         out = out_dir / f"{src.stem}.docx"
-        _, engine = office.pdf_to_word(src, out, opts.get("engine") or "auto", password)
-        if engine == "basic" and (opts.get("engine") or "auto") == "auto":
+        said = len(notes)
+        _, engine = office.pdf_to_word(src, out, opts.get("engine") or "auto", password, notes=notes)
+        if engine == "basic" and (opts.get("engine") or "auto") == "auto" and len(notes) == said:
             notes.append("Converted with the built-in converter. For a more editable "
                          "result, install Microsoft Word.")
     elif op == "to-excel":

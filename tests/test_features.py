@@ -412,16 +412,18 @@ def test_word_is_used_when_installed(tmp_path, monkeypatch):
     automates it; the file paths travel in environment variables."""
     seen = {}
 
-    def fake_run(command, env=None, what=""):
+    def fake_run(command, env=None, what="", timeout=None):
         seen.update(command=command, env=env)
         Path(env["PDFM_OUT"]).write_bytes(b"docx")
         return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
     monkeypatch.setattr(office, "has_word", lambda: True)
+    monkeypatch.setattr(office, "_word_stalled", False)
     monkeypatch.setattr(office, "_run", fake_run)
     out, engine = office.pdf_to_word(text_pdf(tmp_path / "a.pdf"), tmp_path / "a.docx")
     assert engine == "word" and out.read_bytes() == b"docx"
-    assert seen["command"][0] == "powershell" and "Word.Application" in seen["command"][-1]
+    # By its full path on Windows, by name elsewhere.
+    assert seen["command"][0] == office.powershell_exe() and "Word.Application" in seen["command"][-1]
     assert seen["env"]["PDFM_IN"].endswith("a.pdf")
 
 
