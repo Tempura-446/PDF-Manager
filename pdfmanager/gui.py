@@ -42,7 +42,7 @@ from pypdf import PdfReader
 
 from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
                         forms, recipes, redact, scan, search, textedit, update, viewports, markup, pageimages,
-                        formdetect, pdfacheck, filetools, comments)
+                        formdetect, pdfacheck, filetools, comments, filefacts)
 from pdfmanager import certsign
 from pdfmanager import accessibility  # -- accessibility --
 from pdfmanager import applog
@@ -1723,6 +1723,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._open_file(path[len("/api/file/"):])
         if path.startswith("/api/job/"):
             return self._job(path, "GET")
+        if path.startswith("/api/facts/"):
+            target = self.opened.get(path[len("/api/facts/"):]) if self.opened is not None else None
+            if target is None or not target.is_file():
+                return self._error(HTTPStatus.NOT_FOUND, "that file is no longer available")
+            return self._send(HTTPStatus.OK, filefacts.remembered(target))
         if path == "/api/recent":
             return self._recent()
         if path == "/api/events":
@@ -1861,7 +1866,8 @@ class Handler(BaseHTTPRequestHandler):
             path = Path(item["path"])
             if path.is_file() and self.opened is not None:
                 files.append({"id": self.opened.add(path), "name": path.name, "path": str(path),
-                              "folder": str(path.parent), "opened": item.get("opened")})
+                              "folder": str(path.parent), "opened": item.get("opened"),
+                              "facts": filefacts.remembered(path)})
         return self._send(HTTPStatus.OK, {"files": files})
 
     def do_POST(self):
