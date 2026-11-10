@@ -391,7 +391,7 @@ OPERATIONS = [
     # -- end of digital ID signatures --
     {"id": "pdfa", "group": "Convert", "label": "PDF → PDF/A (archive)", "files": "pdf",
      "help": "Convert to PDF/A, the ISO standard for documents that must stay readable for "
-             "decades: fonts and colour profile are embedded. Needs Ghostscript.",
+             "decades: fonts and colour profile are embedded.",
      "fields": [_f("level", "Version", "select", "2",
                    choices=[["2", "PDF/A-2b — recommended"], ["1", "PDF/A-1b — oldest, strictest"],
                             ["3", "PDF/A-3b — allows attachments"]])]},
@@ -778,11 +778,8 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         notes.extend([f"{src.name}: no digital signatures"] if not found else
                      [f"{src.name}, {e['field']}: {e['summary']}" for e in found])
     elif op == "pdfa":
-        if not archive.find_ghostscript():
-            raise UserError("PDF/A needs Ghostscript: install it from "
-                            "https://ghostscript.com/releases/gsdnld.html and try again")
         level = opts.get("level") or "2"
-        archive.to_pdfa(src, out, level=level, password=password)
+        archive.to_pdfa(src, out, level=level, password=password, notes=notes)
         try:
             checked = pdfacheck.check(out, level=f"{level}b", engine="builtin")
             notes.append(f"{src.name}: checked: {pdfacheck.summary(checked)}")

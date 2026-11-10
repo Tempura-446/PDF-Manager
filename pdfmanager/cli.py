@@ -314,12 +314,14 @@ def run_sanitize(a, src, out, pw):
 
 
 def run_pdfa(a, src, out, pw):
-    archive.to_pdfa(src, out, level=a.level, password=pw)
+    notes = []
+    archive.to_pdfa(src, out, level=a.level, password=pw, engine=a.engine, notes=notes)
+    said = "".join(f"; {note}" for note in notes)
     try:
         checked = pdfacheck.summary(pdfacheck.check(out, level=f"{a.level}b", engine="builtin"))
     except Exception:  # the check is extra; the file is made either way
-        return out
-    return f"{out}  (checked: {checked})"
+        return f"{out}  ({said[2:]})" if said else out
+    return f"{out}  (checked: {checked}{said})"
 
 
 def cmd_check_pdfa(a):
@@ -1443,7 +1445,10 @@ def build_parser():
                     help="text size in the fields (default: fit single-line fields to the box)")
     sp.add_argument("--no-border", action="store_true", help="don't draw a border around fields")
 
-    sp = per_file("pdfa", run_pdfa, "convert to PDF/A for long-term archiving (needs Ghostscript)")
+    sp = per_file("pdfa", run_pdfa, "convert to PDF/A for long-term archiving")
+    sp.add_argument("--engine", choices=archive.PDFA_ENGINES, default="auto",
+                    help="auto (default): ZPDF's own converter, Ghostscript for what it can't "
+                         "put right; builtin; ghostscript")
     sp.add_argument("--level", choices=archive.PDFA_LEVELS, default="2",
                     help="PDF/A-1b, -2b (default) or -3b")
 

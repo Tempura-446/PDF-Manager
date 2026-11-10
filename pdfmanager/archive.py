@@ -382,12 +382,48 @@ def _ps_text(text):
     return "<" + ("\ufeff" + text).encode("utf-16-be").hex() + ">"
 
 
-def to_pdfa(path, output, level="2", password=None):
+PDFA_ENGINES = ("auto", "builtin", "ghostscript")
+
+
+def to_pdfa(path, output, level="2", password=None, engine="auto", notes=None, with_engine=False):
     """Convert to PDF/A-1b, -2b (default) or -3b for long-term archiving:
     fonts embedded, colours tied to an sRGB profile, no encryption or
-    scripts. Needs Ghostscript."""
+    scripts.
+
+    ``engine``: "builtin" is ZPDF's own (pdfafix.py), which puts right what
+    the standard asks for and leaves the pages as they are; "ghostscript"
+    rewrites the whole file with Ghostscript; "auto" uses ZPDF's own and
+    turns to Ghostscript, when it's installed, for a file ZPDF can't put
+    right alone. ``notes`` (a list) is told what was done. Returns the
+    output, or with ``with_engine`` (output, the engine used)."""
     if str(level) not in PDFA_LEVELS:
         raise core.PdfManagerError("PDF/A level must be 1, 2 or 3")
+    if engine not in PDFA_ENGINES:
+        raise core.PdfManagerError(f"engine must be one of {', '.join(PDFA_ENGINES)}")
+    used = "ghostscript"
+    if engine == "ghostscript":
+        _ghostscript_pdfa(path, output, level, password)
+    else:
+        from pdfmanager import pdfafix
+
+        try:
+            pdfafix.convert(path, output, level=str(level), password=password, notes=notes)
+            used = "builtin"
+        except pdfafix.CannotConvert as exc:
+            if engine == "builtin" or not find_ghostscript():
+                more = ("" if engine == "builtin" else
+                        ". Ghostscript (free, https://ghostscript.com/releases/gsdnld.html) can "
+                        "convert files like this: install it and try again")
+                raise core.PdfManagerError(f"can't be made PDF/A-{level}b: {exc}{more}") from None
+            _ghostscript_pdfa(path, output, level, password)
+            if notes is not None:
+                notes.append("converted with Ghostscript (ZPDF alone couldn't: "
+                             f"{'; '.join(exc.reasons[:2])})")
+    return (Path(output), used) if with_engine else Path(output)
+
+
+def _ghostscript_pdfa(path, output, level="2", password=None):
+    """PDF/A by having Ghostscript write the file again."""
     gs = find_ghostscript()
     if not gs:
         raise core.PdfManagerError(
