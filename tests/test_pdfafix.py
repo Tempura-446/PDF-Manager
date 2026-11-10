@@ -420,3 +420,109 @@ def test_a_title_with_stray_control_characters_is_tidied(tmp_path):
         pdf.save()
     out = pdfafix.convert(src, tmp_path / "out.pdf")
     assert core.open_pdf(out).metadata["/Title"] == "Report 2024"
+
+
+# -- found by veraPDF ---------------------------------------------------------------------
+
+def program_widths(path):
+    """[(font name, code, width the embedded program gives, width the dictionary says)]
+    for every code of every simple TrueType font embedded in the file."""
+    import struct
+
+    rows = []
+    with pikepdf.open(path) as pdf:
+        for font in pdf.objects:
+            if not (isinstance(font, pikepdf.Dictionary) and font.get("/Subtype") == "/TrueType"
+                    and "/FontDescriptor" in font and "/FontFile2" in font.FontDescriptor):
+                continue
+            program = font.FontDescriptor.FontFile2.read_bytes()
+            tables = {program[12 + 16 * i:16 + 16 * i]: struct.unpack(">II", program[20 + 16 * i:28 + 16 * i])[0]
+                      for i in range(struct.unpack(">H", program[4:6])[0])}
+            units = struct.unpack(">H", program[tables[b"head"] + 18:tables[b"head"] + 20])[0]
+            first, count = struct.unpack(">HH", program[tables[b"cmap"] + 18:tables[b"cmap"] + 22])
+            glyphs = struct.unpack(f">{count}H", program[tables[b"cmap"] + 22:tables[b"cmap"] + 22 + 2 * count])
+            full = struct.unpack(">H", program[tables[b"hhea"] + 34:tables[b"hhea"] + 36])[0]
+            for code, said in enumerate(font.Widths, int(font.FirstChar)):
+                glyph = glyphs[code - first]
+                advance = struct.unpack(">H", program[tables[b"hmtx"] + 4 * min(glyph, full - 1):][:2])[0]
+                rows.append((str(font.BaseFont), code, advance * 1000 / units, float(said)))
+    return rows
+
+
+MONO_SHORT = Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf")
+
+
+@pytest.mark.skipif(not MONO_SHORT.is_file(), reason="needs DejaVu Sans Mono Bold")
+def test_a_fixed_width_font_keeps_its_widths_inside_the_font_too(tmp_path, monkeypatch):
+    """Fixed-width fonts (Courier New) list one width for all their glyphs;
+    the subset must carry it in the font's own units."""
+    real = pdfafix.stand_in
+    monkeypatch.setattr(pdfafix, "stand_in",
+                        lambda name: (str(MONO_SHORT), 0) if "Courier" in name else real(name))
+    out = pdfafix.convert(text_pdf(tmp_path / "a.pdf", "Courier-Bold", "Total 176.16"), tmp_path / "out.pdf")
+    rows = program_widths(out)
+    assert rows and all(abs(inside - said) <= 1 for _, _, inside, said in rows), \
+        [r for r in rows if abs(r[2] - r[3]) > 1][:3]
+
+
+@pytest.mark.skipif(not all(has_like.values()), reason="needs Arial/Times New Roman/Courier New or Liberation")
+@pytest.mark.parametrize("font", ["Helvetica", "Times-BoldItalic", "Courier", "Courier-BoldOblique"])
+def test_every_embedded_font_agrees_with_its_dictionary(tmp_path, font):
+    out = pdfafix.convert(text_pdf(tmp_path / "a.pdf", font, "Invoice 42: \xa3 176.16 \xe9"), tmp_path / "out.pdf")
+    rows = program_widths(out)
+    assert rows and all(abs(inside - said) <= 1 for _, _, inside, said in rows)
+
+
+def cid_page(path):
+    """A page whose font is a CID subset with no CIDSet, as browsers write."""
+    from reportlab.pdfbase.ttfonts import TTFontFile
+
+    import reportlab
+
+    vera = Path(reportlab.__file__).parent / "fonts" / "Vera.ttf"
+    face = TTFontFile(str(vera))
+    program = face.makeSubset([ord(c) for c in "Hello"])
+    pdf = pikepdf.new()
+    name = pikepdf.Name
+    descriptor = pdf.make_indirect(pikepdf.Dictionary(
+        Type=name.FontDescriptor, FontName=name("/AAAAAA+Vera"), Flags=4, FontBBox=[0, -200, 1000, 900],
+        ItalicAngle=0, Ascent=900, Descent=-200, CapHeight=700, StemV=80,
+        FontFile2=pdf.make_stream(program, Length1=len(program))))
+    widths = [round(face.charWidths[ord(c)]) for c in "Helo"]
+    cid = pdf.make_indirect(pikepdf.Dictionary(
+        Type=name.Font, Subtype=name.CIDFontType2, BaseFont=name("/AAAAAA+Vera"),
+        CIDSystemInfo=pikepdf.Dictionary(Registry=pikepdf.String("Adobe"), Ordering=pikepdf.String("Identity"),
+                                         Supplement=0),
+        FontDescriptor=descriptor, CIDToGIDMap=name.Identity, DW=600, W=[1, widths]))
+    to_unicode = (b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /X def "
+                  b"/CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 4 beginbfchar "
+                  b"<0001> <0048> <0002> <0065> <0003> <006C> <0004> <006F> endbfchar endcmap "
+                  b"CMapName currentdict /CMap defineresource pop end end")
+    font = pdf.make_indirect(pikepdf.Dictionary(
+        Type=name.Font, Subtype=name.Type0, BaseFont=name("/AAAAAA+Vera"), Encoding=name("/Identity-H"),
+        DescendantFonts=[cid], ToUnicode=pdf.make_stream(to_unicode)))
+    page = pdf.add_blank_page(page_size=(300, 100))
+    page.Resources = pikepdf.Dictionary(Font=pikepdf.Dictionary(F1=font))
+    page.Contents = pdf.make_stream(b"BT /F1 24 Tf 20 40 Td <00010002000300030004> Tj ET")
+    pdf.save(path)
+    return Path(path)
+
+
+def test_pdfa_1_gets_the_list_of_glyphs_a_cid_subset_needs(tmp_path):
+    src = cid_page(tmp_path / "cid.pdf")
+    found = pdfacheck.check(src, level="1b", engine="builtin")["issues"]
+    assert any("CIDSet" in i["message"] for i in found), "ZPDF's own check sees it too"
+    out = pdfafix.convert(src, tmp_path / "out.pdf", level="1")
+    with pikepdf.open(out) as pdf:
+        descriptor = next(o for o in pdf.objects if isinstance(o, pikepdf.Dictionary)
+                          and o.get("/Type") == "/FontDescriptor")
+        listed = descriptor.CIDSet.read_bytes()
+        import struct
+
+        program = descriptor.FontFile2.read_bytes()
+        tables = {program[12 + 16 * i:16 + 16 * i]: struct.unpack(">II", program[20 + 16 * i:28 + 16 * i])[0]
+                  for i in range(struct.unpack(">H", program[4:6])[0])}
+        glyphs = struct.unpack(">H", program[tables[b"maxp"] + 4:tables[b"maxp"] + 6])[0]
+    bits = "".join(f"{byte:08b}" for byte in listed)
+    assert bits[:glyphs] == "1" * glyphs and "1" not in bits[glyphs:]
+    assert core.extract_text(out).strip() == "Hello"

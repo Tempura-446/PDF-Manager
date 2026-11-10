@@ -691,6 +691,10 @@ class _Checker:
                  if isinstance(desc, self.pk.Dictionary) and k in desc]
         if not files:
             self.add("font-embed", f"The font {name} isn't embedded.", page)
+        elif self.part == 1 and kind == "/Type0" and "/CIDSet" not in desc \
+                and re.match(r"^[A-Z]{6}\+", str(font.get("/BaseFont", "")).lstrip("/")):
+            self.add("font-subset", f"The subset of the font {name} doesn't list its glyphs "
+                                    "(CIDSet).", page)
         elif self.part == 1 and files == ["/FontFile"] and "/CharSet" not in desc \
                 and re.match(r"^[A-Z]{6}\+", str(font.get("/BaseFont", "")).lstrip("/")):
             self.add("font-subset", f"The subset of the font {name} doesn't list its characters "

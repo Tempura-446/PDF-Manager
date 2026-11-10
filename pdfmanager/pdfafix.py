@@ -198,6 +198,52 @@ def _to_unicode(chars):
             + body + "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n").encode("ascii")
 
 
+def _sfnt_tables(program):
+    """{table name: offset} of a TrueType font program."""
+    import struct
+
+    return {program[12 + 16 * i:16 + 16 * i]: struct.unpack(">I", program[20 + 16 * i:24 + 16 * i])[0]
+            for i in range(struct.unpack(">H", program[4:6])[0])}
+
+
+def _true_metrics(face):
+    """Put right the advance widths reportlab keeps for subsetting. A font
+    lists widths for its first glyphs only when the rest share the last
+    one (every glyph of a fixed-width font); reportlab keeps that shared
+    width in thousandths, not the font's own units, and would write it
+    into the subset so: Courier New's letters came out 293 wide inside
+    the font and 600 in the PDF, which PDF/A doesn't allow."""
+    import struct
+
+    try:
+        listed = struct.unpack(">H", face.get_table("hhea")[34:36])[0]
+        shared = struct.unpack(">H", face.get_table("hmtx")[4 * (listed - 1):4 * listed - 2])[0]
+    except Exception:
+        return
+    for glyph in range(listed, len(face.hmetrics)):
+        face.hmetrics[glyph] = (shared, face.hmetrics[glyph][1])
+
+
+def _program_agrees(program, widths):
+    """Whether the subset gives every code the width the dictionary will say."""
+    import struct
+
+    try:
+        tables = _sfnt_tables(program)
+        units = struct.unpack(">H", program[tables[b"head"] + 18:tables[b"head"] + 20])[0]
+        first, count = struct.unpack(">HH", program[tables[b"cmap"] + 18:tables[b"cmap"] + 22])
+        glyphs = struct.unpack(f">{count}H", program[tables[b"cmap"] + 22:tables[b"cmap"] + 22 + 2 * count])
+        listed = struct.unpack(">H", program[tables[b"hhea"] + 34:tables[b"hhea"] + 36])[0]
+        for code, said in enumerate(widths):
+            glyph = glyphs[code - first]
+            at = tables[b"hmtx"] + 4 * min(glyph, listed - 1)
+            if abs(struct.unpack(">H", program[at:at + 2])[0] * 1000 / units - said) > 1:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def _embed(pdf, font, codes):
     """Embed an installed font for the simple font ``font``, shown with the
     character ``codes``; returns the family of the font used. Raises
@@ -253,7 +299,10 @@ def _embed(pdf, font, codes):
                              "move the text")
     subset = [ord(chars[code]) if code in chars and len(chars[code]) == 1
               and ord(chars[code]) in face.charToGlyph else 0x20 for code in range(256)]
+    _true_metrics(face)
     program = face.makeSubset(subset)
+    if not _program_agrees(program, widths):
+        raise ValueError(f"the installed {family} couldn't be put into the file with its widths right")
     tag = "".join(chr(65 + (sum(program[i::6]) + i) % 26) for i in range(6))
     ps_name = face.name.decode("latin-1", "replace") if isinstance(face.name, bytes) else str(face.name)
     base = pikepdf.Name(f"/{tag}+{ps_name}".replace(" ", ""))
@@ -295,6 +344,35 @@ def _embed_fonts(pdf, notes, reasons):
 # --------------------------------------------------------------------------
 # The rest of the file
 # --------------------------------------------------------------------------
+
+def _cid_sets(pdf):
+    """PDF/A-1: a subset of a CID font says which glyphs it holds (CIDSet).
+    Browsers leave that out. For TrueType outlines, where the PDF's
+    numbers are the font's own glyph numbers, it is every glyph in the
+    embedded program."""
+    import struct
+
+    import pikepdf
+
+    for font in pdf.objects:
+        if not (isinstance(font, pikepdf.Dictionary) and font.get("/Subtype") == "/CIDFontType2"):
+            continue
+        descriptor = font.get("/FontDescriptor")
+        mapping = font.get("/CIDToGIDMap")
+        if not isinstance(descriptor, pikepdf.Dictionary) or "/FontFile2" not in descriptor \
+                or not (mapping is None or mapping == "/Identity"):
+            continue  # another numbering: left for the check to judge
+        try:
+            program = descriptor.FontFile2.read_bytes()
+            maxp = _sfnt_tables(program)[b"maxp"]
+            glyphs = struct.unpack(">H", program[maxp + 4:maxp + 6])[0]
+        except Exception:
+            continue
+        bits = bytearray(-(-glyphs // 8))
+        for glyph in range(glyphs):
+            bits[glyph // 8] |= 0x80 >> (glyph % 8)
+        descriptor.CIDSet = pdf.make_stream(bytes(bits))
+
 
 HIDDEN = 1 | 2 | 32   # invisible, hidden, not shown on screen
 
@@ -517,6 +595,8 @@ def _convert(path, output, level, password, notes):
             _streams(pdf)
             if level == "3":
                 _attachments(pdf)
+            if level == "1":
+                _cid_sets(pdf)
             _output_intent(pdf)
             _metadata(pdf, level, output.stem)
             pdf.save(result, min_version="1.4" if level == "1" else "1.7",
