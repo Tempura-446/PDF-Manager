@@ -1,18 +1,19 @@
-/* PDF reader. Uses the app's "paper & ink" tokens from gui.html. */
+/* PDF reader. Uses the app's "layered" tokens from gui.html: the pages lie on the
+   tinted backdrop, bars are solid, menus and toasts are frosted. */
 
-.rd { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--surface-3); container-type: inline-size; }
+.rd { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; background: transparent; container-type: inline-size; }
 .rd [hidden] { display: none !important; }
 .rd button { font-family: inherit; color: inherit; }
 
 /* ---- Toolbar ---- */
 .rd-toolbar {
   display: flex; align-items: center; gap: 4px; padding: 8px 12px; min-height: 54px;
-  background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: nowrap;
+  background: color-mix(in srgb, var(--sidebar) 88%, transparent); border-bottom: 1px solid var(--border); flex-wrap: nowrap;
 }
 .rd-group { display: flex; align-items: center; gap: 2px; flex: none; }
 .rd-sep { width: 1px; height: 22px; background: var(--border-strong); opacity: .6; margin: 0 8px; flex: none; }
 .rd:has(.rd-tabbar:not([hidden])) .rd-title { visibility: hidden; }  /* the active tab is the title then */
-.rd-title { min-width: 0; flex: 1 1 auto; font-weight: 600; font-size: 14px; letter-spacing: -0.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 8px; }
+.rd-title { min-width: 0; flex: 1 1 auto; font: 400 19px/1.2 var(--display, inherit); letter-spacing: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 8px; }
 .rd-btn {
   height: 34px; min-width: 34px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-sm); background: none;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; color: var(--text-2); font-size: 14px;
@@ -23,14 +24,9 @@
 .rd-btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
 .rd-btn:disabled { opacity: .4; cursor: default; background: none; transform: none; }
 .rd-btn svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
-.rd-btn.primary {
-  color: var(--accent-text); padding: 0 14px; font-weight: 600;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, white) 0%, var(--accent) 100%);
-  border-color: color-mix(in srgb, var(--accent) 85%, black 10%);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / .18), 0 1px 2px rgb(27 27 25 / .12);
-}
-.rd-btn.primary:hover { filter: brightness(1.06); background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, white) 0%, var(--accent) 100%); color: var(--accent-text); }
-.rd-btn.primary:active { transform: translateY(1px); box-shadow: inset 0 1px 0 rgb(255 255 255 / .1); }
+.rd-btn.primary { color: var(--accent-text); padding: 0 14px; font-weight: 600; background: var(--accent); box-shadow: 0 1px 2px rgb(20 23 28 / .12); }
+.rd-btn.primary:hover { background: var(--accent-hover); color: var(--accent-text); }
+.rd-btn.primary:active { transform: scale(.98); }
 .rd-page { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; margin-left: 2px; }
 .rd-page input {
   width: 52px; height: 34px; text-align: center; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
@@ -97,7 +93,7 @@
 .rd-body { position: relative; flex: 1; display: flex; min-height: 0; }
 .rd-sidebar {
   width: 224px; flex: none; display: flex; flex-direction: column; min-height: 0;
-  background: var(--sidebar); border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--sidebar) 72%, transparent); border-right: 1px solid var(--border);
 }
 .rd-tabs { display: flex; gap: 2px; margin: 10px 10px 6px; padding: 3px; border-radius: var(--radius-sm); background: var(--surface-3); }
 .rd-tab {
@@ -142,7 +138,7 @@
 .rd-container:focus-visible { outline: none; }  /* the page view itself needs no focus ring */
 .rd-container .pdfViewer { padding: 18px 0 40px; }
 .rd-container .pdfViewer .page {
-  box-shadow: 0 0 0 1px rgb(0 0 0 / .05), 0 1px 3px rgb(0 0 0 / .14), 0 10px 28px rgb(0 0 0 / .08);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / .05), 0 2px 6px rgb(20 23 28 / .08), 0 16px 40px rgb(20 23 28 / .14);
   border: 0; margin: 14px auto;
 }
 .rd-container.hand { cursor: grab; }
@@ -154,11 +150,7 @@
 /* ---- Start screen (no document open) ---- */
 .rd-empty {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px;
-  padding: 24px; background: var(--bg); overflow-y: auto;
-}
-.rd-empty::before {
-  content: ""; position: absolute; inset: 0; pointer-events: none;
-  background: radial-gradient(640px 260px at 85% -10%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 70%);
+  padding: 24px; background: transparent; overflow-y: auto;
 }
 .rd-empty > * { position: relative; }
 .rd-empty:has(.rd-recent:not([hidden])) { justify-content: flex-start; padding-top: 6vh; }
@@ -173,7 +165,7 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .rd-empty-icon svg { width: 30px; height: 30px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.rd-empty h2 { margin: 0 0 6px; font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+.rd-empty h2 { margin: 0 0 6px; font: 400 30px/1.15 var(--display, inherit); letter-spacing: 0; }
 .rd-empty p { margin: 0 0 20px; color: var(--muted); }
 .rd-empty .rd-btn.primary { height: 38px; padding: 0 18px; }
 .rd-empty .keys { margin: 22px 0 0; font-size: 12px; color: var(--faint); }
@@ -181,14 +173,15 @@
 /* ---- Overlays: menu, dialogs, toasts, loading ---- */
 .rd-menu {
   position: absolute; right: 12px; top: 50px; z-index: 20; min-width: 248px; padding: 6px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop);
+  background: var(--glass, var(--surface)); -webkit-backdrop-filter: blur(22px) saturate(1.5); backdrop-filter: blur(22px) saturate(1.5);
+  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--float, var(--shadow-pop));
   animation: rd-menu-pop var(--t) var(--ease);
 }
 .rd-menu button {
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--radius-xs);
   background: none; cursor: pointer; text-align: left; font-size: 14px; color: var(--text);
 }
-.rd-menu button:hover, .rd-menu button:focus-visible { background: var(--surface-2); outline: none; }
+.rd-menu button:hover, .rd-menu button:focus-visible { background: color-mix(in srgb, var(--accent) 14%, transparent); outline: none; }
 .rd-menu button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; color: var(--muted); flex: none; }
 .rd-menu button .check { margin-left: auto; color: var(--accent); visibility: hidden; }
 .rd-menu button[aria-checked="true"] .check { visibility: visible; }
@@ -198,12 +191,12 @@
 
 .rd-dialog {
   border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 0; background: var(--surface); color: var(--text);
-  box-shadow: var(--shadow-pop); width: min(520px, calc(100vw - 32px));
+  box-shadow: var(--float, var(--shadow-pop)); width: min(520px, calc(100vw - 32px));
 }
 .rd-dialog:has(.rd-cardbox) { width: min(820px, calc(100vw - 32px)); }
-.rd-dialog::backdrop { background: rgb(20 20 18 / .36); backdrop-filter: blur(3px); }
+.rd-dialog::backdrop { background: rgb(20 23 28 / .36); backdrop-filter: blur(3px); }
 .rd-dialog form { padding: 24px 26px 22px; }
-.rd-dialog h3 { margin: 0 0 12px; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+.rd-dialog h3 { margin: 0 0 12px; font: 400 26px/1.15 var(--display, inherit); letter-spacing: 0; }
 .rd-dialog p { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
 .rd-dialog input[type=password], .rd-dialog input[type=text]:not(.rd-sigtext), .rd-dialog input[type=number] {
   width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit;
@@ -218,29 +211,26 @@
 }
 .rd-dialog .actions button:hover { background: var(--surface-2); }
 .rd-dialog .actions button:active { transform: translateY(1px); }
-.rd-dialog .actions button.primary {
-  color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 85%, black 10%);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, white) 0%, var(--accent) 100%);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / .18), 0 1px 2px rgb(27 27 25 / .12);
-}
-.rd-dialog .actions button.primary:hover { filter: brightness(1.06); }
+.rd-dialog .actions button.primary { color: var(--accent-text); border-color: transparent; background: var(--accent); box-shadow: 0 1px 2px rgb(20 23 28 / .12); }
+.rd-dialog .actions button.primary:hover { background: var(--accent-hover); }
 .rd-props { display: grid; grid-template-columns: max-content 1fr; gap: 7px 18px; font-size: 14px; margin: 0; }
 .rd-props dt { color: var(--muted); }
 .rd-props dd { margin: 0; word-break: break-word; }
 
 .rd-toast {
   position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 30; max-width: calc(100% - 32px);
-  padding: 10px 16px; border-radius: 999px; background: var(--text); color: var(--bg); font-size: 14px; box-shadow: var(--shadow-pop);
+  padding: 10px 16px; border-radius: 999px; font-size: 14px; color: var(--text); border: 1px solid var(--border);
+  background: var(--glass, var(--surface)); -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4); box-shadow: var(--float, var(--shadow-pop));
   display: flex; align-items: center; gap: 14px; animation: rd-rise calc(var(--t) * 1.5) var(--ease);
 }
-.rd-toast button { border: 0; background: none; color: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0; }
+.rd-toast button { border: 0; background: none; color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0; }
 @keyframes rd-rise { from { opacity: 0; transform: translate(-50%, 8px); } }
 .rd-loading { position: absolute; inset: 0; display: grid; place-items: center; z-index: 5; background: color-mix(in srgb, var(--surface-3) 60%, transparent); backdrop-filter: blur(2px); }
 .rd-spinner { width: 34px; height: 34px; border: 3px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: rd-spin .8s linear infinite; }
 @keyframes rd-spin { to { transform: rotate(360deg); } }
 
 /* Full screen: the reader fills the screen. */
-.rd:fullscreen { background: #232321; }
+.rd:fullscreen { background: var(--bg); }
 .rd:fullscreen .rd-sidebar { display: none; }
 
 /* Printing: only the rendered pages. */
@@ -326,7 +316,7 @@
 .rd-recent li:hover .rd-recent-x, .rd-recent-x:focus-visible { opacity: 1; }
 
 /* ---- Document tabs ---- */
-.rd-tabbar { display: flex; align-items: flex-end; gap: 3px; padding: 8px 10px 0; background: var(--surface-2); border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: thin; }
+.rd-tabbar { display: flex; align-items: flex-end; gap: 3px; padding: 8px 10px 0; background: color-mix(in srgb, var(--sidebar) 70%, transparent); border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: thin; }
 .rd-doctab {
   display: flex; align-items: center; max-width: 220px; min-width: 110px; border: 1px solid transparent; border-bottom: 0; border-radius: 10px 10px 0 0; color: var(--muted);
   transition: background var(--t) var(--ease), color var(--t) var(--ease);

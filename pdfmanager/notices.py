@@ -4,8 +4,9 @@ installs with it.
 The notices are built from what is installed: ZPDF's own requirements
 (with the "app" and "ocr" extras the Windows installer uses), followed
 recursively, each with the licence files its package ships, plus the parts
-ZPDF carries itself (pdf.js in static/pdfjs, and Tesseract's glyphless
-font in textlayer.py). So the list always matches the copy it comes with.
+ZPDF carries itself (pdf.js in static/pdfjs, the interface's fonts in
+static/fonts, and Tesseract's glyphless font in textlayer.py). So the list
+always matches the copy it comes with.
 """
 import re
 from importlib import metadata
@@ -104,13 +105,22 @@ def _read(path):
         return ""
 
 
+# The interface's fonts, shipped in static/fonts (from the Fontsource packages),
+# each with its licence beside it as OFL-<key>.txt.
+FONTS = (("Instrument Sans", "instrument-sans"), ("Instrument Serif", "instrument-serif"),
+         ("JetBrains Mono", "jetbrains-mono"))
+
+
 def _vendored():
+    fonts = HERE / "static" / "fonts"
     pdfjs = HERE / "static" / "pdfjs"
     version = _read(pdfjs / "VERSION").split(" ")[0] or "?"
     return [
         ("pdf.js", version, "Apache-2.0 (Mozilla)", _read(pdfjs / "LICENSE")),
         ("Tesseract glyphless font (pdf.ttf, in textlayer.py)", "5", "Apache-2.0 (the Tesseract authors)",
          "Licensed under the Apache License, Version 2.0, as is pdf.js above."),
+        *((f"{name} font (static/fonts)", "5.3.0 (Fontsource)", "OFL-1.1 (SIL Open Font License 1.1)",
+           _read(fonts / f"OFL-{key}.txt")) for name, key in FONTS),
     ]
 
 

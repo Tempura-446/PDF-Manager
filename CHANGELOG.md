@@ -4,6 +4,21 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.19.0
+
+- A new look and a new way in. ZPDF opens on a start screen: drop or open
+  a PDF, or pick up a recent file. Each recent file says what it is at a
+  glance: its pages and size, and whether it is scanned, searchable,
+  protected, signed or a form.
+- The long list of tools at the side is now a slim rail with five groups:
+  Read, Pages, Convert, Protect and All. Every tool is still there, and
+  the search box at the top (Ctrl+K, or /) finds any of them.
+- A document gets more of the window: the rail stays narrow beside it.
+- Layered surfaces, softer corners and new type, in light and dark. The
+  theme choice has moved into Settings.
+- This is the first of three steps; next, the actions that fit a file
+  will appear beside it when it is open.
+
 ## 0.18.0
 
 - PDF → Word's built-in converter reads pages the way the other exports
