@@ -158,6 +158,7 @@ const { chromium } = require("playwright");
         error: await page.evaluate(() => { const e = document.querySelector('#fp-opts-sign-cert [role="alert"]'); return e && !e.hidden ? e.textContent : ""; }) };
     }
     out.scrollWidth1280 = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
+    out.moreButtonHeights = await page.evaluate(() => [...document.querySelectorAll('.fp-more button')].map((b) => Math.round(b.getBoundingClientRect().height)));
     out.toolbarFits = await page.evaluate(() => { const t = document.querySelector(".rd-toolbar"); return [t.scrollWidth, t.clientWidth]; });
     await page.close();
 

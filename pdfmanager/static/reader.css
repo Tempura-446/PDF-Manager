@@ -65,8 +65,8 @@
 
 /* ---- The file panel: beside the pages from 1100 px, over them below that ---- */
 .rd-side {
-  flex: none; width: 340px; margin: 12px 12px 12px 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
-  scrollbar-gutter: stable;  /* its buttons keep their width when a form makes it scroll */
+  flex: none; width: 356px; margin: 12px 12px 12px 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-gutter: stable;  /* room kept for the scrollbar (hence the width): its buttons never change width or wrap when a form makes it scroll */
   background: var(--surface); color: var(--text); border-radius: var(--radius-lg); box-shadow: var(--float);
   scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent;
 }

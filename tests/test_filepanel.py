@@ -160,6 +160,9 @@ def test_the_file_panel_in_a_browser(app, tmp_path):
     # (h) Nothing beyond this computer; nothing scrolls sideways; the toolbar fits.
     hosts = {urlsplit(u).hostname for u in out["requests"] if not u.startswith(("data:", "blob:"))}
     assert hosts == {"127.0.0.1"}, hosts
+    heights = out["moreButtonHeights"]
+    assert len(heights) == 6 and len(set(heights)) == 1 and heights[0] < 44, \
+        f"a label in 'Or do something else' wraps onto two lines: {heights}"
     for key in ("scrollWidth1280", "scrollWidth1000"):
         width, viewport = out[key]
         assert width == viewport, (key, width, viewport)
