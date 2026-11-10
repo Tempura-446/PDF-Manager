@@ -6,6 +6,12 @@ also the notes of its release on
 
 ## 0.16.0
 
+- Compress keeps scanned text sharp. At Medium and High, a scanned page is
+  stored as a black-and-white text shape at the scan's full resolution
+  over a low-resolution background, with the ink's colour kept, instead
+  of being blurred down as a whole. The file is about as small as before
+  and the text stays as sharp as the scan. On by default; "Keep scanned
+  text sharp" in Compress, or `--no-sharp-scans`, turns it off.
 - When something goes wrong, the message carries a short error ID, and
   ZPDF keeps a log of what happened (the tools run, how long they took, and
   errors), with document names and your user folder left out. Settings ›

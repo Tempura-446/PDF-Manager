@@ -261,4 +261,4 @@ def test_compressing_scans_keeps_memory_to_a_page(tmp_path):
 - [ ] **Step 2: Run** `pytest tests/test_perf.py --perf -q -k scans`. Expected: fail (`unknown work compress-scan`).
 - [ ] **Step 3: Implement** the work name; write the README paragraph (what it does, the checkbox, `--no-sharp-scans`, that Low never uses it) and the CHANGELOG 0.17.0 section; set the version.
 - [ ] **Step 4: Run** the full suite with `--perf` on Python 3.13 with OCR, the plain suite on system Python and on 3.10, and `python packaging/release.py --dry-run --skip-checks`. Expected: all pass; the release files are made.
-- [ ] **Step 5: Commit** "Version 0.17.0: scans compress with their text kept sharp".
+- [ ] **Step 5: Commit** (version stays 0.16.0: see the ledger ruling; 0.16.0 was never published).
