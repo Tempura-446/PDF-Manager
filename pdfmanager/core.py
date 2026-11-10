@@ -1141,7 +1141,7 @@ def pack(path):
             pass
 
 
-def convert_color(path, output, target, icc_profile=None, password=None):
+def convert_color(path, output, target, icc_profile=None, password=None, images="all"):
     """Convert a PDF's colours to ``target`` ("gray", "rgb" or "cmyk").
 
     Converts colours set in page content and form XObjects with the device,
@@ -1158,7 +1158,7 @@ def convert_color(path, output, target, icc_profile=None, password=None):
     from PIL import ImageCms
 
     try:
-        imaging.convert_colors(writer, target, icc_profile)
+        imaging.convert_colors(writer, target, icc_profile, images=images)
         _finish_compression(writer)
     except (OSError, ImageCms.PyCMSError) as exc:  # unreadable or wrong-type ICC profile
         raise PdfManagerError(f"cannot use ICC profile {icc_profile}: {exc}") from None

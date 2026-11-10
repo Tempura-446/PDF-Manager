@@ -98,11 +98,16 @@ def _code_chars(font):
 
 
 def _original_widths(font):
-    """{code: width in thousandths} the file's font has: its /Widths, or
-    for a standard font without them the widths every reader knows."""
+    """A function giving the width (thousandths) the file's font has for a
+    code: from its /Widths (its MissingWidth outside them), or for a
+    standard font without them the widths every reader knows. None when
+    neither is known."""
     if "/Widths" in font and "/FirstChar" in font:
         first = int(font.FirstChar)
-        return {first + i: float(w) for i, w in enumerate(font.Widths)}
+        table = {first + i: float(w) for i, w in enumerate(font.Widths)}
+        descriptor = font.get("/FontDescriptor")
+        missing = float(descriptor.get("/MissingWidth", 0)) if descriptor is not None else 0.0
+        return lambda code: table.get(code, missing)
     from reportlab.pdfbase import pdfmetrics
 
     name = fonts.strip_subset(str(font.get("/BaseFont", "")).lstrip("/"))
@@ -112,20 +117,26 @@ def _original_widths(font):
         return None
     # reportlab's table is in WinAnsi order: by character, for any encoding.
     by_char = {bytes([code]).decode("cp1252", "ignore"): w for code, w in enumerate(widths)}
-    return {code: float(by_char[char]) for code, char in _code_chars(font).items() if char in by_char}
+    chars = _code_chars(font)
+    return lambda code: float(by_char[chars[code]]) if chars.get(code) in by_char else None
 
 
-def _used_codes(pdf):
-    """{font object key: the character codes shown with it} across pages,
-    the forms they draw and the looks of annotations."""
+def _used_fonts(pdf):
+    """{object number: (font, the character codes shown with it)} for the
+    fonts text is shown with, across pages, the forms they draw and the
+    looks of annotations. A font written straight into a resource
+    dictionary is made an object of its own, so it can be told apart.
+    (Text in patterns and the like isn't looked for: a font used only
+    there is left as it is, and the check afterwards says so.)"""
     import pikepdf
 
     used, seen = {}, set()
 
     def walk(stream, resources, depth=0):
-        if depth > 8 or resources is None:
+        if depth > 8 or not isinstance(resources, pikepdf.Dictionary):
             return
-        font_of = resources.get("/Font") or {}
+        font_of = resources.get("/Font")
+        font_of = font_of if isinstance(font_of, pikepdf.Dictionary) else None
         current = None
         try:
             instructions = pikepdf.parse_content_stream(stream)
@@ -134,20 +145,30 @@ def _used_codes(pdf):
         for operands, operator in instructions:
             op = str(operator)
             if op == "Tf" and operands:
-                current = font_of.get(str(operands[0]))
+                key = str(operands[0])
+                current = font_of.get(key) if font_of is not None else None
+                if isinstance(current, pikepdf.Dictionary) and not current.is_indirect:
+                    current = font_of[key] = pdf.make_indirect(current)
+                if not isinstance(current, pikepdf.Dictionary):
+                    current = None
+                else:  # chosen, even if nothing is shown with it here
+                    used.setdefault(current.objgen, (current, set()))
             elif op in ("Tj", "'", '"', "TJ") and current is not None and operands:
-                key = current.objgen if current.is_indirect else id(current)
-                codes = used.setdefault(key, set())
+                codes = used.setdefault(current.objgen, (current, set()))[1]
                 last = operands[-1]
                 for piece in (last if isinstance(last, pikepdf.Array) else [last]):
                     if isinstance(piece, pikepdf.String):
                         codes.update(bytes(piece))
             elif op == "Do" and operands:
-                form = (resources.get("/XObject") or {}).get(str(operands[0]))
-                if form is not None and form.get("/Subtype") == "/Form" and form.objgen not in seen:
+                forms = resources.get("/XObject")
+                form = forms.get(str(operands[0])) if isinstance(forms, pikepdf.Dictionary) else None
+                if isinstance(form, pikepdf.Stream) and form.get("/Subtype") == "/Form" \
+                        and form.objgen not in seen:
                     seen.add(form.objgen)
                     walk(form, form.get("/Resources", resources), depth + 1)
 
+    form_fonts = pdf.Root.get("/AcroForm")
+    form_fonts = form_fonts.get("/DR") if isinstance(form_fonts, pikepdf.Dictionary) else None
     for page in pdf.pages:
         walk(page, page.get("/Resources"))
         for annot in page.get("/Annots") or []:
@@ -156,7 +177,7 @@ def _used_codes(pdf):
                 for stream in ([look] if isinstance(look, pikepdf.Stream) else
                                list(look.values()) if isinstance(look, pikepdf.Dictionary) else []):
                     if isinstance(stream, pikepdf.Stream):
-                        walk(stream, stream.get("/Resources"))
+                        walk(stream, stream.get("/Resources", form_fonts))
     return used
 
 
@@ -178,40 +199,66 @@ def _to_unicode(chars):
 
 
 def _embed(pdf, font, codes):
-    """Embed an installed font for the simple font ``font``; returns the
-    name of the font used, or raises ValueError saying why none could be."""
+    """Embed an installed font for the simple font ``font``, shown with the
+    character ``codes``; returns the family of the font used. Raises
+    ValueError, saying why, unless every one of those codes is known to
+    come out as the same letter, as wide as it was."""
+    import struct
+
     import pikepdf
     from reportlab.pdfbase.ttfonts import TTFontFile
 
     name = fonts.strip_subset(str(font.get("/BaseFont", "")).lstrip("/")) or "a font"
+    descriptor = font.get("/FontDescriptor")
+    flags = int(descriptor.get("/Flags", 0)) if isinstance(descriptor, pikepdf.Dictionary) else 0
+    if flags & 4 or (font.get("/Subtype") == "/TrueType" and "/Encoding" not in font):
+        # Its codes mean what the font's own table says, and that font isn't here.
+        raise ValueError("it has its own table of letters, which only the font itself knows")
     found = stand_in(name)
     if found is None:
         raise ValueError("no font with the same letter widths is installed")
     chars = _code_chars(font)
     face = TTFontFile(found[0], subfontIndex=found[1])
+    family = face.familyName.decode("latin-1", "replace") if isinstance(face.familyName, bytes) \
+        else str(face.familyName)
+    try:
+        licence = struct.unpack(">H", face.get_table("OS/2")[8:10])[0]
+    except Exception:
+        licence = 0
+    if licence & 0x0002 or licence & 0x0100:
+        raise ValueError(f"the installed {family} doesn't allow being put into documents")
     original = _original_widths(font)
-    widths = [0] * 256
-    for code in range(256):
+    if original is None:
+        raise ValueError("the widths of its letters aren't known")
+
+    def width_of(char):
+        return round(face.charWidths.get(ord(char), face.defaultWidth))
+
+    space = width_of(" ") if 0x20 in face.charToGlyph else 0
+    widths = [space] * 256  # codes with no letter show the stand-in's space
+    for code, char in chars.items():
+        if len(char) == 1 and ord(char) in face.charToGlyph:
+            widths[code] = width_of(char)
+    # Chosen but not seen showing anything (it may, where the engine doesn't
+    # look): held to the plain letters, digits and signs.
+    for code in sorted(codes) or [c for c in range(32, 127) if c in chars]:
         char = chars.get(code)
-        if char and len(char) == 1 and ord(char) in face.charToGlyph:
-            widths[code] = round(face.charWidths.get(ord(char), face.defaultWidth))
-    for code in sorted(codes):
-        char = chars.get(code)
-        if not char or char.isspace() and code not in (32,):
-            continue
-        if len(char) != 1 or ord(char) not in face.charToGlyph:
-            raise ValueError(f"the installed {face.familyName.decode('latin-1', 'replace')} "
-                             f"has no {char!r}")
-        if original is None or abs(widths[code] - original.get(code, widths[code])) > WIDTH_SLACK:
-            raise ValueError("the installed font of that name has letters of other widths, "
-                             "which would move the text")
-    subset = [ord(chars[code]) if code in chars and len(chars[code]) == 1 else 0x20 for code in range(256)]
+        if not char or len(char) != 1:
+            raise ValueError(f"it shows a letter (code {code}) the engine can't name")
+        if ord(char) not in face.charToGlyph:
+            raise ValueError(f"the installed {family} has no {char!r}")
+        was = original(code)
+        if was is None or abs(widths[code] - was) > WIDTH_SLACK:
+            raise ValueError(f"the installed {family} has letters of other widths, which would "
+                             "move the text")
+    subset = [ord(chars[code]) if code in chars and len(chars[code]) == 1
+              and ord(chars[code]) in face.charToGlyph else 0x20 for code in range(256)]
     program = face.makeSubset(subset)
     tag = "".join(chr(65 + (sum(program[i::6]) + i) % 26) for i in range(6))
     ps_name = face.name.decode("latin-1", "replace") if isinstance(face.name, bytes) else str(face.name)
     base = pikepdf.Name(f"/{tag}+{ps_name}".replace(" ", ""))
     file = pdf.make_stream(program, Length1=len(program))
-    descriptor = pdf.make_indirect(pikepdf.Dictionary(
+    new_descriptor = pdf.make_indirect(pikepdf.Dictionary(
         Type=pikepdf.Name.FontDescriptor, FontName=base, Flags=4,  # symbolic: its own code table
         FontBBox=[round(v) for v in face.bbox], ItalicAngle=face.italicAngle,
         Ascent=round(face.ascent), Descent=round(face.descent), CapHeight=round(face.capHeight),
@@ -221,41 +268,22 @@ def _embed(pdf, font, codes):
             del font[key]
     font.Type, font.Subtype, font.BaseFont = pikepdf.Name.Font, pikepdf.Name.TrueType, base
     font.FirstChar, font.LastChar, font.Widths = 0, 255, widths
-    font.FontDescriptor = descriptor
-    font.ToUnicode = pdf.make_stream(_to_unicode({c: ch for c, ch in chars.items() if ch}))
-    return face.familyName.decode("latin-1", "replace") if isinstance(face.familyName, bytes) \
-        else str(face.familyName)
-
-
-def _all_fonts(pdf):
-    import pikepdf
-
-    seen = set()
-    for obj in pdf.objects:
-        if isinstance(obj, pikepdf.Dictionary) and obj.get("/Type") == "/Font":
-            seen.add(obj.objgen)
-            yield obj
-    for obj in pdf.objects:  # fonts written straight into a resource dictionary
-        holder = obj.get("/Font") if isinstance(obj, (pikepdf.Dictionary, pikepdf.Stream)) else None
-        if isinstance(holder, pikepdf.Dictionary):
-            for font in holder.values():
-                if isinstance(font, pikepdf.Dictionary) and not font.is_indirect:
-                    yield font
+    font.FontDescriptor = new_descriptor
+    font.ToUnicode = pdf.make_stream(_to_unicode(chars))
+    return family
 
 
 def _embed_fonts(pdf, notes, reasons):
-    used = None
-    for font in _all_fonts(pdf):
-        kind = font.get("/Subtype")
-        if kind not in ("/Type1", "/MMType1", "/TrueType"):
+    """Embed the fonts text is shown with that aren't in the file. A font
+    that isn't seen to be used is left alone: the check afterwards objects
+    if it is used after all (in a pattern, say)."""
+    for font, codes in _used_fonts(pdf).values():
+        if font.get("/Subtype") not in ("/Type1", "/MMType1", "/TrueType"):
             continue  # Type 0 fonts without their file, Type 3: the check reports them
         descriptor = font.get("/FontDescriptor")
         if descriptor is not None and any(k in descriptor for k in ("/FontFile", "/FontFile2", "/FontFile3")):
             continue
         name = fonts.strip_subset(str(font.get("/BaseFont", "")).lstrip("/")) or "a font"
-        if used is None:
-            used = _used_codes(pdf)
-        codes = used.get(font.objgen if font.is_indirect else id(font), set())
         try:
             family = _embed(pdf, font, codes)
         except Exception as exc:
@@ -268,13 +296,70 @@ def _embed_fonts(pdf, notes, reasons):
 # The rest of the file
 # --------------------------------------------------------------------------
 
-def _annotations(pdf):
+HIDDEN = 1 | 2 | 32   # invisible, hidden, not shown on screen
+
+
+def _annotations(pdf, notes, reasons):
+    """Annotations print, show only their normal look, and none is hidden.
+    A hidden comment is taken out (the page looks the same without it); a
+    hidden form field can't be, nor shown: that stops the conversion."""
     import pikepdf
 
+    removed = 0
     for page in pdf.pages:
-        for annot in page.get("/Annots") or []:
-            if isinstance(annot, pikepdf.Dictionary):
-                annot.F = (int(annot.get("/F", 0)) | 4) & ~(1 | 2 | 32 | 256)
+        annots = page.get("/Annots")
+        if not isinstance(annots, pikepdf.Array):
+            continue
+        keep = []
+        for annot in annots:
+            if not isinstance(annot, pikepdf.Dictionary):
+                keep.append(annot)
+                continue
+            flags = int(annot.get("/F", 0))
+            if flags & HIDDEN and annot.get("/Subtype") != "/Popup":
+                if annot.get("/Subtype") == "/Widget":
+                    reasons.append("a form field is hidden, which PDF/A doesn't allow (showing it "
+                                   "would change the page)")
+                    keep.append(annot)
+                else:
+                    removed += 1
+                continue
+            annot.F = (flags | 4) & ~(HIDDEN | 256)
+            looks = annot.get("/AP")
+            if isinstance(looks, pikepdf.Dictionary):
+                for key in [k for k in looks.keys() if k != "/N"]:
+                    del looks[key]
+            keep.append(annot)
+        if len(keep) != len(annots):
+            page.Annots = pikepdf.Array(keep)
+    if removed:
+        notes.append(f"removed {removed} hidden comment{'s' if removed != 1 else ''} "
+                     "(PDF/A allows none)")
+
+
+def _attachments(pdf):
+    """PDF/A-3: every attached file says what it is and is tied to the document."""
+    import mimetypes
+
+    import pikepdf
+
+    specs = []
+    for name, attached in pdf.attachments.items():
+        spec = attached.obj
+        if "/AFRelationship" not in spec:
+            spec.AFRelationship = pikepdf.Name.Unspecified
+        files = spec.get("/EF")
+        for key in (files.keys() if isinstance(files, pikepdf.Dictionary) else []):
+            stream = files[key]
+            if isinstance(stream, pikepdf.Stream) and "/Subtype" not in stream:
+                kind = mimetypes.guess_type(name)[0] or "application/octet-stream"
+                stream.Subtype = pikepdf.Name("/" + kind)
+        specs.append(spec if spec.is_indirect else pdf.make_indirect(spec))
+    if specs:
+        tied = pdf.Root.get("/AF")
+        tied = list(tied) if isinstance(tied, pikepdf.Array) else []
+        have = {a.objgen for a in tied if a.is_indirect}
+        pdf.Root.AF = pikepdf.Array(tied + [s for s in specs if s.objgen not in have])
 
 
 def _streams(pdf):
@@ -288,7 +373,10 @@ def _streams(pdf):
         filters = obj.get("/Filter")
         names = [str(f) for f in filters] if isinstance(filters, pikepdf.Array) else [str(filters)]
         if "/LZWDecode" in names:
-            obj.write(obj.read_bytes())  # stored again without it (packed with Flate on saving)
+            try:
+                obj.write(obj.read_bytes())  # stored again without it (packed with Flate on saving)
+            except pikepdf.PdfError:
+                pass  # can't be unpacked here: the check afterwards says so
 
 
 def _output_intent(pdf):
@@ -334,7 +422,9 @@ def _metadata(pdf, level, fallback_title):
     old = pdf.trailer.get("/Info")
     values = {}
     for key in ("/Title", "/Author", "/Subject", "/Keywords", "/Creator"):
-        value = str(old[key]).strip() if old is not None and key in old else ""
+        value = str(old[key]) if old is not None and key in old else ""
+        # No control characters: XML has no way to write them, and a title runs on one line.
+        value = " ".join("".join(ch if ch.isprintable() or ch in "\r\n\t" else "" for ch in value).split())
         if value:
             values[key] = value
     values.setdefault("/Title", fallback_title)
@@ -379,17 +469,31 @@ def convert(path, output, level="2", password=None, notes=None):
     told what was changed. Raises CannotConvert when something the standard
     forbids can't be put right here."""
     import pikepdf
-
-    from pdfmanager import archive, pdfacheck
+    from pypdf.errors import PyPdfError
 
     level = str(level)
     if level not in LEVELS:
         raise core.PdfManagerError("PDF/A level must be 1, 2 or 3")
-    notes = [] if notes is None else notes
-    output = Path(output)
+    try:
+        return _convert(path, Path(output), level, password, [] if notes is None else notes)
+    except pikepdf.PasswordError:
+        raise core.PdfManagerError(f"{Path(path).name} is password-protected; give its password") from None
+    except (PyPdfError, pikepdf.PdfError) as exc:
+        raise core.PdfManagerError(f"{Path(path).name} is damaged or unusual and couldn't be "
+                                   f"converted ({exc})") from None
+
+
+def _convert(path, output, level, password, notes):
+    import pikepdf
+
+    from pdfmanager import archive, pdfacheck
+
     with tempfile.TemporaryDirectory(prefix="pdfm-pdfa-") as tmp:
         work, result = Path(tmp) / "work.pdf", Path(tmp) / "result.pdf"
-        if core.open_pdf(path, password).is_encrypted:
+        reader = core.open_pdf(path, password)
+        if not len(reader.pages):
+            raise core.PdfManagerError(f"{Path(path).name} has no pages")
+        if reader.is_encrypted:
             core.decrypt(path, work, password or "")
             notes.append("removed the password protection (PDF/A files can't have any)")
         else:
@@ -402,19 +506,21 @@ def convert(path, output, level="2", password=None, notes=None):
                          f"{'s' if counts['attachments'] != 1 else ''} (PDF/A-{level} allows none)")
         before = pdfacheck.check(work, level=f"{level}b", engine="builtin")["issues"]
         if any(i["message"].startswith("CMYK colours are used") for i in before):
-            core.convert_color(work, work, "rgb")
+            core.convert_color(work, work, "rgb", images="cmyk")
             notes.append("brought CMYK colours to RGB")
         reasons = []
         with pikepdf.open(work) as pdf:
             _embed_fonts(pdf, notes, reasons)
+            _annotations(pdf, notes, reasons)
             if reasons:
                 raise CannotConvert(reasons)
-            _annotations(pdf)
             _streams(pdf)
+            if level == "3":
+                _attachments(pdf)
             _output_intent(pdf)
             _metadata(pdf, level, output.stem)
-            pdf.remove_unreferenced_resources()
-            pdf.save(result, min_version="1.4" if level == "1" else "1.7", force_version="1.4" if level == "1" else None,
+            pdf.save(result, min_version="1.4" if level == "1" else "1.7",
+                     force_version="1.4" if level == "1" else None,
                      object_stream_mode=(pikepdf.ObjectStreamMode.disable if level == "1"
                                          else pikepdf.ObjectStreamMode.generate),
                      compress_streams=True)

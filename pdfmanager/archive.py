@@ -409,7 +409,9 @@ def to_pdfa(path, output, level="2", password=None, engine="auto", notes=None, w
         try:
             pdfafix.convert(path, output, level=str(level), password=password, notes=notes)
             used = "builtin"
-        except pdfafix.CannotConvert as exc:
+        except core.PdfManagerError as exc:
+            if not isinstance(exc, pdfafix.CannotConvert):
+                raise  # a damaged or locked file: Ghostscript wouldn't do better
             if engine == "builtin" or not find_ghostscript():
                 more = ("" if engine == "builtin" else
                         ". Ghostscript (free, https://ghostscript.com/releases/gsdnld.html) can "
