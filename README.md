@@ -230,6 +230,12 @@ closed.
   the private repository's branch instead, with a GitHub token entered
   there. (A copy running from a git checkout is updated with `git pull`,
   the standalone app by building it again.)
+- **Reporting a problem:** an unexpected error shows a short error ID.
+  ZPDF keeps a small log (`logs/zpdf.log` in its data folder: the tools
+  run, how long they took, errors) with document names and your user
+  folder left out. **Settings › About › Copy diagnostics** copies the
+  version, setup and recent log lines to paste into a message; **Open log
+  folder** shows the log itself.
 
 Everything runs on your own computer. The app's built-in server only
 listens on `127.0.0.1` and requires a random token that only the app
