@@ -679,6 +679,78 @@ td { word-break: break-all; }
 .fav-btn[aria-pressed="true"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); background: var(--accent-soft); }
 .fav-btn[aria-pressed="true"] svg { fill: currentColor; }
 
+/* ---- File panel (inside the reader's .rd-side, see reader.css): this file's name and facts, then its tools ---- */
+.fp { padding: 20px; display: flex; flex-direction: column; gap: 18px; min-height: 100%; }
+.fp-head { display: flex; flex-direction: column; gap: 10px; }
+.fp-name { margin: 0; font: 400 27px/1.1 var(--display); letter-spacing: 0; overflow-wrap: anywhere; }
+.fp-facts { display: flex; flex-wrap: wrap; gap: 6px; }
+.fp-fact { font: 500 11.5px/1.5 var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px; }
+.fp-fact.flag { color: var(--accent); border-color: transparent; background: var(--accent-soft); }
+.fp-fact.wait { height: 22px; border-color: transparent; background: var(--surface-2); animation: fp-wait 1.2s ease-in-out infinite alternate; }
+@keyframes fp-wait { to { opacity: .45; } }
+.fp-sec { display: flex; flex-direction: column; gap: 8px; }
+.fp-sec h3.lbl { margin: 0; }
+.fp-list { display: flex; flex-direction: column; gap: 8px; }
+.fp-card { background: color-mix(in srgb, var(--bg) 45%, var(--surface)); border: 1px solid transparent; border-radius: var(--radius); overflow: hidden;
+  transition: border-color var(--t) var(--ease), background var(--t) var(--ease); }
+.fp-card[data-open="true"] { border-color: var(--border); background: var(--surface); }
+.fp-card-head { width: 100%; border: 0; background: none; text-align: left; padding: 12px 14px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px; align-items: center; cursor: pointer; color: var(--text); border-radius: var(--radius); }
+.fp-card-head:hover { background: color-mix(in srgb, var(--surface) 70%, transparent); }
+.fp-card-head:focus-visible, .fp-tool:focus-visible, .fp-all:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.fp-card-head strong { display: block; font-weight: 600; }
+.fp-card-head span span { display: block; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.fp-ico { display: grid; place-items: center; color: var(--accent); }
+.fp-go { color: var(--faint); transition: transform var(--t) var(--ease); }
+.fp-card-head[aria-expanded="true"] .fp-go { transform: rotate(90deg); }
+.fp-opts { border-top: 1px solid var(--border); padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 12px; outline: none;
+  animation: fp-open calc(var(--t) * 1.8) var(--ease); }
+@keyframes fp-open { from { opacity: 0; transform: translateY(-6px); } }
+.fp-opts.wide { grid-column: 1 / -1; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); margin-bottom: 2px; }
+.fp .fields { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.fp .field.check { padding-bottom: 0; align-self: start; }
+.fp .field label { font-size: 12.5px; margin-bottom: 4px; }
+.fp .field input[type=text], .fp .field input[type=number], .fp .field input[type=password], .fp .field select { height: 36px; }
+.fp .field input[type=file] { width: 100%; }
+.fp .empty-note { font-size: 13px; }
+.fp-hint { margin: 0; font-size: 13px; color: var(--muted); }
+.fp-actions { display: flex; gap: 8px; }
+.fp-run { flex: 1; border-radius: var(--radius-sm); }
+.fp-progress { display: flex; flex-direction: column; gap: 6px; }
+.fp-bar { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.fp-bar i { display: block; height: 100%; width: 0; border-radius: inherit; transition: width calc(var(--t) * 4) ease;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 40%, var(--surface)), var(--accent)); background-size: 200% 100%; animation: shimmer 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .fp-bar i, .fp-fact.wait { animation: none; } }
+.fp-status { margin: 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.fp-err { margin: 0; padding: 9px 11px; border-radius: var(--radius-sm); background: var(--err-soft); color: var(--err); font-size: 13px; overflow-wrap: anywhere; }
+.fp-done { display: flex; gap: 10px; align-items: flex-start; color: var(--muted); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.fp-done > svg.i { color: var(--ok); margin-top: 1px; }
+.fp-done b { color: var(--text); font-weight: 600; }
+.fp-note .fp-done { padding: 10px 12px; border-radius: var(--radius); background: color-mix(in srgb, var(--ok-soft) 60%, var(--surface)); }
+.fp-note:empty { display: none; }
+.fp-line { margin-top: 2px; }
+.fp-said .saving { color: var(--ok); font-weight: 600; }
+.fp-save { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.fp-save .btn { height: 34px; padding: 0 14px; }
+.fp-more { display: grid; grid-template-columns: 1fr 1fr; grid-auto-flow: row dense; gap: 6px; }
+.fp-tool { border: 1px solid var(--border); background: none; border-radius: var(--radius-sm); padding: 8px 9px; text-align: left; display: flex; gap: 7px;
+  align-items: center; color: var(--text); cursor: pointer; min-width: 0; font-size: 13.5px; line-height: 1.25;
+  transition: background var(--t) var(--ease), border-color var(--t) var(--ease); }
+.fp-tool span { min-width: 0; overflow-wrap: anywhere; }
+.fp-tool svg.i { color: var(--muted); }
+.fp-tool:hover { background: var(--surface-2); }
+.fp-tool[aria-expanded="true"] { background: var(--accent-soft); border-color: transparent; }
+.fp-tool[aria-expanded="true"] svg.i { color: var(--accent); }
+.fp-all { align-self: flex-start; border: 0; background: none; padding: 2px 0; color: var(--accent); font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; border-radius: 4px; }
+.fp-all svg.i { width: 15px; height: 15px; }
+.fp-all:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* (reader.css gives every button in the reader its parent's colour: these keep their own.) */
+.rd .fp .btn { color: var(--accent-text); }
+.rd .fp .btn.seal { color: var(--seal-ink); }
+.rd .fp .btn.secondary { color: var(--text); }
+.rd .fp .link-btn, .rd .fp .fp-all { color: var(--accent); }
+.rd .fp .link-btn:hover { color: var(--accent-hover); }
+
 /* Home mode: only the start screen. */
 body.home-mode main > :not(#home-host) { display: none !important; }
 body.home-mode main { padding-top: 34px; }
@@ -996,6 +1068,7 @@ const ICONS = {
   download: '<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>', folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4-4"/>', upload: '<path d="M12 16V5M7 10l5-5 5 5M5 19h14"/>',
+  play: '<path d="M7 4v16l13-8z"/>',
 };
 function icon(name, cls = "i") {
   const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -1090,6 +1163,7 @@ async function ensureReader() {
     onAllTools: () => toggleFlyout("all"),
     onCommands: () => openPalette(),
     onHome: () => select("home"),
+    onChange: () => fpSync(),
   });
   return reader;
 }
@@ -1097,6 +1171,296 @@ const inReader = () => current && current.files === "reader";
 async function openInReader(file) {
   await select("reader");
   reader.openFile(file, $("pw").value || null);  // the password typed for the tools, if any
+}
+
+// ---- the file panel (beside the reader's pages) -------------------------------------
+// What the shown document is (its facts), what to do with it (suggestions,
+// six common tools, All tools), and a tool's options right there with Run.
+// The result opens as a new reader tab beside the original. Tools that need
+// the page or a board, or several files, go to their own page as before.
+const COMMON_TOOLS = [["split", "Split"], ["sign-cert", "Sign"], ["to-word", "To Word"], ["pdfa", "Archive (PDF/A)"],
+  ["to-excel", "To Excel"], ["encrypt", "Add a password"]];
+/** Tools that run in the panel: one PDF in, nothing to draw or arrange on the pages. */
+const runsInPanel = (op) => !!op && op.files === "pdf" && !op.board && !op.panel && !((op.min || 1) >= 2);
+const fp = { tab: null, key: "", seq: 0, timer: 0, items: new Map(), open: null };
+const capital = (text) => String(text || "").replace(/^./, (c) => c.toUpperCase());
+
+/** The facts as chips: factsLine's parts, "tagged" too; what needs doing stands out. */
+function factChips(facts) {
+  const line = factsLine(facts);
+  if (!line) return [];
+  const parts = line.split(" · ");
+  if (facts.tagged && facts.pages != null) {
+    const at = parts.findIndex((p) => p === "PDF/A" || p === "protected");
+    parts.splice(at < 0 ? parts.length : at, 0, "tagged");
+  }
+  return parts.map((text) => ({ text, flag: text === "scanned, no text yet" || text === "can't be read" }));
+}
+
+/** The reader changed tabs, or the shown document changed: follow it. */
+function fpSync() {
+  if (!reader) return;
+  const tab = reader.doc ? reader.activeTab : null;
+  if (!tab) { clearTimeout(fp.timer); fp.tab = null; fp.key = ""; reader.side.replaceChildren(); return; }
+  const fresh = tab !== fp.tab;
+  if (fresh) fpRender(tab);
+  else if (fp.name.textContent !== tab.name) fp.name.textContent = tab.name;
+  // Facts again when it changed (saved, edited); a moment later, so a run of edits asks once.
+  const key = [tab.id, tab.version || 0, tab.dirty ? 1 : 0, tab.fileId || "", tab.password ? 1 : 0].join("|");
+  if (key === fp.key) return;
+  fp.key = key;
+  clearTimeout(fp.timer);
+  fp.timer = setTimeout(() => fpFacts(tab, key), fresh ? 30 : 700);
+}
+
+async function fpFacts(tab, key) {
+  const seq = ++fp.seq;
+  let facts = null;
+  try {
+    if (reader.isPristine(tab) && !tab.password || (!tab.bytes && tab.fileId)) {
+      facts = await (await api("/api/facts/" + encodeURIComponent(tab.fileId))).json();
+    } else if (tab.bytes) {
+      const body = new FormData();
+      body.append("file", new Blob([tab.bytes], { type: "application/pdf" }), "file.pdf");
+      if (tab.password) body.append("password", tab.password);
+      facts = await (await api("/api/facts", { method: "POST", body })).json();
+    }
+  } catch (e) { facts = null; }  // no facts: the name and the tools still show
+  if (seq !== fp.seq || fp.tab !== tab || fp.key !== key) return;  // another document, or changed since
+  fpShowFacts(facts);
+}
+
+function fpRender(tab) {
+  fp.tab = tab;
+  fp.items = new Map();
+  fp.open = null;
+  fp.name = el("h2", { class: "fp-name", id: "fp-name" }, tab.name);
+  fp.chips = el("div", { class: "fp-facts", role: "list", "aria-label": "About this file", "aria-busy": "true" },
+    ...[58, 52, 120].map((w) => el("span", { class: "fp-fact wait", style: `width:${w}px`, "aria-hidden": "true" })),
+    el("span", { class: "sr-only", role: "listitem" }, "Reading the file…"));
+  fp.note = el("div", { class: "fp-note" });
+  fp.chosen = el("section", { class: "fp-sec", hidden: true, "aria-labelledby": "fp-chosen-h" },
+    el("h3", { class: "lbl", id: "fp-chosen-h" }, "Chosen tool"), el("div", { class: "fp-list" }));
+  fp.sug = el("section", { class: "fp-sec", hidden: true, "aria-labelledby": "fp-sug-h" },
+    el("h3", { class: "lbl", id: "fp-sug-h" }, "Suggested for this file"), el("div", { class: "fp-list" }));
+  const grid = el("div", { class: "fp-more" });
+  for (const [id, label] of COMMON_TOOLS) {
+    const op = ops.find((o) => o.id === id);
+    if (!op) continue;
+    const btn = el("button", { type: "button", class: "fp-tool", "data-op": id, title: op.label + (TAGLINES[id] ? ": " + TAGLINES[id] : "") },
+      icon(id), el("span", {}, label));
+    grid.append(btn);
+    fpItem(op, btn, grid);
+  }
+  const count = ops.filter((o) => o.group).length;
+  const all = el("button", { type: "button", class: "fp-all", "aria-haspopup": "dialog", "aria-controls": "flyout",
+    onclick: () => toggleFlyout("all") }, `All ${count} tools`, icon("right"));
+  const common = el("section", { class: "fp-sec", "aria-labelledby": "fp-more-h" },
+    el("h3", { class: "lbl", id: "fp-more-h" }, "Or do something else"), grid, all);
+  reader.side.replaceChildren(el("div", { class: "fp" },
+    el("div", { class: "fp-head" }, fp.name, fp.chips), fp.note, fp.chosen, fp.sug, common));
+  fpShowNote(tab);
+}
+
+function fpShowFacts(facts) {
+  const chips = factChips(facts);
+  fp.chips.removeAttribute("aria-busy");
+  fp.chips.hidden = !chips.length;
+  fp.chips.replaceChildren(...chips.map((c) => el("span", { class: "fp-fact" + (c.flag ? " flag" : ""), role: "listitem" }, c.text)));
+  // Suggestions: three at most, tools this app has; the open one stays as it is.
+  const list = fp.sug.querySelector(".fp-list");
+  const wanted = (facts?.suggestions || []).filter((s) => ops.some((o) => o.id === s.op && o.files === "pdf")).slice(0, 3);
+  const cards = wanted.map((s) => {
+    const had = fp.items.get(s.op);
+    if (had && had.home === list) return had.card;
+    if (had) return null;  // already among the tools below
+    return fpCard(ops.find((o) => o.id === s.op), s.title, s.why, list);
+  }).filter(Boolean);
+  for (const old of [...list.children]) if (!cards.includes(old)) { fpForget(old.dataset.op); old.remove(); }
+  list.replaceChildren(...cards);
+  fp.sug.hidden = !cards.length;
+}
+
+/** A card: the tool's name and why, opening to its options. */
+function fpCard(op, title, why, home) {
+  const head = el("button", { type: "button", class: "fp-card-head", "data-op": op.id },
+    el("span", { class: "fp-ico" }, icon(op.id)), el("span", {}, el("strong", {}, title), why ? el("span", {}, why) : null),
+    icon(runsInPanel(op) ? "right" : "reader", "i fp-go"));
+  const card = el("div", { class: "fp-card", "data-op": op.id, "data-open": "false" }, head);
+  fpItem(op, head, home, card);
+  return card;
+}
+
+/** Wire a tool's button: open its options here, or hand the file to its page. */
+function fpItem(op, btn, home, card = null) {
+  const item = { op, btn, home, card, box: null };
+  fp.items.set(op.id, item);
+  if (runsInPanel(op)) {
+    btn.setAttribute("aria-expanded", "false");
+    btn.setAttribute("aria-controls", `fp-opts-${op.id}`);
+    btn.addEventListener("click", () => (fp.open === item ? fpCollapse(item, true) : fpExpand(item)));
+  } else {
+    btn.title = `${op.label}: opens in its own page with this file`;
+    btn.addEventListener("click", () => reader.editWith(op.id));
+  }
+  return item;
+}
+function fpForget(id) { const item = fp.items.get(id); if (item && fp.open === item) fp.open = null; fp.items.delete(id); }
+
+function fpExpand(item, focus = true) {
+  if (fp.open && fp.open !== item) fpCollapse(fp.open, false);
+  if (!item.box) item.box = fpOptions(item);
+  if (item.card) { if (item.box.parentNode !== item.card) item.card.append(item.box); }
+  else if (item.btn.nextElementSibling !== item.box) item.btn.after(item.box);  // the whole row under its button
+  item.box.hidden = false;
+  item.btn.setAttribute("aria-expanded", "true");
+  item.card?.setAttribute("data-open", "true");
+  fp.open = item;
+  if (focus) (item.box.querySelector("input:not([type=hidden]), select, textarea, button") || item.box).focus();
+}
+function fpCollapse(item, focus) {
+  if (!item.box) return;
+  item.box.hidden = true;
+  item.btn.setAttribute("aria-expanded", "false");
+  item.card?.setAttribute("data-open", "false");
+  if (fp.open === item) fp.open = null;
+  if (focus) item.btn.focus();
+}
+
+/** A tool's options (the tool page's fields), Run, and what came of it. */
+function fpOptions(item) {
+  const { op } = item, prefix = `fp-${op.id}-`;
+  const form = el("form", { class: "fields fp-form", autocomplete: "off", novalidate: true });
+  renderFields(op, form, prefix, "Nothing to choose here: just run it.");
+  form.addEventListener("input", () => updateVisibility(op, form, prefix));
+  form.addEventListener("submit", (e) => { e.preventDefault(); fpRun(item); });
+  const runBtn = el("button", { type: "button", class: "btn seal fp-run" }, el("span", { class: "spinner" }),
+    icon("play", "i btn-icon"), op.action || "Run");
+  const cancel = el("button", { type: "button", class: "btn secondary fp-cancel", hidden: true }, "Cancel");
+  const bar = el("div", { class: "fp-bar", role: "progressbar", "aria-label": `${op.label}: progress`, "aria-valuemin": "0", "aria-valuemax": "100" }, el("i"));
+  const status = el("p", { class: "fp-status", "aria-live": "polite" });
+  const progress = el("div", { class: "fp-progress", hidden: true }, bar, status);
+  const error = el("p", { class: "fp-err", role: "alert", hidden: true });
+  const done = el("div", { class: "fp-done", hidden: true, "aria-live": "polite" });
+  const extra = op.id === "sign-cert" ? el("p", { class: "fp-hint" }, "No digital ID? ",
+    el("button", { type: "button", class: "link-btn", onclick: () => reader.sign() }, "Draw or type a signature on the page"), " instead.") : null;
+  Object.assign(item, { form, runBtn, cancel, bar, status, progress, error, done });
+  runBtn.addEventListener("click", () => fpRun(item));
+  cancel.addEventListener("click", async () => {
+    if (!item.job) return;
+    cancel.disabled = true; cancel.textContent = "Cancelling…";
+    try { await api(`/api/job/${item.job}/cancel`, { method: "POST" }); } catch (e) { /* it may just have finished */ }
+  });
+  return el("div", { class: "fp-opts" + (item.card ? "" : " wide"), id: `fp-opts-${op.id}`, role: "group", "aria-label": `${op.label}: options`, tabindex: "-1" },
+    form, extra, el("div", { class: "fp-actions" }, runBtn, cancel), progress, error, done);
+}
+
+/** Run the tool on the shown document: by its id when the file on this
+ *  computer is what's shown, else its bytes as they are now (unsaved changes
+ *  included; the tab keeps them). */
+async function fpRun(item) {
+  const { op, error, done, status, runBtn } = item, prefix = `fp-${op.id}-`;
+  const tab = fp.tab;
+  if (item.running || !tab) return;
+  const fail = (text) => {
+    if (item.box.isConnected) { error.textContent = text; error.hidden = false; } else reader.toast(`${op.label}: ${text}`, 8000);
+  };
+  error.hidden = true; done.hidden = true;
+  const missing = firstMissing(op, prefix);
+  if (missing) { fail(`Please fill in “${missing.label}”.`); $(prefix + missing.key).focus(); return; }
+  const { opts, extra } = collectOptions(op, prefix);
+  item.running = true;
+  runBtn.disabled = true; runBtn.classList.add("busy");
+  status.textContent = op.id === "ocr" ? "Recognising text: this can take a while…" : "Working…";
+  item.bar.firstChild.style.width = "0";
+  item.progress.hidden = false;
+  try {
+    const body = new FormData();
+    body.append("op", op.id);
+    if (tab.password) body.append("password", tab.password);
+    for (const [k, v] of Object.entries(opts)) body.append(k, v);
+    for (const [k, v] of Object.entries(extra)) for (const file of [v].flat()) body.append(k, file, file.name);
+    let before;
+    if (reader.isPristine(tab)) {
+      body.append("ids", tab.fileId);
+      before = tab.size || tab.original?.length || 0;
+    } else {
+      const bytes = await reader.currentBytes();
+      if (!bytes || reader.activeTab !== tab) throw new Error("the document changed: try again");
+      before = bytes.length;
+      body.append("files", new File([bytes], /\.pdf$/i.test(tab.name) ? tab.name : tab.name + ".pdf", { type: "application/pdf" }));
+    }
+    const ui = {
+      start(id) { item.job = id; item.cancel.hidden = false; item.cancel.disabled = false; item.cancel.textContent = "Cancel"; },
+      message(text) { status.textContent = text; },
+      progress(fraction) { const pct = Math.round(fraction * 100); item.bar.firstChild.style.width = `${Math.max(4, pct)}%`; item.bar.setAttribute("aria-valuenow", String(pct)); },
+      cancelled() { item.cancelled = true; },
+      end() { item.job = null; },
+    };
+    const res = await runJob("/api/run", { method: "POST", body, headers: isDesktop() ? { "X-Pdfm-Keep": "1" } : {} }, ui);
+    if (!res) { done.replaceChildren(el("span", {}, "Cancelled: nothing was changed.")); done.hidden = false; return; }
+    const name = decodeURIComponent(res.headers.get("X-Pdfm-Filename") || "") || "result.pdf";
+    const resultId = res.headers.get("X-Pdfm-Result-Id");
+    const notes = decodeURIComponent(res.headers.get("X-Pdfm-Note") || "").split("\n").filter(Boolean);
+    const blob = await res.blob();
+    if (/\.pdf$/i.test(name)) {
+      const nb = (text) => text.replace(" ", "\u00a0");  // "7.0 KB" stays on one line
+      const sizes = `${nb(humanSize(before))} → ${nb(humanSize(blob.size))}`;
+      const pct = before ? Math.round((1 - blob.size / before) * 100) : 0;
+      const password = op.id === "encrypt" ? (opts.new_password || null) : op.id === "decrypt" ? null : tab.password;
+      const made = await reader.openResult(new Uint8Array(await blob.arrayBuffer()), name, password, tab);
+      if (!made) { fail("the result couldn't be opened"); return; }
+      made.madeBy = { label: op.label, from: tab, sizes: pct >= 5 ? `${sizes}, ${pct}% smaller` : sizes, notes };
+      if (fp.tab === made) fpShowNote(made);
+      done.replaceChildren(icon("check"), el("div", {}, el("b", {}, made.madeBy.sizes), ". Opened beside the original as ", el("b", {}, name), "."));
+      done.hidden = false;
+      reader.toast(`Opened ${name} in a new tab`, 5000);
+    } else {
+      if (item.url) URL.revokeObjectURL(item.url);
+      item.url = URL.createObjectURL(blob);
+      const said = el("div", { class: "fp-said" }, humanSize(blob.size));
+      done.replaceChildren(icon("check"), el("div", {}, el("b", {}, name), said,
+        ...notes.map((line) => el("div", { class: "fp-line" }, line)),
+        el("div", { class: "fp-save" }, ...saveControls(blob, name, resultId, item.url, (...n) => said.replaceChildren(...n),
+          { onError: fail, download: "Save" }))));
+      done.hidden = false;
+    }
+  } catch (e) {
+    fail(capital(e.message || e));
+  } finally {
+    item.running = false;
+    runBtn.disabled = false; runBtn.classList.remove("busy");
+    item.progress.hidden = true;
+    item.cancel.hidden = true;
+  }
+}
+
+/** On a tab a tool made: what was done, and the way back to the original. */
+function fpShowNote(tab) {
+  const m = tab.madeBy;
+  if (!m) { fp.note.replaceChildren(); return; }
+  const back = reader.tabs.includes(m.from)
+    ? el("button", { type: "button", class: "link-btn", onclick: () => reader.showTab(m.from) }, m.from.name) : el("b", {}, m.from.name);
+  fp.note.replaceChildren(el("div", { class: "fp-done" }, icon("check"), el("div", {},
+    el("b", {}, m.label), `: ${m.sizes}. Made from `, back, ", still open in its own tab.",
+    ...m.notes.map((line) => el("div", { class: "fp-line" }, line)))));
+}
+
+/** "<tool>: this document" from the palette: open it in the panel when it runs there. */
+function fpChoose(id) {
+  const op = ops.find((o) => o.id === id);
+  if (!runsInPanel(op) || !reader?.doc) { reader?.editWith(id); return; }
+  reader.setPanel(true);
+  fpSync();
+  let item = fp.items.get(id);
+  if (!item) {
+    const list = fp.chosen.querySelector(".fp-list");
+    for (const old of [...list.children]) fpForget(old.dataset.op);
+    list.replaceChildren(fpCard(op, op.label, TAGLINES[id] || "", list));
+    fp.chosen.hidden = false;
+    item = fp.items.get(id);
+  }
+  fpExpand(item);
 }
 
 // ---- command palette (Ctrl+K) -------------------------------------------------
@@ -1112,7 +1476,7 @@ function paletteCommands() {
       sub: TAGLINES[op.id] || "", run: () => select(op.id) });
     if (doc && op.files === "pdf") {
       list.push({ label: `${op.label}: this document`, words: `${op.group} ${TAGLINES[op.id] || ""}`, group: "This document", icon: op.id,
-        run: () => reader.editWith(op.id), later: true });
+        run: () => fpChoose(op.id), later: true });
     }
   }
   return list;
@@ -1270,7 +1634,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && flyoutGroup && !document.querySelector("dialog[open]")) { e.stopImmediatePropagation(); e.preventDefault(); closeFlyout(true); }
 }, { capture: true });
 document.addEventListener("pointerdown", (e) => {
-  if (flyoutGroup && !e.target.closest("#flyout, .rail-btn[data-group], .rd-tray")) closeFlyout();
+  if (flyoutGroup && !e.target.closest("#flyout, .rail-btn[data-group], .fp-all")) closeFlyout();
 });
 const toolsFrom = (ids) => ids.map((id) => ops.find((o) => o.id === id && o.group)).filter(Boolean);
 function favTools() { try { return JSON.parse(localStorage.getItem("pdfm-fav-tools") || "[]"); } catch (e) { return []; } }
@@ -1964,12 +2328,14 @@ $("form").addEventListener("input", (e) => { if (e.target.id === "f-mode") muteB
 
 // ---- options -----------------------------------------------------------------
 const PATH_FIELDS = new Set(["directory", "dest"]);
-function renderForm() {
-  const form = $("form");
+function renderForm() { renderFields(current, $("form"), "f-", "No options — add files and run."); }
+/** A tool's options as fields in ``form``, each with the id ``prefix`` + its
+ *  key: the tool page's form ("f-"), or a tool opened in the file panel. */
+function renderFields(op, form, prefix, empty) {
   form.replaceChildren();
-  if (!current.fields.some((f) => f.kind !== "hidden")) form.append(el("p", { class: "empty-note" }, "No options — add files and run."));
-  for (const f of current.fields) {
-    const id = "f-" + f.key;
+  if (!op.fields.some((f) => f.kind !== "hidden")) form.append(el("p", { class: "empty-note" }, empty));
+  for (const f of op.fields) {
+    const id = prefix + f.key;
     let input;
     if (f.kind === "hidden") { form.append(el("input", { id, name: f.key, type: "hidden", value: f.default ?? "" })); continue; }
     if (f.kind === "select") {
@@ -2007,9 +2373,9 @@ function renderForm() {
     if (f.hint) wrap.append(el("div", { class: "hint" }, f.hint));
     form.append(wrap);
   }
-  updateVisibility();
+  updateVisibility(op, form, prefix);
 }
-$("form").addEventListener("input", updateVisibility);
+$("form").addEventListener("input", () => updateVisibility());
 $("form").addEventListener("input", () => { if (current?.url_field) updateSummary(); });
 function fmtRange(f, v) {
   const n = Number(v);
@@ -2062,25 +2428,28 @@ $("live-img").title = "Click to see it larger";
 $("live-img").addEventListener("click", () => { if (!liveUrl) return; $("live-big-img").src = liveUrl; $("live-big").showModal(); });
 $("live-big").addEventListener("click", () => $("live-big").close());
 $("form").addEventListener("submit", (e) => { e.preventDefault(); run(false); });
-function updateVisibility() {
-  for (const f of current.fields) {
+function updateVisibility(op = current, form = $("form"), prefix = "f-") {
+  for (const f of op.fields) {
     if (!f.show_if) continue;
-    const ok = Object.entries(f.show_if).every(([k, v]) => $("f-" + k).value === v);
-    document.querySelector(`.field[data-key="${f.key}"]`).hidden = !ok;
+    // (In the form, which may not be on the page yet.)
+    const ok = Object.entries(f.show_if).every(([k, v]) => form.querySelector("#" + CSS.escape(prefix + k))?.value === v);
+    form.querySelector(`.field[data-key="${f.key}"]`).hidden = !ok;
   }
 }
-function collectOptions() {
+function collectOptions(op = current, prefix = "f-") {
   const opts = {}, extra = {};
-  for (const f of current.fields) {
-    const input = $("f-" + f.key);
+  for (const f of op.fields) {
+    const input = $(prefix + f.key);
     if (f.kind === "check") opts[f.key] = input.checked ? "true" : "false";
     else if (f.kind === "file") { if (input.files[0]) extra[f.key] = f.multiple ? [...input.files] : input.files[0]; }
     else opts[f.key] = input.value;
   }
   return { opts, extra };
 }
+/** The first required field left empty, if any. */
+function firstMissing(op, prefix) { return op.fields.find((f) => f.required && !$(prefix + f.key).value.trim()); }
 function missingField() {
-  const f = current.fields.find((f) => f.required && !$("f-" + f.key).value.trim());
+  const f = firstMissing(current, "f-");
   if (f) { showError(`Please fill in “${f.label}”.`); $("f-" + f.key).focus(); }
   return !!f;
 }
@@ -2125,32 +2494,8 @@ async function showResult(name, blob, resultId, note = "") {
   }
   const thumb = el("div", { class: "thumb" }, icon(/\.zip$/i.test(name) ? "zip" : "file"));
   const subEl = el("div", { class: "result-sub" }, sub);
-  const actions = el("div", { class: "result-actions" });
-  if (isDesktop() && resultId) {
-    const save = el("button", { class: "btn", type: "button" }, icon("download"), "Save…");
-    save.addEventListener("click", async () => {
-      try {
-        const path = await window.pywebview.api.save_result(resultId, name);
-        if (!path) return;
-        subEl.replaceChildren(el("span", { class: "saving" }, "Saved"), ` to ${path}`);
-        if (!actions.querySelector("[data-reveal]")) save.after(el("button", { class: "btn secondary", type: "button", "data-reveal": "" }, icon("folder"), "Show in folder"));
-        actions.querySelector("[data-reveal]").onclick = () => window.pywebview.api.reveal(path);
-      } catch (e) { showError(String(e.message || e)); }
-    });
-    actions.append(save);
-  } else if (filesLib && filesLib.canSave) {
-    // Edge or Chrome: the computer's own Save dialog (it needs a click).
-    const save = el("button", { class: "btn", type: "button" }, icon("download"), "Save…");
-    save.addEventListener("click", async () => {
-      try {
-        const saved = await filesLib.saveAs(blob, name);
-        if (saved) subEl.replaceChildren(el("span", { class: "saving" }, "Saved"), ` as ${saved}`);
-      } catch (e) { showError("Could not save: " + (e.message || e)); }
-    });
-    actions.append(save, el("a", { class: "btn secondary", href: lastUrl, download: name }, "Download"));
-  } else {
-    actions.append(el("a", { class: "btn", href: lastUrl, download: name, "data-auto": "" }, icon("download"), "Download"));
-  }
+  const actions = el("div", { class: "result-actions" },
+    ...saveControls(blob, name, resultId, lastUrl, (...said) => subEl.replaceChildren(...said)));
   if (/\.pdf$/i.test(name)) {
     actions.append(el("button", { class: "btn secondary", type: "button", onclick: () => openInReader(new File([blob], name, { type: "application/pdf" })) }, icon("reader"), "Open in reader"));
   }
@@ -2175,6 +2520,39 @@ async function showResult(name, blob, resultId, note = "") {
       if (info.pages != null) subEl.prepend(plural(info.pages, "page") + " · ");
     } catch (e) { /* preview is optional */ }
   }
+}
+
+/** The buttons that save a tool's result, the way this window can: the
+ *  desktop app's Save dialog, the browser's own (Edge, Chrome), or a
+ *  download. ``said(...)`` shows where it went; ``download`` names the plain
+ *  download link (the tool page clicks it by itself, data-auto). */
+function saveControls(blob, name, resultId, href, said, { onError = showError, download = "Download" } = {}) {
+  if (isDesktop() && resultId) {
+    let reveal = null;
+    const save = el("button", { class: "btn", type: "button" }, icon("download"), "Save…");
+    save.addEventListener("click", async () => {
+      try {
+        const path = await window.pywebview.api.save_result(resultId, name);
+        if (!path) return;
+        said(el("span", { class: "saving" }, "Saved"), ` to ${path}`);
+        if (!reveal) save.after(reveal = el("button", { class: "btn secondary", type: "button", "data-reveal": "" }, icon("folder"), "Show in folder"));
+        reveal.onclick = () => window.pywebview.api.reveal(path);
+      } catch (e) { onError(String(e.message || e)); }
+    });
+    return [save];
+  }
+  if (filesLib && filesLib.canSave) {
+    // Edge or Chrome: the computer's own Save dialog (it needs a click).
+    const save = el("button", { class: "btn", type: "button" }, icon("download"), "Save…");
+    save.addEventListener("click", async () => {
+      try {
+        const saved = await filesLib.saveAs(blob, name);
+        if (saved) said(el("span", { class: "saving" }, "Saved"), ` as ${saved}`);
+      } catch (e) { onError("Could not save: " + (e.message || e)); }
+    });
+    return [save, el("a", { class: "btn secondary", href, download: name }, "Download")];
+  }
+  return [el("a", { class: "btn", href, download: name, "data-auto": "" }, icon("download"), download)];
 }
 
 async function runFolder(apply) {
@@ -2242,27 +2620,35 @@ function busy(on, text, which = "run") {
 // Tools run as background jobs: the bar shows how far they are, and Cancel
 // stops them. Resolves with the result's response, or null if cancelled.
 let jobId = null, jobCancelled = false;
-async function runJob(path, options) {
+// Where a job shows how it's going: the tool page's action bar, or a tool in
+// the file panel (which brings its own).
+const pageJob = {
+  start(id) { jobId = id; const cancel = $("cancel"); cancel.hidden = false; cancel.disabled = false; cancel.textContent = "Cancel"; },
+  message(text) { $("summary").textContent = text; },
+  progress(fraction) {
+    const box = $("job-progress"), pct = Math.round(fraction * 100);
+    box.hidden = false;
+    $("job-bar").style.width = `${pct}%`;
+    box.setAttribute("aria-valuenow", String(pct));
+  },
+  cancelled() { jobCancelled = true; },
+  end() { jobId = null; },
+};
+async function runJob(path, options, ui = pageJob) {
   const start = await (await api(path, { ...options, headers: { ...(options.headers || {}), "X-Pdfm-Async": "1" } })).json();
-  jobId = start.job;
-  const cancel = $("cancel"), bar = $("job-bar"), box = $("job-progress");
-  cancel.hidden = false; cancel.disabled = false; cancel.textContent = "Cancel";
+  ui.start(start.job);
   const shown = Date.now();
   try {
     for (let wait = 150; ; wait = Math.min(wait * 1.5, 600)) {
       await new Promise((r) => setTimeout(r, wait));
       const s = await (await api(`/api/job/${start.job}`)).json();
-      if (s.message) $("summary").textContent = s.message;
-      if (Date.now() - shown > 400) {  // quick jobs don't need a bar
-        box.hidden = false;
-        bar.style.width = `${Math.round(s.fraction * 100)}%`;
-        box.setAttribute("aria-valuenow", String(Math.round(s.fraction * 100)));
-      }
-      if (s.state === "cancelled") { jobCancelled = true; return null; }
+      if (s.message) ui.message(s.message);
+      if (Date.now() - shown > 400) ui.progress(s.fraction);  // quick jobs don't need a bar
+      if (s.state === "cancelled") { ui.cancelled(); return null; }
       if (s.state === "done" || s.state === "failed") break;
     }
     return await api(`/api/job/${start.job}/result`);
-  } finally { jobId = null; }
+  } finally { ui.end(); }
 }
 $("cancel").addEventListener("click", async () => {
   if (!jobId) return;

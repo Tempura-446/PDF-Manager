@@ -10,17 +10,18 @@ also the notes of its release on
   a PDF, or pick up a recent file. Each recent file says what it is at a
   glance: its pages and size, and whether it is scanned, searchable,
   protected, signed or a form.
+- With a document open, a panel beside it shows what the file is and what
+  fits it: a scan with no text is offered "Make it searchable", a large
+  file "Make it smaller", a signed one "Check its signatures". Common
+  tools are one click away, with their options in the panel.
+- A tool run from the panel works on the open file and opens its result
+  as a new tab beside the original; nothing is uploaded again, and the
+  original stays as it was. T shows and hides the panel.
 - The long list of tools at the side is now a slim rail with five groups:
   Read, Pages, Convert, Protect and All. Every tool is still there, and
   the search box at the top (Ctrl+K, or /) finds any of them.
-- A document gets more of the window: the rail stays narrow beside it.
 - Layered surfaces, softer corners and new type, in light and dark. The
   theme choice has moved into Settings.
-- This is the first of three steps; next, the actions that fit a file
-  will appear beside it when it is open.
-
-## 0.18.0
-
 - PDF → Word's built-in converter reads pages the way the other exports
   do. Columns of text come out one after the other where they were read
   straight across, headings are headings, tables are real Word tables,

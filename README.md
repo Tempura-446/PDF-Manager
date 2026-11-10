@@ -253,11 +253,19 @@ the file on the app). It is built on [pdf.js](https://mozilla.github.io/pdf.js/)
 the engine behind Firefox's PDF viewer, bundled with the app so it works offline.
 
 - **Distraction-free:** an open document gets the whole window. The toolbar
-  keeps only the page number, zoom and the thumbnails button; **Tools** (or
-  the T key) pulls out the rest (open, find, annotate and sign, rotate,
-  print, save, more), and **All tools** in it slides out the app's tool list.
+  keeps the page number, zoom, find, annotate and sign, and **More** (open,
+  rotate, print, save, properties, "Edit with" any tool).
   The **Home** button (top left) goes back to the tools; your documents stay
   open in the reader.
+- **The file panel** at the right says what the shown file is (pages, size,
+  scanned or not, signed, a form, protected), suggests what it may need
+  (make a scan searchable, make a big file smaller, check its signatures)
+  and offers common tools. A tool opens its options right there; **Run**
+  works on the open file and opens the result in a new tab beside it (a
+  Word or Excel file is offered to save instead). Tools that work on the
+  page itself (crop, redact, arranging pages) open their own page with the
+  file. The panel button in the toolbar, or the T key, shows or hides it;
+  in a window narrower than 1100 px it comes over the page when asked for.
 - **Save** and **Undo** appear in the toolbar as soon as a document has
   changes not saved yet. **Save** (Ctrl+S) writes them into the file you
   opened (safely: to a new file next to it that then takes its place; if
