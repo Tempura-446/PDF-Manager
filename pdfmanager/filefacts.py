@@ -52,10 +52,10 @@ def _page_look(page, pikepdf):
 
 
 def _fields(pdf, pikepdf):
-    """(fields to fill in, signatures made)."""
+    """(fields to fill in, signatures made, places to sign still empty)."""
     form = pdf.Root.get("/AcroForm")
     fields = form.get("/Fields") if isinstance(form, pikepdf.Dictionary) else None
-    filled = signed = 0
+    filled = signed = unsigned = 0
     stack = list(fields) if isinstance(fields, pikepdf.Array) else []
     seen = 0
     while stack and seen < 5000:
@@ -70,9 +70,10 @@ def _fields(pdf, pikepdf):
             stack.extend(named)
         elif field.get("/FT") == "/Sig":
             signed += "/V" in field
+            unsigned += "/V" not in field
         elif "/FT" in field or "/T" in field:
             filled += 1
-    return filled, signed
+    return filled, signed, unsigned
 
 
 def _pdfa(pdf, pikepdf):
@@ -90,7 +91,8 @@ def _pdfa(pdf, pikepdf):
 
 def facts(path, password=None):
     """{"size", "pages", "protected", "scanned", "has_text", "form_fields",
-    "signatures", "tagged", "pdfa"} of the PDF at ``path``. A file that
+    "signatures", "to_sign" (signature fields still empty), "tagged",
+    "pdfa"} of the PDF at ``path``. A file that
     needs a password it wasn't given has "protected" and no page count; one
     that can't be read has {"size", "pages": None, "error"}."""
     import pikepdf
@@ -115,12 +117,12 @@ def facts(path, password=None):
                 text, picture = _page_look(page, pikepdf)
                 texts += text
                 pictures += picture
-            filled, signed = _fields(pdf, pikepdf)
+            filled, signed, unsigned = _fields(pdf, pikepdf)
             marked = pdf.Root.get("/MarkInfo")
             return {
                 "size": size, "pages": count, "protected": bool(pdf.is_encrypted),
                 "scanned": bool(sampled) and pictures >= 0.6 * sampled,
-                "has_text": texts > 0, "form_fields": filled, "signatures": signed,
+                "has_text": texts > 0, "form_fields": filled, "signatures": signed, "to_sign": unsigned,
                 "tagged": isinstance(marked, pikepdf.Dictionary) and marked.get("/Marked") is True
                 and "/StructTreeRoot" in pdf.Root,
                 "pdfa": _pdfa(pdf, pikepdf),
@@ -151,6 +153,9 @@ def suggestions(found):
     if found.get("signatures"):
         out.append({"op": "verify-sig", "title": "Check its signatures",
                     "why": "See who signed it and whether it was changed afterwards"})
+    if found.get("to_sign"):
+        out.append({"op": "sign-cert", "title": "Sign it",
+                    "why": "It has a place for a signature that is still empty"})
     return out[:3]
 
 

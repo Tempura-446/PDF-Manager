@@ -268,3 +268,38 @@ def test_bringing_the_window_forward_on_windows_never_waits_on_the_window(monkey
     monkeypatch.setattr(gui, "_win32_bring_forward", lambda title: called.append(("system", title)) or True)
     gui._raise_window(Window())
     assert called == [("system", "ZPDF")]
+
+
+# -- stage 3 ---------------------------------------------------------------------------------
+
+def test_a_file_with_a_place_to_sign_is_offered_signing(tmp_path):
+    pdf = pikepdf.open(text_pdf(tmp_path / "a.pdf"))
+    empty = pdf.make_indirect(pikepdf.Dictionary(FT=pikepdf.Name.Sig, T=pikepdf.String("Signature1")))
+    pdf.Root.AcroForm = pikepdf.Dictionary(Fields=[empty])
+    pdf.save(tmp_path / "to-sign.pdf")
+    found = filefacts.facts(tmp_path / "to-sign.pdf")
+    assert found["to_sign"] == 1 and found["signatures"] == 0 and found["form_fields"] == 0
+    assert [s["op"] for s in filefacts.suggestions(found)] == ["sign-cert"]
+    assert filefacts.facts(text_pdf(tmp_path / "plain.pdf"))["to_sign"] == 0
+    # Signed already: checking comes before signing again.
+    assert ops({"size": 1, "pages": 1, "signatures": 1, "to_sign": 1}) == ["verify-sig", "sign-cert"]
+
+
+def test_a_handed_over_file_lets_the_running_app_come_forward(monkeypatch, tmp_path):
+    """Windows only lets a program take the foreground when the one in front
+    allows it: the launch that hands a file over says so first."""
+    from pdfmanager import gui
+
+    order = []
+    monkeypatch.setattr(gui, "_allow_foreground", lambda: order.append("allowed"))
+    monkeypatch.setattr(gui, "_instance_file", lambda: tmp_path / "instance.json")
+    (tmp_path / "instance.json").write_text(json.dumps({"port": 9, "secret": "s"}), encoding="utf-8")
+
+    class Opener:
+        def open(self, request, timeout=0):
+            order.append("asked")
+            raise OSError("nothing is listening")
+
+    monkeypatch.setattr(gui.urllib.request, "build_opener", lambda *a: Opener())
+    assert gui.forward_to_running_app([tmp_path / "a.pdf"]) is False
+    assert order == ["allowed", "asked"]
