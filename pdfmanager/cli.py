@@ -189,11 +189,13 @@ def run_booklet(a, src, out, pw):
 
 def run_compress(a, src, out, pw):
     before = Path(src).stat().st_size  # before: the output may replace the input
+    notes = []
     result = core.compress(src, out, level=a.level, image_quality=a.image_quality,
-                           max_dpi=a.max_dpi, password=pw)
+                           max_dpi=a.max_dpi, password=pw, sharp_scans=a.sharp_scans, notes=notes)
     after = Path(result).stat().st_size
     pct = (1 - after / before) * 100 if before else 0
-    return f"{result}  ({_human_size(before)} -> {_human_size(after)}, {pct:.1f}% smaller)"
+    return (f"{result}  ({_human_size(before)} -> {_human_size(after)}, {pct:.1f}% smaller"
+            + "".join(f"; {note}" for note in notes) + ")")
 
 
 def run_color(a, src, out, pw):
@@ -1068,6 +1070,7 @@ def cmd_watch(a):
 
     settings = watch.WatchSettings(
         inbox=a.inbox, dest=a.dest, by=a.by, rename=a.rename, compress=a.compress,
+        sharp_scans=a.sharp_scans,
         remove_blank=a.clean, auto_rotate=a.rotate,
         recipe=recipes.get(a.recipe)["steps"] if a.recipe else None,
         ocr=a.ocr, ocr_language=a.language, ocr_engine=a.engine, skip_duplicates=a.skip_duplicates,
@@ -1246,6 +1249,9 @@ def build_parser():
     sp.add_argument("-q", "--image-quality", type=int, metavar="1-95",
                     help="override the level's JPEG quality")
     sp.add_argument("--max-dpi", type=int, help="override the level's image resolution")
+    sp.add_argument("--no-sharp-scans", dest="sharp_scans", action="store_false",
+                    help="compress scanned pages like other pictures, instead of keeping "
+                         "their text at full sharpness over a reduced background")
 
     sp = per_file("color", run_color, "convert colours to grayscale, RGB or CMYK")
     sp.add_argument("--to", required=True, choices=imaging.COLOR_TARGETS)
@@ -1632,6 +1638,8 @@ def build_parser():
     sp.add_argument("--by", choices=organize.GROUPINGS, help="sort into sub-folders")
     sp.add_argument("--rename", metavar="PATTERN", help="rename, e.g. '{date:%%Y-%%m-%%d} {title}'")
     sp.add_argument("--compress", choices=["low", "medium", "high", "large"])
+    sp.add_argument("--no-sharp-scans", dest="sharp_scans", action="store_false",
+                    help="with --compress: don't keep scanned text at full sharpness")
     sp.add_argument("--clean", action="store_true", help="remove blank pages")
     sp.add_argument("--rotate", action="store_true",
                     help="turn sideways/upside-down pages upright (needs Tesseract)")

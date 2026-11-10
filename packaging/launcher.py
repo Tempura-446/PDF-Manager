@@ -41,6 +41,20 @@ def self_test(result_file):
             info = gui.inspect_pdf(src)
             assert info["pages"] == 1 and info["thumb"], f"inspect failed: {info}"
             core.compress(src, Path(tmp) / "small.pdf", level="high")
+            # The scan compression engine (NumPy, and Pillow writing Group 4).
+            from PIL import Image, ImageDraw
+
+            sheet = Image.new("RGB", (1240, 1754), (250, 248, 240))
+            draw = ImageDraw.Draw(sheet)
+            for row in range(12):
+                draw.text((120, 150 + row * 60), "ZPDF self-test: a scanned page of text", fill=(20, 20, 20))
+                draw.line((120, 180 + row * 60, 900, 180 + row * 60), fill=(20, 20, 20), width=3)
+            sheet.save(Path(tmp) / "sheet.jpg", quality=85, dpi=(150, 150))
+            scanned = core.images_to_pdf([Path(tmp) / "sheet.jpg"], Path(tmp) / "scan.pdf")
+            sharp = []
+            core.compress(scanned, Path(tmp) / "scan-small.pdf", level="high", notes=sharp)
+            assert sharp and b"/CCITTFaxDecode" in (Path(tmp) / "scan-small.pdf").read_bytes(), \
+                f"scan compression not used: {sharp}"
             core.convert_color(src, Path(tmp) / "gray.pdf", "gray")
             # The libraries the later tools need: pyHanko (signing), pdfplumber
             # and openpyxl (PDF -> Excel), pikepdf (the PDF/A check), pypdfium2

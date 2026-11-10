@@ -418,3 +418,68 @@ def test_layers_larger_than_the_usual_way_are_not_used(tmp_path, monkeypatch):
     monkeypatch.setattr(scanlayers, "group4", lambda mask: b"x" * 200_000)
     out = core.compress(src, tmp_path / "out.pdf", level="high")
     assert out.stat().st_size == plain.stat().st_size
+
+
+# -- the choice in the app, pdfm, recipes and the watch folder --------------------------
+
+from pdfmanager import cli, gui, recipes, watch  # noqa: E402
+
+FAX = b"/CCITTFaxDecode"
+
+
+@pytest.fixture(scope="module")
+def one_scan(tmp_path_factory):
+    return scan(ocrpages.render(), tmp_path_factory.mktemp("one") / "scan.pdf")
+
+
+def test_the_app_offers_the_choice_and_says_what_it_did(one_scan, tmp_path):
+    op = next(o for o in gui.OPERATIONS if o["id"] == "compress")
+    field = next(f for f in op["fields"] if f["key"] == "sharp_scans")
+    assert field["label"] == "Keep scanned text sharp" and field["default"] is True and field["kind"] == "check"
+    notes = []
+    (tmp_path / "a").mkdir()
+    _, data, _ = gui.run_operation("compress", [one_scan], {"level": "high"}, None, {}, tmp_path / "a", notes)
+    assert "1 scanned page kept sharp" in notes and FAX in data
+    notes = []
+    (tmp_path / "b").mkdir()
+    _, data, _ = gui.run_operation("compress", [one_scan], {"level": "high", "sharp_scans": "false"},
+                                   None, {}, tmp_path / "b", notes)
+    assert notes == [] and FAX not in data
+
+
+def test_the_command_line_can_turn_it_off(one_scan, tmp_path, capsys):
+    assert cli.main(["compress", str(one_scan), "-o", str(tmp_path / "a.pdf"), "--level", "high"]) in (0, None)
+    assert FAX in (tmp_path / "a.pdf").read_bytes()
+    assert "1 scanned page kept sharp" in capsys.readouterr().out
+    assert cli.main(["compress", str(one_scan), "-o", str(tmp_path / "b.pdf"), "--level", "high",
+                     "--no-sharp-scans"]) in (0, None)
+    assert FAX not in (tmp_path / "b.pdf").read_bytes()
+
+
+def test_recipes_pass_it_on(one_scan, tmp_path):
+    recipes.run([{"op": "compress", "options": {"level": "high"}}], one_scan, tmp_path / "a.pdf")
+    recipes.run([{"op": "compress", "options": {"level": "high", "sharp_scans": "false"}}], one_scan,
+                tmp_path / "b.pdf")
+    assert FAX in (tmp_path / "a.pdf").read_bytes() and FAX not in (tmp_path / "b.pdf").read_bytes()
+
+
+@pytest.mark.parametrize("sharp", [True, False])
+def test_the_watch_folder_passes_it_on(one_scan, tmp_path, sharp):
+    import shutil
+
+    inbox, dest = tmp_path / "inbox", tmp_path / "dest"
+    inbox.mkdir()
+    shutil.copy(one_scan, inbox / "scan.pdf")
+    settings = (watch.WatchSettings(inbox=inbox, dest=dest, compress="high") if sharp else
+                watch.WatchSettings(inbox=inbox, dest=dest, compress="high", sharp_scans=False))
+    state = watch._State()
+    watch.poll(settings, state, log=lambda *a: None)
+    done = watch.poll(settings, state, log=lambda *a: None)
+    assert (FAX in done[0][1].read_bytes()) is sharp
+
+
+def test_pdfm_watch_has_the_switch():
+    parser_args = cli.build_parser().parse_args(["watch", "in", "--dest", "out", "--compress", "high",
+                                                 "--no-sharp-scans"])
+    assert parser_args.sharp_scans is False
+    assert cli.build_parser().parse_args(["watch", "in", "--dest", "out"]).sharp_scans is True

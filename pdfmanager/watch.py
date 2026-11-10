@@ -23,6 +23,7 @@ class WatchSettings:
     by: str = None                # organize into sub-folders (see organize.GROUPINGS)
     rename: str = None            # rename pattern (see organize.format_name)
     compress: str = None          # compression level
+    sharp_scans: bool = True      # when compressing, keep scanned text sharp (see core.compress)
     remove_blank: bool = False    # drop blank pages
     auto_rotate: bool = False     # turn pages upright (built-in OCR engine or Tesseract)
     ocr: bool = False
@@ -81,7 +82,7 @@ def process_file(path, settings, known_hashes=None):
         if settings.recipe:
             recipes.run(settings.recipe, work, work)
         if settings.compress:
-            core.compress(work, work, level=settings.compress)
+            core.compress(work, work, level=settings.compress, sharp_scans=settings.sharp_scans)
         record = organize.describe(work)
         if record["error"] and not record["locked"]:
             raise core.PdfManagerError(f"can't be read: {record['error']}")
