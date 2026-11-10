@@ -964,6 +964,22 @@ def updates(tmp_path, monkeypatch):
     return update, github
 
 
+def test_the_tests_keep_updates_offline_and_out_of_the_users_folder(monkeypatch):
+    """Outside the update tests (which bring a fake GitHub), checking for
+    updates asks nobody and writes nothing in the user's own ZPDF folder."""
+    from pdfmanager import appdata, update
+
+    users_folder = appdata._data_dir().resolve()
+    assert users_folder not in Path(update.data_dir()).resolve().parents
+    assert Path(update.data_dir()).resolve() != users_folder
+
+    def no_network(*args, **kwargs):
+        raise AssertionError("a test asked GitHub")
+
+    monkeypatch.setattr(update.urllib.request, "urlopen", no_network)
+    assert update.check()["latest"] is None
+
+
 def test_update_check(updates):
     from pdfmanager import __version__
 
