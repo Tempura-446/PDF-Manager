@@ -231,7 +231,9 @@ def test_form_tool_and_cli_find_fields(tmp_path, capsys, app):
                                       notes=notes, work=tmp_path / "work")
     assert name == "form_form.pdf" and "added 10 fields" in notes[0]
     blank = tmp_path / "blank.pdf"
-    canvas.Canvas(str(blank)).save()
+    c = canvas.Canvas(str(blank))
+    c.showPage()  # one empty page: no lines or boxes to turn into fields
+    c.save()
     (tmp_path / "work2").mkdir()
     with pytest.raises(gui.UserError, match="no fields were found"):
         gui.run_operation("form", [blank], {"detect": "true", "fields": "{}"},

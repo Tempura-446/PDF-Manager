@@ -327,7 +327,7 @@ def _transform_annotations(page, op, turn=0):
 def _transfer_rotation(page):
     """Like ``page.transfer_rotation_to_content()`` but also turns the
     page's annotations, appearances included."""
-    rotation = (page.rotation or 0) % 360
+    rotation = quarter_turn(page.rotation)
     if not rotation:
         return
     box = page.mediabox
@@ -730,6 +730,8 @@ def resize(path, output, size=None, scale=None, fit="fit", pages=None,
             tw, th = target
             if auto_orient and (sw > sh) != (tw > th) and sw != sh:
                 tw, th = th, tw
+            if not sw or not sh:
+                raise PdfManagerError(f"page {i + 1} has no size (its box is empty), so it can't be resized")
             if fit == "fit":
                 sx = sy = min(tw / sw, th / sh)
             elif fit == "fill":
@@ -752,12 +754,22 @@ def resize(path, output, size=None, scale=None, fit="fit", pages=None,
     return _write(writer, output)
 
 
+def quarter_turn(rotation):
+    """A page's /Rotate as 0, 90, 180 or 270. The value must be a multiple of
+    90; anything else counts as 0, as viewers (pdf.js, Acrobat) show it."""
+    try:
+        rotation = int(rotation or 0) % 360
+    except (TypeError, ValueError):
+        return 0
+    return rotation if rotation % 90 == 0 else 0
+
+
 def _unturned(margins, rotation):
     """Margins as a page is shown (left, bottom, right, top) -> the same
     edges in the page's own coordinates, before its /Rotate."""
     left, bottom, right, top = margins
     return {0: (left, bottom, right, top), 90: (top, left, bottom, right),
-            180: (right, top, left, bottom), 270: (bottom, right, top, left)}[rotation % 360]
+            180: (right, top, left, bottom), 270: (bottom, right, top, left)}[quarter_turn(rotation)]
 
 
 def crop(path, output, margins, pages=None, visual=True, password=None):
@@ -831,6 +843,8 @@ def _impose(path, password, sheets, sheet_size, cols, rows, fill=0.95):
             _transfer_rotation(src)
             box = _visible_box(src)  # what the page shows goes in the cell
             pw, ph = float(box.width), float(box.height)
+            if not pw or not ph:
+                raise PdfManagerError(f"page {i + 1} has no size (its box is empty), so it can't be placed")
             s = min(cell_w / pw, cell_h / ph) * fill
             col, row = slot % cols, slot // cols
             x = col * cell_w + (cell_w - pw * s) / 2
@@ -1506,7 +1520,7 @@ def _upright(page):
     upright."""
     box = page.cropbox
     w, h, left, bottom = float(box.width), float(box.height), float(box.left), float(box.bottom)
-    rotation = page.rotation % 360
+    rotation = quarter_turn(page.rotation)
     matrix = {0: (1, 0, 0, 1, 0, 0), 90: (0, 1, -1, 0, w, 0),
               180: (-1, 0, 0, -1, w, h), 270: (0, -1, 1, 0, 0, h)}[rotation]
     a, b, c, d, e, f = matrix
