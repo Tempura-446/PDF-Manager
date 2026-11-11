@@ -981,3 +981,26 @@ def test_a_ligature_read_as_several_letters_keeps_them_all(tmp_path):
     pdf.save(tmp_path / "a.pdf")
     paragraphs, _, _ = read(office.basic_docx(tmp_path / "a.pdf", tmp_path / "a.docx"))
     assert "Work offline and offer, official and effortless." in " ".join(text for _, text in paragraphs)
+
+
+def test_a_page_of_frames_taken_for_a_table_is_not_one():
+    """Found on a brochure: pdfplumber saw a 3 x 3 grid over the whole page
+    and put the same spec list in two cells; it is read as text instead."""
+    from pdfmanager import webpage
+
+    spec = "HUDSON BEIGE - HB • Color: Beige • Finish: painted shaker door"
+    seen = {"kind": "ruled", "bbox": (0, -1, 630, 811),
+            "rows": [["", spec, ""], ["", "", spec], ["www.proselectdesign.com", "", ""]]}
+    assert webpage._artefact(seen, 612, 792)
+    frame = {"kind": "ruled", "bbox": (10, 10, 600, 780),
+             "rows": [["", "Welcome", ""], ["", "", ""], ["", "", "Contact"]]}
+    assert webpage._artefact(frame, 612, 792), "a grid over the whole page with most cells empty"
+    real = {"kind": "ruled", "bbox": (72, 100, 540, 300),
+            "rows": [["Item", "Qty", "Price"], ["Copper tubing", "14", "52.50"], ["Brass fittings", "6", "74.40"]]}
+    assert not webpage._artefact(real, 612, 792)
+    full_real = {"kind": "ruled", "bbox": (20, 20, 590, 770),
+                 "rows": [[f"r{r}c{c}" for c in range(4)] for r in range(30)]}
+    assert not webpage._artefact(full_real, 612, 792), "a real table may fill the page"
+    repeats = {"kind": "ruled", "bbox": (72, 100, 540, 300),
+               "rows": [["Mon-Fri", "Mon-Fri", "Sat"], ["07:15", "09:40", "08:05"], ["n/a", "n/a", "n/a"]]}
+    assert not webpage._artefact(repeats, 612, 792), "short cells repeat in real tables"

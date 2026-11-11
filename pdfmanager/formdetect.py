@@ -467,6 +467,32 @@ QUICK_MAX_SIDE = 1500      # points: just over the long side of A3 and Tabloid
 QUICK_MAX_STROKES = 12000
 
 
+def _blank_pictures(page, image, to_px):
+    """Paint the page's photos and screenshots white before lines are
+    looked for: the edges in a picture are not boxes to write in (found on
+    Windows: a brochure and a software guide were offered "Make it
+    fillable" for boxes inside their pictures). A picture filling most of
+    the page is its scan and is left alone."""
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as raw
+    from PIL import ImageDraw
+
+    width, height = image.size
+    draw = ImageDraw.Draw(image)
+    for obj in page.get_objects(filter=[raw.FPDF_PAGEOBJ_IMAGE], max_depth=3):
+        try:
+            left, bottom, right, top = obj.get_bounds()
+        except pdfium.PdfiumError:
+            continue
+        xs, ys = zip(to_px(left, bottom), to_px(right, top))
+        box = (max(min(xs), 0), max(min(ys), 0), min(max(xs), width), min(max(ys), height))
+        if box[2] <= box[0] or box[3] <= box[1]:
+            continue
+        if (box[2] - box[0]) * (box[3] - box[1]) >= 0.6 * width * height:
+            continue  # the page's own scan
+        draw.rectangle(box, fill=255)
+
+
 def _detect_page(page, textpage, quick=False):
     if quick and max(page.get_size()) > QUICK_MAX_SIDE:
         return []
@@ -477,6 +503,8 @@ def _detect_page(page, textpage, quick=False):
     extra = (turn - page.get_rotation()) % 360
     image = page.render(scale=SCALE, grayscale=True, rotation=extra).to_pil().convert("L")
     page_w, page_h = image.size
+    if quick:
+        _blank_pictures(page, image, to_px)
     ink = _Ink(image)
     words = _words(chars, to_px)
     chars = [(box, ch) for w in words for ch, box in zip(w[4], w[5])]

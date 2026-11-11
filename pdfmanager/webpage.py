@@ -264,7 +264,8 @@ class _Tables:
             if dropped:
                 plumber = _without(plumber, dropped)
             return [(tables._pdf_bbox(plumber, t["bbox"]), t["rows"])
-                    for t in tables._page_tables(plumber) if _table_like(t)]
+                    for t in tables._page_tables(plumber)
+                    if _table_like(t) and not _artefact(t, plumber.width, plumber.height)]
         finally:
             self.pdf.pages[index].close()
 
@@ -296,6 +297,23 @@ def _without(plumber, dropped):
             remove.add(id(best))
             shift[round(y)] = best["matrix"][4] - x
     return plumber.filter(lambda obj: id(obj) not in remove) if remove else plumber
+
+
+def _artefact(table, width, height):
+    """Whether a "table" is the page's own frames and panels taken for one
+    (found on a brochure: a 3 x 3 grid over the whole page, its text cut
+    into overlapping cells so the same words were in two of them): the
+    same text in more than one cell, or a grid over nearly the whole page
+    with most of its cells empty."""
+    texts = [" ".join(str(cell).split()) for row in table["rows"] for cell in row if cell]
+    # A passage (several words, 40 letters or more) found again in another
+    # cell, whole or cut short: the grid cut one block of text into two.
+    long = [t for t in texts if len(t) >= 40 and len(t.split()) >= 5]
+    if any(i != j and a[:40] == b[:40] for i, a in enumerate(long) for j, b in enumerate(long)):
+        return True
+    x0, top, x1, bottom = table["bbox"]
+    cells = sum(len(row) for row in table["rows"]) or 1
+    return (x1 - x0) >= 0.85 * width and (bottom - top) >= 0.85 * height and len(texts) <= 0.5 * cells
 
 
 def _table_like(table):
