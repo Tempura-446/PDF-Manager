@@ -205,6 +205,47 @@ const FIRST_BYTES = 4 * 1024 * 1024;
 // row is taller than its picture (its padding, the gap and the page number:
 // see .rd-thumb in reader.css); how many drawn thumbnails are kept.
 const THUMB_PAD = 8, THUMB_EXTRA = 44, THUMBS_KEPT = 150;
+// A file read in pieces up to this size is read in full in the background
+// once its first page is on screen, and then held like a small file: it can
+// be shown again, saved elsewhere or compared even if the file on disk is
+// changed or deleted meanwhile. Bigger ones stay in pieces.
+const HOLD_BYTES = 64 * 1024 * 1024;
+// How long the reader waits, at most, for a piece of a file, for all of it,
+// and for pdf.js to open a document (not counting the password prompt): a
+// request that never answers mustn't leave the reader waiting for ever.
+const PIECE_MS = 60000, WHOLE_MS = 180000, OPEN_MS = 120000;
+
+/** fetch(), given up after ``ms`` (and when ``signal`` aborts). */
+function fetchFor(url, options, ms, signal = null) {
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(new DOMException("no answer in time", "TimeoutError")), ms);
+  const onAbort = () => stop.abort(signal.reason);
+  if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener("abort", onAbort, { once: true }); }
+  return fetch(url, { ...options, signal: stop.signal }).finally(() => {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  });
+}
+
+/** ``promise``, or an error saying ``what`` once ``ms`` have gone by. */
+function bounded(promise, ms, what) {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(what)), ms); })])
+    .finally(() => clearTimeout(timer));
+}
+
+/** Why a piece of a file couldn't be had, from the server's answer; ``gone``
+ *  when it won't come back by asking again (the file was moved, deleted or
+ *  rewritten). */
+async function pieceError(res, tab) {
+  if (res.status === 404) return Object.assign(new Error("the file is no longer where it was (moved or deleted)"), { gone: true });
+  const stamp = res.headers.get("X-Pdfm-Stamp");
+  if (res.ok && stamp && tab.stamp && stamp !== tab.stamp) {
+    return Object.assign(new Error("another program changed the file since it was opened here"), { gone: true });
+  }
+  if (res.status !== 206) return new Error((await res.json().catch(() => ({}))).error || res.statusText || `error ${res.status}`);
+  return null;
+}
 const header = (res, name) => { try { return decodeURIComponent(res.headers.get(name) || ""); } catch (e) { return ""; } };
 
 /** A box on the page (PDF coordinates) as [x0, y0, x1, y1] on screen, within the page. */
@@ -841,7 +882,7 @@ export class Reader {
       const file = { fileId: id, path: header(res, "X-Pdfm-Path"), stamp: res.headers.get("X-Pdfm-Stamp") || "",
         size: Number((res.headers.get("Content-Range") || "").split("/")[1]) || head.length };
       if (head.length >= file.size) await this.openBytes(head, name, null, goto, file);
-      else await this.#serial(() => this.#openBytesNow(null, name, null, goto, { ...file, url, head }));  // the rest in pieces
+      else await this.#serial(() => this.#openBytesNow(null, name, null, goto, { ...file, url, head, headCopy: head.slice() }));  // the rest in pieces
     } catch (e) {
       this.toast("Could not open the file: " + (e.message || e));
     } finally {
@@ -907,7 +948,9 @@ export class Reader {
    *  path, stamp, size; url when it's read in pieces, bytes then null). */
   async #openBytesNow(bytes, name, password, goto, file = null) {
     const same = this.tabs.find((t) => (file?.path && t.path === file.path)
-      || (bytes && t.original && t.name === name && sameBytes(t.original, bytes)));
+      || (bytes && t.original && t.name === name && sameBytes(t.original, bytes))
+      || (bytes && !t.original && t.headCopy && t.name === name && t.size === bytes.length  // (read in pieces, not all here yet)
+        && sameBytes(t.headCopy, bytes.subarray(0, t.headCopy.length))));
     if (same) {
       if (same === this.activeTab) { if (goto) this.#goto(goto); }
       else { if (goto) same.goto = goto; await this.#switchToNow(same); }  // applied once its pages are there
@@ -935,8 +978,12 @@ export class Reader {
     const tab = this.activeTab;
     this.#finishEditing();
     if (!tab || !this.doc || !this.#changed()) return;
-    tab.bytes = await this.doc.saveDocument();
-    tab.edited = true;
+    try {
+      tab.bytes = await this.#savedDocument(tab);
+      tab.edited = true;
+    } catch (e) {
+      this.toast(`Your unsaved changes to “${tab.name}” couldn't be kept: ${e.message || e}`, 9000);
+    }
   }
 
   #switchTo(tab) {
@@ -945,8 +992,13 @@ export class Reader {
 
   async #switchToNow(tab) {
     if (tab === this.activeTab || !this.tabs.includes(tab)) return;
+    const previous = this.activeTab;
     await this.#stash();
-    if (!(await this.#load(tab))) { await this.#closeDocument(); this.#showEmpty(); }
+    // (A tab that can't be shown: the one shown before comes back.)
+    if (!(await this.#load(tab)) && !(previous && this.tabs.includes(previous) && await this.#load(previous))) {
+      await this.#closeDocument();
+      this.#showEmpty();
+    }
     this.#renderTabs();
   }
 
@@ -1028,54 +1080,125 @@ export class Reader {
   }
 
   /** The first piece of a file that is read in pieces (``tab.url``), asked
-   *  for again when its tab is shown after another one: the piece that came
-   *  when the file was opened went to pdf.js. The file's size and version
-   *  are taken as they are now (the tab has no changes of its own: those
-   *  would be in ``tab.bytes``). */
+   *  for again when its tab is shown after another one (the piece that came
+   *  when the file was opened went to pdf.js). The file must still be the
+   *  one that was opened: a file changed or deleted meanwhile is said so,
+   *  never shown in its place. */
   async #firstPiece(tab) {
-    const res = await fetch(tab.url, { headers: { "X-Pdfm-Token": this.token, Range: `bytes=0-${FIRST_BYTES - 1}` } });
-    if (res.status !== 206) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-    const head = new Uint8Array(await res.arrayBuffer());
-    tab.size = Number((res.headers.get("Content-Range") || "").split("/")[1]) || head.length;
-    tab.stamp = res.headers.get("X-Pdfm-Stamp") || tab.stamp;
-    if (head.length >= tab.size) tab.bytes = tab.original = head;  // (it has become small: all of it is here)
-    else tab.head = head;
+    if (tab.gone) throw Object.assign(new Error(tab.gone), { gone: true });
+    let res;
+    try {
+      res = await fetchFor(tab.url, { headers: { "X-Pdfm-Token": this.token, Range: `bytes=0-${FIRST_BYTES - 1}` } }, PIECE_MS);
+    } catch (e) { throw new Error("the file couldn't be read: " + (e.message || e)); }
+    const bad = await pieceError(res, tab);
+    const size = Number((res.headers.get("Content-Range") || "").split("/")[1]) || 0;
+    if (bad || size !== tab.size) {
+      const e = bad || Object.assign(new Error("another program changed the file since it was opened here"), { gone: true });
+      if (e.gone) tab.gone = e.message;
+      throw e;
+    }
+    tab.head = new Uint8Array(await res.arrayBuffer());
   }
 
   /** Where pdf.js gets the pieces of a file that isn't held here in full:
    *  it starts with the first piece (``tab.head``, which it takes) and asks
-   *  for the others as pages need them. Requests still on their way stop
-   *  when the document is closed. A piece that can't be had (the file is
-   *  gone, or another program rewrote it) is said once; while the document
-   *  is still being opened, opening it is given up (``failure`` says why). */
+   *  for the others as pages need them; once all of the file is here
+   *  (#readAll), they come from memory. A piece that fails is asked for once
+   *  more; if it fails again, ``failed`` rejects (#load gives up opening)
+   *  and, once open, the reader says so once and offers to close the tab.
+   *  Requests still on their way stop when the document is closed. */
   #pieces(tab) {
     const head = tab.head;
     tab.head = null;
     const source = new pdfjs.PDFDataRangeTransport(tab.size, head);
     const stop = new AbortController();
-    source.requestDataRange = (begin, end) => {
-      fetch(tab.url, { headers: { "X-Pdfm-Token": this.token, Range: `bytes=${begin}-${end - 1}` }, signal: stop.signal }).then(async (res) => {
-        if (res.status !== 206) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-        // Another program wrote the file meanwhile: its pieces no longer fit the ones already read.
-        const stamp = res.headers.get("X-Pdfm-Stamp");
-        if (stamp && tab.stamp && stamp !== tab.stamp) throw new Error("it was changed by another program; close it and open it again");
-        source.onDataRange(begin, new Uint8Array(await res.arrayBuffer()));
-      }).catch((e) => {
-        if (stop.signal.aborted || source.failure) return;
-        source.failure = String(e.message || e);
-        if (source.task && source.task === this.task && !this.doc) destroyTask(source.task);  // (#load says why)
-        else this.toast(`Couldn't read more of “${tab.name}”: ${source.failure}`, 9000);
-      });
+    const pending = new Map();  // begin -> end of the pieces pdf.js waits for
+    source.failed = new Promise((_, reject) => { source.fail = reject; });
+    source.failed.catch(() => {});
+    source.serve = (data) => {  // all of the file is here
+      for (const [begin, end] of pending) source.onDataRange(begin, data.slice(begin, end));
+      pending.clear();
     };
-    source.abort = () => stop.abort();
+    const ask = async (begin, end, again) => {
+      try {
+        const res = await fetchFor(tab.url, { headers: { "X-Pdfm-Token": this.token, Range: `bytes=${begin}-${end - 1}` } }, PIECE_MS, stop.signal);
+        const bad = await pieceError(res, tab);
+        if (bad) throw bad;
+        const chunk = new Uint8Array(await res.arrayBuffer());
+        if (chunk.length !== end - begin) throw new Error("the file is shorter than it was");
+        if (pending.delete(begin)) source.onDataRange(begin, chunk);
+      } catch (e) {
+        if (stop.signal.aborted || !pending.has(begin)) return;
+        if (source.data) { source.serve(source.data); return; }
+        if (again && !e.gone) { setTimeout(() => ask(begin, end, false), 300); return; }
+        if (e.gone) tab.gone ||= e.message;
+        if (source.failure) return;
+        source.failure = String(e.message || e);
+        source.fail(new Error(source.failure));
+        if (source.task && source.task === this.task && this.doc && this.activeTab === tab) {
+          this.toast(`Couldn't read more of “${tab.name}”: ${source.failure}. Close it and open it again.`, 15000,
+            ["Close", () => this.closeTab(tab)]);
+        }
+      }
+    };
+    source.requestDataRange = (begin, end) => {
+      pending.set(begin, end);
+      if (source.data) source.serve(source.data);
+      else ask(begin, end, true);
+    };
+    source.abort = () => { stop.abort(); pending.clear(); };
+    tab.source = source;
     return source;
+  }
+
+  /** All of a file read in pieces, read now (once; at most HOLD_BYTES of it
+   *  in the background, any size when a change or a save needs it). From
+   *  then on the tab holds it as it holds a small file. Rejects, saying why,
+   *  if the file can't be read or is no longer the one that was opened. */
+  #readAll(tab) {
+    if (tab.bytes) return Promise.resolve(tab.bytes);
+    if (tab.gone) return Promise.reject(new Error(tab.gone));
+    tab.reading ||= (async () => {
+      const from = tab.headCopy?.length || 0;
+      let res;
+      try {
+        res = await fetchFor(tab.url, { headers: { "X-Pdfm-Token": this.token, Range: `bytes=${from}-${tab.size - 1}` } }, WHOLE_MS);
+      } catch (e) { throw new Error("the file couldn't be read: " + (e.message || e)); }
+      const bad = await pieceError(res, tab);
+      if (bad) { if (bad.gone) tab.gone = bad.message; throw bad; }
+      let rest;
+      try { rest = new Uint8Array(await res.arrayBuffer()); } catch (e) { throw new Error("the file couldn't be read: " + (e.message || e)); }
+      if (from + rest.length !== tab.size) throw new Error("the file couldn't be read in full");
+      const all = new Uint8Array(tab.size);
+      if (from) all.set(tab.headCopy);
+      all.set(rest, from);
+      if (tab.source) { tab.source.data = all; tab.source.serve(all); }
+      if (!tab.bytes) {
+        tab.bytes = tab.original = all;
+        if (tab === this.activeTab && !this.bytes) this.bytes = all;
+      }
+      tab.headCopy = null;
+      return tab.bytes;
+    })();
+    const reading = tab.reading;
+    reading.catch(() => { if (tab.reading === reading) tab.reading = null; });
+    return reading;
+  }
+
+  /** The shown document with its unsaved annotations and form entries. */
+  async #savedDocument(tab) {
+    if (tab?.url && !tab.bytes) await this.#readAll(tab);  // (pdf.js needs every piece to write it out)
+    return await bounded(this.doc.saveDocument(), WHOLE_MS, "writing the document took too long");
   }
 
   /** Show ``tab``'s document in the viewer. Returns false if it couldn't be
    *  opened (not a PDF, or the password prompt was cancelled). */
   async #load(tab) {
     this.#busy(true);
-    let pieces = null;
+    let pieces = null, timer = 0, tooLong = null;
+    const giveUp = new Promise((_, reject) => { tooLong = reject; });
+    giveUp.catch(() => {});
+    const arm = () => { clearTimeout(timer); timer = setTimeout(() => tooLong(new Error("opening it took too long")), OPEN_MS); };
     try {
       await loadPdfjs();
       this.#ensureViewer();
@@ -1096,16 +1219,23 @@ export class Reader {
       });
       if (pieces) pieces.task = task;
       task.onPassword = (update, reason) => {
+        clearTimeout(timer);  // (the time at the password prompt doesn't count)
         this.#busy(false);
         this.#askPassword(reason === pdfjs.PasswordResponses.INCORRECT_PASSWORD).then((pw) => {
-          if (pw === null) { destroyTask(task); return; }
+          if (pw === null) { destroyTask(task); tooLong(Object.assign(new Error("cancelled"), { name: "PasswordException" })); return; }
           this.password = tab.password = pw;
           this.#busy(true);
+          arm();
           update(pw);
         });
       };
       this.task = task;
-      const doc = await task.promise;
+      arm();
+      // (A piece of the file that can't be had, or no answer at all: pdf.js
+      // would wait for ever, so the reader stops waiting.)
+      const doc = await Promise.race([task.promise, giveUp, ...(pieces ? [pieces.failed] : [])]);
+      clearTimeout(timer);
+      tab.shown = true;
       this.doc = doc;
       this.activeTab = tab;
       doc.annotationStorage.onSetModified = () => {
@@ -1137,6 +1267,9 @@ export class Reader {
       this.sigbar.hidden = true;
       this.formbar.hidden = true;
       this.#whenShown(() => { this.#checkSignatures(); this.#checkForm(); });
+      // The rest of a file read in pieces, as soon as the first page is on
+      // screen (not before: it would slow that down). See HOLD_BYTES.
+      if (tab.url && !tab.bytes && tab.size <= HOLD_BYTES) this.#whenShown(() => this.#readAll(tab).catch(() => {}), { now: true });
       doc.getPageLabels().then((labels) => {
         if (doc !== this.doc || !labels) return;
         // Only use labels that differ from plain page numbers.
@@ -1144,13 +1277,19 @@ export class Reader {
       }).catch(() => {});
       return true;
     } catch (e) {
+      clearTimeout(timer);
       await this.#closeDocument();
-      if (pieces?.failure) this.toast(`Could not open “${tab.name}”: ${pieces.failure}`, 9000);
+      const why = pieces?.failure || (e && e.message) || String(e);
+      if (tab.gone && tab.shown && this.tabs.includes(tab)) {
+        // A tab left in the background whose file went away or changed: say so; it can be closed.
+        this.toast(`Can't show “${tab.name}” again: ${tab.gone}.`, 15000, ["Close it", () => this.closeTab(tab)]);
+      } else if (pieces?.failure) this.toast(`Could not open “${tab.name}”: ${why}`, 9000);
       else if (!(e && e.name === "PasswordException")) {  // not just cancelled at the password prompt
-        this.toast(e && e.name === "InvalidPDFException" ? `“${tab.name}” isn't a valid PDF.` : "Could not open the PDF: " + (e.message || e));
+        this.toast(e && e.name === "InvalidPDFException" ? `“${tab.name}” isn't a valid PDF.` : "Could not open the PDF: " + why);
       }
       return false;
     } finally {
+      clearTimeout(timer);
       this.#busy(false);
     }
   }
@@ -1779,7 +1918,8 @@ export class Reader {
     try {
       if (!(custom && this.pdfViewer.annotationEditorMode === mode)) this.pdfViewer.annotationEditorMode = { mode };
     } catch (e) {
-      if (!custom) { this.toast("Annotating isn't available for this document."); return; }
+      // (Turning the tools off on a document that has just been replaced, e.g. after signing, isn't news.)
+      if (!custom) { if (name !== "NONE") this.toast("Annotating isn't available for this document."); return; }
     }
     this.#showEditMode(name);
     // Words selected before choosing Underline or Strike out get it straight away.
@@ -2523,7 +2663,8 @@ export class Reader {
       el("label", { class: "rd-field" }, "Digital ID file", pfx), el("label", { class: "rd-field" }, "Its password", password),
       el("label", { class: "rd-field" }, "Reason (optional)", reason), el("label", { class: "rd-field" }, "Location (optional)", location),
       el("label", { class: "rd-field" }, "Timestamp server (optional)", stamp)],
-      [["cancel", "Cancel"], ["ok", "Sign", true]]);
+      [["cancel", "Cancel"], ["ok", "Sign", true]],
+      { ready: () => { if (pfx.files[0]) return true; pfx.focus(); pfx.click?.(); return false; } });
     if (answer !== "ok") return;
     const file = pfx.files[0];
     if (!file) { this.toast("Choose your digital ID file (.pfx or .p12)."); return; }
@@ -2593,7 +2734,7 @@ export class Reader {
   /** Run ``fn`` once the shown document's first page is on screen and the
    *  page has a quiet moment (not at all if another document is shown by
    *  then): what isn't needed to show the file doesn't hold it up. */
-  #whenShown(fn) {
+  #whenShown(fn, { now = false } = {}) {
     const doc = this.doc, bus = this.eventBus;
     let timer = 0, done = false;
     const go = () => { if (doc === this.doc) fn(); };
@@ -2602,7 +2743,8 @@ export class Reader {
       done = true;
       clearTimeout(timer);
       bus.off("pagerendered", shown);
-      if (window.requestIdleCallback) requestIdleCallback(go, { timeout: 1500 }); else setTimeout(go, 100);
+      if (now) setTimeout(go, 0);  // (``now``: not waiting for a quiet moment)
+      else if (window.requestIdleCallback) requestIdleCallback(go, { timeout: 1500 }); else setTimeout(go, 100);
     };
     const view = this.pdfViewer.getPageView((this.pdfViewer.currentPageNumber || 1) - 1);
     if (view?.renderingState === 3) { shown(); return; }  // (it's on screen already)
@@ -2747,8 +2889,11 @@ export class Reader {
     if (answer.startsWith("tab:")) {
       const tab = others.find((t) => "tab:" + t.id === answer);
       if (!tab) return;
-      source = tab.bytes ? { data: tab.bytes.slice() } : { url: tab.url, httpHeaders: { "X-Pdfm-Token": this.token }, length: tab.size || undefined,
-        rangeChunkSize: 1 << 20, disableAutoFetch: true, disableStream: true };
+      let bytes = tab.bytes;
+      if (!bytes) {
+        try { bytes = await this.#readAll(tab); } catch (e) { this.toast(`Couldn't read “${tab.name}”: ${e.message || e}`, 9000); return; }
+      }
+      source = { data: bytes.slice() };
       name = tab.name;
       password = tab.password;
     } else if (answer === "file") {
@@ -2867,6 +3012,7 @@ export class Reader {
     const buttons = [["cancel", "Cancel"], ["ok", "Place signature", true]];
     if (saved) buttons.splice(1, 0, ["saved", "Use saved signature"]);
     return this.#dialog("Sign", body, buttons).then(async (answer) => {
+      if (answer === "ok" && !drawn && saved) answer = "saved";  // (Enter with nothing drawn: the saved one)
       if (answer === "saved") return (await fetch(saved)).blob();
       if (answer !== "ok") return null;
       if (!drawn) { this.toast("Draw or type a signature first."); return null; }
@@ -2896,7 +3042,7 @@ export class Reader {
   }
 
   // ---- dialogs ----------------------------------------------------------------
-  #dialog(title, body, buttons) {
+  #dialog(title, body, buttons, { ready = null } = {}) {
     return new Promise((resolve) => {
       // Enter in a box of the dialog presses the form's first submit button:
       // that has to be the main one ("Open", not the "Cancel" before it), so
@@ -2907,6 +3053,9 @@ export class Reader {
           ? el("button", { value, class: primary ? "primary" : null, type: "submit" }, label)
           : el("button", { value, type: "button", onclick: () => dialog.close(value) }, label)))));
       const dialog = el("dialog", { class: "rd-dialog" }, form);
+      // ``ready``: whether the main button can do its work yet; if not (Enter
+      // in a box before everything needed is given) the dialog stays open.
+      if (ready) form.addEventListener("submit", (e) => { if (!ready()) e.preventDefault(); });
       dialog.addEventListener("close", () => { resolve(dialog.returnValue); dialog.remove(); });
       dialog.addEventListener("cancel", () => { dialog.returnValue = "cancel"; });
       this.root.append(dialog);
@@ -3776,15 +3925,17 @@ export class Reader {
   async #currentBytes() {
     this.#finishEditing();
     if (!this.#changed()) return await this.#fullBytes();
-    return await this.doc.saveDocument();
+    return await this.#savedDocument(this.activeTab);
   }
 
-  /** The shown document's bytes; a file read in pieces is read in full now. */
+  /** The shown document's bytes; a file read in pieces is read in full now
+   *  (and rejects, saying why, when that can't be done). */
   async #fullBytes() {
     if (!this.bytes && this.doc) {
-      const tab = this.activeTab, data = await this.doc.getData();
-      this.bytes = data;
-      if (tab && !tab.bytes) tab.bytes = tab.original = data;
+      const tab = this.activeTab;
+      if (tab?.url) await this.#readAll(tab);
+      else if (tab && !tab.bytes) tab.bytes = tab.original = await bounded(this.doc.getData(), WHOLE_MS, "reading the document took too long");
+      if (tab === this.activeTab) this.bytes = tab.bytes;
     }
     return this.bytes;
   }
@@ -3803,7 +3954,8 @@ export class Reader {
     if (!tab.fileId) { await this.saveCopy(); return; }
     if (!tab.dirty && !this.#changed()) { this.toast("No changes to save", 1500); return; }
     const version = tab.version || 0;
-    const bytes = await this.#currentBytes();
+    let bytes;
+    try { bytes = await this.#currentBytes(); } catch (e) { this.toast("Could not save: " + (e.message || e), 9000, ["Save as…", () => this.saveCopy()]); return; }
     const put = (force) => fetch("/api/save/" + encodeURIComponent(tab.fileId), { method: "POST", body: bytes,
       headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/pdf", "X-Pdfm-Stamp": tab.stamp || "",
         ...(force ? { "X-Pdfm-Force": "1" } : {}) } });
@@ -3833,7 +3985,8 @@ export class Reader {
     await this.chain;  // a text change still on its way is included
     if (!this.doc) return;
     const tab = this.activeTab, version = tab.version || 0;
-    const bytes = await this.#currentBytes();
+    let bytes;
+    try { bytes = await this.#currentBytes(); } catch (e) { this.toast("Could not save a copy: " + (e.message || e), 9000); return; }
     await this.#saveBytes(bytes, this.#copyName(), () => this.#markSaved(tab, version), tab?.fileId);
   }
 

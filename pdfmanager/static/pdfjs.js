@@ -41,10 +41,13 @@ export function loadPdfjs() {
 
 const freeing = new Set();
 
-/** Free a document's loading task. */
+/** Free a document's loading task (waiting 10 s at most: a document whose
+ *  file stopped answering mustn't hold up the next one for ever). */
 export function destroyTask(task) {
   if (!task) return Promise.resolve();
-  const done = Promise.resolve().then(() => task.destroy()).catch(() => {}).finally(() => freeing.delete(done));
+  let timer;
+  const done = Promise.race([Promise.resolve().then(() => task.destroy()), new Promise((resolve) => { timer = setTimeout(resolve, 10000); })])
+    .catch(() => {}).finally(() => { clearTimeout(timer); freeing.delete(done); });
   freeing.add(done);
   return done;
 }
