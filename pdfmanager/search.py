@@ -118,6 +118,8 @@ there their they have has had will would should could about""".split())
 WORDS = 0.1       # how much sharing the question's words adds to a page's likeness
 KEYWORDS = 0.5    # ... when the search is a few keywords and the page has them all
 CLOSEST = 20      # pages shown for their meaning alone, at most
+FLOOR = 0.15      # ... and no page less like the question than this
+TERMS = 16        # words of a question that are counted
 NEAR = 0.5        # ... each at least this fraction as close as the closest page
 _RUN = re.compile(f"{meaning.CJK.pattern}+")
 
@@ -130,10 +132,12 @@ def _terms(query):
     for run in _RUN.findall(query):
         for pair in ([run] if len(run) == 1 else [run[i:i + 2] for i in range(len(run) - 1)]):
             terms.setdefault(pair, re.compile(r"\s*".join(re.escape(c) for c in pair)))
-    for word in re.findall(r"[^\W_]+", re.sub(r"['’]s\b", " ", _RUN.sub(" ", query).lower())):
-        if word not in STOP and (len(word) > 1 or word.isdigit()):
-            terms.setdefault(word, re.compile(rf"(?<![^\W_]){re.escape(word)}", re.IGNORECASE))
-    return list(terms.values())
+    for word in re.findall(r"\d+(?:[.,]\d+)*|[^\W\d_]+", re.sub(r"['’]s\b", " ", _RUN.sub(" ", query))):
+        if word[0].isdigit():  # a number is matched whole: 3.5 is not 35 or 3.55
+            terms.setdefault(word, re.compile(rf"(?<![\d.,]){re.escape(word)}(?![.,]?\d)"))
+        elif word.lower() not in STOP and len(word) > 1:
+            terms.setdefault(word.lower(), re.compile(rf"\b{re.escape(word)}", re.IGNORECASE))
+    return list(terms.values())[:TERMS]
 
 
 def _word_scores(pages, terms):
@@ -178,13 +182,15 @@ def _best_snippet(text, terms, question, vectors):
     if question is None:
         return "", "", ""
     words = [m.span() for m in re.finditer(r"\S+", text[start:end])]
+    words = [(a, min(b, a + 40)) for a, b in words]  # a run without spaces isn't a word to show
     top, where = -2.0, (0, min(12, len(words)))
     for first in range(0, max(1, len(words) - 11), 4):
         last = min(first + 12, len(words))
         likeness = float(meaning.embed(text[start + words[first][0]:start + words[last - 1][1]]) @ question)
         if likeness > top:
             top, where = likeness, (first, last)
-    found = re.compile(r"(?s).*").match(text, start + words[where[0]][0], start + words[where[1] - 1][1])
+    first = start + words[where[0]][0]
+    found = re.compile(r"(?s).*").match(text, first, min(start + words[where[1] - 1][1], first + 160))
     return _snippet(text, found)
 
 
@@ -216,7 +222,7 @@ def _best(entries, query, limit):
     chosen, by_meaning = [], 0
     for score, has_words, i, *likeness in ranked:
         if not has_words:
-            if by_meaning >= CLOSEST or likeness[0] < NEAR * closest:
+            if by_meaning >= CLOSEST or likeness[0] < max(FLOOR, NEAR * closest):
                 continue
             by_meaning += 1
         chosen.append((score, i))
@@ -247,6 +253,8 @@ def search(directory, query, recursive=False, case_sensitive=False, whole_words=
     if how not in ("exact", "best"):
         raise core.PdfManagerError(f"unknown way to search {how!r}")
     pattern = _pattern(query, case_sensitive, whole_words)
+    if how == "best":
+        meaning.embed(query)  # load the table now: a fault in it is not a fault in a PDF
     files = organize.find_pdfs(directory, recursive)
     matches, skipped, entries = [], [], []
     with _lock:

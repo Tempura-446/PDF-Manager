@@ -178,3 +178,31 @@ def test_the_limit_holds(folder):
         write_pdf(folder / f"{i}.pdf", f"Invoice number {i} for plumbing work.")
     result = search.search(folder, "invoice", how="best", limit=4)
     assert len(result["matches"]) == 4 and result["limited"]
+
+
+def test_nonsense_finds_nothing_and_long_runs_are_not_shown_whole(folder):
+    write_pdf(folder / "cats.pdf", "Cats sleep in the afternoon sun and wake for supper.")
+    write_pdf(folder / "party.pdf", "Notes for the garden party: tables, bunting and lemonade.")
+    for nonsense in ("zebra quantum chromodynamics", "???", "the", "x"):
+        assert search.search(folder, nonsense, how="best")["matches"] == [], nonsense
+    entries = [("a.pdf", 1, text, meaning.embed_page(text))
+               for text in ("balance:" + "-" * 50000, "Payment" + "发票金额" * 5000)]
+    for match in search._best(entries, "money owed for the payment of a balance", 500)[0]:
+        assert len(match["match"]) <= 160
+
+
+def test_numbers_and_capitals_in_a_question():
+    def has(query, text):
+        return all(t.search(text) for t in search._terms(query))
+    assert has("3.5", "a rate of 3.5 per cent") and not has("3.5", "30 days, 5 items, 3.55 or 13.5")
+    assert has("İstanbul", "a flight to İstanbul") and has("invoice", "two Invoices")
+    assert len(search._terms(" ".join(f"word{chr(97 + i)}{chr(97 + i // 26)}x" for i in range(60)))) == search.TERMS
+
+
+def test_a_missing_table_is_not_blamed_on_the_pdfs(folder, monkeypatch):
+    write_pdf(folder / "a.pdf", "Some words.")
+    monkeypatch.setattr(meaning, "_table", None)
+    monkeypatch.setattr(meaning, "DATA", folder / "gone.npz")
+    meaning._pieces.cache_clear()
+    with pytest.raises(FileNotFoundError):
+        search.search(folder, "anything", how="best")

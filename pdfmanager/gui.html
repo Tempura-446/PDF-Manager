@@ -2799,7 +2799,7 @@ function showSearchResults(data, query) {
   const best = data.how === "best";
   let msg = pages ? `Found on ${plural(pages, "page")} in ${plural(files, "file")} (${plural(data.files, "PDF")} searched)${data.limited ? " — showing the first " + pages : ""}.`
     : `Not found in the ${plural(data.files, "PDF")} searched.`;
-  if (best && pages) msg = `${pages === 1 ? "The best match" : `The ${pages} best matches`} in ${plural(data.files, "PDF")}, the closest first.`
+  if (best && pages) msg = `${pages === 1 ? "The best match" : `The ${pages} best matches`} in ${plural(data.files, "PDF")}, the closest first.${data.limited ? " There are more; a longer question narrows them." : ""}`
     + (data.meaning ? "" : " Matched by its words: questions are understood in English only.");
   else if (best) msg = `Nothing like that in the ${plural(data.files, "PDF")} searched.`;
   const extra = data.skipped.length ? ` ${plural(data.skipped.length, "file")} couldn't be searched (password protected or unreadable).` : "";

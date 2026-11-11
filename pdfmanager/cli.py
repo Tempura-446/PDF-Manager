@@ -1035,7 +1035,7 @@ def cmd_search(a):
     result = search.search(a.directory, a.query, a.recursive, a.case_sensitive, a.whole_words,
                            limit=a.limit, how="best" if a.best else "exact")
     for m in result["matches"]:
-        more = f" (+{m['count'] - 1} more)" if m["count"] > 1 else ""
+        more = f" (+{m['count'] - 1} more)" if m["count"] > 1 and not a.best else ""
         print(f"{m['path']}, page {m['page']}: {m['before']}[{m['match']}]{m['after']}{more}")
     for path, reason in result["skipped"]:
         print(f"skipped {path}: {reason}", file=sys.stderr)
