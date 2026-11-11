@@ -38,7 +38,7 @@ import math
 import statistics
 
 from pypdf.generic import (ArrayObject, ByteStringObject, ContentStream, DecodedStreamObject, DictionaryObject,
-                           FloatObject, NameObject)
+                           FloatObject, NameObject, TextStringObject)
 
 IDENTITY = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 PAINT = {b"S", b"s", b"f", b"F", b"f*", b"B", b"B*", b"b", b"b*", b"n"}
@@ -176,11 +176,18 @@ class Content:
         self.paths = []   # {start, end, box, fill, segments, rect, ctm}
         self.things = []  # pictures and forms: their boxes
         self.forms = []   # (operator index, name, the form, the transformation it's drawn in)
+        self.fonts_by_state = {}  # ("gs", name) -> the font a graphics state sets
         self._walk()
+
+    def font(self, name):
+        """The font dictionary a piece of text is drawn with (None if unknown)."""
+        if isinstance(name, tuple):
+            return self.fonts_by_state.get(name)
+        return self.fonts.get(name) if name is not None else None
 
     def _font(self, name):
         if name not in self._info:
-            self._info[name] = _FontInfo(self.fonts.get(name))
+            self._info[name] = _FontInfo(self.font(name))
         return self._info[name]
 
     def _walk(self):
@@ -188,6 +195,7 @@ class Content:
         ts = {"Tc": 0.0, "Tw": 0.0, "Th": 1.0, "TL": 0.0, "font": None, "fs": 0.0, "rise": 0.0, "fill": []}
         tm = tlm = IDENTITY
         lx = 0.0  # how far the pen is along the line from where the line began (text space)
+        mc = []   # the marked-content sequences open here: [{i, operands, shows}]
         path, path_start, segments, rects, clip = [], None, 0, 0, False
         for i, (operands, op) in enumerate(self.ops):
             if op == b"q":
@@ -202,6 +210,21 @@ class Content:
             elif op == b"BT":
                 tm = tlm = IDENTITY
                 lx = 0.0
+            elif op in (b"BMC", b"BDC"):
+                mc.append({"i": i, "operands": operands, "shows": []})
+            elif op == b"EMC":
+                if mc:
+                    mc.pop()
+            elif op == b"gs" and operands:
+                # A graphics state can set the font too: /Font [font size].
+                states = self.resources.get("/ExtGState")
+                state = states.get_object().get(operands[0]) if states is not None else None
+                entry = state.get_object().get("/Font") if state is not None else None
+                size = _nums(entry[1:2]) if entry is not None and len(entry) == 2 else None
+                if size:
+                    key = ("gs", str(operands[0]))
+                    self.fonts_by_state[key] = entry[0]
+                    ts["font"], ts["fs"], ts["font_set"] = key, size[0], [(operands, op)]
             elif op in (b"g", b"rg", b"k", b"cs"):
                 ts["fill"] = [(operands, op)]
             elif op in (b"sc", b"scn"):
@@ -213,6 +236,7 @@ class Content:
                     ts[key] = v[0] / 100 if op == b"Tz" else v[0]
             elif op == b"Tf" and len(operands) == 2:
                 ts["font"] = operands[0]
+                ts["font_set"] = None
                 v = _nums(operands[1:])
                 ts["fs"] = v[0] if v else 0.0
             elif op == b"Tf" and len(operands) == 1 and _nums(operands):
@@ -242,6 +266,9 @@ class Content:
                     lx = 0.0
                 tm = self._show(i, op, operands, ts, tm, ctm, tlm, lx)
                 lx += self.shows[-1]["tx"]
+                self.shows[-1]["mc"] = tuple(mc)
+                for sequence in mc:
+                    sequence["shows"].append(self.shows[-1])
             elif op in BUILD:
                 if path_start is None:
                     path_start, path, segments, rects, clip = i, [], 0, 0, False
@@ -312,7 +339,8 @@ class Content:
         self.shows.append({"i": i, "op": op, "glyphs": glyphs, "rise": ts["rise"], "m": start, "fs": fs,
                            "th": th, "tx": tx, "sure": info.sure, "operands": operands,
                            "codes": codes, "txs": txs, "advs": advs, "tlm": tlm, "lx": lx, "ctm": ctm,
-                           "font": ts["font"], "Tc": ts["Tc"], "Tw": ts["Tw"], "fill": ts["fill"],
+                           "font": ts["font"], "font_set": ts.get("font_set"),
+                           "Tc": ts["Tc"], "Tw": ts["Tw"], "fill": ts["fill"],
                            "info": info, "layer": self})
         return _mul((1, 0, 0, 1, tx, 0), tm)
 
@@ -379,6 +407,7 @@ class Flow:
         self.dropped = set()  # path starts
         self.orphans = []     # new words that couldn't be written in place: drawn after everything else
         self.reshaped = {}    # operator index -> new operands: an underline or highlight that follows its words
+        self.retag = {}       # (layer, operator index) -> new operands: a tag's replacement text, changed with its line
         self.rises, self.moves = {}, {}  # show op index -> page dy; path start -> page dy
         self.annots = []  # (box, dy)
         self.moved_letters = {}  # pdfium letter index -> page dy
@@ -536,10 +565,101 @@ class Flow:
     def checkpoint(self):
         """The changes so far, to come back to with :meth:`rollback`."""
         return ({key: {"show": e["show"], "els": list(e["els"]), "shift": dict(e["shift"]), "gone": set(e["gone"])}
-                 for key, e in self.edits.items()}, set(self.dropped))
+                 for key, e in self.edits.items()}, set(self.dropped), dict(self.retag), dict(self.reshaped))
 
     def rollback(self, saved):
-        self.edits, self.dropped = saved
+        self.edits, self.dropped, self.retag, self.reshaped = saved
+
+    @staticmethod
+    def _replacement(layer, sequence):
+        """Whether a marked-content sequence gives its own text in place of
+        what it draws (/ActualText, /Alt): "here" (in the drawing, where it
+        can be changed), "named" (in the resources, maybe shared) or None."""
+        operands = sequence["operands"]
+        if len(operands) < 2:
+            return None
+        props = operands[1]
+        where = "here"
+        if not isinstance(props, dict):
+            named = layer.resources.get("/Properties")
+            props = named.get_object().get(props) if named is not None else None
+            props = props.get_object() if props is not None else None
+            where = "named"
+        if isinstance(props, dict) and ("/ActualText" in props or "/Alt" in props):
+            return where
+        return None
+
+    def replaced_line(self, letter, count, text):
+        """A line a tag gives replacement text for (/ActualText) is read
+        by pdfium as that text, all of it at the line's start, not as the
+        letters drawn. When the tag holds exactly one such line that starts
+        at ``letter`` and its text has ``count`` letters, everything it
+        draws is taken out and its text set to ``text``: the place to
+        write the new words at, else None (nothing changed)."""
+        content = self.content
+        near = self._near([content], *letter["origin"]) if content else []
+        if not near or text is None:
+            return None
+        show, k = near[0][1], near[0][2]
+        tagged = [seq for seq in show["mc"] if self._replacement(content, seq)]
+        if len(tagged) != 1 or self._replacement(content, tagged[0]) != "here":
+            return None
+        sequence = tagged[0]
+        props = sequence["operands"][1]
+        said = str(props.get("/ActualText", props.get("/Alt", "")))
+        marks = [(sh, j) for sh in sequence["shows"] for j, g in enumerate(sh["glyphs"]) if not g[2]]
+        if sum(1 for ch in said if not ch.isspace()) != count or not marks or marks[0] != (show, k) \
+                or not all(self._editable(sh) for sh in sequence["shows"]):
+            return None
+        y = show["glyphs"][k][1]
+        if any(abs(sh["glyphs"][j][1] - y) > 0.5 for sh, j in marks):
+            return None  # more than one line in the tag
+        for sh, j in marks:
+            self._drop(sh, j)
+        for sh in sequence["shows"]:
+            self._tidy_spaces(sh)
+        new = DictionaryObject(props)
+        for name in ("/ActualText", "/Alt"):
+            if name in new:
+                new[NameObject(name)] = TextStringObject(text)
+        self.retag[(id(content), sequence["i"])] = [sequence["operands"][0], new]
+        return show, k
+
+    def tags(self, letters, text, one=False):
+        """What the tags (marked content) around ``letters`` allow, before
+        they are changed. New words are written into the sequence of the
+        letter they replace, so each line's words stay in its own; but a
+        sequence that gives replacement text (/ActualText, /Alt) would go
+        on saying the old words. That text is changed to ``text`` when the
+        sequence holds exactly these letters; otherwise, or when ``one``
+        is asked (everything is written at the first letter's place) and
+        the letters are in more than one sequence, None: not to be changed
+        in place. Else {where: new operands} for :attr:`retag`."""
+        found = [self.glyph(L) for L in letters]
+        if any(g is None for g in found):
+            return None
+        if one and len({tuple(id(seq) for seq in show["mc"]) for show, _ in found}) > 1:
+            return None
+        mine = {(id(show), k) for show, k in found}
+        if len(mine) != len(found):
+            return None  # two letters read at one glyph: not letters this can tell apart
+        out = {}
+        for show in {id(g[0]): g[0] for g in found}.values():
+            for sequence in show["mc"]:
+                key = (id(show["layer"]), sequence["i"])
+                where = self._replacement(show["layer"], sequence)
+                if where is None or key in out:
+                    continue
+                marks = {(id(sh), k) for sh in sequence["shows"] for k, g in enumerate(sh["glyphs"])
+                         if not g[2] and not self._is_gone(sh, k)}
+                if where != "here" or text is None or marks != mine or out:
+                    return None
+                props = DictionaryObject(sequence["operands"][1])
+                for name in ("/ActualText", "/Alt"):
+                    if name in props:
+                        props[NameObject(name)] = TextStringObject(text)
+                out[key] = [sequence["operands"][0], props]
+        return out
 
     def _drop(self, show, k):
         edit = self._edit(show)
@@ -638,7 +758,7 @@ class Flow:
         return True
 
     def _font_of(self, show):
-        font = show["layer"].fonts.get(show["font"]) if show["font"] is not None else None
+        font = show["layer"].font(show["font"])
         return font.get_object() if font is not None else None
 
     def _spliced(self, show, run, tag):
@@ -941,7 +1061,7 @@ class Flow:
 
     # -- writing the changed drawing --------------------------------------------------------
     def changed(self):
-        return bool(self.edits or self.dropped or self.rises or self.moves or self.reshaped)
+        return bool(self.edits or self.dropped or self.rises or self.moves or self.reshaped or self.retag)
 
     def pending(self):
         """The new runs to be written in place, for their fonts to be made ready."""
@@ -1031,6 +1151,8 @@ class Flow:
                 out.append(([renames[i]], op))
             elif top and i in self.reshaped:
                 out.append((self.reshaped[i], op))
+            elif (id(layer), i) in self.retag:
+                out.append((self.retag[(id(layer), i)], op))
             else:
                 out.append((operands, op))
             if open_q is not None and i == open_q:
@@ -1118,7 +1240,9 @@ class Flow:
                 out += ops
                 follow = _at(inverse, end[0], end[1])[0] if inverse else None
                 # Back to the piece's own font and spacing, the pen where its line began.
-                if show["font"] is not None:
+                if show["font_set"]:
+                    out += show["font_set"]  # the graphics state that set the font
+                elif show["font"] is not None:
                     out.append(([show["font"], FloatObject(fs)], b"Tf"))
                 out += [([FloatObject(show["Tc"])], b"Tc"), ([FloatObject(show["Tw"])], b"Tw"),
                         ([FloatObject(th * 100)], b"Tz"), ([FloatObject(rise)], b"Ts")]

@@ -332,28 +332,189 @@ def paragraph_page(path, below=True):
     return path, lines
 
 
-def test_a_line_that_outgrows_its_paragraph_is_wrapped_again(tmp_path):
-    (src, lines), out = paragraph_page(tmp_path / "p.pdf"), tmp_path / "out.pdf"
-    report = change(src, out, lines[0], lines[0].replace("annual", "comprehensive annual and quarterly"))
-    assert report.get("reflowed") is True and "wider" not in report and "covered" not in report
-    after = chars(out)
-    # Nothing runs into the right column, every word is still there, and the next paragraph moved down a line.
-    assert max(c[3] for c in after if c[1] < 350) < 350
-    words = " ".join(lines).replace("annual", "comprehensive annual and quarterly").replace(" ", "")
-    assert words in "".join(c[0] for c in after)
-    assert stays(src, out, "Right column line 0 stays put.")
-    assert edges(out, "A second paragraph")[0] == edges(src, "A second paragraph")[0]
-    y = lambda path: next(c[2] for c in chars(path) if c[0] == "A" and c[1] < 73)  # noqa: E731
-    assert y(src) - y(out) == pytest.approx(12, abs=0.5)
+def fonts_of(path, page=0):
+    """[(letter, x, y, font name, size)] of the letters pdfium reads."""
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        textpage = doc[page].get_textpage()
+        buf, flags, out = ctypes.create_string_buffer(256), ctypes.c_int(), []
+        for i in range(textpage.count_chars()):
+            ch = textpage.get_text_range(i, 1)
+            if ch.strip():
+                pdfium_raw.FPDFText_GetFontInfo(textpage.raw, i, buf, 256, ctypes.byref(flags))
+                out.append((ch, *(round(v, 2) for v in textedit._origin(textpage, i)), buf.value.decode(),
+                            round(pdfium_raw.FPDFText_GetFontSize(textpage.raw, i), 2)))
+        return out
+    finally:
+        doc.close()
 
 
-def test_taking_a_line_out_of_a_paragraph_leaves_no_hole(tmp_path):
+def off_line(path, y):
+    return [c for c in fonts_of(path) if abs(c[2] - y) > 3]
+
+
+def test_a_change_of_one_line_of_a_paragraph_changes_that_line_only(tmp_path):
     (src, lines), out = paragraph_page(tmp_path / "p.pdf"), tmp_path / "out.pdf"
+    # Longer than the paragraph is wide: it stays one line (no wrapping of the
+    # lines around it), and nothing else on the page moves or changes font.
+    longer = lines[0].replace("annual", "comprehensive annual and quarterly")
+    report = change(src, out, lines[0], longer)
+    assert "reflowed" not in report and "moved" not in report and "covered" not in report
+    assert report.get("wider") is True  # it now reaches the right column: said
+    assert off_line(out, 700) == off_line(src, 700)
+    assert found(out, longer) == 1
+    # A little longer, with room: not "wider".
+    report = change(src, out, lines[3], lines[3].replace("costs", "expenses"))
+    assert "wider" not in report and off_line(out, 664) == off_line(src, 664)
+    # A line taken away leaves its space: the lines below stay where they are.
     report = change(src, out, lines[1], "")
-    assert report.get("reflowed") is True
-    rows = sorted({round(c[2]) for c in chars(out) if c[1] < 350}, reverse=True)
-    assert rows[:3] == [700, 688, 676]  # three lines, evenly spaced, from the top
-    assert found(out, "proposed figures") == 0 and found(out, "clearer breakdown of travel costs.") == 1
+    assert report == {"font": "", "kind": "same"}
+    assert off_line(out, 688) == off_line(src, 688) and found(out, "proposed figures") == 0
+    assert not [c for c in fonts_of(out) if abs(c[2] - 688) <= 3 and c[1] < 350]
+
+
+def test_three_separate_lines_of_like_length_stay_three_lines(tmp_path):
+    rows = ["Invoice number 20417 was issued on Monday", "Delivery is expected within thirty days.",
+            "Payment is due at the end of the month."]
+    src = raw_page(tmp_path / "rows.pdf", "BT /F1 12 Tf 72 700 Td ({}) Tj 0 -18 Td ({}) Tj 0 -18 Td ({}) Tj ET".format(*rows))
+    out = tmp_path / "out.pdf"
+    for old, new, y in ((rows[0], rows[0] + " morning, very early indeed", 700), (rows[1], "", 682),
+                        (rows[1], rows[1].replace("thirty", "Ωμέγα"), 682)):
+        report = change(src, out, old, new)
+        assert "reflowed" not in report and "moved" not in report
+        assert off_line(out, y) == off_line(src, y)
+
+
+def tagged_lines(path, first):
+    return raw_page(path, f"/P <</MCID 0>> BDC BT /F1 12 Tf 72 700 Td {first} ET EMC\n"
+                    f"/P <</MCID 1>> BDC BT /F1 12 Tf 72 682 Td ({STAYS}) Tj ET EMC\n"
+                    "/Span BMC BT /F1 12 Tf 72 664 Td (Pack my box with five dozen liquor jugs.) Tj ET EMC")
+
+
+def sequences(path):
+    """The text operators of each marked-content sequence of the page, in order."""
+    data, out = content(path), []
+    while "EMC" in data:
+        head, data = data.split("EMC", 1)
+        if "BDC" in head or "BMC" in head:
+            out.append(head[head.index("BDC") if "BDC" in head else head.index("BMC"):])
+    return out
+
+
+def test_a_tags_replacement_text_is_changed_with_its_line(tmp_path):
+    src = tagged_lines(tmp_path / "t.pdf", f"/Span <</ActualText ({FOX}) /Lang (en-GB)>> BDC ({FOX}) Tj EMC")
+    out = tmp_path / "out.pdf"
+    new = FOX.replace("brown", "black")
+    report = change(src, out, FOX, new)
+    assert "covered" not in report
+    data = content(out)
+    assert f"/ActualText ({new})" in data.replace("\\056", ".") and "brown" not in data and "/Lang" in data
+    assert data.count("BDC") == 3 and data.count("BMC") == 1 and data.count("EMC") == 4
+    assert off_line(out, 700) == off_line(src, 700)
+    # Each of the other lines is still drawn inside its own tag.
+    parts = sequences(out)
+    assert "neighbouring" in parts[-2] and "Pack my box" in parts[-1]
+    # A longer change (written as a line of its own): the same.
+    report = change(src, out, FOX, "Now something else entirely.")
+    assert "covered" not in report and "/ActualText (Now something else entirely" in content(out)
+
+
+def test_a_tag_whose_replacement_text_is_only_part_of_the_line_is_left_alone(tmp_path):
+    src = tagged_lines(tmp_path / "t.pdf", "/Span <</ActualText (The quick brown fox)>> BDC (The quick brown fox) Tj EMC "
+                       "( jumps over the lazy dog.) Tj")
+    out = tmp_path / "out.pdf"
+    report = change(src, out, FOX, FOX.replace("lazy", "idle"))
+    assert report.get("covered") is True  # can't be changed for sure: covered, and said
+    data = content(out)
+    assert "/ActualText (The quick brown fox)" in data
+    parts = sequences(out)
+    assert any("neighbouring" in part for part in parts) and any("Pack my box" in part for part in parts)  # no tag emptied
+    assert off_line(out, 700) == off_line(src, 700)
+    assert found(out, STAYS) == 1 and found(out, "Pack my box with five dozen liquor jugs.") == 1
+
+
+def test_a_paragraph_whose_lines_have_tags_of_their_own_isnt_emptied_into_one(tmp_path):
+    src = tagged_lines(tmp_path / "t.pdf", f"({FOX}) Tj")
+    out = tmp_path / "out.pdf"
+    report = []
+    textedit.edit_text(src, out, [{"page": 1, "rect": [70, 660, 340, 712], "paragraph": True,
+                                   "text": "One paragraph written in place of the three lines."}], report=report)
+    assert report[0].get("covered") is True
+    parts = sequences(out)
+    assert "quick brown" in parts[0] and "neighbouring" in parts[1] and "Pack my box" in parts[2]
+
+
+def test_only_the_letters_the_font_lacks_get_another_font(tmp_path):
+    src, out = plain(tmp_path / "a.pdf"), tmp_path / "out.pdf"
+    report = change(src, out, FOX, FOX.replace("brown", "brőwn"))
+    assert report["kind"] in ("similar", "installed") and "missing" not in report
+    line = {c[0]: c[3] for c in fonts_of(out) if abs(c[2] - 720) < 1}
+    assert line["ő"] != "Helvetica" and all(line[ch] == "Helvetica" for ch in "brwnTqfx")
+    assert off_line(out, 720) == off_line(src, 720)  # the other line: same letters, places, font
+    assert found(out, FOX.replace("brown", "brőwn")) == 1
+    # Every font of the page is one a reader has (a standard one) or is in the file with its letters' meanings.
+    for font in PdfReader(str(out)).pages[0]["/Resources"]["/Font"].values():
+        font = font.get_object()
+        assert font["/Subtype"] != "/Type0" or "/ToUnicode" in font
+        if font["/BaseFont"] != "/Helvetica":
+            descriptor = (font["/DescendantFonts"][0].get_object() if font["/Subtype"] == "/Type0" else font)["/FontDescriptor"]
+            assert any(k in descriptor.get_object() for k in ("/FontFile", "/FontFile2", "/FontFile3"))
+
+
+def test_letters_no_font_here_can_draw_are_named_not_written_blind(tmp_path):
+    src, out = plain(tmp_path / "a.pdf"), tmp_path / "out.pdf"
+    odd = "\ue123"  # a private-use letter: no font has it
+    report = change(src, out, FOX, FOX.replace("brown", "br" + odd + "wn Ωμέγα"))
+    assert report["missing"] == odd
+    assert found(out, "The quick brwn Ωμέγα fox jumps over the lazy dog.") == 1
+    assert off_line(out, 720) == off_line(src, 720)
+    used = [f.get_object() for f in PdfReader(str(out)).pages[0]["/Resources"]["/Font"].values()]
+    assert not any(str(f["/BaseFont"]).lstrip("/") in textedit.READER_FONTS for f in used)
+    # A paragraph change says so too.
+    report = []
+    textedit.edit_text(src, out, [{"page": 1, "rect": [70, 715, 330, 732], "paragraph": True, "text": "New " + odd + " words"}],
+                       report=report)
+    assert report[0]["missing"] == odd and found(out, "New words") == 1
+
+
+def test_a_change_that_moves_another_line_is_caught_and_only_that_change_is_covered(tmp_path, monkeypatch):
+    rows = ["First line of three on the page.", "Second line of three on the page.", "Third line of three on the page."]
+    src = raw_page(tmp_path / "rows.pdf", "BT /F1 12 Tf 72 700 Td ({}) Tj 0 -18 Td ({}) Tj 0 -18 Td ({}) Tj ET".format(*rows))
+    out = tmp_path / "out.pdf"
+    real = textedit._Page._in_place
+
+    def faulty(self, *args, **kwargs):
+        """A fault planted in the new way: a change whose words say FAULT nudges the page's last line."""
+        done = real(self, *args, **kwargs)
+        if done and "FAULT" in args[-1]:
+            self.flow.rises[self.flow.content.shows[-1]["i"]] = 0.7
+        return done
+
+    monkeypatch.setattr(textedit._Page, "_in_place", faulty)
+    report = []
+    textedit.edit_text(src, out, [
+        {"page": 1, "rect": line_rect(src, rows[0]), "text": rows[0].replace("First", "Opening"), "old": rows[0]},
+        {"page": 1, "rect": line_rect(src, rows[1]), "text": rows[1].replace("Second", "FAULT"), "old": rows[1]},
+    ], report=report)
+    assert "covered" not in report[0] and report[1].get("covered") is True
+    third = lambda path: [c for c in fonts_of(path) if abs(c[2] - 664) < 1]  # noqa: E731
+    assert third(out) == third(src) and len(third(src)) > 20  # the third line: untouched
+    assert found(out, "Opening line of three") == 1 and found(out, "First line") == 0
+    assert found(out, "FAULT line of three") == 1
+    # The check itself: a letter in another font, a letter gone, one too many, the new words unreadable.
+    good = tmp_path / "good.pdf"
+    monkeypatch.undo()
+    _, expect = textedit._edit(src, good, [{"page": 1, "rect": line_rect(src, rows[0]), "text": "Opening words", "old": rows[0]}],
+                               None, [], frozenset())
+    assert textedit._intact(good, expect)
+    letters_ = expect[0]["letters"]
+    for broken in (dict(expect[0], letters=[(*letters_[0][:3], b"Courier", letters_[0][4])] + letters_[1:]),
+                   dict(expect[0], letters=[(*letters_[0][:4], 11.0)] + letters_[1:]),
+                   dict(expect[0], letters=letters_ + [("Z", 300.0, 500.0, b"Helvetica", 12.0)]),
+                   dict(expect[0], letters=letters_[1:]),
+                   dict(expect[0], letters=letters_[1:2] + letters_[:1] + letters_[2:]),
+                   dict(expect[0], texts=[(0, "Opening words and more")])):
+        assert not textedit._intact(good, {0: broken})
 
 
 def test_a_lone_line_that_runs_into_its_neighbour_says_so(tmp_path):
