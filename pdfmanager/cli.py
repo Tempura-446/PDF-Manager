@@ -1037,6 +1037,8 @@ def cmd_search(a):
     for m in result["matches"]:
         more = f" (+{m['count'] - 1} more)" if m["count"] > 1 and not a.best else ""
         print(f"{m['path']}, page {m['page']}: {m['before']}[{m['match']}]{m['after']}{more}")
+        for copy in m.get("also", ()):
+            print(f"    the same file: {copy}")
     for path, reason in result["skipped"]:
         print(f"skipped {path}: {reason}", file=sys.stderr)
     files = len({m["path"] for m in result["matches"]})

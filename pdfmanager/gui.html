@@ -2810,10 +2810,11 @@ function showSearchResults(data, query) {
   const tbody = el("tbody");
   for (const m of data.matches) {
     const name = m.path.split(/[\\/]/).pop(), folder = m.path.slice(0, m.path.length - name.length - 1);
-    const open = () => openInReaderById([m.id], { page: m.page, find: best ? (m.words ? m.match : "") : query });
+    const open = () => openInReaderById([m.id], { page: m.page, find: best ? m.find : query });
     const row = el("tr", { class: "search-row", tabindex: "0", title: "Open this page in the reader",
       onclick: open, onkeydown: (e) => { if (e.key === "Enter") open(); } },
-      el("td", {}, el("strong", {}, name), el("div", { class: "search-folder" }, folder)),
+      el("td", {}, el("strong", {}, name), el("div", { class: "search-folder" }, folder),
+        (m.also || []).length ? el("div", { class: "search-folder", title: m.also.join("\n") }, `The same as ${m.also[0].split(/[\\/]/).pop()}${m.also.length > 1 ? " and " + plural(m.also.length - 1, "other") : ""}`) : null),
       el("td", { class: "search-page" }, `p. ${m.page}`),
       el("td", {}, m.before, el("mark", {}, m.match), m.after, m.count > 1 && !best ? el("span", { class: "search-more" }, ` +${m.count - 1} more`) : null));
     tbody.append(row);

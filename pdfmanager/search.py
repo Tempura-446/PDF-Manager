@@ -132,9 +132,11 @@ def _terms(query):
     for run in _RUN.findall(query):
         for pair in ([run] if len(run) == 1 else [run[i:i + 2] for i in range(len(run) - 1)]):
             terms.setdefault(pair, re.compile(r"\s*".join(re.escape(c) for c in pair)))
-    for word in re.findall(r"\d+(?:[.,]\d+)*|[^\W\d_]+", re.sub(r"['’]s\b", " ", _RUN.sub(" ", query))):
-        if word[0].isdigit():  # a number is matched whole: 3.5 is not 35 or 3.55
-            terms.setdefault(word, re.compile(rf"(?<![\d.,]){re.escape(word)}(?![.,]?\d)"))
+    for word in re.findall(r"[^\W_]*\d[^\W_]*(?:[.,]\d+)*|[^\W\d_]+",
+                           re.sub(r"['’]s\b", " ", _RUN.sub(" ", query))):
+        if any(c.isdigit() for c in word):  # a number or a code is matched whole: 3.5 is not 35 or 3.55
+            terms.setdefault(word.lower(), re.compile(
+                rf"(?<![^\W_])(?<!\d[.,]){re.escape(word)}(?![.,]?\d)(?![^\W_])", re.IGNORECASE))
         elif word.lower() not in STOP and len(word) > 1:
             terms.setdefault(word.lower(), re.compile(rf"\b{re.escape(word)}", re.IGNORECASE))
     return list(terms.values())[:TERMS]
@@ -164,23 +166,24 @@ def _word_scores(pages, terms):
     return scores, hits, complete
 
 
-def _best_snippet(text, terms, question, vectors):
-    """The part of a page to show: around the question's first word found in
-    its closest passage, or failing that the dozen words closest in meaning."""
+def _best_snippet(text, terms, question, vectors, keywords):
+    """The part of a page to show, and whether it is a word of the search. For
+    keywords: around the first of them found in the closest passage. For a
+    question: the dozen words of that passage closest to it in meaning."""
     parts = meaning.passages(text)
     if not parts:
-        return "", "", ""
+        return ("", "", ""), False
     best = 0
     if question is not None and len(vectors) == len(parts):
         best = int((vectors @ question).argmax())
     start, end = parts[best]
-    for area in ((start, end), (0, len(text))):
+    for area in ((start, end), (0, len(text))) if keywords or question is None else ():
         for term in terms:
             found = term.search(text, *area)
             if found:
-                return _snippet(text, found)
+                return _snippet(text, found), True
     if question is None:
-        return "", "", ""
+        return ("", "", ""), False
     words = [m.span() for m in re.finditer(r"\S+", text[start:end])]
     words = [(a, min(b, a + 40)) for a, b in words]  # a run without spaces isn't a word to show
     top, where = -2.0, (0, min(12, len(words)))
@@ -191,14 +194,15 @@ def _best_snippet(text, terms, question, vectors):
             top, where = likeness, (first, last)
     first = start + words[where[0]][0]
     found = re.compile(r"(?s).*").match(text, first, min(start + words[where[1] - 1][1], first + 160))
-    return _snippet(text, found)
+    return _snippet(text, found), False
 
 
 def _best(entries, query, limit):
     """Rank pages for a question. ``entries`` is [(path, page number, text,
     vectors)]; returns the match entries, best first."""
     terms = _terms(query)
-    question = meaning.embed(query)
+    # A code or a number (SA353569347) has no meaning to compare, only itself.
+    question = meaning.embed(" ".join(w for w in query.split() if not any(c.isdigit() for c in w)))
     if not question.any():
         question = None  # nothing the model knows (Chinese, a number): the words decide
     scores, hits, complete = _word_scores([text for _, _, text, _ in entries], terms)
@@ -218,21 +222,24 @@ def _best(entries, query, limit):
     ranked.sort(key=lambda r: (-r[0], r[2]))
     # Every page that has the words, and beyond those the closest in meaning:
     # a few, and only those in the same league as the closest of all.
+    # A few keywords that some pages have in full want those pages, not likenesses.
     closest = max((r[3] for r in ranked if len(r) > 3), default=0)
+    found_whole = keywords and any(complete)
     chosen, by_meaning = [], 0
     for score, has_words, i, *likeness in ranked:
         if not has_words:
-            if by_meaning >= CLOSEST or likeness[0] < max(FLOOR, NEAR * closest):
+            if found_whole or by_meaning >= CLOSEST or likeness[0] < max(FLOOR, NEAR * closest):
                 continue
             by_meaning += 1
         chosen.append((score, i))
     matches = []
     for score, i in chosen[:limit]:
         path, number, text, vectors = entries[i]
-        before, hit, after = _best_snippet(text, terms, question, vectors)
+        (before, hit, after), word = _best_snippet(text, terms, question, vectors, keywords)
         matches.append({"path": str(path), "page": number, "count": max(1, hits[i]),
                         "before": before, "match": hit, "after": after,
-                        "words": bool(hits[i]), "score": round(score, 3)})
+                        "words": bool(hits[i]), "find": hit if word else "",
+                        "score": round(score, 3)})
     return matches, len(chosen) > limit, question is not None
 
 
@@ -256,7 +263,7 @@ def search(directory, query, recursive=False, case_sensitive=False, whole_words=
     if how == "best":
         meaning.embed(query)  # load the table now: a fault in it is not a fault in a PDF
     files = organize.find_pdfs(directory, recursive)
-    matches, skipped, entries = [], [], []
+    matches, skipped, entries, same = [], [], [], {}
     with _lock:
         conn = _db()
         try:
@@ -274,6 +281,12 @@ def search(directory, query, recursive=False, case_sensitive=False, whole_words=
                     skipped.append((str(path), error))
                     continue
                 if how == "best":
+                    # A second copy of a file (the same text on every page) is named, not listed again.
+                    whole = hash(tuple(text for _, text in texts))
+                    if texts and any(text for _, text in texts) and whole in same:
+                        same[whole][1].append(str(path))
+                        continue
+                    same[whole] = (str(path), [])
                     entries.extend((path, number, text, vectors[number]) for number, text in texts)
                     continue
                 for number, text in texts:
@@ -291,6 +304,9 @@ def search(directory, query, recursive=False, case_sensitive=False, whole_words=
               "how": how}
     if how == "best":
         result["matches"], result["limited"], result["meaning"] = _best(entries, query, limit)
+        copies = dict(same.values())
+        for match in result["matches"]:
+            match["also"] = copies.get(match["path"], [])
     return result
 
 

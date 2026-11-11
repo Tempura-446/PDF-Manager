@@ -44,8 +44,14 @@ ZPDF's own code. Loading takes 0.1 s; 5,000 pages are prepared in under
   search is one to three keywords, pages with all of them come first.
 - Shown: every page that has the words, then up to 20 pages close in
   meaning, each at least half as close as the closest.
-- The snippet is around the question's first word found in the closest
-  passage; with none, the dozen words closest in meaning.
+- When the search is one to three keywords and some page has them all,
+  only pages with the words are shown. Words with a digit in them (codes,
+  numbers) are matched whole and left out of the question's vector.
+- The snippet for keywords is around the first of them in the closest
+  passage; for a question it is the dozen words of that passage closest
+  in meaning.
+- A file whose text is the same as one already read is not listed again;
+  the first carries its path in `also`.
 
 `how="exact"` is the search as it was. The app uses "best" unless "These
 exact words" is chosen; `pdfm search` uses exact unless `--best`.

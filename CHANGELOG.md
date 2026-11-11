@@ -13,8 +13,10 @@ also the notes of its release on
   of 44 questions worded differently from the documents, the right
   document came first 30 times (matching words alone: 19; the exact
   phrase: never).
-- A name or a number still finds every page that has it, ahead of
-  anything else. "These exact words" searches for a phrase as before.
+- A name, a number or a code (an order or invoice number) finds the pages
+  that have it and nothing else. "These exact words" searches for a
+  phrase as before. A second copy of the same file is named beside the
+  first instead of doubling every result.
 - Questions are understood in English. Chinese (and Japanese and Korean)
   is matched by its characters, so searching in Chinese finds the pages
   with those words, in the best order.

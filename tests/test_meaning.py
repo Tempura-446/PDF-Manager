@@ -102,7 +102,7 @@ def test_a_question_finds_the_page_that_answers_it(folder):
     best = search.search(folder, "how much do I owe", how="best")
     assert first(best) == "statement.pdf" and best["meaning"] and best["how"] == "best"
     hit = best["matches"][0]
-    assert hit["page"] == 1 and hit["match"] and not hit["words"]
+    assert hit["page"] == 1 and hit["match"] and not hit["words"] and hit["find"] == ""
     assert hit["match"] in "Statement of account. The balance due is 240.00 and must reach us by the end of March."
     assert first(search.search(folder, "what flowers are we putting in", how="best")) == "garden.pdf"
 
@@ -206,3 +206,32 @@ def test_a_missing_table_is_not_blamed_on_the_pdfs(folder, monkeypatch):
     meaning._pieces.cache_clear()
     with pytest.raises(FileNotFoundError):
         search.search(folder, "anything", how="best")
+
+
+def test_a_code_or_a_name_that_is_there_brings_no_lookalikes(folder):
+    """Found on a real folder: an order number came first, then 140 pages of codes."""
+    write_pdf(folder / "slip.pdf", "Trade-in instructions for order SA353569347. Pack the phone and post it.")
+    write_pdf(folder / "bill.pdf", "Hi Mei, here is your utility bill for the month from Entergy. Invoice # 150006282016. "
+              + "Thank you for being a customer. " * 30 + "Electric Charges $101.12 Gas Charges $55.28 Total amount due $156.40")
+    for i in range(8):
+        write_pdf(folder / f"tiles{i}.pdf", f"Schedule T{i}: SKU SA35{i}77 AB-{i}9 X200 tile 300x600 code ZR{i}5531 room 15000{i}")
+    for query, name in (("SA353569347", "slip.pdf"), ("150006282016", "bill.pdf"), ("Entergy", "bill.pdf")):
+        found = search.search(folder, query, how="best")["matches"]
+        assert [Path(m["path"]).name for m in found] == [name], query
+        assert found[0]["find"].lower() == query.lower()
+    # A question shows the part of the page that answers it, not its first shared word.
+    hit = search.search(folder, "how much was my electricity bill", how="best")["matches"][0]
+    assert Path(hit["path"]).name == "bill.pdf" and hit["words"]
+    assert "Electric Charges" in hit["before"] + hit["match"] + hit["after"], hit
+
+
+def test_a_second_copy_of_a_file_is_named_not_listed_again(folder):
+    text = "The warranty on the fridge runs for five years from delivery."
+    write_pdf(folder / "contract.pdf", text, "Second page.")
+    write_pdf(folder / "contract (1).pdf", text, "Second page.")
+    write_pdf(folder / "other.pdf", "A recipe for lemon cake.")
+    result = search.search(folder, "how long is the refrigerator guaranteed", how="best")
+    hits = [m for m in result["matches"] if "contract" in m["path"]]
+    assert {m["page"] for m in hits} == {1, 2} or [m["page"] for m in hits] == [1]
+    assert len({m["path"] for m in hits}) == 1 and len(hits[0]["also"]) == 1 and result["files"] == 3
+    assert "contract" in hits[0]["also"][0] and hits[0]["also"][0] != hits[0]["path"]
