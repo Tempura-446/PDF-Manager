@@ -807,7 +807,7 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             raise UserError("enter a password to open it, or choose what to limit")
         core.encrypt(src, out, opts.get("new_password") or "", opts.get("owner_password") or None,
                      password=password, permissions=perms if limited else None)
-        notes.append(f"{src.name}: " + ("opens with its password" if opts.get("new_password")
+        notes.append(f"{out.name}: " + ("opens with its password" if opts.get("new_password")
                                        else "anyone can open it")
                      + (f"; {filetools.describe(perms)}" if limited else ""))
     # -- comments --
@@ -2257,10 +2257,11 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     raise UserError("pages should look like 1-2") from None
             if pages is not None:
-                # The quick look, unasked: a scan nobody can type in yet isn't
-                # offered as a form (a contents page's dot leaders look like one).
+                # The quick look, unasked: a scan isn't offered as a form, with
+                # or without its text recognised (a contents page's dot leaders
+                # look like one, and a scanned form is filled in on paper).
                 seen = filefacts.facts(path, fields.get("password") or None)
-                if seen.get("scanned") and not seen.get("has_text"):
+                if seen.get("scanned"):
                     return self._send(HTTPStatus.OK, {"fields": {}})
             found = formdetect.detect(path, fields.get("password") or None, pages=pages)
         return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})
@@ -2810,6 +2811,20 @@ def _unregister_instance(server):
         pass
 
 
+def _allow_foreground():
+    """Let the running copy bring its window forward (Windows): only the
+    program in front, which this launch is when a PDF was double-clicked,
+    can allow another to take the foreground."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.user32.AllowSetForegroundWindow(-1)  # ASFW_ANY
+    except Exception:  # noqa: BLE001 - a courtesy; the file is handed over all the same
+        pass
+
+
 def forward_to_running_app(paths=()):
     """If ZPDF is already running, hand it ``paths`` to open and
     return True, so this launch can end: there's only ever one copy.
@@ -2832,6 +2847,7 @@ def forward_to_running_app(paths=()):
                                               "Host": f"127.0.0.1:{port}"})
     # Straight to this computer: a system or http_proxy proxy must not see it.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    _allow_foreground()
     try:
         with opener.open(request, timeout=5) as res:
             answer = json.loads(res.read())

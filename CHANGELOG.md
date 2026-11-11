@@ -4,6 +4,26 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.20.0
+
+- The panel beside an open document suggests more: "Make it fillable" for
+  a form you can't type in yet, and "Sign it" for a file with an empty
+  signature field.
+- Tools that start from several files (Merge, Compare, Interleave, and
+  the tools that turn pictures, Office files and web pages into PDFs)
+  open on a large drop area that says what to add; their options appear
+  once the files are there.
+- One list of recent files, the same on the start screen and in the
+  reader: each file with what it is, and two files of the same name told
+  apart by their folder.
+- Movement where it shows what happened: panels and the search box open
+  softly, a running tool's bar shimmers, results and messages arrive and
+  leave gently. None of it with Windows' "reduce motion" on.
+- Frosted surfaces read properly in the dark theme; saving a result and
+  removing a recent file say so in a short message.
+- Opening a PDF while ZPDF is running brings its window to the front more
+  reliably. After "Add a password", the note names the protected copy.
+
 ## 0.19.0
 
 - A new look and a new way in. ZPDF opens on a start screen: drop or open

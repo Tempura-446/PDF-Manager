@@ -78,8 +78,9 @@ def test_add_password_tool_and_cli_limits(tmp_path, capsys):
     src = pages_pdf(tmp_path / "a.pdf")
     out, notes = run("encrypt", [src], {"new_password": "", "printing": "none", "changes": "comments",
                                         "copy": "false", "owner_password": "boss"}, tmp_path)
-    assert notes == ["a.pdf: anyone can open it; no printing, commenting, filling in forms and "
-                     "signing, no copying"]
+    # The note names the protected copy, not the file it was made from.
+    assert notes == [f"{Path(out).name}: anyone can open it; no printing, commenting, filling in forms and "
+                     "signing, no copying"] and Path(out).name != "a.pdf"
     with pikepdf.open(out) as pdf:
         assert not pdf.allow.print_lowres and pdf.allow.modify_annotation
     with pytest.raises(gui.UserError, match="enter a password to open it"):

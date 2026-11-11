@@ -69,6 +69,17 @@ def test_the_facts_line_says_what_a_file_is_in_plain_words():
     assert json.loads(run.stdout) == [line for _, line in FACTS]
 
 
+def test_two_files_of_one_name_are_told_apart_by_their_folder():
+    html = GUI_HTML.read_text(encoding="utf-8")
+    script = _function(html, "folderOf") + "\nconsole.log(JSON.stringify(JSON.parse(process.argv[1]).map(folderOf)));"
+    paths = ["C:\\Work\\2024\\invoice.pdf", "/home/me/taxes/invoice.pdf", "invoice.pdf", ""]
+    run = subprocess.run([_node(), "-e", script, json.dumps(paths)],
+                         capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert run.returncode == 0, run.stderr
+    assert json.loads(run.stdout) == ["2024", "taxes", "", ""]
+    assert "names[e.name] > 1" in html, "the folder is shown only when a name repeats"
+
+
 def test_the_page_keeps_what_tests_and_scripts_rely_on():
     html = GUI_HTML.read_text(encoding="utf-8")
     assert 'class="tools tool-index" id="tools"' in html          # .tools button[data-op] for every tool

@@ -177,13 +177,14 @@
 .rd-empty h2 { margin: 0 0 6px; font: 400 30px/1.15 var(--display, inherit); letter-spacing: 0; }
 .rd-empty p { margin: 0 0 20px; color: var(--muted); }
 .rd-empty .rd-btn.primary { height: 38px; padding: 0 18px; }
-.rd-empty .keys { margin: 22px 0 0; font-size: 12px; color: var(--faint); }
+.rd-empty .keys { margin: 22px auto 0; max-width: 40ch; font-size: 12px; line-height: 1.6; color: var(--faint); text-wrap: balance; }
+.rd-empty .keys span { white-space: nowrap; }
 
 /* ---- Overlays: menu, dialogs, toasts, loading ---- */
 .rd-menu {
   position: absolute; right: 12px; top: 50px; z-index: 29; min-width: 248px; padding: 6px;  /* above the file panel's sheet */
   background: var(--glass, var(--surface)); -webkit-backdrop-filter: blur(22px) saturate(1.5); backdrop-filter: blur(22px) saturate(1.5);
-  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--float, var(--shadow-pop));
+  border: 1px solid var(--glass-edge, var(--border)); border-radius: var(--radius); box-shadow: var(--glass-hi, 0 0 transparent), var(--float, var(--shadow-pop));
   animation: rd-menu-pop var(--t) var(--ease);
 }
 .rd-menu button {
@@ -228,14 +229,22 @@
 .rd-props dt { color: var(--muted); }
 .rd-props dd { margin: 0; word-break: break-word; }
 
-.rd-toast {
+/* Toasts: the reader's (.rd-toast, over the pages) and the app's (.toast, on the
+   start screen and tool pages, see appToast in gui.html) look and move the same. */
+.rd-toast, .toast {
   position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 30; max-width: calc(100% - 32px);
-  padding: 10px 16px; border-radius: 999px; font-size: 14px; color: var(--text); border: 1px solid var(--border);
-  background: var(--glass, var(--surface)); -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4); box-shadow: var(--float, var(--shadow-pop));
+  padding: 10px 16px; border-radius: 999px; font-size: 14px; color: var(--text); border: 1px solid var(--glass-edge, var(--border));
+  background: var(--glass, var(--surface)); -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow: var(--glass-hi, 0 0 transparent), var(--float, var(--shadow-pop));
   display: flex; align-items: center; gap: 14px; animation: rd-rise calc(var(--t) * 1.5) var(--ease);
 }
-.rd-toast button { border: 0; background: none; color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0; }
+.toast { position: fixed; bottom: 24px; z-index: 60; left: calc(50% + 32px); max-width: min(560px, calc(100vw - 96px)); }  /* centred on the page beside the rail */
+@media (max-width: 760px) { .toast { left: 50%; max-width: calc(100vw - 32px); } }
+.rd-toast button, .toast button { border: 0; background: none; color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0; }
 @keyframes rd-rise { from { opacity: 0; transform: translate(-50%, 8px); } }
+/* Leaving: it fades and sinks a little (fadeOut in reader.js; at once when motion is reduced). */
+.rd-toast.out, .rd-toast.top.out, .toast.out { animation: rd-leave calc(var(--t) * 1.5) var(--ease) forwards; pointer-events: none; }
+@keyframes rd-leave { to { opacity: 0; transform: translate(-50%, 6px); } }
 .rd-loading { position: absolute; inset: 0; display: grid; place-items: center; z-index: 5; background: color-mix(in srgb, var(--surface-3) 60%, transparent); backdrop-filter: blur(2px); }
 .rd-spinner { width: 34px; height: 34px; border: 3px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: rd-spin .8s linear infinite; }
 @keyframes rd-spin { to { transform: rotate(360deg); } }
@@ -307,24 +316,9 @@
 .rd-sigremember { display: flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 13px; color: var(--muted); }
 .rd-sigremember input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
 
-/* ---- Recent files (start screen) ---- */
-.rd-recent { width: min(560px, 100%); }
-.rd-recent h3 { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin: 0 0 8px 4px; }
-.rd-recent ul { list-style: none; margin: 0; padding: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
-.rd-recent li { display: flex; align-items: center; border-top: 1px solid var(--border); }
-.rd-recent li:first-child { border-top: 0; }
-.rd-recent-open {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 0; background: none;
-  text-align: left; cursor: pointer; color: var(--text); transition: background var(--t);
-}
-.rd-recent-open:hover { background: var(--surface-2); }
-.rd-recent-icon { width: 36px; height: 36px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; flex: none; }
-.rd-recent-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
-.rd-recent-text { min-width: 0; display: flex; flex-direction: column; }
-.rd-recent-text strong { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rd-recent-text small { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rd-recent-x { margin-right: 6px; opacity: .5; }
-.rd-recent li:hover .rd-recent-x, .rd-recent-x:focus-visible { opacity: 1; }
+/* ---- Recent files, under "Open a PDF": the start screen's list (its rows are styled in gui.html) ---- */
+.rd-recent { width: min(560px, 100%); display: flex; flex-direction: column; gap: 8px; }
+.rd-recent h3 { font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); margin: 0; }
 
 /* ---- Document tabs ---- */
 .rd-tabbar { display: flex; align-items: flex-end; gap: 3px; padding: 8px 10px 0; background: color-mix(in srgb, var(--sidebar) 70%, transparent); border-bottom: 1px solid var(--border); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
