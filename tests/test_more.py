@@ -640,14 +640,14 @@ def test_edit_text(tmp_path):
     out = tmp_path / "edited.pdf"
     assert textedit.edit_text(src, out, [
         {"page": 1, "rect": [72, 755, 230, 775], "text": "Invoice for April"},
-        {"page": 1, "rect": [72, 697, 200, 711], "text": ""},  # just cover it
+        {"page": 1, "rect": [72, 697, 200, 711], "text": ""},  # just take it away
         {"page": 1, "rect": [300, 300, 400, 320], "text": "New words"},  # nothing there before
     ]) == 3
     doc = pdfium.PdfDocument(str(out))
     page = doc[0]
     text = page.get_textpage().get_text_range()
     assert "Invoice for April" in text and "New words" in text
-    assert "Invoice for March" in text  # still underneath, as the tool says
+    assert "Invoice for March" not in text  # really taken out of the page, not left under a cover
     image = page.render(scale=1).to_pil().convert("RGB")
     # the new title is red like the old one
     reds = [image.getpixel((x, 842 - 763)) for x in range(72, 230)]

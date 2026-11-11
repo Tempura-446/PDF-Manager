@@ -38,6 +38,7 @@ it in its column (see textflow.py): text flows, as in a word processor.
 import ctypes
 import math
 import statistics
+import unicodedata
 
 from pypdf import Transformation
 from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject
@@ -757,6 +758,8 @@ class _Page:
         self.notes = {}   # for the report on the change being made: wider, taller, moved, ...
         self.runs = []    # {style, own, name, entries: [(letter, x, y)]}
         self._flow, self._faces = None, {}
+        self.spot = None    # where the change being made writes its new words in the drawing
+        self.legacy = False  # the change being made is done the old way (covered and drawn on top)
 
     @property
     def flow(self):
@@ -771,10 +774,70 @@ class _Page:
 
     def cover(self, box):
         self.covers.append((box, _background(self.pdf_page, self.image, box)))
+        self.notes["covered"] = True  # the old words are still in the file, under the box
+
+    # -- changing the page's own drawing ---------------------------------------------------
+    def start(self):
+        """Before each change."""
+        self.notes, self.spot, self.legacy = {}, None, False
+        self._first_run = len(self.runs)
+
+    def take(self, rows, paragraph=False):
+        """Take the old words (rows of letters) out of the page's drawing,
+        and note where they were drawn, for the new ones to be written
+        there. False (nothing changed) when that can't be done for sure:
+        the old words are covered instead."""
+        flow = self.flow
+        if flow is None or self.legacy or not flow.content:
+            return False
+        everything = [L for row in rows for L in row]
+        saved = flow.checkpoint()
+        spot = flow.glyph(everything[0]) if flow.uncover(everything) else None
+        if paragraph:
+            done = flow.take_out(rows)
+        else:
+            done = spot is not None and flow.remove(everything)
+        if not done:
+            flow.rollback(saved)
+            return False
+        if spot is not None:
+            self.spot = (spot, everything[0])
+        return True
+
+    def settle(self):
+        """After each change: its new words go into the drawing where the
+        old ones were (when those were taken out of it), not on top of the
+        page."""
+        if self.spot is None:
+            return
+        spot, first = self.spot
+        left = []
+        for run in self.runs[self._first_run:]:
+            colour = None if _same_colour(run["style"]["color"], first["style"]["color"]) else run["style"]["color"]
+            if not self.flow.insert(spot, True, {**run, "same": False, "color": colour}):
+                left.append(run)
+        self.runs[self._first_run:] = left
+
+    def ready(self):
+        """Fonts that aren't the document's own, for words written in the
+        drawing: put in the file (cut down to the letters used), so the
+        words are text like the rest: found by a search, copied in order."""
+        if self._flow is None:
+            return
+        groups = {}
+        for run in self._flow.pending():
+            if run["own"] is None:
+                groups.setdefault(run["name"], []).append(run)
+        for name, runs in groups.items():
+            letters = {c for run in runs for e in run["entries"] for c in e[0]}
+            own = _embedded(self.writer, name, letters)
+            for run in runs:
+                if own is not None and own.can_write("".join(c for e in run["entries"] for c in e[0])):
+                    run["own"] = own
 
     def run(self, style, font, entries):
         own, name = font[:2]
-        entries = [e for e in entries if not e[0].isspace() or (own and own.space is None)]
+        entries = [e for e in entries if not e[0].isspace() or not (own and own.space)]
         if not any(not e[0].isspace() for e in entries):
             return
         last = self.runs[-1] if self.runs else None
@@ -933,7 +996,8 @@ class _Page:
     def line(self, rect, text, old, opts=None):
         """Change the words of one line."""
         opts = opts or {}
-        letters = _letters(self.textpage, _chars(self.textpage, rect), self.cache, self.hidden)
+        letters = _letters(self.textpage, self._one_line(_chars(self.textpage, rect), rect, old), self.cache,
+                           self.hidden)
         if letters is None:  # nothing there (e.g. a scan): the box as drawn
             base = _default_style(rect)
             style = _restyle(base, opts)
@@ -955,6 +1019,46 @@ class _Page:
             return self._respell(letters, before, text, tc, word)
         except _Unsure:
             return self._redo(letters, [letters], text, tc, word)
+
+    def _one_line(self, chars, rect, old):
+        """The letters of ``chars`` on the one line meant: a box drawn a
+        little tall also catches letters of the line above or below (on a
+        level page; lines at an angle are left as found)."""
+        raw = _raw()
+        m = raw.FS_MATRIX()
+        for i in chars:
+            raw.FPDFText_GetMatrix(self.textpage.raw, i, ctypes.byref(m))
+            if abs(m.b) > abs(m.a) * 0.02 or m.a <= 0:
+                return chars
+        # Lines, not the raised and lowered letters within one (H2O, E=mc2):
+        # those sit less than a line apart.
+        rows = []
+        for i in sorted(chars, key=lambda i: -_origin(self.textpage, i)[1]):
+            y, size = _origin(self.textpage, i)[1], max(1.0, raw.FPDFText_GetFontSize(self.textpage.raw, i))
+            if rows and rows[-1][0] - y < 0.7 * max(size, rows[-1][1]):
+                rows[-1][2].append(i)
+            else:
+                rows.append([y, size, [i]])
+            rows[-1][0], rows[-1][1] = y, max(size, rows[-1][1])
+        if len(rows) < 2:
+            return chars
+        rows = [sorted(members) for _, _, members in rows]
+
+        def count(row):
+            return sum(1 for i in row if self.textpage.get_text_range(i, 1).strip()
+                       and not self.hidden.hides(self.textpage, i, self.textpage.get_charbox(i, loose=True)))
+
+        if old is not None:
+            exact = [row for row in rows if count(row) == _nonspace(old)]
+            if len(exact) == 1:
+                return exact[0]
+        middle = (rect[1] + rect[3]) / 2
+
+        def off(row):
+            boxes = [self.textpage.get_charbox(i, loose=True) for i in row]
+            return abs((min(b[1] for b in boxes) + max(b[3] for b in boxes)) / 2 - middle)
+
+        return min(rows, key=off)
 
     def paragraph(self, rect, text, opts=None):
         """Write a paragraph again, wrapped in the old one's width; the
@@ -981,7 +1085,8 @@ class _Page:
                     + (first["origin"][1] - rows[-1][0]["origin"][1]) * -down[1])
             lead = span / (len(rows) - 1) if span > 0 else lead
         flow = opts.get("flow", True) and self.flow is not None and not self.flow.flowed
-        taken = flow and self.flow.take_out(rows)
+        self.legacy = self.legacy or _rtl(text) or any(_rtl(L["char"]) for L in everything)
+        taken = self.flow is not None and not self.flow.flowed and self.take(rows, paragraph=True)
         if not taken:
             self.cover(_box(everything))
         if not text.strip():  # taken away: what's below comes up into its place
@@ -990,6 +1095,7 @@ class _Page:
                 if found["lines"] and self.flow.move(found, max(L["loose"][3] for L in rows[0]) - found["lines"][0][3]):
                     self.notes["moved"] = len(found["lines"])
             return None, None, SAME, fonts.display_name(base["font"])
+        flow = flow and (taken or True)
         style = _restyle(base, opts)
         font = self._font(style, base, text, opts)
         plain = not any(key in opts for key in ("font", "bold", "italic"))  # the old words' font
@@ -1114,7 +1220,9 @@ class _Page:
         """Cover the old words and set the new ones from where they began."""
         opts = opts or {}
         everything = [L for row in rows for L in row]
-        self.cover(_box(everything, everything))
+        self.legacy = self.legacy or _rtl(text) or any(_rtl(L["char"]) for L in everything)
+        if not self.take(rows):
+            self.cover(_box(everything, everything))
         base = letters[0]["style"]
         style = _restyle(base, opts)
         font = self._font(style, base, text, opts)
@@ -1140,6 +1248,12 @@ class _Page:
         s = 0
         while s < min(len(before), len(after)) - p and before[-1 - s] == after[-1 - s]:
             s += 1
+        # Words put in between two others: the space before them is theirs
+        # ("required| and enforced| within", not "required |and enforced |within"),
+        # so they look like the word they follow (bold after a bold word).
+        while 0 < p == len(before) - s and before[p - 1].isspace() and len(after) - s > p \
+                and after[len(after) - s - 1].isspace() and _nonspace(before[:p]):
+            p, s = p - 1, s + 1
         count = sum(len(L["char"]) for L in letters)
         keep = _take(letters, _nonspace(before[:p]))
         tail = _take(letters, count - _nonspace(before[len(before) - s:]))
@@ -1249,6 +1363,10 @@ class _Page:
             end, rest_runs = tail, []
         new = [(ch, *at(d), 0.0, style) for ch, d in placed]
         writes = any(not ch.isspace() for ch in middle)
+        same = (None, None, SAME, fonts.display_name(style["font"]))
+        if not self.legacy and not _rtl(before + after) and self._in_place(
+                letters, keep, tail, anchor, before, p, s, font, style, [e[:3] for e in new] if writes else [], moves):
+            return font if writes else same
         covered = letters[start:end]
         if not covered and not writes:
             return font
@@ -1265,6 +1383,78 @@ class _Page:
             return font
         worst = next((f for _, _, f in rest_runs if not f[0]), None) if moved else None
         return worst or (None, None, SAME, fonts.display_name(style["font"]))
+
+
+    def _in_place(self, letters, keep, tail, anchor, before, p, s, font, style, entries, moves):
+        """Make a line's change in the page's own drawing: the letters
+        that go are taken out of their pieces of text, the new ones written
+        there, and the letters after them moved along. Nothing is covered
+        and nothing drawn twice. False (nothing changed) when any of that
+        can't be done for sure."""
+        flow = self.flow
+        if flow is None or not flow.content:
+            return False
+        own = font[0]
+        if own is not None and own.space:
+            entries = [e for e in entries if not e[0].isspace()]
+        saved = flow.checkpoint()
+        ok = flow.uncover(letters)
+        spot = flow.glyph(anchor) if ok else None
+        ok = spot is not None and flow.remove(letters[keep:tail])
+        if ok and keep > 0 and tail < len(letters):
+            # Spaces that went with the old words (not those kept before and after them).
+            old = before[p:len(before) - s]
+            lead = len(before[:p]) - len(before[:p].rstrip())
+            trail = len(before[len(before) - s:]) - len(before[len(before) - s:].lstrip())
+            flow.remove_spaces(letters[keep - 1], letters[tail], lead, trail, sum(ch.isspace() for ch in old))
+        for L, move in zip(letters[tail:], moves):
+            if ok and abs(move) > MOVED:
+                ok = flow.shift(L, move)
+        if ok and entries:
+            ahead = anchor is letters[keep] if keep < len(letters) else False
+            ok = flow.insert(spot, ahead, {"own": own, "name": font[1], "style": style, "entries": entries,
+                                           "same": True, "color": None})
+        if not ok:
+            flow.rollback(saved)
+        return ok
+
+
+def _same_colour(a, b):
+    return all(abs(x - y) < 0.004 for x, y in zip(a, b))
+
+
+def _rtl(text):
+    """Whether any of the letters is written right to left (Hebrew, Arabic)."""
+    return any(unicodedata.bidirectional(ch) in ("R", "AL", "AN") for ch in text)
+
+
+def _embedded(writer, name, letters):
+    """A font registered with reportlab (a standard one, or one installed
+    on this computer) as a font of the document being written, holding
+    ``letters``: an :class:`_OwnFont`, or None."""
+    wanted = "".join(sorted(ch for ch in letters if not ch.isspace()))
+    if not wanted:
+        return None
+    try:
+        def draw(c, w, h):
+            c.setFont(name, 10)
+            c.drawString(10, 10, wanted + " ")
+
+        made = core._overlay_page(200, 200, draw)
+        found = made["/Resources"]["/Font"]
+        for font in found.values():
+            base = str(font.get_object().get("/BaseFont", "")).lstrip("/")
+            if base == "Helvetica" and name != "Helvetica":
+                continue  # reportlab's page always lists it
+            codes = fonts.pdf_font_codes(font)
+            if all(ch in codes for ch in wanted):
+                ref = font.clone(writer)
+                if getattr(ref, "idnum", None) is None:
+                    ref = writer._add_object(ref)
+                return _OwnFont(ref, fonts.pdf_font_codes(ref))
+    except Exception:  # noqa: BLE001 - not a font that can be put in the file this way
+        return None
+    return None
 
 
 def _skip(text, count):
@@ -1321,19 +1511,22 @@ def edit_text(path, output, edits, password=None, report=None):
                 work = _Page(doc[number - 1], page, doc, number - 1, writer, pdfa)
                 try:
                     for kind, rect, text, old, opts in page_edits:
-                        work.notes = {}
+                        work.start()
                         if kind == "add":
                             font = work.add(rect[0], rect[1], text, opts)
                         elif kind == "paragraph":
                             font = work.paragraph(rect, text, opts)
                         else:
                             font = work.line(rect, text, old, opts)
+                        work.settle()
                         if report is not None:
                             drawn = any(not ch.isspace() for ch in text)
                             report.append({"font": font[3] if drawn else "", "kind": font[2] if drawn else SAME,
                                            **work.notes})
                     if work.flow is not None and work.flow.changed():
+                        work.ready()
                         work.flow.write(writer, page)
+                        work.runs += work.flow.orphans
                     _draw(writer, page, work.covers, work.runs)
                 finally:
                     work.close()
@@ -1448,6 +1641,8 @@ def _write_with_own_fonts(writer, page, runs):
                 " ".join(_num(v) for v in (a, b, c, d, x0, y0)) + " Tm"]
         parts, pen = [], 0.0
         for ch, x, y in entries:
+            if ch.isspace() and own.space:
+                continue  # no space in the font: the next letter's place makes it
             s = (x - x0) * u[0] + (y - y0) * u[1]
             move = (s - pen) / scale * 1000  # in thousandths of the font size
             if abs(move) > 0.001:
