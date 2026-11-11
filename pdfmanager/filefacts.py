@@ -14,12 +14,15 @@ from pdfmanager import appdata
 SAMPLE = 10            # pages looked at for text and scans
 BIG_PICTURE = 400_000  # pixels from which a picture can be a page's scan
 REMEMBERED = 300       # files whose facts are kept
+LOOK = 2               # raised when facts are worked out differently, so kept ones are looked at again
 TEXT_SHOWING = {"Tj", "TJ", "'", '"'}
 
 
 def _page_look(page, pikepdf):
-    """(shows text, holds a picture big enough to be its scan)."""
-    text = picture = False
+    """(shows text, shows text a reader can see, holds a picture big enough
+    to be its scan). The text OCR puts on a scan is invisible (render mode
+    3); a designed page with large photos has text people read."""
+    text = visible = picture = False
     resources = page.get("/Resources")
     seen = set()
 
@@ -42,13 +45,23 @@ def _page_look(page, pikepdf):
 
     pictures(resources)
     try:
-        for instruction in pikepdf.parse_content_stream(page):
-            if str(instruction.operator) in TEXT_SHOWING:
+        mode, saved = 0, []
+        for operands, operator in pikepdf.parse_content_stream(page):
+            operator = str(operator)
+            if operator == "q":
+                saved.append(mode)
+            elif operator == "Q":
+                mode = saved.pop() if saved else 0
+            elif operator == "Tr" and operands:
+                mode = int(operands[0])
+            elif operator in TEXT_SHOWING:
                 text = True
-                break
+                if mode != 3:
+                    visible = True
+                    break
     except Exception:
         pass
-    return text, picture
+    return text, visible, picture
 
 
 def _fields(pdf, pikepdf):
@@ -114,9 +127,9 @@ def facts(path, password=None):
             texts = pictures = sampled = 0
             for page in list(pdf.pages)[:SAMPLE]:
                 sampled += 1
-                text, picture = _page_look(page, pikepdf)
+                text, visible, picture = _page_look(page, pikepdf)
                 texts += text
-                pictures += picture
+                pictures += picture and not visible  # a page of its own picture, or one with OCR text
             filled, signed, unsigned = _fields(pdf, pikepdf)
             marked = pdf.Root.get("/MarkInfo")
             return {
@@ -169,7 +182,7 @@ def remembered(path):
     path = Path(path)
     try:
         stat = path.stat()
-        stamp = [stat.st_size, stat.st_mtime_ns]
+        stamp = [stat.st_size, stat.st_mtime_ns, LOOK]
     except OSError:
         return facts(path)
     key = str(path)

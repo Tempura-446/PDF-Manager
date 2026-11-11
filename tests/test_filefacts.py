@@ -64,6 +64,22 @@ def test_a_scan_with_and_without_its_text(tmp_path):
     assert searchable["scanned"] and searchable["has_text"]
 
 
+def test_a_designed_page_with_a_big_photo_is_not_a_scan(tmp_path):
+    """Found on Windows: a picture-heavy guide and a brochure were called
+    "scanned". Their text is printed for people to read; a scan's OCR text
+    is invisible."""
+    designed = scan_pdf(tmp_path / "a.pdf", words="Hudson Beige")
+    with pikepdf.open(designed, allow_overwriting_input=True) as pdf:
+        for page in pdf.pages:
+            page.Contents = pdf.make_stream(page.Contents.read_bytes().replace(b"BT 3 Tr", b"BT 0 Tr"))
+        pdf.save(designed)
+    found = filefacts.facts(designed)
+    assert found["has_text"] and not found["scanned"]
+    assert "Scanned pages" not in " ".join(s["why"] for s in filefacts.suggestions(found) if "why" in s)
+    restored = scan_pdf(tmp_path / "b.pdf", words="q 3 Tr Q")  # a mode set and undone inside q/Q
+    assert filefacts.facts(restored)["scanned"]
+
+
 def test_a_scan_kept_sharp_by_compress_is_still_a_scan(tmp_path):
     from pdfmanager import scanlayers  # noqa: F401  (the engine must be there)
     sys.path.insert(0, str(Path(__file__).parent))
