@@ -130,8 +130,9 @@ def test_the_page_in_a_browser(served, tmp_path):
     out = json.loads(run.stdout)
     assert not out["errors"]
 
-    # The start screen: the line, a recent file with its facts, several files.
-    assert out["startLine"] == "Open a PDF and ZPDF shows you what it can do with it."
+    # The start screen: no line of text above the drop area (only a heading
+    # for screen readers), a recent file with its facts, several files.
+    assert out["startLine"] == {"text": "Start", "shown": False}
     (recent,) = out["recent"]
     assert recent["name"] == "invoice-scan.pdf"
     assert recent["facts"].startswith("3 pages · ") and recent["facts"].endswith(" KB · scanned, no text yet")

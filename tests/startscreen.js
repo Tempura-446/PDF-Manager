@@ -17,7 +17,7 @@ const { chromium } = require("playwright");
     await page.evaluate(() => document.fonts.ready);
 
     // The start screen.
-    out.startLine = await page.textContent(".start-line");
+    out.startLine = await page.$eval("#home h1, .start h1, h1.sr-only", (h) => ({ text: h.textContent, shown: h.offsetWidth > 1 })).catch(() => null);
     out.recent = await page.$$eval(".recent-row", (rows) => rows.map((r) => ({
       name: r.querySelector(".recent-name")?.textContent, facts: r.querySelector(".recent-facts")?.textContent })));
     out.multi = await page.$$eval(".multi button", (bs) => bs.map((b) => b.dataset.tool || b.textContent.trim()));

@@ -670,7 +670,6 @@ td { word-break: break-all; }
 
 /* Start screen: one line, a drop area, Recent and "Start from several files". */
 .start { display: flex; flex-direction: column; gap: 28px; padding: 4px 0 40px; max-width: 1040px; }
-.start-line { margin: 0; font: 400 clamp(30px, 4.6vw, 44px)/1.08 var(--display); letter-spacing: 0; text-wrap: balance; color: var(--text); }
 .start-drop {
   display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; padding: 30px 20px; cursor: pointer;
   border: 1.5px dashed var(--faint); border-radius: 22px; background: var(--surface); box-shadow: var(--shadow); color: var(--text-2);
@@ -2135,7 +2134,7 @@ async function renderHome() {
   drop.addEventListener("dragover", (e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); drop.classList.add("over"); } });
   drop.addEventListener("dragleave", () => drop.classList.remove("over"));
   drop.addEventListener("drop", (e) => { drop.classList.remove("over"); if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); openFilesInReader(e.dataTransfer.files); } });
-  const parts = [el("h1", { class: "start-line" }, "Open a PDF and ZPDF shows you what it can do with it."), drop, input];
+  const parts = [el("h1", { class: "sr-only" }, "Start"), drop, input];
   const pinned = toolsFrom(favTools());
   if (pinned.length) {
     parts.push(el("section", { class: "start-sec", "aria-label": "Pinned tools" }, el("span", { class: "lbl" }, "Pinned"),
