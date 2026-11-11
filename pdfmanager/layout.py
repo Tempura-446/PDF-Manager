@@ -106,11 +106,11 @@ def metrics(family):
 
 class Char:
     __slots__ = ("text", "x0", "x1", "base", "size", "angle", "family", "bold", "italic",
-                 "color", "hidden", "link", "space", "box")
+                 "color", "hidden", "link", "space", "box", "raised")
 
     def style(self):
         return (self.family, round(self.size * 2) / 2, self.bold, self.italic, self.color,
-                self.hidden, self.link)
+                self.hidden, self.link, self.raised)
 
 
 class Line:
@@ -127,11 +127,47 @@ class Line:
         # A character may overlap the one before (ligatures, kerning); a
         # wide gap starts another piece (the next column, a value after its
         # label), placed on its own.
-        return (char.angle == self.angle and abs(char.base - self.base) <= 0.45 * size
-                and char.x0 >= self.x0 - 0.4 * size and char.x0 - self.x1 <= GAP * size)
+        if char.angle != self.angle or char.x0 < self.x0 - 0.4 * size:
+            return False
+        if abs(char.base - self.base) <= 0.45 * size:
+            # Much smaller type on a baseline of its own (a date beside a
+            # masthead's title) is no nearer than its own size makes it.
+            apart = (abs(char.base - self.base) > 0.1 * size
+                     and min(self.size, char.size) < 0.6 * size and self._raised(char) is None)
+            return char.x0 - self.x1 <= GAP * (min(self.size, char.size) if apart else size)
+        return self._raised(char) is not None
+
+    def _raised(self, char):
+        """A small raised character right after a word (a footnote mark, an
+        exponent) is on the word's line, as is the text right after such a
+        mark that starts a line (a footnote). True: ``char`` is raised;
+        False: the line so far is; None: neither."""
+        last = self.chars[-1]
+        gap = char.x0 - self.x1
+        if last.raised and abs(char.size - last.size) + abs(char.base - last.base) < 0.1 * last.size:
+            return True if gap <= 0.3 * self.size else None  # the mark's next figure
+        if char.size <= 0.86 * last.size and not last.raised:
+            small, rise, size = char.size, last.base - char.base, last.size
+            raised = True
+        elif len(self.chars) <= 3 and all(c.size <= 0.86 * char.size for c in self.chars):
+            small, rise, size = self.size, char.base - self.base, char.size
+            raised = False
+        else:
+            return None
+        if 0.2 * size <= rise <= 0.75 * size and -0.1 * size <= gap <= 0.3 * size and rise < 1.3 * small:
+            return raised
+        return None
 
     def add(self, char):
-        if not char.space and char.x0 - self.x1 > 0.25 * max(char.size, self.size):
+        raised = self._raised(char) if abs(char.base - self.base) > 0.25 * min(self.size, char.size) else None
+        if raised:
+            char.raised = True
+            if char.x0 - self.x1 <= 0.12 * self.size:
+                char.space = False  # set against its word, however pdfium read the gap
+        elif raised is False:
+            for c in self.chars:
+                c.raised = True
+        if not raised and not char.space and char.x0 - self.x1 > 0.25 * max(char.size, self.size):
             char.space = True
         self.chars.append(char)
         self.x0, self.x1 = min(self.x0, char.x0), max(self.x1, char.x1)
@@ -265,6 +301,11 @@ class Block:
         if len(lines) > 1:
             gaps = [b.base - a.base for a, b in zip(lines, lines[1:])]
             self.spacing = statistics.median(gaps)
+        tol = max(1.5, 0.3 * size)
+        spread = lambda values: max(values) - min(values) if values else 0  # noqa: E731
+        lefts, rights = [ln.x0 for ln in lines], [ln.x1 for ln in lines]
+        centres = [(ln.x0 + ln.x1) / 2 for ln in lines]
+        centred = len(lines) > 1 and spread(centres) <= tol < min(spread(lefts), spread(rights))
         paragraphs, cur = [], [lines[0]]
         for prev, line in zip(lines, lines[1:]):
             # A line ends its paragraph when the next line's first word would
@@ -275,16 +316,20 @@ class Block:
             indented = (line.x0 - prev.x0 > 0.8 * size and prev.x0 - self.x0 < 0.5 * size
                         and not LIST_ITEM.match(cur[0].text))
             resized = abs(line.main_size - prev.main_size) > 0.05 * prev.main_size
+            if centred:
+                # Centred lines are as long as their words: a sentence that
+                # goes on (a small letter, a quotation still open) is one
+                # paragraph, wherever its lines end.
+                indented = False
+                text = " ".join(ln.text for ln in cur)
+                fits = fits and not (line.text[:1].islower() or text.count("“") > text.count("”")
+                                     or text.count('"') % 2)
             if fits or listed or indented or resized:
                 paragraphs.append(cur)
                 cur = []
             cur.append(line)
         paragraphs.append(cur)
         self.paragraphs = paragraphs
-        tol = max(1.5, 0.3 * size)
-        spread = lambda values: max(values) - min(values) if values else 0  # noqa: E731
-        lefts, rights = [ln.x0 for ln in lines], [ln.x1 for ln in lines]
-        centres = [(ln.x0 + ln.x1) / 2 for ln in lines]
         inner = [ln.x1 for p in paragraphs for ln in p[:-1]]
         if len(lines) == 1:
             self.align = "l"
@@ -364,7 +409,25 @@ def blocks_of(lines):
             if gap is not None and (best_gap is None or gap < best_gap):
                 best, best_gap = block, gap
         if best is None:
-            blocks.append(Block(line))
+            best = Block(line)
+            # Lines taken for a block that were paragraphs of one line each
+            # (set further apart than the lines of one paragraph): the last
+            # starts a block with the line that follows it closely.
+            for block in blocks[-40:]:
+                gap = line.base - block.lines[-1].base
+                if (len(block.lines) >= 2 and gap < 0.8 * block.spacing
+                        and block.lines[-1].base - block.lines[-2].base > 1.15 * gap):
+                    start = Block(block.lines[-1])
+                    if start.fits(line) is not None:
+                        block.lines.pop()
+                        block.x0 = min(ln.x0 for ln in block.lines)
+                        block.x1 = max(ln.x1 for ln in block.lines)
+                        if len(block.lines) == 1:
+                            block.spacing = None
+                        start.add(line)
+                        best = start
+                        break
+            blocks.append(best)
         else:
             best.add(line)
     return [b.finish() for b in blocks]
@@ -434,10 +497,11 @@ class Page:
     ``chars``, ``lines``, ``blocks``, ``links`` ([{"box", "uri" or "page"}]),
     ``images`` (boxes of the pictures on it), ``geometry``."""
 
-    def __init__(self, number, geometry, chars, links, images, rules=()):
+    def __init__(self, number, geometry, chars, links, images, rules=(), shapes=()):
         self.number, self.geometry = number, geometry
         self.width, self.height = geometry.width, geometry.height
         self.images = images
+        self.shapes = list(shapes)  # boxes of what is drawn with lines and fills
         self.chars, self.links = chars, links
         self.lines = lines_of(chars, rules)
         self.blocks = blocks_of(self.lines)
@@ -562,7 +626,7 @@ class Document:
             finally:
                 textpage.close()
             images = _images(page, geometry)
-            rules = _rules(page, geometry)
+            rules, shapes = _rules(page, geometry)
         finally:
             page.close()
         for link_index, link in enumerate(links):
@@ -571,7 +635,7 @@ class Document:
                 cx, cy = (c.box[0] + c.box[2]) / 2, (c.box[1] + c.box[3]) / 2
                 if x0 - 1 <= cx <= x1 + 1 and y0 - 1 <= cy <= y1 + 1:
                     c.link = link_index
-        return Page(index + 1, geometry, chars, links, images, rules)
+        return Page(index + 1, geometry, chars, links, images, rules, shapes)
 
     def size(self, index):
         """(width, height) of page ``index`` as shown."""
@@ -671,7 +735,7 @@ def _chars(textpage, geometry):
         c.family, c.bold, c.italic = fonts[key]
         c.color = tuple(min(255, v.value) for v in rgba[:3])
         c.hidden = mode in (3, 7) or rgba[3].value == 0
-        c.link, c.space = None, space
+        c.link, c.space, c.raised = None, space, False
         space = False
         chars.append(c)
     return chars
@@ -697,24 +761,25 @@ def _images(page, geometry, smallest=24):
 
 
 def _rules(page, geometry):
-    """Upright lines drawn on a page (table borders, the sides of boxes):
-    [(x, top, bottom)]."""
+    """(upright lines drawn on a page (table borders, the sides of boxes):
+    [(x, top, bottom)], the boxes of everything drawn with lines and fills)."""
     import pypdfium2 as pdfium
     import pypdfium2.raw as raw
 
-    rules = []
+    rules, shapes = [], []
     for obj in page.get_objects(filter=[raw.FPDF_PAGEOBJ_PATH], max_depth=3):
         try:
             x0, y0, x1, y1 = geometry.box(*obj.get_bounds())
         except pdfium.PdfiumError:
             continue
+        shapes.append((x0, y0, x1, y1))
         if y1 - y0 < 4:
             continue
         if x1 - x0 <= 3:
             rules.append(((x0 + x1) / 2, y0, y1))
         elif raw.FPDFPath_CountSegments(obj) in (4, 5):  # a rectangle: its two sides
             rules += [(x0, y0, y1), (x1, y0, y1)]
-    return rules
+    return rules, shapes
 
 
 _SAFE_URI = re.compile(r"^(https?|mailto|ftp|tel):", re.I)

@@ -188,7 +188,12 @@ def _runs(lines):
     for line in lines:
         gap_ok = previous is not None and \
             line["top"] - previous["bottom"] <= MAX_LINE_GAP * max(line["size"], previous["size"])
-        if current and not gap_ok:
+        # The rows of a table are set in one size: a line in much larger or
+        # smaller type (a title over the table, a name beside an address) is
+        # no row of it.
+        same_size = previous is None or \
+            max(line["size"], previous["size"]) <= 1.3 * min(line["size"], previous["size"])
+        if current and not (gap_ok and same_size):
             runs.append(current)
             current, pending = [], []
         if len(line["segments"]) >= 2:
@@ -276,6 +281,12 @@ def _aligned_table(run):
             merged[-1] = [f"{a} {b}".strip() for a, b in zip(merged[-1], cells)]
         else:
             merged.append(cells)
+    # A heading row of two lines whose one-line cells stand on the lower
+    # line: the upper line (its first cell empty) is the start of that row.
+    if (len(merged) > 2 and not merged[0][0] and merged[1][0] and pitches[0] < pitch * 0.85
+            and all(b for a, b in zip(merged[0], merged[1]) if a)):
+        merged[1] = [f"{a} {b}".strip() for a, b in zip(merged[0], merged[1])]
+        del merged[0]
     # Mostly one cell per row isn't a table.
     if sum(1 for cells in merged if sum(1 for c in cells if c) >= 2) < max(2, len(merged) // 2):
         return None

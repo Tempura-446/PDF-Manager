@@ -391,6 +391,8 @@ def _runs_xml(segments, links, heading, link_id):
             look += "<w:b/>"
         if char.italic:
             look += "<w:i/>"
+        if getattr(char, "raised", False):
+            look += '<w:vertAlign w:val="superscript"/>'
         if char.family == "Courier New":
             look += '<w:rFonts w:ascii="Courier New" w:hAnsi="Courier New" w:cs="Courier New"/>'
         link = links[char.link] if char.link is not None and char.link < len(links) else None
@@ -409,7 +411,13 @@ def _runs_xml(segments, links, heading, link_id):
     return "".join(out)
 
 
-def _table_xml(rows, width_twips):
+_FIGURE = re.compile(r"^[-+−–(]?[£$€¥]?\s?\d[\d\s.,:/%-]*\)?\s?[%£$€¥]?$")
+
+
+def _table_xml(rows, width_twips, bold=None):
+    """A table. ``bold``: [[whether the cell is in bold type on the page]].
+    The first row is a heading row (in bold, repeated on each page) when it
+    is in bold on the page, or is plainly one: words over rows of figures."""
     columns = max(len(row) for row in rows)
     each = width_twips // max(1, columns)
     edge = "".join(f'<w:{side} w:val="single" w:sz="4" w:space="0" w:color="808080"/>'
@@ -417,12 +425,23 @@ def _table_xml(rows, width_twips):
     out = [f'<w:tbl><w:tblPr><w:tblW w:w="{each * columns}" w:type="dxa"/><w:tblBorders>{edge}</w:tblBorders>'
            '<w:tblCellMar><w:left w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar>'
            '</w:tblPr><w:tblGrid>' + f'<w:gridCol w:w="{each}"/>' * columns + '</w:tblGrid>']
+
+    def figures(row):
+        return sum(1 for cell in row if _FIGURE.match(str(cell or "").strip()))
+
+    def in_bold(r, k):
+        return bool(bold) and r < len(bold) and k < len(bold[r]) and bold[r][k]
+
+    filled = [k for k, cell in enumerate(rows[0]) if str(cell or "").strip()]
+    heading = bool(filled) and (all(in_bold(0, k) for k in filled) or (
+        len(rows) > 1 and not figures(rows[0]) and any(figures(row) for row in rows[1:])))
     for number, row in enumerate(rows):
         cells = list(row) + [""] * (columns - len(row))
-        look = "<w:rPr><w:b/></w:rPr>" if number == 0 else ""
-        out.append("<w:tr>" + ("<w:trPr><w:tblHeader/></w:trPr>" if number == 0 else "") + "".join(
+        head = heading and number == 0
+        out.append("<w:tr>" + ("<w:trPr><w:tblHeader/></w:trPr>" if head else "") + "".join(
             f'<w:tc><w:tcPr><w:tcW w:w="{each}" w:type="dxa"/></w:tcPr><w:p><w:pPr><w:spacing w:after="0"/>'
-            f'</w:pPr><w:r>{look}{_text_xml(str(cell or ""))}</w:r></w:p></w:tc>' for cell in cells) + "</w:tr>")
+            f'</w:pPr><w:r>{"<w:rPr><w:b/></w:rPr>" if head or in_bold(number, k) else ""}'
+            f'{_text_xml(str(cell or ""))}</w:r></w:p></w:tc>' for k, cell in enumerate(cells)) + "</w:tr>")
     out.append("</w:tbl><w:p/>")  # Word wants a paragraph after a table
     return "".join(out)
 
@@ -456,7 +475,7 @@ def _write_docx(pages, output, title=""):
                                 + runs + "</w:p>")
             elif kind == "table":
                 if item["rows"]:
-                    body.append(_table_xml(item["rows"], int(max_width_pt * 20)))
+                    body.append(_table_xml(item["rows"], int(max_width_pt * 20), item.get("bold")))
             else:
                 image = item["image"].convert("RGB")
                 picture += 1
