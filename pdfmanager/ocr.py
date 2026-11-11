@@ -17,6 +17,7 @@ import importlib.util
 import logging
 import math
 import os
+import re
 import statistics
 import threading
 from dataclasses import dataclass
@@ -280,6 +281,23 @@ def _array(image):
     return numpy.asarray(image.convert("RGB"))
 
 
+GREY_PAPER = 190   # a page whose paper is darker than this (of 255) is stretched to full contrast
+
+
+def _clear(image):
+    """``image`` with its contrast stretched when the paper is grey: on dark
+    ink over mid-grey paper the model reads the letters but loses the spaces
+    between words, and reads them all once the paper is white."""
+    from PIL import ImageOps
+
+    small = image.convert("L")
+    small.thumbnail((200, 200))
+    levels = sorted(small.tobytes())
+    if not levels or levels[len(levels) // 2] >= GREY_PAPER:
+        return image
+    return ImageOps.autocontrast(image.convert("RGB"), cutoff=1)
+
+
 def _quad(points):
     return [(float(x), float(y)) for x, y in points]
 
@@ -292,7 +310,7 @@ def _read(image, script=None):
     whole pages are turned upright by page_orientation() instead."""
     engine = _engine(script)
     with _call_lock:
-        return engine(_array(image), use_det=True, use_cls=False, use_rec=True)
+        return engine(_array(_clear(image)), use_det=True, use_cls=False, use_rec=True)
 
 
 def recognise(image, script=None):
@@ -310,10 +328,20 @@ def _lines(result):
         if score < MIN_CONFIDENCE or not text.strip():
             continue
         words = _words(text, found) if found else [Word(text, _quad(box), float(score))]
+        words = [w for w in (_without_blanks(word) for word in words) if w]
         if not words:
             continue
         lines.append(Line(text, _quad(box), float(score), words))
     return reading_order(lines)
+
+
+def _without_blanks(word):
+    """A word without what the model makes of a form's blank to write on
+    ("birth:__", "/_ _"): the rule is not text. None when nothing is left."""
+    if "_" not in word.text:
+        return word
+    text = re.sub(r"_[_/\-–—.\s]*", "", word.text).strip()
+    return Word(text, word.quad, word.confidence) if re.search(r"\w", text) else None
 
 
 def _words(text, found):
@@ -332,6 +360,8 @@ def _words(text, found):
         while pos < len(text) and text[pos] == " ":
             space_before, pos = True, pos + 1
         pos += len(piece_text)
+        if words and run and len(piece_text) == 1 and not space_before:
+            space_before = _unwritten_space(words[-1], piece_text, quad)
         if words and run and not space_before and len(piece_text) == 1:
             last = words[-1]
             words[-1] = Word(last.text + piece_text, _union([last.quad, quad]), min(last.confidence, score))
@@ -339,6 +369,32 @@ def _words(text, found):
             words.append(Word(piece_text, quad, score))
             run = len(piece_text) == 1
     return [w for w in words if w.confidence >= MIN_CONFIDENCE]
+
+
+def _wide(char):
+    return bool(_WIDE.match(char))
+
+
+_WIDE = re.compile("[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]")
+
+
+def _unwritten_space(last, char, quad):
+    """Whether a space belongs between a word so far and the next character
+    although the model's text has none. A line with Chinese in it comes
+    letter by letter, and the model drops the spaces around and inside its
+    English: "发票号码Invoice No.2024". One is put back where Chinese meets a
+    Latin letter, and inside Latin text where the letters stand apart and
+    the kinds change (windTraders, No.2024)."""
+    before = last.text[-1]
+    if _wide(before) != _wide(char):
+        return (char if _wide(before) else before).isalpha()
+    if _wide(char):
+        return False
+    height = abs(quad[3][1] - quad[0][1]) or 1
+    apart = quad[0][0] - last.quad[1][0] >= 0.04 * height
+    return apart and ((before.islower() and char.isupper())
+                      or (before in ".,:;)" and char.isalnum() and not (before in ".," and char.isdigit() and last.text[-2:-1].isdigit()))
+                      or (before.isalpha() != char.isalpha() and before.isalnum() and char.isalnum()))
 
 
 def _union(quads):
@@ -401,6 +457,21 @@ def _prose(lines):
     return words >= 3 and filled >= 0.5 * width
 
 
+def _columns(lines):
+    """Whether lines are a column of running text, or several side by side
+    (the two right-hand columns of three don't fill half their joint width,
+    but each does its own)."""
+    if _prose(lines):
+        return True
+    boxes = [_bbox(line) for line in lines]
+    for _, cut in _gaps([(b[0], b[2]) for b in boxes]):
+        left = [l for l, b in zip(lines, boxes) if b[2] <= cut]
+        right = [l for l, b in zip(lines, boxes) if b[0] >= cut]
+        if _prose(left) and _columns(right) or _columns(left) and _prose(right):
+            return True
+    return False
+
+
 def _layout(lines):
     """``lines`` as rows in reading order. The page is cut at its widest
     empty stretch, again and again: across, between blocks (a heading, the
@@ -411,8 +482,8 @@ def _layout(lines):
         return _rows(lines)
     boxes = {id(line): _bbox(line) for line in lines}
     down = [(width, cut) for width, cut in _gaps([(b[0], b[2]) for b in boxes.values()])
-            if _prose([l for l in lines if boxes[id(l)][2] <= cut])
-            and _prose([l for l in lines if boxes[id(l)][0] >= cut])]
+            if _columns([l for l in lines if boxes[id(l)][2] <= cut])
+            and _columns([l for l in lines if boxes[id(l)][0] >= cut])]
     across = _gaps([(b[1], b[3]) for b in boxes.values()])
     if down and (not across or max(down)[0] >= max(across)[0]):
         cut = max(down)[1]
@@ -428,13 +499,51 @@ def _layout(lines):
 def reading_order(lines):
     """``lines`` in reading order: blocks top to bottom, columns of running
     text one after the other, and rows left to right."""
-    return [line for row in _layout(lines) for line in row]
+    return [line for row in _ordered(lines) for line in row]
+
+
+def _ordered(lines):
+    """``lines`` as rows in reading order, however crooked the scan."""
+    level, real = _straight(lines)
+    return [[real.get(id(line), line) for line in row] for row in _layout(level)]
+
+
+def _tilt(lines):
+    """The slope of the text, in radians, from the lines' own boxes (image
+    y points down); 0.0 when there is too little to tell."""
+    angles = []
+    for line in lines:
+        (x0, y0), (x1, y1), (x2, y2), _ = line.quad
+        if math.hypot(x1 - x0, y1 - y0) > 2 * math.hypot(x2 - x1, y2 - y1):
+            angles.append(math.atan2(y1 - y0, x1 - x0))
+    if len(angles) < MIN_SKEW_BOXES:
+        return 0.0
+    angle = statistics.median(angles)
+    return angle if abs(math.degrees(angle)) >= MIN_SKEW else 0.0
+
+
+def _straight(lines):
+    """Copies of ``lines`` with their boxes turned level, each with the line
+    it stands for. On a crooked scan the cells of one table row drift down
+    the page until they overlap the next row's; order is worked out on the
+    level copies."""
+    angle = _tilt(lines)
+    if not angle:
+        return lines, {}
+    cos, sin = math.cos(-angle), math.sin(-angle)
+    level, real = [], {}
+    for line in lines:
+        copy = Line(line.text, [(x * cos - y * sin, x * sin + y * cos) for x, y in line.quad],
+                    line.confidence, line.words)
+        level.append(copy)
+        real[id(copy)] = line
+    return level, real
 
 
 def text_of(lines):
     """The recognised text as a reader gets it: words separated by spaces,
     one line per row, columns one after the other."""
-    return "\n".join(" ".join(w.text for line in row for w in line.words) for row in _layout(lines))
+    return "\n".join(" ".join(w.text for line in row for w in line.words) for row in _ordered(lines))
 
 
 def skew_angle(image):

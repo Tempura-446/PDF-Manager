@@ -645,3 +645,73 @@ def test_test_pages_look_alike_on_every_computer(monkeypatch):
     for serif in (False, True):
         font = ocrpages._font(40, serif=serif)
         assert str(getattr(font, "path", "")).endswith("Vera.ttf"), font
+
+
+# -- order and spacing, worked out from boxes alone (no engine needed) ---------------
+
+import math  # noqa: E402
+
+from pdfmanager.textlayer import Word  # noqa: E402
+
+
+def _box_line(text, x, y, width=None, height=30, turn=0.0):
+    width = width or 14 * len(text)
+    quad = [(x, y), (x + width, y), (x + width, y + height), (x, y + height)]
+    if turn:
+        cos, sin = math.cos(turn), math.sin(turn)
+        quad = [(px * cos - py * sin, px * sin + py * cos) for px, py in quad]
+    return ocr.Line(text, quad, 0.99, [Word(text, quad, 0.99)])
+
+
+def test_three_columns_are_read_one_after_the_other():
+    lines = [_box_line(f"column {c} line {r} of the running text", 100 + 700 * c, 100 + 45 * r, width=600)
+             for r in range(12) for c in range(3)]
+    read = [line.text for line in ocr.reading_order(lines)]
+    assert read == [f"column {c} line {r} of the running text" for c in range(3) for r in range(12)]
+
+
+def test_a_crooked_table_is_still_read_row_by_row():
+    turn = math.radians(3)
+    lines = [_box_line(f"r{r}c{c}", 150 + 320 * c, 200 + 44 * r, width=120, turn=turn)
+             for r in range(20) for c in range(6)]
+    assert ocr._tilt(lines) == pytest.approx(turn, abs=1e-6)
+    read = [line.text for line in ocr.reading_order(list(reversed(lines)))]
+    assert read == [f"r{r}c{c}" for r in range(20) for c in range(6)]
+    assert all(any(line is original for original in lines) for line in ocr.reading_order(lines)), \
+        "the lines given back are the real ones, not the levelled copies"
+
+
+def test_spaces_the_model_drops_beside_chinese_are_put_back():
+    def char(text, x, gap=0):
+        return (text, 0.99, [(x + gap, 0), (x + gap + 30, 0), (x + gap + 30, 40), (x + gap, 40)])
+    text, found, x = "发票Invoice开票30日", [], 0
+    for ch in text:
+        found.append(char(ch, x))
+        x += 30
+    assert [w.text for w in ocr._words(text, found)] == ["发票", "Invoice", "开票30日"]
+    apart = [char("d", 0), char("T", 30, gap=3), char("r", 63)]
+    assert [w.text for w in ocr._words("dTr", apart)] == ["d", "Tr"]
+    touching = [char("d", 0), char("T", 30), char("r", 60)]
+    assert [w.text for w in ocr._words("dTr", touching)] == ["dTr"]
+    price = [char(c, 30 * i, gap=3 * i) for i, c in enumerate("3.75")]
+    assert [w.text for w in ocr._words("3.75", price)] == ["3.75"], "a number is not pulled apart"
+
+
+def test_the_blanks_of_a_form_are_not_text():
+    quad = [(0, 0), (10, 0), (10, 10), (0, 10)]
+    def cleaned(text):
+        word = ocr._without_blanks(Word(text, quad, 0.9))
+        return word.text if word else None
+    assert cleaned("birth:__") == "birth:" and cleaned("/_") is None and cleaned("_") is None
+    assert cleaned("no._") == "no." and cleaned("plain") == "plain" and cleaned("-_") is None
+
+
+def test_grey_paper_is_stretched_and_white_paper_left_alone():
+    grey = Image.new("RGB", (300, 300), (125, 125, 125))
+    for x in range(40, 260):
+        for y in range(140, 150):
+            grey.putpixel((x, y), (60, 60, 60))
+    clear = ocr._clear(grey)
+    assert clear.getpixel((5, 5))[0] > 240 and clear.getpixel((100, 145))[0] < 20
+    white = Image.new("RGB", (300, 300), (250, 250, 250))
+    assert ocr._clear(white) is white
