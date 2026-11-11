@@ -218,7 +218,7 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 .palette-search kbd, .palette-item kbd { font: 500 11px/1 var(--mono); color: var(--muted);
   border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; background: color-mix(in srgb, var(--surface) 60%, transparent); white-space: nowrap; }
 .palette-list { list-style: none; margin: 0; padding: 6px; max-height: min(420px, 60vh); overflow-y: auto; scrollbar-width: thin; }
-.palette-group { font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); padding: 10px 12px 4px; }
+.palette-group { font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); padding: 10px 12px 4px; }  /* --faint fell under 4.5:1 on the glass over a white page */
 .palette-item { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; cursor: pointer; font-size: 14px; }
 .palette-item svg { color: var(--muted); }
 .palette-icon { display: inline-flex; }
@@ -2174,11 +2174,23 @@ async function fillRecent(host, { emptyText = "", onEmpty = null, still = () => 
   // Two files of the same name are told apart by their folder.
   const names = {};
   for (const e of entries) names[e.name] = (names[e.name] || 0) + 1;
+  // The folder note is worked out again when a row goes: the last file of a name needs none.
+  const relabel = () => {
+    const rows = [...host.querySelectorAll(".recent-row")];
+    const count = {};
+    for (const r of rows) count[r.dataset.name] = (count[r.dataset.name] || 0) + 1;
+    for (const r of rows) {
+      const facts = r.querySelector(".recent-facts");
+      const text = [r.dataset.facts, count[r.dataset.name] > 1 && r.dataset.where && `in ${r.dataset.where}`].filter(Boolean).join(" · ");
+      if (facts) { facts.textContent = text; facts.hidden = !text; }
+    }
+  };
   host.replaceChildren(...entries.map((e) => {
-    const where = names[e.name] > 1 && e.title !== e.name ? folderOf(e.title) : "";
+    const folder = e.title !== e.name ? folderOf(e.title) : "";
+    const where = names[e.name] > 1 ? folder : "";
     const line = [factsLine(e.facts), where && `in ${where}`].filter(Boolean).join(" · ");
     const flag = !!(e.facts && (e.facts.error || (e.facts.scanned && !e.facts.has_text)));
-    const row = el("div", { class: "recent-row", "data-key": e.key },
+    const row = el("div", { class: "recent-row", "data-key": e.key, "data-name": e.name, "data-facts": factsLine(e.facts), "data-where": folder },
       el("button", { type: "button", class: "recent-open", title: e.title, onclick: () => e.open() },
         el("span", {}, el("span", { class: "recent-name" }, e.name), line ? el("span", { class: "recent-facts" + (flag ? " flag" : "") }, line) : null),
         el("span", { class: "recent-when" }, whenText(e.opened))),
@@ -2187,6 +2199,7 @@ async function fillRecent(host, { emptyText = "", onEmpty = null, still = () => 
           try { await e.forget(); } catch (err) { appToast("Couldn't remove it from Recent: " + (err.message || err)); return; }
           const next = row.nextElementSibling || row.previousElementSibling;
           row.remove();
+          relabel();
           if (!host.querySelector(".recent-row")) empty(); else next?.querySelector(".recent-x")?.focus();
           appToast(`Removed ${e.name} from Recent`, 2500);
         } }, icon("x")));

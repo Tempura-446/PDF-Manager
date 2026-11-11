@@ -2257,10 +2257,11 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     raise UserError("pages should look like 1-2") from None
             if pages is not None:
-                # The quick look, unasked: a scan nobody can type in yet isn't
-                # offered as a form (a contents page's dot leaders look like one).
+                # The quick look, unasked: a scan isn't offered as a form, with
+                # or without its text recognised (a contents page's dot leaders
+                # look like one, and a scanned form is filled in on paper).
                 seen = filefacts.facts(path, fields.get("password") or None)
-                if seen.get("scanned") and not seen.get("has_text"):
+                if seen.get("scanned"):
                     return self._send(HTTPStatus.OK, {"fields": {}})
             found = formdetect.detect(path, fields.get("password") or None, pages=pages)
         return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})

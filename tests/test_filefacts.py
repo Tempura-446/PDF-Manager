@@ -242,6 +242,8 @@ def test_a_scan_with_no_text_isnt_taken_for_a_form_at_a_glance(tmp_path, monkeyp
     try:
         scan, plain = scan_pdf(tmp_path / "scan.pdf"), text_pdf(tmp_path / "plain.pdf")
         assert detect(scan, quick=True) == {}, "no form banner on a bare scan"
+        searchable = scan_pdf(tmp_path / "ocr.pdf", words="Contents .......... 3")
+        assert detect(searchable, quick=True) == {}, "nor once its text has been recognised"
         assert detect(plain, quick=True) != {}
         assert detect(scan, quick=False) != {}, "asked for outright (Add form fields), it still looks"
     finally:

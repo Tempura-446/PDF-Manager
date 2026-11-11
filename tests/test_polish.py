@@ -54,8 +54,12 @@ def run_polish(app, tmp_path, shots=None, theme="light"):
     if not node or subprocess.run([node, "-e", "require('playwright')"], capture_output=True, cwd=tmp_path).returncode:
         pytest.skip("needs Node.js with Playwright")
     srv, url = app
-    for name, maker in (("old-scan.pdf", lambda p: scan_pdf(p, pages=3)), ("Quarterly report.pdf", text_pdf),
-                        ("Minutes.pdf", lambda p: text_pdf(p, pages=1))):
+    (tmp_path / "archive").mkdir()
+    (tmp_path / "desk").mkdir()
+    # Oldest first. Two files are called Minutes.pdf, in different folders.
+    for name, maker in (("archive/Minutes.pdf", lambda p: text_pdf(p, pages=2)),
+                        ("desk/old-scan.pdf", lambda p: scan_pdf(p, pages=3)), ("desk/Quarterly report.pdf", text_pdf),
+                        ("desk/Minutes.pdf", lambda p: text_pdf(p, pages=1))):
         gui.RecentFiles.add(maker(tmp_path / name))
     opened = srv.RequestHandlerClass.opened
     form_id = opened.add(make_form(tmp_path / "Application form.pdf"))
@@ -75,16 +79,21 @@ def test_polish_in_a_browser(app, tmp_path):
 
     # (a) One list: the reader's empty state shows the start screen's rows, facts and all.
     home = out["homeRecent"]
-    assert [r["name"] for r in home] == ["Minutes.pdf", "Quarterly report.pdf", "old-scan.pdf"]
+    assert [r["name"] for r in home] == ["Minutes.pdf", "Quarterly report.pdf", "old-scan.pdf", "Minutes.pdf"]
     assert home[2]["facts"].startswith("3 pages · ") and home[2]["facts"].endswith("scanned, no text yet")
     assert home[0]["facts"].startswith("1 page · ") and all(r["when"] for r in home)
+    # Two files of one name say which folder each is in; the others don't.
+    assert home[0]["facts"].endswith(" · in desk") and home[3]["facts"].endswith(" · in archive")
+    assert " in " not in home[1]["facts"] and " in " not in home[2]["facts"]
     assert out["readerRecent"] == home
     assert out["readerHint"][0] == "balance"
     # Removed there, gone here too; the toast says so (and the start screen's own toast looks the same).
-    assert out["removed"] == "old-scan.pdf" and out["readerToast"] == "Removed old-scan.pdf from Recent"
-    assert out["readerAfter"] == home[:2] and out["homeAfter"] == home[:2]
+    assert out["removed"] == "Minutes.pdf" and out["readerToast"] == "Removed Minutes.pdf from Recent"
+    # The Minutes.pdf that is left needs no folder any more, in the reader's list as on the start screen.
+    alone = {**home[0], "facts": home[0]["facts"].removesuffix(" · in desk")}
+    assert out["readerAfter"] == [alone, home[1], home[2]] and out["homeAfter"] == out["readerAfter"]
     toast = out["homeToast"]
-    assert toast["text"] == "Removed Quarterly report.pdf from Recent"
+    assert toast["text"] == "Removed old-scan.pdf from Recent"
     assert "blur" in toast["blur"] and toast["radius"] == "999px" and toast["position"] == "fixed"
     assert toast["anim"] == "rd-rise" and out["toastGone"]
 
