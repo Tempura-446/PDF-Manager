@@ -32,20 +32,51 @@ function fadeOut(node) {
 let pdfjs = null;   // pdf.js display API
 let viewer = null;  // pdf.js viewer components
 
-/** pdf.js and its viewer components. Called early (see gui.html) so the
- *  reader is ready by the time it's opened. */
-export async function loadPdfjs() {
-  if (viewer) return;
-  pdfjs = await loadLibrary();
-  globalThis.pdfjsLib = pdfjs;  // the viewer components read the API from here
-  viewer ||= await import(BASE + "web/pdf_viewer.mjs");
-  if (!document.querySelector("link[data-pdfjs]")) {
-    const link = document.createElement("link");
-    link.rel = "stylesheet"; link.href = BASE + "web/pdf_viewer.css"; link.dataset.pdfjs = "";
-    document.head.append(link);
-    await new Promise((resolve) => { link.onload = resolve; link.onerror = resolve; });
-  }
+/** Fetch a script or stylesheet the page is about to need, alongside what's loading now. */
+function preload(rel, href, as = null) {
+  if (document.querySelector(`link[rel="${rel}"][href="${href}"]`)) return;
+  const link = document.createElement("link");
+  link.rel = rel; link.href = href;
+  if (as) link.as = as;
+  document.head.append(link);
 }
+
+/** pdf.js's stylesheet, once (resolves when it applies, or failed to load).
+ *  It is fetched at once but takes its place after the page's own styles, as
+ *  it always has: where a stylesheet stands decides which rule wins. */
+async function loadViewerCss() {
+  if (document.querySelector("link[data-pdfjs]")) return;
+  const href = BASE + "web/pdf_viewer.css";
+  if (document.readyState === "loading") {
+    preload("preload", href, "style");
+    await new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true }));
+    if (document.querySelector("link[data-pdfjs]")) return;
+  }
+  const link = document.createElement("link");
+  link.rel = "stylesheet"; link.href = href; link.dataset.pdfjs = "";
+  document.head.append(link);
+  await new Promise((resolve) => { link.onload = resolve; link.onerror = resolve; });
+}
+
+let pdfjsReady = null;
+/** pdf.js and its viewer components. Started as soon as this file is read:
+ *  the library, its worker, the viewer and its stylesheet load side by side,
+ *  so the reader is ready by the time it's opened. */
+export function loadPdfjs() {
+  pdfjsReady ||= (async () => {
+    // (The viewer reads the API from globalThis when it runs, so it can only
+    // run after the library; fetching it doesn't have to wait.)
+    preload("modulepreload", BASE + "web/pdf_viewer.mjs");
+    const css = loadViewerCss();
+    pdfjs = await loadLibrary();
+    globalThis.pdfjsLib = pdfjs;
+    viewer = await import(BASE + "web/pdf_viewer.mjs");
+    await css;
+  })();
+  pdfjsReady.catch(() => { pdfjsReady = null; });  // try again next time
+  return pdfjsReady;
+}
+loadPdfjs().catch(() => {});
 
 /** What a protected PDF allows, from pdf.js's list of allowed permissions. */
 function permissionText(allowed) {
@@ -166,9 +197,57 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 let tabSeq = 0;
-// Files bigger than this, opened from this computer, are read in pieces as
-// pages are shown (the whole file only when a change or save needs it).
-const LAZY_BYTES = 32 * 1024 * 1024;
+// A file opened from this computer comes in pieces: the first this long (a
+// file no bigger is whole in it, and is held here in full), the rest as pages
+// are shown (the whole file only when a change or save needs it).
+const FIRST_BYTES = 4 * 1024 * 1024;
+// Thumbnails (see #buildThumbs): the list's padding above its first row; what a
+// row is taller than its picture (its padding, the gap and the page number:
+// see .rd-thumb in reader.css); how many drawn thumbnails are kept.
+const THUMB_PAD = 8, THUMB_EXTRA = 44, THUMBS_KEPT = 150;
+// A file read in pieces up to this size is read in full in the background
+// once its first page is on screen, and then held like a small file: it can
+// be shown again, saved elsewhere or compared even if the file on disk is
+// changed or deleted meanwhile. Bigger ones stay in pieces.
+const HOLD_BYTES = 64 * 1024 * 1024;
+// How long the reader waits, at most, for a piece of a file, for all of it,
+// and for pdf.js to open a document (not counting the password prompt): a
+// request that never answers mustn't leave the reader waiting for ever.
+const PIECE_MS = 60000, WHOLE_MS = 180000, OPEN_MS = 120000;
+
+/** fetch(), given up after ``ms`` (and when ``signal`` aborts). */
+function fetchFor(url, options, ms, signal = null) {
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(new DOMException("no answer in time", "TimeoutError")), ms);
+  const onAbort = () => stop.abort(signal.reason);
+  if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener("abort", onAbort, { once: true }); }
+  // (no-store: the browser lets only one request at a time for an address
+  // through its cache, and pieces of one file must go side by side)
+  return fetch(url, { cache: "no-store", ...options, signal: stop.signal }).finally(() => {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  });
+}
+
+/** ``promise``, or an error saying ``what`` once ``ms`` have gone by. */
+function bounded(promise, ms, what) {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(what)), ms); })])
+    .finally(() => clearTimeout(timer));
+}
+
+/** Why a piece of a file couldn't be had, from the server's answer; ``gone``
+ *  when it won't come back by asking again (the file was moved, deleted or
+ *  rewritten). */
+async function pieceError(res, tab) {
+  if (res.status === 404) return Object.assign(new Error("the file is no longer where it was (moved or deleted)"), { gone: true });
+  const stamp = res.headers.get("X-Pdfm-Stamp");
+  if (res.ok && stamp && tab.stamp && stamp !== tab.stamp) {
+    return Object.assign(new Error("another program changed the file since it was opened here"), { gone: true });
+  }
+  if (res.status !== 206) return new Error((await res.json().catch(() => ({}))).error || res.statusText || `error ${res.status}`);
+  return null;
+}
 const header = (res, name) => { try { return decodeURIComponent(res.headers.get(name) || ""); } catch (e) { return ""; } };
 
 /** A box on the page (PDF coordinates) as [x0, y0, x1, y1] on screen, within the page. */
@@ -356,7 +435,7 @@ export class Reader {
     this.commentsPanel = el("div", { class: "rd-panel rd-commentspanel", role: "tabpanel", hidden: true },
       el("label", { class: "rd-authorrow" }, "Comment as", this.authorInput), commentActions, this.commentsList);
     this.thumbsList = el("ol", { class: "rd-thumbs", role: "listbox", "aria-multiselectable": "true", "aria-label": "Pages" });
-    this.selected = new Set();
+    this.pickedPages = new Set();  // pages picked in the thumbnails
     this.outlineList = el("ul", { class: "rd-outline" });
     this.pageBar = el("div", { class: "rd-pagebar" });
     this.thumbsPanel = el("div", { class: "rd-panel", role: "tabpanel" }, this.pageBar, this.thumbsList);
@@ -749,7 +828,11 @@ export class Reader {
   // ---- visibility (called by the app when switching tools) --------------------
   show() {
     this.active = true; this.root.hidden = false;
-    if (this.doc) this.container.focus({ preventScroll: true }); else this.refreshRecent();
+    if (this.doc) this.container.focus({ preventScroll: true });
+    // (A moment later: when the reader is shown to open a file in it, the
+    // Recent list isn't needed, and listing it would keep the server busy
+    // while the file is being read.)
+    else setTimeout(() => { if (!this.doc && !this.opening) this.refreshRecent(); }, 0);
   }
   hide() { this.active = false; this.root.hidden = true; this.#closeMenu(); }
 
@@ -786,25 +869,27 @@ export class Reader {
 
   /** Open a file the server knows by id; ``goto`` = {page, find} shows a
    *  page and searches for text on it (e.g. from the folder search). */
-  async openById(id, goto = null) {
+  async openById(id, goto = null, first = null) {
     this.#busy(true);
+    this.opening = (this.opening || 0) + 1;
     try {
-      const url = "/api/file/" + encodeURIComponent(id), headers = { "X-Pdfm-Token": this.token };
-      // The first byte tells the file's size, place and version.
-      const probe = await fetch(url, { headers: { ...headers, Range: "bytes=0-0" } });
-      if (!probe.ok && probe.status !== 416) throw new Error((await probe.json().catch(() => ({}))).error || probe.statusText);
-      await probe.arrayBuffer();
-      const name = header(probe, "X-Pdfm-Filename") || "document.pdf";
-      const file = { fileId: id, path: header(probe, "X-Pdfm-Path"), stamp: probe.headers.get("X-Pdfm-Stamp") || "",
-        size: Number((probe.headers.get("Content-Range") || "").split("/")[1]) || 0 };
-      if (file.size > LAZY_BYTES) { await this.#serial(() => this.#openBytesNow(null, name, null, goto, { ...file, url })); return; }
-      const res = await fetch(url, { headers });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-      file.stamp = res.headers.get("X-Pdfm-Stamp") || file.stamp;
-      await this.openBytes(new Uint8Array(await res.arrayBuffer()), name, null, goto, file);
+      const url = "/api/file/" + encodeURIComponent(id);
+      // One request: the file's first piece, which comes with its size, place
+      // and version. A small file is whole in it. (``first``: that request,
+      // already made by the page while it was starting.)
+      const res = await (first || fetch(url, { cache: "no-store", headers: { "X-Pdfm-Token": this.token, Range: `bytes=0-${FIRST_BYTES - 1}` } }));
+      if (!res.ok && res.status !== 416) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+      const head = new Uint8Array(await res.arrayBuffer());
+      const name = header(res, "X-Pdfm-Filename") || "document.pdf";
+      const file = { fileId: id, path: header(res, "X-Pdfm-Path"), stamp: res.headers.get("X-Pdfm-Stamp") || "",
+        size: Number((res.headers.get("Content-Range") || "").split("/")[1]) || head.length };
+      if (head.length >= file.size) await this.openBytes(head, name, null, goto, file);
+      else await this.#serial(() => this.#openBytesNow(null, name, null, goto, { ...file, url, head, headCopy: head.slice() }));  // the rest in pieces
     } catch (e) {
       this.toast("Could not open the file: " + (e.message || e));
     } finally {
+      this.opening--;
+      if (!this.opening && !this.doc && this.active) this.refreshRecent();  // nothing opened after all
       this.#busy(false);
     }
   }
@@ -865,7 +950,9 @@ export class Reader {
    *  path, stamp, size; url when it's read in pieces, bytes then null). */
   async #openBytesNow(bytes, name, password, goto, file = null) {
     const same = this.tabs.find((t) => (file?.path && t.path === file.path)
-      || (bytes && t.original && t.name === name && sameBytes(t.original, bytes)));
+      || (bytes && t.original && t.name === name && sameBytes(t.original, bytes))
+      || (bytes && !t.original && t.headCopy && t.name === name && t.size === bytes.length  // (read in pieces, not all here yet)
+        && sameBytes(t.headCopy, bytes.subarray(0, t.headCopy.length))));
     if (same) {
       if (same === this.activeTab) { if (goto) this.#goto(goto); }
       else { if (goto) same.goto = goto; await this.#switchToNow(same); }  // applied once its pages are there
@@ -893,8 +980,12 @@ export class Reader {
     const tab = this.activeTab;
     this.#finishEditing();
     if (!tab || !this.doc || !this.#changed()) return;
-    tab.bytes = await this.doc.saveDocument();
-    tab.edited = true;
+    try {
+      tab.bytes = await this.#savedDocument(tab);
+      tab.edited = true;
+    } catch (e) {
+      this.toast(`Your unsaved changes to “${tab.name}” couldn't be kept: ${e.message || e}`, 9000);
+    }
   }
 
   #switchTo(tab) {
@@ -903,8 +994,13 @@ export class Reader {
 
   async #switchToNow(tab) {
     if (tab === this.activeTab || !this.tabs.includes(tab)) return;
+    const previous = this.activeTab;
     await this.#stash();
-    if (!(await this.#load(tab))) { await this.#closeDocument(); this.#showEmpty(); }
+    // (A tab that can't be shown: the one shown before comes back.)
+    if (!(await this.#load(tab)) && !(previous && this.tabs.includes(previous) && await this.#load(previous))) {
+      await this.#closeDocument();
+      this.#showEmpty();
+    }
     this.#renderTabs();
   }
 
@@ -981,42 +1077,182 @@ export class Reader {
     this.sidebar.hidden = true;
     this.root.classList.remove("reading");
     if (this.active) document.title = "PDF reader — ZPDF";
-    this.refreshRecent();
+    setTimeout(() => { if (!this.doc && !this.opening) this.refreshRecent(); }, 0);  // (see show())
     this.onChange?.();
+  }
+
+  /** The first piece of a file that is read in pieces (``tab.url``), asked
+   *  for again when its tab is shown after another one (the piece that came
+   *  when the file was opened went to pdf.js). The file must still be the
+   *  one that was opened: a file changed or deleted meanwhile is said so,
+   *  never shown in its place. */
+  async #firstPiece(tab) {
+    if (tab.gone) throw Object.assign(new Error(tab.gone), { gone: true });
+    let res;
+    try {
+      res = await fetchFor(tab.url, { headers: { "X-Pdfm-Token": this.token, Range: `bytes=0-${FIRST_BYTES - 1}` } }, PIECE_MS);
+    } catch (e) { throw new Error("the file couldn't be read: " + (e.message || e)); }
+    const bad = await pieceError(res, tab);
+    const size = Number((res.headers.get("Content-Range") || "").split("/")[1]) || 0;
+    if (bad || size !== tab.size) {
+      const e = bad || Object.assign(new Error("another program changed the file since it was opened here"), { gone: true });
+      if (e.gone) tab.gone = e.message;
+      throw e;
+    }
+    tab.head = new Uint8Array(await res.arrayBuffer());
+  }
+
+  /** Where pdf.js gets the pieces of a file that isn't held here in full:
+   *  it starts with the first piece (``tab.head``, which it takes) and asks
+   *  for the others as pages need them; once all of the file is here
+   *  (#readAll), they come from memory. A piece that fails is asked for once
+   *  more; if it fails again, ``failed`` rejects (#load gives up opening)
+   *  and, once open, the reader says so once and offers to close the tab.
+   *
+   *  pdf.js has no way to be told a piece can't be had: it would wait for
+   *  it for ever, and so would closing the document. So a piece given up
+   *  (or still on its way when the document is closed: ``giveUp``) is
+   *  answered with empty bytes, which pdf.js reads as nothing to draw; the
+   *  document is then ``poisoned``: it is never written out (#savedDocument). */
+  #pieces(tab) {
+    const head = tab.head;
+    tab.head = null;
+    const source = new pdfjs.PDFDataRangeTransport(tab.size, head);
+    const stop = new AbortController();
+    const pending = new Map();  // begin -> end of the pieces pdf.js waits for
+    source.failed = new Promise((_, reject) => { source.fail = reject; });
+    source.failed.catch(() => {});
+    source.serve = (data) => {  // all of the file is here
+      for (const [begin, end] of pending) source.onDataRange(begin, data.slice(begin, end));
+      pending.clear();
+    };
+    source.giveUp = () => {
+      source.poisoned = true;
+      stop.abort();
+      for (const [begin, end] of pending) source.onDataRange(begin, new Uint8Array(end - begin));
+      pending.clear();
+    };
+    const ask = async (begin, end, again) => {
+      try {
+        const res = await fetchFor(tab.url, { headers: { "X-Pdfm-Token": this.token, Range: `bytes=${begin}-${end - 1}` } }, PIECE_MS, stop.signal);
+        const bad = await pieceError(res, tab);
+        if (bad) throw bad;
+        const chunk = new Uint8Array(await res.arrayBuffer());
+        if (chunk.length !== end - begin) throw new Error("the file is shorter than it was");
+        if (pending.delete(begin)) source.onDataRange(begin, chunk);
+      } catch (e) {
+        if (stop.signal.aborted || !pending.has(begin)) return;
+        if (source.data) { source.serve(source.data); return; }
+        if (again && !e.gone) { setTimeout(() => ask(begin, end, false), 300); return; }
+        if (e.gone) tab.gone ||= e.message;
+        if (source.failure) { source.giveUp(); return; }
+        source.failure = String(e.message || e);
+        source.fail(new Error(source.failure));
+        source.giveUp();
+        if (source.task && source.task === this.task && this.doc && this.activeTab === tab) {
+          this.toast(`Couldn't read more of “${tab.name}”: ${source.failure}. Close it and open it again.`, 15000,
+            ["Close", () => this.closeTab(tab)]);
+        }
+      }
+    };
+    source.requestDataRange = (begin, end) => {
+      pending.set(begin, end);
+      if (source.data) source.serve(source.data);
+      else if (source.poisoned) source.giveUp();
+      else ask(begin, end, true);
+    };
+    source.abort = () => { stop.abort(); pending.clear(); };
+    source.waiting = () => pending.size > 0;
+    tab.source = source;
+    return source;
+  }
+
+  /** All of a file read in pieces, read now (once; at most HOLD_BYTES of it
+   *  in the background, any size when a change or a save needs it). From
+   *  then on the tab holds it as it holds a small file. Rejects, saying why,
+   *  if the file can't be read or is no longer the one that was opened. */
+  #readAll(tab) {
+    if (tab.bytes) return Promise.resolve(tab.bytes);
+    if (tab.gone) return Promise.reject(new Error(tab.gone));
+    tab.reading ||= (async () => {
+      const from = tab.headCopy?.length || 0;
+      let res;
+      try {
+        res = await fetchFor(tab.url, { headers: { "X-Pdfm-Token": this.token, Range: `bytes=${from}-${tab.size - 1}` } }, WHOLE_MS);
+      } catch (e) { throw new Error("the file couldn't be read: " + (e.message || e)); }
+      const bad = await pieceError(res, tab);
+      if (bad) { if (bad.gone) tab.gone = bad.message; throw bad; }
+      let rest;
+      try { rest = new Uint8Array(await res.arrayBuffer()); } catch (e) { throw new Error("the file couldn't be read: " + (e.message || e)); }
+      if (from + rest.length !== tab.size) throw new Error("the file couldn't be read in full");
+      const all = new Uint8Array(tab.size);
+      if (from) all.set(tab.headCopy);
+      all.set(rest, from);
+      if (tab.source) { tab.source.data = all; tab.source.serve(all); }
+      if (!tab.bytes) {
+        tab.bytes = tab.original = all;
+        if (tab === this.activeTab && !this.bytes) this.bytes = all;
+      }
+      tab.headCopy = null;
+      return tab.bytes;
+    })();
+    const reading = tab.reading;
+    reading.catch(() => { if (tab.reading === reading) tab.reading = null; });
+    return reading;
+  }
+
+  /** The shown document with its unsaved annotations and form entries. */
+  async #savedDocument(tab) {
+    if (this.pieces?.poisoned) throw new Error(`part of the file couldn't be read (${this.pieces.failure || "it stopped answering"}); close it and open it again`);
+    if (tab?.url && !tab.bytes) await this.#readAll(tab);  // (pdf.js needs every piece to write it out)
+    return await bounded(this.doc.saveDocument(), WHOLE_MS, "writing the document took too long");
   }
 
   /** Show ``tab``'s document in the viewer. Returns false if it couldn't be
    *  opened (not a PDF, or the password prompt was cancelled). */
   async #load(tab) {
     this.#busy(true);
+    let pieces = null, timer = 0, tooLong = null;
+    const giveUp = new Promise((_, reject) => { tooLong = reject; });
+    giveUp.catch(() => {});
+    const arm = () => { clearTimeout(timer); timer = setTimeout(() => tooLong(new Error("opening it took too long")), OPEN_MS); };
     try {
       await loadPdfjs();
       this.#ensureViewer();
       await this.#closeDocument();
+      if (!tab.bytes && !tab.head) await this.#firstPiece(tab);
       this.bytes = tab.bytes;
       this.name = tab.name;
       this.password = tab.password;
+      pieces = this.pieces = tab.bytes ? null : this.#pieces(tab);
       const task = await openDocument({
         ...DOC_OPTIONS,
         ...(tab.bytes
           ? { data: tab.bytes.slice() }  // pdf.js takes ownership of the buffer; keep our copy intact
-          : { url: tab.url, httpHeaders: { "X-Pdfm-Token": this.token }, length: tab.size || undefined,
-              rangeChunkSize: 1 << 20, disableAutoFetch: true, disableStream: true }),
+          : { range: pieces, rangeChunkSize: 1 << 20, disableAutoFetch: true, disableStream: true }),
         password: tab.password || undefined,
         enableXfa: true,
         fontExtraProperties: true,  // fonts' own names, to find the installed copy when editing text
       });
+      if (pieces) pieces.task = task;
       task.onPassword = (update, reason) => {
+        clearTimeout(timer);  // (the time at the password prompt doesn't count)
         this.#busy(false);
         this.#askPassword(reason === pdfjs.PasswordResponses.INCORRECT_PASSWORD).then((pw) => {
-          if (pw === null) { destroyTask(task); return; }
+          if (pw === null) { destroyTask(task); tooLong(Object.assign(new Error("cancelled"), { name: "PasswordException" })); return; }
           this.password = tab.password = pw;
           this.#busy(true);
+          arm();
           update(pw);
         });
       };
       this.task = task;
-      const doc = await task.promise;
+      arm();
+      // (A piece of the file that can't be had, or no answer at all: pdf.js
+      // would wait for ever, so the reader stops waiting.)
+      const doc = await Promise.race([task.promise, giveUp, ...(pieces ? [pieces.failed] : [])]);
+      clearTimeout(timer);
+      tab.shown = true;
       this.doc = doc;
       this.activeTab = tab;
       doc.annotationStorage.onSetModified = () => {
@@ -1039,12 +1275,18 @@ export class Reader {
       this.root.classList.add("reading");
       this.#applyPanel();
       this.#setSidebar(store.get("pdfm-reader-sidebar", false));
-      this.#buildThumbs();
+      this.thumbs = null;  // made when the Pages panel shows them (#showThumbs)
+      this.pickedPages = new Set();
+      this.#renderPageBar();
       this.#buildOutline();
       this.#listComments();
       this.#loadMeasures();
-      this.#checkSignatures();
-      this.#checkForm();
+      this.sigbar.hidden = true;
+      this.formbar.hidden = true;
+      this.#whenShown(() => { this.#checkSignatures(); this.#checkForm(); });
+      // The rest of a file read in pieces, as soon as the first page is on
+      // screen (not before: it would slow that down). See HOLD_BYTES.
+      if (tab.url && !tab.bytes && tab.size <= HOLD_BYTES) this.#whenShown(() => this.#readAll(tab).catch(() => {}), { now: true });
       doc.getPageLabels().then((labels) => {
         if (doc !== this.doc || !labels) return;
         // Only use labels that differ from plain page numbers.
@@ -1052,12 +1294,19 @@ export class Reader {
       }).catch(() => {});
       return true;
     } catch (e) {
+      clearTimeout(timer);
       await this.#closeDocument();
-      if (!(e && e.name === "PasswordException")) {  // not just cancelled at the password prompt
-        this.toast(e && e.name === "InvalidPDFException" ? `“${tab.name}” isn't a valid PDF.` : "Could not open the PDF: " + (e.message || e));
+      const why = pieces?.failure || (e && e.message) || String(e);
+      if (tab.gone && tab.shown && this.tabs.includes(tab)) {
+        // A tab left in the background whose file went away or changed: say so; it can be closed.
+        this.toast(`Can't show “${tab.name}” again: ${tab.gone}.`, 15000, ["Close it", () => this.closeTab(tab)]);
+      } else if (pieces?.failure) this.toast(`Could not open “${tab.name}”: ${why}`, 9000);
+      else if (!(e && e.name === "PasswordException")) {  // not just cancelled at the password prompt
+        this.toast(e && e.name === "InvalidPDFException" ? `“${tab.name}” isn't a valid PDF.` : "Could not open the PDF: " + why);
       }
       return false;
     } finally {
+      clearTimeout(timer);
       this.#busy(false);
     }
   }
@@ -1121,10 +1370,11 @@ export class Reader {
       const goto = this.activeTab?.goto;
       if (goto) { this.activeTab.goto = null; this.#goto(goto); }
       this.#updatePage();
+      this.#showThumbs();
       this.container.focus({ preventScroll: true });
     });
     eventBus.on("pagechanging", ({ pageNumber }) => { this.#updatePage(); this.#remember(); this.#refreshScale(); if (this.measureMode) this.#geometry(pageNumber); });
-    eventBus.on("pagesloaded", () => this.#refreshScale());
+    eventBus.on("pagesloaded", () => { this.#whenShown(() => this.#refreshScale()); this.#sizeThumbs(); });
     eventBus.on("annotationlayerrendered", ({ source }) => this.#nameFields(source?.div?.querySelector(".annotationLayer")));
     eventBus.on("pagerendered", ({ pageNumber }) => {
       this.#drawMeasures(pageNumber);
@@ -1155,21 +1405,27 @@ export class Reader {
     this.uiManager = null;
     this.annotUndo = false;
     this.labels = null;
-    if (this.thumbObserver) { this.thumbObserver.disconnect(); this.thumbObserver = null; }
+    for (const stop of this.asking || []) { stop.closed = true; stop.abort(); }
+    this.thumbs = null;
     this.thumbsList.replaceChildren();
     this.outlineList.replaceChildren();
-    const doc = this.doc, task = this.task;
+    const doc = this.doc, task = this.task, pieces = this.pieces;
     this.doc = null;
     this.task = null;
+    this.pieces = null;
+    // A file read in pieces: what's still on its way is given up, and if
+    // pdf.js won't let go of the document soon, the reader doesn't wait.
+    const wait = pieces && (pieces.poisoned || pieces.waiting()) ? 2000 : 10000;
+    pieces?.giveUp();
     this.#showSaveState();
     if (doc) {
       this.pdfViewer.setDocument(null);
       this.linkService.setDocument(null);
       this.findController.setDocument(null);
       this.scripting?.setDocument(null).catch(() => {});
-      await destroyTask(doc.loadingTask || task);  // pdf.js frees a document through its task
+      await destroyTask(doc.loadingTask || task, wait);  // pdf.js frees a document through its task
     } else if (task) {
-      await destroyTask(task);  // e.g. cancelled at the password prompt: wait for it to be gone
+      await destroyTask(task, wait);  // e.g. cancelled at the password prompt: wait for it to be gone
     }
   }
 
@@ -1192,12 +1448,14 @@ export class Reader {
     this.pageCount.textContent = this.labels ? `(${n} of ${total})` : `of ${total}`;
     this.prevBtn.disabled = n <= 1;
     this.nextBtn.disabled = n >= total;
-    for (const li of this.thumbsList.children) li.classList.toggle("current", +li.dataset.page === n);
-    const current = this.thumbsList.children[n - 1];
-    if (current && !this.sidebar.hidden) {
-      const panel = this.thumbsPanel, top = current.offsetTop, bottom = top + current.offsetHeight;
-      if (top < panel.scrollTop || bottom > panel.scrollTop + panel.clientHeight) panel.scrollTop = top - panel.clientHeight / 3;
+    const t = this.thumbs;
+    if (!t) return;
+    if (t.current !== n) {
+      t.rows.get(t.current)?.classList.remove("current");
+      t.rows.get(n)?.classList.add("current");
+      t.current = n;
     }
+    this.#revealThumb(n);
   }
 
   #goToTypedPage() {
@@ -1255,7 +1513,7 @@ export class Reader {
   #setSidebar(open) {
     this.sidebar.hidden = !open;
     this.sidebarBtn.setAttribute("aria-pressed", String(open));
-    if (open) this.#updatePage();
+    if (open) { this.#updatePage(); this.#showThumbs(); }
   }
   #showTab(which) {
     for (const [name, tab, panel] of [["thumbs", this.thumbsTab, this.thumbsPanel], ["outline", this.outlineTab, this.outlinePanel],
@@ -1264,45 +1522,125 @@ export class Reader {
       panel.hidden = name !== which;
     }
     if (which === "comments") this.#listComments();
+    if (which === "thumbs") this.#showThumbs();
   }
 
-  async #buildThumbs() {
-    const doc = this.doc;
-    const first = await doc.getPage(1);
-    if (doc !== this.doc) return;
-    const vp = first.getViewport({ scale: 1, rotation: this.pdfViewer?.pagesRotation || 0 });
-    const ratio = vp.height / vp.width;
-    this.thumbQueue = [];
-    this.thumbObserver = new IntersectionObserver((entries) => {
-      for (const entry of entries) if (entry.isIntersecting && !entry.target.dataset.rendered) this.#queueThumb(entry.target);
-    }, { root: this.thumbsPanel, rootMargin: "300px 0px" });
-    const items = [];
-    for (let n = 1; n <= doc.numPages; n++) {
-      const box = el("div", { class: "rd-thumb-img", style: `height:${Math.round(128 * ratio)}px` });
-      const actions = el("div", { class: "rd-thumb-actions" },
-        el("button", { type: "button", class: "rd-thumb-act", "data-act": "rotate", title: "Turn clockwise", "aria-label": `Turn page ${n} clockwise`, html: svg("cw") }),
-        el("button", { type: "button", class: "rd-thumb-act", "data-act": "delete", title: "Delete page", "aria-label": `Delete page ${n}`, html: svg("trash") }));
-      const li = el("li", { class: "rd-thumb", "data-page": n, tabindex: "0", role: "option", draggable: "true",
-        "aria-selected": "false", "aria-label": `Page ${n}` }, box, actions, el("span", {}, String(n)));
-      items.push(li);
+  // Thumbnails are made when the Pages panel first shows them, and only the
+  // rows near what the panel shows exist: a document of 3000 pages costs what
+  // one of 30 does. Every page still has its place in the list (worked out
+  // from the pages' sizes), so the list scrolls as if all of them were there.
+  #thumbsVisible() { return !!this.doc && !this.sidebar.hidden && !this.thumbsPanel.hidden && this.pdfViewer?.pagesCount > 0; }
+
+  /** The Pages panel is shown (or its document just got its pages): make the
+   *  thumbnails if they aren't there yet. */
+  #showThumbs() {
+    if (!this.#thumbsVisible()) return;
+    if (!this.thumbs || this.thumbs.doc !== this.doc) this.#buildThumbs();
+    else this.#layoutThumbs();
+    this.#revealThumb();
+  }
+
+  #buildThumbs() {
+    const doc = this.doc, count = doc.numPages;
+    this.thumbsList.replaceChildren();
+    // heights[n]: how tall page n's row is; tops[n]: where it starts in the list.
+    this.thumbs = { doc, count, heights: new Float64Array(count + 2), tops: new Float64Array(count + 2), rows: new Map(),
+      canvases: new Map(), queue: [], busy: false, held: null, current: this.pdfViewer.currentPageNumber || 1 };
+    this.#sizeThumbs();
+  }
+
+  /** Every row's height from its page's size (as far as the viewer knows the
+   *  sizes: all of them once "pagesloaded"), then the rows in their places. */
+  #sizeThumbs() {
+    const t = this.thumbs;
+    if (!t || t.doc !== this.doc) return;
+    for (let n = 1; n <= t.count; n++) {
+      const vp = this.pdfViewer.getPageView(n - 1)?.viewport;
+      t.heights[n] = Math.round(128 * (vp ? vp.height / vp.width : 1.4142)) + THUMB_EXTRA;
     }
-    this.selected = new Set();
-    this.thumbsList.replaceChildren(...items);
-    this.#renderPageBar();
-    for (const li of items) this.thumbObserver.observe(li);
-    this.#updatePage();
+    this.#placeThumbs();
+    this.#layoutThumbs();
+  }
+
+  #placeThumbs() {
+    const t = this.thumbs;
+    for (let n = 1; n <= t.count; n++) t.tops[n + 1] = t.tops[n] + t.heights[n];
+    this.thumbsList.style.height = t.tops[t.count + 1] + "px";
+    for (const [n, li] of t.rows) li.style.top = THUMB_PAD + t.tops[n] + "px";
+  }
+
+  /** Where the list starts in what its panel scrolls. */
+  #thumbsTop() {
+    const panel = this.thumbsPanel;
+    return this.thumbsList.getBoundingClientRect().top - panel.getBoundingClientRect().top + panel.scrollTop;
+  }
+
+  /** The rows the panel shows now (and a screenful around them) exist; the others don't. */
+  #layoutThumbs() {
+    const t = this.thumbs;
+    if (!t || !this.#thumbsVisible()) return;
+    const panel = this.thumbsPanel, around = Math.max(400, panel.clientHeight);
+    const from = panel.scrollTop - this.#thumbsTop() - THUMB_PAD - around, to = from + panel.clientHeight + 2 * around;
+    const rowAt = (y) => {  // the last row that starts at or above y
+      let lo = 1, hi = t.count;
+      while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (t.tops[mid] <= y) lo = mid; else hi = mid - 1; }
+      return lo;
+    };
+    const first = rowAt(from), last = rowAt(to);
+    for (const [n, li] of t.rows) {
+      // (A row being dragged, or holding the keyboard focus, stays.)
+      if ((n < first || n > last) && li !== t.held && !li.contains(document.activeElement)) { li.remove(); t.rows.delete(n); }
+    }
+    for (let n = first; n <= last; n++) if (!t.rows.has(n)) this.#addThumb(n);
+    if (t.queue.length && !t.busy) this.#drainThumbs();
+  }
+
+  #addThumb(n) {
+    const t = this.thumbs, list = this.thumbsList;
+    const canvas = t.canvases.get(n);
+    const box = el("div", { class: "rd-thumb-img", style: `height:${t.heights[n] - THUMB_EXTRA}px` }, canvas || null);
+    const actions = el("div", { class: "rd-thumb-actions" },
+      el("button", { type: "button", class: "rd-thumb-act", "data-act": "rotate", title: "Turn clockwise", "aria-label": `Turn page ${n} clockwise`, html: svg("cw") }),
+      el("button", { type: "button", class: "rd-thumb-act", "data-act": "delete", title: "Delete page", "aria-label": `Delete page ${n}`, html: svg("trash") }));
+    const li = el("li", { class: "rd-thumb" + (n === t.current ? " current" : ""), "data-page": n, tabindex: "0", role: "option", draggable: "true",
+      "aria-selected": String(this.pickedPages.has(n)), "aria-label": `Page ${n}`, "aria-posinset": n, "aria-setsize": t.count,
+      style: `top:${THUMB_PAD + t.tops[n]}px` }, box, actions, el("span", {}, String(n)));
+    t.rows.set(n, li);
+    // In page order, for the keyboard and for screen readers.
+    let before = null;
+    if (list.lastElementChild && +list.lastElementChild.dataset.page > n) {
+      for (const other of list.children) if (+other.dataset.page > n) { before = other; break; }
+    }
+    list.insertBefore(li, before);
+    if (!canvas) t.queue.push(n);
+  }
+
+  /** Bring page ``n``'s row (the current page's) into what the panel shows. */
+  #revealThumb(n = this.pdfViewer?.currentPageNumber || 1) {
+    const t = this.thumbs;
+    if (!t || !this.#thumbsVisible() || n < 1 || n > t.count) return;
+    const panel = this.thumbsPanel, top = this.#thumbsTop() + THUMB_PAD + t.tops[n], bottom = top + t.heights[n];
+    if (top < panel.scrollTop || bottom > panel.scrollTop + panel.clientHeight) panel.scrollTop = top - panel.clientHeight / 3;
+    this.#layoutThumbs();
+  }
+
+  #focusThumb(n) {
+    const t = this.thumbs;
+    if (!t || n < 1 || n > t.count) return;
+    this.#revealThumb(n);
+    t.rows.get(n)?.focus();
   }
 
   // ---- thumbnails: pick, drag to move, drop a PDF to insert ---------------------------------
   #select(pages, anchor = pages.at(-1)) {
-    this.selected = new Set(pages);
+    this.pickedPages = new Set(pages);
     this.selectAnchor = anchor;
-    for (const li of this.thumbsList.children) li.setAttribute("aria-selected", String(this.selected.has(+li.dataset.page)));
+    for (const [n, li] of this.thumbs?.rows || []) li.setAttribute("aria-selected", String(this.pickedPages.has(n)));
     this.#renderPageBar();
   }
 
   #renderPageBar() {
-    const pages = [...this.selected].sort((a, b) => a - b);
+    const pages = [...this.pickedPages].sort((a, b) => a - b);
     const b = (icon, label, run, title = label) => {
       const btn = el("button", { type: "button", class: "rd-btn", title, "aria-label": title });
       btn.innerHTML = svg(icon) + (label ? `<span>${label}</span>` : "");
@@ -1331,13 +1669,13 @@ export class Reader {
       const n = pageOf(e);
       if (!n) return;
       const act = e.target.closest(".rd-thumb-act")?.dataset.act;
-      if (act === "rotate") return this.rotatePages(this.selected.has(n) ? [...this.selected] : [n], 90);
-      if (act === "delete") return this.deletePages(this.selected.has(n) && this.selected.size > 1 ? [...this.selected] : [n]);
+      if (act === "rotate") return this.rotatePages(this.pickedPages.has(n) ? [...this.pickedPages] : [n], 90);
+      if (act === "delete") return this.deletePages(this.pickedPages.has(n) && this.pickedPages.size > 1 ? [...this.pickedPages] : [n]);
       if (e.shiftKey && this.selectAnchor) {
         const [a, z] = [Math.min(this.selectAnchor, n), Math.max(this.selectAnchor, n)];
         this.#select(Array.from({ length: z - a + 1 }, (_, i) => a + i), this.selectAnchor);
       } else if (e.ctrlKey || e.metaKey) {
-        const next = new Set(this.selected);
+        const next = new Set(this.pickedPages);
         if (next.has(n)) next.delete(n); else next.add(n);
         this.#select([...next], n);
       } else {
@@ -1349,11 +1687,10 @@ export class Reader {
       const n = pageOf(e);
       if (!n) return;
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.#select([n]); this.pdfViewer.currentPageNumber = n; }
-      if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); this.deletePages(this.selected.has(n) ? [...this.selected] : [n]); }
+      if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); this.deletePages(this.pickedPages.has(n) ? [...this.pickedPages] : [n]); }
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
-        const next = list.children[n - 1 + (e.key === "ArrowDown" ? 1 : -1)];
-        next?.focus();
+        this.#focusThumb(n + (e.key === "ArrowDown" ? 1 : -1));
       }
     });
     // Dragging pages: a line shows where they'll go.
@@ -1361,9 +1698,9 @@ export class Reader {
     const clear = () => { if (marker) marker.classList.remove("drop-before", "drop-after"); marker = null; };
     const spot = (e) => {
       const li = e.target.closest?.(".rd-thumb");
-      if (!li) {
-        const last = list.lastElementChild;
-        return last ? { li: last, before: Number(last.dataset.page) + 1, after: true } : null;
+      if (!li) {  // below the last page: after it
+        const t = this.thumbs;
+        return t ? { li: t.rows.get(t.count) || null, before: t.count + 1, after: true } : null;
       }
       const r = li.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
       return { li, before: Number(li.dataset.page) + (after ? 1 : 0), after };
@@ -1372,9 +1709,10 @@ export class Reader {
     list.addEventListener("dragstart", (e) => {
       const n = pageOf(e);
       if (!n) return;
-      if (!this.selected.has(n)) this.#select([n]);
-      e.dataTransfer.setData("application/x-zpdf-pages", JSON.stringify([...this.selected]));
+      if (!this.pickedPages.has(n)) this.#select([n]);
+      e.dataTransfer.setData("application/x-zpdf-pages", JSON.stringify([...this.pickedPages]));
       e.dataTransfer.effectAllowed = "move";
+      if (this.thumbs) this.thumbs.held = e.target.closest(".rd-thumb");  // stays while it's dragged, wherever the list scrolls
     });
     list.addEventListener("dragover", (e) => {
       const ours = [...(e.dataTransfer?.types || [])].includes("application/x-zpdf-pages");
@@ -1386,14 +1724,18 @@ export class Reader {
       if (!where) return;
       if (marker !== where.li) clear();
       marker = where.li;
-      marker.classList.toggle("drop-after", where.after);
-      marker.classList.toggle("drop-before", !where.after);
+      marker?.classList.toggle("drop-after", where.after);
+      marker?.classList.toggle("drop-before", !where.after);
     });
     list.addEventListener("dragleave", (e) => { if (!list.contains(e.relatedTarget)) clear(); });
-    list.addEventListener("dragend", clear);
+    const release = () => { if (this.thumbs?.held) { this.thumbs.held = null; this.#layoutThumbs(); } };
+    list.addEventListener("dragend", () => { clear(); release(); });
+    this.thumbsPanel.addEventListener("scroll", () => this.#layoutThumbs(), { passive: true });
+    new ResizeObserver(() => this.#layoutThumbs()).observe(this.thumbsPanel);
     list.addEventListener("drop", (e) => {
       const where = spot(e);
       clear();
+      release();
       const moving = e.dataTransfer.getData("application/x-zpdf-pages");
       if (moving) {
         e.preventDefault(); e.stopPropagation();
@@ -1408,39 +1750,52 @@ export class Reader {
     });
   }
 
-  #queueThumb(li) {
-    li.dataset.rendered = "1";
-    this.thumbQueue.push(li);
-    if (!this.thumbBusy) this.#drainThumbs();
-  }
-
+  /** Draw the thumbnails of the rows that are waiting, one after the other. */
   async #drainThumbs() {
-    this.thumbBusy = true;
-    const doc = this.doc;
-    while (this.thumbQueue.length && doc === this.doc) {
-      const li = this.thumbQueue.shift();
+    const t = this.thumbs, doc = this.doc;
+    t.busy = true;
+    while (t.queue.length && t === this.thumbs && doc === this.doc) {
+      const n = t.queue.shift();
+      if (!t.rows.has(n) || t.canvases.has(n)) continue;  // scrolled away meanwhile: drawn when it's back
       try {
-        const page = await doc.getPage(+li.dataset.page);
-        const vp = page.getViewport({ scale: 1, rotation: (page.rotate + this.pdfViewer.pagesRotation) % 360 });
+        const page = await doc.getPage(n);
+        const rotation = (page.rotate + this.pdfViewer.pagesRotation) % 360;
+        const vp = page.getViewport({ scale: 1, rotation });
         const scale = (128 * (window.devicePixelRatio || 1)) / vp.width;
-        const viewport = page.getViewport({ scale, rotation: (page.rotate + this.pdfViewer.pagesRotation) % 360 });
+        const viewport = page.getViewport({ scale, rotation });
         const canvas = el("canvas", { width: Math.ceil(viewport.width), height: Math.ceil(viewport.height) });
         await page.render({ canvas, viewport, annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS }).promise;
-        if (doc !== this.doc) break;
-        const box = li.firstChild;
-        box.style.height = Math.round(128 * viewport.height / viewport.width) + "px";
-        box.replaceChildren(canvas);
+        if (t !== this.thumbs || doc !== this.doc) break;
+        // Drawn thumbnails are kept for when their row comes back; not all of a long document's.
+        t.canvases.set(n, canvas);
+        for (const old of t.canvases.keys()) {
+          if (t.canvases.size <= THUMBS_KEPT) break;
+          if (!t.rows.has(old)) t.canvases.delete(old);
+        }
+        const height = Math.round(128 * viewport.height / viewport.width);
+        const box = t.rows.get(n)?.firstChild;
+        if (box) { box.style.height = height + "px"; box.replaceChildren(canvas); }
+        if (height + THUMB_EXTRA !== t.heights[n]) {  // not the size its place was kept for: the rows after it move
+          const grew = height + THUMB_EXTRA - t.heights[n], panel = this.thumbsPanel;
+          const above = this.#thumbsTop() + THUMB_PAD + t.tops[n] < panel.scrollTop;
+          t.heights[n] = height + THUMB_EXTRA;
+          this.#placeThumbs();
+          if (above) panel.scrollTop += grew;  // (what the panel shows stays where it is)
+        }
       } catch (e) { /* skip pages that fail to render */ }
     }
-    this.thumbBusy = false;
+    t.busy = false;
   }
 
   #rebuildThumbsSoon() {
     clearTimeout(this.thumbTimer);
     this.thumbTimer = setTimeout(() => {
       if (!this.doc) return;
-      if (this.thumbObserver) this.thumbObserver.disconnect();
-      this.#buildThumbs();
+      this.thumbs = null;
+      this.thumbsList.replaceChildren();
+      this.pickedPages = new Set();
+      this.#renderPageBar();
+      this.#showThumbs();
     }, 250);
   }
 
@@ -1585,7 +1940,8 @@ export class Reader {
     try {
       if (!(custom && this.pdfViewer.annotationEditorMode === mode)) this.pdfViewer.annotationEditorMode = { mode };
     } catch (e) {
-      if (!custom) { this.toast("Annotating isn't available for this document."); return; }
+      // (Turning the tools off on a document that has just been replaced, e.g. after signing, isn't news.)
+      if (!custom) { if (name !== "NONE") this.toast("Annotating isn't available for this document."); return; }
     }
     this.#showEditMode(name);
     // Words selected before choosing Underline or Strike out get it straight away.
@@ -2329,7 +2685,8 @@ export class Reader {
       el("label", { class: "rd-field" }, "Digital ID file", pfx), el("label", { class: "rd-field" }, "Its password", password),
       el("label", { class: "rd-field" }, "Reason (optional)", reason), el("label", { class: "rd-field" }, "Location (optional)", location),
       el("label", { class: "rd-field" }, "Timestamp server (optional)", stamp)],
-      [["cancel", "Cancel"], ["ok", "Sign", true]]);
+      [["cancel", "Cancel"], ["ok", "Sign", true]],
+      { ready: () => { if (pfx.files[0]) return true; pfx.focus(); return false; } });  // (Enter before a digital ID is chosen: to the file box, nothing lost)
     if (answer !== "ok") return;
     const file = pfx.files[0];
     if (!file) { this.toast("Choose your digital ID file (.pfx or .p12)."); return; }
@@ -2354,13 +2711,71 @@ export class Reader {
   async #verifySignatures() {
     const tab = this.activeTab;
     if (!tab || !this.doc) return [];
-    const body = new FormData();
-    body.append("file", new Blob([await this.#fullBytes()], { type: "application/pdf" }), "file.pdf");
-    body.append("password", tab.password || "");
+    const body = await this.#about(tab);
+    if (!body) return [];
     const res = await fetch("/api/sign/verify", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
     return (await res.json()).signatures || [];
   }
+
+  /** What a request about ``tab``'s document sends: the id of the file on
+   *  this computer while that file holds what the tab shows (nothing is
+   *  uploaded then), else the document itself. null: nothing to send. */
+  async #about(tab, fields = {}) {
+    const body = new FormData();
+    if (this.isPristine(tab)) body.append("id", tab.fileId);
+    else {
+      const bytes = tab === this.activeTab ? await this.#fullBytes() : tab.bytes;  // (annotations not saved yet don't matter here)
+      if (!bytes) return null;
+      body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
+    }
+    body.append("password", tab.password || "");
+    for (const [k, v] of Object.entries(fields)) body.append(k, v);
+    return body;
+  }
+
+  /** A question the reader asks the server on its own about the shown
+   *  document. It is given up when the document is closed (the error then
+   *  has ``closed``) and after ``ms``: nothing waits for an answer for ever. */
+  async #ask(url, body, ms = 30000) {
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(), ms);
+    (this.asking ||= new Set()).add(stop);
+    try {
+      const res = await fetch(url, { method: "POST", body, headers: { "X-Pdfm-Token": this.token }, signal: stop.signal });
+      return { ok: res.ok, data: await res.json().catch(() => ({})) };
+    } catch (e) {
+      e.closed = !!stop.closed;
+      throw e;
+    } finally {
+      clearTimeout(timer);
+      this.asking.delete(stop);
+    }
+  }
+
+  /** Run ``fn`` once the shown document's first page is on screen and the
+   *  page has a quiet moment (not at all if another document is shown by
+   *  then): what isn't needed to show the file doesn't hold it up. */
+  #whenShown(fn, { now = false } = {}) {
+    const doc = this.doc, bus = this.eventBus;
+    let timer = 0, done = false;
+    const go = () => { if (doc === this.doc) fn(); };
+    const shown = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      bus.off("pagerendered", shown);
+      if (now) setTimeout(go, 0);  // (``now``: not waiting for a quiet moment)
+      else if (window.requestIdleCallback) requestIdleCallback(go, { timeout: 1500 }); else setTimeout(go, 100);
+    };
+    const view = this.pdfViewer.getPageView((this.pdfViewer.currentPageNumber || 1) - 1);
+    if (view?.renderingState === 3) { shown(); return; }  // (it's on screen already)
+    bus.on("pagerendered", shown);
+    timer = setTimeout(shown, 5000);  // (a first page that takes long to draw, or fails)
+  }
+
+  /** Resolves once the shown document's first page is on screen and the page is idle. */
+  shown() { return new Promise((resolve) => { if (this.doc) this.#whenShown(resolve); else resolve(); }); }
 
   /** A signed document says so (and whether the signatures hold) in a bar. */
   /** Form fields' names for screen readers: pdf.js leaves its inputs
@@ -2396,15 +2811,17 @@ export class Reader {
       // (Fields first: also after "Make it fillable" reloads the document.)
       if (fieldEntries(await doc.getFieldObjects()).length) { tab.formHint = "has-fields"; return; }
       if (tab.formHint === "show") { if (doc === this.doc) this.#showFormHint(tab); return; }
-      if (tab.formHint !== "checking" || !tab.bytes || tab.bytes.length > 30e6) { tab.formHint = "none"; return; }
-      const res = await this.#post("/api/form/detect", tab.bytes, tab, { pages: "1-2" });
-      if (!res.ok) { tab.formHint = "none"; return; }
-      const found = Object.values((await res.json()).fields || {}).flat();
+      // (A document that isn't a file on this computer is sent to be looked at: not a very big one.)
+      if (tab.formHint !== "checking" || !this.isPristine(tab) && (!tab.bytes || tab.bytes.length > 30e6)) { tab.formHint = "none"; return; }
+      const body = await this.#about(tab, { pages: "1-2" });
+      const res = body && await this.#ask("/api/form/detect", body);
+      if (!res?.ok) { tab.formHint = "none"; return; }
+      const found = Object.values(res.data.fields || {}).flat();
       tab.formHint = found.length >= 3 ? "show" : "none";
       if (tab.formHint === "show" && doc === this.doc && tab === this.activeTab) this.#showFormHint(tab);
       if (tab.formHint === "show") this.onFormHint?.(tab);
     } catch (e) {
-      tab.formHint = "none";
+      tab.formHint = e.closed ? null : "none";  // closed meanwhile (another tab shown): looked at again when it's back
     }
   }
 
@@ -2434,15 +2851,17 @@ export class Reader {
   async #checkSignatures() {
     const doc = this.doc, tab = this.activeTab;
     this.sigbar.hidden = true;
-    if (!doc) return;
-    // Every signature has a /ByteRange (pdf.js leaves signature fields out of
-    // its list of fields). A big file read in pieces isn't searched.
-    const bytes = tab?.bytes;
-    if (!bytes || doc !== this.doc) return;
-    if (!new TextDecoder("latin1").decode(bytes).includes("/ByteRange")) return;
+    if (!doc || !tab) return;
     try {
-      const list = await this.#verifySignatures();
-      if (doc !== this.doc || tab !== this.activeTab || !list.length) return;
+      // Every signature has a /ByteRange (pdf.js leaves signature fields out
+      // of its list of fields): the server looks for one before anything else
+      // ("quick"), in the file itself when it's on this computer.
+      const body = await this.#about(tab, { quick: "1" });
+      const res = body && doc === this.doc && await this.#ask("/api/sign/verify", body, 120000);
+      if (!res?.ok || doc !== this.doc || tab !== this.activeTab) return;
+      if (res.data.error) throw new Error(res.data.error);
+      const list = res.data.signatures || [];
+      if (!list.length) return;
       tab.signatures = list;
       const bad = list.filter((s) => s.status === "modified" || s.status === "invalid");
       const names = [...new Set(list.map((s) => s.signer).filter(Boolean))].join(", ");
@@ -2453,6 +2872,7 @@ export class Reader {
           + (list.every((s) => s.status === "valid") ? "The signer's identity is verified." : "The signer's identity isn't verified (their certificate isn't one this computer trusts).");
       this.sigbar.hidden = false;
     } catch (e) {
+      if (e.name === "AbortError" || doc !== this.doc) return;  // closed meanwhile, or no answer
       this.sigText.textContent = "This document is signed, but its signatures couldn't be checked: " + (e.message || e);
       this.sigbar.classList.add("bad");
       this.sigbar.hidden = false;
@@ -2491,8 +2911,11 @@ export class Reader {
     if (answer.startsWith("tab:")) {
       const tab = others.find((t) => "tab:" + t.id === answer);
       if (!tab) return;
-      source = tab.bytes ? { data: tab.bytes.slice() } : { url: tab.url, httpHeaders: { "X-Pdfm-Token": this.token }, length: tab.size || undefined,
-        rangeChunkSize: 1 << 20, disableAutoFetch: true, disableStream: true };
+      let bytes = tab.bytes;
+      if (!bytes) {
+        try { bytes = await this.#readAll(tab); } catch (e) { this.toast(`Couldn't read “${tab.name}”: ${e.message || e}`, 9000); return; }
+      }
+      source = { data: bytes.slice() };
       name = tab.name;
       password = tab.password;
     } else if (answer === "file") {
@@ -2611,6 +3034,7 @@ export class Reader {
     const buttons = [["cancel", "Cancel"], ["ok", "Place signature", true]];
     if (saved) buttons.splice(1, 0, ["saved", "Use saved signature"]);
     return this.#dialog("Sign", body, buttons).then(async (answer) => {
+      if (answer === "ok" && !drawn && saved) answer = "saved";  // (Enter with nothing drawn: the saved one)
       if (answer === "saved") return (await fetch(saved)).blob();
       if (answer !== "ok") return null;
       if (!drawn) { this.toast("Draw or type a signature first."); return null; }
@@ -2640,12 +3064,20 @@ export class Reader {
   }
 
   // ---- dialogs ----------------------------------------------------------------
-  #dialog(title, body, buttons) {
+  #dialog(title, body, buttons, { ready = null } = {}) {
     return new Promise((resolve) => {
+      // Enter in a box of the dialog presses the form's first submit button:
+      // that has to be the main one ("Open", not the "Cancel" before it), so
+      // where there is a main button the others close the dialog themselves.
+      const main = buttons.some(([, , primary]) => primary);
       const form = el("form", { method: "dialog" }, el("h3", {}, title), ...body,
-        el("div", { class: "actions" }, ...buttons.map(([value, label, primary]) =>
-          el("button", { value, class: primary ? "primary" : null, type: "submit" }, label))));
+        el("div", { class: "actions" }, ...buttons.map(([value, label, primary]) => (primary || !main
+          ? el("button", { value, class: primary ? "primary" : null, type: "submit" }, label)
+          : el("button", { value, type: "button", onclick: () => dialog.close(value) }, label)))));
       const dialog = el("dialog", { class: "rd-dialog" }, form);
+      // ``ready``: whether the main button can do its work yet; if not (Enter
+      // in a box before everything needed is given) the dialog stays open.
+      if (ready) form.addEventListener("submit", (e) => { if (!ready()) e.preventDefault(); });
       dialog.addEventListener("close", () => { resolve(dialog.returnValue); dialog.remove(); });
       dialog.addEventListener("cancel", () => { dialog.returnValue = "cancel"; });
       this.root.append(dialog);
@@ -3057,6 +3489,13 @@ export class Reader {
       ? el("textarea", { class: "rd-textedit", spellcheck: "true", "aria-label": label })
       : el("input", { type: "text", class: "rd-textedit", spellcheck: "true", "aria-label": label });
     field.value = value;
+    // Double-clicking a word selects the space after it too (Chromium on
+    // Windows), so typing a replacement swallowed the space: select the word.
+    field.addEventListener("dblclick", () => {
+      let { selectionStart: start, selectionEnd: end } = field;
+      while (end > start && /\s/.test(field.value[end - 1])) end--;
+      if (end !== field.selectionEnd) field.setSelectionRange(start, end);
+    });
     const box = el("div", { class: "rd-textedit-box" }, field, el("div", { class: "rd-textedit-hint" }, ...hint));
     if (look) {
       const lh = lineHeight || Math.round(look.size * 1.3 * 100) / 100;
@@ -3515,15 +3954,17 @@ export class Reader {
   async #currentBytes() {
     this.#finishEditing();
     if (!this.#changed()) return await this.#fullBytes();
-    return await this.doc.saveDocument();
+    return await this.#savedDocument(this.activeTab);
   }
 
-  /** The shown document's bytes; a file read in pieces is read in full now. */
+  /** The shown document's bytes; a file read in pieces is read in full now
+   *  (and rejects, saying why, when that can't be done). */
   async #fullBytes() {
     if (!this.bytes && this.doc) {
-      const tab = this.activeTab, data = await this.doc.getData();
-      this.bytes = data;
-      if (tab && !tab.bytes) tab.bytes = tab.original = data;
+      const tab = this.activeTab;
+      if (tab?.url) await this.#readAll(tab);
+      else if (tab && !tab.bytes) tab.bytes = tab.original = await bounded(this.doc.getData(), WHOLE_MS, "reading the document took too long");
+      if (tab === this.activeTab) this.bytes = tab.bytes;
     }
     return this.bytes;
   }
@@ -3542,7 +3983,8 @@ export class Reader {
     if (!tab.fileId) { await this.saveCopy(); return; }
     if (!tab.dirty && !this.#changed()) { this.toast("No changes to save", 1500); return; }
     const version = tab.version || 0;
-    const bytes = await this.#currentBytes();
+    let bytes;
+    try { bytes = await this.#currentBytes(); } catch (e) { this.toast("Could not save: " + (e.message || e), 9000, ["Save as…", () => this.saveCopy()]); return; }
     const put = (force) => fetch("/api/save/" + encodeURIComponent(tab.fileId), { method: "POST", body: bytes,
       headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/pdf", "X-Pdfm-Stamp": tab.stamp || "",
         ...(force ? { "X-Pdfm-Force": "1" } : {}) } });
@@ -3572,7 +4014,8 @@ export class Reader {
     await this.chain;  // a text change still on its way is included
     if (!this.doc) return;
     const tab = this.activeTab, version = tab.version || 0;
-    const bytes = await this.#currentBytes();
+    let bytes;
+    try { bytes = await this.#currentBytes(); } catch (e) { this.toast("Could not save a copy: " + (e.message || e), 9000); return; }
     await this.#saveBytes(bytes, this.#copyName(), () => this.#markSaved(tab, version), tab?.fileId);
   }
 
@@ -3618,8 +4061,8 @@ export class Reader {
     if (!page) return;
     e.preventDefault();
     // On a thumbnail, the menu acts on the selected pages if it's one of them.
-    const pages = thumb && this.selected.has(page) ? [...this.selected].sort((a, b) => a - b) : [page];
-    if (thumb && !this.selected.has(page)) this.#select([page]);
+    const pages = thumb && this.pickedPages.has(page) ? [...this.pickedPages].sort((a, b) => a - b) : [page];
+    if (thumb && !this.pickedPages.has(page)) this.#select([page]);
     const what = Reader.#pagesText(pages).replace(/^Page \d+$/, "this page");
     const item = (icon, label, run, keys = "") => {
       const b = el("button", { type: "button", role: "menuitem" });
@@ -3907,7 +4350,7 @@ export class Reader {
     if (open && !this.doc) return;
     this.scalebar.hidden = !open;
     this.scaleBtn.setAttribute("aria-expanded", String(open));
-    if (open) this.#refreshScale();
+    if (open) this.#refreshScale(true);
     else this.measureTool(null);
   }
 
@@ -3923,8 +4366,13 @@ export class Reader {
 
   #scaleKey() { return "pdfm-scale:" + this.#key(); }
 
-  /** Read the scale written on the current sheet (once per page), then show it. */
-  async #refreshScale() {
+  /** The current page's scale: what is known is shown at once. Reading it
+   *  from the sheet (once per page) waits until the page is drawn and has
+   *  been stayed on for a moment: the text is read by the same pdf.js worker
+   *  that draws the pages, and a page that is only passed isn't read at all.
+   *  ``now``: asked for (the scale bar was opened), so no waiting to see
+   *  whether the page is stayed on. */
+  #refreshScale(now = false) {
     const tab = this.activeTab, doc = this.doc;
     if (!tab || !doc) return;
     if (!tab.scales) {
@@ -3933,14 +4381,30 @@ export class Reader {
       if (saved && typeof saved === "object") for (const [k, v] of Object.entries(saved)) if (v === false || isScale(v)) tab.scales[k] = v;
     }
     tab.detected ||= new Map();
-    tab.stored ||= this.#storedScales(tab);
+    this.#showScale();
+    clearTimeout(this.scaleTimer);
     const n = this.pdfViewer.currentPageNumber || 1;
-    if (!tab.detected.has(n)) {
-      tab.detected.set(n, null);
+    if (tab.detected.has(n)) return;
+    // While measuring, a scale stored in the PDF is looked up at once (it's
+    // already here: one answer from the server for every page); reading the
+    // sheet's text still waits for the page to be drawn.
+    this.scaleTimer = setTimeout(() => this.#readScale(tab, doc, n, now), now || this.measureMode ? 0 : 400);
+  }
+
+  async #readScale(tab, doc, n, now = false) {
+    const here = () => doc === this.doc && tab === this.activeTab && (this.pdfViewer.currentPageNumber || 1) === n;
+    if (!here() || tab.detected.has(n) || tab.readingScale === n) return;
+    tab.readingScale = n;
+    try {
       // A scale the drawing program stored in the PDF is exact; the one
       // written on the sheet is read from its text.
+      tab.stored ||= this.#storedScales(tab);
       const stored = (await tab.stored)[n]?.[0];
-      if (doc !== this.doc) return;
+      if (!here()) return;
+      if (!stored && !now) {
+        await this.#drawn(n);
+        if (!here()) return;  // left meanwhile: read when it's come back to
+      }
       if (stored) {
         const near = measure.nearestScale(stored.ratio, stored.units);
         const label = stored.label || (near.off < 0.005 ? near.scale.label : `1:${+stored.ratio.toFixed(stored.ratio < 10 ? 2 : 0)}`);
@@ -3951,10 +4415,25 @@ export class Reader {
         const content = await page.getTextContent();
         const text = content.items.map((i) => (i.str || "") + (i.hasEOL ? "\n" : " ")).join("");
         tab.detected.set(n, measure.findScale(text));
-      } catch (e) { /* no text: no scale */ }
-      if (doc !== this.doc) return;
+      } catch (e) { tab.detected.set(n, null); /* no text: no scale */ }
+    } finally {
+      if (tab.readingScale === n) tab.readingScale = 0;
     }
-    this.#showScale();
+    if (doc === this.doc && tab === this.activeTab) this.#showScale();
+  }
+
+  /** Resolves when page ``n`` is drawn (at once if it is), or left for another page. */
+  #drawn(n) {
+    const view = this.pdfViewer.getPageView(n - 1);
+    if (!view || view.renderingState === 3) return Promise.resolve();
+    return new Promise((resolve) => {
+      const bus = this.eventBus;
+      const done = () => { bus.off("pagerendered", rendered); bus.off("pagechanging", done); clearTimeout(timer); resolve(); };
+      const rendered = (e) => { if (e.pageNumber === n) done(); };
+      const timer = setTimeout(done, 15000);  // (a page that can't be drawn)
+      bus.on("pagerendered", rendered);
+      bus.on("pagechanging", done);
+    });
   }
 
   /** {page: [viewport scale, biggest first]} stored in the PDF (see viewports.py). */
@@ -4175,7 +4654,7 @@ export class Reader {
     this.container.style.cursor = "";
     if (page) this.#drawMeasures(page);
     if (aimPage && aimPage !== page) this.#drawMeasures(aimPage);
-    if (mode) this.#geometry(this.pdfViewer.currentPageNumber || 1);  // start reading the lines now
+    if (mode) { this.#geometry(this.pdfViewer.currentPageNumber || 1); this.#refreshScale(true); }  // start reading the lines and the scale now
     this.root.classList.toggle("rd-measuring", !!mode);
     this.distanceBtn.setAttribute("aria-pressed", String(mode === "distance"));
     this.areaBtn.setAttribute("aria-pressed", String(mode === "area"));

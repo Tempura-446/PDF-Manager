@@ -741,7 +741,8 @@ def test_edited_words_keep_the_documents_own_font(tmp_path):
     # plain ASCII): a letter it lacks comes from elsewhere, never as a blank.
     report = []
     textedit.edit_text(src, out, [{"page": 1, "rect": word_box(src, 0, "today"), "text": "Straße"}], report=report)
-    assert report[0]["kind"] in ("installed", "similar") and font_at(out, 0, "Straße") != vera
+    assert report[0]["kind"] in ("installed", "similar") and font_at(out, 0, "ße") != vera
+    assert font_at(out, 0, "Straße") == vera  # only the letter it lacks: the others stay in the file's font
     report = []
     textedit.edit_text(src, out, [{"page": 1, "rect": word_box(src, 0, "Café"), "text": "Déjà"}], report=report)
     assert report[0]["kind"] != "same"  # no à in the file's copy

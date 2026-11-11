@@ -13,7 +13,11 @@
 Coordinates are points from the top left of the page as shown (its crop box
 and rotation applied), y downwards, like a picture of the page. Angles are
 degrees clockwise. Invisible text (the searchable layer of an OCRed scan)
-is read, marked ``hidden``.
+is read, marked ``hidden``. Text is read once as a reader sees it: a
+character drawn twice at nearly the same place is read once, text wholly off
+the page is left out, and so is a copy of the page's text that doesn't show
+(invisible, white on white, under a picture, clipped away, in a hidden
+layer); what is left out is in the page's ``dropped``.
 """
 
 import bisect
@@ -22,6 +26,7 @@ import io
 import math
 import re
 import statistics
+import unicodedata
 from pathlib import Path
 
 from pdfmanager import core
@@ -106,11 +111,11 @@ def metrics(family):
 
 class Char:
     __slots__ = ("text", "x0", "x1", "base", "size", "angle", "family", "bold", "italic",
-                 "color", "hidden", "link", "space", "box")
+                 "color", "hidden", "link", "space", "box", "raised", "origin")
 
     def style(self):
         return (self.family, round(self.size * 2) / 2, self.bold, self.italic, self.color,
-                self.hidden, self.link)
+                self.hidden, self.link, self.raised)
 
 
 class Line:
@@ -127,11 +132,82 @@ class Line:
         # A character may overlap the one before (ligatures, kerning); a
         # wide gap starts another piece (the next column, a value after its
         # label), placed on its own.
-        return (char.angle == self.angle and abs(char.base - self.base) <= 0.45 * size
-                and char.x0 >= self.x0 - 0.4 * size and char.x0 - self.x1 <= GAP * size)
+        if char.angle != self.angle or char.x0 < self.x0 - 0.4 * size:
+            return False
+        if char.x0 < self.x1 - 0.5 * size and self._covers(char):
+            return False  # set over the line's own text: another run (a page number on a footer)
+        if abs(char.base - self.base) <= 0.45 * size:
+            # Much smaller type on a baseline of its own (a date beside a
+            # masthead's title) is no nearer than its own size makes it.
+            apart = (abs(char.base - self.base) > 0.1 * size
+                     and min(self.size, char.size) < 0.6 * size and not self._shifted(char))
+            return char.x0 - self.x1 <= GAP * (min(self.size, char.size) if apart else size)
+        return self._shifted(char) == 1 or self._marked(char)
+
+    def _covers(self, char):
+        """Whether ``char`` lies over a character of the line other than its
+        last (over which an accent or a kerned letter may go): text set on
+        top of the line, not after it."""
+        if unicodedata.category(char.text[:1] or " ") in ("Mn", "Sk", "Lm"):
+            return False
+        width = max(char.x1 - char.x0, 0.05)
+        # One glyph read as several letters ("ffi" → f, f, i) puts them all
+        # in the same box: the letters sharing the last one's box are its own.
+        last = self.chars[-1]
+        same = [c for c in self.chars if abs(c.x0 - last.x0) < 0.05 and abs(c.x1 - last.x1) < 0.05]
+        if abs(char.x0 - last.x0) < 0.05 and abs(char.x1 - last.x1) < 0.05:
+            return False
+        for c in self.chars[:-1]:
+            if any(c is o for o in same):
+                continue
+            if (abs(c.base - char.base) <= 0.45 * max(c.size, char.size)
+                    and min(c.x1, char.x1) - max(c.x0, char.x0) > 0.3 * min(width, max(c.x1 - c.x0, 0.05))):
+                return True
+        return False
+
+    def _shifted(self, char):
+        """1 when ``char`` is a small raised character right after the
+        line's own type (a footnote mark, an exponent), -1 when a small
+        lowered one (the 2 of CO2), else 0. Small means clearly smaller than
+        the type it follows, and that type more than one letter (after a
+        drop capital comes the text, not a mark)."""
+        last = self.chars[-1]
+        gap = char.x0 - self.x1
+        if last.raised and abs(char.size - last.size) + abs(char.base - last.base) < 0.1 * last.size:
+            return last.raised if gap <= 0.3 * self.size else 0  # the mark's next figure
+        if last.raised or char.size > 0.86 * last.size or not -0.1 * last.size <= gap <= 0.3 * last.size:
+            return 0
+        if len(self.chars) < 2 or abs(self.chars[-2].size - last.size) > 0.05 * last.size:
+            return 0
+        rise = last.base - char.base
+        if 0.2 * last.size <= rise <= 0.75 * last.size and rise < 1.3 * char.size:
+            return 1
+        if -0.45 * last.size <= rise <= -0.08 * last.size:
+            return -1
+        return 0
+
+    def _marked(self, char):
+        """Whether the line so far is a raised mark that ``char``, in
+        larger type and lower, follows closely: a footnote's number before
+        its text."""
+        if len(self.chars) > 3 or any(c.size > 0.86 * char.size for c in self.chars):
+            return False
+        rise, gap = char.base - self.base, char.x0 - self.x1
+        return (0.2 * char.size <= rise <= 0.75 * char.size and rise < 1.3 * self.size
+                and -0.1 * char.size <= gap <= 0.3 * char.size)
 
     def add(self, char):
-        if not char.space and char.x0 - self.x1 > 0.25 * max(char.size, self.size):
+        shift = self._shifted(char)
+        if shift:
+            char.raised = shift
+            if char.x0 - self.x1 <= 0.12 * self.size:
+                char.space = False  # set against its word, however pdfium read the gap
+        elif self._marked(char):
+            for c in self.chars:
+                c.raised = 1
+        elif self.chars[-1].raised and char.x0 - self.x1 <= 0.12 * char.size:
+            char.space = False  # right after the mark: no space, as before it
+        if not shift and not char.space and char.x0 - self.x1 > 0.25 * max(char.size, self.size):
             char.space = True
         self.chars.append(char)
         self.x0, self.x1 = min(self.x0, char.x0), max(self.x1, char.x1)
@@ -265,6 +341,17 @@ class Block:
         if len(lines) > 1:
             gaps = [b.base - a.base for a, b in zip(lines, lines[1:])]
             self.spacing = statistics.median(gaps)
+        tol = max(1.5, 0.3 * size)
+        spread = lambda values: max(values) - min(values) if values else 0  # noqa: E731
+        lefts, rights = [ln.x0 for ln in lines], [ln.x1 for ln in lines]
+        centres = [(ln.x0 + ln.x1) / 2 for ln in lines]
+        centred = len(lines) > 1 and spread(centres) <= tol < min(spread(lefts), spread(rights))
+        width = max(ln.x1 - ln.x0 for ln in lines)
+        # Centred lines mostly shorter than the widest by a word or more are
+        # lines of their own (a programme, an address), each of them.
+        short = [ln.x1 - ln.x0 + 0.3 * size + nxt.first_word_width() <= width + 0.1 * size
+                 for ln, nxt in zip(lines, lines[1:])]
+        apart = centred and sum(short) * 2 >= len(short)
         paragraphs, cur = [], [lines[0]]
         for prev, line in zip(lines, lines[1:]):
             # A line ends its paragraph when the next line's first word would
@@ -275,16 +362,21 @@ class Block:
             indented = (line.x0 - prev.x0 > 0.8 * size and prev.x0 - self.x0 < 0.5 * size
                         and not LIST_ITEM.match(cur[0].text))
             resized = abs(line.main_size - prev.main_size) > 0.05 * prev.main_size
+            if centred:
+                # Centred lines: the next line's first word would have fit
+                # when the line is that much shorter than the widest; a
+                # sentence that goes on (a small letter, a quotation still
+                # open) is one paragraph wherever its lines end.
+                text = " ".join(ln.text for ln in cur)
+                fits = ((apart or prev.x1 - prev.x0 + 0.3 * size + line.first_word_width() <= width + 0.1 * size)
+                        and not (line.text[:1].islower() or text.count("“") > text.count("”")))
+                indented = False
             if fits or listed or indented or resized:
                 paragraphs.append(cur)
                 cur = []
             cur.append(line)
         paragraphs.append(cur)
         self.paragraphs = paragraphs
-        tol = max(1.5, 0.3 * size)
-        spread = lambda values: max(values) - min(values) if values else 0  # noqa: E731
-        lefts, rights = [ln.x0 for ln in lines], [ln.x1 for ln in lines]
-        centres = [(ln.x0 + ln.x1) / 2 for ln in lines]
         inner = [ln.x1 for p in paragraphs for ln in p[:-1]]
         if len(lines) == 1:
             self.align = "l"
@@ -364,7 +456,25 @@ def blocks_of(lines):
             if gap is not None and (best_gap is None or gap < best_gap):
                 best, best_gap = block, gap
         if best is None:
-            blocks.append(Block(line))
+            best = Block(line)
+            # Lines taken for a block that were paragraphs of one line each
+            # (set further apart than the lines of one paragraph): the last
+            # starts a block with the line that follows it closely.
+            for block in blocks[-40:]:
+                gap = line.base - block.lines[-1].base
+                if (len(block.lines) >= 2 and gap < 0.8 * block.spacing
+                        and block.lines[-1].base - block.lines[-2].base > 1.15 * gap):
+                    start = Block(block.lines[-1])
+                    if start.fits(line) is not None:
+                        block.lines.pop()
+                        block.x0 = min(ln.x0 for ln in block.lines)
+                        block.x1 = max(ln.x1 for ln in block.lines)
+                        if len(block.lines) == 1:
+                            block.spacing = None
+                        start.add(line)
+                        best = start
+                        break
+            blocks.append(best)
         else:
             best.add(line)
     return [b.finish() for b in blocks]
@@ -434,10 +544,14 @@ class Page:
     ``chars``, ``lines``, ``blocks``, ``links`` ([{"box", "uri" or "page"}]),
     ``images`` (boxes of the pictures on it), ``geometry``."""
 
-    def __init__(self, number, geometry, chars, links, images, rules=()):
+    def __init__(self, number, geometry, chars, links, images, rules=(), shapes=(), dropped=()):
         self.number, self.geometry = number, geometry
+        # (text, origin in the PDF's coordinates, size) of what was left out: a
+        # second copy of text, or text that is not on the page as shown.
+        self.dropped = list(dropped)
         self.width, self.height = geometry.width, geometry.height
         self.images = images
+        self.shapes = list(shapes)  # boxes of what is drawn with lines and fills
         self.chars, self.links = chars, links
         self.lines = lines_of(chars, rules)
         self.blocks = blocks_of(self.lines)
@@ -562,16 +676,47 @@ class Document:
             finally:
                 textpage.close()
             images = _images(page, geometry)
-            rules = _rules(page, geometry)
+            rules, shapes = _rules(page, geometry)
         finally:
             page.close()
+        chars, dropped = self._seen(index, geometry, chars)
         for link_index, link in enumerate(links):
             x0, y0, x1, y1 = link["box"]
             for c in chars:
                 cx, cy = (c.box[0] + c.box[2]) / 2, (c.box[1] + c.box[3]) / 2
                 if x0 - 1 <= cx <= x1 + 1 and y0 - 1 <= cy <= y1 + 1:
                     c.link = link_index
-        return Page(index + 1, geometry, chars, links, images, rules)
+        return Page(index + 1, geometry, chars, links, images, rules, shapes, dropped)
+
+    def _seen(self, index, geometry, chars):
+        """(the characters a reader sees once each, [(text, origin, size)] of the
+        others): a character drawn twice at (nearly) the same place once;
+        text wholly off the page left out; and text that doesn't show
+        (invisible, white on white, under a picture, cut off by a clipping
+        path or in a hidden layer) left out when it is a second copy of
+        text that does show. The page drawn with and without its text tells
+        what shows."""
+        drawn = chars
+        chars, dropped = _dedupe(chars)
+        if not chars:
+            return chars, dropped
+        shown = None
+        if self.has_background(index):
+            try:
+                shown = _shown(chars, self.render(index, SEEN_DPI), self.render(index, SEEN_DPI, True),
+                               SEEN_DPI / 72)
+            except Exception:  # pdfium couldn't draw the page: go by the text's own marks
+                shown = None
+        if shown is None:
+            shown = [not c.hidden for c in chars]
+        gone = _unseen(chars, shown, geometry.width, geometry.height)
+        dropped += [(c.text, c.origin, c.size) for k, c in enumerate(chars) if k in gone]
+        kept = [c for k, c in enumerate(chars) if k not in gone]
+        rest = _rest_of_copies(drawn, kept)
+        if rest:
+            dropped += [(c.text, c.origin, c.size) for c in drawn if id(c) in rest]
+            kept = [c for c in kept if id(c) not in rest]
+        return kept, dropped
 
     def size(self, index):
         """(width, height) of page ``index`` as shown."""
@@ -653,6 +798,7 @@ def _chars(textpage, geometry):
         px, py = geometry.point(ox.value, oy.value)
         c = Char()
         c.text, c.box, c.size, c.angle = ch, box, size, angle
+        c.origin = (ox.value, oy.value)  # in the PDF's own coordinates
         # From where the glyph starts (its origin) to where the next one
         # would (its advance), not its ink: text set at the same place starts
         # at the same origin, and a line is as wide as when it was set.
@@ -671,10 +817,155 @@ def _chars(textpage, geometry):
         c.family, c.bold, c.italic = fonts[key]
         c.color = tuple(min(255, v.value) for v in rgba[:3])
         c.hidden = mode in (3, 7) or rgba[3].value == 0
-        c.link, c.space = None, space
+        c.link, c.space, c.raised = None, space, 0  # raised: 1 a raised mark, -1 a lowered one
         space = False
         chars.append(c)
     return chars
+
+
+SEEN_DPI = 72  # the page drawn to tell which text shows
+
+
+LIGATURE = 3  # letters one glyph can stand for ("ffl"): neighbours that close are never a copy
+
+
+def _dedupe(chars):
+    """(the characters without a second one of the same text drawn at
+    nearly the same place (bold made by drawing twice, overprinting, a copy
+    laid over its original), [(text, origin, size)] of those left out). Of two,
+    the one that shows is kept."""
+    kept, grid, dropped = [], {}, []
+    order = []  # where in the page's text each kept character came
+    for index, c in enumerate(chars):
+        key = (c.text, c.angle)
+        gx, gy = int(c.x0 // 8), int(c.base // 8)
+        tol_x = min(0.35 * max(c.x1 - c.x0, 0.3 * c.size), 0.2 * c.size, 7.5) + 0.05
+        tol_y = min(0.1 * c.size, 7.5) + 0.05
+        twin = None
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for k in grid.get((key, gx + dx, gy + dy), ()):
+                    o = kept[k]
+                    if index - order[k] <= LIGATURE:
+                        continue  # one glyph read as several letters at one place ("ff" → f, f)
+                    if (abs(o.x0 - c.x0) <= tol_x and abs(o.base - c.base) <= tol_y
+                            and abs(o.size - c.size) <= 0.1 * c.size):
+                        twin = k
+                        break
+        if twin is None:
+            grid.setdefault((key, gx, gy), []).append(len(kept))
+            kept.append(c)
+            order.append(index)
+            continue
+        if kept[twin].hidden and not c.hidden:
+            kept[twin], c = c, kept[twin]
+            c.space, kept[twin].space = kept[twin].space, c.space
+        dropped.append((c.text, c.origin, c.size))
+    return kept, dropped
+
+
+def _rest_of_copies(drawn, kept):
+    """ids of characters left from a copy whose most part was left out (a
+    footer drawn twice, the copy's tail hidden under a panel or meeting the
+    original, its first letters "www.p" still showing): a run of text, as
+    drawn, of which 60% or more is gone loses the rest too, when that rest
+    is found in the text kept elsewhere."""
+    left = {id(c) for c in kept}
+    rest = set()
+    for run in _runs(drawn):
+        if len(run) < 6:
+            continue
+        stays = [drawn[i] for i in run if id(drawn[i]) in left]
+        if not stays or len(stays) > 0.4 * len(run):
+            continue
+        elsewhere = _squeeze("".join(c.text for c in kept if not any(c is s for s in stays)))
+        if _squeeze("".join(c.text for c in stays)) in elsewhere:
+            rest.update(id(c) for c in stays)
+    return rest
+
+
+def _runs(chars):
+    """[[indices]] of the characters as drawn, cut where the text jumps (a
+    new line, a gap, going back): the runs the page sets one after another."""
+    runs, run = [], []
+    for i, c in enumerate(chars):
+        if run:
+            p = chars[run[-1]]
+            if (c.angle != p.angle or abs(c.base - p.base) > 0.3 * max(c.size, p.size)
+                    or c.x0 < p.x0 - 0.3 * c.size or c.x0 - p.x1 > 1.5 * max(c.size, p.size)):
+                runs.append(run)
+                run = []
+        run.append(i)
+    if run:
+        runs.append(run)
+    return runs
+
+
+def _shown(chars, full, bare, scale):
+    """[whether each character shows]: whether the page drawn with its text
+    (``full``) differs from it drawn without (``bare``) where it is."""
+    from PIL import ImageChops
+
+    diff = ImageChops.difference(full, bare)
+    red, green, blue = diff.split()
+    diff = ImageChops.lighter(ImageChops.lighter(red, green), blue)
+    w, h = diff.size
+    out = []
+    for c in chars:
+        x0, y0, x1, y1 = c.box
+        if x1 - x0 < 0.2 or y1 - y0 < 0.2:
+            out.append(True)  # a glyph without an outline: nothing to tell by
+            continue
+        box = (max(0, int(x0 * scale)), max(0, int(y0 * scale)),
+               min(w, math.ceil(x1 * scale)), min(h, math.ceil(y1 * scale)))
+        out.append(box[2] > box[0] and box[3] > box[1] and diff.crop(box).getextrema()[1] >= 24)
+    return out
+
+
+def _squeeze(text):
+    return re.sub(r"[\W_]+", "", text.lower())
+
+
+def _unseen(chars, shown, width, height):
+    """Indices of the characters to leave out: those wholly off the page, and
+    runs of characters that don't show (drawn one after the other) that are
+    a copy of text that does, when some text on the page shows. Text that
+    doesn't show and is not a copy (the recognised text over a scan) stays."""
+    gone = set()
+    for k, c in enumerate(chars):
+        x0, y0, x1, y1 = c.box
+        if x1 <= 0 or y1 <= 0 or x0 >= width or y0 >= height:
+            gone.add(k)
+    visible = [c for k, c in enumerate(chars) if shown[k] and k not in gone]
+    if not visible:
+        return gone
+    seen = _squeeze("".join(c.text for c in visible))
+    k, n = 0, len(chars)
+    while k < n:
+        if shown[k] or k in gone:
+            k += 1
+            continue
+        end = k
+        while end < n and not shown[end] and end not in gone:
+            end += 1
+        pieces, piece = [], [chars[k]]
+        for c in chars[k + 1:end]:  # the run in its lines
+            last = piece[-1]
+            if abs(c.base - last.base) > 0.5 * max(c.size, last.size) or c.x0 < last.x0 - 0.4 * c.size:
+                pieces.append(piece)
+                piece = []
+            piece.append(c)
+        pieces.append(piece)
+        total = matched = 0
+        for piece in pieces:
+            text = _squeeze("".join(c.text for c in piece))
+            total += len(text)
+            if text and text in seen:
+                matched += len(text)
+        if total >= 4 and matched >= 0.8 * total:
+            gone.update(range(k, end))
+        k = end
+    return gone
 
 
 def _images(page, geometry, smallest=24):
@@ -697,24 +988,25 @@ def _images(page, geometry, smallest=24):
 
 
 def _rules(page, geometry):
-    """Upright lines drawn on a page (table borders, the sides of boxes):
-    [(x, top, bottom)]."""
+    """(upright lines drawn on a page (table borders, the sides of boxes):
+    [(x, top, bottom)], the boxes of everything drawn with lines and fills)."""
     import pypdfium2 as pdfium
     import pypdfium2.raw as raw
 
-    rules = []
+    rules, shapes = [], []
     for obj in page.get_objects(filter=[raw.FPDF_PAGEOBJ_PATH], max_depth=3):
         try:
             x0, y0, x1, y1 = geometry.box(*obj.get_bounds())
         except pdfium.PdfiumError:
             continue
+        shapes.append((x0, y0, x1, y1))
         if y1 - y0 < 4:
             continue
         if x1 - x0 <= 3:
             rules.append(((x0 + x1) / 2, y0, y1))
         elif raw.FPDFPath_CountSegments(obj) in (4, 5):  # a rectangle: its two sides
             rules += [(x0, y0, y1), (x1, y0, y1)]
-    return rules
+    return rules, shapes
 
 
 _SAFE_URI = re.compile(r"^(https?|mailto|ftp|tel):", re.I)

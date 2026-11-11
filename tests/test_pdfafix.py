@@ -526,3 +526,15 @@ def test_pdfa_1_gets_the_list_of_glyphs_a_cid_subset_needs(tmp_path):
     bits = "".join(f"{byte:08b}" for byte in listed)
     assert bits[:glyphs] == "1" * glyphs and "1" not in bits[glyphs:]
     assert core.extract_text(out).strip() == "Hello"
+
+
+def test_protecting_a_pdfa_file_drops_its_pdfa_claim(tmp_path):
+    """PDF/A forbids encryption: a protected copy must not still say it is PDF/A."""
+    pdfa = pdfafix.convert(picture_pdf(tmp_path / "scan.pdf"), tmp_path / "pdfa.pdf", level="2")
+    assert archive.pdfa_level(pdfa) == "2B"
+    locked = core.encrypt(pdfa, tmp_path / "locked.pdf", "secret")
+    with pikepdf.open(locked, password="secret") as pdf:
+        meta = bytes(pdf.Root.Metadata.read_bytes()).decode("utf-8", "replace") if "/Metadata" in pdf.Root else ""
+    assert "pdfaid:part" not in meta
+    from pdfmanager import filefacts
+    assert not filefacts.facts(locked, password="secret").get("pdfa")

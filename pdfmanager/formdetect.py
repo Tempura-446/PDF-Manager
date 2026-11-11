@@ -459,7 +459,50 @@ def _reading_turn(page, chars):
     return best
 
 
-def _detect_page(page, textpage):
+# The reader's quick look at a file it has just opened (nobody asked): pages
+# that can't be a form to fill in aren't traced at all. A drawing sheet is
+# far bigger than any form, and a page with this many straight strokes is a
+# drawing or a dense table of figures; tracing either takes a minute or more.
+QUICK_MAX_SIDE = 1500      # points: just over the long side of A3 and Tabloid
+QUICK_MAX_STROKES = 12000
+
+
+def _blank_pictures(page, image, to_px):
+    """Paint the page's photos and screenshots white before lines are
+    looked for: the edges in a picture are not boxes to write in (found on
+    Windows: a brochure and a software guide were offered "Make it
+    fillable" for boxes inside their pictures). A picture filling most of
+    a page with no text of its own to read is its scan, and is left alone;
+    a cover photo behind printed text is not."""
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as raw
+    from PIL import ImageDraw
+
+    printed = False  # text people read (a scan's recognised text is invisible)
+    for obj in page.get_objects(filter=[raw.FPDF_PAGEOBJ_TEXT], max_depth=3):
+        if raw.FPDFTextObj_GetTextRenderMode(obj.raw) not in (raw.FPDF_TEXTRENDERMODE_INVISIBLE,
+                                                               raw.FPDF_TEXTRENDERMODE_CLIP):
+            printed = True
+            break
+    width, height = image.size
+    draw = ImageDraw.Draw(image)
+    for obj in page.get_objects(filter=[raw.FPDF_PAGEOBJ_IMAGE], max_depth=3):
+        try:
+            left, bottom, right, top = obj.get_bounds()
+        except pdfium.PdfiumError:
+            continue
+        xs, ys = zip(to_px(left, bottom), to_px(right, top))
+        box = (max(min(xs), 0), max(min(ys), 0), min(max(xs), width), min(max(ys), height))
+        if box[2] <= box[0] or box[3] <= box[1]:
+            continue
+        if not printed and (box[2] - box[0]) * (box[3] - box[1]) >= 0.6 * width * height:
+            continue  # the page's own scan
+        draw.rectangle(box, fill=255)
+
+
+def _detect_page(page, textpage, quick=False):
+    if quick and max(page.get_size()) > QUICK_MAX_SIDE:
+        return []
     chars = _chars(textpage)
     turn = _reading_turn(page, chars)
     to_px, to_pdf = _transform(page, turn)
@@ -467,10 +510,14 @@ def _detect_page(page, textpage):
     extra = (turn - page.get_rotation()) % 360
     image = page.render(scale=SCALE, grayscale=True, rotation=extra).to_pil().convert("L")
     page_w, page_h = image.size
+    if quick:
+        _blank_pictures(page, image, to_px)
     ink = _Ink(image)
     words = _words(chars, to_px)
     chars = [(box, ch) for w in words for ch, box in zip(w[4], w[5])]
     flat, upright = _lines(image, 5 * pt)
+    if quick and len(flat) + len(upright) > QUICK_MAX_STROKES:
+        return []
     # How slanted the page is (a scan): rise per pixel of the long lines.
     slants = sorted((s[5] - s[4] + 1 - s[3]) / (s[2] - s[1]) for s in flat if s[2] - s[1] > 100 * pt)
     slant = slants[len(slants) // 2] if slants else 0
@@ -629,10 +676,11 @@ def _named(fields, taken):
     return fields
 
 
-def detect(path, password=None, pages=None):
+def detect(path, password=None, pages=None, quick=False):
     """Fields a flat form should have: {1-based page: [{"rect": [x0, y0, x1, y1],
     "type": text/multiline/checkbox/signature/radio, "name", "value" (radio
-    buttons)}]}. ``pages`` limits it to some pages (1-based numbers)."""
+    buttons)}]}. ``pages`` limits it to some pages (1-based numbers);
+    ``quick`` leaves out pages that would take long and can't be forms."""
     import pypdfium2 as pdfium
 
     if not core.open_pdf(path, password).pages:
@@ -652,7 +700,7 @@ def detect(path, password=None, pages=None):
                 page = doc[number - 1]
                 textpage = page.get_textpage()
                 try:
-                    fields = _detect_page(page, textpage)
+                    fields = _detect_page(page, textpage, quick)
                 finally:
                     textpage.close()
                     page.close()

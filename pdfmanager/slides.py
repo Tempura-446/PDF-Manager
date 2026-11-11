@@ -236,12 +236,17 @@ _LINK_COLOR = ('<a:extLst><a:ext uri="{A12FA001-AC4F-418D-AE19-62706E023703}">'
 
 
 def _run(text, char, scale, link_rids, lang):
-    size = max(100, min(400000, int(round(char.size * scale * 100))))
+    # A raised mark (a footnote's) is superscript and a lowered one subscript,
+    # which PowerPoint shows at two thirds of the run's size.
+    raised = getattr(char, "raised", 0)
+    size = max(100, min(400000, int(round(char.size * (1.5 if raised else 1) * scale * 100))))
     alpha = '<a:alpha val="0"/>' if char.hidden else ""
     fill = f'<a:solidFill><a:srgbClr val="{layout.hex_color(char.color)}">{alpha}</a:srgbClr></a:solidFill>'
     face = quoteattr(char.family)
     link = link_rids.get(char.link, "")
     attrs = f'{lang}sz="{size}" b="{int(char.bold)}" i="{int(char.italic)}" dirty="0"'
+    if raised:
+        attrs += ' baseline="30000"' if raised > 0 else ' baseline="-25000"'
     return (f'<a:r><a:rPr {attrs}>{fill}<a:latin typeface={face}/><a:ea typeface={face}/>'
             f'<a:cs typeface={face}/>{link}</a:rPr><a:t>{_x(text)}</a:t></a:r>')
 

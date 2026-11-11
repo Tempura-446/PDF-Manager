@@ -4,6 +4,40 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.22.0
+
+- Editing text really replaces it. The old words are taken out of the
+  page and the new ones written in their place, instead of being painted
+  over: search finds what you wrote and not what was there, gradients,
+  highlights and underlines behind the words survive, outlined and
+  see-through text keeps its look, and a right-aligned number keeps its
+  right edge. A change to one line changes that line only. Letters the
+  document's font lacks use a matching font (serif for serif), and any
+  that no font can draw are named. Every edit is checked afterwards; one
+  that can't be done safely in place falls back to the old way and says
+  so.
+- PDF to Word follows designed pages better: a pull quote or picture
+  inside a column no longer splits the columns around it, footnote marks,
+  superscripts and subscripts (1st, m², CO₂) stay in their sentence, the
+  labels of charts and diagrams come out as tidy lines of text, numbered
+  headings are told from numbered clauses, and Chinese, Japanese and
+  Korean lines join without stray spaces.
+- OCR reads three-column pages column by column, keeps the rows of a
+  table on a crooked scan together, keeps the spaces between words on
+  grey paper, puts back spaces where Chinese meets English, and no longer
+  reads the blanks of a form as text.
+- The reader opens files faster (a 27 MB scan shows its first page in
+  about half the time) and big files are read in pieces while the first
+  page is drawn. Page thumbnails are made only when the Pages panel is
+  open, and only for the pages in view. Opening a file no longer sends
+  it back to ZPDF's own server for checks.
+- Enter presses the main button of a reader dialog: it used to press the
+  first, which cancelled the password prompt and deleted a link in the
+  link editor. Enter after typing a password now opens the file.
+- A big file that is moved, deleted or changed by another program while
+  it is open no longer stops the reader: ZPDF says what happened and the
+  tab can be closed.
+
 ## 0.21.0
 
 - Search a folder by meaning. Ask "how much do I owe" and Search PDFs

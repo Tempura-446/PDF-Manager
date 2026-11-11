@@ -15,13 +15,17 @@ just that piece, so the letters keep their font, spacing and everything
 else exactly, and nothing is left behind underneath. A rule moves by
 drawing it in a shifted copy of the coordinates (``q ... cm ... Q``).
 
-The paragraph that was rewritten is taken out of the drawing the same way
-(its words replaced by an empty move of the same width, so whatever comes
-after on the line stays put). When that isn't possible for sure (its words
-share a piece of text with others, sit inside a form XObject, or use a
-font whose letter widths can't be read), the old way is kept: the words
-are covered with the colour around them, and the text below only moves
-down, never up under the cover.
+The words that were changed are taken out of the drawing itself, glyph by
+glyph: a piece of text (one Tj or TJ) they share with other words is
+written again without them, every other glyph at its place and the pen
+left where it was, so what follows on the page stays put. New words are
+written at that place in the drawing (see :class:`Flow`), so they keep the
+old ones' colour, outline, clipping and tag. Text inside a form XObject is
+changed in a copy of the form made for that one drawing of it. When any
+of this isn't possible for sure (a font whose letter widths can't be read,
+letters drawn twice at one spot), nothing is changed here and the caller
+covers the old words instead; the text below then only moves down, never
+up under the cover.
 
 When the text below would be pushed past the bottom margin (or into
 something that stays), nothing moves and the change says so: no words are
@@ -33,7 +37,8 @@ room, as linked text boxes do.
 import math
 import statistics
 
-from pypdf.generic import ArrayObject, ContentStream, DecodedStreamObject, FloatObject, NameObject
+from pypdf.generic import (ArrayObject, ByteStringObject, ContentStream, DecodedStreamObject, DictionaryObject,
+                           FloatObject, NameObject, TextStringObject)
 
 IDENTITY = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 PAINT = {b"S", b"s", b"f", b"F", b"f*", b"B", b"B*", b"b", b"b*", b"n"}
@@ -43,6 +48,9 @@ TEXT_OPS = {b"Tj", b"TJ", b"'", b'"'}
 RULE = 3.0      # points: a path no taller than this (and wider than tall) is a rule
 COVER_PAD = 2.5  # points: how far an earlier change's cover box reaches past its words
 NEAR = 1.0      # points: a letter pdfium reads and one worked out here are the same letter
+SAME_GLYPH = 0.6  # points: the same, when single letters (not whole lines) are matched up
+TWICE = 0.35    # points: two letters drawn this close are one drawn twice (a shadow, a false bold)
+FORMS = 60      # form XObjects on a page: past this their text isn't looked into
 MARGIN = 72.0   # points: the bottom margin of a page whose text ends higher up
 
 
@@ -55,6 +63,14 @@ def _mul(m, n):
 
 def _at(m, x, y):
     return x * m[0] + y * m[2] + m[4], x * m[1] + y * m[3] + m[5]
+
+
+def _inv(m):
+    a, b, c, d, e, f = m
+    det = a * d - b * c
+    if abs(det) < 1e-12:
+        return None
+    return (d / det, -b / det, -c / det, a / det, (c * f - d * e) / det, (b * e - a * f) / det)
 
 
 def _nums(operands):
@@ -136,11 +152,21 @@ class Content:
     """The page's own drawing (not inside form XObjects), read operator by
     operator: where each piece of text, path and picture is on the page."""
 
-    def __init__(self, page, pdf):
-        contents = page.get_contents()
-        self.ops = ContentStream(contents, pdf).operations if contents is not None else []
+    def __init__(self, page, pdf, form=None, ctm=IDENTITY, do=None):
+        """The page's drawing, or that of ``form`` (a form XObject the page
+        draws at operator ``do[0]`` under the name ``do[1]``, with ``ctm``
+        the transformation its drawing starts in)."""
+        self.form, self.do, self.base = form, do, ctm
         resources = page.get("/Resources")
+        if form is None:
+            contents = page.get_contents()
+            self.ops = ContentStream(contents, pdf).operations if contents is not None else []
+        else:
+            self.ops = ContentStream(form, pdf).operations
+            if form.get("/Resources") is not None:
+                resources = form.get("/Resources")
         resources = resources.get_object() if resources is not None else {}
+        self.resources = resources
         fonts = resources.get("/Font")
         self.fonts = fonts.get_object() if fonts is not None else {}
         xobjects = resources.get("/XObject")
@@ -149,17 +175,27 @@ class Content:
         self.shows = []   # {i, op, glyphs: [(x, y, space)], rise, m (Tm x CTM), fs, th, tx, sure}
         self.paths = []   # {start, end, box, fill, segments, rect, ctm}
         self.things = []  # pictures and forms: their boxes
+        self.forms = []   # (operator index, name, the form, the transformation it's drawn in)
+        self.fonts_by_state = {}  # ("gs", name) -> the font a graphics state sets
         self._walk()
+
+    def font(self, name):
+        """The font dictionary a piece of text is drawn with (None if unknown)."""
+        if isinstance(name, tuple):
+            return self.fonts_by_state.get(name)
+        return self.fonts.get(name) if name is not None else None
 
     def _font(self, name):
         if name not in self._info:
-            self._info[name] = _FontInfo(self.fonts.get(name))
+            self._info[name] = _FontInfo(self.font(name))
         return self._info[name]
 
     def _walk(self):
-        ctm, stack = IDENTITY, []
-        ts = {"Tc": 0.0, "Tw": 0.0, "Th": 1.0, "TL": 0.0, "font": None, "fs": 0.0, "rise": 0.0}
+        ctm, stack = self.base, []
+        ts = {"Tc": 0.0, "Tw": 0.0, "Th": 1.0, "TL": 0.0, "font": None, "fs": 0.0, "rise": 0.0, "fill": []}
         tm = tlm = IDENTITY
+        lx = 0.0  # how far the pen is along the line from where the line began (text space)
+        mc = []   # the marked-content sequences open here: [{i, operands, shows}]
         path, path_start, segments, rects, clip = [], None, 0, 0, False
         for i, (operands, op) in enumerate(self.ops):
             if op == b"q":
@@ -173,6 +209,26 @@ class Content:
                     ctm = _mul(tuple(m), ctm)
             elif op == b"BT":
                 tm = tlm = IDENTITY
+                lx = 0.0
+            elif op in (b"BMC", b"BDC"):
+                mc.append({"i": i, "operands": operands, "shows": []})
+            elif op == b"EMC":
+                if mc:
+                    mc.pop()
+            elif op == b"gs" and operands:
+                # A graphics state can set the font too: /Font [font size].
+                states = self.resources.get("/ExtGState")
+                state = states.get_object().get(operands[0]) if states is not None else None
+                entry = state.get_object().get("/Font") if state is not None else None
+                size = _nums(entry[1:2]) if entry is not None and len(entry) == 2 else None
+                if size:
+                    key = ("gs", str(operands[0]))
+                    self.fonts_by_state[key] = entry[0]
+                    ts["font"], ts["fs"], ts["font_set"] = key, size[0], [(operands, op)]
+            elif op in (b"g", b"rg", b"k", b"cs"):
+                ts["fill"] = [(operands, op)]
+            elif op in (b"sc", b"scn"):
+                ts["fill"] = [f for f in ts["fill"] if f[1] == b"cs"] + [(operands, op)]
             elif op in (b"Tc", b"Tw", b"Tz", b"TL", b"Ts"):
                 v = _nums(operands)
                 if v:
@@ -180,20 +236,26 @@ class Content:
                     ts[key] = v[0] / 100 if op == b"Tz" else v[0]
             elif op == b"Tf" and len(operands) == 2:
                 ts["font"] = operands[0]
+                ts["font_set"] = None
                 v = _nums(operands[1:])
                 ts["fs"] = v[0] if v else 0.0
+            elif op == b"Tf" and len(operands) == 1 and _nums(operands):
+                ts["fs"] = _nums(operands)[0]  # no font named: readers take the size alone
             elif op in (b"Td", b"TD"):
                 v = _nums(operands)
                 if v and len(v) == 2:
                     if op == b"TD":
                         ts["TL"] = -v[1]
                     tm = tlm = _mul((1, 0, 0, 1, v[0], v[1]), tlm)
+                    lx = 0.0
             elif op == b"Tm":
                 v = _nums(operands)
                 if v and len(v) == 6:
                     tm = tlm = tuple(v)
+                    lx = 0.0
             elif op == b"T*":
                 tm = tlm = _mul((1, 0, 0, 1, 0, -ts["TL"]), tlm)
+                lx = 0.0
             elif op in TEXT_OPS:
                 if op in (b"'", b'"'):
                     if op == b'"':
@@ -201,7 +263,12 @@ class Content:
                         if v and len(v) == 2:
                             ts["Tw"], ts["Tc"] = v
                     tm = tlm = _mul((1, 0, 0, 1, 0, -ts["TL"]), tlm)
-                tm = self._show(i, op, operands, ts, tm, ctm)
+                    lx = 0.0
+                tm = self._show(i, op, operands, ts, tm, ctm, tlm, lx)
+                lx += self.shows[-1]["tx"]
+                self.shows[-1]["mc"] = tuple(mc)
+                for sequence in mc:
+                    sequence["shows"].append(self.shows[-1])
             elif op in BUILD:
                 if path_start is None:
                     path_start, path, segments, rects, clip = i, [], 0, 0, False
@@ -230,6 +297,7 @@ class Content:
                 if obj is not None and obj.get("/Subtype") == "/Form":
                     bbox = _nums(obj.get("/BBox", [0, 0, 1, 1])) or [0, 0, 1, 1]
                     m = _mul(tuple(_nums(obj.get("/Matrix", IDENTITY)) or IDENTITY), ctm)
+                    self.forms.append((i, operands[0], obj, m))
                     corners = [_at(m, x, y) for x in (bbox[0], bbox[2]) for y in (bbox[1], bbox[3])]
                 else:
                     corners = [_at(m, x, y) for x in (0, 1) for y in (0, 1)]
@@ -242,7 +310,7 @@ class Content:
             elif op == b"sh":
                 self.things.append((-1e9, -1e9, 1e9, 1e9))  # a shading fills what's clipped: assume all
 
-    def _show(self, i, op, operands, ts, tm, ctm):
+    def _show(self, i, op, operands, ts, tm, ctm, tlm=IDENTITY, lx=0.0):
         """Follow the pen through one piece of text; the text matrix after it."""
         info = self._font(ts["font"])
         fs, th = ts["fs"], ts["Th"]
@@ -251,6 +319,7 @@ class Content:
             items = [items]
         start = _mul(tm, ctm)
         glyphs, tx = [], 0.0
+        codes, txs, advs = [], [], []
         for item in items:
             if isinstance(item, (int, float)):
                 tx += -float(item) / 1000 * fs * th
@@ -263,9 +332,16 @@ class Content:
                 space = code in info.spaces
                 glyphs.append((x, y, space))
                 w = info.width(code) / 1000 * fs + ts["Tc"] + (ts["Tw"] if info.size == 1 and code == b" " else 0)
+                codes.append(code)
+                txs.append(tx)
+                advs.append(w * th)
                 tx += w * th
         self.shows.append({"i": i, "op": op, "glyphs": glyphs, "rise": ts["rise"], "m": start, "fs": fs,
-                           "th": th, "tx": tx, "sure": info.sure, "operands": operands})
+                           "th": th, "tx": tx, "sure": info.sure, "operands": operands,
+                           "codes": codes, "txs": txs, "advs": advs, "tlm": tlm, "lx": lx, "ctm": ctm,
+                           "font": ts["font"], "font_set": ts.get("font_set"),
+                           "Tc": ts["Tc"], "Tw": ts["Tw"], "fill": ts["fill"],
+                           "info": info, "layer": self})
         return _mul((1, 0, 0, 1, tx, 0), tm)
 
 
@@ -326,7 +402,12 @@ class Flow:
         self.page, self.writer, self.textpage, self.covers = page, writer, textpage, covers
         self.crop = crop  # the page's visible box, (x0, y0, x1, y1)
         self._letters = self._content = None
-        self.removed, self.dropped = set(), set()  # show op indices; path starts
+        self._forms, self._index, self._hidden = None, {}, None
+        self.edits = {}       # (layer, show op index) -> {show, els, shift, gone}: letters changed in place
+        self.dropped = set()  # path starts
+        self.orphans = []     # new words that couldn't be written in place: drawn after everything else
+        self.reshaped = {}    # operator index -> new operands: an underline or highlight that follows its words
+        self.retag = {}       # (layer, operator index) -> new operands: a tag's replacement text, changed with its line
         self.rises, self.moves = {}, {}  # show op index -> page dy; path start -> page dy
         self.annots = []  # (box, dy)
         self.moved_letters = {}  # pdfium letter index -> page dy
@@ -347,11 +428,428 @@ class Flow:
                 self._content = False
         return self._content
 
+    # -- changing letters where they are drawn ---------------------------------------------
+    #
+    # A piece of text (one Tj or TJ) is a row of glyphs, each at a known
+    # place along the line. A change keeps that row and says what becomes
+    # of each glyph: it stays, goes, or moves along the line; and new glyphs
+    # (in the same font) or whole new runs (in another) come in between.
+    # The piece is then written again as one TJ that puts every glyph at its
+    # place and ends with the pen exactly where it ended before, so nothing
+    # after it on the page moves. Because the new words are written where
+    # the old ones were, they keep everything that applied to those:
+    # colour, outline or see-through drawing, clipping, and the tag of a
+    # tagged PDF.
+
+    def form_layers(self):
+        """The drawings of the form XObjects the page draws: [Content]."""
+        if self._forms is None:
+            self._forms = []
+            content = self.content
+            if content and len(content.forms) <= FORMS:
+                for i, name, form, m in content.forms:
+                    try:
+                        self._forms.append(Content(self.page, self.writer, form=form, ctm=m, do=(i, name)))
+                    except Exception:  # noqa: BLE001 - a form pypdf can't read: its text stays as it is
+                        continue
+        return self._forms
+
+    def _glyphs_of(self, layer):
+        index = self._index.get(id(layer))
+        if index is None:
+            index = self._index[id(layer)] = {}
+            for show in layer.shows:
+                for k, g in enumerate(show["glyphs"]):
+                    if not g[2]:
+                        index.setdefault(math.floor(g[1]), []).append((g[0], g[1], show, k))
+        return index
+
+    def _edit(self, show):
+        key = (id(show["layer"]), show["i"])
+        if key not in self.edits:
+            self.edits[key] = {"show": show, "els": [("g", k) for k in range(len(show["glyphs"]))],
+                               "shift": {}, "gone": set()}
+        return self.edits[key]
+
+    def _is_gone(self, show, k):
+        edit = self.edits.get((id(show["layer"]), show["i"]))
+        return edit is not None and k in edit["gone"]
+
+    @staticmethod
+    def _editable(show):
+        return bool(show["sure"] and show["fs"] and show["th"] and math.hypot(show["m"][0], show["m"][1]))
+
+    def _near(self, layers, ox, oy):
+        near = []
+        for layer in layers:
+            index = self._glyphs_of(layer)
+            row = math.floor(oy)
+            for bucket in (row - 1, row, row + 1):
+                for x, y, show, k in index.get(bucket, ()):
+                    d = math.hypot(x - ox, y - oy)
+                    if d < SAME_GLYPH and not self._is_gone(show, k):
+                        near.append((d, show, k))
+        near.sort(key=lambda t: t[0])
+        return near
+
+    def glyph(self, letter):
+        """Where the letter (one of textedit's) is drawn: (piece of text,
+        place in it), or None when it isn't found, or isn't found for sure
+        (drawn twice, as for a shadow)."""
+        content = self.content
+        if not content:
+            return None
+        ox, oy = letter["origin"]
+        near = self._near([content], ox, oy) or self._near(self.form_layers(), ox, oy)
+        if not near or (len(near) > 1 and near[1][0] < max(TWICE, near[0][0] + 0.2)):
+            return None
+        return near[0][1], near[0][2]
+
+    def space_width(self, letter):
+        """The width of a space where the letter is drawn, in points along
+        the line: the font's own space with the letter spacing, without any
+        word spacing. None when the font has no space."""
+        found = self.glyph(letter)
+        if found is None or not self._editable(found[0]):
+            return None
+        show = found[0]
+        info = show["info"]
+        code = next((c for c in show["codes"] if c in info.spaces), None) or next(iter(sorted(info.spaces)), None)
+        if code is None or info.width(code) <= 0:
+            return None
+        return (info.width(code) / 1000 * show["fs"] + show["Tc"]) * show["th"] * math.hypot(show["m"][0], show["m"][1])
+
+    def follow(self, letters, spot, delta):
+        """An underline or highlight drawn by the words of a changed line
+        (a thin rule under or through them, or a filled box behind them,
+        from the start of one letter to the end of another) goes with them:
+        ``delta(x, tolerance, right)`` says how far the letter that starts
+        (or, with ``right``, ends) at ``x`` moved (None when that isn't
+        sure, and the mark is left as it is)."""
+        content = self.content
+        if not content or spot[0]["layer"] is not content:
+            return
+        size = max(L["style"]["size"] for L in letters)
+        tol = 0.3 * size
+        x0, x1 = min(L["loose"][0] for L in letters), max(L["loose"][2] for L in letters)
+        y0, y1 = min(L["loose"][1] for L in letters), max(L["loose"][3] for L in letters)
+        for path in content.paths:
+            b, c = path["box"], path["ctm"]
+            if not path["paint"] or path["clip"] or abs(c[1]) > 1e-6 or abs(c[2]) > 1e-6 or c[0] <= 0:
+                continue
+            if b[0] < x0 - tol or b[2] > x1 + tol or b[2] - b[0] < size:
+                continue
+            high = b[3] - b[1]
+            rule = high <= RULE and b[1] >= y0 - 0.15 * size and b[3] <= y1
+            behind = (path["fill"] and path["rects"] == 1 and high >= 0.6 * size and b[1] >= y0 - tol
+                      and b[3] <= y1 + tol and path["start"] < spot[0]["i"])
+            if not (rule or behind):
+                continue
+            if not any(abs(L["loose"][0] - b[0]) <= tol for L in letters) \
+                    or not any(abs(L["loose"][2] - b[2]) <= tol for L in letters):
+                continue  # not from letter to letter: a frame or a table's line, not a mark on words
+            da, db = delta(b[0], tol), delta(b[2], tol, True)
+            if da is None or db is None or (abs(da) < 0.005 and abs(db) < 0.005):
+                continue
+            span = range(path["start"], path["end"])
+            kinds = [content.ops[i][1] for i in span]
+            values = [_nums(content.ops[i][0]) for i in span]
+            if kinds == [b"re"] and values[0] and len(values[0]) == 4 and values[0][2] > 0:
+                x, y, w, h = values[0]
+                self.reshaped[path["start"]] = [FloatObject(v) for v in (x + da / c[0], y, w + (db - da) / c[0], h)]
+            elif kinds == [b"m", b"l"] and all(v and len(v) == 2 for v in values) and values[0][0] != values[1][0]:
+                first = values[0][0] < values[1][0]
+                for i, (x, y), left in zip(span, values, (first, not first)):
+                    self.reshaped[i] = [FloatObject(x + (da if left else db) / c[0]), FloatObject(y)]
+
+    def checkpoint(self):
+        """The changes so far, to come back to with :meth:`rollback`."""
+        return ({key: {"show": e["show"], "els": list(e["els"]), "shift": dict(e["shift"]), "gone": set(e["gone"])}
+                 for key, e in self.edits.items()}, set(self.dropped), dict(self.retag), dict(self.reshaped))
+
+    def rollback(self, saved):
+        self.edits, self.dropped, self.retag, self.reshaped = saved
+
+    @staticmethod
+    def _replacement(layer, sequence):
+        """Whether a marked-content sequence gives its own text in place of
+        what it draws (/ActualText, /Alt): "here" (in the drawing, where it
+        can be changed), "named" (in the resources, maybe shared) or None."""
+        operands = sequence["operands"]
+        if len(operands) < 2:
+            return None
+        props = operands[1]
+        where = "here"
+        if not isinstance(props, dict):
+            named = layer.resources.get("/Properties")
+            props = named.get_object().get(props) if named is not None else None
+            props = props.get_object() if props is not None else None
+            where = "named"
+        if isinstance(props, dict) and ("/ActualText" in props or "/Alt" in props):
+            return where
+        return None
+
+    def replaced_line(self, letter, count, text):
+        """A line a tag gives replacement text for (/ActualText) is read
+        by pdfium as that text, all of it at the line's start, not as the
+        letters drawn. When the tag holds exactly one such line that starts
+        at ``letter`` and its text has ``count`` letters, everything it
+        draws is taken out and its text set to ``text``: the place to
+        write the new words at, else None (nothing changed)."""
+        content = self.content
+        near = self._near([content], *letter["origin"]) if content else []
+        if not near or text is None:
+            return None
+        show, k = near[0][1], near[0][2]
+        tagged = [seq for seq in show["mc"] if self._replacement(content, seq)]
+        if len(tagged) != 1 or self._replacement(content, tagged[0]) != "here":
+            return None
+        sequence = tagged[0]
+        props = sequence["operands"][1]
+        said = str(props.get("/ActualText", props.get("/Alt", "")))
+        marks = [(sh, j) for sh in sequence["shows"] for j, g in enumerate(sh["glyphs"]) if not g[2]]
+        if sum(1 for ch in said if not ch.isspace()) != count or not marks or marks[0] != (show, k) \
+                or not all(self._editable(sh) for sh in sequence["shows"]):
+            return None
+        y = show["glyphs"][k][1]
+        if any(abs(sh["glyphs"][j][1] - y) > 0.5 for sh, j in marks):
+            return None  # more than one line in the tag
+        for sh, j in marks:
+            self._drop(sh, j)
+        for sh in sequence["shows"]:
+            self._tidy_spaces(sh)
+        new = DictionaryObject(props)
+        for name in ("/ActualText", "/Alt"):
+            if name in new:
+                new[NameObject(name)] = TextStringObject(text)
+        self.retag[(id(content), sequence["i"])] = [sequence["operands"][0], new]
+        return show, k
+
+    def tags(self, letters, text, one=False):
+        """What the tags (marked content) around ``letters`` allow, before
+        they are changed. New words are written into the sequence of the
+        letter they replace, so each line's words stay in its own; but a
+        sequence that gives replacement text (/ActualText, /Alt) would go
+        on saying the old words. That text is changed to ``text`` when the
+        sequence holds exactly these letters; otherwise, or when ``one``
+        is asked (everything is written at the first letter's place) and
+        the letters are in more than one sequence, None: not to be changed
+        in place. Else {where: new operands} for :attr:`retag`."""
+        found = [self.glyph(L) for L in letters]
+        if any(g is None for g in found):
+            return None
+        if one and len({tuple(id(seq) for seq in show["mc"]) for show, _ in found}) > 1:
+            return None
+        mine = {(id(show), k) for show, k in found}
+        if len(mine) != len(found):
+            return None  # two letters read at one glyph: not letters this can tell apart
+        out = {}
+        for show in {id(g[0]): g[0] for g in found}.values():
+            for sequence in show["mc"]:
+                key = (id(show["layer"]), sequence["i"])
+                where = self._replacement(show["layer"], sequence)
+                if where is None or key in out:
+                    continue
+                marks = {(id(sh), k) for sh in sequence["shows"] for k, g in enumerate(sh["glyphs"])
+                         if not g[2] and not self._is_gone(sh, k)}
+                if where != "here" or text is None or marks != mine or out:
+                    return None
+                props = DictionaryObject(sequence["operands"][1])
+                for name in ("/ActualText", "/Alt"):
+                    if name in props:
+                        props[NameObject(name)] = TextStringObject(text)
+                out[key] = [sequence["operands"][0], props]
+        return out
+
+    def _drop(self, show, k):
+        edit = self._edit(show)
+        if k not in edit["gone"]:
+            edit["gone"].add(k)
+            edit["els"][edit["els"].index(("g", k))] = ("x", k)
+
+    def _tidy_spaces(self, show):
+        """Spaces left with no word on either side go too."""
+        edit = self._edit(show)
+        glyphs, gone = show["glyphs"], edit["gone"]
+        marks = [k for k, g in enumerate(glyphs) if not g[2]]
+        for k, g in enumerate(glyphs):
+            if not g[2] or k in gone:
+                continue
+            before = [m for m in marks if m < k]
+            after = [m for m in marks if m > k]
+            b_gone = not before or before[-1] in gone
+            a_gone = not after or after[0] in gone
+            if not ((before and before[-1] in gone) or (after and after[0] in gone)):
+                continue
+            if b_gone and a_gone:
+                self._drop(show, k)
+
+    def remove(self, letters):
+        """Take letters out of the drawing; what's left of their pieces of
+        text stays where it is. False (and nothing changed) unless every one
+        is found."""
+        found = [self.glyph(L) for L in letters]
+        if any(g is None or not self._editable(g[0]) for g in found):
+            return False
+        for show, k in found:
+            self._drop(show, k)
+        for show in {id(g[0]): g[0] for g in found}.values():
+            self._tidy_spaces(show)
+        return True
+
+    def remove_spaces(self, a, b, lead, trail, inner):
+        """Between letters ``a`` and ``b`` (kept, in one piece of text) words
+        were taken out with ``inner`` spaces among them: those spaces go
+        too, but not the first ``lead`` and last ``trail`` (kept, like the
+        letters). Only when the spaces drawn there are exactly those."""
+        ga, gb = self.glyph(a), self.glyph(b)
+        if ga is None or gb is None or ga[0] is not gb[0] or not inner:
+            return
+        show = ga[0]
+        between = [k for k in range(ga[1] + 1, gb[1]) if show["glyphs"][k][2] and not self._is_gone(show, k)]
+        if len(between) != lead + inner + trail:
+            return
+        for k in between[lead:len(between) - trail]:
+            self._drop(show, k)
+
+    def shift(self, letter, ds):
+        """Move a letter ``ds`` points along its line."""
+        found = self.glyph(letter)
+        if found is None or not self._editable(found[0]):
+            return False
+        show, k = found
+        m = show["m"]
+        scale = math.hypot(m[0], m[1])
+        ux, uy = _unit_of(letter)
+        if (m[0] * ux + m[1] * uy) / scale < 0.999:
+            return False  # drawn mirrored or at another angle than it reads
+        edit = self._edit(show)
+        edit["shift"][k] = edit["shift"].get(k, 0.0) + ds / scale
+        return True
+
+    def insert(self, spot, before, run):
+        """Write new words (``run``: {own, name, style, entries: [(letter,
+        x, y)], same, color}) just before or after the glyph at ``spot``
+        (from :meth:`glyph`, asked for before anything was removed). In the
+        piece of text itself when they are in its font and on its line,
+        else as a piece of their own at that place in the drawing."""
+        show, k = spot
+        if not self._editable(show) or not run["entries"]:
+            return False
+        edit = self._edit(show)
+        els = edit["els"]
+        at = next((n for n, el in enumerate(els) if el[0] in ("g", "x") and el[1] == k), None)
+        if at is None:
+            return False
+        tag = ("b" if before else "a", k)
+        pos = at
+        if not before:
+            pos = at + 1
+            while pos < len(els) and els[pos][0] in ("c", "f") and els[pos][-1] == tag:
+                pos += 1
+        new = self._spliced(show, run, tag)
+        if new is None:
+            if _inv(show["ctm"]) is None:
+                return False
+            if run.get("color") is not None and not show["fill"] and show["layer"].form is not None:
+                return False  # the colour to go back to is set outside the form: not known here
+            new = [("f", run, tag)]
+        els[pos:pos] = new
+        return True
+
+    def _font_of(self, show):
+        font = show["layer"].font(show["font"])
+        return font.get_object() if font is not None else None
+
+    def _spliced(self, show, run, tag):
+        """The run as glyphs of the piece of text itself, or None."""
+        own = run["own"]
+        if own is None or not run.get("same") or run.get("color") is not None \
+                or self._font_of(show) is not own.font.get_object():
+            return None
+        inverse = _inv(show["m"])
+        if inverse is None:
+            return None
+        info, fs, th = show["info"], show["fs"], show["th"]
+        scale_y = math.hypot(show["m"][2], show["m"][3]) or 1.0
+        new = []
+        for ch, x, y in run["entries"]:
+            tx, ty = _at(inverse, x, y)
+            if abs(ty - show["rise"]) * scale_y > 0.05:
+                return None  # not on this piece's line
+            if ch.isspace() and own.space:
+                continue  # the font has no space: the place of the next letter makes it
+            try:
+                codes = [own.codes[c] for c in ch]
+            except KeyError:
+                return None
+            adv = sum((info.width(c) / 1000 * fs + show["Tc"] + (show["Tw"] if info.size == 1 and c == b" " else 0))
+                      * th for c in codes)
+            new.append(("c", b"".join(codes), tx, adv, tag))
+        return new or None
+
+    def _hidden_origins(self):
+        """Where letters covered by an earlier change's box start."""
+        if self._hidden is None:
+            self._hidden = []
+            if getattr(self.covers, "boxes", None):
+                from pdfmanager.textedit import _origin
+
+                for i in range(self.textpage.count_chars()):
+                    loose = self.textpage.get_charbox(i, loose=True)
+                    if loose[2] <= loose[0] or loose[3] <= loose[1]:
+                        continue
+                    ch = self.textpage.get_text_range(i, 1)
+                    if ch and not ch.isspace() and self.covers.hides(self.textpage, i, loose):
+                        self._hidden.append(_origin(self.textpage, i))
+        return self._hidden
+
+    def uncover(self, letters):
+        """An earlier version covered old words with a box and drew the new
+        ones after everything else. Before a change in place on this line:
+        the letters hidden under such boxes go, and the boxes with them (or
+        they would hide what's written in the old letters' place). False if
+        that can't be done for sure."""
+        content = self.content
+        if not content:
+            return False
+        if not self._hidden_origins():
+            return True
+        # Boxes on this line: no taller than it, and reaching into it (the
+        # old words may have been longer than the line is now).
+        area = _grow((min(L["loose"][0] for L in letters), min(L["loose"][1] for L in letters),
+                      max(L["loose"][2] for L in letters), max(L["loose"][3] for L in letters)), COVER_PAD)
+        paths = [p for p in content.paths if p["start"] not in self.dropped and p["paint"] and self._cover_like(p)
+                 and p["box"][1] >= area[1] and p["box"][3] <= area[3] and _overlaps(p["box"][0], p["box"][2], area[0], area[2])]
+        hidden = [o for o in self._hidden_origins()
+                  if any(p["box"][0] - 1 <= o[0] <= p["box"][2] + 1 and p["box"][1] - 1 <= o[1] <= p["box"][3] + 1 for p in paths)]
+        if not hidden:
+            # A box of the page's own (a highlight) may lie on the line: it stays.
+            return True
+        used, shows = set(), {}
+        for ox, oy in hidden:
+            over = [p for p in paths if p["box"][0] - 1 <= ox <= p["box"][2] + 1 and p["box"][1] - 1 <= oy <= p["box"][3] + 1]
+            if not over:
+                return False
+            last = max(p["start"] for p in over)
+            under = [(show, k) for _, show, k in self._near([content], ox, oy) if show["i"] < last]
+            if not under or not all(self._editable(show) for show, _ in under):
+                return False
+            for show, k in under:
+                self._drop(show, k)
+                shows[id(show)] = show
+            used.update(p["start"] for p in over)
+        for show in shows.values():
+            self._tidy_spaces(show)
+        self.dropped.update(used)
+        return True
+
     # -- taking the rewritten paragraph out -------------------------------------------------
     def take_out(self, rows):
         """Take the paragraph's old words (``rows`` of textedit letters) out
-        of the drawing. False, and nothing changed, unless every one of its
-        letters is found in pieces of text that hold nothing else."""
+        of the drawing. Other words drawn in the same pieces of text stay
+        where they are. False, and nothing changed, unless every one of its
+        letters is found."""
         content = self.content
         if not content:
             return False
@@ -360,37 +858,46 @@ class Flow:
             size = max(L["style"]["size"] for L in row)
             boxes.append((min(L["loose"][0] for L in row) - NEAR, min(L["loose"][1] for L in row) - NEAR,
                           max(L["loose"][2] for L in row) + size * 0.6, max(L["loose"][3] for L in row) + NEAR))
+        # Only as far right as the row's own letters: a piece of text shared
+        # with a neighbour on the line is cut there.
+        tight = [(b[0], b[1], max(L["origin"][0] for L in row) + NEAR, b[3]) for b, row in zip(boxes, rows)]
 
         def inside(x, y):
-            return any(b[0] <= x <= b[2] and b[1] <= y <= b[3] for b in boxes)
+            return any(b[0] <= x <= b[2] and b[1] <= y <= b[3] for b in tight)
 
+        saved = self.checkpoint()
         taken, origins = [], []
         for show in content.shows:
-            marks = [g for g in show["glyphs"] if not g[2]]
-            if not marks:
+            marks = [(k, g) for k, g in enumerate(show["glyphs"]) if not g[2] and not self._is_gone(show, k)]
+            ins = [(k, g) for k, g in marks if inside(g[0], g[1])]
+            if not ins:
                 continue
-            ins = [inside(g[0], g[1]) for g in marks]
-            if not any(ins):
-                continue
-            if not all(ins) or not show["sure"] or show["fs"] == 0 or show["th"] == 0:
-                return False  # shares its piece of text with other words, or widths unknown
+            if not self._editable(show):
+                self.rollback(saved)
+                return False  # the widths of its letters can't be read
+            for k, g in ins:
+                self._drop(show, k)
+                origins.append((g[0], g[1]))
             taken.append(show)
-            origins += [(g[0], g[1]) for g in marks]
-        for L in (L for row in rows for L in row):
-            ox, oy = L["origin"]
-            if not any(abs(ox - x) < NEAR and abs(oy - y) < NEAR for x, y in origins):
-                return False  # drawn somewhere this can't change (a form XObject)
-        if not taken:
+        rest = [L for row in rows for L in row
+                if not any(abs(L["origin"][0] - x) < NEAR and abs(L["origin"][1] - y) < NEAR for x, y in origins)]
+        if rest and not self.remove(rest):  # drawn in a form XObject, or nowhere this can change
+            self.rollback(saved)
             return False
-        self.removed.update(show["i"] for show in taken)
+        if not taken and not rest:
+            self.rollback(saved)
+            return False
+        for show in taken:
+            self._tidy_spaces(show)
         # The boxes earlier changes drew over words in it go too, or the
         # lines moving up would be hidden under them.
-        first = min(show["i"] for show in taken)
-        area = (min(b[0] for b in boxes) - COVER_PAD, min(b[1] for b in boxes) - COVER_PAD,
-                max(b[2] for b in boxes) + COVER_PAD, max(b[3] for b in boxes) + COVER_PAD)
-        for path in content.paths:
-            if path["start"] > first and self._cover_like(path) and _within(path["box"], area):
-                self.dropped.add(path["start"])
+        if taken:
+            first = min(show["i"] for show in taken)
+            area = (min(b[0] for b in boxes) - COVER_PAD, min(b[1] for b in boxes) - COVER_PAD,
+                    max(b[2] for b in boxes) + COVER_PAD, max(b[3] for b in boxes) + COVER_PAD)
+            for path in content.paths:
+                if path["start"] > first and self._cover_like(path) and _within(path["box"], area):
+                    self.dropped.add(path["start"])
         return True
 
     @staticmethod
@@ -554,7 +1061,11 @@ class Flow:
 
     # -- writing the changed drawing --------------------------------------------------------
     def changed(self):
-        return bool(self.removed or self.dropped or self.rises or self.moves)
+        return bool(self.edits or self.dropped or self.rises or self.moves or self.reshaped or self.retag)
+
+    def pending(self):
+        """The new runs to be written in place, for their fonts to be made ready."""
+        return [el[1] for edit in self.edits.values() for el in edit["els"] if el[0] == "f"]
 
     def write(self, writer, page):
         """Put the changes into the page's drawing (and move the links and
@@ -562,17 +1073,63 @@ class Flow:
         if not self.changed():
             return
         content = self.content
-        shows = {show["i"]: show for show in content.shows}
-        ends = {path["start"]: path["end"] for path in content.paths}
+        renames = {}
+        for layer in self._forms or []:
+            if not any(e["show"]["layer"] is layer for e in self.edits.values()):
+                continue
+            # The form may be drawn elsewhere too (twice on this page, or on
+            # other pages): this drawing of it gets a copy of its own.
+            names = _FontNames(layer.fonts)
+            data = self._stream(writer, self._ops(layer, names, {}))
+            form = DecodedStreamObject()
+            for key, value in layer.form.items():
+                if key not in ("/Length", "/Filter", "/DecodeParms"):
+                    form[NameObject(key)] = value
+            if names.added:
+                resources = DictionaryObject(layer.resources)
+                resources[NameObject("/Font")] = DictionaryObject({**layer.fonts, **names.added})
+                form[NameObject("/Resources")] = resources
+            form.set_data(data)
+            n = 1
+            while f"/ZPDFFm{n}" in content.xobjects:
+                n += 1
+            content.xobjects[NameObject(f"/ZPDFFm{n}")] = writer._add_object(form)
+            renames[layer.do[0]] = NameObject(f"/ZPDFFm{n}")
+        names = _FontNames(content.fonts)
+        data = self._stream(writer, self._ops(content, names, renames))
+        if names.added:
+            resources = page.get("/Resources")
+            resources = DictionaryObject() if resources is None else resources.get_object()
+            page[NameObject("/Resources")] = resources
+            font_dict = resources.get("/Font")
+            font_dict = DictionaryObject() if font_dict is None else font_dict.get_object()
+            resources[NameObject("/Font")] = font_dict
+            font_dict.update(names.added)
+        stream = DecodedStreamObject()
+        stream.set_data(data)
+        page[NameObject("/Contents")] = writer._add_object(stream)
+        self._move_annotations(page)
+
+    @staticmethod
+    def _stream(writer, ops):
+        stream = ContentStream(None, writer)
+        stream.operations = ops
+        return stream.get_data()
+
+    def _ops(self, layer, names, renames):
+        """The layer's drawing with the changes made."""
+        top = layer.form is None  # lines and rules only move in the page's own drawing
+        shows = {show["i"]: show for show in layer.shows}
+        ends = {path["start"]: path["end"] for path in layer.paths}
         out, skip_to, open_q = [], -1, None
-        for i, (operands, op) in enumerate(content.ops):
+        for i, (operands, op) in enumerate(layer.ops):
             if i <= skip_to:
                 continue
-            if i in self.dropped:
+            if top and i in self.dropped:
                 skip_to = ends[i]
                 continue
-            if i in self.moves and open_q is None:
-                path = next(p for p in content.paths if p["start"] == i)
+            if top and i in self.moves and open_q is None:
+                path = next(p for p in layer.paths if p["start"] == i)
                 a, b, c, d = path["ctm"][:4]
                 det = a * d - b * c
                 if abs(det) > 1e-12:
@@ -580,23 +1137,122 @@ class Flow:
                     out += [([], b"q"), ([FloatObject(1), FloatObject(0), FloatObject(0), FloatObject(1),
                                           FloatObject(-dy * c / det), FloatObject(dy * a / det)], b"cm")]
                     open_q = ends[i]
-            if i in self.removed:
-                out += _blank(shows[i])
-            elif i in self.rises:
+            edit = self.edits.get((id(layer), i))
+            dy = self.rises.get(i) if top else None
+            if dy is not None:
                 show = shows[i]
-                k = self.rises[i] / show["m"][3]
-                out += [([FloatObject(show["rise"] + k)], b"Ts"), (operands, op), ([FloatObject(show["rise"])], b"Ts")]
+                risen = show["rise"] + dy / show["m"][3]
+                out.append(([FloatObject(risen)], b"Ts"))
+                out += self._rebuilt(edit, names, dy, risen) if edit else [(operands, op)]
+                out.append(([FloatObject(show["rise"])], b"Ts"))
+            elif edit:
+                out += self._rebuilt(edit, names, 0.0, edit["show"]["rise"])
+            elif i in renames:
+                out.append(([renames[i]], op))
+            elif top and i in self.reshaped:
+                out.append((self.reshaped[i], op))
+            elif (id(layer), i) in self.retag:
+                out.append((self.retag[(id(layer), i)], op))
             else:
                 out.append((operands, op))
             if open_q is not None and i == open_q:
                 out.append(([], b"Q"))
                 open_q = None
-        stream = ContentStream(None, writer)
-        stream.operations = out
-        data = DecodedStreamObject()
-        data.set_data(stream.get_data())
-        page[NameObject("/Contents")] = writer._add_object(data)
-        self._move_annotations(page)
+        return out
+
+    def _rebuilt(self, edit, names, dy, rise):
+        """One piece of text written again with its changes: the glyphs
+        that stay each at their place, the new ones between them, and the
+        pen left where it was left before."""
+        show = edit["show"]
+        fs, th, glyphs = show["fs"], show["th"], show["glyphs"]
+        els, shift = edit["els"], edit["shift"]
+        unit = fs * th / 1000.0
+        out, arr, pen = [], [], 0.0
+        op, operands = show["op"], show["operands"]
+        if op == b'"' and len(operands) >= 2:
+            out += [([operands[0]], b"Tw"), ([operands[1]], b"Tc")]
+        if op in (b"'", b'"'):
+            out.append(([], b"T*"))
+
+        def moved(n, k):
+            """How far glyph ``k`` (element ``n``) moves: a space goes with
+            the word right after it, else the one right before."""
+            if k in shift or not glyphs[k][2]:
+                return shift.get(k, 0.0)
+            for step in (1, -1):
+                j = n + step
+                while 0 <= j < len(els) and els[j][0] == "g" and glyphs[els[j][1]][2]:
+                    j += step
+                if 0 <= j < len(els) and els[j][0] == "g":
+                    return shift.get(els[j][1], 0.0)
+            return 0.0
+
+        def kern(to):
+            nonlocal pen
+            d = to - pen
+            if abs(d) > abs(unit) * 0.25:
+                n = -d / unit
+                if arr and isinstance(arr[-1], FloatObject):
+                    arr[-1] = FloatObject(float(arr[-1]) + n)
+                else:
+                    arr.append(FloatObject(n))
+                pen = to
+
+        def put(code, adv):
+            nonlocal pen
+            if arr and isinstance(arr[-1], ByteStringObject):
+                arr[-1] = ByteStringObject(bytes(arr[-1]) + code)
+            else:
+                arr.append(ByteStringObject(code))
+            pen += adv
+
+        def flush():
+            nonlocal arr
+            if arr:
+                out.append(([ArrayObject(arr)], b"TJ"))
+                arr = []
+
+        inverse = _inv(show["m"])
+        follow = None  # where a space right after new words goes: straight after them
+        for n, el in enumerate(els):
+            if el[0] == "g":
+                k = el[1]
+                if glyphs[k][2] and follow is not None:
+                    kern(follow)
+                    put(show["codes"][k], show["advs"][k])
+                    follow = pen
+                    continue
+                follow = None
+                kern(show["txs"][k] + moved(n, k))
+                put(show["codes"][k], show["advs"][k])
+            elif el[0] == "c":
+                kern(el[2])
+                put(el[1], el[3])
+                follow = pen
+            elif el[0] == "f":
+                run = el[1]
+                if run["own"] is None:
+                    self.orphans.append(run)  # its font couldn't be put in the file: drawn the old way
+                    continue
+                flush()
+                ops, end = _foreign(show, run, names.of(run["own"].font), dy)
+                out += ops
+                follow = _at(inverse, end[0], end[1])[0] if inverse else None
+                # Back to the piece's own font and spacing, the pen where its line began.
+                if show["font_set"]:
+                    out += show["font_set"]  # the graphics state that set the font
+                elif show["font"] is not None:
+                    out.append(([show["font"], FloatObject(fs)], b"Tf"))
+                out += [([FloatObject(show["Tc"])], b"Tc"), ([FloatObject(show["Tw"])], b"Tw"),
+                        ([FloatObject(th * 100)], b"Tz"), ([FloatObject(rise)], b"Ts")]
+                if run.get("color") is not None:
+                    out += show["fill"] or [([FloatObject(0)], b"g")]
+                out.append(([FloatObject(v) for v in show["tlm"]], b"Tm"))
+                pen = -show["lx"]
+        kern(show["tx"])
+        flush()
+        return out
 
     def _move_annotations(self, page):
         """Links and text highlights on lines that moved go with them."""
@@ -619,6 +1275,81 @@ class Flow:
             if quads:
                 annot[NameObject("/QuadPoints")] = ArrayObject(
                     [FloatObject(v + dy if k % 2 else v) for k, v in enumerate(quads)])
+
+
+class _FontNames:
+    """The names fonts go by in one drawing's resources; new ones as needed."""
+
+    def __init__(self, fonts):
+        self.fonts, self.added = fonts, {}
+
+    def of(self, font):
+        obj = font.get_object()
+        for name, value in list(self.fonts.items()) + list(self.added.items()):
+            if value.get_object() is obj:
+                return NameObject(name)
+        n = 1
+        while f"/ZPDF{n}" in self.fonts or f"/ZPDF{n}" in self.added:
+            n += 1
+        self.added[NameObject(f"/ZPDF{n}")] = font
+        return NameObject(f"/ZPDF{n}")
+
+
+def _unit_of(letter):
+    a, b = letter["style"]["matrix"][:2]
+    n = math.hypot(a, b) or 1.0
+    return a / n, b / n
+
+
+def _foreign(show, run, name, dy):
+    """A run of new words in a font or look of its own, written at this
+    place in the drawing: everything not set here (colour, outline,
+    clipping, tags) is as for the words around it."""
+    style, entries, own = run["style"], run["entries"], run["own"]
+    a, b, c, d = style["matrix"]
+    x0, y0 = entries[0][1], entries[0][2]
+    tm = _mul((a, b, c, d, x0, y0 + dy), _inv(show["ctm"]))
+    ops = []
+    if run.get("color") is not None:
+        ops.append(([FloatObject(round(v, 4)) for v in run["color"]], b"rg"))
+    ops += [([name, FloatObject(style["raw_size"])], b"Tf"), ([FloatObject(0)], b"Tc"), ([FloatObject(0)], b"Tw"),
+            ([FloatObject(100)], b"Tz"), ([FloatObject(0)], b"Ts"), ([FloatObject(v) for v in tm], b"Tm")]
+    n = math.hypot(a, b) or 1.0
+    ux, uy = a / n, b / n
+    scale = n * style["raw_size"]
+
+    def wide(ch):
+        return sum(own.width_of(own.codes[c]) for c in ch) / 1000 * scale
+
+    # Letters set apart evenly (letter spacing): said once, as spacing, not
+    # as a move before each letter (which reads as a space between them).
+    along = [((x - x0) * ux + (y - y0) * uy, ch) for ch, x, y in entries]
+    gaps = [s2 - s1 - wide(c1) for (s1, c1), (s2, c2) in zip(along, along[1:]) if not c1.isspace() and not c2.isspace()]
+    tc = statistics.median(gaps) if len(gaps) >= 2 else 0.0
+    if abs(tc) < 0.02 or sum(abs(g - tc) < 0.02 for g in gaps) < len(gaps) * 0.6:
+        tc = 0.0
+    if tc:
+        ops[-5] = ([FloatObject(round(tc / n, 4))], b"Tc")  # in place of the "0 Tc" above
+    arr, pen = [], 0.0
+    for ch, x, y in entries:
+        s = (x - x0) * ux + (y - y0) * uy
+        move = (s - pen) / scale * 1000  # in thousandths of the font size
+        if abs(move) > 0.25:
+            if arr and isinstance(arr[-1], FloatObject):
+                arr[-1] = FloatObject(float(arr[-1]) - move)
+            else:
+                arr.append(FloatObject(-move))
+            pen = s
+        if ch.isspace() and own.space:
+            continue
+        code = b"".join(own.codes[c] for c in ch)
+        if arr and isinstance(arr[-1], ByteStringObject):
+            arr[-1] = ByteStringObject(bytes(arr[-1]) + code)
+        else:
+            arr.append(ByteStringObject(code))
+        pen += wide(ch) + tc * len(ch)
+    ops.append(([ArrayObject(arr)], b"TJ"))
+    return ops, (x0 + ux * pen, y0 + uy * pen)
 
 
 def _blank(show):

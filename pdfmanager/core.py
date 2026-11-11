@@ -1207,6 +1207,7 @@ def encrypt(path, output, user_password, owner_password=None, password=None, per
         plain.seek(0)
         try:
             with pikepdf.open(plain) as pdf:
+                _forget_pdfa(pdf)
                 protected = io.BytesIO()
                 allow = permissions if permissions is not None else pikepdf.Permissions(
                     modify_assembly=True)
@@ -1219,10 +1220,27 @@ def encrypt(path, output, user_password, owner_password=None, password=None, per
         except (pikepdf.PdfError, RuntimeError):
             pass  # qpdf can't read pypdf's copy: protect it the pypdf way
     writer = clone_document(reader)
+    if "/Metadata" in writer._root_object:  # an encrypted file can't be PDF/A
+        del writer._root_object["/Metadata"]
     extra = {"permissions_flag": filetools.pypdf_flags(permissions)} if permissions else {}
     writer.encrypt(user_password=user_password or "", owner_password=owner_password,
                    algorithm="AES-256", **extra)
     return _write(writer, output)
+
+
+def _forget_pdfa(pdf):
+    """Take the PDF/A identification out of a pikepdf document about to be
+    encrypted: PDF/A forbids encryption, and a file that kept the claim
+    would say it is an archive copy when it can't be."""
+    if "/Metadata" not in pdf.Root:
+        return
+    try:
+        with pdf.open_metadata(set_pikepdf_as_editor=False, update_docinfo=False) as meta:
+            for key in ("pdfaid:part", "pdfaid:conformance", "pdfaid:amd"):
+                if key in meta:
+                    del meta[key]
+    except Exception:  # noqa: BLE001 - metadata pikepdf can't edit: drop it rather than lie
+        del pdf.Root.Metadata
 
 
 def decrypt(path, output, password):

@@ -64,6 +64,22 @@ def test_a_scan_with_and_without_its_text(tmp_path):
     assert searchable["scanned"] and searchable["has_text"]
 
 
+def test_a_designed_page_with_a_big_photo_is_not_a_scan(tmp_path):
+    """Found on Windows: a picture-heavy guide and a brochure were called
+    "scanned". Their text is printed for people to read; a scan's OCR text
+    is invisible."""
+    designed = scan_pdf(tmp_path / "a.pdf", words="Hudson Beige")
+    with pikepdf.open(designed, allow_overwriting_input=True) as pdf:
+        for page in pdf.pages:
+            page.Contents = pdf.make_stream(page.Contents.read_bytes().replace(b"BT 3 Tr", b"BT 0 Tr"))
+        pdf.save(designed)
+    found = filefacts.facts(designed)
+    assert found["has_text"] and not found["scanned"]
+    assert "Scanned pages" not in " ".join(s["why"] for s in filefacts.suggestions(found) if "why" in s)
+    restored = scan_pdf(tmp_path / "b.pdf", words="q 3 Tr Q")  # a mode set and undone inside q/Q
+    assert filefacts.facts(restored)["scanned"]
+
+
 def test_a_scan_kept_sharp_by_compress_is_still_a_scan(tmp_path):
     from pdfmanager import scanlayers  # noqa: F401  (the engine must be there)
     sys.path.insert(0, str(Path(__file__).parent))
@@ -305,3 +321,43 @@ def test_a_handed_over_file_lets_the_running_app_come_forward(monkeypatch, tmp_p
     monkeypatch.setattr(gui.urllib.request, "build_opener", lambda *a: Opener())
     assert gui.forward_to_running_app([tmp_path / "a.pdf"]) is False
     assert order == ["allowed", "asked"]
+
+
+def test_boxes_inside_a_picture_are_no_form_at_a_glance(tmp_path):
+    """Found on Windows: a software guide full of screenshots and a photo
+    brochure were offered "Make it fillable" for boxes the quick look found
+    inside their pictures. A form drawn on the page is still found."""
+    from PIL import ImageDraw
+
+    from pdfmanager import formdetect
+
+    shot = Image.new("RGB", (900, 600), "white")
+    draw = ImageDraw.Draw(shot)
+    for row in range(5):
+        draw.text((40, 60 + row * 100), f"Setting {row + 1}", fill="black")
+        draw.rectangle((300, 50 + row * 100, 820, 90 + row * 100), outline="black", width=3)
+        draw.rectangle((850, 55 + row * 100, 880, 85 + row * 100), outline="black", width=3)
+    shot.save(tmp_path / "shot.png")
+    c = canvas.Canvas(str(tmp_path / "guide.pdf"))
+    c.drawString(72, 780, "Open the settings window and choose your options.")
+    c.drawImage(str(tmp_path / "shot.png"), 72, 380, width=450, height=300)
+    c.showPage()
+    c.drawString(72, 780, "Name:")
+    c.rect(120, 772, 250, 20)
+    c.drawString(72, 740, "Address:")
+    c.rect(130, 732, 300, 20)
+    c.drawString(72, 700, "Phone:")
+    c.rect(120, 692, 160, 20)
+    c.save()
+    found = formdetect.detect(tmp_path / "guide.pdf", pages=[1, 2], quick=True)
+    assert 1 not in found, found.get(1)
+    # A cover: a photo over most of the page, printed text on it (found on
+    # Windows: such a photo was let off as if it were the page's scan).
+    big = shot.resize((1200, 1600))
+    big.save(tmp_path / "cover.png")
+    c = canvas.Canvas(str(tmp_path / "cover.pdf"))
+    c.drawImage(str(tmp_path / "cover.png"), 0, 60, width=595, height=760)
+    c.drawString(72, 30, "ProSelect 2026 collection")
+    c.save()
+    assert formdetect.detect(tmp_path / "cover.pdf", pages=[1], quick=True) == {}
+    assert len(found.get(2, [])) >= 3, "a form drawn on the page is still a form"

@@ -408,7 +408,7 @@ def test_a_one_line_change_still_keeps_every_letter_where_it_was(tmp_path):
     assert [L for L in after if L[1] >= 315] == [L for L in before if L[1] >= 315]
     assert where(out, "Third paragraph") == where(src, "Third paragraph")
     start = [L for L in after if abs(L[2] - 656) < 0.1]
-    assert [L for L in start[:31]] == [L for L in before if abs(L[2] - 656) < 0.1][:31]  # "Secondparagraphsitsbelowthe"
+    assert [L for L in start[:27]] == [L for L in before if abs(L[2] - 656) < 0.1][:27]  # "Secondparagraphsitsbelowthe"
 
 
 # -- how the new words look ------------------------------------------------------------------------
