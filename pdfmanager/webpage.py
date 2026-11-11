@@ -2,14 +2,15 @@
 URIs), no scripts.
 
   * "flowing": a readable page that reflows to fit any window: headings
-    (from the text's size, or a short line in bold, capitals or its own
-    colour over its text), paragraphs (wrapped lines joined, hyphenated
-    words joined back up), lists, tables (found like PDF → Excel finds
-    them; labels beside their values are not one), pictures (a drawing
-    with lettering on it too), links (web addresses, and links to other
-    pages as #page-N), and a marker where each page starts. Columns are
-    read one after the other, past a quotation or a figure set across
-    them. Running headers and footers and page numbers are left out.
+    (from the text's size, or a short bold line), paragraphs (wrapped
+    lines joined, hyphenated words joined back up), lists, tables (found
+    like PDF → Excel finds them), pictures (a drawing with lettering on
+    it too, its lettering after it as text), links (web addresses, and
+    links to other pages as #page-N), and a marker where each page
+    starts. Columns are read one after the other, past a quotation or a
+    figure set across them. Running headers and footers (the same line at
+    the top or bottom of most pages) and page numbers are left out; no
+    other text is.
   * "exact": each page as it looks: the page drawn without its text as a
     picture, with the text on top in place, so it can be selected,
     searched and copied. Pages scale to fit the window.
@@ -250,40 +251,30 @@ def _tables(path, password, pages):
     return found
 
 
-_FIGURE = re.compile(r"^[-+−–(]?[£$€¥]?\s?\d[\d\s.,:/%-]*\)?\s?[%£$€¥]?$")
-
-
 def _table_like(table):
-    """Ruled tables, and tables without lines that are a grid of values:
-    most rows with two or more cells filled, few cells empty. Not columns of
-    sentences, and not labels that happen to line up with what stands
-    beside them (a form, the details at the top of an invoice, a column of
-    totals): with only two columns, a table has a heading row over a
-    column of figures."""
+    """Ruled tables, and tables without lines whose rows mostly have two or
+    more cells filled (not a few labels that happen to line up). Not
+    columns of sentences, and not labels ending in a colon before their
+    values (the details at the top of an invoice)."""
     if table["kind"] == "ruled":
         return True
     rows = table["rows"]
     cells = [cell for row in rows for cell in row if cell]
     if cells and sum(len(str(cell).split()) for cell in cells) >= 5 * len(cells):
         return False  # sentences side by side: columns of text, not a table
-    below = [str(cell).strip() for row in rows[1:] for cell in row if cell]
-    if below and sum(len(cell.split()) for cell in below) >= 3 * len(below) and \
-            sum(1 for cell in below if cell[:1].islower()) >= 0.5 * len(below):
-        return False  # lines that go on from the line above: narrow columns of text
-    if sum(1 for row in rows if sum(1 for cell in row if cell) >= 2) < 0.8 * len(rows):
-        return False
     columns = max(len(row) for row in rows)
-    if len(cells) < 0.7 * columns * len(rows):
-        return False  # a third of the grid empty: things set side by side
+    prose = labels = 0
     for k in range(columns):
         column = [str(row[k]).strip() for row in rows if k < len(row) and row[k]]
-        if column and sum(1 for cell in column if cell.endswith(":")) >= 0.6 * len(column):
-            return False  # "Date:", "Invoice no:": labels before their values
-    if columns == 2:
-        figures = sum(1 for row in rows[1:] if len(row) == 2 and _FIGURE.match(str(row[1]).strip()))
-        heading = not any(_FIGURE.match(str(cell).strip()) for cell in rows[0])
-        return len(rows) >= 4 and heading and figures >= 0.6 * (len(rows) - 1)
-    return True
+        below = [str(row[k]).strip() for row in rows[1:] if k < len(row) and row[k]]
+        if len(column) >= 2 and all(cell.endswith(":") for cell in column):
+            labels += 1
+        if len(below) >= 3 and sum(len(cell.split()) for cell in below) >= 3 * len(below) and \
+                sum(1 for cell in below if cell[:1].islower()) >= 0.4 * len(below):
+            prose += 1
+    if labels or prose == columns:
+        return False  # "Date:", "Invoice no:" before their values; narrow columns of running text
+    return sum(1 for row in rows if sum(1 for cell in row if cell) >= 2) >= 0.8 * len(rows)
 
 
 class _Item:
@@ -292,6 +283,7 @@ class _Item:
     def __init__(self, kind, box, value):
         self.kind, self.box, self.value = kind, box, value
         self.bold = None  # of a table: which of its cells are in bold type
+        self.lettering = ()  # of a picture of a drawing: the lines of text on it
 
 
 def _bold_cells(rows, lines):
@@ -484,7 +476,7 @@ def _merge_boxes(boxes):
 
 
 DRAWING_PARTS = 6    # lines and shapes drawn together from which they are a drawing
-DRAWING_LABELS = 3   # words on it from which it is shown as a picture, lettering and all
+DRAWING_LABELS = 3   # words on it from which it is also shown as a picture
 
 
 def _clusters(boxes, reach):
@@ -526,6 +518,9 @@ def _drawings(page, lines, wrapped, taken, body):
     if not DRAWING_PARTS <= len(shapes) <= 4000:
         return []
     boxed = [(ln, layout.box_on_page(ln.angle, ln.x0, ln.top, ln.x1, ln.bottom)) for ln in lines]
+    # A frame around several lines of text is no part of a drawing.
+    shapes = [s for s in shapes if sum(1 for _, b in boxed if s[0] <= (b[0] + b[2]) / 2 <= s[2]
+                                       and s[1] <= (b[1] + b[3]) / 2 <= s[3]) < 5]
     found = []
     for cluster in _clusters(shapes, 3):
         if len(cluster) < DRAWING_PARTS or sum(1 for b in cluster if min(b[2] - b[0], b[3] - b[1]) > 3) < 2:
@@ -578,44 +573,30 @@ _PAGE_NUMBER = re.compile(r"(?i)^(page\s*)?\d{1,4}(\s*(/|of)\s*\d{1,4})?$")
 
 def _running(read, body):
     """ids of the lines that are running headers and footers and page
-    numbers. At the very top or bottom of a page (its outer 9%): a page
-    number, or the same line (digits apart) on most of three or more pages.
-    Standing clear of the text (white space between): a page number up to
-    13% in, the same line on most pages up to 15% in, and, at the very
-    edge, a few words in smaller type than the text (a document's name, a
-    web address) on a page with text enough to tell."""
+    numbers: at the very top or bottom of a page (its outer 9%), a page
+    number, or the same line on most of three or more pages. Never a line
+    in larger type than the text, nor a bold line with text right under it
+    (a heading that opens each page)."""
     pages, counts = [], {}
     for page, _ in read:
         boxes = [(ln, layout.box_on_page(ln.angle, ln.x0, ln.top, ln.x1, ln.bottom)) for ln in page.lines]
         found = []
         for line, (x0, y0, x1, y1) in boxes:
-            top = (y0 + y1) / 2 < page.height / 2
-            depth = (y1 if top else page.height - y0) / page.height
-            if depth > 0.15:
+            if not (y1 < page.height * 0.09 or y0 > page.height * 0.91):
                 continue
-            slack = 0.3 * (y1 - y0)
-            if top:  # to the nearest line that reaches further down the page
-                gap = min((b[1] for _, b in boxes if b[3] > y1 + slack), default=page.height) - y1
-            else:
-                gap = y0 - max((b[3] for _, b in boxes if b[1] < y0 - slack), default=0)
-            key = (top, re.sub(r"\d+", "#", " ".join(line.text.lower().split())))
-            found.append((line, depth, gap / max(line.size, 1), key))
-        for key in {entry[3] for entry in found}:
+            text = " ".join(line.text.lower().split())
+            under = min((b[1] for _, b in boxes if b[3] > y1 + 0.3 * (y1 - y0)), default=page.height) - y1
+            heading = line.main_size > 1.08 * body or (
+                all(c.bold for c in line.chars) and under < 1.5 * line.size)
+            found.append((line, text, heading))
+        for key in {entry[1] for entry in found}:
             counts[key] = counts.get(key, 0) + 1
-        pages.append((page, found))
+        pages.append(found)
     total, running = len(pages), set()
-    for page, found in pages:
-        for line, depth, clear, key in found:
-            text = " ".join(line.text.split())
-            number = bool(_PAGE_NUMBER.match(text))
-            often = total >= 2 and counts[key] >= max(2, total * 0.6)
-            if depth <= 0.09:
-                gone = (number or (often and total >= 3) or (often and clear >= 1.5)
-                        or (clear >= 2.5 and line.main_size <= 0.95 * body and len(text.split()) <= 6
-                            and len(page.lines) >= 8 and text[-1:] not in ".,;!?" and text[:1].isalnum()))
-            else:
-                gone = (number and depth <= 0.13 and clear >= 2) or (often and clear >= 1.5)
-            if gone:
+    for found in pages:
+        for line, text, heading in found:
+            if _PAGE_NUMBER.match(text) or (
+                    not heading and total >= 3 and counts[text] >= total * 0.6):
                 running.add(id(line))
     return running
 
@@ -670,6 +651,9 @@ def _flowing(doc, tables, collected=None):
                 writer.table(value.value, value.bold)
             else:
                 writer.image(value.value, value.box)
+                for line in value.lettering:
+                    if id(line) not in running:
+                        writer.paragraph([line], plain=True)
         out += writer.finish()
         if collected is not None:
             collected.append(writer.items)
@@ -723,8 +707,8 @@ def _page_items(doc, page, page_tables):
 
     wrapped = {id(ln) for block in page.blocks for para in block.paragraphs
                if len(para) >= 3 and sum(len(ln.text.split()) for ln in para) >= 4 * len(para) for ln in para}
-    # The lettering of a drawing made of lines and shapes is part of it too:
-    # the drawing is shown as a picture, lettering and all.
+    # A drawing made of lines and shapes with lettering on it is shown as a
+    # picture; its lettering follows as plain text, a paragraph each.
     drawings = []
     if not scanned:
         outside = [ln for ln in page.lines if id(ln) not in inside and not (table_boxes and in_table(ln))]
@@ -756,9 +740,18 @@ def _page_items(doc, page, page_tables):
     scale = PICTURE_DPI / 72
     if drawings:
         with_words = doc.render(page.number - 1, PICTURE_DPI)
-        for box, _ in drawings:
+        for box, lettering in drawings:
             crop = with_words.crop(tuple(int(round(v * scale)) for v in box))
-            items.append(_Item("image", box, crop))
+            item = _Item("image", box, crop)
+            # Its lettering follows it as text, row by row: never left out.
+            rows = []
+            for line in sorted(lettering, key=lambda ln: ln.base):
+                if rows and line.base - rows[-1][0].base <= 0.3 * line.size:
+                    rows[-1].append(line)
+                else:
+                    rows.append([line])
+            item.lettering = [line for row in rows for line in sorted(row, key=lambda ln: ln.x0)]
+            items.append(item)
     if not page.chars and not pictures:
         # Drawings only (or an empty page): the whole page as a picture,
         # unless it is blank.
@@ -801,23 +794,18 @@ def _page_items(doc, page, page_tables):
 
 
 _CJK = re.compile("[\u2e80-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]")
-_COMPOUND_FIRST = {"self", "well", "half", "all", "non", "quasi"}
+_LINKING = {"in", "of", "to", "the", "and", "by", "on", "at", "a", "for", "de", "la", "le", "du", "en"}
 _SENTENCE_END = re.compile(r"[.!?…][\"”’')\]]*$")
 _OPENING_QUOTE = "“\"‘«„"
 
 
-def _compound(before, after):
+def _compound(before):
     """Whether a word broken at a hyphen at the end of a line keeps the
-    hyphen: ``before`` is what stands before it, ``after`` the rest on the
-    next line. A compound broken at its own hyphen (up-to-|date,
-    up-|to-date, self-|financing), not a word hyphenated to fit the line."""
-    after = after.strip(".,;:!?)”’\"'")
-    if "-" in before.strip("-"):
-        return True
-    letters = re.sub(r"\W", "", before).lower()
-    if "-" in after.strip("-") and len(letters) <= 4:
-        return True
-    return letters in _COMPOUND_FIRST and len(after) >= 4
+    hyphen: only when what stands before it ends in a short linking word
+    after a hyphen (son-in-|law, up-to-|date, matter-of-|fact). Any other
+    break may be a word hyphenated to fit the line, and is joined."""
+    parts = before.strip("-").lower().split("-")
+    return len(parts) >= 2 and parts[-1] in _LINKING and all(part.isalpha() for part in parts)
 
 
 class _Writer:
@@ -842,9 +830,7 @@ class _Writer:
                 prev = segments[-1][0]
                 if (prev.endswith("-") and runs[0][0][:1].islower() and len(prev) > 1
                         and prev[-2].isalpha()):
-                    before = "".join(t for t, _ in segments[-3:]).split()[-1][:-1]
-                    after = "".join(t for t, _ in runs[:3]).split()[0]
-                    if not _compound(before, after):
+                    if not _compound("".join(t for t, _ in segments[-3:]).split()[-1]):
                         segments[-1][0] = prev[:-1]  # a hyphenated word, joined back up
                 elif not prev.endswith((" ", "-", "/")) and not (_CJK.match(prev[-1]) and _CJK.match(runs[0][0][:1])):
                     segments[-1][0] = prev + " "
@@ -874,7 +860,7 @@ class _Writer:
             if c.family == "Courier New":
                 piece = f"<code>{piece}</code>"
             if c.raised:
-                piece = f"<sup>{piece}</sup>"
+                piece = f"<sup>{piece}</sup>" if c.raised > 0 else f"<sub>{piece}</sub>"
             if c.italic:
                 piece = f"<em>{piece}</em>"
             if c.bold and not heading and not self.bold_body:
@@ -898,9 +884,10 @@ class _Writer:
         words = len(text.split())
         if len(text) > 200 or len(lines) > 3 or not any(ch.isalpha() for ch in text):
             return 0
-        # A sentence in large type (a standfirst, a pull quote) is text.
+        # A sentence in large type (a standfirst, a quotation pulled out of
+        # the text, quotation marks around the whole of it) is text.
         if (words >= 8 and text.endswith((".", ".”", '."', ".’"))) or \
-                (text[0] in _OPENING_QUOTE and (len(lines) > 1 or _SENTENCE_END.search(text))):
+                (text[0] in _OPENING_QUOTE and text[-1] in "”\"’»" and words >= 8):
             return 0
         if size > self.body * 1.5:
             return 1
@@ -914,35 +901,21 @@ class _Writer:
         first = lines[0]
         beside = (after is not None and after[0].angle == first.angle
                   and abs(after[0].base - first.base) <= 0.25 * first.size)  # a value beside its label
-        if size > self.body * 1.08 and not recognised and (bold or (
-                size > self.body * 1.14 and words <= 12 and not _SENTENCE_END.search(text) and not beside)):
+        if size > self.body * 1.08 and not recognised:
             return 3
-        if len(lines) > 1 or len(text) > 80 or words > 12 or beside or recognised:
+        if not bold or len(lines) > 1 or len(text) > 80 or words > 12 or beside:
             return 0
         numbered = layout.LIST_ITEM.match(text)
         introduces = self._introduces(lines, after)
-        if bold:
-            if numbered:
-                # "3. Fees and charges" over its text, not an item of a list.
-                return 3 if introduces and numbered.group(1) and not self.list_kind else 0
-            if text.endswith(":"):
-                return 3 if introduces and words >= 3 else 0
-            if text[-1] in ".,;" or (words > 9 and not introduces):
-                return 0
-            if re.search(r":\s+\S", text) or re.search(r"\d[\d\s.,/-]{4,}$", text):
-                return 0  # a label and its value ("Booking office: 01632 960 417")
-            return 3
-        if not introduces or numbered or text[-1] in ".,;:" or words > 8:
+        if numbered:
+            # "3. Fees and charges" over its text, not an item of a list.
+            return 3 if introduces and numbered.group(1) and not self.list_kind and text[-1] not in ".,;:" else 0
+        if text[-1] in ".,;:" or (words > 9 and not introduces):
             return 0
-        letters = [ch for ch in text if ch.isalpha()]
-        if len(letters) >= 4 and all(ch.isupper() for ch in letters) and words >= 2:
-            return 3  # a line of capitals over its text
-        colors = {c.color for c in chars}
-        follow = {c.color for ln in after for c in ln.chars}
-        if (len(colors) == 1 and colors.isdisjoint(follow) and all(c.link is None for c in chars)
-                and size > self.body * 1.03 and text[:1].isupper()):
-            return 3  # a line in its own colour, a little larger, over its text
-        return 0
+        value = re.search(r":\s+(\S.*)$", text)
+        if value and not any(ch.isalpha() for ch in value.group(1)):
+            return 0  # a label and its value ("Booking office: 01632 960 417")
+        return 3
 
     def _introduces(self, lines, after):
         """Whether ``after`` is running text set right under the line
@@ -977,27 +950,31 @@ class _Writer:
         return True
 
     def _unfinished(self):
-        """The index in ``out`` of the paragraph that the text now coming
-        may continue: the last one, or the one before a picture (and its
-        caption) set into the text, when it stops in mid-sentence."""
-        picture = False
-        for back in range(1, min(4, len(self.out)) + 1):
-            index = len(self.out) - back
-            entry = self.out[index]
-            if entry.startswith("<p>") and index in self._item_at:
-                text = re.sub(r"<[^>]+>", "", entry).rstrip()
-                if not re.search(r"[.!?:;\"”’)\]…]$", text):
-                    return index if back == 1 or (picture and len(text.split()) >= 8) else None
-            elif entry.startswith("<figure>"):
-                picture = True
-            else:
-                return None
+        """The index in ``out`` of the last paragraph, when it stops in
+        mid-sentence and the text now coming may continue it."""
+        index = len(self.out) - 1
+        if index >= 0 and self.out[index].startswith("<p>") and index in self._item_at:
+            text = re.sub(r"<[^>]+>", "", self.out[index]).rstrip()
+            if not re.search(r"[.!?:;\"”’)\]…]$", text):
+                return index
         return None
 
-    def paragraph(self, lines, after=None):
+    def paragraph(self, lines, after=None, plain=False):
+        """``plain``: a paragraph of its own whatever it looks like (the
+        lettering of a drawing)."""
         segments = self._segments(lines)
         text = "".join(t for t, _ in segments).strip()
         if not text:
+            return
+        if plain:
+            self._close_list()
+            body = self._inline(segments)
+            if body:
+                self.out.append(f"<p>{body}</p>")
+                self.items.append({"kind": "paragraph", "level": 0, "segments": [(t, c) for t, c in segments],
+                                   "links": self.page.links})
+                self.out.append("")  # nothing that follows goes on from it
+            self.last_line = None
             return
         first = lines[0]
         # A piece of a line that the page set apart (a value after its label):
@@ -1041,7 +1018,7 @@ class _Writer:
             joined = self.out[index][:-4]
             earlier = self._item_at[index]["segments"]
             if re.search(r"[^\W\d_]-$", joined) and not _compound(
-                    "".join(t for t, _ in earlier[-3:]).split()[-1][:-1], text.split()[0]):
+                    "".join(t for t, _ in earlier[-3:]).split()[-1]):
                 joined = joined[:-1]
                 earlier[-1] = (earlier[-1][0].rstrip()[:-1], earlier[-1][1])
             elif not joined.endswith("-"):

@@ -335,15 +335,38 @@ def diagram(c, y=600):
             c.line(x - 5, y + 14, x - 1, y + 17)
 
 
-def test_the_lettering_of_a_drawing_stays_in_the_picture(tmp_path):
+def test_a_drawing_is_a_picture_and_its_lettering_stays_as_plain_text(tmp_path):
     def draw(c, _):
         y = wrap(c, SENTENCES, 72, 760, 450)
         diagram(c, y - 60)
         wrap(c, SENTENCES, 72, y - 100, 450)
 
     paragraphs, _, xml = convert(tmp_path, draw)
-    assert [t[:20] for _, t in paragraphs] == [SENTENCES[:20]] * 2, paragraphs
-    assert xml.count("<w:drawing>") == 1, "the diagram is a picture, its lettering on it"
+    assert paragraphs[1:5] == [("", "Intake"), ("", "Sorting"), ("", "Quality check"), ("", "Dispatch")], paragraphs
+    assert [t[:20] for _, t in paragraphs[::5]] == [SENTENCES[:20]] * 2 and len(paragraphs) == 6
+    assert xml.count("<w:drawing>") == 1, "the diagram is there as a picture too"
+
+
+def test_the_names_in_an_organisation_chart_are_all_kept(tmp_path):
+    people = [("Managing Director", "Ruth Abara", 230, 700), ("Head of Finance", "Leon Whitcombe", 80, 620),
+              ("Head of Operations", "Sunita Varma", 230, 620), ("Head of Sales", "Gareth Pryce", 380, 620)]
+
+    def draw(c, _):
+        for role, name, x, y in people:
+            c.rect(x, y, 130, 40)
+            c.setFont("Helvetica-Bold", 10)
+            c.drawCentredString(x + 65, y + 24, role)
+            c.setFont("Helvetica", 9)
+            c.drawCentredString(x + 65, y + 10, name)
+        c.line(295, 700, 295, 680)
+        c.line(145, 680, 445, 680)
+        for x in (145, 295, 445):
+            c.line(x, 680, x, 660)
+        wrap(c, SENTENCES, 72, 560, 450)
+
+    paragraphs, _, _ = convert(tmp_path, draw)
+    for role, name, _, _ in people:
+        assert ("", role) in paragraphs and ("", name) in paragraphs, paragraphs
 
 
 def test_text_in_frames_is_not_a_drawing(tmp_path):
@@ -356,22 +379,56 @@ def test_text_in_frames_is_not_a_drawing(tmp_path):
     assert len(paragraphs) == 6 and "<w:drawing>" not in xml, paragraphs
 
 
-def test_headings_set_apart_without_larger_type(tmp_path):
-    heads = [("SPEED IN THE FAIRWAY", "Helvetica"),
-             ("What every skipper must do before leaving the berth at night", "Helvetica-Bold"),
-             ("Opening hours of the harbour office:", "Helvetica-Bold"),
-             ("3. Fees and charges", "Helvetica-Bold")]
+def test_a_framed_checklist_is_text_not_a_picture(tmp_path):
+    items = ["Spare wheel and jack present", "Tyres at correct pressure", "Service book in glovebox",
+             "No new damage to bodywork", "Fuel above one quarter", "First aid kit sealed"]
+
+    def draw(c, _):
+        c.rect(64, 590, 300, 130)
+        c.setFont("Helvetica", 10)
+        for n, item in enumerate(items):
+            c.rect(74, 698 - 18 * n, 9, 9)
+            c.drawString(90, 700 - 18 * n, item)
+        wrap(c, SENTENCES, 64, 560, 450)
+
+    paragraphs, _, xml = convert(tmp_path, draw)
+    assert [t for _, t in paragraphs[:6]] == items and "<w:drawing>" not in xml, paragraphs
+
+
+def test_bold_headings_in_the_size_of_the_text(tmp_path):
+    heads = ["What every skipper must do before leaving the berth at night", "3. Fees and charges",
+             "Case study: the Harker boundary", "Survey results 2024-2025"]
 
     def draw(c, _):
         y = 780
-        for text, font in heads:
-            c.setFont(font, 10)
+        for text in heads:
+            c.setFont("Helvetica-Bold", 10)
             c.drawString(64, y, text)
             y = wrap(c, SENTENCES[:300], 64, y - 16, 460) - 14
 
     paragraphs, _, _ = convert(tmp_path, draw)
-    assert [t for s, t in paragraphs if s == "Heading3"] == [t for t, _ in heads], paragraphs
+    assert [t for s, t in paragraphs if s == "Heading3"] == heads, paragraphs
     assert len(paragraphs) == 8
+
+
+def test_lines_over_text_that_are_not_headings(tmp_path):
+    def draw(c, _):
+        c.setFont("Times-Bold", 20)
+        c.drawString(90, 760, "Kiln Room Notes")
+        c.setFont("Times-Roman", 11.5)                     # a dateline, grey, a shade larger than the text
+        c.setFillGray(0.47)
+        c.drawString(90, 738, "Revised Thursday 5 February 2026")
+        c.setFillGray(0)
+        y = wrap(c, SENTENCES[:300], 90, 720, 410, "Times-Roman", 11) - 9
+        c.drawString(90, y, "THIS KILN MUST COOL FOR TWELVE HOURS")       # a notice in capitals
+        y = wrap(c, SENTENCES[:300], 90, y - 16, 410, "Times-Roman", 11) - 9
+        c.setFont("Times-Bold", 11)
+        c.drawString(90, y, "A word about the thermocouple:")              # a bold lead-in
+        wrap(c, SENTENCES[:300], 90, y - 16, 410, "Times-Roman", 11)
+
+    paragraphs, _, _ = convert(tmp_path, draw)
+    assert [(s, t) for s, t in paragraphs if s] == [("Heading1", "Kiln Room Notes")], paragraphs
+    assert len(paragraphs) == 7
 
 
 def test_bold_lines_that_are_not_headings(tmp_path):
@@ -405,10 +462,7 @@ def test_large_sentences_are_text_not_headings(tmp_path):
         c.setFont("Helvetica-Oblique", 14)                 # a pull quote in the column, centred
         c.drawCentredString(170, y - 14, "“We stopped waiting for the big ships")
         c.drawCentredString(170, y - 32, "and looked after the small ones.”")
-        y = wrap(c, SENTENCES, 50, y - 64, 240)
-        c.setFont("Helvetica", 11)                         # a little larger than the text, no more
-        c.drawString(50, y - 10, "Spring programme")
-        wrap(c, SENTENCES[:200], 50, y - 40, 240)
+        wrap(c, SENTENCES, 50, y - 64, 240)
 
     paragraphs, _, _ = convert(tmp_path, draw)
     assert [(s, t) for s, t in paragraphs if s] == [("Heading1", "Three Seasons on the Estuary")], paragraphs
@@ -417,19 +471,38 @@ def test_large_sentences_are_text_not_headings(tmp_path):
     assert "A year of small repairs and one very large crane has changed how the port works from day to day." in texts
 
 
-def test_a_header_and_footer_on_a_single_page(tmp_path):
+def test_a_title_that_opens_with_a_quotation_and_a_plain_heading_a_little_larger(tmp_path):
     def draw(c, _):
-        c.setFont("Helvetica", 9)
-        c.drawString(64, 802, "Annual Review 2026")
-        c.drawRightString(531, 802, "Section 2: Finance")
-        c.drawString(64, 34, "www.northfield.example")
-        c.drawRightString(531, 34, "7")
-        c.setFont("Helvetica-Bold", 15)
-        c.drawString(64, 747, "Income and expenditure")
-        wrap(c, SENTENCES * 2, 64, 725, 460)
+        c.setFont("Times-Bold", 22)
+        c.drawString(78, 740, "“Slow Is Smooth” and the Patient")
+        c.drawString(78, 714, "Craft of the Dry-Stone Waller")
+        y = wrap(c, SENTENCES, 78, 680, 450, "Times-Roman", 10, 13)
+        c.setFont("Helvetica", 11)                         # 11 pt plain over 10 pt text
+        c.drawString(78, y - 6, "Materials and tools")
+        wrap(c, SENTENCES, 78, y - 22, 450, "Times-Roman", 10, 13)
 
     paragraphs, _, _ = convert(tmp_path, draw)
-    assert [t[:22] for _, t in paragraphs] == ["Income and expenditure", SENTENCES[:22]], paragraphs
+    assert [(s, t) for s, t in paragraphs if s] == [
+        ("Heading1", "“Slow Is Smooth” and the Patient Craft of the Dry-Stone Waller"),
+        ("Heading3", "Materials and tools")], paragraphs
+
+
+def test_small_lines_at_the_edges_of_a_single_page_are_kept(tmp_path):
+    def draw(c, _):
+        c.setFont("Helvetica", 8)
+        c.drawString(64, 802, "Our ref KT/2291/B")                 # a letter's reference
+        c.drawString(64, 34, "Registered in England No 4471902")
+        c.setFont("Helvetica-Bold", 15)
+        c.drawString(64, 747, "Income and expenditure")
+        y = wrap(c, SENTENCES * 2, 64, 725, 460)
+        c.setFont("Helvetica", 8)
+        c.drawString(64, 110, "1 Excludes agency staff")           # the only footnote
+        c.setFont("Helvetica", 30)
+        c.drawCentredString(297, y - 200, "7")                     # a chapter's numeral, mid-page
+
+    texts = [t for _, t in convert(tmp_path, draw)[0]]
+    for kept in ("Our ref KT/2291/B", "Registered in England No 4471902", "1 Excludes agency staff", "7"):
+        assert kept in texts, (kept, texts)
 
 
 def test_first_and_last_lines_in_the_texts_own_type_are_kept(tmp_path):
@@ -446,57 +519,51 @@ def test_first_and_last_lines_in_the_texts_own_type_are_kept(tmp_path):
     assert "A note in small type right under the text." in texts
 
 
-def test_running_titles_and_page_numbers_set_well_inside_the_page(tmp_path):
+def test_what_opens_and_closes_each_page_is_not_a_running_line(tmp_path):
     def draw(c, number):
-        c.setFont("Helvetica-Oblique", 10)
-        c.drawCentredString(297, 746, "Harbour Notes")             # 11% down the page
-        c.setFont("Helvetica", 11.5)
-        y = wrap(c, f"Page {number} starts here. " + SENTENCES, 90, 700, 410, size=11.5, lead=15)
-        wrap(c, SENTENCES, 90, y - 10, 410, size=11.5, lead=15)
-        c.setFont("Helvetica", 10.5)
-        c.drawCentredString(297, 100, str(11 + number))            # 12% up from the foot
+        c.setFont("Helvetica", 8)
+        c.drawString(64, 810, "Coast path guide")                  # the running header, and the page number
+        c.drawCentredString(297, 30, str(number))
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(64, 790, f"Day {number}")                     # a heading at the top of each page
+        y = wrap(c, f"The walk on day {number} starts here. " + SENTENCES, 64, 770, 460)
+        c.setFont("Helvetica", 10)
+        c.drawString(64, y - 10, f"Distance walked: {10 + number} km")
+        c.drawString(64, 70, f"Distance walked: {10 + number} km")  # and a closing line low on the page
 
     paragraphs, _, _ = convert(tmp_path, draw, pages=3)
     texts = [t for _, t in paragraphs]
-    assert len(texts) == 6 and not [t for t in texts if "Harbour Notes" in t or t.strip().isdigit()], texts
+    assert [t for s, t in paragraphs if s.startswith("Heading")] == ["Day 1", "Day 2", "Day 3"], paragraphs
+    assert texts.count("Distance walked: 12 km") == 2 and "Coast path guide" not in texts
+    assert not [t for t in texts if t.strip().isdigit()], "the page numbers are left out"
 
 
-def test_a_form_is_not_a_table_and_keeps_its_headings(tmp_path):
-    def draw(c, _):
-        y = 760
-        for head, pairs in (("1. Applicant details", [("Full name", "Date of birth"), ("Address", "Postcode"),
-                                                      ("Telephone", "Email address")]),
-                            ("2. Vessel details", [("Vessel name", "Registration no."), ("Length (m)", "Beam (m)")])):
-            c.setFont("Helvetica-Bold", 11.5)
-            c.drawString(64, y, head)
-            c.setFont("Helvetica", 10)
-            for left, right in pairs:
-                y -= 26
-                c.drawString(64, y, left)
-                c.line(156, y - 2, 290, y - 2)
-                c.drawString(310, y, right)
-                c.line(402, y - 2, 531, y - 2)
-            y -= 34
-
-    paragraphs, tables, _ = convert(tmp_path, draw)
-    assert not tables
-    assert [t for s, t in paragraphs if s.startswith("Heading")] == ["1. Applicant details", "2. Vessel details"]
-    assert ("", "Full name Date of birth") in paragraphs and ("", "Length (m) Beam (m)") in paragraphs
-
-
-def test_labels_that_line_up_with_their_values_are_not_a_table():
+def test_tables_without_lines_stay_tables(tmp_path):
     from pdfmanager import webpage
 
     def aligned(rows):
         return webpage._table_like({"kind": "aligned", "rows": rows})
 
-    assert not aligned([["Subtotal", "1,056.50"], ["VAT at 20%", "211.30"], ["Total due", "1,267.80"]])
+    assert aligned([["Oak board", "14.50"], ["Pine board", "9.25"], ["Ash board", "17.00"]]), "two columns"
+    assert aligned([["", "Mon", "Tue", "Wed"], ["Early", "Abara", "", ""], ["Late", "", "Pryce", ""],
+                    ["Night", "", "", "Varma"], ["Cover", "Mbeki", "", ""]]), "many cells empty"
+    assert aligned([["Kerf", "the width of the cut that the blade makes"], ["Arbor", "the shaft that carries the blade"],
+                    ["Fence", "a straight guide for the work"], ["Riving knife", "a plate behind the blade"]])
+
+
+def test_labels_ending_in_a_colon_before_their_values_are_not_a_table():
+    from pdfmanager import webpage
+
+    def aligned(rows):
+        return webpage._table_like({"kind": "aligned", "rows": rows})
+
     assert not aligned([["Northfield NF2 6QT", "Invoice no:", "2026-0417"], ["accounts@example.com", "Date:", "11 May"],
                         ["", "Due date:", "11 June"]])
-    assert not aligned([["Tidewater Marine", "", "INVOICE"], ["14 Chandlers Row", "", ""], ["Northfield", "No", "17"],
-                        ["", "Date", "11 May"]])
-    assert aligned([["Item", "Price"], ["Boat hook", "14.25"], ["Signal horn", "9.90"], ["Fender", "19.50"]])
     assert aligned([["Item", "Qty", "Amount"], ["Copper tubing", "14", "52.50"], ["Brass fittings", "", "74.40"]])
+    narrow = [["The harbour authority approved", "second survey of the seabed"], ["the new dredging schedule after", "will be carried out before the"],
+              ["a long public consultation.", "winter storms arrive. Fishing"], ["Local traders reported steady", "crews asked for longer"],
+              ["growth in visitor numbers.", "opening hours at the plant."]]
+    assert not aligned(narrow), "narrow columns of running text"
 
 
 def test_a_tables_bold_is_the_pages_own(tmp_path):
@@ -538,7 +605,7 @@ def test_the_short_last_line_of_a_list_item_stays_with_it(tmp_path):
                           ("ListParagraph", "• Guided walks leave the pilot office at ten and two.")], paragraphs
 
 
-def test_text_goes_on_after_a_picture_and_its_caption(tmp_path):
+def test_a_caption_in_italics_is_not_joined_to_the_text_after_it(tmp_path):
     from PIL import Image
     from reportlab.lib.utils import ImageReader
 
@@ -552,8 +619,22 @@ def test_text_goes_on_after_a_picture_and_its_caption(tmp_path):
     paragraphs, _, xml = convert(tmp_path, draw)
     texts = [t for _, t in paragraphs]
     assert "Figure 1: The restored east quay at low tide." in texts, texts
-    assert any("Planners expect the waterfront path to be finished well ahead of the regatta." in t for t in texts), texts
     assert "<w:drawing>" in xml
+
+
+def test_paragraphs_on_both_sides_of_a_picture_are_not_joined(tmp_path):
+    from PIL import Image
+    from reportlab.lib.utils import ImageReader
+
+    def draw(c, _):
+        c.setFont("Helvetica", 10)
+        c.drawString(64, 760, "The first paragraph ends without a full stop, as a line of a list would")
+        c.drawImage(ImageReader(Image.new("RGB", (300, 200), (120, 150, 180))), 64, 600, 189, 126)
+        c.drawString(64, 570, "eBay and iPhone are names; this paragraph starts with a small letter.")
+
+    texts = [t for _, t in convert(tmp_path, draw)[0]]
+    assert texts == ["The first paragraph ends without a full stop, as a line of a list would",
+                     "eBay and iPhone are names; this paragraph starts with a small letter."], texts
 
 
 def test_a_masthead_is_not_one_line(tmp_path):
@@ -587,37 +668,110 @@ def test_wrapped_chinese_is_joined_without_a_space(tmp_path):
     assert [t for _, t in paragraphs] == ["".join(lines)], paragraphs
 
 
-def test_a_compound_broken_at_its_hyphen_keeps_it(tmp_path):
-    lines = ["The harbourside community relies on up-", "to-date charts, a full-time pilot and round-the-",
-             "clock monitoring, which is self-", "financing; the channel is under obser-",
-             "vation by a well-", "equipped team."]
+def test_only_a_plain_compound_broken_at_its_hyphen_keeps_it(tmp_path):
+    lines = ["The harbourside community relies on up-to-", "date charts, a matter-of-", "fact pilot, his son-in-",
+             "law and round-the-", "clock monitoring. It is non-", "sense to call this self-",
+             "ishness: the long-estab-", "lished firm is under obser-", "vation."]
 
     def draw(c, _):
         c.setFont("Helvetica", 10)
         for n, line in enumerate(lines):
             c.drawString(64, 700 - 14 * n, line)
-            if n < 5:  # set as full lines: the right edge of the column
+            if n < len(lines) - 1:  # set as full lines: the right edge of the column
                 c.drawString(64 + 215 - c.stringWidth("-", "Helvetica", 10), 700 - 14 * n, " ")
 
-    paragraphs, _, _ = convert(tmp_path, draw)
-    text = " ".join(t for _, t in paragraphs)
-    for word in ("up-to-date", "round-the-clock", "self-financing", "observation", "well-equipped", "full-time"):
-        assert word in text, (word, text)
+    text = " ".join(t for _, t in convert(tmp_path, draw)[0])
+    for word in ("up-to-date", "matter-of-fact", "son-in-law", "round-the-clock", "nonsense", "selfishness",
+                 "long-established", "observation"):
+        assert f" {word}" in text, (word, text)
+
+
+def table_lines(heading_font, upper, lower, first_row):
+    """The words of a table without lines: two lines at the top set close, then rows."""
+    def line(top, cells, font="Helvetica", size=10):
+        return [{"x0": x, "x1": x + 6 * len(t), "top": top, "bottom": top + size, "text": t, "size": size,
+                 "fontname": font} for x, t in cells]
+
+    xs = (64, 250, 340, 430)
+    words = line(100, upper, heading_font) + line(111.5, lower, heading_font)
+    for n, row in enumerate((first_row, ("Fender", "19.50", "120", "Large"), ("Boat-hook", "14.25", "30", "Telescopic"),
+                             ("Signal-horn", "9.90", "64", "Brass"))):
+        words += line(131.5 + 20 * n, list(zip(xs, row)))
+    return words
 
 
 def test_a_two_line_heading_row_whose_one_line_cells_stand_on_the_lower_line():
     from pdfmanager import tables
 
-    def line(top, cells):
-        return [{"x0": x, "x1": x + 6 * len(t), "top": top, "bottom": top + 10, "text": t, "size": 10}
-                for x, t in cells]
-
-    words = (line(100, [(250, "Unit-price"), (340, "Quantity")])
-             + line(111.5, [(64, "Item"), (250, "(EUR)"), (340, "in-stock"), (430, "Notes")]))
-    for n, row in enumerate((("Mooring-warp", "28.00", "45", "Nylon"), ("Fender", "19.50", "120", "Large"),
-                             ("Boat-hook", "14.25", "30", "Telescopic"))):
-        words += line(131.5 + 20 * n, list(zip((64, 250, 340, 430), row)))
+    words = table_lines("Helvetica-Bold", [(250, "Unit-price"), (340, "Quantity")],
+                        [(64, "Item"), (250, "(EUR)"), (340, "in-stock"), (430, "Notes")],
+                        ("Mooring-warp", "28.00", "45", "Nylon"))
     runs = tables._runs(tables._lines(words))
     assert len(runs) == 1
     assert tables._aligned_table(runs[0])["rows"][:2] == [["Item", "Unit-price (EUR)", "Quantity in-stock", "Notes"],
                                                           ["Mooring-warp", "28.00", "45", "Nylon"]]
+
+
+def test_a_heading_row_is_not_merged_into_the_first_row_of_figures():
+    from pdfmanager import tables
+
+    # a timetable: the heading row has no first cell and stands close over the first row, all in one type
+    words = table_lines("Helvetica", [(250, "Mon"), (340, "Tue"), (430, "Wed")],
+                        [(64, "Ashby"), (250, "07:10"), (340, "07:15"), (430, "07:10")],
+                        ("Dunmore", "07:40", "07:45", "07:40"))
+    rows = tables._aligned_table(tables._runs(tables._lines(words))[0])["rows"]
+    assert rows[:2] == [["", "Mon", "Tue", "Wed"], ["Ashby", "07:10", "07:15", "07:10"]], rows
+
+
+def test_a_heading_row_in_larger_type_stays_in_its_table():
+    from pdfmanager import tables
+
+    words = [{"x0": x, "x1": x + 8 * len(t), "top": 100, "bottom": 114, "text": t, "size": 14, "fontname": "Helvetica-Bold"}
+             for x, t in ((64, "Plant"), (250, "Q1"), (340, "Q2"), (430, "Q3"))]
+    for n, row in enumerate((("Ashby", "12", "14", "9"), ("Dunmore", "7", "11", "13"), ("Eskfield", "5", "6", "8"))):
+        words += [{"x0": x, "x1": x + 6 * len(t), "top": 124 + 18 * n, "bottom": 134 + 18 * n, "text": t, "size": 10,
+                   "fontname": "Helvetica"} for x, t in zip((64, 250, 340, 430), row)]
+    runs = tables._runs(tables._lines(words))
+    assert len(runs) == 1 and tables._aligned_table(runs[0])["rows"][0] == ["Plant", "Q1", "Q2", "Q3"]
+
+
+def test_centred_lines_with_an_inch_mark_are_not_run_together(tmp_path):
+    lines = ["Overture to a Northern Spring", 'Fanfare for Brass and a 28" Tam-tam', "Interval of Twenty Minutes",
+             "Suite in D for Small Orchestra and Solo Cello", "Evening Hymn"]
+
+    def draw(c, _):
+        c.setFont("Helvetica", 11)
+        for n, line in enumerate(lines):
+            c.drawCentredString(297, 700 - 16 * n, line)
+
+    assert [t for _, t in convert(tmp_path, draw)[0]] == lines
+
+
+def test_a_drop_capital_does_not_make_its_line_a_raised_mark(tmp_path):
+    def draw(c, _):
+        c.setFont("Times-Bold", 36)
+        c.drawString(72, 676, "T")
+        x = 72 + c.stringWidth("T", "Times-Bold", 36) + 2
+        c.setFont("Times-Roman", 11)
+        c.drawString(x, 692, "he harbour authority approved the new dredging schedule after a long")
+        c.drawString(x, 678, "public consultation, and local traders reported steady growth in visitor")
+        c.drawString(72, 664, "numbers throughout the summer season.")
+
+    paragraphs, _, xml = convert(tmp_path, draw)
+    text = " ".join(t for _, t in paragraphs)
+    assert "he harbour authority approved the new dredging schedule" in text, text
+    assert "vertAlign" not in xml
+
+
+def test_lowered_figures_stay_in_their_line(tmp_path):
+    def draw(c, _):
+        x = 72
+        for text, size, y in (("Carbon dioxide (CO", 11, 700), ("2", 7, 697.5), (") and water (H", 11, 700),
+                              ("2", 7, 697.5), ("O) are given off.", 11, 700)):
+            c.setFont("Helvetica", size)
+            c.drawString(x, y, text)
+            x += c.stringWidth(text, "Helvetica", size)
+
+    paragraphs, _, xml = convert(tmp_path, draw)
+    assert [t for _, t in paragraphs] == ["Carbon dioxide (CO2) and water (H2O) are given off."], paragraphs
+    assert xml.count('<w:vertAlign w:val="subscript"/>') == 2

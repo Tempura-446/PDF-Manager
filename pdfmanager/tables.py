@@ -188,12 +188,7 @@ def _runs(lines):
     for line in lines:
         gap_ok = previous is not None and \
             line["top"] - previous["bottom"] <= MAX_LINE_GAP * max(line["size"], previous["size"])
-        # The rows of a table are set in one size: a line in much larger or
-        # smaller type (a title over the table, a name beside an address) is
-        # no row of it.
-        same_size = previous is None or \
-            max(line["size"], previous["size"]) <= 1.3 * min(line["size"], previous["size"])
-        if current and not (gap_ok and same_size):
+        if current and not gap_ok:
             runs.append(current)
             current, pending = [], []
         if len(line["segments"]) >= 2:
@@ -283,8 +278,14 @@ def _aligned_table(run):
             merged.append(cells)
     # A heading row of two lines whose one-line cells stand on the lower
     # line: the upper line (its first cell empty) is the start of that row.
-    if (len(merged) > 2 and not merged[0][0] and merged[1][0] and pitches[0] < pitch * 0.85
-            and all(b for a, b in zip(merged[0], merged[1]) if a)):
+    # Only when both lines are in bold and the rows under them are not: a
+    # heading row over a first row of figures looks the same otherwise.
+    def bold(line):
+        return all("bold" in str(w.get("fontname", "")).lower() for w in line["words"])
+
+    if (len(merged) > 2 and len(run) > 2 and not merged[0][0] and merged[1][0] and pitches[0] < pitch * 0.85
+            and all(b for a, b in zip(merged[0], merged[1]) if a)
+            and bold(run[0]) and bold(run[1]) and not bold(run[2])):
         merged[1] = [f"{a} {b}".strip() for a, b in zip(merged[0], merged[1])]
         del merged[0]
     # Mostly one cell per row isn't a table.
@@ -380,7 +381,7 @@ def _page_tables(page):
         if rows:
             columns = sorted({round(cell[0], 1) for cell in table.cells})
             found.append({"bbox": table.bbox, "rows": rows, "columns": columns, "kind": "ruled"})
-    words = [w for w in page.extract_words(extra_attrs=["size"])
+    words = [w for w in page.extract_words(extra_attrs=["size", "fontname"])
              if w.get("upright", True) and not any(_inside(w, t["bbox"]) for t in found)]
     for run in _runs(_lines(words)):
         table = _aligned_table(run)

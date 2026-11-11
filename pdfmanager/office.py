@@ -391,8 +391,8 @@ def _runs_xml(segments, links, heading, link_id):
             look += "<w:b/>"
         if char.italic:
             look += "<w:i/>"
-        if getattr(char, "raised", False):
-            look += '<w:vertAlign w:val="superscript"/>'
+        if getattr(char, "raised", 0):
+            look += f'<w:vertAlign w:val="{"superscript" if char.raised > 0 else "subscript"}"/>'
         if char.family == "Courier New":
             look += '<w:rFonts w:ascii="Courier New" w:hAnsi="Courier New" w:cs="Courier New"/>'
         link = links[char.link] if char.link is not None and char.link < len(links) else None

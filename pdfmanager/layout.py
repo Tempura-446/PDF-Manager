@@ -133,41 +133,53 @@ class Line:
             # Much smaller type on a baseline of its own (a date beside a
             # masthead's title) is no nearer than its own size makes it.
             apart = (abs(char.base - self.base) > 0.1 * size
-                     and min(self.size, char.size) < 0.6 * size and self._raised(char) is None)
+                     and min(self.size, char.size) < 0.6 * size and not self._shifted(char))
             return char.x0 - self.x1 <= GAP * (min(self.size, char.size) if apart else size)
-        return self._raised(char) is not None
+        return self._shifted(char) == 1 or self._marked(char)
 
-    def _raised(self, char):
-        """A small raised character right after a word (a footnote mark, an
-        exponent) is on the word's line, as is the text right after such a
-        mark that starts a line (a footnote). True: ``char`` is raised;
-        False: the line so far is; None: neither."""
+    def _shifted(self, char):
+        """1 when ``char`` is a small raised character right after the
+        line's own type (a footnote mark, an exponent), -1 when a small
+        lowered one (the 2 of CO2), else 0. Small means clearly smaller than
+        the type it follows, and that type more than one letter (after a
+        drop capital comes the text, not a mark)."""
         last = self.chars[-1]
         gap = char.x0 - self.x1
         if last.raised and abs(char.size - last.size) + abs(char.base - last.base) < 0.1 * last.size:
-            return True if gap <= 0.3 * self.size else None  # the mark's next figure
-        if char.size <= 0.86 * last.size and not last.raised:
-            small, rise, size = char.size, last.base - char.base, last.size
-            raised = True
-        elif len(self.chars) <= 3 and all(c.size <= 0.86 * char.size for c in self.chars):
-            small, rise, size = self.size, char.base - self.base, char.size
-            raised = False
-        else:
-            return None
-        if 0.2 * size <= rise <= 0.75 * size and -0.1 * size <= gap <= 0.3 * size and rise < 1.3 * small:
-            return raised
-        return None
+            return last.raised if gap <= 0.3 * self.size else 0  # the mark's next figure
+        if last.raised or char.size > 0.86 * last.size or not -0.1 * last.size <= gap <= 0.3 * last.size:
+            return 0
+        if len(self.chars) < 2 or abs(self.chars[-2].size - last.size) > 0.05 * last.size:
+            return 0
+        rise = last.base - char.base
+        if 0.2 * last.size <= rise <= 0.75 * last.size and rise < 1.3 * char.size:
+            return 1
+        if -0.45 * last.size <= rise <= -0.08 * last.size:
+            return -1
+        return 0
+
+    def _marked(self, char):
+        """Whether the line so far is a raised mark that ``char``, in
+        larger type and lower, follows closely: a footnote's number before
+        its text."""
+        if len(self.chars) > 3 or any(c.size > 0.86 * char.size for c in self.chars):
+            return False
+        rise, gap = char.base - self.base, char.x0 - self.x1
+        return (0.2 * char.size <= rise <= 0.75 * char.size and rise < 1.3 * self.size
+                and -0.1 * char.size <= gap <= 0.3 * char.size)
 
     def add(self, char):
-        raised = self._raised(char) if abs(char.base - self.base) > 0.25 * min(self.size, char.size) else None
-        if raised:
-            char.raised = True
+        shift = self._shifted(char)
+        if shift:
+            char.raised = shift
             if char.x0 - self.x1 <= 0.12 * self.size:
                 char.space = False  # set against its word, however pdfium read the gap
-        elif raised is False:
+        elif self._marked(char):
             for c in self.chars:
-                c.raised = True
-        if not raised and not char.space and char.x0 - self.x1 > 0.25 * max(char.size, self.size):
+                c.raised = 1
+        elif self.chars[-1].raised and char.x0 - self.x1 <= 0.12 * char.size:
+            char.space = False  # right after the mark: no space, as before it
+        if not shift and not char.space and char.x0 - self.x1 > 0.25 * max(char.size, self.size):
             char.space = True
         self.chars.append(char)
         self.x0, self.x1 = min(self.x0, char.x0), max(self.x1, char.x1)
@@ -306,6 +318,12 @@ class Block:
         lefts, rights = [ln.x0 for ln in lines], [ln.x1 for ln in lines]
         centres = [(ln.x0 + ln.x1) / 2 for ln in lines]
         centred = len(lines) > 1 and spread(centres) <= tol < min(spread(lefts), spread(rights))
+        width = max(ln.x1 - ln.x0 for ln in lines)
+        # Centred lines mostly shorter than the widest by a word or more are
+        # lines of their own (a programme, an address), each of them.
+        short = [ln.x1 - ln.x0 + 0.3 * size + nxt.first_word_width() <= width + 0.1 * size
+                 for ln, nxt in zip(lines, lines[1:])]
+        apart = centred and sum(short) * 2 >= len(short)
         paragraphs, cur = [], [lines[0]]
         for prev, line in zip(lines, lines[1:]):
             # A line ends its paragraph when the next line's first word would
@@ -317,13 +335,14 @@ class Block:
                         and not LIST_ITEM.match(cur[0].text))
             resized = abs(line.main_size - prev.main_size) > 0.05 * prev.main_size
             if centred:
-                # Centred lines are as long as their words: a sentence that
-                # goes on (a small letter, a quotation still open) is one
-                # paragraph, wherever its lines end.
-                indented = False
+                # Centred lines: the next line's first word would have fit
+                # when the line is that much shorter than the widest; a
+                # sentence that goes on (a small letter, a quotation still
+                # open) is one paragraph wherever its lines end.
                 text = " ".join(ln.text for ln in cur)
-                fits = fits and not (line.text[:1].islower() or text.count("“") > text.count("”")
-                                     or text.count('"') % 2)
+                fits = ((apart or prev.x1 - prev.x0 + 0.3 * size + line.first_word_width() <= width + 0.1 * size)
+                        and not (line.text[:1].islower() or text.count("“") > text.count("”")))
+                indented = False
             if fits or listed or indented or resized:
                 paragraphs.append(cur)
                 cur = []
@@ -735,7 +754,7 @@ def _chars(textpage, geometry):
         c.family, c.bold, c.italic = fonts[key]
         c.color = tuple(min(255, v.value) for v in rgba[:3])
         c.hidden = mode in (3, 7) or rgba[3].value == 0
-        c.link, c.space, c.raised = None, space, False
+        c.link, c.space, c.raised = None, space, 0  # raised: 1 a raised mark, -1 a lowered one
         space = False
         chars.append(c)
     return chars
