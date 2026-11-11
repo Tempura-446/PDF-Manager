@@ -13,7 +13,11 @@
 Coordinates are points from the top left of the page as shown (its crop box
 and rotation applied), y downwards, like a picture of the page. Angles are
 degrees clockwise. Invisible text (the searchable layer of an OCRed scan)
-is read, marked ``hidden``.
+is read, marked ``hidden``. Text is read once as a reader sees it: a
+character drawn twice at nearly the same place is read once, text wholly off
+the page is left out, and so is a copy of the page's text that doesn't show
+(invisible, white on white, under a picture, clipped away, in a hidden
+layer); what is left out is in the page's ``dropped``.
 """
 
 import bisect
@@ -22,6 +26,7 @@ import io
 import math
 import re
 import statistics
+import unicodedata
 from pathlib import Path
 
 from pdfmanager import core
@@ -106,7 +111,7 @@ def metrics(family):
 
 class Char:
     __slots__ = ("text", "x0", "x1", "base", "size", "angle", "family", "bold", "italic",
-                 "color", "hidden", "link", "space", "box", "raised")
+                 "color", "hidden", "link", "space", "box", "raised", "origin")
 
     def style(self):
         return (self.family, round(self.size * 2) / 2, self.bold, self.italic, self.color,
@@ -129,6 +134,8 @@ class Line:
         # label), placed on its own.
         if char.angle != self.angle or char.x0 < self.x0 - 0.4 * size:
             return False
+        if char.x0 < self.x1 - 0.5 * size and self._covers(char):
+            return False  # set over the line's own text: another run (a page number on a footer)
         if abs(char.base - self.base) <= 0.45 * size:
             # Much smaller type on a baseline of its own (a date beside a
             # masthead's title) is no nearer than its own size makes it.
@@ -136,6 +143,19 @@ class Line:
                      and min(self.size, char.size) < 0.6 * size and not self._shifted(char))
             return char.x0 - self.x1 <= GAP * (min(self.size, char.size) if apart else size)
         return self._shifted(char) == 1 or self._marked(char)
+
+    def _covers(self, char):
+        """Whether ``char`` lies over a character of the line other than its
+        last (over which an accent or a kerned letter may go): text set on
+        top of the line, not after it."""
+        if unicodedata.category(char.text[:1] or " ") in ("Mn", "Sk", "Lm"):
+            return False
+        width = max(char.x1 - char.x0, 0.05)
+        for c in self.chars[:-1]:
+            if (abs(c.base - char.base) <= 0.45 * max(c.size, char.size)
+                    and min(c.x1, char.x1) - max(c.x0, char.x0) > 0.3 * min(width, max(c.x1 - c.x0, 0.05))):
+                return True
+        return False
 
     def _shifted(self, char):
         """1 when ``char`` is a small raised character right after the
@@ -516,8 +536,11 @@ class Page:
     ``chars``, ``lines``, ``blocks``, ``links`` ([{"box", "uri" or "page"}]),
     ``images`` (boxes of the pictures on it), ``geometry``."""
 
-    def __init__(self, number, geometry, chars, links, images, rules=(), shapes=()):
+    def __init__(self, number, geometry, chars, links, images, rules=(), shapes=(), dropped=()):
         self.number, self.geometry = number, geometry
+        # (text, origin in the PDF's coordinates, size) of what was left out: a
+        # second copy of text, or text that is not on the page as shown.
+        self.dropped = list(dropped)
         self.width, self.height = geometry.width, geometry.height
         self.images = images
         self.shapes = list(shapes)  # boxes of what is drawn with lines and fills
@@ -648,13 +671,38 @@ class Document:
             rules, shapes = _rules(page, geometry)
         finally:
             page.close()
+        chars, dropped = self._seen(index, geometry, chars)
         for link_index, link in enumerate(links):
             x0, y0, x1, y1 = link["box"]
             for c in chars:
                 cx, cy = (c.box[0] + c.box[2]) / 2, (c.box[1] + c.box[3]) / 2
                 if x0 - 1 <= cx <= x1 + 1 and y0 - 1 <= cy <= y1 + 1:
                     c.link = link_index
-        return Page(index + 1, geometry, chars, links, images, rules, shapes)
+        return Page(index + 1, geometry, chars, links, images, rules, shapes, dropped)
+
+    def _seen(self, index, geometry, chars):
+        """(the characters a reader sees once each, [(text, origin, size)] of the
+        others): a character drawn twice at (nearly) the same place once;
+        text wholly off the page left out; and text that doesn't show
+        (invisible, white on white, under a picture, cut off by a clipping
+        path or in a hidden layer) left out when it is a second copy of
+        text that does show. The page drawn with and without its text tells
+        what shows."""
+        chars, dropped = _dedupe(chars)
+        if not chars:
+            return chars, dropped
+        shown = None
+        if self.has_background(index):
+            try:
+                shown = _shown(chars, self.render(index, SEEN_DPI), self.render(index, SEEN_DPI, True),
+                               SEEN_DPI / 72)
+            except Exception:  # pdfium couldn't draw the page: go by the text's own marks
+                shown = None
+        if shown is None:
+            shown = [not c.hidden for c in chars]
+        gone = _unseen(chars, shown, geometry.width, geometry.height)
+        dropped += [(c.text, c.origin, c.size) for k, c in enumerate(chars) if k in gone]
+        return [c for k, c in enumerate(chars) if k not in gone], dropped
 
     def size(self, index):
         """(width, height) of page ``index`` as shown."""
@@ -736,6 +784,7 @@ def _chars(textpage, geometry):
         px, py = geometry.point(ox.value, oy.value)
         c = Char()
         c.text, c.box, c.size, c.angle = ch, box, size, angle
+        c.origin = (ox.value, oy.value)  # in the PDF's own coordinates
         # From where the glyph starts (its origin) to where the next one
         # would (its advance), not its ink: text set at the same place starts
         # at the same origin, and a line is as wide as when it was set.
@@ -758,6 +807,107 @@ def _chars(textpage, geometry):
         space = False
         chars.append(c)
     return chars
+
+
+SEEN_DPI = 72  # the page drawn to tell which text shows
+
+
+def _dedupe(chars):
+    """(the characters without a second one of the same text drawn at
+    nearly the same place (bold made by drawing twice, overprinting, a copy
+    laid over its original), [(text, origin, size)] of those left out). Of two,
+    the one that shows is kept."""
+    kept, grid, dropped = [], {}, []
+    for c in chars:
+        key = (c.text, c.angle)
+        gx, gy = int(c.x0 // 8), int(c.base // 8)
+        tol_x = min(0.35 * max(c.x1 - c.x0, 0.3 * c.size), 0.2 * c.size, 7.5) + 0.05
+        tol_y = min(0.1 * c.size, 7.5) + 0.05
+        twin = None
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for k in grid.get((key, gx + dx, gy + dy), ()):
+                    o = kept[k]
+                    if (abs(o.x0 - c.x0) <= tol_x and abs(o.base - c.base) <= tol_y
+                            and abs(o.size - c.size) <= 0.1 * c.size):
+                        twin = k
+                        break
+        if twin is None:
+            grid.setdefault((key, gx, gy), []).append(len(kept))
+            kept.append(c)
+            continue
+        if kept[twin].hidden and not c.hidden:
+            kept[twin], c = c, kept[twin]
+            c.space, kept[twin].space = kept[twin].space, c.space
+        dropped.append((c.text, c.origin, c.size))
+    return kept, dropped
+
+
+def _shown(chars, full, bare, scale):
+    """[whether each character shows]: whether the page drawn with its text
+    (``full``) differs from it drawn without (``bare``) where it is."""
+    from PIL import ImageChops
+
+    diff = ImageChops.difference(full, bare)
+    red, green, blue = diff.split()
+    diff = ImageChops.lighter(ImageChops.lighter(red, green), blue)
+    w, h = diff.size
+    out = []
+    for c in chars:
+        x0, y0, x1, y1 = c.box
+        if x1 - x0 < 0.2 or y1 - y0 < 0.2:
+            out.append(True)  # a glyph without an outline: nothing to tell by
+            continue
+        box = (max(0, int(x0 * scale)), max(0, int(y0 * scale)),
+               min(w, math.ceil(x1 * scale)), min(h, math.ceil(y1 * scale)))
+        out.append(box[2] > box[0] and box[3] > box[1] and diff.crop(box).getextrema()[1] >= 24)
+    return out
+
+
+def _squeeze(text):
+    return re.sub(r"[\W_]+", "", text.lower())
+
+
+def _unseen(chars, shown, width, height):
+    """Indices of the characters to leave out: those wholly off the page, and
+    runs of characters that don't show (drawn one after the other) that are
+    a copy of text that does, when some text on the page shows. Text that
+    doesn't show and is not a copy (the recognised text over a scan) stays."""
+    gone = set()
+    for k, c in enumerate(chars):
+        x0, y0, x1, y1 = c.box
+        if x1 <= 0 or y1 <= 0 or x0 >= width or y0 >= height:
+            gone.add(k)
+    visible = [c for k, c in enumerate(chars) if shown[k] and k not in gone]
+    if not visible:
+        return gone
+    seen = _squeeze("".join(c.text for c in visible))
+    k, n = 0, len(chars)
+    while k < n:
+        if shown[k] or k in gone:
+            k += 1
+            continue
+        end = k
+        while end < n and not shown[end] and end not in gone:
+            end += 1
+        pieces, piece = [], [chars[k]]
+        for c in chars[k + 1:end]:  # the run in its lines
+            last = piece[-1]
+            if abs(c.base - last.base) > 0.5 * max(c.size, last.size) or c.x0 < last.x0 - 0.4 * c.size:
+                pieces.append(piece)
+                piece = []
+            piece.append(c)
+        pieces.append(piece)
+        total = matched = 0
+        for piece in pieces:
+            text = _squeeze("".join(c.text for c in piece))
+            total += len(text)
+            if text and text in seen:
+                matched += len(text)
+        if total >= 4 and matched >= 0.8 * total:
+            gone.update(range(k, end))
+        k = end
+    return gone
 
 
 def _images(page, geometry, smallest=24):
