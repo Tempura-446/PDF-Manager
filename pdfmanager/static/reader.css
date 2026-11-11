@@ -113,7 +113,9 @@
 .rd-tab[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
 .rd-tab:disabled { opacity: .4; cursor: default; }
 .rd-panel { flex: 1; overflow-y: auto; min-height: 0; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
-.rd-thumbs { list-style: none; margin: 0; padding: 8px 0 16px; }
+/* Only the rows near what the panel shows exist (reader.js, #layoutThumbs): each has its
+   place in the list, which is as tall as all of them. (8px, 44px: THUMB_PAD and THUMB_EXTRA there.) */
+.rd-thumbs { list-style: none; margin: 0; padding: 8px 0 16px; position: relative; box-sizing: content-box; }
 .rd-thumb { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 0; cursor: pointer; }
 .rd-thumb-img {
   width: 132px; background: #fff; border-radius: 3px; box-shadow: var(--shadow-page);
@@ -450,7 +452,7 @@ textarea.rd-textedit.rd-textedit-fit { white-space: pre-wrap; overflow: auto; }
 .rd-pagebar .rd-btn { height: 30px; min-width: 30px; padding: 0 7px; font-size: 13px; }
 .rd-pagebar-count { font-size: 13px; font-weight: 600; margin-right: auto; padding-left: 4px; white-space: nowrap; }
 .rd-pagebar-hint { margin-left: auto; font-size: 12px; color: var(--muted); padding-right: 4px; }
-.rd-thumb { position: relative; }
+.rd-thumb { position: absolute; left: 0; right: 0; box-sizing: border-box; }
 .rd-thumb[aria-selected="true"] .rd-thumb-img { box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px var(--accent-ring); }
 .rd-thumb[aria-selected="true"] span { color: var(--accent); font-weight: 700; }
 .rd-thumb.current[aria-selected="true"] span { color: var(--accent-text); }

@@ -459,7 +459,17 @@ def _reading_turn(page, chars):
     return best
 
 
-def _detect_page(page, textpage):
+# The reader's quick look at a file it has just opened (nobody asked): pages
+# that can't be a form to fill in aren't traced at all. A drawing sheet is
+# far bigger than any form, and a page with this many straight strokes is a
+# drawing or a dense table of figures; tracing either takes a minute or more.
+QUICK_MAX_SIDE = 1500      # points: just over the long side of A3 and Tabloid
+QUICK_MAX_STROKES = 12000
+
+
+def _detect_page(page, textpage, quick=False):
+    if quick and max(page.get_size()) > QUICK_MAX_SIDE:
+        return []
     chars = _chars(textpage)
     turn = _reading_turn(page, chars)
     to_px, to_pdf = _transform(page, turn)
@@ -471,6 +481,8 @@ def _detect_page(page, textpage):
     words = _words(chars, to_px)
     chars = [(box, ch) for w in words for ch, box in zip(w[4], w[5])]
     flat, upright = _lines(image, 5 * pt)
+    if quick and len(flat) + len(upright) > QUICK_MAX_STROKES:
+        return []
     # How slanted the page is (a scan): rise per pixel of the long lines.
     slants = sorted((s[5] - s[4] + 1 - s[3]) / (s[2] - s[1]) for s in flat if s[2] - s[1] > 100 * pt)
     slant = slants[len(slants) // 2] if slants else 0
@@ -629,10 +641,11 @@ def _named(fields, taken):
     return fields
 
 
-def detect(path, password=None, pages=None):
+def detect(path, password=None, pages=None, quick=False):
     """Fields a flat form should have: {1-based page: [{"rect": [x0, y0, x1, y1],
     "type": text/multiline/checkbox/signature/radio, "name", "value" (radio
-    buttons)}]}. ``pages`` limits it to some pages (1-based numbers)."""
+    buttons)}]}. ``pages`` limits it to some pages (1-based numbers);
+    ``quick`` leaves out pages that would take long and can't be forms."""
     import pypdfium2 as pdfium
 
     if not core.open_pdf(path, password).pages:
@@ -652,7 +665,7 @@ def detect(path, password=None, pages=None):
                 page = doc[number - 1]
                 textpage = page.get_textpage()
                 try:
-                    fields = _detect_page(page, textpage)
+                    fields = _detect_page(page, textpage, quick)
                 finally:
                     textpage.close()
                     page.close()

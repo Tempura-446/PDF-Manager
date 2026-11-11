@@ -1288,7 +1288,9 @@ function fpSync() {
   if (key === fp.key) return;
   fp.key = key;
   clearTimeout(fp.timer);
-  fp.timer = setTimeout(() => fpFacts(tab, key), fresh ? 30 : 700);
+  // (A document just opened: once its first page is on screen, not while it's being read and drawn.)
+  if (fresh) reader.shown().then(() => { if (fp.tab === tab && fp.key === key) fpFacts(tab, key); });
+  else fp.timer = setTimeout(() => fpFacts(tab, key), 700);
 }
 
 async function fpFacts(tab, key) {

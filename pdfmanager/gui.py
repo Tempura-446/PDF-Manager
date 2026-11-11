@@ -1602,6 +1602,24 @@ def _byte_range(header, size):
     return (start, end) if start <= end and start < size else None
 
 
+def _file_mentions(path, needle):
+    """Whether the bytes ``needle`` occur in the file (read in pieces, so a
+    big file isn't held in memory)."""
+    keep = len(needle) - 1
+    tail = b""
+    try:
+        with Path(path).open("rb") as f:
+            while True:
+                chunk = f.read(1 << 22)
+                if not chunk:
+                    return False
+                if needle in chunk or needle in tail + chunk[:keep]:
+                    return True
+                tail = chunk[-keep:] if keep else b""
+    except OSError:
+        return False
+
+
 def _safe_name(name):
     name = Path(name.replace("\\", "/")).name  # drop any path the browser sent
     return re.sub(r'[<>:"|?*\x00-\x1f]', "_", name).strip(" .") or "file"
@@ -2249,14 +2267,27 @@ class Handler(BaseHTTPRequestHandler):
             found = forms.existing_fields(path, fields.get("password") or None)
         return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})
 
+    def _opened_path(self, key):
+        """The file opened from this computer under id ``key`` (see
+        OpenFiles): what a request works on when the page names the file
+        (field "id") instead of sending it back."""
+        path = self.opened.get(key) if self.opened is not None else None
+        if path is None or not path.is_file():
+            raise UserError("that file is no longer available")
+        return path
+
     def _form_detect(self, body):
-        """The fields a flat form should have, for the Add form fields editor."""
+        """The fields a flat form should have, for the Add form fields editor:
+        of a file opened from this computer (field "id") or of an uploaded copy."""
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
-        if not uploads:
+        opened = self._opened_path(fields["id"]) if fields.get("id") else None
+        if opened is None and not uploads:
             raise UserError("no file")
         with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
-            path = Path(tmp) / "file.pdf"
-            path.write_bytes(uploads[0][2])
+            path = opened
+            if path is None:
+                path = Path(tmp) / "file.pdf"
+                path.write_bytes(uploads[0][2])
             pages = None
             if fields.get("pages"):  # e.g. "1-2": the reader's quick look at the first pages
                 try:
@@ -2268,10 +2299,11 @@ class Handler(BaseHTTPRequestHandler):
                 # The quick look, unasked: a scan isn't offered as a form, with
                 # or without its text recognised (a contents page's dot leaders
                 # look like one, and a scanned form is filled in on paper).
-                seen = filefacts.facts(path, fields.get("password") or None)
+                password = fields.get("password") or None
+                seen = filefacts.remembered(path) if opened is not None and not password else filefacts.facts(path, password)
                 if seen.get("scanned"):
                     return self._send(HTTPStatus.OK, {"fields": {}})
-            found = formdetect.detect(path, fields.get("password") or None, pages=pages)
+            found = formdetect.detect(path, fields.get("password") or None, pages=pages, quick=pages is not None)
         return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})
 
     def _comments(self, what, body):
@@ -2535,19 +2567,34 @@ class Handler(BaseHTTPRequestHandler):
 
     def _sign_verify(self, body):
         """The digital signatures in a PDF, checked: {"signatures": [...]}
-        (see certsign.verify)."""
+        (see certsign.verify), of a file opened from this computer (field
+        "id") or of an uploaded copy. With "quick", a file that can't hold a
+        signature (every one has a /ByteRange) is answered without being read
+        as a PDF: what the reader asks about every file it opens."""
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
         named = {name: data for name, _, data in uploads}
-        if "file" not in named:
+        opened = self._opened_path(fields["id"]) if fields.get("id") else None
+        if opened is None and "file" not in named:
             raise UserError("no file")
+        if fields.get("quick") and not (_file_mentions(opened, b"/ByteRange") if opened is not None
+                                        else re.search(rb"/ByteRange", named["file"])):
+            return self._send(HTTPStatus.OK, {"signatures": []})
         with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
-            path = Path(tmp) / "file.pdf"
-            path.write_bytes(named["file"])
+            path = opened
+            if path is None:
+                path = Path(tmp) / "file.pdf"
+                path.write_bytes(named["file"])
             trust = None
             if len(named.get("trust") or b""):
                 trust = [Path(tmp) / "trusted.cer"]
                 trust[0].write_bytes(named["trust"])
-            found = certsign.verify(path, fields.get("password") or None, trust)
+            try:
+                found = certsign.verify(path, fields.get("password") or None, trust)
+            except EXPECTED_ERRORS as exc:
+                if not fields.get("quick"):
+                    raise
+                # Signed, but the signatures couldn't be checked: the reader says so.
+                return self._send(HTTPStatus.OK, {"signatures": [], "error": str(exc)})
         return self._send(HTTPStatus.OK, {"signatures": found})
 
     def _facts(self, body):
