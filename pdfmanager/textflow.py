@@ -211,6 +211,8 @@ class Content:
                 ts["font"] = operands[0]
                 v = _nums(operands[1:])
                 ts["fs"] = v[0] if v else 0.0
+            elif op == b"Tf" and len(operands) == 1 and _nums(operands):
+                ts["fs"] = _nums(operands)[0]  # no font named: readers take the size alone
             elif op in (b"Td", b"TD"):
                 v = _nums(operands)
                 if v and len(v) == 2:
@@ -468,6 +470,20 @@ class Flow:
         if not near or (len(near) > 1 and near[1][0] < max(TWICE, near[0][0] + 0.2)):
             return None
         return near[0][1], near[0][2]
+
+    def space_width(self, letter):
+        """The width of a space where the letter is drawn, in points along
+        the line: the font's own space with the letter spacing, without any
+        word spacing. None when the font has no space."""
+        found = self.glyph(letter)
+        if found is None or not self._editable(found[0]):
+            return None
+        show = found[0]
+        info = show["info"]
+        code = next((c for c in show["codes"] if c in info.spaces), None) or next(iter(sorted(info.spaces)), None)
+        if code is None or info.width(code) <= 0:
+            return None
+        return (info.width(code) / 1000 * show["fs"] + show["Tc"]) * show["th"] * math.hypot(show["m"][0], show["m"][1])
 
     def checkpoint(self):
         """The changes so far, to come back to with :meth:`rollback`."""
@@ -1027,21 +1043,32 @@ class Flow:
                 out.append(([ArrayObject(arr)], b"TJ"))
                 arr = []
 
+        inverse = _inv(show["m"])
+        follow = None  # where a space right after new words goes: straight after them
         for n, el in enumerate(els):
             if el[0] == "g":
                 k = el[1]
+                if glyphs[k][2] and follow is not None:
+                    kern(follow)
+                    put(show["codes"][k], show["advs"][k])
+                    follow = pen
+                    continue
+                follow = None
                 kern(show["txs"][k] + moved(n, k))
                 put(show["codes"][k], show["advs"][k])
             elif el[0] == "c":
                 kern(el[2])
                 put(el[1], el[3])
+                follow = pen
             elif el[0] == "f":
                 run = el[1]
                 if run["own"] is None:
                     self.orphans.append(run)  # its font couldn't be put in the file: drawn the old way
                     continue
                 flush()
-                out += _foreign(show, run, names.of(run["own"].font), dy)
+                ops, end = _foreign(show, run, names.of(run["own"].font), dy)
+                out += ops
+                follow = _at(inverse, end[0], end[1])[0] if inverse else None
                 # Back to the piece's own font and spacing, the pen where its line began.
                 if show["font"] is not None:
                     out.append(([show["font"], FloatObject(fs)], b"Tf"))
@@ -1118,6 +1145,19 @@ def _foreign(show, run, name, dy):
     n = math.hypot(a, b) or 1.0
     ux, uy = a / n, b / n
     scale = n * style["raw_size"]
+
+    def wide(ch):
+        return sum(own.width_of(own.codes[c]) for c in ch) / 1000 * scale
+
+    # Letters set apart evenly (letter spacing): said once, as spacing, not
+    # as a move before each letter (which reads as a space between them).
+    along = [((x - x0) * ux + (y - y0) * uy, ch) for ch, x, y in entries]
+    gaps = [s2 - s1 - wide(c1) for (s1, c1), (s2, c2) in zip(along, along[1:]) if not c1.isspace() and not c2.isspace()]
+    tc = statistics.median(gaps) if len(gaps) >= 2 else 0.0
+    if abs(tc) < 0.02 or sum(abs(g - tc) < 0.02 for g in gaps) < len(gaps) * 0.6:
+        tc = 0.0
+    if tc:
+        ops[-5] = ([FloatObject(round(tc / n, 4))], b"Tc")  # in place of the "0 Tc" above
     arr, pen = [], 0.0
     for ch, x, y in entries:
         s = (x - x0) * ux + (y - y0) * uy
@@ -1135,9 +1175,9 @@ def _foreign(show, run, name, dy):
             arr[-1] = ByteStringObject(bytes(arr[-1]) + code)
         else:
             arr.append(ByteStringObject(code))
-        pen += sum(own.width_of(own.codes[c]) for c in ch) / 1000 * scale
+        pen += wide(ch) + tc * len(ch)
     ops.append(([ArrayObject(arr)], b"TJ"))
-    return ops
+    return ops, (x0 + ux * pen, y0 + uy * pen)
 
 
 def _blank(show):
