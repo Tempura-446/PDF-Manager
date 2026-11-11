@@ -4,6 +4,29 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZPDF</title>
+<script>
+// Started with a file to show (#open=<id>): pdf.js, its worker, the reader and
+// the file itself start loading now, side by side with this page, instead of
+// one after the other once the page has set itself up. (Before the
+// stylesheets on purpose: a script after them would wait for them.)
+(() => {
+  const q = new URLSearchParams(location.hash.slice(1)), token = q.get("token");
+  const id = (q.get("open") || "").split(",").filter(Boolean)[0];
+  if (!token || !id) return;
+  for (const href of ["/static/pdfjs/build/pdf.min.mjs", "/static/pdfjs/web/pdf_viewer.mjs", "/static/reader.js"]) {
+    const link = document.createElement("link");
+    link.rel = "modulepreload"; link.href = href;
+    document.head.append(link);
+  }
+  import("/static/pdfjs.js").then((m) => m.loadPdfjs()).catch(() => {});
+  import("/static/reader.js").catch(() => {});
+  // The file's first piece (all of a small file): the reader's openById takes
+  // it from here. The piece is as long as the reader's own FIRST_BYTES.
+  const first = fetch("/api/file/" + encodeURIComponent(id), { headers: { "X-Pdfm-Token": token, Range: "bytes=0-4194303" } });
+  first.catch(() => {});
+  window.zpdfEarly = { id, first };
+})();
+</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22zpdf-g%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23f45640%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23ba1e2a%22%2F%3E%3C%2FlinearGradient%3E%3Cmask%20id%3D%22zpdf-g-z%22%3E%3Cpath%20d%3D%22M26.5%2045.3L27.8%2045.0L29.2%2044.7L30.5%2044.2L31.9%2043.8L33.3%2043.3L34.7%2042.9L36.1%2042.5L37.6%2042.3L39.0%2042.1L40.5%2041.9L42.0%2041.7L43.5%2041.4L45.0%2041.1L46.5%2040.7L48.0%2040.4L49.6%2040.2L51.1%2040.1L52.6%2039.9L54.2%2039.8L55.7%2039.7L57.3%2039.5L58.8%2039.4L60.3%2039.2L61.8%2039.1L63.4%2039.0L64.9%2039.0L66.4%2039.0L67.9%2039.0L69.4%2038.9L70.9%2038.7L72.3%2038.5L73.8%2038.3L72.2%2026.7L70.8%2026.9L69.4%2027.0L68.0%2027.2L66.6%2027.4L65.1%2027.7L63.7%2028.1L62.2%2028.4L60.7%2028.7L59.2%2028.9L57.7%2029.0L56.2%2029.2L54.6%2029.4L53.1%2029.6L51.5%2029.8L50.0%2030.0L48.4%2030.1L46.9%2030.3L45.3%2030.4L43.7%2030.4L42.1%2030.5L40.5%2030.6L39.0%2030.8L37.4%2031.0L35.9%2031.3L34.3%2031.5L32.8%2031.7L31.2%2031.8L29.6%2031.8L28.1%2031.9L26.5%2032.1L25.0%2032.3L23.5%2032.7Z%22%20fill%3D%22%23fff%22%2F%3E%3Cpath%20d%3D%22M70.4%2029.5L69.3%2030.7L68.2%2031.8L67.1%2032.9L65.9%2034.0L64.6%2035.0L63.3%2035.9L62.0%2036.9L60.7%2037.9L59.4%2039.0L58.2%2040.1L56.9%2041.3L55.7%2042.4L54.3%2043.4L52.9%2044.3L51.5%2045.3L50.0%2046.2L48.6%2047.2L47.3%2048.2L45.9%2049.3L44.6%2050.3L43.2%2051.4L41.8%2052.3L40.3%2053.2L38.8%2054.1L37.3%2055.0L35.9%2055.9L34.5%2056.9L33.0%2057.8L31.6%2058.8L30.2%2059.6L28.7%2060.4L27.1%2061.2L34.9%2072.8L36.2%2071.7L37.5%2070.6L38.9%2069.6L40.3%2068.6L41.7%2067.6L43.1%2066.6L44.5%2065.6L45.9%2064.5L47.3%2063.5L48.7%2062.4L50.1%2061.4L51.6%2060.4L53.1%2059.5L54.6%2058.6L56.1%2057.6L57.5%2056.6L58.8%2055.5L60.2%2054.4L61.6%2053.3L63.0%2052.3L64.4%2051.3L65.9%2050.4L67.4%2049.5L68.8%2048.5L70.2%2047.5L71.5%2046.4L72.8%2045.3L74.1%2044.3L75.5%2043.3L76.9%2042.3L78.3%2041.4L79.6%2040.5Z%22%20fill%3D%22%23fff%22%2F%3E%3Cpath%20d%3D%22M25.5%2077.8L27.3%2077.8L29.2%2077.9L31.0%2078.0L32.8%2078.1L34.7%2078.1L36.5%2078.0L38.3%2077.8L40.1%2077.6L41.9%2077.4L43.7%2077.2L45.6%2077.1L47.4%2077.0L49.2%2076.9L51.0%2076.8L52.9%2076.7L54.8%2076.5L56.6%2076.2L58.5%2076.0L60.4%2075.8L62.3%2075.7L64.3%2075.5L66.3%2075.3L68.3%2075.0L70.1%2073.8L71.9%2072.5L73.7%2071.3L75.6%2070.1L77.4%2068.9L79.3%2067.6L81.2%2066.4L83.1%2065.1L85.1%2063.7L84.9%2063.3L82.6%2063.2L80.3%2063.1L78.0%2063.0L75.8%2062.9L73.7%2062.8L71.6%2062.6L69.5%2062.2L67.4%2061.9L65.4%2061.5L63.6%2062.0L61.9%2062.5L60.1%2063.0L58.4%2063.5L56.7%2063.9L55.0%2064.2L53.2%2064.4L51.6%2064.6L49.9%2064.8L48.2%2065.1L46.5%2065.3L44.9%2065.4L43.2%2065.5L41.5%2065.4L39.9%2065.3L38.2%2065.1L36.6%2064.9L34.9%2064.8L33.3%2064.7L31.6%2064.6L29.9%2064.5L28.2%2064.4L26.5%2064.2Z%22%20fill%3D%22%23fff%22%2F%3E%3Cpath%20d%3D%22M32.4%2044.6L31.4%2045.3L30.1%2045.8L28.7%2045.9L27.1%2045.6L25.4%2045.0L23.8%2044.1L22.3%2043.0L20.9%2041.6L19.9%2040.1L19.1%2038.5L18.7%2036.9L18.6%2035.4L18.9%2034.1L19.6%2033.0L20.6%2032.3L21.9%2031.8L23.3%2031.7L24.9%2032.0L26.6%2032.6L28.2%2033.5L29.7%2034.6L31.1%2036.0L32.1%2037.5L32.9%2039.1L33.3%2040.7L33.4%2042.2L33.1%2043.5Z%22%20fill%3D%22%23fff%22%2F%3E%3Cpath%20d%3D%22M80.2%2040.2L79.1%2040.9L77.8%2041.3L76.3%2041.3L74.7%2040.9L73.2%2040.2L71.6%2039.2L70.3%2037.9L69.1%2036.4L68.3%2034.8L67.7%2033.1L67.5%2031.5L67.7%2030.1L68.2%2028.8L69.0%2027.8L70.1%2027.1L71.4%2026.7L72.9%2026.7L74.5%2027.1L76.0%2027.8L77.6%2028.8L78.9%2030.1L80.1%2031.6L80.9%2033.2L81.5%2034.9L81.7%2036.5L81.5%2037.9L81.0%2039.2Z%22%20fill%3D%22%23fff%22%2F%3E%3Cpath%20d%3D%22M35.6%2066.0L36.1%2067.3L36.2%2068.7L36.0%2070.2L35.3%2071.7L34.3%2073.1L33.0%2074.5L31.4%2075.6L29.7%2076.5L28.0%2077.1L26.2%2077.4L24.5%2077.3L23.1%2076.9L21.9%2076.2L21.0%2075.2L20.5%2073.9L20.4%2072.5L20.6%2071.0L21.3%2069.5L22.3%2068.1L23.6%2066.7L25.2%2065.6L26.9%2064.7L28.6%2064.1L30.4%2063.8L32.1%2063.9L33.5%2064.3L34.7%2065.0Z%22%20fill%3D%22%23fff%22%2F%3E%3Cpath%20d%3D%22M63.8%2046.4L62.3%2047.3L60.9%2048.1L59.4%2049.0L58.0%2049.9L56.6%2050.8L55.2%2051.8L53.7%2052.7L52.3%2053.6L50.9%2054.5L49.5%2055.5L48.0%2056.4L46.6%2057.3L45.2%2058.3L43.8%2059.3L42.5%2060.3L41.1%2061.2L39.7%2062.2L38.3%2063.2L38.3%2063.2L39.8%2062.4L41.3%2061.6L42.8%2060.7L44.2%2059.9L45.7%2059.0L47.1%2058.1L48.6%2057.2L50.0%2056.3L51.5%2055.4L52.9%2054.4L54.3%2053.5L55.7%2052.5L57.1%2051.5L58.4%2050.5L59.8%2049.4L61.1%2048.4L62.5%2047.5L63.8%2046.4Z%22%20fill%3D%22%23000%22%2F%3E%3Cpath%20d%3D%22M53.8%2069.2L55.7%2069.2L57.5%2069.2L59.3%2069.0L61.2%2068.8L63.0%2068.6L64.9%2068.4L66.8%2068.1L68.8%2067.9L70.8%2067.5L72.8%2067.2L74.8%2066.7L76.8%2066.2L78.8%2065.6L80.9%2064.9L83.0%2064.2L83.0%2064.2L80.8%2064.7L78.7%2065.1L76.6%2065.6L74.6%2066.0L72.6%2066.4L70.6%2066.7L68.6%2067.0L66.7%2067.2L64.8%2067.5L62.9%2067.8L61.0%2068.1L59.2%2068.4L57.4%2068.7L55.6%2069.0L53.8%2069.2Z%22%20fill%3D%22%23000%22%2F%3E%3Cpath%20d%3D%22M61.4%2072.2L63.5%2072.5L65.5%2072.8L67.6%2072.9L69.6%2072.5L71.5%2071.8L73.5%2071.0L75.4%2070.2L77.4%2069.2L79.3%2068.0L81.3%2066.8L83.2%2065.3L85.1%2063.7L85.1%2063.7L83.1%2065.1L81.1%2066.3L79.2%2067.4L77.2%2068.4L75.2%2069.3L73.3%2070.2L71.3%2071.0L69.4%2071.7L67.5%2072.3L65.4%2072.3L63.4%2072.2L61.4%2072.2Z%22%20fill%3D%22%23000%22%2F%3E%3C%2Fmask%3E%3C%2Fdefs%3E%3Cpath%20d%3D%22M26%206H74L94%2026V74A20%2020%200%200%201%2074%2094H26A20%2020%200%200%201%206%2074V26A20%2020%200%200%201%2026%206Z%22%20fill%3D%22url%28%23zpdf-g%29%22%2F%3E%3Cpath%20d%3D%22M74%206V22A4%204%200%200%200%2078%2026H94Z%22%20fill%3D%22%23ffd0c6%22%2F%3E%3Crect%20width%3D%22100%22%20height%3D%22100%22%20fill%3D%22%23fff%22%20mask%3D%22url%28%23zpdf-g-z%29%22%2F%3E%3C%2Fsvg%3E">
 <link rel="stylesheet" href="/static/reader.css">
 <style>
@@ -1265,7 +1288,9 @@ function fpSync() {
   if (key === fp.key) return;
   fp.key = key;
   clearTimeout(fp.timer);
-  fp.timer = setTimeout(() => fpFacts(tab, key), fresh ? 30 : 700);
+  // (A document just opened: once its first page is on screen, not while it's being read and drawn.)
+  if (fresh) reader.shown().then(() => { if (fp.tab === tab && fp.key === key) fpFacts(tab, key); });
+  else fp.timer = setTimeout(() => fpFacts(tab, key), 700);
 }
 
 async function fpFacts(tab, key) {
@@ -3036,7 +3061,12 @@ async function listen() {
 }
 async function openInReaderById(ids, goto = null) {
   await select("reader");
-  for (const id of ids) await reader.openById(id, goto);  // each in its own tab
+  for (const id of ids) {  // each in its own tab
+    // (The file this page was started with is already on its way: see the top of the page.)
+    const early = window.zpdfEarly;
+    if (early) window.zpdfEarly = null;
+    await reader.openById(id, goto, early && early.id === id ? early.first : null);
+  }
 }
 setInterval(ping, 15000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) ping(); });
