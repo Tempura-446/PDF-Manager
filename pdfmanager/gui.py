@@ -2643,6 +2643,14 @@ class _Server(ThreadingHTTPServer):
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
 
+    def handle_error(self, request, client_address):
+        # The page cancels questions it no longer needs (a document closed, a
+        # tab switched) and the window may close mid-answer: a reader that has
+        # gone is not a fault worth a traceback in the log.
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
+
     def server_close(self):
         super().server_close()
         # Every way of ending the app comes through here. Jobs still running

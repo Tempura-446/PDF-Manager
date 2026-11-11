@@ -484,3 +484,27 @@ def test_save_as_starts_next_to_the_opened_file(tmp_path, monkeypatch):
     key = results.add("b.pdf", b"%PDF-1.4 y")
     api.save_result(key, "b.pdf")
     assert seen["directory"] == str(Path.home())
+
+
+def test_a_reader_that_went_away_leaves_no_traceback(app, tmp_path, monkeypatch, capsys):
+    base, token, srv = app
+    pdf = text_pdf(tmp_path / "a.pdf").read_bytes()
+    body, headers = multipart({"op": "rotate", "degrees": "90"}, [("files", "a.pdf", pdf)])
+    job = run_job(base, token, "/api/run", body, headers)
+    handler = srv.RequestHandlerClass
+
+    def cut_off(self, result):
+        raise BrokenPipeError("gone")
+
+    monkeypatch.setattr(handler, "_send_result", cut_off)
+    with pytest.raises((urllib.error.URLError, ConnectionError)):
+        call(base, token, f"/api/job/{job}/result")
+    assert "Traceback" not in capsys.readouterr().err
+
+    def broken(self, result):
+        raise ValueError("a real fault")
+
+    monkeypatch.setattr(handler, "_send_result", broken)
+    with pytest.raises((urllib.error.URLError, ConnectionError)):
+        call(base, token, f"/api/job/{job}/result")
+    assert "ValueError: a real fault" in capsys.readouterr().err, "real faults are still reported"
