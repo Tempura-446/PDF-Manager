@@ -221,7 +221,9 @@ function fetchFor(url, options, ms, signal = null) {
   const timer = setTimeout(() => stop.abort(new DOMException("no answer in time", "TimeoutError")), ms);
   const onAbort = () => stop.abort(signal.reason);
   if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener("abort", onAbort, { once: true }); }
-  return fetch(url, { ...options, signal: stop.signal }).finally(() => {
+  // (no-store: the browser lets only one request at a time for an address
+  // through its cache, and pieces of one file must go side by side)
+  return fetch(url, { cache: "no-store", ...options, signal: stop.signal }).finally(() => {
     clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
   });
@@ -875,7 +877,7 @@ export class Reader {
       // One request: the file's first piece, which comes with its size, place
       // and version. A small file is whole in it. (``first``: that request,
       // already made by the page while it was starting.)
-      const res = await (first || fetch(url, { headers: { "X-Pdfm-Token": this.token, Range: `bytes=0-${FIRST_BYTES - 1}` } }));
+      const res = await (first || fetch(url, { cache: "no-store", headers: { "X-Pdfm-Token": this.token, Range: `bytes=0-${FIRST_BYTES - 1}` } }));
       if (!res.ok && res.status !== 416) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
       const head = new Uint8Array(await res.arrayBuffer());
       const name = header(res, "X-Pdfm-Filename") || "document.pdf";
@@ -1106,7 +1108,12 @@ export class Reader {
    *  (#readAll), they come from memory. A piece that fails is asked for once
    *  more; if it fails again, ``failed`` rejects (#load gives up opening)
    *  and, once open, the reader says so once and offers to close the tab.
-   *  Requests still on their way stop when the document is closed. */
+   *
+   *  pdf.js has no way to be told a piece can't be had: it would wait for
+   *  it for ever, and so would closing the document. So a piece given up
+   *  (or still on its way when the document is closed: ``giveUp``) is
+   *  answered with empty bytes, which pdf.js reads as nothing to draw; the
+   *  document is then ``poisoned``: it is never written out (#savedDocument). */
   #pieces(tab) {
     const head = tab.head;
     tab.head = null;
@@ -1117,6 +1124,12 @@ export class Reader {
     source.failed.catch(() => {});
     source.serve = (data) => {  // all of the file is here
       for (const [begin, end] of pending) source.onDataRange(begin, data.slice(begin, end));
+      pending.clear();
+    };
+    source.giveUp = () => {
+      source.poisoned = true;
+      stop.abort();
+      for (const [begin, end] of pending) source.onDataRange(begin, new Uint8Array(end - begin));
       pending.clear();
     };
     const ask = async (begin, end, again) => {
@@ -1132,9 +1145,10 @@ export class Reader {
         if (source.data) { source.serve(source.data); return; }
         if (again && !e.gone) { setTimeout(() => ask(begin, end, false), 300); return; }
         if (e.gone) tab.gone ||= e.message;
-        if (source.failure) return;
+        if (source.failure) { source.giveUp(); return; }
         source.failure = String(e.message || e);
         source.fail(new Error(source.failure));
+        source.giveUp();
         if (source.task && source.task === this.task && this.doc && this.activeTab === tab) {
           this.toast(`Couldn't read more of “${tab.name}”: ${source.failure}. Close it and open it again.`, 15000,
             ["Close", () => this.closeTab(tab)]);
@@ -1144,9 +1158,11 @@ export class Reader {
     source.requestDataRange = (begin, end) => {
       pending.set(begin, end);
       if (source.data) source.serve(source.data);
+      else if (source.poisoned) source.giveUp();
       else ask(begin, end, true);
     };
     source.abort = () => { stop.abort(); pending.clear(); };
+    source.waiting = () => pending.size > 0;
     tab.source = source;
     return source;
   }
@@ -1187,6 +1203,7 @@ export class Reader {
 
   /** The shown document with its unsaved annotations and form entries. */
   async #savedDocument(tab) {
+    if (this.pieces?.poisoned) throw new Error(`part of the file couldn't be read (${this.pieces.failure || "it stopped answering"}); close it and open it again`);
     if (tab?.url && !tab.bytes) await this.#readAll(tab);  // (pdf.js needs every piece to write it out)
     return await bounded(this.doc.saveDocument(), WHOLE_MS, "writing the document took too long");
   }
@@ -1207,7 +1224,7 @@ export class Reader {
       this.bytes = tab.bytes;
       this.name = tab.name;
       this.password = tab.password;
-      pieces = tab.bytes ? null : this.#pieces(tab);
+      pieces = this.pieces = tab.bytes ? null : this.#pieces(tab);
       const task = await openDocument({
         ...DOC_OPTIONS,
         ...(tab.bytes
@@ -1392,18 +1409,23 @@ export class Reader {
     this.thumbs = null;
     this.thumbsList.replaceChildren();
     this.outlineList.replaceChildren();
-    const doc = this.doc, task = this.task;
+    const doc = this.doc, task = this.task, pieces = this.pieces;
     this.doc = null;
     this.task = null;
+    this.pieces = null;
+    // A file read in pieces: what's still on its way is given up, and if
+    // pdf.js won't let go of the document soon, the reader doesn't wait.
+    const wait = pieces && (pieces.poisoned || pieces.waiting()) ? 2000 : 10000;
+    pieces?.giveUp();
     this.#showSaveState();
     if (doc) {
       this.pdfViewer.setDocument(null);
       this.linkService.setDocument(null);
       this.findController.setDocument(null);
       this.scripting?.setDocument(null).catch(() => {});
-      await destroyTask(doc.loadingTask || task);  // pdf.js frees a document through its task
+      await destroyTask(doc.loadingTask || task, wait);  // pdf.js frees a document through its task
     } else if (task) {
-      await destroyTask(task);  // e.g. cancelled at the password prompt: wait for it to be gone
+      await destroyTask(task, wait);  // e.g. cancelled at the password prompt: wait for it to be gone
     }
   }
 
@@ -4356,21 +4378,26 @@ export class Reader {
     clearTimeout(this.scaleTimer);
     const n = this.pdfViewer.currentPageNumber || 1;
     if (tab.detected.has(n)) return;
-    this.scaleTimer = setTimeout(() => this.#readScale(tab, doc, n), now ? 0 : 400);
+    // While measuring, a scale stored in the PDF is looked up at once (it's
+    // already here: one answer from the server for every page); reading the
+    // sheet's text still waits for the page to be drawn.
+    this.scaleTimer = setTimeout(() => this.#readScale(tab, doc, n, now), now || this.measureMode ? 0 : 400);
   }
 
-  async #readScale(tab, doc, n) {
+  async #readScale(tab, doc, n, now = false) {
     const here = () => doc === this.doc && tab === this.activeTab && (this.pdfViewer.currentPageNumber || 1) === n;
     if (!here() || tab.detected.has(n) || tab.readingScale === n) return;
     tab.readingScale = n;
     try {
-      await this.#drawn(n);
-      if (!here()) return;  // left meanwhile: read when it's come back to
       // A scale the drawing program stored in the PDF is exact; the one
       // written on the sheet is read from its text.
       tab.stored ||= this.#storedScales(tab);
       const stored = (await tab.stored)[n]?.[0];
       if (!here()) return;
+      if (!stored && !now) {
+        await this.#drawn(n);
+        if (!here()) return;  // left meanwhile: read when it's come back to
+      }
       if (stored) {
         const near = measure.nearestScale(stored.ratio, stored.units);
         const label = stored.label || (near.off < 0.005 ? near.scale.label : `1:${+stored.ratio.toFixed(stored.ratio < 10 ? 2 : 0)}`);
@@ -4620,7 +4647,7 @@ export class Reader {
     this.container.style.cursor = "";
     if (page) this.#drawMeasures(page);
     if (aimPage && aimPage !== page) this.#drawMeasures(aimPage);
-    if (mode) this.#geometry(this.pdfViewer.currentPageNumber || 1);  // start reading the lines now
+    if (mode) { this.#geometry(this.pdfViewer.currentPageNumber || 1); this.#refreshScale(true); }  // start reading the lines and the scale now
     this.root.classList.toggle("rd-measuring", !!mode);
     this.distanceBtn.setAttribute("aria-pressed", String(mode === "distance"));
     this.areaBtn.setAttribute("aria-pressed", String(mode === "area"));

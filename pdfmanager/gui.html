@@ -22,7 +22,7 @@
   import("/static/reader.js").catch(() => {});
   // The file's first piece (all of a small file): the reader's openById takes
   // it from here. The piece is as long as the reader's own FIRST_BYTES.
-  const first = fetch("/api/file/" + encodeURIComponent(id), { headers: { "X-Pdfm-Token": token, Range: "bytes=0-4194303" } });
+  const first = fetch("/api/file/" + encodeURIComponent(id), { cache: "no-store", headers: { "X-Pdfm-Token": token, Range: "bytes=0-4194303" } });
   first.catch(() => {});
   window.zpdfEarly = { id, first };
 })();
@@ -3049,12 +3049,18 @@ window.addEventListener("beforeunload", (e) => { if (!restarting && reader && re
 // Files handed over by another launch of the app (e.g. a PDF opened from
 // Explorer while the app is already running) arrive as events.
 async function listen() {
+  // Where this window got to, kept across a reload of the page (for this run
+  // of the app: the token is new each time), so the files handed over
+  // before the reload aren't opened again.
+  const seen = "pdfm-events:" + token;
   let after = 0;
+  try { after = Number(sessionStorage.getItem(seen)) || 0; } catch (e) { after = 0; }
   for (;;) {
     try {
       const data = await (await api(`/api/events?after=${after}`)).json();
       if (data.none) return;  // not the app's own window: nothing will come
       after = data.last;
+      try { sessionStorage.setItem(seen, String(after)); } catch (e) { /* not kept */ }
       for (const event of data.events) if (event.open && event.open.length) await openInReaderById(event.open);
     } catch (e) { await new Promise((r) => setTimeout(r, 3000)); }
   }

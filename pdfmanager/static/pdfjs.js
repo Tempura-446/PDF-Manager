@@ -18,6 +18,7 @@ export const DOC_OPTIONS = {
 };
 
 let loading = null;
+let library = null;  // pdf.js once loaded
 
 export function loadPdfjs() {
   loading ||= (async () => {
@@ -29,6 +30,7 @@ export function loadPdfjs() {
       const pdfjs = await import(BASE + "build/pdf.min.mjs");
       if (worker) pdfjs.GlobalWorkerOptions.workerPort = worker;
       else pdfjs.GlobalWorkerOptions.workerSrc = src;
+      library = pdfjs;
       return pdfjs;
     } catch (e) {
       worker?.terminate();
@@ -41,15 +43,25 @@ export function loadPdfjs() {
 
 const freeing = new Set();
 
-/** Free a document's loading task (waiting 10 s at most: a document whose
- *  file stopped answering mustn't hold up the next one for ever). */
-export function destroyTask(task) {
+/** Free a document's loading task. A document that won't let go within
+ *  ``wait`` ms (pdf.js waiting for a piece of a file that will never come)
+ *  is left behind with the worker it holds up: the documents opened after
+ *  it get a new worker, so it can't hold them up too. */
+export function destroyTask(task, wait = 10000) {
   if (!task) return Promise.resolve();
   let timer;
-  const done = Promise.race([Promise.resolve().then(() => task.destroy()), new Promise((resolve) => { timer = setTimeout(resolve, 10000); })])
-    .catch(() => {}).finally(() => { clearTimeout(timer); freeing.delete(done); });
+  const stuck = new Promise((resolve) => { timer = setTimeout(() => resolve("stuck"), wait); });
+  const done = Promise.race([Promise.resolve().then(() => task.destroy()), stuck])
+    .then((how) => { if (how === "stuck") freshWorker(); }, () => {})
+    .finally(() => { clearTimeout(timer); freeing.delete(done); });
   freeing.add(done);
   return done;
+}
+
+function freshWorker() {
+  const options = library?.GlobalWorkerOptions;
+  if (!options?.workerPort) return;  // (pdf.js starts a worker per document then: nothing shared to hold up)
+  try { options.workerPort = new Worker(BASE + "build/pdf.worker.min.mjs", { type: "module" }); } catch (e) { /* the old one stays */ }
 }
 
 /** pdfjs.getDocument(), once every document being freed is gone. */
