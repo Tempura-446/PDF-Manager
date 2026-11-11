@@ -785,7 +785,11 @@ export class Reader {
   // ---- visibility (called by the app when switching tools) --------------------
   show() {
     this.active = true; this.root.hidden = false;
-    if (this.doc) this.container.focus({ preventScroll: true }); else this.refreshRecent();
+    if (this.doc) this.container.focus({ preventScroll: true });
+    // (A moment later: when the reader is shown to open a file in it, the
+    // Recent list isn't needed, and listing it would keep the server busy
+    // while the file is being read.)
+    else setTimeout(() => { if (!this.doc && !this.opening) this.refreshRecent(); }, 0);
   }
   hide() { this.active = false; this.root.hidden = true; this.#closeMenu(); }
 
@@ -824,6 +828,7 @@ export class Reader {
    *  page and searches for text on it (e.g. from the folder search). */
   async openById(id, goto = null, first = null) {
     this.#busy(true);
+    this.opening = (this.opening || 0) + 1;
     try {
       const url = "/api/file/" + encodeURIComponent(id);
       // One request: the file's first piece, which comes with its size, place
@@ -840,6 +845,8 @@ export class Reader {
     } catch (e) {
       this.toast("Could not open the file: " + (e.message || e));
     } finally {
+      this.opening--;
+      if (!this.opening && !this.doc && this.active) this.refreshRecent();  // nothing opened after all
       this.#busy(false);
     }
   }
@@ -1016,7 +1023,7 @@ export class Reader {
     this.sidebar.hidden = true;
     this.root.classList.remove("reading");
     if (this.active) document.title = "PDF reader — ZPDF";
-    this.refreshRecent();
+    setTimeout(() => { if (!this.doc && !this.opening) this.refreshRecent(); }, 0);  // (see show())
     this.onChange?.();
   }
 

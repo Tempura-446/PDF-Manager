@@ -279,9 +279,11 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   **Save as** (Ctrl+Shift+S) starts in the file's own folder. A PDF that
   came from elsewhere (dropped from a browser, a tool's result) is saved
   as a copy.
-- **Big files open fast:** a PDF of over 32 MB from your computer is read
+- **Big files open fast:** a PDF of over 4 MB from your computer is read
   a piece at a time as you go, so the first pages show at once (a 277 MB
   drawing set: first page in about a second, using a few MB of memory).
+  The page thumbnails are made when you open their panel, and only those
+  near the page you are on.
 - A zoom that fits the page (Automatic, Fit width, Fit page) fits it again
   when the window or the sidebar changes size.
 - **Tabs:** open several PDFs at once (the + button, or drop more files),
