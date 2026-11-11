@@ -15,13 +15,17 @@ just that piece, so the letters keep their font, spacing and everything
 else exactly, and nothing is left behind underneath. A rule moves by
 drawing it in a shifted copy of the coordinates (``q ... cm ... Q``).
 
-The paragraph that was rewritten is taken out of the drawing the same way
-(its words replaced by an empty move of the same width, so whatever comes
-after on the line stays put). When that isn't possible for sure (its words
-share a piece of text with others, sit inside a form XObject, or use a
-font whose letter widths can't be read), the old way is kept: the words
-are covered with the colour around them, and the text below only moves
-down, never up under the cover.
+The words that were changed are taken out of the drawing itself, glyph by
+glyph: a piece of text (one Tj or TJ) they share with other words is
+written again without them, every other glyph at its place and the pen
+left where it was, so what follows on the page stays put. New words are
+written at that place in the drawing (see :class:`Flow`), so they keep the
+old ones' colour, outline, clipping and tag. Text inside a form XObject is
+changed in a copy of the form made for that one drawing of it. When any
+of this isn't possible for sure (a font whose letter widths can't be read,
+letters drawn twice at one spot), nothing is changed here and the caller
+covers the old words instead; the text below then only moves down, never
+up under the cover.
 
 When the text below would be pushed past the bottom margin (or into
 something that stays), nothing moves and the change says so: no words are
@@ -374,6 +378,7 @@ class Flow:
         self.edits = {}       # (layer, show op index) -> {show, els, shift, gone}: letters changed in place
         self.dropped = set()  # path starts
         self.orphans = []     # new words that couldn't be written in place: drawn after everything else
+        self.reshaped = {}    # operator index -> new operands: an underline or highlight that follows its words
         self.rises, self.moves = {}, {}  # show op index -> page dy; path start -> page dy
         self.annots = []  # (box, dy)
         self.moved_letters = {}  # pdfium letter index -> page dy
@@ -484,6 +489,49 @@ class Flow:
         if code is None or info.width(code) <= 0:
             return None
         return (info.width(code) / 1000 * show["fs"] + show["Tc"]) * show["th"] * math.hypot(show["m"][0], show["m"][1])
+
+    def follow(self, letters, spot, delta):
+        """An underline or highlight drawn by the words of a changed line
+        (a thin rule under or through them, or a filled box behind them,
+        from the start of one letter to the end of another) goes with them:
+        ``delta(x, tolerance, right)`` says how far the letter that starts
+        (or, with ``right``, ends) at ``x`` moved (None when that isn't
+        sure, and the mark is left as it is)."""
+        content = self.content
+        if not content or spot[0]["layer"] is not content:
+            return
+        size = max(L["style"]["size"] for L in letters)
+        tol = 0.3 * size
+        x0, x1 = min(L["loose"][0] for L in letters), max(L["loose"][2] for L in letters)
+        y0, y1 = min(L["loose"][1] for L in letters), max(L["loose"][3] for L in letters)
+        for path in content.paths:
+            b, c = path["box"], path["ctm"]
+            if not path["paint"] or path["clip"] or abs(c[1]) > 1e-6 or abs(c[2]) > 1e-6 or c[0] <= 0:
+                continue
+            if b[0] < x0 - tol or b[2] > x1 + tol or b[2] - b[0] < size:
+                continue
+            high = b[3] - b[1]
+            rule = high <= RULE and b[1] >= y0 - 0.15 * size and b[3] <= y1
+            behind = (path["fill"] and path["rects"] == 1 and high >= 0.6 * size and b[1] >= y0 - tol
+                      and b[3] <= y1 + tol and path["start"] < spot[0]["i"])
+            if not (rule or behind):
+                continue
+            if not any(abs(L["loose"][0] - b[0]) <= tol for L in letters) \
+                    or not any(abs(L["loose"][2] - b[2]) <= tol for L in letters):
+                continue  # not from letter to letter: a frame or a table's line, not a mark on words
+            da, db = delta(b[0], tol), delta(b[2], tol, True)
+            if da is None or db is None or (abs(da) < 0.005 and abs(db) < 0.005):
+                continue
+            span = range(path["start"], path["end"])
+            kinds = [content.ops[i][1] for i in span]
+            values = [_nums(content.ops[i][0]) for i in span]
+            if kinds == [b"re"] and values[0] and len(values[0]) == 4 and values[0][2] > 0:
+                x, y, w, h = values[0]
+                self.reshaped[path["start"]] = [FloatObject(v) for v in (x + da / c[0], y, w + (db - da) / c[0], h)]
+            elif kinds == [b"m", b"l"] and all(v and len(v) == 2 for v in values) and values[0][0] != values[1][0]:
+                first = values[0][0] < values[1][0]
+                for i, (x, y), left in zip(span, values, (first, not first)):
+                    self.reshaped[i] = [FloatObject(x + (da if left else db) / c[0]), FloatObject(y)]
 
     def checkpoint(self):
         """The changes so far, to come back to with :meth:`rollback`."""
@@ -900,7 +948,7 @@ class Flow:
 
     # -- writing the changed drawing --------------------------------------------------------
     def changed(self):
-        return bool(self.edits or self.dropped or self.rises or self.moves)
+        return bool(self.edits or self.dropped or self.rises or self.moves or self.reshaped)
 
     def pending(self):
         """The new runs to be written in place, for their fonts to be made ready."""
@@ -988,6 +1036,8 @@ class Flow:
                 out += self._rebuilt(edit, names, 0.0, edit["show"]["rise"])
             elif i in renames:
                 out.append(([renames[i]], op))
+            elif top and i in self.reshaped:
+                out.append((self.reshaped[i], op))
             else:
                 out.append((operands, op))
             if open_q is not None and i == open_q:

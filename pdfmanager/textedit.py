@@ -1,19 +1,28 @@
 """Change words already on a page, rewrite a paragraph, or add words.
 
 Text in a PDF isn't stored as editable paragraphs: it's drawn letter by
-letter, usually with fonts that only contain the letters used. So, like
-most PDF editors do, a change covers the old words with a box in the colour
-around them and writes the words again on top. The old words are still in
-the file underneath (copying or searching can find them); to remove text
-for good, use Redact.
+letter, usually with fonts that only contain the letters used. A change is
+made in that drawing itself (see textflow.py): the old letters are taken
+out of their piece of text, the new ones written at the same place (so
+they keep the colour, outline, opacity and, in a tagged PDF, the tag of the
+old ones), and the letters after them moved along. Nothing is covered and
+nothing is drawn twice: a search finds the new words and not the old.
 
-The words stay where they were. Each letter of a changed line that wasn't
-changed is drawn again exactly where it was (with its own font, size and
-colour, so a bold word stays bold); the new letters go where the old ones
-began, spaced like the rest of the line (its letter and word spacing are
-measured, not assumed); and the letters after them move along by exactly
-the difference in width. A rewritten paragraph keeps its left edge, line
-spacing and width, and stays justified if it was.
+Before the result is kept it is read back, and every letter no change was
+about must still be where it was. When that fails, or the drawing can't be
+changed for sure (right-to-left text, a font whose widths can't be read,
+letters drawn twice), the change is made the way most PDF editors do: the
+old words are covered with a box in the colour around them and the new
+ones drawn on top. The report then says "covered": the old words are still
+in the file underneath; to remove text for good, use Redact.
+
+The words stay where they were. A letter of a changed line that wasn't
+changed isn't touched (so a bold word stays bold); the new letters go
+where the old ones began, spaced like the rest of the line (its letter and
+word spacing are measured, not assumed); and the letters after them move
+along by exactly the difference in width. A line set to the right keeps
+its right end, a centred one its middle. A rewritten paragraph keeps its
+left edge, line spacing and width, and stays justified if it was.
 
 The new words keep the original look as far as the file allows:
 
@@ -37,9 +46,12 @@ it in its column (see textflow.py): text flows, as in a word processor.
 
 import ctypes
 import math
+import os
 import re
 import statistics
+import tempfile
 import unicodedata
+from pathlib import Path
 
 from pypdf import Transformation
 from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject
@@ -733,15 +745,20 @@ def _wrap(text, room, measure):
 
 
 def _box(letters, line=None, before=None, after=None):
-    """The box covering ``letters`` (of the whole ``line`` across it), kept
-    off the letters left as they are on either side."""
+    """The box covering ``letters``, kept off the letters left as they are
+    on either side."""
     boxes = [L["loose"] for L in letters]
     x0, y0 = min(b[0] for b in boxes) - PAD, min(b[1] for b in boxes) - PAD
     x1, y1 = max(b[2] for b in boxes) + PAD, max(b[3] for b in boxes) + PAD
     u = _unit(letters[0]["style"]["matrix"])
-    if line and abs(u[1]) < 1e-6:  # across a level line: the line's full height
-        y0 = min(y0, min(L["loose"][1] for L in line) - PAD)
-        y1 = max(y1, max(L["loose"][3] for L in line) + PAD)
+    # No taller than the letters' own shapes (their loose boxes are the
+    # font's full height): lines set close above and below aren't clipped.
+    shapes = [L["tight"] for L in letters]
+    if abs(u[1]) < 1e-6 and all(t[2] > t[0] and t[3] > t[1] for t in shapes):
+        y0 = max(y0, min(t[1] for t in shapes) - PAD)
+        y1 = min(y1, max(t[3] for t in shapes) + PAD)
+        x0 = min(x0, min(t[0] for t in shapes) - PAD)
+        x1 = max(x1, max(t[2] for t in shapes) + PAD)
     if abs(u[1]) < 1e-6 and u[0] > 0:
         if before and before["tight"][2] > before["tight"][0]:
             x0 = max(x0, min(before["tight"][2], letters[0]["loose"][0]))
@@ -786,7 +803,9 @@ def _alignment(rows, left, right, word, natural, size):
 class _Page:
     """One page being changed: what pdfium reads of it and what gets drawn."""
 
-    def __init__(self, pdf_page, page, doc=None, number=0, writer=None, pdfa=False):
+    def __init__(self, pdf_page, page, doc=None, number=0, writer=None, pdfa=False, old_way=False):
+        self.old_way = old_way  # every change covered and drawn on top, none made in the drawing
+        self.touched = []       # boxes around the words the changes were about
         self.pdf_page, self.page = pdf_page, page
         self.doc, self.number, self.writer, self.pdfa = doc, number, writer, pdfa
         self.textpage = pdf_page.get_textpage()
@@ -819,8 +838,32 @@ class _Page:
     # -- changing the page's own drawing ---------------------------------------------------
     def start(self):
         """Before each change."""
-        self.notes, self.spot, self.legacy = {}, None, False
+        self.notes, self.spot, self.legacy = {}, None, self.old_way
         self._first_run = len(self.runs)
+
+    def touch(self, letters):
+        boxes = [L["loose"] for L in letters]
+        self.touched.append((min(b[0] for b in boxes) - 1, min(b[1] for b in boxes) - 1,
+                             max(b[2] for b in boxes) + 1, max(b[3] for b in boxes) + 1))
+
+    def expected(self):
+        """The letters no change was about, where each should now be:
+        [(letter, x, y)]. Those on lines moved by a paragraph that grew or
+        shrank are expected where they moved to."""
+        moved = self._flow.moved_letters if self._flow is not None else {}
+        out = []
+        for i in range(self.textpage.count_chars()):
+            loose = self.textpage.get_charbox(i, loose=True)
+            ch = self.textpage.get_text_range(i, 1)
+            if loose[2] <= loose[0] or loose[3] <= loose[1] or not ch or ch.isspace():
+                continue
+            x, y = _origin(self.textpage, i)
+            cx, cy = (loose[0] + loose[2]) / 2, (loose[1] + loose[3]) / 2
+            if any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b in self.touched) \
+                    or self.hidden.hides(self.textpage, i, loose):
+                continue
+            out.append((ch, x, y + moved.get(i, 0.0)))
+        return out
 
     def take(self, rows, paragraph=False):
         """Take the old words (rows of letters) out of the page's drawing,
@@ -1041,6 +1084,7 @@ class _Page:
         letters = _letters(self.textpage, self._one_line(_chars(self.textpage, rect), rect, old), self.cache,
                            self.hidden)
         if letters is None:  # nothing there (e.g. a scan): the box as drawn
+            self.touched.append(tuple(rect))
             base = _default_style(rect)
             style = _restyle(base, opts)
             self.cover(rect)
@@ -1048,6 +1092,7 @@ class _Page:
             self._set(text.split("\n"), (rect[0], rect[1] + (rect[3] - rect[1]) * 0.22), style, font,
                       0.0, None, style["size"] * 1.2, opts.get("align"), rect[2] - rect[0])
             return font
+        self.touch(letters)
         tc, word = _spacing([letters])
         if any(key in opts for key in LOOKS):  # a new look: the line written again in it
             return self._redo(letters, [letters], text, tc, word, opts)
@@ -1281,6 +1326,7 @@ class _Page:
             return self.line(rect, text, None, opts)
         tc, word = _spacing(rows)
         everything = [L for row in rows for L in row]
+        self.touch(everything)
         base = rows[0][0]["style"]
         if abs(base["angle"]) >= 1:
             return self._redo(rows[0], rows, text, tc, word, opts)
@@ -1669,7 +1715,8 @@ class _Page:
         same = (None, None, SAME, fonts.display_name(style["font"]))
         if not self.legacy and not _rtl(before + after) and self._in_place(
                 letters, keep, tail, anchor, before, p, s, font, style,
-                [(ch, *at(d - part)) for ch, d in placed] if writes else [], [m - part for m in moves], -part):
+                [(ch, *at(d - part)) for ch, d in placed] if writes else [], [m - part for m in moves], -part,
+                growth - part):
             if anchored and (letters[0]["s"] - part < self._beside(letters)[0]
                              or old_end + growth - part > self._beside(letters)[1]):
                 self.notes["wider"] = True
@@ -1692,7 +1739,7 @@ class _Page:
         return worst or (None, None, SAME, fonts.display_name(style["font"]))
 
 
-    def _in_place(self, letters, keep, tail, anchor, before, p, s, font, style, entries, moves, head=0.0):
+    def _in_place(self, letters, keep, tail, anchor, before, p, s, font, style, entries, moves, head=0.0, after=0.0):
         """Make a line's change in the page's own drawing: the letters
         that go are taken out of their pieces of text, the new ones written
         there, and the letters after them moved along. Nothing is covered
@@ -1723,7 +1770,24 @@ class _Page:
                                            "same": True, "color": None})
         if not ok:
             flow.rollback(saved)
-        return ok
+            return False
+        if abs(letters[0]["style"]["angle"]) < 1:
+            # A mark starts where a letter starts and ends where one ends.
+            starts = [(L["s"], head) for L in letters[:keep]] + [(L["s"], m) for L, m in zip(letters[tail:], moves)]
+            ends = [(L["s"] + L["adv"], head) for L in letters[:keep]] \
+                + [(L["s"] + L["adv"], m) for L, m in zip(letters[tail:], moves)]
+            if keep < tail:  # where the old words began and ended
+                starts.append((letters[keep]["s"], head))
+                ends.append((letters[tail - 1]["s"] + letters[tail - 1]["adv"], moves[0] if len(moves) else after))
+
+            def delta(x, tol, right=False):
+                """How far the letter edge at ``x`` moved with the change."""
+                edges = ends if right else starts
+                at, move = min(edges, key=lambda e: abs(e[0] - x)) if edges else (x + 2 * tol, 0.0)
+                return move if abs(at - x) <= tol else None
+
+            flow.follow(letters, spot, delta)
+        return True
 
 
 def _same_colour(a, b):
@@ -1790,8 +1854,13 @@ def edit_text(path, output, edits, password=None, report=None):
     "paragraph": true to rewrite the lines in it as one paragraph that
     wraps; else "old" may give the words as shown, to match the new ones
     against), or "at": [x, y] for new words whose top left is there (and
-    "width" to wrap them in); and "text": the new words (empty to just cover
-    the old ones)}.
+    "width" to wrap them in); and "text": the new words (empty to take the
+    old ones away)}.
+
+    A line set to the right or centred keeps its right end or its middle.
+    A line that grows past the width of its paragraph (or is taken away)
+    has the paragraph wrapped again; one that stands alone and runs into
+    what's beside it is reported as "wider".
 
     How the new words look can be chosen too: "font" (a family: one of the
     document's, an installed one, or Helvetica, Times or Courier), "size"
@@ -1800,18 +1869,93 @@ def edit_text(path, output, edits, password=None, report=None):
     taller or shorter moves the text below it in its column ("flow": false
     to leave it); when that doesn't fit on the page nothing moves and the
     report says "overflow", unless "fit": "shrink" lets the paragraph's
-    size come down a little to fit.
+    size come down a little to fit. A paragraph that grows where nothing
+    below it can move is never drawn over what follows: it is set smaller
+    and tighter, as little as needed, and the report gives its "size".
 
     Returns how many edits were made; ``report``, a list, gets for each the
     font used ("same", "installed", "standard" or "similar") and its name,
     with "asked" (the family asked for) and "matched" (whether it was the
     one used), "moved" (lines moved), "overflow", "size" (shrunk to),
-    "wider" and "taller" when they apply."""
+    "wider" and "taller" when they apply; "reflowed" when a line's change
+    made its paragraph wrap again, and "covered" when the old words could
+    only be covered (they are still in the file under the cover)."""
+    output = Path(output)
+    if output.is_dir():
+        raise core.PdfManagerError(f"{output} is a folder; give the name of the PDF to write")
+    if output.parent and not output.parent.exists():
+        output.parent.mkdir(parents=True, exist_ok=True)
+    # The changes are made in the pages' own drawing. Before the result is
+    # kept it is read back: every letter no change was about must still be
+    # there, where it was. If one isn't (a drawing this misreads), the
+    # changes are made the old way instead, which touches nothing: the old
+    # words covered, the new ones drawn on top.
+    fd, tmp = tempfile.mkstemp(prefix=output.name + ".", suffix=".check", dir=output.parent)
+    os.close(fd)
+    try:
+        notes = []
+        try:
+            count, expect = _edit(path, tmp, edits, password, notes, False)
+            sound = _intact(tmp, expect)
+        except core.PdfManagerError:
+            raise  # a change that can't be made either way (no such page, ...)
+        except Exception:  # noqa: BLE001 - a drawing the new way can't handle
+            sound = False
+        if not sound:
+            notes = []
+            count, _ = _edit(path, tmp, edits, password, notes, True)
+        os.replace(tmp, output)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    if report is not None:
+        report += notes
+    return count
+
+
+def _intact(path, expect):
+    """Whether the letters ``expect`` ({page: [(letter, x, y)]}) are all in
+    the file written, each where it should be."""
+    import pypdfium2 as pdfium
+
+    try:
+        with core.PDFIUM_LOCK:
+            doc = pdfium.PdfDocument(str(path))
+            try:
+                for number, letters in expect.items():
+                    page = doc[number]
+                    textpage = page.get_textpage()
+                    try:
+                        have = {}
+                        for i in range(textpage.count_chars()):
+                            ch = textpage.get_text_range(i, 1)
+                            if ch and not ch.isspace():
+                                x, y = _origin(textpage, i)
+                                have.setdefault((ch, math.floor(x), math.floor(y)), []).append((x, y))
+                        for ch, x, y in letters:
+                            if not any(abs(x - hx) < 0.15 and abs(y - hy) < 0.15
+                                       for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                                       for hx, hy in have.get((ch, math.floor(x) + dx, math.floor(y) + dy), ())):
+                                return False
+                    finally:
+                        textpage.close()
+                        page.close()
+            finally:
+                doc.close()
+    except Exception:  # noqa: BLE001 - a file that can't be read back isn't one to keep
+        return False
+    return True
+
+
+def _edit(path, output, edits, password, report, old_way):
+    """Make the changes; (how many, the untouched letters to find again:
+    {page index: [(letter, x, y)]})."""
     import pypdfium2 as pdfium
 
     reader = core.open_pdf(path, password)
     by_page = _parse(edits, len(reader.pages))
     pdfa = _is_pdfa(reader)
+    expect = {}
     writer = core.clone_document(reader)
     # Pages can share one content stream (after Compress, or a duplicated
     # page): the change must land on this page only.
@@ -1822,7 +1966,7 @@ def edit_text(path, output, edits, password=None, report=None):
             for number, page_edits in by_page.items():
                 page = writer.pages[number - 1]
                 core._own_contents(page, shared)
-                work = _Page(doc[number - 1], page, doc, number - 1, writer, pdfa)
+                work = _Page(doc[number - 1], page, doc, number - 1, writer, pdfa, old_way)
                 try:
                     for kind, rect, text, old, opts in page_edits:
                         work.start()
@@ -1842,12 +1986,14 @@ def edit_text(path, output, edits, password=None, report=None):
                         work.flow.write(writer, page)
                         work.runs += work.flow.orphans
                     _draw(writer, page, work.covers, work.runs)
+                    if not old_way:
+                        expect[number - 1] = work.expected()
                 finally:
                     work.close()
         finally:
             doc.close()
     core._write(writer, output)
-    return sum(len(p) for p in by_page.values())
+    return sum(len(p) for p in by_page.values()), expect
 
 
 def font_choices(path, password=None):

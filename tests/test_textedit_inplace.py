@@ -401,6 +401,30 @@ def test_a_highlight_and_an_underline_by_the_words_are_left_alone(tmp_path):
     assert "90 688 m" in content(out) and filled_boxes(out) == 1
 
 
+def test_an_underline_and_a_highlight_follow_their_words(tmp_path):
+    src = raw_page(tmp_path / "marks.pdf", "1 1 0 rg 105 716 62 14 re f 0 g BT /F1 12 Tf 72 720 Td (Some highlighted words in a line.) Tj ET "
+                   "0.6 w 90 688 m 185 688 l S BT /F1 12 Tf 72 690 Td (An underlined phrase in a line.) Tj ET "
+                   "0.5 w 60 650 m 400 650 l S BT /F1 12 Tf 72 652 Td (Words above a table line.) Tj ET")
+    out = tmp_path / "out.pdf"
+    # Words put in the underlined phrase: the line under it grows with it.
+    change(src, out, "An underlined phrase in a line.", "An underlined longer phrase in a line.")
+    grown = stringWidth("longer ", "Helvetica", 12)
+    data = content(out)
+    assert "90 688 m" in data and "185 688 l" not in data
+    end = float(data[data.index("90 688 m"):].split()[3])
+    assert end == pytest.approx(185 + grown, abs=0.05)
+    assert edges(out, "phrase")[1] == pytest.approx(edges(src, "phrase")[1] + grown, abs=0.05)
+    # Words put in before the highlighted one: the highlight moves along with it.
+    change(src, out, "Some highlighted words in a line.", "Some very highlighted words in a line.")
+    moved = stringWidth("very ", "Helvetica", 12)
+    data = content(out)
+    x, _, w = (float(v) for v in data[data.index("rg") + 2:data.index("re")].split()[:3])
+    assert x == pytest.approx(105 + moved, abs=0.05) and w == pytest.approx(62, abs=0.05)
+    # A rule that doesn't run from letter to letter (a table's line) stays as it is.
+    change(src, out, "Words above a table line.", "More words above a table line.")
+    assert "60 650 m" in content(out) and "400 650 l" in content(out)
+
+
 # -- 6. ragged or justified --------------------------------------------------------------------------------
 
 def test_a_ragged_line_with_kerned_gaps_isnt_squeezed(tmp_path):
@@ -506,6 +530,26 @@ def test_a_line_covered_by_an_earlier_version_is_cleaned_up_when_changed_again(t
     # No letter twice: the old line's letters that were under the cover are gone.
     assert sorted(c[0] for c in chars(out)) == sorted((line.replace("quick", "very quick") + STAYS).replace(" ", ""))
     assert stays(src, out)
+
+
+def test_a_change_that_would_lose_other_words_is_made_the_old_way_instead(tmp_path, monkeypatch):
+    from pdfmanager import textflow
+
+    src = raw_page(tmp_path / "shared.pdf",
+                   "BT /F1 11 Tf 14 TL 72 720 Td [(First line of the paragraph is here) -9000 (Side note A)] TJ T* "
+                   "[(and the second line of it ends here.) -9200 (Side note B)] TJ ET")
+    out = tmp_path / "out.pdf"
+    # A faulty rewrite of the piece of text, which drops the side note with the line...
+    monkeypatch.setattr(textflow.Flow, "_rebuilt", lambda self, edit, names, dy, rise: [])
+    report = change(src, out, "First line of the paragraph is here", "First line of the statement is here")
+    # ... is caught when the result is read back, and the change made by covering instead.
+    assert report.get("covered") is True
+    assert stays(src, out, "Side note A") and stays(src, out, "Side note B") and found(out, "statement") == 1
+    # So is one that fails outright.
+    monkeypatch.setattr(textflow.Flow, "write", lambda self, writer, page: 1 / 0)
+    report = change(src, out, "First line of the paragraph is here", "First line of the statement is here")
+    assert report.get("covered") is True and stays(src, out, "Side note A") and found(out, "statement") == 1
+    assert not list(tmp_path.glob("*.check"))  # nothing left behind
 
 
 def test_right_to_left_lines_are_changed_as_before(tmp_path):
