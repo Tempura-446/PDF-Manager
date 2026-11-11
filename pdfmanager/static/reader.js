@@ -1027,16 +1027,32 @@ export class Reader {
     this.onChange?.();
   }
 
-  /** Where pdf.js gets the pieces of a file that isn't held here in full
-   *  (``tab.url``): it starts with the piece that came when the file was
-   *  opened (``tab.head``, used once) and asks for the others as pages need
-   *  them. Requests still on their way stop when the document is closed. */
+  /** The first piece of a file that is read in pieces (``tab.url``), asked
+   *  for again when its tab is shown after another one: the piece that came
+   *  when the file was opened went to pdf.js. The file's size and version
+   *  are taken as they are now (the tab has no changes of its own: those
+   *  would be in ``tab.bytes``). */
+  async #firstPiece(tab) {
+    const res = await fetch(tab.url, { headers: { "X-Pdfm-Token": this.token, Range: `bytes=0-${FIRST_BYTES - 1}` } });
+    if (res.status !== 206) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    const head = new Uint8Array(await res.arrayBuffer());
+    tab.size = Number((res.headers.get("Content-Range") || "").split("/")[1]) || head.length;
+    tab.stamp = res.headers.get("X-Pdfm-Stamp") || tab.stamp;
+    if (head.length >= tab.size) tab.bytes = tab.original = head;  // (it has become small: all of it is here)
+    else tab.head = head;
+  }
+
+  /** Where pdf.js gets the pieces of a file that isn't held here in full:
+   *  it starts with the first piece (``tab.head``, which it takes) and asks
+   *  for the others as pages need them. Requests still on their way stop
+   *  when the document is closed. A piece that can't be had (the file is
+   *  gone, or another program rewrote it) is said once; while the document
+   *  is still being opened, opening it is given up (``failure`` says why). */
   #pieces(tab) {
-    const head = tab.head || null;
-    tab.head = null;  // pdf.js takes the buffer
+    const head = tab.head;
+    tab.head = null;
     const source = new pdfjs.PDFDataRangeTransport(tab.size, head);
     const stop = new AbortController();
-    let failed = false;
     source.requestDataRange = (begin, end) => {
       fetch(tab.url, { headers: { "X-Pdfm-Token": this.token, Range: `bytes=${begin}-${end - 1}` }, signal: stop.signal }).then(async (res) => {
         if (res.status !== 206) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
@@ -1045,9 +1061,10 @@ export class Reader {
         if (stamp && tab.stamp && stamp !== tab.stamp) throw new Error("it was changed by another program; close it and open it again");
         source.onDataRange(begin, new Uint8Array(await res.arrayBuffer()));
       }).catch((e) => {
-        if (stop.signal.aborted || failed) return;
-        failed = true;
-        this.toast(`Couldn't read more of “${tab.name}”: ${e.message || e}`, 9000);
+        if (stop.signal.aborted || source.failure) return;
+        source.failure = String(e.message || e);
+        if (source.task && source.task === this.task && !this.doc) destroyTask(source.task);  // (#load says why)
+        else this.toast(`Couldn't read more of “${tab.name}”: ${source.failure}`, 9000);
       });
     };
     source.abort = () => stop.abort();
@@ -1058,22 +1075,26 @@ export class Reader {
    *  opened (not a PDF, or the password prompt was cancelled). */
   async #load(tab) {
     this.#busy(true);
+    let pieces = null;
     try {
       await loadPdfjs();
       this.#ensureViewer();
       await this.#closeDocument();
+      if (!tab.bytes && !tab.head) await this.#firstPiece(tab);
       this.bytes = tab.bytes;
       this.name = tab.name;
       this.password = tab.password;
+      pieces = tab.bytes ? null : this.#pieces(tab);
       const task = await openDocument({
         ...DOC_OPTIONS,
         ...(tab.bytes
           ? { data: tab.bytes.slice() }  // pdf.js takes ownership of the buffer; keep our copy intact
-          : { range: this.#pieces(tab), rangeChunkSize: 1 << 20, disableAutoFetch: true, disableStream: true }),
+          : { range: pieces, rangeChunkSize: 1 << 20, disableAutoFetch: true, disableStream: true }),
         password: tab.password || undefined,
         enableXfa: true,
         fontExtraProperties: true,  // fonts' own names, to find the installed copy when editing text
       });
+      if (pieces) pieces.task = task;
       task.onPassword = (update, reason) => {
         this.#busy(false);
         this.#askPassword(reason === pdfjs.PasswordResponses.INCORRECT_PASSWORD).then((pw) => {
@@ -1124,7 +1145,8 @@ export class Reader {
       return true;
     } catch (e) {
       await this.#closeDocument();
-      if (!(e && e.name === "PasswordException")) {  // not just cancelled at the password prompt
+      if (pieces?.failure) this.toast(`Could not open “${tab.name}”: ${pieces.failure}`, 9000);
+      else if (!(e && e.name === "PasswordException")) {  // not just cancelled at the password prompt
         this.toast(e && e.name === "InvalidPDFException" ? `“${tab.name}” isn't a valid PDF.` : "Could not open the PDF: " + (e.message || e));
       }
       return false;

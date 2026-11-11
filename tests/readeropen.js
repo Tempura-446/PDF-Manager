@@ -58,6 +58,11 @@ const { chromium } = require("playwright");
       bar: await text(page, ".rd-formbar"),
       suggestions: await page.evaluate(suggested),
     };
+    // Back to the first tab: its file is read in pieces again, and its bar is back.
+    await page.evaluate(() => reader.showTab(reader.tabs[0]));  // eslint-disable-line no-undef
+    await page.waitForFunction(() => reader.activeTab === reader.tabs[0] && !!reader.doc && reader.loading.hidden, null, { timeout: 60000 });  // eslint-disable-line no-undef
+    await page.waitForSelector(".rd-sigbar:not([hidden])", { timeout: 60000 });
+    out.back = { name: await page.evaluate(() => reader.activeTab.name), pages: await page.evaluate(() => reader.doc.numPages), formBar: await text(page, ".rd-formbar") };  // eslint-disable-line no-undef
     await page.context().close();
 
     // (c) Thumbnails, in a document of 120 pages.

@@ -229,6 +229,7 @@ def test_opening_files_in_a_browser(app, tmp_path):
     assert f["held"] is False and f["tabs"] == 2
     assert f["bar"].startswith("This looks like a form to fill in")
     assert "Make it fillable" in f["suggestions"]
+    assert out["back"] == {"name": "Signed contract.pdf", "pages": 3, "formBar": None}
     # (c) Thumbnails: none until the Pages panel is shown, then only those near what it shows.
     t = out["thumbs"]
     assert t["pages"] == 120
