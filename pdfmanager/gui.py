@@ -454,7 +454,8 @@ OPERATIONS = [
                             ["layout", "Exact layout — needs LibreOffice; text in boxes"],
                             ["word", "Microsoft Word only"]],
                    hint="Microsoft Word gives the most editable result. The built-in "
-                        "converter turns tables and columns into plain paragraphs.")]},
+                        "converter keeps headings, paragraphs, lists, tables and pictures; "
+                        "designed pages may not come out exactly as they look.")]},
     # PDF → Excel: the tables in a PDF (pdfmanager/tables.py)
     {"id": "to-excel", "group": "Convert", "label": "PDF → Excel", "files": "pdf",
      "help": "Put the tables in PDFs into an Excel workbook, with numbers as numbers, or into "
