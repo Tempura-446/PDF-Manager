@@ -133,6 +133,9 @@ def test_polish_in_a_browser(app, tmp_path):
     so = out["signOpen"]
     assert so["expanded"] == "true" and so["grid"] == "true" and so["pfx"] and so["inCard"] and so["ids"] == 1
     assert out["signClosed"] == ["false", True]
+    # The link back to the original in a result's note: its focus ring stays inside its own line.
+    note = out["noteLink"]
+    assert note["focusVisible"] and note["offset"] == "0px" and note["height"] + 4 <= note["line"], note
 
     # (d) Less motion: nothing animates.
     calm = out["calm"]
@@ -146,3 +149,15 @@ def test_polish_in_a_browser(app, tmp_path):
     for key in ("width1280Home", "width1280Merge", "width1280Reader", "width1000Merge", "width1000Home"):
         width, viewport = out[key]
         assert width == viewport, (key, width, viewport)
+
+
+def test_polish_screenshots(app, tmp_path):
+    """Light and dark screenshots for looking at (POLISH_SHOTS=<folder>)."""
+    import os
+    shots = os.environ.get("POLISH_SHOTS")
+    if not shots:
+        pytest.skip("set POLISH_SHOTS to a folder to take the screenshots")
+    for theme in ("light", "dark"):
+        (tmp_path / theme).mkdir()
+        out = run_polish(app, tmp_path / theme, Path(shots), theme)
+        assert not out["errors"], out["errors"]

@@ -21,7 +21,7 @@ const snapReady = import("./snap.js").then((m) => { snap = m; }, () => {});
 
 /** Take ``node`` away with its leaving animation (the .out class), or at once
  *  when motion is reduced (the --t token is 0 then). */
-export function fadeOut(node) {
+function fadeOut(node) {
   if (!node.isConnected) return;
   const t = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--t")) || 0;
   if (!t) { node.remove(); return; }
@@ -377,7 +377,9 @@ export class Reader {
         el("h2", {}, "Read a PDF"),
         el("p", {}, "Drop a PDF here, or open one from your computer."),
         this.emptyOpenBtn,
-        el("p", { class: "keys" }, "Ctrl+K commands · T file panel · E edit text · M measure · Ctrl+F find · N / P pages")),
+        // (Each key with its word stays on one line; the lines come out even.)
+        el("p", { class: "keys" }, ...["Ctrl+K commands", "T file panel", "E edit text", "M measure", "Ctrl+F find", "N / P pages"]
+          .flatMap((keys, i) => [i ? " · " : "", el("span", {}, keys)]))),
       this.recentBox = el("section", { class: "rd-recent", hidden: true, "aria-label": "Recent files" },
         el("h3", {}, "Recent"), this.recentList = el("div", {})));
     this.main = el("div", { class: "rd-main" }, this.container, this.loading, this.empty, this.measPanel);

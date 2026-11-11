@@ -84,7 +84,7 @@
     --text: #eef0f3; --text-2: #c9ced6; --muted: #a4acb8; --faint: #8c95a1;
     --border: #2c3138; --border-strong: #3d444d;
     --accent: #5cc9c4; --accent-hover: #7fd8d3; --accent-text: #0f1114; --accent-soft: #17302f; --accent-ring: rgb(92 201 196 / .3);
-    --seal: #ef5a4c; --seal-ink: #14171c; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(43 49 57 / .84);
+    --seal: #ef5a4c; --seal-ink: #14171c; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(40 46 54 / .88);
     --glass-edge: rgb(255 255 255 / .13); --glass-hi: inset 0 1px 0 rgb(255 255 255 / .08);
     --ok: #5fd09a; --ok-soft: #173326; --warn: #e6b65e; --warn-soft: #3a2d10; --err: #f28c7e; --err-soft: #3f1f1b;
     --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 10px 28px rgb(0 0 0 / .45); --shadow-lift: 0 2px 6px rgb(0 0 0 / .45), 0 16px 40px rgb(0 0 0 / .5);
@@ -98,7 +98,7 @@
   --text: #eef0f3; --text-2: #c9ced6; --muted: #a4acb8; --faint: #8c95a1;
   --border: #2c3138; --border-strong: #3d444d;
   --accent: #5cc9c4; --accent-hover: #7fd8d3; --accent-text: #0f1114; --accent-soft: #17302f; --accent-ring: rgb(92 201 196 / .3);
-  --seal: #ef5a4c; --seal-ink: #14171c; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(43 49 57 / .84);
+  --seal: #ef5a4c; --seal-ink: #14171c; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(40 46 54 / .88);
     --glass-edge: rgb(255 255 255 / .13); --glass-hi: inset 0 1px 0 rgb(255 255 255 / .08);
   --ok: #5fd09a; --ok-soft: #173326; --warn: #e6b65e; --warn-soft: #3a2d10; --err: #f28c7e; --err-soft: #3f1f1b;
   --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 10px 28px rgb(0 0 0 / .45); --shadow-lift: 0 2px 6px rgb(0 0 0 / .45), 0 16px 40px rgb(0 0 0 / .5);
@@ -293,7 +293,7 @@ main > .action-bar { max-width: none; width: auto; }
 .drop.compact .drop-icon svg { width: 16px; height: 16px; }
 .drop.compact small { display: none; }
 .drop.compact strong { font-size: 14px; font-weight: 600; color: var(--text-2); }
-.drop-choose { display: none; }
+#drop .drop-choose { display: none; }
 /* Tools that start from several files (or from images, Office files, web pages):
    before any file is added, the page is the tool's name and line and one big
    drop area, as on the start screen; the options and Run come with the files. */
@@ -307,7 +307,7 @@ body.drop-first:not(.has-files) #drop .drop-icon { width: 58px; height: 58px; ma
 body.drop-first:not(.has-files) #drop .drop-icon svg { width: 26px; height: 26px; }
 body.drop-first:not(.has-files) #drop strong { font: 400 clamp(26px, 3.2vw, 34px)/1.15 var(--display); letter-spacing: 0; text-wrap: balance; max-width: 22ch; }
 body.drop-first:not(.has-files) #drop small { font-size: 14px; max-width: 52ch; text-wrap: balance; }
-body.drop-first:not(.has-files) .drop-choose { display: inline-flex; margin-top: 12px; }
+body.drop-first:not(.has-files) #drop .drop-choose { display: inline-flex; margin-top: 12px; }
 body.drop-first.opts-later:not(.has-files) #options-card, body.drop-first.opts-later:not(.has-files) .action-bar { display: none; }
 body.drop-first.has-files #files-card { animation: fade-in calc(var(--t) * 1.6) var(--ease); }
 body.drop-first.opts-later.has-files #options-card, body.drop-first.opts-later.has-files .action-bar { animation: rise calc(var(--t) * 2) var(--ease); }
@@ -678,6 +678,8 @@ td { word-break: break-all; }
 .recent-facts.flag { color: var(--accent); }
 .recent-when { font: 400 12px var(--mono); color: var(--faint); white-space: nowrap; }
 .recent-x { opacity: 0; margin-left: 4px; border-color: transparent; background: none; }
+.rd .recent-x { color: var(--muted); }  /* (reader.css gives the reader's buttons their parent's colour) */
+.rd .recent-x:hover { color: var(--text); }
 .recent-row:hover .recent-x, .recent-x:focus-visible { opacity: 1; }
 @media (hover: none) { .recent-x { opacity: 1; } }
 .start-empty { color: var(--muted); margin: 0; padding: 12px 0; border-top: 1px solid var(--border); font-size: 14px; }
@@ -722,7 +724,7 @@ td { word-break: break-all; }
 .fp-card-head:hover { background: color-mix(in srgb, var(--surface) 70%, transparent); }
 .fp-card-head:focus-visible, .fp-tool:focus-visible, .fp-all:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .fp-card-head strong { display: block; font-weight: 600; }
-.fp-card-head span span { display: block; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.fp-card-head span span { display: block; color: var(--muted); font-size: 13px; line-height: 1.4; text-wrap: pretty; }
 .fp-ico { display: grid; place-items: center; color: var(--accent); }
 .fp-go { color: var(--faint); transition: transform var(--t) var(--ease); }
 .fp-card-head[aria-expanded="true"] .fp-go { transform: rotate(90deg); }
@@ -1407,10 +1409,13 @@ function fpExpand(item, focus = true) {
   if (!item.box) item.box = fpOptions(item);
   if (item.card) { if (item.box.parentNode !== item.card) item.card.append(item.box); }
   else if (item.btn.nextElementSibling !== item.box) item.btn.after(item.box);  // the whole row under its button
-  fpSlide(item.box, true);
+  const opening = fpSlide(item.box, true);
   fpExpanded(item, true);
   fp.open = item;
   if (focus) (item.box.querySelector("input:not([type=hidden]), select, textarea, button") || item.box).focus({ preventScroll: true });
+  // Once open, as much of it as fits comes into view.
+  const box = item.box, reveal = () => { if (box.isConnected && !box.hidden) box.scrollIntoView({ block: "nearest", behavior: smoothScroll() }); };
+  if (opening) opening.finished.then(reveal, () => {}); else reveal();
 }
 function fpCollapse(item, focus) {
   if (!item.box) return;
@@ -1431,7 +1436,7 @@ function fpSlide(box, open) {
   for (const a of box.getAnimations()) a.cancel();
   box.classList.remove("sliding");
   const ms = motionMs(1.8);
-  if (!ms || !box.animate || (!open && box.hidden)) { box.hidden = !open; return; }
+  if (!ms || !box.animate || (!open && box.hidden)) { box.hidden = !open; return null; }
   box.hidden = false;
   const cs = getComputedStyle(box);
   const full = { height: box.offsetHeight + "px", paddingTop: cs.paddingTop, paddingBottom: cs.paddingBottom, opacity: 1 };
@@ -1439,6 +1444,7 @@ function fpSlide(box, open) {
   box.classList.add("sliding");
   const run = box.animate(open ? [none, full] : [full, none], { duration: ms, easing: "cubic-bezier(.2, .8, .2, 1)" });
   run.onfinish = () => { box.classList.remove("sliding"); if (!open) box.hidden = true; };
+  return run;
 }
 
 /** A tool's options (the tool page's fields), Run, and what came of it. */
@@ -2153,14 +2159,24 @@ async function recentEntries() {
 /** Fill ``host`` with the Recent rows: the name, what ZPDF knows about the file
  *  (factsLine), when it was opened; a click opens it, × forgets it (everywhere:
  *  both places read the same lists). Resolves to the number of rows. */
+/** The folder a path's file is in, by its name ("C:\\Work\\2024\\a.pdf" gives "2024"). */
+function folderOf(path) {
+  const parts = String(path).split(/[\\/]/).filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 2] : "";
+}
+
 async function fillRecent(host, { emptyText = "", onEmpty = null, still = () => true } = {}) {
   host.classList.add("recent-list");
   const entries = await recentEntries();
   if (!still()) return 0;
   const empty = () => { host.replaceChildren(...(emptyText ? [el("p", { class: "start-empty" }, emptyText)] : [])); onEmpty?.(); };
   if (!entries.length) { empty(); return 0; }
+  // Two files of the same name are told apart by their folder.
+  const names = {};
+  for (const e of entries) names[e.name] = (names[e.name] || 0) + 1;
   host.replaceChildren(...entries.map((e) => {
-    const line = factsLine(e.facts);
+    const where = names[e.name] > 1 && e.title !== e.name ? folderOf(e.title) : "";
+    const line = [factsLine(e.facts), where && `in ${where}`].filter(Boolean).join(" · ");
     const flag = !!(e.facts && (e.facts.error || (e.facts.scanned && !e.facts.has_text)));
     const row = el("div", { class: "recent-row", "data-key": e.key },
       el("button", { type: "button", class: "recent-open", title: e.title, onclick: () => e.open() },

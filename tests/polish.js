@@ -81,6 +81,7 @@ const { chromium } = require("playwright");
       };
     });
     await page.dispatchEvent('.tools button[data-op="merge"]', "click");
+    await page.mouse.move(1270, 790);
     out.mergeBefore = await layout();
     out.width1280Merge = await width(page);
     await shot(page, "4-merge-before");
@@ -100,6 +101,7 @@ const { chromium } = require("playwright");
     await page.click("#run");
     await page.waitForSelector(".result-actions", { timeout: 60000 });
     out.mergeResult = await page.evaluate(() => getComputedStyle(document.getElementById("result")).animationName);
+    await page.evaluate(() => startOver());  // (files carry over from one tool to the next)
     for (const id of ["compare", "interleave", "from-images", "from-office", "web", "organize", "split"]) {
       await page.dispatchEvent(`.tools button[data-op="${id}"]`, "click");
       out["page_" + id] = await layout();
@@ -151,8 +153,7 @@ const { chromium } = require("playwright");
       c.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
       const room = s.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
       return { text: s.selectedOptions[0].textContent, fontSize: cs.fontSize, room: Math.round(room),
-        needs: Math.round(c.measureText(s.selectedOptions[0].textContent).width), long: s.closest(".field").classList.contains("fp-long"),
-        pageSelectFont: null };
+        needs: Math.round(c.measureText(s.selectedOptions[0].textContent).width), long: s.closest(".field").classList.contains("fp-long") };
     });
     await page.selectOption("#fp-encrypt-changes", "any");
     await page.evaluate(() => document.getElementById("fp-opts-encrypt").scrollIntoView({ block: "center" }));
@@ -179,7 +180,23 @@ const { chromium } = require("playwright");
     await page.waitForTimeout(500);
     out.signClosed = await page.evaluate(() => [document.querySelector('.fp-card-head[data-op="sign-cert"]').getAttribute("aria-expanded"),
       document.getElementById("fp-opts-sign-cert").hidden]);
-    // The link back to the original in a result's note: its focus ring.
+    // A result opened beside the original: the note's link back, focused from the keyboard.
+    await page.click('.fp-tool[data-op="encrypt"]');
+    await page.fill("#fp-encrypt-new_password", "secret");
+    await page.click("#fp-opts-encrypt .fp-run");
+    await page.waitForSelector(".fp-note .link-btn", { timeout: 60000 });
+    await page.keyboard.press("Shift");
+    await page.evaluate(() => document.querySelector(".fp-note .link-btn").focus());
+    out.noteLink = await page.evaluate(() => {
+      const b = document.querySelector(".fp-note .link-btn"), cs = getComputedStyle(b);
+      return { focusVisible: b.matches(":focus-visible"), offset: cs.outlineOffset, height: Math.round(b.getBoundingClientRect().height),
+        line: parseFloat(getComputedStyle(b.closest(".fp-done")).lineHeight) };
+    });
+    if (shots) {
+      await page.waitForTimeout(600);
+      const box = await page.$(".fp-note");
+      await box.screenshot({ path: `${shots}/${theme}-8-note-focus.png` });
+    }
     await page.close();
     await context.close();
 
@@ -200,6 +217,9 @@ const { chromium } = require("playwright");
     await page.keyboard.press("Escape");
     await page.evaluate(() => appToast("Saved"));
     out.calm.toast = await timing(".toast");
+    await page.close();
+    page = await calm.newPage();
+    watch(page);
     await page.goto(url + "&open=" + signId);
     await page.waitForSelector('.rd-side .fp-card-head[data-op="sign-cert"]', { timeout: 60000 });
     out.calm.card = await timing('.fp-card[data-op="sign-cert"]');
