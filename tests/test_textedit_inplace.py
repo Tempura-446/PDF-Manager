@@ -463,7 +463,7 @@ def test_only_the_letters_the_font_lacks_get_another_font(tmp_path):
 
 def test_letters_no_font_here_can_draw_are_named_not_written_blind(tmp_path):
     src, out = plain(tmp_path / "a.pdf"), tmp_path / "out.pdf"
-    odd = "\ue123"  # a private-use letter: no font has it
+    odd = "\ue123"  # a private-use letter: some fonts have it (an icon in Segoe UI Symbol), but it means nothing there
     report = change(src, out, FOX, FOX.replace("brown", "br" + odd + "wn Ωμέγα"))
     assert report["missing"] == odd
     assert found(out, "The quick brwn Ωμέγα fox jumps over the lazy dog.") == 1
@@ -727,3 +727,19 @@ def test_right_to_left_lines_are_changed_as_before(tmp_path):
     report = []
     textedit.edit_text(src, out, [{"page": 1, "rect": [70, 695, 300, 716], "text": "שלום רב"}], report=report)
     assert report[0].get("covered") is True and stays(src, out)
+
+
+def test_a_private_use_letter_is_never_borrowed_from_another_font(tmp_path, monkeypatch):
+    """Windows' Segoe UI Symbol draws an icon at U+E123: a private-use code
+    means only what the document's own font says, so no other font stands in."""
+    assert textedit._private("\ue123") and textedit._private("\U000F0001") and not textedit._private("Ω")
+    real = textedit._can_draw
+
+    def everything_draws_it(font, ch):  # as if an installed font had every code point
+        return True if not font[0] and not textedit._private(ch) else real(font, ch)
+
+    monkeypatch.setattr(textedit, "_can_draw", everything_draws_it)
+    src, out = plain(tmp_path / "a.pdf"), tmp_path / "out.pdf"
+    report = change(src, out, FOX, FOX.replace("brown", "br\ue123wn"))
+    assert report["missing"] == "\ue123"
+    assert found(out, "The quick brwn fox jumps over the lazy dog.") == 1

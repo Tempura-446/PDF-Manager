@@ -572,12 +572,22 @@ def _own_font(page, style, text):
     return None
 
 
+def _private(ch):
+    """Whether ``ch`` is a private-use code point: it means whatever one
+    font's maker chose (an icon in one, a logo in another), so only the
+    document's own font can stand for it."""
+    code = ord(ch)
+    return 0xE000 <= code <= 0xF8FF or code >= 0xF0000
+
+
 def _can_draw(font, ch):
     """Whether a chosen font (the document's own, or one known to
     reportlab by name) has the letter."""
     own, name = font[:2]
     if own:
         return ch in own.codes
+    if _private(ch):
+        return False
     if name in READER_FONTS:
         return False
     if name in BASE14_NAMES:
@@ -723,6 +733,7 @@ def _choose(page, style, text):
     own = _own_font(page, style, letters)
     if own:
         return own, None, SAME, fonts.display_name(style["font"])
+    letters = "".join(ch for ch in letters if not _private(ch))  # no other font may stand in for those
     name = fonts.installed_font(style["font"], style["bold"], style["italic"], letters) \
         if style["font"] else None
     if name:
@@ -1021,6 +1032,9 @@ class _Page:
         here has all the letters): then the font that draws most of them,
         and the letters no font here can draw are noted as "missing" and
         left out, rather than written in a font that may show nothing."""
+        private = {ch for ch in text if _private(ch) and not _can_draw(font, ch)}
+        if private:  # only the document's own font may stand for these
+            self.notes["missing"] = "".join(sorted(set(self.notes.get("missing", "")) | private))
         if font[0] or font[1] not in READER_FONTS:
             return font
         letters = sorted({ch for ch in text if not ch.isspace()})
@@ -1052,11 +1066,16 @@ class _Page:
         if own:
             mine = (own, None, SAME, fonts.display_name(style["font"]))
             by.update({ch: mine for ch in has})
+        blind = set()
         for ch in letters:
             if ch not in by and not _can_draw(font, ch):
                 other = self._choose(style, ch)
                 if _can_draw(other, ch):
                     by[ch] = other
+                else:
+                    blind.add(ch)
+        if blind:  # no font here draws them: named, not written in a font that shows something else
+            self.notes["missing"] = "".join(sorted(set(self.notes.get("missing", "")) | blind))
         return by or None
 
     def _font(self, style, base, text, opts):

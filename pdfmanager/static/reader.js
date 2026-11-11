@@ -3489,6 +3489,13 @@ export class Reader {
       ? el("textarea", { class: "rd-textedit", spellcheck: "true", "aria-label": label })
       : el("input", { type: "text", class: "rd-textedit", spellcheck: "true", "aria-label": label });
     field.value = value;
+    // Double-clicking a word selects the space after it too (Chromium on
+    // Windows), so typing a replacement swallowed the space: select the word.
+    field.addEventListener("dblclick", () => {
+      let { selectionStart: start, selectionEnd: end } = field;
+      while (end > start && /\s/.test(field.value[end - 1])) end--;
+      if (end !== field.selectionEnd) field.setSelectionRange(start, end);
+    });
     const box = el("div", { class: "rd-textedit-box" }, field, el("div", { class: "rd-textedit-hint" }, ...hint));
     if (look) {
       const lh = lineHeight || Math.round(look.size * 1.3 * 100) / 100;
