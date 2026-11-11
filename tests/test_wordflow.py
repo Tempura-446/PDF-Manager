@@ -962,3 +962,22 @@ def test_the_converter_menus_hint_says_what_the_built_in_converter_keeps():
     (field,) = [f for f in op["fields"] if f.get("hint")]
     assert "plain paragraphs" not in field["hint"]
     assert all(word in field["hint"] for word in ("headings", "lists", "tables", "pictures"))
+
+
+def test_a_ligature_read_as_several_letters_keeps_them_all(tmp_path):
+    """Found on Windows: "offline" came out "ofline" once text drawn twice
+    was read once, because an "ff" glyph is two letters at one place."""
+    import pikepdf
+
+    cmap = (b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Lig def "
+            b"1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <41> <00660066> "
+            b"<42> <006600660069> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end")
+    pdf = pikepdf.new()
+    font = pikepdf.Dictionary(Type=pikepdf.Name.Font, Subtype=pikepdf.Name.Type1, BaseFont=pikepdf.Name.Helvetica,
+                              ToUnicode=pdf.make_stream(cmap))
+    page = pdf.add_blank_page(page_size=(595, 842))
+    page.Resources = pikepdf.Dictionary(Font=pikepdf.Dictionary(F1=font))
+    page.Contents = pdf.make_stream(b"BT /F1 12 Tf 72 700 Td (Work oAline and oAer, oBcial and eAortless.) Tj ET")
+    pdf.save(tmp_path / "a.pdf")
+    paragraphs, _, _ = read(office.basic_docx(tmp_path / "a.pdf", tmp_path / "a.docx"))
+    assert "Work offline and offer, official and effortless." in " ".join(text for _, text in paragraphs)

@@ -151,7 +151,15 @@ class Line:
         if unicodedata.category(char.text[:1] or " ") in ("Mn", "Sk", "Lm"):
             return False
         width = max(char.x1 - char.x0, 0.05)
+        # One glyph read as several letters ("ffi" → f, f, i) puts them all
+        # in the same box: the letters sharing the last one's box are its own.
+        last = self.chars[-1]
+        same = [c for c in self.chars if abs(c.x0 - last.x0) < 0.05 and abs(c.x1 - last.x1) < 0.05]
+        if abs(char.x0 - last.x0) < 0.05 and abs(char.x1 - last.x1) < 0.05:
+            return False
         for c in self.chars[:-1]:
+            if any(c is o for o in same):
+                continue
             if (abs(c.base - char.base) <= 0.45 * max(c.size, char.size)
                     and min(c.x1, char.x1) - max(c.x0, char.x0) > 0.3 * min(width, max(c.x1 - c.x0, 0.05))):
                 return True
@@ -812,13 +820,17 @@ def _chars(textpage, geometry):
 SEEN_DPI = 72  # the page drawn to tell which text shows
 
 
+LIGATURE = 3  # letters one glyph can stand for ("ffl"): neighbours that close are never a copy
+
+
 def _dedupe(chars):
     """(the characters without a second one of the same text drawn at
     nearly the same place (bold made by drawing twice, overprinting, a copy
     laid over its original), [(text, origin, size)] of those left out). Of two,
     the one that shows is kept."""
     kept, grid, dropped = [], {}, []
-    for c in chars:
+    order = []  # where in the page's text each kept character came
+    for index, c in enumerate(chars):
         key = (c.text, c.angle)
         gx, gy = int(c.x0 // 8), int(c.base // 8)
         tol_x = min(0.35 * max(c.x1 - c.x0, 0.3 * c.size), 0.2 * c.size, 7.5) + 0.05
@@ -828,6 +840,8 @@ def _dedupe(chars):
             for dy in (-1, 0, 1):
                 for k in grid.get((key, gx + dx, gy + dy), ()):
                     o = kept[k]
+                    if index - order[k] <= LIGATURE:
+                        continue  # one glyph read as several letters at one place ("ff" → f, f)
                     if (abs(o.x0 - c.x0) <= tol_x and abs(o.base - c.base) <= tol_y
                             and abs(o.size - c.size) <= 0.1 * c.size):
                         twin = k
@@ -835,6 +849,7 @@ def _dedupe(chars):
         if twin is None:
             grid.setdefault((key, gx, gy), []).append(len(kept))
             kept.append(c)
+            order.append(index)
             continue
         if kept[twin].hidden and not c.hidden:
             kept[twin], c = c, kept[twin]
