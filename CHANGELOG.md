@@ -4,6 +4,24 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.21.0
+
+- Search a folder by meaning. Ask "how much do I owe" and Search PDFs
+  finds the page that says "balance due": pages are ranked by what they
+  are about as well as by the words they share with your question, the
+  closest first, each with the part of the page that matched. In a test
+  of 44 questions worded differently from the documents, the right
+  document came first 30 times (matching words alone: 19; the exact
+  phrase: never).
+- A name or a number still finds every page that has it, ahead of
+  anything else. "These exact words" searches for a phrase as before.
+- Questions are understood in English. Chinese (and Japanese and Korean)
+  is matched by its characters, so searching in Chinese finds the pages
+  with those words, in the best order.
+- It runs on your computer: a 4 MB table of word meanings comes with
+  ZPDF, nothing is sent anywhere, and a folder is prepared once and then
+  searched in moments. On the command line: `pdfm search FOLDER "…" --best`.
+
 ## 0.20.0
 
 - The panel beside an open document suggests more: "Make it fillable" for

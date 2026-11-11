@@ -1033,7 +1033,7 @@ def cmd_catalog(a):
 
 def cmd_search(a):
     result = search.search(a.directory, a.query, a.recursive, a.case_sensitive, a.whole_words,
-                           limit=a.limit)
+                           limit=a.limit, how="best" if a.best else "exact")
     for m in result["matches"]:
         more = f" (+{m['count'] - 1} more)" if m["count"] > 1 else ""
         print(f"{m['path']}, page {m['page']}: {m['before']}[{m['match']}]{m['after']}{more}")
@@ -1634,6 +1634,9 @@ def build_parser():
     sp.add_argument("-R", "--recursive", action="store_true")
     sp.add_argument("--case-sensitive", action="store_true")
     sp.add_argument("--whole-words", action="store_true")
+    sp.add_argument("--best", action="store_true",
+                    help="rank pages by what they are about as well as their words, best first: "
+                         "\"how much do I owe\" finds \"balance due\" (English; Chinese by its words)")
     sp.add_argument("--limit", type=int, default=500, help="most pages to list (default: 500)")
 
     sp = other("watch", cmd_watch,

@@ -211,10 +211,16 @@ closed.
   a picture of the page). **PDF → HTML** makes a web page: flowing text
   that fits any screen, or each page as it looks. No Office needed. See
   [PowerPoint and HTML](#powerpoint-and-html).
-- **Search PDFs** finds words in every PDF in a folder (and its
-  sub-folders). Each result shows the words around the match; click one to
-  open that page in the reader with the words highlighted. The text is
-  kept in a small index, so searching the same folder again is quick.
+- **Search PDFs** searches every PDF in a folder (and its sub-folders).
+  Type words or ask a question: "how much do I owe" finds the page that
+  says "balance due", because pages are ranked by what they are about as
+  well as by the words they share with the question, the closest first.
+  "These exact words" finds a phrase as typed instead. Each result shows
+  the part of the page that matched; click one to open that page in the
+  reader. Questions are understood in English; Chinese is matched by its
+  words. It all runs on this computer (a 4 MB table of word meanings comes
+  with ZPDF), and the text is kept in a small index, so searching the same
+  folder again is quick.
 - Long jobs show **progress** and can be **cancelled**.
 - **Save…** opens the computer's own Save dialog, also in the Edge window.
 - Password-protected PDFs: enter the password once under the options;
@@ -558,7 +564,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `rename` | rename PDFs from their metadata | `pdfm rename ~/PDFs --pattern "{date:%Y-%m-%d} {title}" -n` |
 | `duplicates` | find (and optionally delete) identical PDFs | `pdfm duplicates ~/PDFs -R` |
 | `catalog` | CSV inventory of a folder | `pdfm catalog ~/PDFs -o inventory.csv -R` |
-| `search` | find words in every PDF in a folder | `pdfm search ~/PDFs "invoice 2024" -R` |
+| `search` | find words in every PDF in a folder, or with `--best` the pages that answer a question | `pdfm search ~/PDFs "invoice 2024" -R`, `pdfm search ~/PDFs "how much do I owe" --best` |
 | `watch` | process new PDFs dropped into a folder | see below |
 | `setup-windows` | Windows shortcuts, Open with, uninstall entry (`--remove`) | used by the installer |
 

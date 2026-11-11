@@ -2057,7 +2057,7 @@ const TAGLINES = {
   "to-pptx": "Turn pages into editable slides", "to-html": "Make a web page from a PDF",
   /* -- end of pptx and html -- */
   recipe: "Run several tools in one go", organize: "Sort a folder into subfolders", rename: "Rename files from their details",
-  duplicates: "Find identical PDFs", search: "Find words across a whole folder",
+  duplicates: "Find identical PDFs", search: "Find words, or answer a question, across a folder",
 };
 const inHome = () => current && current.files === "home";
 function recentTools() { try { return JSON.parse(localStorage.getItem("pdfm-recent-tools") || "[]"); } catch (e) { return []; } }
@@ -2096,7 +2096,7 @@ function factsLine(facts) {
   if (facts.protected) parts.push("protected");
   return parts.join(" · ");
 }
-const MULTI_TOOLS = [["merge", "Several PDFs into one"], ["compare", "What changed between two versions"], ["search", "Find words across all its PDFs", "Search a folder"]];
+const MULTI_TOOLS = [["merge", "Several PDFs into one"], ["compare", "What changed between two versions"], ["search", "Find words or ask a question across its PDFs", "Search a folder"]];
 async function renderHome() {
   const host = $("home-host");
   const input = el("input", { type: "file", accept: ".pdf,application/pdf", multiple: true, hidden: true });
@@ -2796,8 +2796,12 @@ async function runFolder(apply) {
 
 function showSearchResults(data, query) {
   const pages = data.matches.length, files = new Set(data.matches.map((m) => m.path)).size;
-  const msg = pages ? `Found on ${plural(pages, "page")} in ${plural(files, "file")} (${plural(data.files, "PDF")} searched)${data.limited ? " — showing the first " + pages : ""}.`
+  const best = data.how === "best";
+  let msg = pages ? `Found on ${plural(pages, "page")} in ${plural(files, "file")} (${plural(data.files, "PDF")} searched)${data.limited ? " — showing the first " + pages : ""}.`
     : `Not found in the ${plural(data.files, "PDF")} searched.`;
+  if (best && pages) msg = `${pages === 1 ? "The best match" : `The ${pages} best matches`} in ${plural(data.files, "PDF")}, the closest first.`
+    + (data.meaning ? "" : " Matched by its words: questions are understood in English only.");
+  else if (best) msg = `Nothing like that in the ${plural(data.files, "PDF")} searched.`;
   const extra = data.skipped.length ? ` ${plural(data.skipped.length, "file")} couldn't be searched (password protected or unreadable).` : "";
   $("result").replaceChildren(el("div", { class: "result-body" },
     el("div", { class: "result-title" }, icon(pages ? "check" : "alert"), "Search"), el("div", { class: "result-sub" }, msg + extra)));
@@ -2806,12 +2810,12 @@ function showSearchResults(data, query) {
   const tbody = el("tbody");
   for (const m of data.matches) {
     const name = m.path.split(/[\\/]/).pop(), folder = m.path.slice(0, m.path.length - name.length - 1);
-    const open = () => openInReaderById([m.id], { page: m.page, find: query });
+    const open = () => openInReaderById([m.id], { page: m.page, find: best ? (m.words ? m.match : "") : query });
     const row = el("tr", { class: "search-row", tabindex: "0", title: "Open this page in the reader",
       onclick: open, onkeydown: (e) => { if (e.key === "Enter") open(); } },
       el("td", {}, el("strong", {}, name), el("div", { class: "search-folder" }, folder)),
       el("td", { class: "search-page" }, `p. ${m.page}`),
-      el("td", {}, m.before, el("mark", {}, m.match), m.after, m.count > 1 ? el("span", { class: "search-more" }, ` +${m.count - 1} more`) : null));
+      el("td", {}, m.before, el("mark", {}, m.match), m.after, m.count > 1 && !best ? el("span", { class: "search-more" }, ` +${m.count - 1} more`) : null));
     tbody.append(row);
   }
   $("result-table").replaceChildren(el("table", { class: "search-results" },

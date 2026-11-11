@@ -15,6 +15,8 @@ def test_notices_list_what_zpdf_includes_and_installs():
     for font in ("Instrument Sans", "Instrument Serif", "JetBrains Mono"):  # the interface's fonts
         block = text.split(f"== {font} font ", 1)[1].split("\n== ", 1)[0]
         assert "SIL Open Font License" in block and "Copyright" in block, font
+    words = text.split("== WordLlama word vectors ", 1)[1].split("\n== ", 1)[0]   # search by meaning
+    assert "MIT License" in words and "Lee Miller" in words and "Llama 2" in words
     assert "Mozilla Public License" in text                             # pikepdf's own licence text
     assert "== pdf-manager " not in text                                # not ZPDF itself
 

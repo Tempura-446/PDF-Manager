@@ -520,13 +520,20 @@ OPERATIONS = [
                 _f("delete", "Delete duplicates (keeps the oldest copy)", "check", False)]},
     {"id": "search", "group": "Folders", "label": "Search PDFs", "files": None,
      "action": "Search", "preview": False,
-     "help": "Find text in every PDF in a folder. Click a result to open the page in the "
-             "reader. Nothing is changed.",
+     "help": "Find text in every PDF in a folder, or ask a question: \"how much do I owe\" "
+             "finds the page that says \"balance due\". Click a result to open the page in "
+             "the reader. Nothing is changed and nothing leaves this computer.",
      "fields": [_f("directory", "Folder", "text", "", required=True),
-                _f("query", "Search for", "text", "", required=True),
+                _f("query", "Search for", "text", "", required=True,
+                   placeholder="Words, or a question"),
+                _f("how", "Find", "select", "best",
+                   choices=[["best", "The best matches (understands a question)"],
+                            ["exact", "These exact words"]],
+                   hint="Questions are understood in English. Chinese is matched by its words."),
                 _f("recursive", "Include sub-folders", "check", True),
-                _f("case_sensitive", "Match upper/lower case", "check", False),
-                _f("whole_words", "Whole words only", "check", False)]},
+                _f("case_sensitive", "Match upper/lower case", "check", False,
+                   show_if={"how": "exact"}),
+                _f("whole_words", "Whole words only", "check", False, show_if={"how": "exact"})]},
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
@@ -1256,7 +1263,8 @@ def run_folder_operation(op, opts, apply):
         rows = [[str(s), str(d)] for s, d in plan]
     elif op == "search":
         return search.search(directory, opts.get("query") or "", recursive,
-                             _bool(opts.get("case_sensitive")), _bool(opts.get("whole_words")))
+                             _bool(opts.get("case_sensitive")), _bool(opts.get("whole_words")),
+                             how="exact" if opts.get("how") == "exact" else "best")
     elif op == "duplicates":
         rows = []
         for keep, *extra in organize.find_duplicates(directory, recursive):

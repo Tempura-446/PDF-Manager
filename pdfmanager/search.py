@@ -6,12 +6,13 @@ time, so searching the same folder again is quick and only new or changed
 files are read again. Scans without a text layer need OCR first.
 """
 
+import math
 import re
 import sqlite3
 import threading
 from pathlib import Path
 
-from pdfmanager import core, organize, progress
+from pdfmanager import core, meaning, organize, progress
 from pdfmanager.appdata import data_dir, touch_private
 
 _lock = threading.Lock()
@@ -25,6 +26,8 @@ def _db():
                  "mtime REAL, pages INTEGER, error TEXT)")
     conn.execute("CREATE TABLE IF NOT EXISTS pages (path TEXT, page INTEGER, text TEXT, "
                  "PRIMARY KEY (path, page))")
+    conn.execute("CREATE TABLE IF NOT EXISTS vectors (path TEXT, page INTEGER, model INTEGER, "
+                 "data BLOB, PRIMARY KEY (path, page))")
     return conn
 
 
@@ -69,6 +72,7 @@ def _pages(conn, path):
             return texts, error
     with conn:
         conn.execute("DELETE FROM pages WHERE path = ?", (key,))
+        conn.execute("DELETE FROM vectors WHERE path = ?", (key,))
         conn.executemany("INSERT INTO pages VALUES (?, ?, ?)", [(key, n, t) for n, t in texts])
         conn.execute("INSERT OR REPLACE INTO files VALUES (?, ?, ?, ?, ?)",
                      (key, stat.st_size, stat.st_mtime, len(texts), error))
@@ -91,18 +95,160 @@ def _snippet(text, match, width=70):
     return ("…" if start else "") + before, found, after + ("…" if end < len(text) else "")
 
 
+def _vectors(conn, path, texts):
+    """{page number: one vector per passage} for a file, made once and kept."""
+    key = str(path)
+    kept = {page: meaning.unpack(data) for page, data in conn.execute(
+        "SELECT page, data FROM vectors WHERE path = ? AND model = ?", (key, meaning.VERSION))}
+    missing = [(number, text) for number, text in texts if number not in kept]
+    if missing:
+        made = [(number, meaning.pack(meaning.embed_page(text))) for number, text in missing]
+        with conn:
+            conn.executemany("INSERT OR REPLACE INTO vectors VALUES (?, ?, ?, ?)",
+                             [(key, number, meaning.VERSION, data) for number, data in made])
+        kept.update((number, meaning.unpack(data)) for number, data in made)
+    return kept
+
+
+# Words that say nothing about what a question is after.
+STOP = frozenset("""a an and are as at be by can did do does for from how i in is it me my of on
+or our that the this to was we were what when where which who why with you your much many
+there their they have has had will would should could about""".split())
+
+WORDS = 0.1       # how much sharing the question's words adds to a page's likeness
+KEYWORDS = 0.5    # ... when the search is a few keywords and the page has them all
+CLOSEST = 20      # pages shown for their meaning alone, at most
+NEAR = 0.5        # ... each at least this fraction as close as the closest page
+_RUN = re.compile(f"{meaning.CJK.pattern}+")
+
+
+def _terms(query):
+    """The question as patterns to count on a page: its words (matching the
+    start of a word, so "invoice" finds "invoices"), and for Chinese, Japanese
+    and Korean, which have no spaces, each pair of neighbouring characters."""
+    terms = {}
+    for run in _RUN.findall(query):
+        for pair in ([run] if len(run) == 1 else [run[i:i + 2] for i in range(len(run) - 1)]):
+            terms.setdefault(pair, re.compile(r"\s*".join(re.escape(c) for c in pair)))
+    for word in re.findall(r"[^\W_]+", re.sub(r"['’]s\b", " ", _RUN.sub(" ", query).lower())):
+        if word not in STOP and (len(word) > 1 or word.isdigit()):
+            terms.setdefault(word, re.compile(rf"(?<![^\W_]){re.escape(word)}", re.IGNORECASE))
+    return list(terms.values())
+
+
+def _word_scores(pages, terms):
+    """How well each page matches the question's words (BM25), and whether it
+    has every one of them."""
+    count = len(pages)
+    scores, hits, complete = [0.0] * count, [0] * count, [bool(terms)] * count
+    if not count or not terms:
+        return scores, hits, complete
+    average = sum(len(text) for text in pages) / count or 1
+    for term in terms:
+        found = [len(term.findall(text)) for text in pages]
+        having = sum(1 for n in found if n)
+        if not having:
+            complete = [False] * count
+            continue
+        rarity = math.log(1 + (count - having + 0.5) / (having + 0.5))
+        for i, n in enumerate(found):
+            if n:
+                scores[i] += rarity * n * 2.2 / (n + 1.2 * (0.25 + 0.75 * len(pages[i]) / average))
+                hits[i] += n
+            else:
+                complete[i] = False
+    return scores, hits, complete
+
+
+def _best_snippet(text, terms, question, vectors):
+    """The part of a page to show: around the question's first word found in
+    its closest passage, or failing that the dozen words closest in meaning."""
+    parts = meaning.passages(text)
+    if not parts:
+        return "", "", ""
+    best = 0
+    if question is not None and len(vectors) == len(parts):
+        best = int((vectors @ question).argmax())
+    start, end = parts[best]
+    for area in ((start, end), (0, len(text))):
+        for term in terms:
+            found = term.search(text, *area)
+            if found:
+                return _snippet(text, found)
+    if question is None:
+        return "", "", ""
+    words = [m.span() for m in re.finditer(r"\S+", text[start:end])]
+    top, where = -2.0, (0, min(12, len(words)))
+    for first in range(0, max(1, len(words) - 11), 4):
+        last = min(first + 12, len(words))
+        likeness = float(meaning.embed(text[start + words[first][0]:start + words[last - 1][1]]) @ question)
+        if likeness > top:
+            top, where = likeness, (first, last)
+    found = re.compile(r"(?s).*").match(text, start + words[where[0]][0], start + words[where[1] - 1][1])
+    return _snippet(text, found)
+
+
+def _best(entries, query, limit):
+    """Rank pages for a question. ``entries`` is [(path, page number, text,
+    vectors)]; returns the match entries, best first."""
+    terms = _terms(query)
+    question = meaning.embed(query)
+    if not question.any():
+        question = None  # nothing the model knows (Chinese, a number): the words decide
+    scores, hits, complete = _word_scores([text for _, _, text, _ in entries], terms)
+    most = max(scores, default=0) or 1
+    keywords = len(query.split()) <= 3
+    ranked = []
+    for i, (path, number, text, vectors) in enumerate(entries):
+        if question is None:
+            if scores[i]:
+                ranked.append((scores[i] / most, True, i))
+            continue
+        likeness = float((vectors @ question).max()) if len(vectors) else 0.0
+        if not scores[i] and likeness <= 0:
+            continue
+        score = likeness + WORDS * scores[i] / most + (KEYWORDS if keywords and complete[i] else 0)
+        ranked.append((score, bool(scores[i]), i, likeness))
+    ranked.sort(key=lambda r: (-r[0], r[2]))
+    # Every page that has the words, and beyond those the closest in meaning:
+    # a few, and only those in the same league as the closest of all.
+    closest = max((r[3] for r in ranked if len(r) > 3), default=0)
+    chosen, by_meaning = [], 0
+    for score, has_words, i, *likeness in ranked:
+        if not has_words:
+            if by_meaning >= CLOSEST or likeness[0] < NEAR * closest:
+                continue
+            by_meaning += 1
+        chosen.append((score, i))
+    matches = []
+    for score, i in chosen[:limit]:
+        path, number, text, vectors = entries[i]
+        before, hit, after = _best_snippet(text, terms, question, vectors)
+        matches.append({"path": str(path), "page": number, "count": max(1, hits[i]),
+                        "before": before, "match": hit, "after": after,
+                        "words": bool(hits[i]), "score": round(score, 3)})
+    return matches, len(chosen) > limit, question is not None
+
+
 def search(directory, query, recursive=False, case_sensitive=False, whole_words=False,
-           limit=500):
+           limit=500, how="exact"):
     """Find ``query`` in the PDFs in ``directory``. Returns {"matches": [{"path",
     "page", "count", "before", "match", "after"}], "files": number searched,
-    "skipped": [(path, reason)]}, one match entry per page (with the number of
-    hits on it), at most ``limit``."""
+    "skipped": [(path, reason)], "limited", "how"}, one match entry per page,
+    at most ``limit``.
+
+    ``how`` is "exact" (the words as typed, as one phrase; in the order the
+    files are found) or "best" (pages ranked by what they are about and the
+    words they share with the query, best first; "meaning" in the result says
+    whether the query's meaning could be used, which it can't for Chinese)."""
     directory = Path(directory).expanduser()
     if not directory.is_dir():
         raise core.PdfManagerError(f"{directory} is not a folder")
+    if how not in ("exact", "best"):
+        raise core.PdfManagerError(f"unknown way to search {how!r}")
     pattern = _pattern(query, case_sensitive, whole_words)
     files = organize.find_pdfs(directory, recursive)
-    matches, skipped = [], []
+    matches, skipped, entries = [], [], []
     with _lock:
         conn = _db()
         try:
@@ -111,12 +257,16 @@ def search(directory, query, recursive=False, case_sensitive=False, whole_words=
                                                        f"({i + 1} of {len(files)})")
                 try:
                     texts, error = _pages(conn, path)
+                    vectors = _vectors(conn, path, texts) if how == "best" and not error else {}
                 except FileNotFoundError:
                     error = "removed while searching"
                 except OSError:
                     error = "can't be read"
                 if error:
                     skipped.append((str(path), error))
+                    continue
+                if how == "best":
+                    entries.extend((path, number, text, vectors[number]) for number, text in texts)
                     continue
                 for number, text in texts:
                     found = list(pattern.finditer(text))
@@ -126,10 +276,14 @@ def search(directory, query, recursive=False, case_sensitive=False, whole_words=
                                         "before": before, "match": hit, "after": after})
                         if len(matches) >= limit:
                             return {"matches": matches, "files": i + 1, "skipped": skipped,
-                                    "limited": True}
+                                    "limited": True, "how": how}
         finally:
             conn.close()
-    return {"matches": matches, "files": len(files), "skipped": skipped, "limited": False}
+    result = {"matches": matches, "files": len(files), "skipped": skipped, "limited": False,
+              "how": how}
+    if how == "best":
+        result["matches"], result["limited"], result["meaning"] = _best(entries, query, limit)
+    return result
 
 
 def forget_index():

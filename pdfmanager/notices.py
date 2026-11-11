@@ -111,6 +111,35 @@ FONTS = (("Instrument Sans", "instrument-sans"), ("Instrument Serif", "instrumen
          ("JetBrains Mono", "jetbrains-mono"))
 
 
+WORDLLAMA = """ZPDF's table of word vectors is a shortened copy (the first 128 of 256 numbers, one
+byte each) of the "l2_supercat" model of the WordLlama project,
+https://github.com/dleemiller/WordLlama, with that model's vocabulary. WordLlama's
+vectors were trained from the token embeddings of large language models that use the
+Llama 2 vocabulary.
+
+MIT License
+
+Copyright (c) 2024 Lee Miller
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE."""
+
+
 def _vendored():
     fonts = HERE / "static" / "fonts"
     pdfjs = HERE / "static" / "pdfjs"
@@ -119,6 +148,8 @@ def _vendored():
         ("pdf.js", version, "Apache-2.0 (Mozilla)", _read(pdfjs / "LICENSE")),
         ("Tesseract glyphless font (pdf.ttf, in textlayer.py)", "5", "Apache-2.0 (the Tesseract authors)",
          "Licensed under the Apache License, Version 2.0, as is pdf.js above."),
+        ("WordLlama word vectors (static/meaning/words.npz, for search by meaning)", "0.4.0, l2_supercat",
+         "MIT (Lee Miller)", WORDLLAMA),
         *((f"{name} font (static/fonts)", "5.3.0 (Fontsource)", "OFL-1.1 (SIL Open Font License 1.1)",
            _read(fonts / f"OFL-{key}.txt")) for name, key in FONTS),
     ]

@@ -498,6 +498,20 @@ def test_cli_search_and_app(tmp_path, monkeypatch, capsys, app):
     match = json.loads(body)["matches"][0]
     assert status == 200 and match["page"] == 1
     assert call(base, token, f"/api/file/{match['id']}")[2].startswith(b"%PDF")
+    # By meaning: the app's usual way, and --best on the command line.
+    text_pdf(tmp_path / "y.pdf", ["Statement of account: the balance due is 240.00"])
+    capsys.readouterr()
+    assert main(["search", str(tmp_path), "how much do I owe", "--best"]) == 0
+    assert capsys.readouterr().out.splitlines()[0].startswith(f"{tmp_path / 'y.pdf'}, page 1: ")
+    assert main(["search", str(tmp_path), "how much do I owe"]) == 1
+    asked = {"directory": str(tmp_path), "query": "how much do I owe"}
+    found = json.loads(call(base, token, "/api/folder", {"op": "search", "options": asked})[2])
+    assert found["how"] == "best" and found["meaning"] and found["matches"][0]["path"].endswith("y.pdf")
+    assert call(base, token, f"/api/file/{found['matches'][0]['id']}")[2].startswith(b"%PDF")
+    exact = json.loads(call(base, token, "/api/folder", {"op": "search", "options": {**asked, "how": "exact"}})[2])
+    assert exact["how"] == "exact" and exact["matches"] == []
+    fields = {f["key"]: f for f in gui.OPS["search"]["fields"]}
+    assert fields["how"]["default"] == "best" and fields["whole_words"]["show_if"] == {"how": "exact"}
 
 
 # -- form fields ----------------------------------------------------------------------------------
