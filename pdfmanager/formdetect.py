@@ -472,11 +472,18 @@ def _blank_pictures(page, image, to_px):
     looked for: the edges in a picture are not boxes to write in (found on
     Windows: a brochure and a software guide were offered "Make it
     fillable" for boxes inside their pictures). A picture filling most of
-    the page is its scan and is left alone."""
+    a page with no text of its own to read is its scan, and is left alone;
+    a cover photo behind printed text is not."""
     import pypdfium2 as pdfium
     import pypdfium2.raw as raw
     from PIL import ImageDraw
 
+    printed = False  # text people read (a scan's recognised text is invisible)
+    for obj in page.get_objects(filter=[raw.FPDF_PAGEOBJ_TEXT], max_depth=3):
+        if raw.FPDFTextObj_GetTextRenderMode(obj.raw) not in (raw.FPDF_TEXTRENDERMODE_INVISIBLE,
+                                                               raw.FPDF_TEXTRENDERMODE_CLIP):
+            printed = True
+            break
     width, height = image.size
     draw = ImageDraw.Draw(image)
     for obj in page.get_objects(filter=[raw.FPDF_PAGEOBJ_IMAGE], max_depth=3):
@@ -488,7 +495,7 @@ def _blank_pictures(page, image, to_px):
         box = (max(min(xs), 0), max(min(ys), 0), min(max(xs), width), min(max(ys), height))
         if box[2] <= box[0] or box[3] <= box[1]:
             continue
-        if (box[2] - box[0]) * (box[3] - box[1]) >= 0.6 * width * height:
+        if not printed and (box[2] - box[0]) * (box[3] - box[1]) >= 0.6 * width * height:
             continue  # the page's own scan
         draw.rectangle(box, fill=255)
 

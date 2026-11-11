@@ -1004,3 +1004,45 @@ def test_a_page_of_frames_taken_for_a_table_is_not_one():
     repeats = {"kind": "ruled", "bbox": (72, 100, 540, 300),
                "rows": [["Mon-Fri", "Mon-Fri", "Sat"], ["07:15", "09:40", "08:05"], ["n/a", "n/a", "n/a"]]}
     assert not webpage._artefact(repeats, 612, 792), "short cells repeat in real tables"
+
+
+def test_a_footer_copy_mostly_hidden_leaves_no_fragment(tmp_path):
+    """Found on a brochure: the footer is drawn twice; most of the copy is
+    hidden (under a panel), only its first letters show, and "www.p" was
+    left before the real footer."""
+    c = canvas.Canvas(str(tmp_path / "a.pdf"), pagesize=A4)
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 700, "Hudson Beige. A painted shaker door in a warm beige colour.")
+    url = "www.proselectdesign.com"
+    c.setFont("Helvetica", 10)
+    c.drawString(380, 40, url)  # the footer
+    c.drawString(380, 56, url)  # its copy, then a panel over all but "www.p"
+    c.setFillColorRGB(1, 1, 1)
+    c.rect(380 + c.stringWidth("www.p", "Helvetica", 10), 52, 200, 16, stroke=0, fill=1)
+    c.save()
+    paragraphs, tables, _ = read(office.basic_docx(tmp_path / "a.pdf", tmp_path / "a.docx"))
+    texts = [text for _, text in paragraphs] + [cell for t in tables for row in t for cell in row]
+    joined = " ".join(texts)
+    assert joined.count("www.p") == 1 and joined.count(url) == 1, texts
+
+
+def test_a_footer_drawn_twice_a_little_differently_leaves_no_fragment(tmp_path):
+    """Found on a brochure: the footer is drawn twice, right-aligned, the
+    copy set a little differently; only its tail met the original, and
+    "www.p" was left before it."""
+    c = canvas.Canvas(str(tmp_path / "a.pdf"), pagesize=A4)
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 700, "Hudson Beige. A painted shaker door in a warm beige colour.")
+    url = "www.proselectdesign.com"
+    for spacing in (0, 0.12):  # the copy's letters a little wider apart: only its tail meets the original
+        text = c.beginText()
+        text.setFont("Helvetica", 10)
+        text.setCharSpace(spacing)
+        text.setTextOrigin(520 - c.stringWidth(url, "Helvetica", 10) - spacing * len(url), 40)
+        text.textOut(url)
+        c.drawText(text)
+    c.save()
+    paragraphs, tables, _ = read(office.basic_docx(tmp_path / "a.pdf", tmp_path / "a.docx"))
+    texts = [text for _, text in paragraphs] + [cell for t in tables for row in t for cell in row]
+    joined = " ".join(texts)
+    assert joined.count("www.p") == joined.count(url) <= 1, texts

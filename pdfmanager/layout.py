@@ -696,6 +696,7 @@ class Document:
         path or in a hidden layer) left out when it is a second copy of
         text that does show. The page drawn with and without its text tells
         what shows."""
+        drawn = chars
         chars, dropped = _dedupe(chars)
         if not chars:
             return chars, dropped
@@ -710,7 +711,12 @@ class Document:
             shown = [not c.hidden for c in chars]
         gone = _unseen(chars, shown, geometry.width, geometry.height)
         dropped += [(c.text, c.origin, c.size) for k, c in enumerate(chars) if k in gone]
-        return [c for k, c in enumerate(chars) if k not in gone], dropped
+        kept = [c for k, c in enumerate(chars) if k not in gone]
+        rest = _rest_of_copies(drawn, kept)
+        if rest:
+            dropped += [(c.text, c.origin, c.size) for c in drawn if id(c) in rest]
+            kept = [c for c in kept if id(c) not in rest]
+        return kept, dropped
 
     def size(self, index):
         """(width, height) of page ``index`` as shown."""
@@ -856,6 +862,43 @@ def _dedupe(chars):
             c.space, kept[twin].space = kept[twin].space, c.space
         dropped.append((c.text, c.origin, c.size))
     return kept, dropped
+
+
+def _rest_of_copies(drawn, kept):
+    """ids of characters left from a copy whose most part was left out (a
+    footer drawn twice, the copy's tail hidden under a panel or meeting the
+    original, its first letters "www.p" still showing): a run of text, as
+    drawn, of which 60% or more is gone loses the rest too, when that rest
+    is found in the text kept elsewhere."""
+    left = {id(c) for c in kept}
+    rest = set()
+    for run in _runs(drawn):
+        if len(run) < 6:
+            continue
+        stays = [drawn[i] for i in run if id(drawn[i]) in left]
+        if not stays or len(stays) > 0.4 * len(run):
+            continue
+        elsewhere = _squeeze("".join(c.text for c in kept if not any(c is s for s in stays)))
+        if _squeeze("".join(c.text for c in stays)) in elsewhere:
+            rest.update(id(c) for c in stays)
+    return rest
+
+
+def _runs(chars):
+    """[[indices]] of the characters as drawn, cut where the text jumps (a
+    new line, a gap, going back): the runs the page sets one after another."""
+    runs, run = [], []
+    for i, c in enumerate(chars):
+        if run:
+            p = chars[run[-1]]
+            if (c.angle != p.angle or abs(c.base - p.base) > 0.3 * max(c.size, p.size)
+                    or c.x0 < p.x0 - 0.3 * c.size or c.x0 - p.x1 > 1.5 * max(c.size, p.size)):
+                runs.append(run)
+                run = []
+        run.append(i)
+    if run:
+        runs.append(run)
+    return runs
 
 
 def _shown(chars, full, bare, scale):

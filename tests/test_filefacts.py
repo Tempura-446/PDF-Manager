@@ -351,4 +351,13 @@ def test_boxes_inside_a_picture_are_no_form_at_a_glance(tmp_path):
     c.save()
     found = formdetect.detect(tmp_path / "guide.pdf", pages=[1, 2], quick=True)
     assert 1 not in found, found.get(1)
+    # A cover: a photo over most of the page, printed text on it (found on
+    # Windows: such a photo was let off as if it were the page's scan).
+    big = shot.resize((1200, 1600))
+    big.save(tmp_path / "cover.png")
+    c = canvas.Canvas(str(tmp_path / "cover.pdf"))
+    c.drawImage(str(tmp_path / "cover.png"), 0, 60, width=595, height=760)
+    c.drawString(72, 30, "ProSelect 2026 collection")
+    c.save()
+    assert formdetect.detect(tmp_path / "cover.pdf", pages=[1], quick=True) == {}
     assert len(found.get(2, [])) >= 3, "a form drawn on the page is still a form"
