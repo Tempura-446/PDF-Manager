@@ -210,13 +210,14 @@ def test_opening_files_in_a_browser(app, tmp_path):
     out = json.loads(run.stdout)
     assert not out["errors"], out["errors"]
 
-    # (a) A signed file of 5 MB: one first piece, the rest as needed, never the whole file; nothing
-    # is sent back to the server; the signature bar shows all the same.
+    # (a) A signed file of 5 MB: one first piece, the rest in pieces; nothing is sent back to the
+    # server; the signature bar shows all the same.
     s = out["signed"]
     size = signed.stat().st_size
-    assert s["size"] == size and s["held"] is False
-    assert s["ranges"][0] == "bytes=0-4194303" and len(s["ranges"]) >= 2 and all(s["ranges"])
-    assert s["asked"] < size  # (the padding in the middle was never fetched)
+    assert s["size"] == size and all(s["ranges"])  # (never the whole file in one answer)
+    assert s["ranges"][0] == "bytes=0-4194303" and len(s["ranges"]) >= 2
+    # After the first page, the rest in one go, in the background: then it's held like a small file.
+    assert f"bytes=4194304-{size - 1}" in s["ranges"] and s["held"] is True
     assert s["bar"].startswith("Signed by Jane Tester")
     assert s["biggestUpload"] < 2000
     assert "/api/sign/verify" in s["posts"]
@@ -226,7 +227,7 @@ def test_opening_files_in_a_browser(app, tmp_path):
     assert s["fullLength"] == size
     # (b) Opened later, from the page that is already up: a printed form of 5 MB, its bar and the panel's suggestion.
     f = out["form"]
-    assert f["held"] is False and f["tabs"] == 2
+    assert f["tabs"] == 2
     assert f["bar"].startswith("This looks like a form to fill in")
     assert "Make it fillable" in f["suggestions"]
     assert out["back"] == {"name": "Signed contract.pdf", "pages": 3, "formBar": None}

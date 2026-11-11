@@ -2686,7 +2686,7 @@ export class Reader {
       el("label", { class: "rd-field" }, "Reason (optional)", reason), el("label", { class: "rd-field" }, "Location (optional)", location),
       el("label", { class: "rd-field" }, "Timestamp server (optional)", stamp)],
       [["cancel", "Cancel"], ["ok", "Sign", true]],
-      { ready: () => { if (pfx.files[0]) return true; pfx.focus(); pfx.click?.(); return false; } });
+      { ready: () => { if (pfx.files[0]) return true; pfx.focus(); return false; } });  // (Enter before a digital ID is chosen: to the file box, nothing lost)
     if (answer !== "ok") return;
     const file = pfx.files[0];
     if (!file) { this.toast("Choose your digital ID file (.pfx or .p12)."); return; }

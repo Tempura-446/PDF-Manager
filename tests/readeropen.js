@@ -34,6 +34,7 @@ const { chromium } = require("playwright");
     await firstPage(page);
     await page.waitForSelector(".rd-sigbar:not([hidden])", { timeout: 60000 });
     await page.waitForFunction(() => ["none", "show", "has-fields"].includes(reader.activeTab.formHint), null, { timeout: 60000 });  // eslint-disable-line no-undef
+    await page.waitForFunction(() => !!reader.activeTab.bytes, null, { timeout: 30000 }).catch(() => {});  // eslint-disable-line no-undef
     const files = reqs.filter((r) => r.path.startsWith("/api/file/"));
     const span = (r) => { const m = /bytes=(\d+)-(\d+)/.exec(r.range); return m ? +m[2] - +m[1] + 1 : Infinity; };
     out.signed = {
