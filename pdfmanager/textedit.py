@@ -1620,7 +1620,8 @@ class _Page:
         old_end = letters[-1]["s"] + letters[-1]["adv"]
         growth = shift if tail < len(letters) else pen - tc - old_end
         gaps = [k for k, L in enumerate(letters[tail:]) if L.get("space_before")]
-        if abs(shift) > MOVED and stretched and gaps:
+        absorbed = abs(shift) > MOVED and stretched and bool(gaps)  # the gaps after the change take it up
+        if absorbed:
             each = shift / len(gaps)
             narrowest = min(letters[tail + k]["s"] - letters[tail + k - 1]["s"] - letters[tail + k - 1]["adv"]
                             for k in gaps if tail + k > 0) if any(tail + k > 0 for k in gaps) else word
@@ -1639,10 +1640,10 @@ class _Page:
         # A line set to the right keeps its right end, a centred one its
         # middle: the words before the change move left to make room.
         part = 0.0
-        anchored = context in ("right", "center") and abs(growth) > MOVED and self.flow is not None
+        anchored = context in ("right", "center") and abs(growth) > MOVED and self.flow is not None and not absorbed
         if anchored:
             part = growth if context == "right" else growth / 2
-        elif growth > 0.5 and not stretched and self.flow is not None and not self.legacy \
+        elif growth > 0.5 and not absorbed and self.flow is not None and not self.legacy \
                 and abs(letters[0]["style"]["angle"]) < 1:
             size = letters[0]["style"]["size"]
             if para:

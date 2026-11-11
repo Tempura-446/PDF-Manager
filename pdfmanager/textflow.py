@@ -548,8 +548,7 @@ class Flow:
             edit["els"][edit["els"].index(("g", k))] = ("x", k)
 
     def _tidy_spaces(self, show):
-        """Spaces left with no word on either side, or doubled where a word
-        went, go too."""
+        """Spaces left with no word on either side go too."""
         edit = self._edit(show)
         glyphs, gone = show["glyphs"], edit["gone"]
         marks = [k for k, g in enumerate(glyphs) if not g[2]]
@@ -562,13 +561,7 @@ class Flow:
             a_gone = not after or after[0] in gone
             if not ((before and before[-1] in gone) or (after and after[0] in gone)):
                 continue
-            doubled = False
-            if before and before[-1] in gone:  # back over the words taken out: another space there?
-                j = k - 1
-                while j >= 0 and j in gone:
-                    j -= 1
-                doubled = j >= 0 and glyphs[j][2]
-            if (b_gone and a_gone) or doubled:
+            if b_gone and a_gone:
                 self._drop(show, k)
 
     def remove(self, letters):
