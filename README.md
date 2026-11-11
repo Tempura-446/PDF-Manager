@@ -282,7 +282,10 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
 - **Big files open fast:** a PDF of over 4 MB from your computer is read
   a piece at a time as you go, so the first pages show at once (a 277 MB
   drawing set: first page in about a second, using a few MB of memory).
-  The page thumbnails are made when you open their panel, and only those
+  Once the first page shows, a file of up to 64 MB is read in full in the
+  background, so it stays open as it was even if the file is then changed
+  or deleted. If a bigger file stops being readable, the reader says so
+  and the tab can be closed. The page thumbnails are made when you open their panel, and only those
   near the page you are on.
 - A zoom that fits the page (Automatic, Fit width, Fit page) fits it again
   when the window or the sidebar changes size.
