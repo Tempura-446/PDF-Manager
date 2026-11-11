@@ -25,7 +25,7 @@ const { chromium } = require("playwright");
   };
   const firstPage = (page) => page.waitForFunction(() => {
     const c = document.querySelector(".pdfViewer .page canvas");
-    return !!c && typeof reader !== "undefined" && !!reader.doc && reader.loading.hidden;  // eslint-disable-line no-undef
+    return !!c && typeof reader !== "undefined" && !!reader && !!reader.doc && reader.loading.hidden;  // eslint-disable-line no-undef
   }, null, { timeout: 60000 });
   const text = (page, sel) => page.evaluate((s) => { const e = document.querySelector(s); return e && !e.hidden ? e.textContent : null; }, sel);
   try {
