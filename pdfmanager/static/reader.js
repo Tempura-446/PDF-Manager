@@ -32,20 +32,51 @@ function fadeOut(node) {
 let pdfjs = null;   // pdf.js display API
 let viewer = null;  // pdf.js viewer components
 
-/** pdf.js and its viewer components. Called early (see gui.html) so the
- *  reader is ready by the time it's opened. */
-export async function loadPdfjs() {
-  if (viewer) return;
-  pdfjs = await loadLibrary();
-  globalThis.pdfjsLib = pdfjs;  // the viewer components read the API from here
-  viewer ||= await import(BASE + "web/pdf_viewer.mjs");
-  if (!document.querySelector("link[data-pdfjs]")) {
-    const link = document.createElement("link");
-    link.rel = "stylesheet"; link.href = BASE + "web/pdf_viewer.css"; link.dataset.pdfjs = "";
-    document.head.append(link);
-    await new Promise((resolve) => { link.onload = resolve; link.onerror = resolve; });
-  }
+/** Fetch a script or stylesheet the page is about to need, alongside what's loading now. */
+function preload(rel, href, as = null) {
+  if (document.querySelector(`link[rel="${rel}"][href="${href}"]`)) return;
+  const link = document.createElement("link");
+  link.rel = rel; link.href = href;
+  if (as) link.as = as;
+  document.head.append(link);
 }
+
+/** pdf.js's stylesheet, once (resolves when it applies, or failed to load).
+ *  It is fetched at once but takes its place after the page's own styles, as
+ *  it always has: where a stylesheet stands decides which rule wins. */
+async function loadViewerCss() {
+  if (document.querySelector("link[data-pdfjs]")) return;
+  const href = BASE + "web/pdf_viewer.css";
+  if (document.readyState === "loading") {
+    preload("preload", href, "style");
+    await new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true }));
+    if (document.querySelector("link[data-pdfjs]")) return;
+  }
+  const link = document.createElement("link");
+  link.rel = "stylesheet"; link.href = href; link.dataset.pdfjs = "";
+  document.head.append(link);
+  await new Promise((resolve) => { link.onload = resolve; link.onerror = resolve; });
+}
+
+let pdfjsReady = null;
+/** pdf.js and its viewer components. Started as soon as this file is read:
+ *  the library, its worker, the viewer and its stylesheet load side by side,
+ *  so the reader is ready by the time it's opened. */
+export function loadPdfjs() {
+  pdfjsReady ||= (async () => {
+    // (The viewer reads the API from globalThis when it runs, so it can only
+    // run after the library; fetching it doesn't have to wait.)
+    preload("modulepreload", BASE + "web/pdf_viewer.mjs");
+    const css = loadViewerCss();
+    pdfjs = await loadLibrary();
+    globalThis.pdfjsLib = pdfjs;
+    viewer = await import(BASE + "web/pdf_viewer.mjs");
+    await css;
+  })();
+  pdfjsReady.catch(() => { pdfjsReady = null; });  // try again next time
+  return pdfjsReady;
+}
+loadPdfjs().catch(() => {});
 
 /** What a protected PDF allows, from pdf.js's list of allowed permissions. */
 function permissionText(allowed) {
@@ -166,9 +197,10 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 let tabSeq = 0;
-// Files bigger than this, opened from this computer, are read in pieces as
-// pages are shown (the whole file only when a change or save needs it).
-const LAZY_BYTES = 32 * 1024 * 1024;
+// A file opened from this computer comes in pieces: the first this long (a
+// file no bigger is whole in it, and is held here in full), the rest as pages
+// are shown (the whole file only when a change or save needs it).
+const FIRST_BYTES = 4 * 1024 * 1024;
 const header = (res, name) => { try { return decodeURIComponent(res.headers.get(name) || ""); } catch (e) { return ""; } };
 
 /** A box on the page (PDF coordinates) as [x0, y0, x1, y1] on screen, within the page. */
@@ -786,22 +818,21 @@ export class Reader {
 
   /** Open a file the server knows by id; ``goto`` = {page, find} shows a
    *  page and searches for text on it (e.g. from the folder search). */
-  async openById(id, goto = null) {
+  async openById(id, goto = null, first = null) {
     this.#busy(true);
     try {
-      const url = "/api/file/" + encodeURIComponent(id), headers = { "X-Pdfm-Token": this.token };
-      // The first byte tells the file's size, place and version.
-      const probe = await fetch(url, { headers: { ...headers, Range: "bytes=0-0" } });
-      if (!probe.ok && probe.status !== 416) throw new Error((await probe.json().catch(() => ({}))).error || probe.statusText);
-      await probe.arrayBuffer();
-      const name = header(probe, "X-Pdfm-Filename") || "document.pdf";
-      const file = { fileId: id, path: header(probe, "X-Pdfm-Path"), stamp: probe.headers.get("X-Pdfm-Stamp") || "",
-        size: Number((probe.headers.get("Content-Range") || "").split("/")[1]) || 0 };
-      if (file.size > LAZY_BYTES) { await this.#serial(() => this.#openBytesNow(null, name, null, goto, { ...file, url })); return; }
-      const res = await fetch(url, { headers });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-      file.stamp = res.headers.get("X-Pdfm-Stamp") || file.stamp;
-      await this.openBytes(new Uint8Array(await res.arrayBuffer()), name, null, goto, file);
+      const url = "/api/file/" + encodeURIComponent(id);
+      // One request: the file's first piece, which comes with its size, place
+      // and version. A small file is whole in it. (``first``: that request,
+      // already made by the page while it was starting.)
+      const res = await (first || fetch(url, { headers: { "X-Pdfm-Token": this.token, Range: `bytes=0-${FIRST_BYTES - 1}` } }));
+      if (!res.ok && res.status !== 416) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+      const head = new Uint8Array(await res.arrayBuffer());
+      const name = header(res, "X-Pdfm-Filename") || "document.pdf";
+      const file = { fileId: id, path: header(res, "X-Pdfm-Path"), stamp: res.headers.get("X-Pdfm-Stamp") || "",
+        size: Number((res.headers.get("Content-Range") || "").split("/")[1]) || head.length };
+      if (head.length >= file.size) await this.openBytes(head, name, null, goto, file);
+      else await this.#serial(() => this.#openBytesNow(null, name, null, goto, { ...file, url, head }));  // the rest in pieces
     } catch (e) {
       this.toast("Could not open the file: " + (e.message || e));
     } finally {
@@ -985,6 +1016,33 @@ export class Reader {
     this.onChange?.();
   }
 
+  /** Where pdf.js gets the pieces of a file that isn't held here in full
+   *  (``tab.url``): it starts with the piece that came when the file was
+   *  opened (``tab.head``, used once) and asks for the others as pages need
+   *  them. Requests still on their way stop when the document is closed. */
+  #pieces(tab) {
+    const head = tab.head || null;
+    tab.head = null;  // pdf.js takes the buffer
+    const source = new pdfjs.PDFDataRangeTransport(tab.size, head);
+    const stop = new AbortController();
+    let failed = false;
+    source.requestDataRange = (begin, end) => {
+      fetch(tab.url, { headers: { "X-Pdfm-Token": this.token, Range: `bytes=${begin}-${end - 1}` }, signal: stop.signal }).then(async (res) => {
+        if (res.status !== 206) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+        // Another program wrote the file meanwhile: its pieces no longer fit the ones already read.
+        const stamp = res.headers.get("X-Pdfm-Stamp");
+        if (stamp && tab.stamp && stamp !== tab.stamp) throw new Error("it was changed by another program; close it and open it again");
+        source.onDataRange(begin, new Uint8Array(await res.arrayBuffer()));
+      }).catch((e) => {
+        if (stop.signal.aborted || failed) return;
+        failed = true;
+        this.toast(`Couldn't read more of “${tab.name}”: ${e.message || e}`, 9000);
+      });
+    };
+    source.abort = () => stop.abort();
+    return source;
+  }
+
   /** Show ``tab``'s document in the viewer. Returns false if it couldn't be
    *  opened (not a PDF, or the password prompt was cancelled). */
   async #load(tab) {
@@ -1000,8 +1058,7 @@ export class Reader {
         ...DOC_OPTIONS,
         ...(tab.bytes
           ? { data: tab.bytes.slice() }  // pdf.js takes ownership of the buffer; keep our copy intact
-          : { url: tab.url, httpHeaders: { "X-Pdfm-Token": this.token }, length: tab.size || undefined,
-              rangeChunkSize: 1 << 20, disableAutoFetch: true, disableStream: true }),
+          : { range: this.#pieces(tab), rangeChunkSize: 1 << 20, disableAutoFetch: true, disableStream: true }),
         password: tab.password || undefined,
         enableXfa: true,
         fontExtraProperties: true,  // fonts' own names, to find the installed copy when editing text
