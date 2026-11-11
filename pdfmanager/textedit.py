@@ -1204,6 +1204,9 @@ class _Page:
         # they are one at all (two entries of a list look the same).
         if len(rows) < 3 or self._context(letters) not in ("left", "justify"):
             return None
+        ends = sorted((seg["x1"] for seg in rows), reverse=True)
+        if ends[0] - ends[1] > 4 * size:
+            return None  # one line reaches far past the others: words of a column beside it, most likely
         found = [_letters(self.textpage, sorted(seg["idx"]), self.cache, self.hidden) for seg in rows]
         if any(row is None for row in found):
             return None

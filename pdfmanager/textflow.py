@@ -652,11 +652,16 @@ class Flow:
         content = self.content
         if not content:
             return False
+        if not self._hidden_origins():
+            return True
+        # Boxes on this line: no taller than it, and reaching into it (the
+        # old words may have been longer than the line is now).
         area = _grow((min(L["loose"][0] for L in letters), min(L["loose"][1] for L in letters),
                       max(L["loose"][2] for L in letters), max(L["loose"][3] for L in letters)), COVER_PAD)
-        hidden = [o for o in self._hidden_origins() if area[0] <= o[0] <= area[2] and area[1] <= o[1] <= area[3]]
         paths = [p for p in content.paths if p["start"] not in self.dropped and p["paint"] and self._cover_like(p)
-                 and _within(p["box"], area)]
+                 and p["box"][1] >= area[1] and p["box"][3] <= area[3] and _overlaps(p["box"][0], p["box"][2], area[0], area[2])]
+        hidden = [o for o in self._hidden_origins()
+                  if any(p["box"][0] - 1 <= o[0] <= p["box"][2] + 1 and p["box"][1] - 1 <= o[1] <= p["box"][3] + 1 for p in paths)]
         if not hidden:
             # A box of the page's own (a highlight) may lie on the line: it stays.
             return True
