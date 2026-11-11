@@ -370,6 +370,71 @@ def _stacked(raw_rows):
     return False
 
 
+def _runs_of_chars(chars):
+    """The characters in runs, in the order the PDF draws them: one after
+    the other along a line, in one font and size."""
+    runs = []
+    for char in chars:
+        run = runs[-1] if runs else None
+        if run:
+            last = run[-1]
+            size = max(float(char.get("size") or 0), 1.0)
+            if (char.get("fontname") == last.get("fontname") and char.get("size") == last.get("size")
+                    and char.get("upright", True) == last.get("upright", True)
+                    and abs(char["top"] - last["top"]) <= 0.2 * size
+                    and last["x0"] - 0.1 * size <= char["x0"] <= last["x1"] + 0.6 * size):
+                run.append(char)
+                continue
+        runs.append([char])
+    return runs
+
+
+def _overlap(a, b):
+    width = min(a["x1"] - a["x0"], b["x1"] - b["x0"])
+    return min(a["x1"], b["x1"]) - max(a["x0"], b["x0"]) > 0.3 * max(width, 0.05)
+
+
+def _words(page):
+    """The page's words (pdfplumber's, with their size and font), each made
+    of one run of characters: a run set over another on the same line (a
+    page number over a footer's web address) makes words of its own,
+    instead of having its letters sorted in among the other's. A
+    character drawn again over the same one is left out."""
+    from pdfplumber.utils import extract_words
+
+    layers, keep = [], []  # per layer: {line key: [characters]}, [characters]
+    for run in _runs_of_chars(page.chars):
+        inked = [c for c in run if c["text"].strip()]
+        k = 0
+        while True:
+            if k == len(layers):
+                layers.append({})
+                keep.append([])
+            twins, clash = set(), False
+            for c in inked:
+                key = round(c["top"] / 4)
+                for o in (o for row in (key - 1, key, key + 1) for o in layers[k].get(row, ())):
+                    if abs(o["top"] - c["top"]) > 0.5 * max(float(c.get("size") or 0), 1.0) or not _overlap(o, c):
+                        continue
+                    if o["text"] == c["text"] and abs(o["x0"] - c["x0"]) <= 1:
+                        twins.add(id(c))  # drawn twice: bold made by overprinting
+                    else:
+                        clash = True
+            if not clash:
+                break
+            k += 1
+        for c in run:
+            if id(c) not in twins:
+                layers[k].setdefault(round(c["top"] / 4), []).append(c)
+                keep[k].append(c)
+    if len(keep) <= 1:
+        return page.extract_words(extra_attrs=["size", "fontname"])
+    words = []
+    for chars in keep:
+        words += extract_words(chars, extra_attrs=["size", "fontname"])
+    return words
+
+
 def _page_tables(page):
     """Tables on a pdfplumber page, top to bottom (bbox in pdfplumber's
     coordinates)."""
@@ -381,7 +446,7 @@ def _page_tables(page):
         if rows:
             columns = sorted({round(cell[0], 1) for cell in table.cells})
             found.append({"bbox": table.bbox, "rows": rows, "columns": columns, "kind": "ruled"})
-    words = [w for w in page.extract_words(extra_attrs=["size", "fontname"])
+    words = [w for w in _words(page)
              if w.get("upright", True) and not any(_inside(w, t["bbox"]) for t in found)]
     for run in _runs(_lines(words)):
         table = _aligned_table(run)

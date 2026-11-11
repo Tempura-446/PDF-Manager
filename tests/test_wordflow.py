@@ -775,3 +775,190 @@ def test_lowered_figures_stay_in_their_line(tmp_path):
     paragraphs, _, xml = convert(tmp_path, draw)
     assert [t for _, t in paragraphs] == ["Carbon dioxide (CO2) and water (H2O) are given off."], paragraphs
     assert xml.count('<w:vertAlign w:val="subscript"/>') == 2
+
+# -- found on a designed product brochure --------------------------------------------------
+
+SPECS = ["Size: 600 x 600 mm", "Thickness: 10 mm", "Finish: matt", "Rectified edges",
+         "Frost resistant", "Suitable for floors and walls"]
+
+
+def product(c, x=320, y=700, dx=0.0, mode=None, white=False):
+    """A product's heading over its list of specifications."""
+    t = c.beginText()
+    if mode is not None:
+        t.setTextRenderMode(mode)
+    if white:
+        t.setFillColorRGB(1, 1, 1)
+    t.setTextOrigin(x + dx, y)
+    t.setFont("Helvetica-Bold", 20)
+    t.textLine("HUDSON BEIGE - HB")
+    t.setFont("Helvetica", 11)
+    t.setLeading(16)
+    t.moveCursor(0, 10)
+    for spec in SPECS:
+        t.textLine("-  " + spec)
+    c.drawText(t)
+
+
+def photo(c):
+    from PIL import Image
+    from reportlab.lib.utils import ImageReader
+
+    c.drawImage(ImageReader(Image.new("RGB", (200, 260), (150, 120, 90))), 50, 450, 230, 300)
+
+
+def product_page(c, copy):
+    """A photo, the product beside it, and a second copy of the product's
+    text drawn the way ``copy`` says."""
+    photo(c)
+    if copy == "under the photo":
+        product(c, x=60)
+        photo(c)
+    product(c)
+    if copy == "at the same place":
+        product(c)
+    elif copy == "a little to the side":       # bold made by drawing the text twice
+        product(c, dx=0.4)
+    elif copy == "invisible":                  # render mode 3, over the photo
+        product(c, x=60, mode=3)
+    elif copy == "white on white":
+        product(c, y=330, white=True)
+    elif copy == "off the page":
+        product(c, x=A4[0] + 40)
+    elif copy == "clipped away":
+        c.saveState()
+        path = c.beginPath()
+        path.rect(0, 0, 10, 10)
+        c.clipPath(path, stroke=0, fill=0)
+        product(c, x=60)
+        c.restoreState()
+    elif copy == "in a hidden layer":
+        c._code.append("/OC /Hidden BDC")
+        product(c, x=60)
+        c._code.append("EMC")
+
+
+@pytest.mark.parametrize("copy", ["at the same place", "a little to the side", "under the photo", "invisible",
+                                  "white on white", "off the page", "clipped away", "in a hidden layer"])
+def test_text_drawn_twice_or_a_copy_that_does_not_show_is_read_once(tmp_path, copy):
+    import pikepdf
+
+    c = canvas.Canvas(str(tmp_path / "a.pdf"), pagesize=A4)
+    product_page(c, copy)
+    c.save()
+    if copy == "in a hidden layer":
+        with pikepdf.open(tmp_path / "a.pdf", allow_overwriting_input=True) as pdf:
+            layer = pdf.make_indirect(pikepdf.Dictionary(Type=pikepdf.Name.OCG, Name="Old text"))
+            pdf.Root.OCProperties = pikepdf.Dictionary(OCGs=[layer], D=pikepdf.Dictionary(ON=[], OFF=[layer]))
+            pdf.pages[0].Resources.Properties = pikepdf.Dictionary(Hidden=layer)
+            pdf.save(tmp_path / "a.pdf")
+    paragraphs, tables, xml = read(office.basic_docx(tmp_path / "a.pdf", tmp_path / "a.docx"))
+    assert not tables, tables
+    texts = [t for _, t in paragraphs]
+    assert texts.count("HUDSON BEIGE - HB") == 1 and ("Heading1", "HUDSON BEIGE - HB") in paragraphs, paragraphs
+    for spec in SPECS:
+        assert sum(spec in t for t in texts) == 1, (spec, texts)
+    assert "<w:drawing>" in xml
+
+
+def test_text_that_does_not_show_and_is_no_copy_is_kept(tmp_path):
+    def draw(c, _):
+        photo(c)
+        product(c)
+        t = c.beginText()
+        t.setTextRenderMode(3)
+        t.setTextOrigin(60, 600)
+        t.setFont("Helvetica", 11)
+        t.textLine("Keywords for searching: porcelain floor tile")
+        c.drawText(t)
+
+    texts = [t for _, t in convert(tmp_path, draw)[0]]
+    assert "Keywords for searching: porcelain floor tile" in texts, texts
+
+
+def footer(c, number, url_size=9, over=20, rise=0.0, folio_first=True):
+    """A web address at the foot of the page with the page number in
+    other type set over it."""
+    def folio():
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(72 + over, 30 + rise, str(number))
+
+    if folio_first:
+        folio()
+    c.setFont("Helvetica", url_size)
+    c.drawString(72, 30, "www.proselectdesign.com")
+    if not folio_first:
+        folio()
+
+
+@pytest.mark.parametrize("folio_first, rise", [(True, 0.0), (False, 0.0), (True, 0.5)])
+def test_a_page_number_set_over_the_footer_is_not_mixed_into_it(tmp_path, folio_first, rise):
+    import pdfplumber
+
+    from pdfmanager import tables
+
+    def draw(c, number):
+        y = wrap(c, SENTENCES * 2, 72, 760, 450)
+        footer(c, number, rise=rise, folio_first=folio_first)
+
+    paragraphs, found, _ = convert(tmp_path, draw, pages=3)
+    texts = [t for _, t in paragraphs] + [cell for table in found for row in table for cell in row]
+    assert not [t for t in texts if "proselectdesign" in t and re.search(r"\d", t)], texts
+    with pdfplumber.open(str(tmp_path / "a.pdf")) as pdf:
+        words = [w["text"] for w in tables._words(pdf.pages[0]) if w["top"] > 780]
+    assert sorted(words) == ["1", "www.proselectdesign.com"], words
+
+
+def test_running_lines_with_page_numbers_and_in_larger_type_are_not_headings(tmp_path):
+    def draw(c, number):
+        c.setFont("Helvetica", 12)
+        c.drawString(64, 812, f"Desktop Welcome Guide {number}/4")   # larger than the text, 30 pt over it
+        c.drawString(64, 24, "www.proselectdesign.com")
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(64, 760, f"Step {number}: {['Install', 'Open a file', 'Edit', 'Save'][number - 1]}")
+        wrap(c, SENTENCES, 64, 738, 460)
+
+    paragraphs, _, _ = convert(tmp_path, draw, pages=4)
+    texts = [t for _, t in paragraphs]
+    assert not [t for t in texts if "Desktop Welcome Guide" in t or "proselectdesign" in t], paragraphs
+    assert [t for s, t in paragraphs if s.startswith("Heading")] == [
+        "Step 1: Install", "Step 2: Open a file", "Step 3: Edit", "Step 4: Save"], paragraphs
+
+
+def test_a_running_line_kept_for_the_text_right_under_it_is_not_a_heading(tmp_path):
+    def draw(c, number):
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(64, 800, f"Desktop Welcome Guide {number} of 3")
+        wrap(c, SENTENCES, 64, 786, 460)
+
+    paragraphs, _, _ = convert(tmp_path, draw, pages=3)
+    kept = [(s, t) for s, t in paragraphs if t.startswith("Desktop Welcome Guide")]
+    assert kept and not [s for s, _ in kept if s.startswith("Heading")], paragraphs
+
+
+def test_fragments_and_codes_in_large_type_are_not_headings(tmp_path):
+    def draw(c, _):
+        c.setFont("Helvetica-Bold", 22)
+        c.drawString(64, 780, "Colours and finishes")
+        wrap(c, SENTENCES, 64, 750, 460)
+        c.setFont("Helvetica-Bold", 16)
+        for k, code in enumerate(["BLU", "LG", "WT", "SL", "HB"]):     # beside their swatches
+            c.drawString(80 + 90 * k, 600, code)
+        c.drawString(64, 520, "w")                                      # cut off by the page's edge
+        c.drawString(-60, 480, "www.proselectdesign.com")
+        wrap(c, SENTENCES, 64, 450, 460)
+
+    paragraphs, _, _ = convert(tmp_path, draw)
+    headings = [t for s, t in paragraphs if s.startswith("Heading")]
+    assert headings == ["Colours and finishes"], paragraphs
+    text = " ".join(t for _, t in paragraphs)
+    assert all(code in text for code in ["BLU", "LG", "WT", "SL", "HB"]), "the codes are kept as text"
+
+
+def test_the_converter_menus_hint_says_what_the_built_in_converter_keeps():
+    from pdfmanager import gui
+
+    (op,) = [op for op in gui.OPERATIONS if op["id"] == "to-word"]
+    (field,) = [f for f in op["fields"] if f.get("hint")]
+    assert "plain paragraphs" not in field["hint"]
+    assert all(word in field["hint"] for word in ("headings", "lists", "tables", "pictures"))

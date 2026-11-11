@@ -88,14 +88,14 @@ def pdf_to_html(path, output, password=None, pages=None, mode="flowing"):
     output = Path(output)
     if output.is_dir():
         raise core.PdfManagerError(f"{output} is a folder; give the name of the file to write")
-    tables = _tables(path, password, pages) if mode == "flowing" else {}
     with layout.Document(path, password, pages) as doc:
         lang = doc.lang if _LANG.fullmatch(doc.lang) else "en"
         if mode == "exact":
             title, body, fonts = _exact(doc)
             style = EXACT_CSS + fonts
         else:
-            title, body = _flowing(doc, tables)
+            with _Tables(path, password) as tables:
+                title, body = _flowing(doc, tables)
             style = FLOWING_CSS
         count = len(doc.indices)
     title = title or Path(path).stem
@@ -233,22 +233,69 @@ th{background:#f2f3f5}
 """
 
 
-def _tables(path, password, pages):
-    """{page index: [(PDF box, rows)]}: the tables on each page, as PDF → Excel
-    finds them."""
-    from pdfmanager import tables
-    from pdfmanager.pageranges import parse_page_ranges
+class _Tables:
+    """The tables on each page, as PDF → Excel finds them, found when the
+    page is read: ``get(index, page)`` → [(PDF box, rows)]. What the page
+    reading left out (a second copy of text, text off the page) is left out
+    of the tables too. Use as a context manager."""
 
-    found = {}
-    with tables._open(path, password) as pdf:
-        total = len(pdf.pages)
-        for index in dict.fromkeys(parse_page_ranges(pages, total) if pages else range(total)):
-            page = pdf.pages[index]
-            if page.chars:
-                found[index] = [(tables._pdf_bbox(page, t["bbox"]), t["rows"])
-                                for t in tables._page_tables(page) if _table_like(t)]
-            page.close()
-    return found
+    def __init__(self, path, password):
+        self.path, self.password, self.pdf = path, password, None
+
+    def __enter__(self):
+        from pdfmanager import tables
+
+        self.pdf = tables._open(self.path, self.password)
+        return self
+
+    def __exit__(self, *exc):
+        self.pdf.close()
+
+    def get(self, index, page=None):
+        from pdfmanager import tables
+
+        if index >= len(self.pdf.pages):
+            return []  # a damaged file pdfplumber reads fewer pages of
+        plumber = self.pdf.pages[index]
+        try:
+            if not plumber.chars:
+                return []
+            dropped = getattr(page, "dropped", None)
+            if dropped:
+                plumber = _without(plumber, dropped)
+            return [(tables._pdf_bbox(plumber, t["bbox"]), t["rows"])
+                    for t in tables._page_tables(plumber) if _table_like(t)]
+        finally:
+            self.pdf.pages[index].close()
+
+
+def _without(plumber, dropped):
+    """The pdfplumber page without the characters given ([(text, origin in
+    the PDF's coordinates, size)]): for each, the nearest one of its text
+    on its baseline (pdfplumber may place a glyph a little differently),
+    one per character given (of two drawn at one place, one stays)."""
+    rows = {}
+    for char in plumber.chars:
+        rows.setdefault(round(char["matrix"][5]), []).append(char)
+    remove, shift = set(), {}
+    for text, (x, y), size in dropped:
+        # How far pdfplumber has the line's characters so far from pdfium:
+        # where the next one should be.
+        expect = x + shift.get(round(y), 0)
+        best, best_d = None, max(0.3, 0.6 * size)
+        for row in (round(y) - 1, round(y), round(y) + 1):
+            for char in rows.get(row, ()):
+                cx, cy = char["matrix"][4], char["matrix"][5]
+                d = abs(cx - expect)
+                if (id(char) in remove or abs(cy - y) > 0.3 or d > best_d
+                        or layout.LIGATURES.get(char["text"], char["text"]) != text
+                        and not char["text"].startswith("(cid:")):
+                    continue
+                best, best_d = char, d
+        if best is not None:
+            remove.add(id(best))
+            shift[round(y)] = best["matrix"][4] - x
+    return plumber.filter(lambda obj: id(obj) not in remove) if remove else plumber
 
 
 def _table_like(table):
@@ -569,14 +616,31 @@ def _block_box(block):
 
 
 _PAGE_NUMBER = re.compile(r"(?i)^(page\s*)?\d{1,4}(\s*(/|of)\s*\d{1,4})?$")
+# Page numbering inside a running line: "1/7", "3 of 12", "Page 4", a number
+# set off by a bar or a dot at either end ("Annual report | 7").
+_NUMBERING = re.compile(r"(?i)\b\d{1,4}\s*(?:/|of)\s*\d{1,4}\b|\bpage\s*\d{1,4}\b"
+                        r"|^\d{1,4}\s*[|•·–—]\s*|\s*[|•·–—]\s*\d{1,4}$")
+
+
+def _running_key(line):
+    """A line's text as a running header or footer: its page numbering, as
+    a part of the line set apart or in the text, blanked."""
+    parts = []
+    for start, end in line.pieces():
+        text = "".join((" " if c.space and i else "") + c.text for i, c in enumerate(line.chars[start:end]))
+        text = " ".join(text.lower().split())
+        parts.append("#" if _PAGE_NUMBER.match(text) else _NUMBERING.sub("#", text))
+    return " ".join(parts)
 
 
 def _running(read, body):
-    """ids of the lines that are running headers and footers and page
-    numbers: at the very top or bottom of a page (its outer 9%), a page
-    number, or the same line on most of three or more pages. Never a line
-    in larger type than the text, nor a bold line with text right under it
-    (a heading that opens each page)."""
+    """(ids of the lines to leave out, ids of running lines kept): running
+    headers and footers and page numbers are at the very top or bottom of a
+    page (its outer 9%): a page number, or the same line (but for its page
+    numbering) on most of three or more pages. Not left out: a line that
+    is a heading by its size or weight with text right under it (a heading
+    that opens each page); when it is the same on most pages, it is kept as
+    a running line, never a heading."""
     pages, counts = [], {}
     for page, _ in read:
         boxes = [(ln, layout.box_on_page(ln.angle, ln.x0, ln.top, ln.x1, ln.bottom)) for ln in page.lines]
@@ -586,19 +650,20 @@ def _running(read, body):
                 continue
             text = " ".join(line.text.lower().split())
             under = min((b[1] for _, b in boxes if b[3] > y1 + 0.3 * (y1 - y0)), default=page.height) - y1
-            heading = line.main_size > 1.08 * body or (
-                all(c.bold for c in line.chars) and under < 1.5 * line.size)
-            found.append((line, text, heading))
-        for key in {entry[1] for entry in found}:
+            heading = (line.main_size > 1.08 * body or all(c.bold for c in line.chars)) and under < 1.5 * line.size
+            found.append((line, text, _running_key(line), heading))
+        for key in {entry[2] for entry in found}:
             counts[key] = counts.get(key, 0) + 1
         pages.append(found)
-    total, running = len(pages), set()
+    total, running, kept = len(pages), set(), set()
     for found in pages:
-        for line, text, heading in found:
-            if _PAGE_NUMBER.match(text) or (
-                    not heading and total >= 3 and counts[text] >= total * 0.6):
+        for line, text, key, heading in found:
+            repeated = total >= 3 and counts[key] >= total * 0.6
+            if _PAGE_NUMBER.match(text) or (repeated and not heading):
                 running.add(id(line))
-    return running
+            elif repeated:
+                kept.add(id(line))
+    return running, kept
 
 
 def flow(path, password=None, pages=None):
@@ -609,8 +674,7 @@ def flow(path, password=None, pages=None):
     all), {"kind": "table", "rows", "bold" ([[whether the cell is in bold
     type]] or None)} or {"kind": "image", "image", "width" (points)}. "segments" is [(text, layout.Char with its look)], and
     "links" the page's links a Char's ``link`` indexes."""
-    tables = _tables(path, password, pages)
-    with layout.Document(path, password, pages) as doc:
+    with layout.Document(path, password, pages) as doc, _Tables(path, password) as tables:
         collected = []
         title, _ = _flowing(doc, tables, collected)
     return title or Path(path).stem, collected
@@ -622,18 +686,18 @@ def _flowing(doc, tables, collected=None):
     for n, index in enumerate(doc.indices):
         progress.report(n, len(doc.indices), "page")
         page = doc.page(index)
-        items = _page_items(doc, page, tables.get(index, []))
+        items = _page_items(doc, page, tables.get(index, page))
         read.append((page, items))
         for line in page.lines:
             sizes[round(line.main_size)] = sizes.get(round(line.main_size), 0) + len(line.chars)
     body = max(sizes, key=sizes.get) if sizes else 12
-    running = _running(read, body)
+    running, kept = _running(read, body)
     bold_body = _mostly_bold(read)
     numbers = {page.number for page, _ in read}
     out, title = [], ""
     for page, items in read:
         out.append(f'<div class="page-break" id="page-{page.number}"><span>Page {page.number}</span></div>')
-        writer = _Writer(body, bold_body, numbers, page)
+        writer = _Writer(body, bold_body, numbers, page, kept)
         todo = []
         for item in items:
             if item.kind != "block":
@@ -799,6 +863,31 @@ _SENTENCE_END = re.compile(r"[.!?…][\"”’')\]]*$")
 _OPENING_QUOTE = "“\"‘«„"
 
 
+_ADDRESS = re.compile(r"(?i)^(?:https?://|www\.)\S+$|^[\w.+-]+@[\w-]+\.[\w.-]+$"
+                      r"|^[\w-]+(?:\.[\w-]+)*\.(?:com|org|net|edu|gov|info|biz|io|co|uk|eu|de|fr|nl|be|"
+                      r"es|it|ch|at|se|no|dk|fi|ie|pl|us|ca|au|nz)(?:/\S*)?$")
+_SHORT_HEADINGS = {"faq", "faqs", "q&a", "why", "how", "who", "map", "key", "tip", "new", "top", "art",
+                   "tea", "spa", "day", "use", "kit", "box", "fax", "tel", "fun", "bar", "pub", "inn", "toc",
+                   "go", "me", "us", "ai", "tv", "it"}
+
+
+def _worded(text):
+    """Whether ``text`` can be a heading: a word of two letters or more (a
+    number may go with it: "Day 3"); not a fragment of one to three
+    characters that is no word (a colour code "LG", letters cut off by a
+    clipping path or the edge of the page), nor a web or email address."""
+    tokens = text.split()
+    if any(_ADDRESS.match(token.strip(".,;:()")) for token in tokens) and len(tokens) <= 3:
+        return False
+    if not re.search(r"[^\W\d_]{2,}", text):
+        return False
+    squeezed = re.sub(r"[\W_]+", "", text)
+    if len(squeezed) <= 3 and not re.search(r"\d", squeezed):
+        plain = text.strip().lower()
+        return plain in _SHORT_HEADINGS or (len(squeezed) == 3 and text.strip().istitle())
+    return True
+
+
 def _compound(before):
     """Whether a word broken at a hyphen at the end of a line keeps the
     hyphen: only when what stands before it ends in a short linking word
@@ -811,8 +900,9 @@ def _compound(before):
 class _Writer:
     """HTML for one page's items: paragraphs, headings, lists, tables, pictures."""
 
-    def __init__(self, body, bold_body, numbers, page):
+    def __init__(self, body, bold_body, numbers, page, running=()):
         self.body, self.bold_body, self.numbers, self.page = body, bold_body, numbers, page
+        self.running = running  # ids of running lines kept: never headings
         self.out, self.list_kind, self.first_heading = [], None, ""
         self.last_line = None  # (index in out, line, closing tag, heading): to join pieces
         # The same content, not as HTML, for the other writers (PDF → Word):
@@ -882,7 +972,7 @@ class _Writer:
         size = max(ln.main_size for ln in lines)
         text = " ".join(ln.text for ln in lines).strip()
         words = len(text.split())
-        if len(text) > 200 or len(lines) > 3 or not any(ch.isalpha() for ch in text):
+        if len(text) > 200 or len(lines) > 3 or not _worded(text):
             return 0
         # A sentence in large type (a standfirst, a quotation pulled out of
         # the text, quotation marks around the whole of it) is text.
@@ -986,7 +1076,7 @@ class _Writer:
             self._item_at[index]["segments"] += [(" ", segments[0][1])] + list(segments)
             self.last_line = (index, first, closing, heading)
             return
-        level = self._level(lines, after)
+        level = 0 if any(id(ln) in self.running for ln in lines) else self._level(lines, after)
         marker = layout.LIST_ITEM.match(text)
         if level:
             self._close_list()
