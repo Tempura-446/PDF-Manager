@@ -100,8 +100,19 @@ export async function rememberHandle(handle) {
   } catch (e) { /* remembering is a convenience */ }
 }
 
+/** Forget a remembered handle; resolves to its entry (for restoreHandle), or null. */
 export async function forgetHandle(key) {
-  try { await tx("readwrite", (s) => s.delete(key)); } catch (e) { /* ignore */ }
+  try {
+    const entry = (await recentHandles()).find((i) => i.key === key) || null;
+    await tx("readwrite", (s) => s.delete(key));
+    return entry;
+  } catch (e) { return null; }
+}
+
+/** Put back an entry that forgetHandle gave (Undo). */
+export async function restoreHandle(entry) {
+  if (!entry) return;
+  try { await tx("readwrite", (s) => s.put(entry)); } catch (e) { /* remembering is a convenience */ }
 }
 
 /** The file behind a remembered handle (asks for permission if needed;

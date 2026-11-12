@@ -1504,8 +1504,23 @@ class RecentFiles:
 
     @classmethod
     def forget(cls, path=None):
+        """Drop one file (or all of them); returns the entries dropped, for restore()."""
         with cls.lock:
-            cls._save([] if path is None else [i for i in cls.load() if i["path"] != path])
+            items = cls.load()
+            cls._save([] if path is None else [i for i in items if i["path"] != path])
+            return items if path is None else [i for i in items if i["path"] == path]
+
+    @classmethod
+    def restore(cls, entries):
+        """Put entries that forget() dropped back, in their places (newest first)."""
+        good = [{"path": str(e["path"]), "opened": float(e.get("opened") or 0)}
+                for e in entries if isinstance(e, dict) and e.get("path")]
+        with cls.lock:
+            items = cls.load()
+            have = {os.path.normcase(i["path"]) for i in items}
+            items += [e for e in good if os.path.normcase(e["path"]) not in have]
+            items.sort(key=lambda i: i.get("opened") or 0, reverse=True)
+            cls._save(items)
 
 
 # --------------------------------------------------------------------------
@@ -2019,7 +2034,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(HTTPStatus.OK, {"ok": True})
             if path == "/api/recent/forget":
                 data = json.loads(body or b"{}")
-                RecentFiles.forget(data.get("path") if not data.get("all") else None)
+                removed = RecentFiles.forget(data.get("path") if not data.get("all") else None)
+                return self._send(HTTPStatus.OK, {"ok": True, "removed": removed})
+            if path == "/api/recent/restore":  # Undo after a forget
+                items = json.loads(body or b"{}").get("items")
+                RecentFiles.restore(items if isinstance(items, list) else [])
                 return self._send(HTTPStatus.OK, {"ok": True})
             return self._error(HTTPStatus.NOT_FOUND, "not found")
         except EXPECTED_ERRORS as exc:

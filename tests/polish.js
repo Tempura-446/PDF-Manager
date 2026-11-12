@@ -44,7 +44,7 @@ const { chromium } = require("playwright");
     await page.hover(".rd-recent .recent-row:last-child");
     await page.click(".rd-recent .recent-row:last-child .recent-x");
     await page.waitForSelector(".rd-toast", { timeout: 10000 });
-    out.readerToast = await page.textContent(".rd-toast");
+    out.readerToast = await page.textContent(".rd-toast > span");
     out.readerAfter = await rows(page, ".rd-recent");
     await page.click("#brand");
     await page.waitForFunction((n) => document.querySelectorAll("#home-host .recent-row").length === n, out.readerAfter.length, { timeout: 30000 });
@@ -56,7 +56,7 @@ const { chromium } = require("playwright");
     await page.waitForSelector(".toast", { timeout: 10000 });
     out.homeToast = await page.evaluate(() => {
       const t = document.querySelector(".toast"), cs = getComputedStyle(t);
-      return { text: t.textContent, blur: cs.backdropFilter, radius: cs.borderTopLeftRadius, position: cs.position, anim: cs.animationName };
+      return { text: t.querySelector("span").textContent, blur: cs.backdropFilter, radius: cs.borderTopLeftRadius, position: cs.position, anim: cs.animationName };
     });
     await shot(page, "2-start-toast");
     await page.waitForFunction(() => !document.querySelector(".toast"), null, { timeout: 10000 });

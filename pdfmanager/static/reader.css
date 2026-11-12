@@ -29,18 +29,19 @@
 .rd-btn.primary:active { transform: scale(.98); }
 .rd-page { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; margin-left: 2px; }
 .rd-page input {
-  width: 52px; height: 34px; text-align: center; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  width: 52px; height: 34px; text-align: center; border: 1px solid var(--input-border); border-radius: var(--radius-sm);
   background: var(--surface); color: var(--text); font: inherit; font-variant-numeric: tabular-nums;
   transition: border-color var(--t), box-shadow var(--t);
 }
-.rd-page input:focus, .rd-zoom:focus, .rd-findbar input[type=search]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+/* Focus: the app's 2px ring (3:1), as on every field. */
+.rd-page input:focus, .rd-zoom:focus, .rd-findbar input[type=search]:focus { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--accent); box-shadow: none; }
 .rd-zoominput {
-  width: 64px; height: 34px; text-align: center; border: 1px solid var(--border-strong); border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  width: 64px; height: 34px; text-align: center; border: 1px solid var(--input-border); border-radius: var(--radius-sm) 0 0 var(--radius-sm);
   background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-variant-numeric: tabular-nums;
   transition: border-color var(--t), box-shadow var(--t);
 }
-.rd-zoominput:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); position: relative; z-index: 1; }
-.rd-zoommenu-btn { min-width: 26px; padding: 0 2px; border: 1px solid var(--border-strong); border-left: 0; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--surface); margin-right: 2px; }
+.rd-zoominput:focus { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--accent); box-shadow: none; position: relative; z-index: 1; }
+.rd-zoommenu-btn { min-width: 26px; padding: 0 2px; border: 1px solid var(--input-border); border-left: 0; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--surface); margin-right: 2px; }
 .rd-zoommenu-btn svg { width: 14px; height: 14px; stroke-width: 2.25; }
 .rd-zoommenu-btn[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
 .rd-zoomgroup { gap: 0; }
@@ -48,7 +49,7 @@
 .rd-zoommenu { min-width: 190px; }
 .rd-zoommenu button[aria-checked="true"] { color: var(--accent); font-weight: 600; }
 .rd-zoom {
-  height: 34px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text);
+  height: 34px; border: 1px solid var(--input-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text);
   padding: 0 24px 0 8px; font: inherit; font-size: 13px; max-width: 132px;  /* the chevron comes from gui.html's select rule */
   transition: border-color var(--t), box-shadow var(--t);
 }
@@ -90,7 +91,7 @@
   background: var(--surface-2); border-bottom: 1px solid var(--border); font-size: 13px;
 }
 .rd-findbar input[type=search] {
-  width: min(320px, 100%); height: 34px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  width: min(320px, 100%); height: 34px; padding: 0 10px; border: 1px solid var(--input-border); border-radius: var(--radius-sm);
   background: var(--surface); color: var(--text); font: inherit; font-size: 14px; transition: border-color var(--t), box-shadow var(--t), background var(--t);
 }
 .rd-findbar input[type=search].notfound { border-color: var(--err); background: var(--err-soft); }
@@ -130,11 +131,11 @@
 .rd-outline { padding: 6px 8px 16px; font-size: 13px; }
 .rd-outline ul { padding-left: 14px; }
 .rd-outline .row { display: flex; align-items: flex-start; gap: 2px; }
-.rd-outline .twisty { width: 20px; height: 26px; border: 0; background: none; cursor: pointer; color: var(--muted); flex: none; padding: 0; border-radius: var(--radius-xs); }
+.rd-outline .twisty { width: 24px; height: 26px; border: 0; background: none; cursor: pointer; color: var(--muted); flex: none; padding: 0; border-radius: var(--radius-xs); }
 .rd-outline .twisty:hover { background: var(--surface-3); color: var(--text); }
 .rd-outline .twisty svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.25; transition: transform var(--t) var(--ease); }
 .rd-outline .twisty[aria-expanded="true"] svg { transform: rotate(90deg); }
-.rd-outline .spacer { width: 20px; flex: none; }
+.rd-outline .spacer { width: 24px; flex: none; }
 .rd-outline a {
   flex: 1; display: block; padding: 4px 7px; border-radius: var(--radius-xs); color: var(--text-2); text-decoration: none; cursor: pointer; line-height: 1.35;
   transition: background var(--t), color var(--t);
@@ -146,7 +147,7 @@
 
 .rd-main { position: relative; flex: 1; min-width: 0; }
 .rd-container { position: absolute; inset: 0; overflow: auto; outline: none; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
-.rd-container:focus-visible { outline: none; }  /* the page view itself needs no focus ring */
+.rd-container:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }  /* inside its edge: nothing moves */
 .rd-container .pdfViewer { padding: 18px 0 40px; }
 .rd-container .pdfViewer .page {
   box-shadow: 0 0 0 1px rgb(0 0 0 / .05), 0 2px 6px rgb(20 23 28 / .08), 0 16px 40px rgb(20 23 28 / .14);
@@ -193,7 +194,8 @@
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--radius-xs);
   background: none; cursor: pointer; text-align: left; font-size: 14px; color: var(--text);
 }
-.rd-menu button:hover, .rd-menu button:focus-visible { background: color-mix(in srgb, var(--accent) 14%, transparent); outline: none; }
+.rd-menu button:hover, .rd-menu button:focus-visible { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.rd-menu button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .rd-menu button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; color: var(--muted); flex: none; }
 .rd-menu button .check { margin-left: auto; color: var(--accent); visibility: hidden; }
 .rd-menu button[aria-checked="true"] .check { visibility: visible; }
@@ -213,10 +215,19 @@
 .rd-dialog h3 { margin: 0 0 12px; font: 400 26px/1.15 var(--display, inherit); letter-spacing: 0; }
 .rd-dialog p { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
 .rd-dialog input[type=password], .rd-dialog input[type=text]:not(.rd-sigtext), .rd-dialog input[type=number] {
-  width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit;
+  width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--input-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit;
   transition: border-color var(--t), box-shadow var(--t);
 }
-.rd-dialog input[type=password]:focus, .rd-dialog input[type=text]:focus, .rd-dialog input[type=number]:focus, .rd-sigtext:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.rd-dialog input[type=password]:focus, .rd-dialog input[type=text]:focus, .rd-dialog input[type=number]:focus, .rd-sigtext:focus { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--accent); box-shadow: none; }
+.rd-dialog input[aria-invalid="true"] { border-color: var(--err); }
+/* The password: its label above, Show beside it. */
+.rd-pwfield { font-size: 13px; font-weight: 600; color: var(--text-2); margin: 0; }
+.rd-pwrow { display: flex; gap: 6px; font-weight: 400; }
+.rd-pwrow input { flex: 1; min-width: 0; }
+.rd .pw-toggle { flex: none; min-width: 56px; height: 38px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface);
+  color: var(--text-2); font-size: 13px; font-weight: 600; cursor: pointer; }
+.rd .pw-toggle:hover { background: var(--surface-2); color: var(--text); }
+.rd .pw-toggle[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
 .rd-dialog .err { color: var(--err); font-size: 13px; margin-top: 8px; }
 .rd-dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 .rd-dialog .actions button {
@@ -242,10 +253,11 @@
 }
 .toast { position: fixed; bottom: 24px; z-index: 60; left: calc(50% + 32px); max-width: min(560px, calc(100vw - 96px)); }  /* centred on the page beside the rail */
 @media (max-width: 760px) { .toast { left: 50%; max-width: calc(100vw - 32px); } }
-.rd-toast button, .toast button { border: 0; background: none; color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0; }
+.rd-toast button, .toast button { border: 0; background: none; color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+  padding: 0 4px; min-width: 24px; min-height: 24px; margin: -2px -4px; }  /* a 24px target in the same pill */
 @keyframes rd-rise { from { opacity: 0; transform: translate(-50%, 8px); } }
 /* Leaving: it fades and sinks a little (fadeOut in reader.js; at once when motion is reduced). */
-.rd-toast.out, .rd-toast.top.out, .toast.out { animation: rd-leave calc(var(--t) * 1.5) var(--ease) forwards; pointer-events: none; }
+.rd-toast.out, .rd-toast.top.out, .toast.out { animation: rd-leave var(--t) var(--ease) forwards; pointer-events: none; }  /* out faster than in */
 @keyframes rd-leave { to { opacity: 0; transform: translate(-50%, 6px); } }
 .rd-loading { position: absolute; inset: 0; display: grid; place-items: center; z-index: 5; background: color-mix(in srgb, var(--surface-3) 60%, transparent); backdrop-filter: blur(2px); }
 .rd-spinner { width: 34px; height: 34px; border: 3px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: rd-spin .8s linear infinite; }
@@ -303,7 +315,11 @@
 .rd-swatch:hover { transform: scale(1.1); }
 .rd-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); transform: scale(1.08); }
 .rd-annotbar .rd-zoom { height: 34px; }
-@container (max-width: 1180px) { .rd-tool span { display: none; } .rd-annotbar .rd-btn.primary span { display: none; } }
+@container (max-width: 1540px) { .rd-tool span { display: none; } .rd-annotbar .rd-btn.primary span { display: none; } }
+/* Save and Close stay at the bar's end when the tools scroll under them. */
+.rd-annotbar > .rd-btn.primary, .rd-annotbar > .rd-btn:last-child { position: sticky; z-index: 1; }
+.rd-annotbar > .rd-btn:last-child { right: 0; background: var(--surface-2); }
+.rd-annotbar > .rd-btn.primary { right: 38px; box-shadow: 0 1px 2px rgb(20 23 28 / .12), -8px 0 0 var(--surface-2); }
 
 /* ---- Signature dialog ---- */
 .rd-dialog:has(.rd-sigpad) { width: min(580px, calc(100vw - 32px)); }
@@ -313,7 +329,7 @@
   touch-action: none; cursor: crosshair;
 }
 .rd-sigrow { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
-.rd-sigtext { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; transition: border-color var(--t), box-shadow var(--t); }
+.rd-sigtext { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--input-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; transition: border-color var(--t), box-shadow var(--t); }
 .rd-sigrow .rd-btn { border-color: var(--border-strong); background: var(--surface); box-shadow: var(--shadow); font-weight: 600; }
 .rd-sigremember { display: flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 13px; color: var(--muted); }
 .rd-sigremember input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
@@ -411,7 +427,7 @@ textarea.rd-textedit.rd-textedit-fit { white-space: pre-wrap; overflow: auto; }
   box-shadow: var(--shadow-pop);
 }
 .rd-textedit-mode {
-  border: 0; border-radius: 999px; padding: 3px 9px; cursor: pointer; font: inherit; font-weight: 600;
+  border: 0; border-radius: 999px; padding: 3px 9px; min-height: 24px; margin: -2px 0; cursor: pointer; font: inherit; font-weight: 600;
   background: color-mix(in srgb, var(--bg) 18%, transparent); color: inherit !important;
 }
 .rd-textedit-mode:hover { background: color-mix(in srgb, var(--bg) 30%, transparent); }
@@ -566,7 +582,7 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
 .rd-mrow .rd-mkind { color: var(--mc, var(--accent)); }
 .rd-mval em { display: block; font-style: normal; font-weight: 600; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rd-field { display: grid; gap: 4px; margin: 0 0 10px; font-size: 13px; }
-.rd-field input, .rd-field select { height: 32px; padding: 0 8px; font: inherit; border: 1px solid var(--border-strong); border-radius: var(--radius-xs); background: var(--surface); color: var(--text); }
+.rd-field input, .rd-field select { height: 32px; padding: 0 8px; font: inherit; border: 1px solid var(--input-border); border-radius: var(--radius-xs); background: var(--surface); color: var(--text); }
 .rd-mtotals { border-top: 1px solid var(--border); padding: 8px 14px; display: grid; gap: 4px; }
 .rd-mtotals div { display: flex; justify-content: space-between; gap: 10px; }
 .rd-mtotals b { font-variant-numeric: tabular-nums; }
@@ -692,3 +708,7 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
 
 /* Comment summary and XFDF */
 .rd-commentactions { display: flex; gap: 12px; padding: 2px 12px 8px; font-size: 12.5px; }
+
+/* The reader's skip link (styled with the app's .skip-link): to the page view. */
+.rd .rd-skip { position: absolute; top: 8px; left: 12px; z-index: 40; }
+.rd:not(.reading) .rd-skip { display: none; }
