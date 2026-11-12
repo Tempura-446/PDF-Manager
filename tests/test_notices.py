@@ -12,7 +12,7 @@ def test_notices_list_what_zpdf_includes_and_installs():
         assert f"== {name} " in text, name
     assert "== pdf.js " in text and "Apache License" in text            # vendored in static/pdfjs
     assert "Tesseract" in text and "pdf.ttf" in text                    # the OCR text layer's font
-    for font in ("Instrument Sans", "Instrument Serif", "JetBrains Mono"):  # the interface's fonts
+    for font in ("Instrument Sans", "Source Serif 4", "JetBrains Mono"):  # the interface's fonts
         block = text.split(f"== {font} font ", 1)[1].split("\n== ", 1)[0]
         assert "SIL Open Font License" in block and "Copyright" in block, font
     words = text.split("== WordLlama word vectors ", 1)[1].split("\n== ", 1)[0]   # search by meaning

@@ -246,7 +246,7 @@ def test_critique_fixes_in_a_browser(app, tmp_path, monkeypatch):
         assert t["exactMarks"] and {m.lower() for m in t["exactMarks"]} == {"balance due"}, t["exactMarks"]
         # One file: a compact strip (serif name, mono facts, actions shown); three: the grid.
         s = t["strip"]
-        assert s["strip"] and s["height"] <= 90 and "Instrument Serif" in s["nameFont"] and "JetBrains Mono" in s["factsFont"], s
+        assert s["strip"] and s["height"] <= 90 and "Source Serif 4" in s["nameFont"] and "JetBrains Mono" in s["factsFont"], s
         assert s["actions"] == "1" and s["drop"] == 0 and s["dropText"] == "Add more files" and s["cardHeight"] < 240, s
         assert not t["grid3"]
 

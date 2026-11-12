@@ -107,7 +107,7 @@ def _read(path):
 
 # The interface's fonts, shipped in static/fonts (from the Fontsource packages),
 # each with its licence beside it as OFL-<key>.txt.
-FONTS = (("Instrument Sans", "instrument-sans"), ("Instrument Serif", "instrument-serif"),
+FONTS = (("Instrument Sans", "instrument-sans"), ("Source Serif 4", "source-serif-4"),
          ("JetBrains Mono", "jetbrains-mono"))
 
 
