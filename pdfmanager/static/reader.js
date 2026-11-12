@@ -336,7 +336,7 @@ export class Reader {
     this.panelBtn = b("panel", "File panel", { class: "rd-btn rd-panel-btn", "aria-expanded": "false", "aria-controls": "rd-side" });
     this.panelBtn.title = "Show or hide the file panel (T)";
     // Changes not saved yet: Save and Undo come out where they're seen.
-    this.saveNowBtn = el("button", { class: "rd-btn primary rd-savenow", type: "button", hidden: true,
+    this.saveNowBtn = el("button", { class: "rd-btn primary seal rd-savenow", type: "button", hidden: true,
       title: "Save your changes (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
     this.undoNowBtn = b("undo", "Undo the last change (Ctrl+Z)", { hidden: true });
     this.homeBtn = this.onHome ? b("home", "Home: all of ZPDF's tools (your documents stay open)") : null;
@@ -414,7 +414,7 @@ export class Reader {
     this.undoBtn = b("undo", "Undo (Ctrl+Z)", { disabled: true });
     this.redoBtn = b("redo", "Redo (Ctrl+Y)", { disabled: true });
     this.deleteBtn = b("trash", "Delete the selected annotation (Delete)", { disabled: true });
-    this.annotSaveBtn = el("button", { class: "rd-btn primary", type: "button", title: "Save your changes (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
+    this.annotSaveBtn = el("button", { class: "rd-btn primary seal rd-annotsave", type: "button", title: "Save your changes (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
     this.annotCloseBtn = b("x", "Close the annotation tools");
     this.annotbar = el("div", { class: "rd-findbar rd-annotbar", hidden: true, role: "toolbar", "aria-label": "Annotate" },
       ...this.annotTools.filter((b) => b !== this.certSignBtn && b !== this.redactBtn), this.signBtn, this.certSignBtn, this.redactBtn,
@@ -961,6 +961,9 @@ export class Reader {
    *  there, nothing changed since it was last saved). */
   isPristine(tab = this.activeTab) { return !!(tab && tab.fileId && !tab.dirty); }
 
+  /** Draw the tab bar again (e.g. after the app marked a tab unsaved). */
+  refreshTabs() { this.#renderTabs(); }
+
   /** Switch to an open tab (e.g. back to the one a result was made from). */
   showTab(tab) { return this.#switchTo(tab); }
 
@@ -1032,7 +1035,8 @@ export class Reader {
 
   async #closeTabNow(tab) {
     if (!tab || !this.tabs.includes(tab)) return;
-    if (tab.dirty && !confirm(`Close “${tab.name}” without saving your changes?`)) return;
+    if (tab.dirty && await this.ask(`Close “${tab.name}”?`, "Your changes to it haven't been saved.",
+      [["cancel", "Cancel"], ["close", "Close without saving", true]]) !== "close") return;
     const i = this.tabs.indexOf(tab);
     this.tabs.splice(i, 1);
     if (tab === this.activeTab) {
@@ -1061,21 +1065,23 @@ export class Reader {
     const order = this.tabs.map((tab) => {
       let parts = this.tabEls.get(tab.id);
       if (!parts) {
-        const dot = el("span", { class: "rd-dot", title: "Unsaved changes" });
+        const dot = el("span", { class: "rd-dot", title: "Not saved" });
         const label = el("span", { class: "rd-doctab-label" }, tab.name);
-        const btn = el("button", { type: "button", class: "rd-doctab-name", role: "tab", title: tab.name }, dot, label);
+        const unsaved = el("span", { class: "rd-sr" }, ", unsaved");
+        const btn = el("button", { type: "button", class: "rd-doctab-name", role: "tab", title: tab.name }, dot, label, unsaved);
         btn.addEventListener("click", () => this.#switchTo(tab));
         const close = el("button", { type: "button", class: "rd-doctab-x", title: "Close", "aria-label": `Close ${tab.name}`, html: svg("x") });
         close.addEventListener("click", () => this.closeTab(tab));
         const wrap = el("div", { class: "rd-doctab" }, btn, close);
         wrap.addEventListener("auxclick", (e) => { if (e.button === 1) { e.preventDefault(); this.closeTab(tab); } });
-        parts = { wrap, btn, dot };
+        parts = { wrap, btn, dot, unsaved };
         this.tabEls.set(tab.id, parts);
       }
       const active = tab === this.activeTab;
       parts.wrap.classList.toggle("active", active);
       parts.btn.setAttribute("aria-selected", String(active));
-      parts.dot.hidden = !tab.dirty;
+      // A dot (and the word, for screen readers): changes not saved, or a tool's result not saved anywhere yet.
+      parts.dot.hidden = parts.unsaved.hidden = !(tab.dirty || tab.unsaved);
       return parts.wrap;
     });
     this.#showSaveState();
@@ -2326,8 +2332,10 @@ export class Reader {
     card.append(el("div", { class: "rd-commentbtns" },
       isReply ? null : btn("Reply", () => ask("Reply", "", (text) => text && this.#applyMarkup([{ op: "reply", page: it.page, id: it.id, text }], "Could not reply: "))),
       btn(it.text ? "Edit" : "Add comment", () => ask("Save", it.text, (text) => this.#applyMarkup([{ op: "text", page: it.page, id: it.id, text }], "Could not change the comment: "))),
-      btn("Delete", () => {
-        if (confirm(isReply ? "Delete this reply?" : `Delete this ${it.kind.toLowerCase()}${it.replies?.length ? " and its replies" : ""}?`)) {
+      btn("Delete", async () => {
+        const what = isReply ? "this reply" : `this ${it.kind.toLowerCase()}${it.replies?.length ? " and its replies" : ""}`;
+        if (await this.ask(`Delete ${what}?`, "Undo (Ctrl+Z) brings it back until you save.",
+          [["cancel", "Cancel"], ["delete", "Delete", true]]) === "delete") {
           this.#applyMarkup([{ op: "delete", page: it.page, id: it.id }], "Could not delete it: ");
         }
       })));
@@ -3921,7 +3929,8 @@ export class Reader {
       if (!tab || !this.doc) return;
       // Changes are made by rewriting the file, which a signature can't survive.
       if (!signing && tab.signatures?.length && !tab.signedWarned) {
-        if (!confirm("This document is signed. Changing it makes its signatures show as broken: they no longer cover what the document says. Change it anyway?")) return;
+        if (await this.ask("This document is signed", "Changing it makes its signatures show as broken: they no longer cover what the document says.",
+          [["cancel", "Cancel"], ["change", "Change it anyway", true]]) !== "change") return;
         tab.signedWarned = true;
       }
       this.#busy(true);
@@ -3979,7 +3988,8 @@ export class Reader {
       // Undoing goes back to the bytes before the change; anything added
       // since (drawings, form entries) would go with it.
       if ((this.#changed() || tab.bytes !== tab.afterEdit)
-          && !confirm("Undoing the change also takes away the annotations and form entries made since it. Continue?")) return;
+          && await this.ask("Undo the change?", "Undoing it also takes away the annotations and form entries made since it.",
+            [["cancel", "Cancel"], ["undo", "Undo the change", true]]) !== "undo") return;
       const previous = tab.undo.pop();
       const back = previous === tab.original;
       Object.assign(tab, { bytes: previous, afterEdit: previous, edited: !back, dirty: !back, goto: this.#view(),
@@ -4048,10 +4058,12 @@ export class Reader {
     try {
       let res = await put(false);
       if (res.status === 409) {
-        if (!confirm(`“${tab.name}” was changed by another program since you opened it.\n\nReplace it with your version? (Cancel saves your version as a copy instead.)`)) {
-          await this.saveCopy();
-          return;
-        }
+        // Cancel does nothing; the copy is a choice of its own.
+        const choice = await this.ask(`“${tab.name}” was changed by another program`,
+          "It changed since you opened it. Replace it with your version, or keep both by saving yours as a copy.",
+          [["cancel", "Cancel"], ["copy", "Save as a copy"], ["replace", "Replace file", true]]);
+        if (choice === "copy") { await this.saveCopy(); return; }
+        if (choice !== "replace") return;
         res = await put(true);
       }
       const answer = await res.json().catch(() => ({}));
@@ -4060,10 +4072,66 @@ export class Reader {
       Object.assign(tab, { stamp: answer.stamp, original: bytes, size: bytes.length });
       if (!tab.bytes || tab === this.activeTab && !this.bytes) tab.bytes = bytes;
       this.#markSaved(tab, version);
-      this.toast(`Saved ${tab.name}`, 2000);
+      // What the file held is kept for a while (not for big files): Undo puts it back.
+      if (answer.undo) this.toast(`Saved over ${tab.name}`, 10000, ["Undo", () => this.#unsave(tab, answer.undo)]);
+      else this.toast(`Saved over ${tab.name}`, 4000);
     } catch (e) {
       this.toast("Could not save: " + (e.message || e), 9000, ["Save as…", () => this.saveCopy()]);
     }
+  }
+
+  /** Undo a save over the file: it gets back what it held; the tab keeps
+   *  the changes, unsaved again. */
+  async #unsave(tab, undo) {
+    this.toastHold?.(); this.toastHold = null;
+    this.toastEl?.remove();
+    try {
+      const res = await fetch("/api/unsave", { method: "POST", body: JSON.stringify({ undo }),
+        headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/json" } });
+      const answer = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(answer.error || res.statusText);
+      if (this.tabs.includes(tab)) {
+        Object.assign(tab, { stamp: answer.stamp, dirty: true });
+        this.#renderTabs();
+      }
+      this.toast(`Undone: ${tab.name} is as it was before. Your changes are still here, not saved.`, 6000);
+    } catch (e) {
+      this.toast("Could not undo the save: " + (e.message || e), 9000);
+    }
+  }
+
+  /** A question in the app's own dialog (never the browser's confirm()).
+   *  ``buttons``: [value, label, main?]; resolves with the value of the one
+   *  pressed. Escape and Cancel give "cancel", and focus goes back to where it was. */
+  ask(title, text, buttons) {
+    return this.#dialog(title, [text].flat().filter(Boolean).map((t) => el("p", {}, t)), buttons);
+  }
+
+  /** Show a file the app has open or saved in its folder (the server checks). */
+  async reveal(path) {
+    try {
+      const res = await fetch("/api/reveal", { method: "POST", body: JSON.stringify({ path }),
+        headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/json" } });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    } catch (e) { this.toast("Could not show it in its folder: " + (e.message || e), 6000); }
+  }
+
+  /** Save an open tab (e.g. a tool's result) as a file, the dialog starting
+   *  in the folder of the opened file ``near`` (its id). Resolves with the
+   *  path when it's known (the desktop window), true when saved elsewhere, null if not saved. */
+  async saveTab(tab, near = null) {
+    await this.chain;
+    if (!tab || !this.tabs.includes(tab)) return null;
+    const version = tab.version || 0;
+    let bytes;
+    try { bytes = tab === this.activeTab ? await this.#currentBytes() : tab.bytes || tab.original; }
+    catch (e) { this.toast("Could not save: " + (e.message || e), 9000); return null; }
+    if (!bytes) return null;
+    let done = null;
+    const name = /\.pdf$/i.test(tab.name) ? tab.name : tab.name + ".pdf";
+    await this.#saveBytes(bytes, name, (where) => { done = where || true; tab.unsaved = false; this.#markSaved(tab, version); }, near);
+    if (done && this.tabs.includes(tab)) this.#renderTabs();
+    return done;
   }
 
   /** Save as a new file, starting in the document's own folder (Ctrl+Shift+S). */
@@ -4087,7 +4155,7 @@ export class Reader {
         const res = await fetch("/api/keep", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
         const { id } = await res.json();
         const path = await api.save_result(id, name, near);
-        if (path) { saved(); this.toast("Saved to " + path, 5000, ["Show in folder", () => api.reveal(path)]); }
+        if (path) { saved(path); this.toast("Saved to " + path, 5000, ["Show in folder", () => this.reveal(path)]); }
       } catch (e) { this.toast("Could not save: " + (e.message || e)); }
       return;
     }
@@ -4273,7 +4341,8 @@ export class Reader {
   async print() {
     if (!this.doc) return;
     const doc = this.doc, total = doc.numPages;
-    if (total > 300 && !confirm(`Prepare all ${total} pages for printing? This can take a while.`)) return;
+    if (total > 300 && await this.ask(`Print all ${total} pages?`, "Preparing them can take a while.",
+      [["cancel", "Cancel"], ["print", "Prepare to print", true]]) !== "print") return;
     let box = document.getElementById("rd-print");
     if (box) box.remove();
     box = el("div", { id: "rd-print" });

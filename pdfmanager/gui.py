@@ -1447,6 +1447,44 @@ class OpenFiles:
         with self.lock:
             return self.items.get(key)
 
+    def knows(self, path):
+        """Whether ``path`` is a file the app has open or has saved: only
+        those may be shown in the file manager."""
+        try:
+            path = Path(path).expanduser().resolve()
+        except (OSError, ValueError, TypeError):
+            return False
+        with self.lock:
+            return path in self.items.values()
+
+
+class SavedOver:
+    """What a file held before Save wrote over it, for Undo: the last few,
+    in memory, each up to LIMIT bytes (bigger files get no Undo)."""
+
+    LIMIT = 64 * 2**20
+    KEEP = 4
+
+    def __init__(self):
+        self.items = {}
+        self.lock = threading.Lock()
+
+    def add(self, path, data, stamp):
+        """Keep ``data`` (what ``path`` held); ``stamp`` is the file's stamp
+        after the save, so Undo can tell whether it has changed since."""
+        if data is None or len(data) > self.LIMIT:
+            return None
+        key = secrets.token_urlsafe(9)
+        with self.lock:
+            self.items[key] = (Path(path), data, stamp)
+            while len(self.items) > self.KEEP:
+                self.items.pop(next(iter(self.items)))
+        return key
+
+    def pop(self, key):
+        with self.lock:
+            return self.items.pop(key, None)
+
 
 class Events:
     """Messages for the app's pages, numbered; pages ask for the ones after
@@ -1686,6 +1724,7 @@ class Handler(BaseHTTPRequestHandler):
     quit_app = None  # closes the pywebview window (to restart after an update)
     quit_requested = False  # makes wait_until_closed return
     opened = None  # OpenFiles
+    saved_over = None  # SavedOver: Undo after Save wrote over a file
     work = None  # WorkFolders
     # pywebview's JavaScript bridge needs eval(); only allowed in the desktop window.
     allow_eval = False
@@ -1887,20 +1926,43 @@ class Handler(BaseHTTPRequestHandler):
                 and self.headers.get("X-Pdfm-Force") != "1"):
             return self._send(HTTPStatus.CONFLICT, {"error": f"{path.name} was changed by another "
                                                              "program", "changed": True})
-        temp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.zpdf-saving")
+        # What the file held, for Undo (not for big files: kept in memory).
+        before = None
         try:
-            temp.write_bytes(body)
-            try:
-                shutil.copymode(path, temp)
-            except OSError:
-                pass
-            os.replace(temp, path)
-        except OSError as exc:
-            temp.unlink(missing_ok=True)
-            raise UserError(f"could not save {path.name}: it may be open in another program, "
-                            f"or read-only ({exc.strerror or exc})") from None
+            if path.stat().st_size <= SavedOver.LIMIT:
+                before = path.read_bytes()
+        except OSError:
+            pass
+        _replace_file(path, body)
         RecentFiles.add(path)
+        stamp = _file_stamp(path)
+        undo = self.saved_over.add(path, before, stamp) if self.saved_over is not None else None
+        return self._send(HTTPStatus.OK, {"path": str(path), "stamp": stamp, "undo": undo})
+
+    def _unsave(self, data):
+        """Put back what a file held before Save wrote over it (the "undo"
+        that save gave). Refused when the file has changed since."""
+        item = self.saved_over.pop(str(data.get("undo", ""))) if self.saved_over is not None else None
+        if item is None:
+            raise UserError("that can no longer be undone")
+        path, before, stamp = item
+        if not path.exists() or _file_stamp(path) != stamp:
+            raise UserError(f"{path.name} has changed since it was saved, so it was left as it is")
+        _replace_file(path, before)
         return self._send(HTTPStatus.OK, {"path": str(path), "stamp": _file_stamp(path)})
+
+    def _reveal(self, data):
+        """Show a file in Explorer / Finder / the file manager: only a file
+        the app has open or has saved, never any path the page names."""
+        target = data.get("path")
+        if data.get("id") and self.opened is not None:
+            target = self.opened.get(str(data["id"]))
+        if not target or self.opened is None or not self.opened.knows(target):
+            return self._error(HTTPStatus.FORBIDDEN, "not a file ZPDF has open")
+        if not Path(target).exists():
+            raise UserError("that file is no longer there")
+        reveal_in_file_manager(Path(target).resolve())
+        return self._send(HTTPStatus.OK, {"ok": True})
 
     def _recent(self):
         """Recently opened files that still exist, each with an id the
@@ -1964,6 +2026,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._scales(body)
             if path.startswith("/api/save/"):
                 return self._save_in_place(path[len("/api/save/"):], body)
+            if path == "/api/unsave":  # Undo after Save wrote over a file
+                return self._unsave(json.loads(body or b"{}"))
+            if path == "/api/reveal":
+                return self._reveal(json.loads(body or b"{}"))
             if path == "/api/outline":
                 return self._outline(body)
             if path == "/api/redact/find":
@@ -2700,6 +2766,7 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None):
                                                "last_seen": time.monotonic(),
                                                "closed_at": None, "jobs": progress.JobStore(),
                                                "pages": {}, "events": Events(),
+                                               "saved_over": SavedOver(),
                                                "work": WorkFolders()})
     server = None
     if not port and prefer:
@@ -3011,6 +3078,8 @@ class DesktopApi:
             return None
         target = Path(chosen if isinstance(chosen, str) else chosen[0])
         target.write_bytes(data)
+        if self._opened is not None:
+            self._opened.add(target)  # (so it can be shown in its folder)
         return str(target)
 
     def pick_folder(self):
@@ -3021,8 +3090,28 @@ class DesktopApi:
         return (chosen if isinstance(chosen, str) else chosen[0]) if chosen else None
 
     def reveal(self, path):
-        """Show a saved file in Explorer / Finder / the file manager."""
+        """Show a saved file in Explorer / Finder / the file manager (one
+        the app has open or has saved)."""
+        if self._opened is not None and not self._opened.knows(path):
+            raise ValueError("not a file ZPDF has open")
         reveal_in_file_manager(path)
+
+
+def _replace_file(path, data):
+    """Write ``data`` over ``path``: to a temporary file next to it first,
+    then swapped in, so a failure halfway never leaves a broken file."""
+    temp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.zpdf-saving")
+    try:
+        temp.write_bytes(data)
+        try:
+            shutil.copymode(path, temp)
+        except OSError:
+            pass
+        os.replace(temp, path)
+    except OSError as exc:
+        temp.unlink(missing_ok=True)
+        raise UserError(f"could not save {path.name}: it may be open in another program, "
+                        f"or read-only ({exc.strerror or exc})") from None
 
 
 def reveal_in_file_manager(path):
