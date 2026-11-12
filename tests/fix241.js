@@ -61,6 +61,10 @@ const { chromium } = require("playwright");
       Object.assign(s, await placed(page));
       s.after = await saveState(page);
       await shot(page, `${theme}-1280-signed-on-the-line`);
+      // The picture toolbar's delete icon draws inside its button.
+      s.deleteIcon = await page.evaluate(() => { const b = document.querySelector(".editToolbar .deleteButton"); if (!b) return null;
+        const r = b.getBoundingClientRect(), st = getComputedStyle(b, "::before");
+        return { lineHeight: getComputedStyle(b).lineHeight, button: r.height, icon: parseFloat(st.height) }; });
       if (theme === "light") {
         // Undo the only change: not changed any more. Redo: changed again.
         await page.keyboard.press("Control+z");

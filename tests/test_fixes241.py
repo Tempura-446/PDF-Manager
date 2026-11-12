@@ -93,6 +93,9 @@ def test_fixes241_in_a_browser(app, tmp_path):
     # on the rule at the line's start, 1.6 times the label's height, and resizable like any picture.
     for theme in ("light", "dark"):
         s = out["sign-" + theme]
+        if s.get("deleteIcon"):
+            assert s["deleteIcon"]["lineHeight"] != "250px", s["deleteIcon"]
+            assert s["deleteIcon"]["icon"] <= s["deleteIcon"]["button"] + 1, s["deleteIcon"]
         line = s["line"]
         assert line["page"] == 1 and line["text"] == 12, line
         x0, y0, x1, top = line["rect"]

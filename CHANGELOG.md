@@ -20,6 +20,8 @@ Small fixes after a check of 0.24.0 on Windows. The look is the same.
   same the other way round.
 - In the keyboard shortcuts list, the descriptions start at the same
   place in every section.
+- The delete button on a selected picture or signature shows its icon
+  in the button again, not far below it.
 - Turning a page just after switching tabs turns it in the tab you
   switched to, and no longer logs an error. Page changes asked for while
   a tab is still being shown wait for it, instead of being made from the
