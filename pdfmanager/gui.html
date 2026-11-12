@@ -2955,6 +2955,7 @@ function collectOptions(op = current, prefix = "f-") {
 function firstMissing(op, prefix) { return op.fields.find((f) => f.required && !$(prefix + f.key).value.trim()); }
 function missingField() {
   const f = firstMissing(current, "f-");
+  if (f) foldForm(null);  // (a folded form opens to show the field)
   if (f) { showError(`Please fill in “${f.label}”.`); fieldError($("f-" + f.key), `Fill in “${f.label}” to go on.`); $("f-" + f.key).focus(); }
   return !!f;
 }

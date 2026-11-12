@@ -117,7 +117,9 @@ const { chromium } = require("playwright");
     out.lastRow = last && await page.evaluate(() => { const a = document.activeElement, r = a.getBoundingClientRect(), bar = document.querySelector(".action-bar").getBoundingClientRect(); return { top: r.top, bottom: r.bottom, barTop: bar.top }; });
     out.rowRing = await ring(page);
 
-    // Required field: the message is next to the field too.
+    // Required field: the message is next to the field too. (The form is folded above the
+    // results since 0.23: Edit opens it again.)
+    await page.click("#form-recap .link-btn");
     await page.fill("#f-query", "");
     await page.click("#run");
     out.required = await page.evaluate(() => { const f = document.getElementById("f-query"); const id = f.getAttribute("aria-describedby") || ""; const m = id && document.getElementById(id.split(" ").find((x) => document.getElementById(x)?.classList.contains("field-err")) || "");
