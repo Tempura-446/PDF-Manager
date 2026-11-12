@@ -254,6 +254,26 @@ function bounded(promise, ms, what) {
     .finally(() => clearTimeout(timer));
 }
 
+/** Make a document that's being closed answer every question with a refusal
+ *  (an error with ``closed``). Once pdf.js has torn down a document's link to
+ *  its worker, its methods throw ("Cannot read properties of null (reading
+ *  'sendWithPromise')") instead of rejecting, and a ``.catch()`` doesn't see
+ *  that. pdf.js's own viewer can still be asking the document things (its
+ *  scripting manager after a wait; the page views' pages, 250 at a time,
+ *  without looking again whether the document is still shown), and so can
+ *  work of the reader's still on its way: they all get a rejection now, which
+ *  they handle. (All of these methods return promises.) */
+function closeOff(doc) {
+  const closed = () => Promise.reject(Object.assign(new Error("the document was closed"), { closed: true }));
+  for (let proto = Object.getPrototypeOf(doc); proto && proto !== Object.prototype; proto = Object.getPrototypeOf(proto)) {
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      if (/^(get|has|save|extract)[A-Z]/.test(name) && typeof Object.getOwnPropertyDescriptor(proto, name).value === "function") {
+        Object.defineProperty(doc, name, { value: closed, configurable: true, writable: true });
+      }
+    }
+  }
+}
+
 /** Why a piece of a file couldn't be had, from the server's answer; ``gone``
  *  when it won't come back by asking again (the file was moved, deleted or
  *  rewritten). */
@@ -1522,6 +1542,11 @@ export class Reader {
     // functions) run in pdf.js's sandbox, as in Firefox.
     this.scripting = new viewer.PDFScriptingManager({ eventBus, sandboxBundleSrc: BASE + "build/pdf.sandbox.min.mjs",
       wasmUrl: BASE + "wasm/" });
+    // The viewer hands the scripting manager each document (and null) itself,
+    // without waiting for the answer: one closed meanwhile (another tab shown,
+    // a change reloading it) would leave an error nobody catches.
+    const setScripted = this.scripting.setDocument.bind(this.scripting);
+    this.scripting.setDocument = (doc) => setScripted(doc).catch(() => {});
     this.pdfViewer = new viewer.PDFViewer({
       container: this.container, viewer: this.viewerEl, eventBus,
       linkService: this.linkService, findController: this.findController, scriptingManager: this.scripting,
@@ -1622,6 +1647,7 @@ export class Reader {
     pieces?.giveUp();
     this.#showSaveState();
     if (doc) {
+      closeOff(doc);
       this.pdfViewer.setDocument(null);
       this.linkService.setDocument(null);
       this.findController.setDocument(null);
