@@ -1672,8 +1672,23 @@ export class Reader {
    *  comes over the pages when asked for and goes again. */
   #panelDocked() { return !this.wideQuery || this.wideQuery.matches; }
   get panelOpen() { return this.#panelDocked() ? store.get("pdfm-file-panel", true) !== false : !!this.overlayOpen; }
+  /** While the annotate bar or the find bar is open the file panel steps
+   *  aside (to its button), so the page has the room; it comes back when
+   *  they close. Its open/closed choice isn't changed. Opened again by hand
+   *  meanwhile, it stays. */
+  #stepAside() {
+    const busy = !this.annotbar.hidden || !this.findbar.hidden;
+    if (!busy) this.panelKept = false;
+    const aside = busy && !this.panelKept;
+    if (aside === !!this.panelAside) return;
+    const had = aside && this.side.contains(document.activeElement);
+    this.panelAside = aside;
+    this.#applyPanel();
+    if (had) this.container.focus({ preventScroll: true });
+  }
+
   #applyPanel() {
-    const docked = this.#panelDocked(), open = this.panelOpen;
+    const docked = this.#panelDocked(), open = this.panelOpen && !this.panelAside;
     this.side.hidden = !open;
     this.side.classList.toggle("overlay", !docked);
     this.sideScrim.hidden = !(open && !docked);
@@ -1683,13 +1698,15 @@ export class Reader {
    *  back to the page (closing). */
   setPanel(open, { focus = false } = {}) {
     const had = this.side.contains(document.activeElement);
+    if (open && this.panelAside) { this.panelAside = false; this.panelKept = true; }  // asked for by hand: it stays
+    else if (!open && this.panelAside) { this.#applyPanel(); return; }  // (already out of the way)
     if (this.#panelDocked()) store.set("pdfm-file-panel", !!open);
     else this.overlayOpen = !!open;
     this.#applyPanel();
     if (open && focus) (this.side.querySelector("button, [href], input, select, [tabindex]:not([tabindex='-1'])") || this.side).focus?.();
     if (!open && (focus || had)) (this.doc ? this.panelBtn : this.container).focus({ preventScroll: true });
   }
-  togglePanel() { this.setPanel(!this.panelOpen, { focus: !this.#panelDocked() }); }
+  togglePanel() { this.setPanel(!(this.panelOpen && !this.panelAside), { focus: !this.#panelDocked() }); }
 
   // ---- sidebar: thumbnails and bookmarks ----------------------------------------
   toggleSidebar() { this.#setSidebar(this.sidebar.hidden); store.set("pdfm-reader-sidebar", !this.sidebar.hidden); }
@@ -2042,7 +2059,11 @@ export class Reader {
 
   // ---- find -----------------------------------------------------------------
   openFind() {
+    // One tool row at a time: the annotate bar closes (what was drawn stays, unsaved changes too).
+    if (!this.annotbar.hidden) this.closeAnnotate();
+    this.#endHint();
     this.findbar.hidden = false;
+    this.#stepAside();
     this.findBtn.setAttribute("aria-pressed", "true");
     const selected = String(window.getSelection() || "").trim();
     if (selected && selected.length < 100 && !selected.includes("\n")) this.findInput.value = selected;
@@ -2054,6 +2075,7 @@ export class Reader {
     if (this.findbar.hidden) return;
     this.findbar.hidden = true;
     this.findBtn.setAttribute("aria-pressed", "false");
+    this.#stepAside();
     if (this.eventBus) this.eventBus.dispatch("findbarclose", { source: this });
     this.findBtn.focus({ preventScroll: true });  // back where it was opened from
   }
@@ -2080,7 +2102,9 @@ export class Reader {
   // ---- annotating and signing ------------------------------------------------------
   openAnnotate() {
     if (!this.doc) return;
+    if (!this.findbar.hidden) this.closeFind();
     this.annotbar.hidden = false;
+    this.#stepAside();
     this.annotateBtn.setAttribute("aria-pressed", "true");
     this.#showSaveState();
     this.#showEditMode(this.editMode || "NONE");
@@ -2092,6 +2116,8 @@ export class Reader {
     this.annotateBtn.setAttribute("aria-pressed", "false");
     this.#showSaveState();
     if (this.editMode && this.editMode !== "NONE") this.#setEditMode("NONE");
+    this.#endHint();
+    this.#stepAside();
   }
 
   #modeName(mode) {
@@ -2103,9 +2129,10 @@ export class Reader {
   #setEditMode(name, create = false) {
     if (!this.pdfViewer || !this.doc) return;
     const editText = name === "EDITTEXT";
+    this.#endHint();  // the last tool's hint goes with it
     if (editText && !this.textEditHinted) {
       this.textEditHinted = true;
-      this.toast("Click a line to change it, Shift+click for its whole paragraph, or click an empty spot to add words. Old words can stay in the file underneath — to remove text for good, use Redact.", 8000);
+      this.#hint("Click a line to change it, Shift+click for its whole paragraph, or click an empty spot to add words. Old words can stay in the file underneath — to remove text for good, use Redact.", 8000);
     }
     const markup = MARKUP.has(name), custom = editText || markup;
     if (name !== "NONE" || custom) this.measureTool(null);
@@ -2387,6 +2414,7 @@ export class Reader {
     const cancel = el("button", { type: "button", class: "rd-btn" }, "Cancel");
     const box = el("div", { class: "rd-notebox", style: `left:${at.x}px;top:${at.y}px` }, text, el("div", { class: "rd-notebtns" }, cancel, add));
     at.view.div.append(box);
+    this.#keepInColumn(box, at);
     this.noteBox = box;
     const done = () => {
       const words = text.value.trim();
@@ -2545,14 +2573,14 @@ export class Reader {
   /** Pictures or Links mode: outlines over the pages' pictures or links. */
   #objectBoxes() {
     this.viewerEl?.querySelectorAll(".rd-objbox, .rd-objtools, .rd-linkdraft").forEach((n) => n.remove());
-    if (this.markupMode === "CERTSIGN") this.toast("Drag a box where your signature should appear, then choose your Digital ID.", 5000);
+    if (this.markupMode === "CERTSIGN") this.#hint("Drag a box where your signature should appear, then choose your Digital ID.", 5000);
     if ((this.markupMode !== "IMAGES" && this.markupMode !== "LINKS") || !this.doc) return;
     for (let i = 0; i < this.pdfViewer.pagesCount; i++) {
       if (this.pdfViewer.getPageView(i)?.canvas?.width) this.#drawObjectBoxes(i + 1);
     }
     if (this.markupMode === "IMAGES" && !this.imagesHinted) {
       this.imagesHinted = true;
-      this.toast("Click a picture to pick it: drag it to move it, drag a corner to resize it (Shift: freely), or replace or delete it.", 6000);
+      this.#hint("Click a picture to pick it: drag it to move it, drag a corner to resize it (Shift: freely), or replace or delete it.", 6000);
     }
   }
 
@@ -2797,7 +2825,7 @@ export class Reader {
     if (on) this.#showRedactCount();
     if (on && !this.redactHinted) {
       this.redactHinted = true;
-      this.toast("Drag boxes over what should go (or choose Select words), then Apply redactions. Click × on a mark to remove it.", 7000);
+      this.#hint("Drag boxes over what should go (or choose Select words), then Black out. Click × on a mark to remove it.", 7000);
     }
   }
 
@@ -3189,7 +3217,7 @@ export class Reader {
     if (!layer) { this.toast("Scroll to the page to sign, then try again."); return; }
     if (this.annotbar.hidden) this.openAnnotate();
     await layer.pasteEditor({ mode: pdfjs.AnnotationEditorType.STAMP }, { bitmapFile: file });
-    this.toast("Drag the signature into place; use the corners to resize it.", 5000);
+    this.#hint("Drag the signature into place; use the corners to resize it.", 5000);
   }
 
   #signatureDialog() {
@@ -3260,6 +3288,34 @@ export class Reader {
       }
       return blob;
     });
+  }
+
+  /** The part of the pages the reader can see now: the page column, under
+   *  the bars and left of a docked file panel (and its scrollbar). */
+  #column() {
+    const c = this.container.getBoundingClientRect();
+    return { left: c.left + 8, top: c.top + 8, right: c.left + this.container.clientWidth - 8, bottom: c.top + this.container.clientHeight - 8 };
+  }
+  /** A box put on a page at ``at`` (x, y in the page's own pixels): moved
+   *  left or up (opening above the point) when it would cross the edge of
+   *  what can be seen, so its buttons are never under the panel or a bar. */
+  #keepInColumn(box, at) {
+    const col = this.#column(), r = box.getBoundingClientRect();
+    let x = at.x, y = at.y;
+    if (r.right > col.right) x -= Math.min(r.right - col.right, r.left - col.left);
+    if (r.left < col.left) x += col.left - r.left;
+    if (r.bottom > col.bottom) y = r.top - r.height - 12 >= col.top ? at.y - r.height - 12 : at.y - (r.bottom - col.bottom);
+    box.style.left = `${x}px`;
+    box.style.top = `${y}px`;
+  }
+  /** The text-look bar over a box being edited: below it when there's no
+   *  room above, shifted left when it would run under the panel. */
+  #keepBarInColumn(bar) {
+    if (!bar.isConnected) return;
+    const col = this.#column();
+    let r = bar.getBoundingClientRect();
+    if (r.top < col.top) { bar.classList.add("below"); r = bar.getBoundingClientRect(); }
+    if (r.right > col.right) bar.style.left = `${-Math.min(r.right - col.right, r.left - col.left)}px`;
   }
 
   /** The drawn part of a canvas as a PNG with a transparent background. */
@@ -3413,6 +3469,17 @@ export class Reader {
     if (answer === "tag") this.#edit("tag");
   }
   // -- end of accessibility --
+
+  /** A toast that explains the tool just chosen: it goes when that tool or
+   *  its bar does, or when another bar opens (see #endHint). */
+  #hint(message, ms) {
+    this.toast(message, ms);
+    this.hintEl = this.toastEl;
+  }
+  #endHint() {
+    if (this.hintEl && this.hintEl === this.toastEl) { clearTimeout(this.toastTimer); this.toastEl.remove(); this.toastEl = null; }
+    this.hintEl = null;
+  }
 
   toast(message, ms = 4000, action = null) {
     if (!message) return;
@@ -3923,6 +3990,7 @@ export class Reader {
     const bar = el("div", { class: "rd-tf-bar", role: "toolbar", "aria-label": "Text look" },
       fontSel, sizeIn, el("span", { class: "rd-tf-group" }, boldBtn, italicBtn), colorIn, alignGroup);
     box.append(bar);
+    requestAnimationFrame(() => this.#keepBarInColumn(bar));
 
     const generic = /serif|times|roman|georgia|garamond|cambria|book|palatino/i.test(own) && !/sans/i.test(own) ? "serif"
       : /mono|courier|consol/i.test(own) ? "monospace" : "sans-serif";

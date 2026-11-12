@@ -473,6 +473,7 @@ textarea.rd-textedit.rd-textedit-fit { white-space: pre-wrap; overflow: auto; }
   font: 12px/1.2 system-ui, sans-serif; white-space: nowrap;
 }
 .rd-textedit-box.rd-pending .rd-tf-bar { display: none; }
+.rd-tf-bar.below { bottom: auto; top: 100%; margin: 8px 0 0; }  /* no room above (the bars): under the words instead */
 .rd-tf-bar select, .rd-tf-bar input {
   height: 26px; box-sizing: border-box; border: 0; border-radius: 6px; font: inherit; color: #111; background: #fff;
 }
