@@ -59,7 +59,8 @@ const { chromium } = require("playwright");
       return { text: t.querySelector("span").textContent, blur: cs.backdropFilter, radius: cs.borderTopLeftRadius, position: cs.position, anim: cs.animationName };
     });
     await shot(page, "2-start-toast");
-    await page.waitForFunction(() => !document.querySelector(".toast"), null, { timeout: 10000 });
+    await page.mouse.move(5, 5);  // (a toast with Undo stays 10 s, and not while pointed at)
+    await page.waitForFunction(() => !document.querySelector(".toast"), null, { timeout: 20000 });
     out.toastGone = true;
     // The palette over the start screen (frosted).
     await page.keyboard.press("Control+k");

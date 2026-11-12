@@ -29,6 +29,20 @@ function fadeOut(node) {
   setTimeout(() => node.remove(), t * 1.5 + 40);
 }
 
+/** Run ``done`` after ``ms``, but not while ``node`` (a toast) is hovered or has
+ *  focus: the clock stops then and goes on when the pointer and focus leave.
+ *  Returns a function that cancels it. */
+export function heldTimer(node, ms, done) {
+  let left = ms, since = Date.now(), timer = setTimeout(done, ms), hover = false, focus = false;
+  const pause = () => { if (timer) { clearTimeout(timer); timer = 0; left -= Date.now() - since; } };
+  const resume = () => { if (!timer && !hover && !focus && left !== null) { since = Date.now(); timer = setTimeout(done, Math.max(left, 2000)); } };
+  node.addEventListener("pointerenter", () => { hover = true; pause(); });
+  node.addEventListener("pointerleave", () => { hover = false; resume(); });
+  node.addEventListener("focusin", () => { focus = true; pause(); });
+  node.addEventListener("focusout", (e) => { if (!node.contains(e.relatedTarget)) { focus = false; resume(); } });
+  return () => { clearTimeout(timer); timer = 0; left = null; };
+}
+
 let pdfjs = null;   // pdf.js display API
 let viewer = null;  // pdf.js viewer components
 
@@ -956,7 +970,11 @@ export class Reader {
     const same = this.tabs.find((t) => (file?.path && t.path === file.path)
       || (bytes && t.original && t.name === name && sameBytes(t.original, bytes))
       || (bytes && !t.original && t.headCopy && t.name === name && t.size === bytes.length  // (read in pieces, not all here yet)
-        && sameBytes(t.headCopy, bytes.subarray(0, t.headCopy.length))));
+        && sameBytes(t.headCopy, bytes.subarray(0, t.headCopy.length)))
+      // Opened by id and read in pieces (only its first piece here) while the same file is open
+      // from its bytes (e.g. a tool's file card, then Recent): the same name, size and first piece.
+      || (!bytes && file?.head && t.original && t.name === name && t.original.length === file.size
+        && sameBytes(t.original.subarray(0, file.head.length), file.head)));
     if (same) {
       if (same === this.activeTab) { if (goto) this.#goto(goto); }
       else { if (goto) same.goto = goto; await this.#switchToNow(same); }  // applied once its pages are there
@@ -3105,7 +3123,8 @@ export class Reader {
   }
 
   async #askPassword(wrong) {
-    const input = el("input", { type: "password", "aria-label": "Password", autocomplete: "current-password", spellcheck: "false" });
+    const inputId = `rd-pw-${Math.random().toString(36).slice(2)}`;
+    const input = el("input", { type: "password", id: inputId, autocomplete: "current-password", spellcheck: "false" });
     const toggle = el("button", { type: "button", class: "pw-toggle", "aria-pressed": "false", "aria-label": "Show password" }, "Show");
     toggle.addEventListener("click", () => {
       const show = input.type === "password";
@@ -3115,7 +3134,8 @@ export class Reader {
       input.focus();
     });
     const body = [el("p", {}, `“${this.name}” is protected. Enter its password to open it.`),
-      el("label", { class: "rd-field rd-pwfield" }, "Password", el("span", { class: "rd-pwrow" }, input, toggle))];
+      // The label names the input only; the Show button sits beside it, outside the label.
+      el("div", { class: "rd-field rd-pwfield" }, el("label", { for: inputId }, "Password"), el("span", { class: "rd-pwrow" }, input, toggle))];
     if (wrong) {
       const id = `rd-pw-err-${Math.random().toString(36).slice(2)}`;
       body.push(el("div", { class: "err", role: "alert", id }, "That password is incorrect."));
@@ -3216,7 +3236,11 @@ export class Reader {
     this.root.append(t);
     this.toastEl = t;
     clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => fadeOut(t), ms);
+    this.toastHold?.();
+    this.toastHold = null;
+    // A toast with a button (Undo, Save…) stays 10 s at least, and waits while it's pointed at or focused.
+    if (action) this.toastHold = heldTimer(t, Math.max(ms, 10000), () => fadeOut(t));
+    else this.toastTimer = setTimeout(() => fadeOut(t), ms);
   }
 
   // ---- changing words on the page ----------------------------------------------------

@@ -107,7 +107,7 @@ const { chromium } = require("playwright");
 
     // (d) A protected file: a wrong password and Enter asks again; the right one and Enter opens it.
     ({ page, reqs } = await open(`&open=${lockedId}`));
-    const box = 'dialog.rd-dialog input[type=password][aria-label="Password"]';
+    const box = 'dialog.rd-dialog input[type=password]';  // (named by its label)
     await page.waitForSelector(box, { timeout: 60000 });
     await page.fill(box, "not-it");
     await page.keyboard.press("Enter");

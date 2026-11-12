@@ -3085,6 +3085,7 @@ def run_desktop(port=0, open_paths=()):
         window = webview.create_window("ZPDF", url, js_api=api, width=1180, height=820,
                                        min_size=(400, 560), background_color="#f6f6f3")
         api._window = window
+        _allow_autofill(window)
         handler.bring_to_front = lambda: _raise_window(window)
         handler.quit_app = lambda: window.destroy()
         # Keep the window's cache and settings between launches (pywebview
@@ -3116,6 +3117,43 @@ def run_desktop(port=0, open_paths=()):
     server.shutdown()
     server.server_close()
     return True
+
+
+def _allow_autofill(window):
+    """Let WebView2 offer to save and fill in passwords (autocomplete=
+    "current-password") and other form entries: both are off by default in
+    an app's WebView2, and pywebview leaves them so. Windows' EdgeChromium
+    backend only: pywebview runs its before_show event on the window's own
+    thread right after making the WebView2 control (window.native.browser.
+    webview); its CoreWebView2 is ready later, in CoreWebView2Initialization
+    Completed, where the settings are set. Anything missing or failing is
+    logged and the window opens as before."""
+    if sys.platform != "win32":
+        return
+
+    def on_ready(sender, args):
+        try:
+            if args.IsSuccess:
+                settings = sender.CoreWebView2.Settings
+                settings.IsPasswordAutosaveEnabled = True
+                settings.IsGeneralAutofillEnabled = True
+        except Exception as exc:  # noqa: BLE001 - an older WebView2 lacks these settings
+            _log(f"launch: couldn't turn on password autofill: {exc!r}")
+
+    def before_show(window):
+        try:
+            control = window.native.browser.webview
+            if getattr(control, "CoreWebView2", None) is not None:  # ready already
+                on_ready(control, type("Ready", (), {"IsSuccess": True})())
+            else:
+                control.CoreWebView2InitializationCompleted += on_ready
+        except Exception as exc:  # noqa: BLE001 - another backend (no WebView2 control)
+            _log(f"launch: no WebView2 settings to turn on autofill: {exc!r}")
+
+    try:
+        window.events.before_show += before_show
+    except AttributeError as exc:  # pywebview before 5 has no before_show event
+        _log(f"launch: no before_show event for autofill: {exc!r}")
 
 
 def _debug_port():
