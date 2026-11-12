@@ -327,7 +327,11 @@ export class Reader {
 
     // Toolbar
     this.sidebarBtn = b("sidebar", "Show or hide the sidebar", { "aria-pressed": "true", disabled: true });
-    this.titleEl = el("div", { class: "rd-title" });
+    // The document's name, and a dot (with the word, for screen readers) while it has changes not saved.
+    this.titleText = el("span", { class: "rd-title-text" });
+    this.titleDot = el("span", { class: "rd-dot", title: "Not saved", hidden: true });
+    this.titleSr = el("span", { class: "rd-sr", hidden: true }, ", unsaved");
+    this.titleEl = el("div", { class: "rd-title" }, this.titleText, this.titleDot, this.titleSr);
     this.prevBtn = b("up", "Previous page", { disabled: true });
     this.nextBtn = b("down", "Next page", { disabled: true });
     this.pageInput = el("input", { type: "text", inputmode: "numeric", "aria-label": "Page number", disabled: true, autocomplete: "off" });
@@ -875,7 +879,7 @@ export class Reader {
     if (e.key === "Escape" && this.panelOpen && !this.#panelDocked()) { e.preventDefault(); this.setPanel(false, { focus: true }); return; }
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
     if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); this.print(); return; }
-    if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); if (e.shiftKey) this.saveCopy(); else this.save(); return; }
+    if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); this.#saveKey(e); return; }
     if (mod && !isTyping(e) && !this.scalebar.hidden && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")
         && this.#measureUndo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); return; }
     if (mod && e.key.toLowerCase() === "z" && !e.shiftKey && !isTyping(e) && this.activeTab?.undo?.length
@@ -1163,6 +1167,9 @@ export class Reader {
       parts.dot.hidden = parts.unsaved.hidden = !(tab.dirty || tab.unsaved);
       return parts.wrap;
     });
+    // With one document (no tab bar) the title says it too.
+    const shown = this.doc ? this.activeTab : null;
+    this.titleDot.hidden = this.titleSr.hidden = !(shown && (shown.dirty || shown.unsaved));
     this.#showSaveState();
     // Re-append only if the order changed, so elements stay where they are.
     const current = [...this.tabbar.children].filter((n) => n !== this.addTabBtn);
@@ -1184,7 +1191,7 @@ export class Reader {
     this.brokenRepair.hidden = !this.onRepair || (!tab.fileId && !tab.original);
     this.brokenForget.hidden = !this.onForgetRecent || !tab.path || tab.forgotten;
     this.brokenSaid.textContent = tab.brokenSaid || "";
-    this.titleEl.textContent = tab.name;
+    this.titleText.textContent = tab.name;
     this.titleEl.title = tab.name;
     this.pageInput.value = "";
     this.pageCount.textContent = "";
@@ -1231,7 +1238,7 @@ export class Reader {
     this.#busy(false);
     this.broken.hidden = true;
     this.empty.hidden = false;
-    this.titleEl.textContent = "";
+    this.titleText.textContent = "";
     this.pageInput.value = "";
     this.pageCount.textContent = "";
     for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
@@ -1435,7 +1442,7 @@ export class Reader {
       // (The viewer hands the document to the find controller itself once the
       // first page is drawn; doing it here too would reset a search started
       // when the pages appear, e.g. from the folder search.)
-      this.titleEl.textContent = tab.name;
+      this.titleText.textContent = tab.name;
       this.titleEl.title = tab.name;
       document.title = tab.name + " — ZPDF";
       this.empty.hidden = true;
@@ -2423,10 +2430,13 @@ export class Reader {
     };
     add.addEventListener("click", done);
     cancel.addEventListener("click", () => this.#cancelMarkup());
+    this.noteCommit = () => { if (box.isConnected) done(); this.noteCommit = null; };
     text.addEventListener("keydown", (e) => {
       e.stopPropagation();
       if (e.key === "Escape") this.#cancelMarkup();
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) done();
+      // Ctrl+S here: the note goes in, then the document is saved (as anywhere else in the reader).
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && !e.altKey) { e.preventDefault(); this.#saveKey(e); }
     });
     setTimeout(() => text.focus(), 0);
   }
@@ -2797,8 +2807,9 @@ export class Reader {
       store.set("pdfm-redact-how", this.redactHow.value);
       this.root.dataset.redact = this.redactHow.value;
     });
-    this.redactApplyBtn = el("button", { class: "rd-btn primary", type: "button", hidden: true, disabled: true,
-      title: "Black out the marked areas for good", html: svg("redact") + "<span>Apply</span>" });
+    // The verb, in the Redact page's style: "Black out 3 areas", seal red.
+    this.redactApplyBtn = el("button", { class: "rd-btn primary seal rd-redact-apply", type: "button", hidden: true, disabled: true,
+      title: "Black out the marked areas for good", html: svg("redact") + "<span>Black out</span>" });
     this.redactApplyBtn.addEventListener("click", () => this.#applyRedactions());
   }
 
@@ -2822,7 +2833,7 @@ export class Reader {
     if (!this.redactHow) return;
     this.redactHow.hidden = this.redactApplyBtn.hidden = !on;
     this.root.dataset.redact = on ? this.redactHow.value : "";
-    if (on) this.#showRedactCount();
+    if (on) this.#showRedactCount(); else this.#showSaveState();
     if (on && !this.redactHinted) {
       this.redactHinted = true;
       this.#hint("Drag boxes over what should go (or choose Select words), then Black out. Click × on a mark to remove it.", 7000);
@@ -2832,8 +2843,9 @@ export class Reader {
   #showRedactCount() {
     const n = this.#redactCount();
     this.redactApplyBtn.disabled = !n;
-    this.redactApplyBtn.querySelector("span").textContent = n ? `Apply (${n})` : "Apply";
+    this.redactApplyBtn.querySelector("span").textContent = n ? `Black out ${n} ${n === 1 ? "area" : "areas"}` : "Black out";
     this.redactApplyBtn.title = n ? `Black out the ${n === 1 ? "marked area" : n + " marked areas"} for good` : "Mark something to black out first";
+    this.#showSaveState();
   }
 
   #addRedactions(n, rects) {
@@ -2888,11 +2900,11 @@ export class Reader {
   async #applyRedactions() {
     const tab = this.activeTab, marks = this.#redactMarks(tab), count = this.#redactCount(tab);
     if (!tab || !count) { this.toast("Mark something first: drag a box over it, or choose Select words."); return; }
-    const answer = await this.#dialog("Apply redactions?", [
+    const answer = await this.#dialog(`Black out ${count === 1 ? "this area" : count + " areas"}?`, [
       el("p", {}, `This removes what's under the ${count === 1 ? "marked area" : count + " marked areas"} for good once you save: `
         + "the words, the covered parts of pictures, and comments or form fields there. The rest of the page stays as it is."),
-      el("p", {}, "Until then, Undo (Ctrl+Z) brings it back.")],
-      [["cancel", "Cancel"], ["ok", "Apply redactions", true]]);
+      el("p", {}, "Until then, Undo (Ctrl+Z) brings it back. Saving makes a redacted copy beside the original, unless you choose to replace it.")],
+      [["cancel", "Cancel"], ["ok", count === 1 ? "Black out 1 area" : `Black out ${count} areas`, true]]);
     if (answer !== "ok") return;
     const boxes = Object.fromEntries(Object.entries(marks).filter(([, list]) => list.length));
     await this.#changeDocument((bytes, t) => this.#post("/api/redact/apply", bytes, t, { boxes: JSON.stringify(boxes) }), {
@@ -2906,7 +2918,9 @@ export class Reader {
           message += ` Page${pictures.length === 1 ? "" : "s"} ${pictures.map(([p]) => p).join(", ")} became `
             + `${pictures.length === 1 ? "a picture" : "pictures"} (${[...new Set(pictures.map(([, why]) => why))].join("; ")}).`;
         }
-        this.toast(message + " Save to make it permanent.", 8000, ["Save", () => this.save()]);
+        tab.redacted = true;  // Save makes a redacted copy from now on; replacing the original is asked
+        this.toast(message + " Save a redacted copy to keep it.", 12000, [["Save redacted copy…", () => this.saveRedacted(), "seal"],
+          ...(tab.fileId ? [["Replace original", () => this.replaceWithRedacted()]] : [])]);
       },
     });
     if (this.markupMode === "REDACT") this.#showRedactCount();
@@ -3485,7 +3499,9 @@ export class Reader {
     if (!message) return;
     if (this.toastEl) this.toastEl.remove();
     const t = el("div", { class: "rd-toast", role: "status" }, el("span", {}, message));
-    if (action) t.append(el("button", { type: "button", onclick: action[1] }, action[0]));
+    // ``action``: [label, run] for one button, or [[label, run, "seal"], [label, run]] for more.
+    const actions = !action ? [] : Array.isArray(action[0]) ? action : [action];
+    for (const [label, run, kind] of actions) t.append(el("button", { type: "button", class: kind || null, onclick: run }, label));
     if (this.scalebar && !this.scalebar.hidden) {  // over the drawing's top, not its title block
       t.classList.add("top");
       t.style.top = `${this.body.offsetTop + 12}px`;
@@ -4293,11 +4309,13 @@ export class Reader {
 
   /** Save the changes into the file itself when it was opened from this
    *  computer (Ctrl+S); otherwise as a copy. */
-  async save() {
+  async save({ replace = false } = {}) {
+    this.noteCommit?.();  // a note typed but not added yet goes in first
     await this.chain;  // a text change still on its way is included
     this.#finishEditing();  // a stroke or note still being made counts (Ctrl+S straight after drawing)
     const tab = this.activeTab;
     if (!this.doc || !tab) return;
+    if (tab.redacted && !replace) { await this.saveRedacted(); return; }  // a copy, not over the original
     if (!tab.fileId) { await this.saveCopy(); return; }
     if (!tab.dirty && !this.#changed()) { this.toast("No changes to save", 1500); return; }
     const version = tab.version || 0;
@@ -4370,6 +4388,42 @@ export class Reader {
   /** Save an open tab (e.g. a tool's result) as a file, the dialog starting
    *  in the folder of the opened file ``near`` (its id). Resolves with the
    *  path when it's known (the desktop window), true when saved elsewhere, null if not saved. */
+  /** Ctrl+S, or Shift for Save as. A tab with blacked-out parts saves a
+   *  redacted copy (see saveRedacted), never over its original unasked. */
+  #saveKey(e) {
+    if (e.shiftKey) this.saveCopy();
+    else this.save();
+  }
+
+  /** "<name> (redacted).pdf" for a tab with blacked-out parts. */
+  #redactedName(tab = this.activeTab) {
+    return (tab?.name || "document.pdf").replace(/(?: \(redacted\))?(\.pdf)?$/i, "") + " (redacted).pdf";
+  }
+
+  /** Save what's shown, blacked-out parts and all, as a copy beside the
+   *  original: "<name> (redacted).pdf", the Save dialog starting in the
+   *  original's folder (a download in a plain browser). */
+  async saveRedacted() {
+    this.noteCommit?.();
+    await this.chain;
+    this.#finishEditing();
+    if (!this.doc) return;
+    const tab = this.activeTab, version = tab.version || 0;
+    let bytes;
+    try { bytes = await this.#currentBytes(); } catch (e) { this.toast("Could not save the redacted copy: " + (e.message || e), 9000); return; }
+    await this.#saveBytes(bytes, this.#redactedName(tab), () => this.#markSaved(tab, version), tab?.fileId);
+  }
+
+  /** Write the redacted version over the original file, once asked. */
+  async replaceWithRedacted() {
+    const tab = this.activeTab;
+    if (!tab?.fileId) { await this.saveRedacted(); return; }
+    const answer = await this.ask(`Replace ${tab.name} with the redacted version?`, "The original text can’t be recovered from it.",
+      [["cancel", "Cancel"], ["replace", "Replace original", true]]);
+    if (answer !== "replace" || this.activeTab !== tab) return;
+    await this.save({ replace: true });
+  }
+
   async saveTab(tab, near = null) {
     await this.chain;
     if (!tab || !this.tabs.includes(tab)) return null;
@@ -4577,10 +4631,13 @@ export class Reader {
     this.saveNowBtn.hidden = !(open && tab.dirty);
     // The annotation bar's Save is the screen's main action only once there is
     // something to save; until then it stays quiet (it still works).
+    // (While areas are marked for Redact, Black out is that action: Save waits, quiet.)
+    const marked = this.markupMode === "REDACT" && !!tab && this.#redactCount(tab) > 0;
     const pending = !!(tab && (tab.dirty || (!tab.savedSince && (this.annotUndo || this.#changed()))));
-    this.annotSaveBtn.classList.toggle("seal", pending);
-    this.annotSaveBtn.classList.toggle("primary", pending);
-    this.annotSaveBtn.title = pending ? "Save your changes (Ctrl+S)" : "Nothing to save yet (Ctrl+S)";
+    this.annotSaveBtn.classList.toggle("seal", pending && !marked);
+    this.annotSaveBtn.classList.toggle("primary", pending && !marked);
+    this.annotSaveBtn.title = !pending ? "Nothing to save yet (Ctrl+S)"
+      : tab.redacted ? "Save a redacted copy beside the original (Ctrl+S)" : "Save your changes (Ctrl+S)";
     this.undoNowBtn.hidden = !(open && (this.annotUndo || tab.undo?.length));
   }
 

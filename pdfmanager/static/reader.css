@@ -13,7 +13,8 @@
 .rd-group { display: flex; align-items: center; gap: 2px; flex: none; }
 .rd-sep { width: 1px; height: 22px; background: var(--border-strong); opacity: .6; margin: 0 8px; flex: none; }
 .rd:has(.rd-tabbar:not([hidden])) .rd-title { visibility: hidden; }  /* the active tab is the title then */
-.rd-title { min-width: 0; flex: 1 1 auto; font: 500 16px/1.25 var(--display, inherit); letter-spacing: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 8px; }
+.rd-title { min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: 9px; font: 500 16px/1.25 var(--display, inherit); letter-spacing: 0; white-space: nowrap; overflow: hidden; padding: 0 8px; }
+.rd-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .rd-btn {
   height: 34px; min-width: 34px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-sm); background: none;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; color: var(--text-2); font-size: 14px;
@@ -271,6 +272,11 @@
 @media (max-width: 760px) { .toast { left: 50%; max-width: calc(100vw - 32px); } }
 .rd-toast button, .toast button { border: 0; background: none; color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
   padding: 0 4px; min-width: 24px; min-height: 24px; margin: -2px -4px; }  /* a 24px target in the same pill */
+/* The main choice in a toast with two (Save redacted copy… / Replace original): a seal pill. */
+.rd-toast button.seal { background: var(--seal, #d4382c); color: var(--seal-ink, #fff); text-decoration: none; border-radius: 999px;
+  padding: 5px 12px; margin: -4px 0; white-space: nowrap; }
+.rd-toast button.seal:hover { filter: brightness(var(--seal-hover, .92)); }
+.rd-toast:has(button.seal) { border-radius: 18px; }
 @keyframes rd-rise { from { opacity: 0; transform: translate(-50%, 8px); } }
 /* Leaving: it fades and sinks a little (fadeOut in reader.js; at once when motion is reduced). */
 .rd-toast.out, .rd-toast.top.out, .toast.out { animation: rd-leave var(--t) var(--ease) forwards; pointer-events: none; }  /* out faster than in */
