@@ -6227,6 +6227,8 @@ export class Reader {
     await this.chain;
     if (!this.doc || !this.onEdit) return;
     const bytes = await this.#currentBytes();
-    this.onEdit(toolId, new File([bytes], this.#copyName(), { type: "application/pdf" }), this.password);
+    const file = new File([bytes], this.#copyName(), { type: "application/pdf" });
+    if (this.isPristine()) file.openedId = this.activeTab.fileId;  // the same file handed over twice is one file
+    this.onEdit(toolId, file, this.password);
   }
 }

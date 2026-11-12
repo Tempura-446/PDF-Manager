@@ -713,6 +713,17 @@ body:has(.btn.busy) .btn:disabled { cursor: progress; }  /* waiting for a job, n
 .message .err-more summary { cursor: pointer; }
 .message .err-more code { display: block; margin-top: 2px; font: 12px/1.4 var(--mono); color: var(--text-2); overflow-wrap: anywhere; }
 .message.err { background: var(--err-soft); color: var(--err); }
+/* What went wrong with the last run, by the button that ran it (the full message is at the top). */
+.action-bar .run-err { color: var(--err); font-size: 13px; line-height: 1.4;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.action-bar .run-err[hidden] { display: none; }
+.action-bar .run-err svg.i { width: 14px; height: 14px; vertical-align: -2px; margin-right: 5px; stroke-width: 2; }
+/* Files kept from the last tool: said, with Clear. */
+.carried { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin: 0 0 12px; padding: 8px 8px 8px 12px;
+  border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-2); font-size: 13px; }
+.carried[hidden] { display: none; }
+.carried .link-btn { font-size: 13px; }
+.carried .carried-x { margin-left: auto; }
 .message.info { background: var(--surface-2); color: var(--muted); }
 .result { display: flex; gap: 18px; align-items: center; border-color: color-mix(in srgb, var(--ok) 38%, var(--border)); background: linear-gradient(180deg, color-mix(in srgb, var(--ok-soft) 55%, var(--surface)), var(--surface) 70%); }
 .result:not([hidden]), #result-table:not([hidden]) { animation: rise calc(var(--t) * 2.4) var(--ease); }  /* a result arriving */
@@ -998,6 +1009,7 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
         <h2>Files</h2>
         <span class="sub" id="files-sub"></span>
       </div>
+      <p class="carried" id="carried" hidden role="status"></p>
       <div class="file-grid" id="file-grid" hidden></div>
       <label class="drop" id="drop" tabindex="0" role="button" aria-labelledby="drop-title" aria-describedby="drop-hint">
         <input type="file" id="file-input" multiple tabindex="-1">
@@ -1056,6 +1068,7 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
 
     <div class="action-bar"><div class="action-inner">
       <span class="summary"><span><span id="summary"></span><span class="kbd-hint" id="kbd-hint"></span></span>
+        <span class="run-err" id="run-err" hidden></span>
         <span class="sr-only" id="summary-live" role="status"></span>
         <span class="job-progress" id="job-progress" hidden role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100"><span id="job-bar"></span></span></span>
       <div class="buttons">
@@ -1255,12 +1268,13 @@ function plural(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
 /** Show an error above the page. ``detail``: the technical words behind a
  *  plain message (folded away under "Details"); ``focus``: move focus to it. */
 function showError(text, { detail = "", focus = false } = {}) {
+  text = String(text || "").replace(/^./, (c) => c.toUpperCase());  // (the server's words start in lower case)
   const e = $("error");
   const more = [];
   if (/Try Repair/.test(text) && current && current.id !== "repair" && ops.some((o) => o.id === "repair")) {
     more.push(el("button", { type: "button", class: "link-btn", onclick: () => select("repair") }, "Open Repair"));
   }
-  if (detail && detail !== text) more.push(el("details", {}, el("summary", {}, "Details"), el("code", {}, detail)));
+  if (detail && detail.toLowerCase() !== text.toLowerCase()) more.push(el("details", {}, el("summary", {}, "Details"), el("code", {}, detail)));
   e.replaceChildren(icon("alert"), el("span", {}, text, more.length ? el("span", { class: "err-more" }, ...more) : null));
   e.hidden = false;
   if (focus) { e.focus({ preventScroll: true }); e.scrollIntoView({ block: "nearest", behavior: smoothScroll() }); }
@@ -1276,6 +1290,7 @@ function plainError(message) {
 }
 function clearMessages() {
   $("error").hidden = true; $("result").hidden = true; $("result-table").hidden = true;
+  $("run-err").hidden = true;
   clearFieldErrors();
 }
 /** Required-field messages next to their fields (and the marks on the fields). */
@@ -2145,6 +2160,7 @@ async function select(id) {
   // Back from the reader to the same tool (e.g. after opening a search
   // result): keep what was typed and the result.
   const keep = id === formOp;
+  const fromOp = formOp;
   formOp = id;
   if (!keep) foldForm(null);
   const folder = current.files === null;
@@ -2164,8 +2180,32 @@ async function select(id) {
   }[current.files] || (current.id === "merge" ? "Add PDFs in the order to combine them" : "One or more PDFs");
   if (keep) { syncDropFirst(); return; }
   const want = accepts(current.files);
-  items = items.filter((it) => want(it.file));
+  items = withoutDuplicates(items.filter((it) => want(it.file)));
+  // Files carried over from the last tool are useful, but said, with Clear.
+  const from = ops.find((o) => o.id === fromOp);
+  carried = items.length && from && from.id !== id && from.files !== null ? { from: from.label, count: items.length } : null;
   renderForm(); renderFiles(); clearMessages();
+}
+
+/** The same file twice: same name, size and time, or opened from the same place. */
+function sameFile(a, b) {
+  return a === b || (a.name === b.name && a.size === b.size && a.lastModified === b.lastModified)
+    || (!!a.openedId && a.openedId === b.openedId);
+}
+function withoutDuplicates(list) {
+  const out = [];
+  for (const it of list) if (!out.some((o) => sameFile(o.file, it.file))) out.push(it);
+  return out;
+}
+let carried = null;  // {from: the tool's name, count}: files kept when switching tools
+function showCarried() {
+  const line = $("carried");
+  line.hidden = !carried;
+  if (!carried) { line.replaceChildren(); return; }
+  line.replaceChildren(el("span", {}, `${plural(carried.count, "file")} kept from ${carried.from}`),
+    el("button", { type: "button", class: "link-btn", onclick: () => { items = []; carried = null; renderFiles(); clearMessages(); $("drop").focus(); } }, "Clear"),
+    el("button", { type: "button", class: "chip-btn carried-x", title: "Hide this note", "aria-label": "Hide this note, keep the files",
+      onclick: () => { carried = null; showCarried(); $("drop").focus(); } }, icon("x")));
 }
 /** The tool's help, folded to its first sentence; "More about this" shows the rest. */
 function firstSentence(text) {
@@ -2223,7 +2263,11 @@ function isImage(f) { return f.type.startsWith("image/"); }
 // ---- files -------------------------------------------------------------------
 function addFiles(list) {
   const want = accepts(current.files);
-  const accepted = [...list].filter(want), rejected = list.length - accepted.length;
+  const wanted = [...list].filter(want), rejected = list.length - wanted.length;
+  // A file already in the list isn't added twice.
+  const accepted = wanted.filter((f, i) => !items.some((it) => sameFile(it.file, f)) && !wanted.slice(0, i).some((g) => sameFile(g, f)));
+  const twice = wanted.length - accepted.length;
+  carried = null;  // (the list is the user's own now)
   for (const file of accepted) {
     const it = { file, id: Math.random().toString(36).slice(2), pages: null, thumb: null, locked: false, loading: true };
     items.push(it);
@@ -2233,6 +2277,7 @@ function addFiles(list) {
   }
   renderFiles();
   clearMessages();
+  if (twice && !rejected) appToast(twice === 1 ? "That file is already in the list." : `${plural(twice, "file")} were already in the list.`);
   if (rejected) showError(`${plural(rejected, "file")} skipped — only ${{ images: "images", office: "Word, Excel, PowerPoint, OpenDocument, RTF, text or web page files", web: "saved web pages (.html, .mht)" }[current.files] || "PDFs"} can be used here.`);
 }
 
@@ -2299,7 +2344,7 @@ function renderFiles() {
         isPdf(it.file) ? el("button", { class: "chip-btn", type: "button", title: "Open in reader", "aria-label": `Open ${it.file.name} in the reader`, onclick: () => openInReader(it.file) }, icon("reader")) : null,
         items.length > 1 ? el("button", { class: "chip-btn", type: "button", title: "Move earlier", "aria-label": `Move ${it.file.name} earlier`, disabled: i === 0, onclick: () => move(i, i - 1) }, icon("left")) : null,
         items.length > 1 ? el("button", { class: "chip-btn", type: "button", title: "Move later", "aria-label": `Move ${it.file.name} later`, disabled: i === items.length - 1, onclick: () => move(i, i + 1) }, icon("right")) : null,
-        el("button", { class: "chip-btn", type: "button", title: "Remove", "aria-label": `Remove ${it.file.name}`, onclick: () => { items.splice(i, 1); renderFiles(); } }, icon("x"))));
+        el("button", { class: "chip-btn", type: "button", title: "Remove", "aria-label": `Remove ${it.file.name}`, onclick: () => { items.splice(i, 1); carried = null; renderFiles(); } }, icon("x"))));
     card.addEventListener("dragstart", (e) => { dragId = it.id; card.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", it.id); });
     card.addEventListener("dragend", () => { dragId = null; card.classList.remove("dragging"); });
     card.addEventListener("dragover", (e) => { if (dragId) { e.preventDefault(); card.classList.add("drop-before"); } });
@@ -2313,6 +2358,8 @@ function renderFiles() {
     grid.append(card);
   });
   grid.hidden = items.length === 0;
+  if (!items.length) carried = null;
+  showCarried();
   // One or two files: a compact strip (thumbnail, name, facts, actions); three or more: the grid.
   grid.classList.toggle("strip", items.length > 0 && items.length <= 2);
   $("drop").classList.toggle("compact", items.length > 0);
@@ -2349,22 +2396,35 @@ function updateSummary() {
   const bad = unreadable(), usable = items.length - bad.length;
   const ready = usable >= need || !!typed;
   const done = ready && !$("result").hidden;
+  // Redact: nothing to black out chosen yet (words, kinds of numbers, or areas drawn).
+  const choose = ready && !done && current.id === "redact" && !redactChosen();
   const badSay = bad.length === 1 ? `${bad[0].file.name} can't be opened` : `${bad.length} files can't be opened`;
   $("summary").textContent = done ? "Done · change anything and run again, or start over"
+    : choose ? "Choose what to black out: words, kinds of numbers, or areas on the page"
     : ready ? `Ready · ${plural(usable, "file")}` + (bad.length ? ` · ${badSay} and will be left out` : "")
     : bad.length ? `${badSay} — ${bad.length === 1 ? "it" : "they"} may be damaged. Try Repair, or remove ${bad.length === 1 ? "it" : "them"}.`
     : (need === 1 ? "Add a file to get started" : `Add ${current.files === "pdf2" ? "exactly 2" : "at least " + need} files`);
   // A file that can't be opened is said once (a polite status), not again at every repaint.
   const badNote = bad.length && !done ? $("summary").textContent : "";
   if ($("summary-live").textContent !== badNote) $("summary-live").textContent = badNote;
-  $("kbd-hint").textContent = ready && !done ? ` · ${isMac ? "⌘" : "Ctrl"}+Enter to run` : "";
+  $("kbd-hint").textContent = ready && !done && !choose ? ` · ${isMac ? "⌘" : "Ctrl"}+Enter to run` : "";
   $("run-label").textContent = (current.action || "Run") + (done ? " again" : "");
   // Nothing to run on yet: the button waits (the line beside it says why).
   if (!$("run").classList.contains("busy") && !$("preview").classList.contains("busy")) {
-    $("run").disabled = !ready;
-    $("run").title = ready ? "" : (need === 1 ? "Add a file first" : $("summary").textContent);
+    $("run").disabled = !ready || choose;
+    $("run").title = choose ? "Choose what to black out first" : ready ? "" : (need === 1 ? "Add a file first" : $("summary").textContent);
   }
 }
+/** Redact has something to black out: words or phrases, a kind of number, or areas drawn. */
+function redactChosen() {
+  if (($("f-terms")?.value || "").trim()) return true;
+  if (["emails", "phones", "numbers"].some((k) => $("f-" + k)?.checked)) return true;
+  try {
+    const boxes = JSON.parse($("f-boxes")?.value || "null");
+    return !!boxes && Object.values(boxes).some((list) => Array.isArray(list) ? list.length : !!list);
+  } catch (e) { return false; }
+}
+$("form").addEventListener("input", () => { if (current?.id === "redact") updateSummary(); });
 /** Back to an empty tool: no files, no result, options as they were. */
 function startOver() {
   items = [];
@@ -2785,7 +2845,7 @@ PANELS.redact = {
       const drawn = items.length === 1 ? editor.boxCount : 0, n = found + drawn;
       $("run-label").textContent = !n ? current.action : `${current.action} ${n} ${drawn ? (n === 1 ? "area" : "areas") : (n === 1 ? "match" : "matches")}`;
     };
-    const editor = new RegionEditor(host, { mode: "redact", onChange: (boxes) => { const f = $("f-boxes"); if (f) f.value = JSON.stringify(boxes); sayCount(); } });
+    const editor = new RegionEditor(host, { mode: "redact", onChange: (boxes) => { const f = $("f-boxes"); if (f) f.value = JSON.stringify(boxes); sayCount(); updateSummary(); } });
     let timer = null, asked = 0;
     const findMatches = () => {
       clearTimeout(timer);
@@ -3076,7 +3136,11 @@ async function run(preview) {
     const blob = await res.blob();
     await showResult(name, blob, resultId, note, bad.map((it) => it.file.name));
   } catch (err) {
-    showError(plainError(err.message), { detail: err.message, focus: true });
+    const said = plainError(err.message);
+    showError(said, { detail: err.message, focus: true });
+    // …and by the button too, where the eyes are.
+    $("run-err").replaceChildren(icon("alert"), String(said || "").replace(/^./, (c) => c.toUpperCase()));
+    $("run-err").hidden = false;
   } finally { busy(false); }
 }
 
