@@ -724,6 +724,9 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
     forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight;
   }
   .rd-tf-btn[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText !important; }
+  /* The open document's tab (found on Windows: in high contrast it looked like the others). */
+  .rd-doctab.active { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .rd-doctab.active button { color: HighlightText; }
   .rd-thumb[aria-selected="true"] .rd-thumb-img { outline: 3px solid Highlight; outline-offset: 2px; }
   .rd-thumb[aria-selected="true"] span { forced-color-adjust: none; background: Highlight; color: HighlightText; }
   .rd-swatch { forced-color-adjust: none; border-color: Canvas; box-shadow: 0 0 0 1px CanvasText; }

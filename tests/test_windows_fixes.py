@@ -109,6 +109,7 @@ def test_windows_check_fixes_in_a_browser(app, tmp_path):
 
     # E. Forced colours: pressed and current things differ from the rest; selects keep an arrow.
     f = out["forced"]
+    assert f["docTabOn"] == f["pressedBg"], f  # the open document's tab is highlighted like a pressed button
     assert f["active"], f
     assert f["pressedBg"] != f["plainBg"], f
     assert f["annotPressed"] != f["annotPlain"], f

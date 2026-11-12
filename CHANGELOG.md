@@ -20,9 +20,16 @@ common accessibility guidelines. The look is unchanged.
 - "Skip to main content" for the keyboard; Escape closes the annotate
   bar and puts the focus back where it was after the find bar and
   password box; small buttons are easier to hit.
-- Removing a file from Recent can be undone. The password box has a
-  label, Show/Hide, and lets a password manager fill it in. A missing
-  setting is pointed out next to the field.
+- Removing a file from Recent can be undone; such messages stay at least
+  10 seconds, longer while the pointer is on them. The password box has a
+  label and Show/Hide, and ZPDF offers to remember a PDF's password and
+  fill it in next time. A missing setting is pointed out next to the field.
+- "Drop files here" can be reached and opened with the keyboard.
+- Windows' high contrast mode shows which tool, tab and document are
+  active, and lists keep their arrows.
+- The "looks like a form" suggestion no longer appears for cover pages
+  with drawn artwork, or for boxes inside photos and screenshots.
+- Opening a file that is already open switches to it.
 
 ## 0.22.0
 

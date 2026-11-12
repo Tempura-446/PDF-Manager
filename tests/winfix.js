@@ -219,6 +219,7 @@ const path = require("path");
             pressedBg: bg(document.querySelector(".rd-toolbar button[title^='Annotate'][aria-pressed='true']")),
             plainBg: bg(document.querySelector(".rd-toolbar button[aria-label^='Find in document']")),
             annotPressed: bg(bar.querySelector("button[aria-pressed='true'][data-mode]")), annotPlain: bg(bar.querySelector("button[aria-pressed='false'][data-mode]")),
+            docTabOn: bg(document.querySelector(".rd-doctab.active")),
             tabOn: bg(document.querySelector(".rd-tab[aria-selected='true']")), tabOff: bg(document.querySelector(".rd-tab[aria-selected='false']")),
             zoomAppearance: zoom ? getComputedStyle(zoom).appearance : null, swatchAdjust: swatch ? getComputedStyle(swatch).forcedColorAdjust : null };
         });
