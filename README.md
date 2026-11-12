@@ -213,7 +213,7 @@ closed.
   a picture of the page). **PDF → HTML** makes a web page: flowing text
   that fits any screen, or each page as it looks. No Office needed. See
   [PowerPoint and HTML](#powerpoint-and-html).
-- **Search PDFs** searches every PDF in a folder (and its sub-folders).
+- **Search a folder** searches every PDF in a folder (and its sub-folders).
   Type words or ask a question: "how much do I owe" finds the page that
   says "balance due", because pages are ranked by what they are about as
   well as by the words they share with the question, the closest first.

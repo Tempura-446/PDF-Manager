@@ -1112,14 +1112,27 @@ export class Reader {
     this.#renderTabs();
   }
 
-  closeTab(tab = this.activeTab) {
-    return this.#serial(() => this.#closeTabNow(tab));
+  async closeTab(tab = this.activeTab) {
+    const answer = await this.#serial(() => this.#closeTabNow(tab));
+    if (answer !== "save") return;
+    // Save first (as Ctrl+S would; Save as for a tool's result not saved anywhere yet), then close.
+    if (tab !== this.activeTab) await this.#switchTo(tab);
+    if (tab.unsaved || !tab.fileId) await this.saveTab(tab, tab.madeBy?.from?.fileId || null);
+    else await this.save();
+    if (this.tabs.includes(tab) && !tab.dirty && !tab.unsaved) await this.#serial(() => this.#closeTabNow(tab, true));
   }
 
-  async #closeTabNow(tab) {
+  /** Close ``tab``; one with changes not saved (or a tool's result not saved
+   *  anywhere) asks first. Resolves "save" when Save was chosen: closeTab
+   *  saves it, then closes it. */
+  async #closeTabNow(tab, saved = false) {
     if (!tab || !this.tabs.includes(tab)) return;
-    if (tab.dirty && await this.ask(`Close “${tab.name}”?`, "Your changes to it haven't been saved.",
-      [["cancel", "Cancel"], ["close", "Close without saving", true]]) !== "close") return;
+    if ((tab.dirty || tab.unsaved) && !saved) {
+      const answer = await this.ask(`Close “${tab.name}”?`, tab.dirty ? "Your changes to it haven't been saved." : "It hasn't been saved anywhere yet.",
+        [["cancel", "Cancel"], ["close", "Close without saving"], ["save", tab.unsaved || !tab.fileId ? "Save…" : "Save", "seal"]]);
+      if (answer === "save") return "save";
+      if (answer !== "close") return;
+    }
     const i = this.tabs.indexOf(tab);
     this.tabs.splice(i, 1);
     if (tab === this.activeTab) {
@@ -3356,7 +3369,7 @@ export class Reader {
       const main = buttons.some(([, , primary]) => primary);
       const form = el("form", { method: "dialog" }, el("h3", {}, title), ...body,
         el("div", { class: "actions" }, ...buttons.map(([value, label, primary]) => (primary || !main
-          ? el("button", { value, class: primary ? "primary" : null, type: "submit" }, label)
+          ? el("button", { value, class: primary ? (primary === "seal" ? "primary seal" : "primary") : null, type: "submit" }, label)
           : el("button", { value, type: "button", onclick: () => dialog.close(value) }, label)))));
       const dialog = el("dialog", { class: "rd-dialog" }, form);
       // ``ready``: whether the main button can do its work yet; if not (Enter

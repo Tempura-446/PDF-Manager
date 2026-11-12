@@ -520,7 +520,7 @@ OPERATIONS = [
      "fields": [_f("directory", "Folder", "text", "", required=True),
                 _f("recursive", "Include sub-folders", "check", False),
                 _f("delete", "Delete duplicates (keeps the oldest copy)", "check", False)]},
-    {"id": "search", "group": "Folders", "label": "Search PDFs", "files": None,
+    {"id": "search", "group": "Folders", "label": "Search a folder", "files": None,
      "action": "Search", "preview": False,
      "help": "Find text in every PDF in a folder, or ask a question: \"how much do I owe\" "
              "finds the page that says \"balance due\". Click a result to open the page in "
