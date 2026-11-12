@@ -1454,7 +1454,10 @@ export class Reader {
       tab.clean = tab.dirty ? null : { doc, print: "" };
       this.pdfViewer.setDocument(doc);
       this.linkService.setDocument(doc, null);
-      this.scripting.setDocument(doc).catch(() => {});  // a form without scripts works as before
+      // (The viewer hands the document to its form scripting itself once the
+      // first page is drawn. Handing it over here too made two at once: the
+      // second could ask a document closed meanwhile for its fields, e.g.
+      // when a page was turned just after switching tabs.)
       // (The viewer hands the document to the find controller itself once the
       // first page is drawn; doing it here too would reset a search started
       // when the pages appear, e.g. from the folder search.)
@@ -1630,7 +1633,10 @@ export class Reader {
       this.pdfViewer.setDocument(null);
       this.linkService.setDocument(null);
       this.findController.setDocument(null);
-      this.scripting?.setDocument(null).catch(() => {});
+      // (The viewer lets go of the form scripting too; it finishes before the
+      // document goes, so it never asks a destroyed one for anything.)
+      const scripts = this.scripting?.destroyPromise;
+      if (scripts) await Promise.race([scripts, new Promise((r) => setTimeout(r, 1500))]).catch(() => {});
       await destroyTask(doc.loadingTask || task, wait);  // pdf.js frees a document through its task
     } else if (task) {
       await destroyTask(task, wait);  // e.g. cancelled at the password prompt: wait for it to be gone
@@ -4646,19 +4652,32 @@ export class Reader {
   #closeContextMenu() { if (!this.ctxMenu.hidden) this.ctxMenu.hidden = true; }
 
   // ---- pages: turn, delete, copy, move, insert, extract -------------------------------------
-  #pagePlan() { return Array.from({ length: this.doc.numPages }, (_, i) => ({ page: i + 1 })); }
+  #pagePlan(count = this.doc.numPages) { return Array.from({ length: count }, (_, i) => ({ page: i + 1 })); }
   static #pagesText(pages) { return pages.length === 1 ? `Page ${pages[0]}` : `${pages.length} pages`; }
 
+  /** ``plan``: the pages' new order, or a function making it for the
+   *  document shown when the change's turn comes (a change asked for while
+   *  another tab is still being shown waits for it, and is that tab's). A
+   *  plan made before then is for the document shown when it was asked:
+   *  if another one is shown by its turn, nothing is changed. */
   #arrange(plan, { inserts = [], message = "", page = null } = {}) {
-    return this.#changeDocument((bytes, tab) => this.#post("/api/pages/arrange", bytes, tab, { plan: JSON.stringify(plan) }, inserts), {
+    const asked = this.doc;
+    return this.#changeDocument((bytes, tab) => {
+      if (typeof plan !== "function" && this.doc !== asked) throw new Error("the document changed meanwhile, so nothing was changed");
+      const pages = typeof plan === "function" ? plan(this.doc.numPages) : plan;
+      return this.#post("/api/pages/arrange", bytes, tab, { plan: JSON.stringify(pages) }, inserts);
+    }, {
       failure: "Could not change the pages: ",
       goto: (view) => ({ page: page || view.page, scale: view.scale }),
       after: () => { if (message) this.toast(message, 5000, ["Undo", () => this.#undoTextEdit()]); },
     });
   }
   rotatePages(pages, delta) {
-    if (!this.doc || !pages.length) return;
-    const plan = this.#pagePlan().map((e) => (pages.includes(e.page) ? { ...e, rotate: delta } : e));
+    if (!(this.doc || this.tabs.length) || !pages.length) return;  // (just after a tab switch: that tab's pages, once it's shown)
+    const plan = (count) => {
+      if (!pages.some((n) => n <= count)) throw new Error("that page isn't in this document");
+      return this.#pagePlan(count).map((e) => (pages.includes(e.page) ? { ...e, rotate: delta } : e));
+    };
     return this.#arrange(plan, { page: pages[0], message: `${Reader.#pagesText(pages)} turned` });
   }
   deletePages(pages) {
