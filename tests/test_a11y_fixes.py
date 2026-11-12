@@ -137,7 +137,8 @@ def test_accessibility_fixes_in_a_browser(app, tmp_path):
     assert not out["annotEsc2"]["open"] and out["annotEsc2"]["focus"]["label"].startswith("Annotate"), out["annotEsc2"]
     assert out["menuRing"] == {"inMenu": True, "style": "solid", "width": "2px"}, out["menuRing"]
     for key in ("twisty", "thumbAct", "paragraph", "rdToastUndo"):
-        assert out[key] and min(out[key]) >= 24, (key, out[key])
+        assert out[key] and min(out[key][:2]) >= 24, (key, out[key])
+    assert out["paragraph"][2] is not False  # its focus ring is the pill's light ink, not teal on dark
 
     # Password: label, toggle, autocomplete; a wrong one is marked; Escape doesn't drop focus on the page.
     pw = out["pw"]

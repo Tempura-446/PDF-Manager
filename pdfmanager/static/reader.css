@@ -431,6 +431,7 @@ textarea.rd-textedit.rd-textedit-fit { white-space: pre-wrap; overflow: auto; }
   background: color-mix(in srgb, var(--bg) 18%, transparent); color: inherit !important;
 }
 .rd-textedit-mode:hover { background: color-mix(in srgb, var(--bg) 30%, transparent); }
+.rd-textedit-mode:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }  /* light on the dark pill */
 .rd-textedit-mode:disabled { display: none; }
 /* -- text font picker and reflow -- */
 /* Over the editor (not in its flow, so the words stay on the page's own). */

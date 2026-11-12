@@ -262,7 +262,7 @@ main:focus { outline: none; }  /* the skip link's target: the page itself needs 
 .palette-item[aria-selected="true"] .sub { color: color-mix(in srgb, var(--muted) 78%, var(--text)); }  /* 4.5:1 on the highlight */
 .palette-empty { color: var(--muted); padding: 18px 12px; font-size: 14px; }
 .app-dialog::backdrop { background: rgb(20 23 28 / .36); backdrop-filter: blur(3px); }
-.app-dialog form { padding: 24px 26px 22px; display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
+.app-dialog form { padding: 24px 26px 22px; display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; scroll-padding-bottom: 76px; }  /* (focus stops above the buttons) */
 .app-dialog h2 { margin: 0 0 2px; font: 400 28px/1.15 var(--display); letter-spacing: 0; }
 .app-dialog h3 { margin: 14px 0 2px; font-size: 14px; font-weight: 600; }
 .app-dialog p { margin: 0; font-size: 14px; }
@@ -1015,12 +1015,12 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
   <ul class="palette-list" id="palette-list" role="listbox"></ul>
 </dialog>
 <dialog class="app-dialog" id="settings-dialog" aria-labelledby="settings-title">
-  <form method="dialog" id="settings-form">
+  <form method="dialog" id="settings-form" tabindex="-1">
     <h2 id="settings-title">Settings</h2>
     <p class="dlg-version" id="settings-version"></p>
     <h3>Appearance</h3>
     <label class="dlg-field inline"><span>Theme</span>
-      <select id="theme"><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+      <select id="theme" autofocus><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
     <h3>Updates</h3>
     <label class="dlg-check"><input type="checkbox" id="set-check"> Check for new versions when ZPDF starts</label>
     <label class="dlg-field"><span>GitHub repository</span><input type="text" id="set-repo" spellcheck="false" autocomplete="off" placeholder="owner/name"></label>

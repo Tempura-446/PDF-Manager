@@ -21,7 +21,8 @@ const { chromium } = require("playwright");
   });
   // WCAG contrast of two computed colours (rgb()/rgba() over white or the given base).
   const RATIO = `(() => {
-    const parse = (c) => (c.match(/[\\d.]+/g) || []).map(Number);
+    const parse = (c) => { const n = (c.match(/[\\d.]+/g) || []).map(Number);  // rgb(0-255) or color(srgb 0-1) (from color-mix)
+      return c.startsWith("color(") ? [...n.slice(0, 3).map((v) => v * 255), ...n.slice(3)] : n; };
     const lum = ([r, g, b]) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
     const over = (top, base) => { const [r, g, b, a = 1] = parse(top); const [R, G, B] = base; return [r * a + R * (1 - a), g * a + G * (1 - a), b * a + B * (1 - a)]; };
     const bgOf = (el) => { const layers = []; for (let e = el; e; e = e.parentElement) { const c = getComputedStyle(e).backgroundColor; const p = parse(c); if (p.length && (p[3] ?? 1) > 0) { layers.push(c); if ((p[3] ?? 1) >= 1) break; } }
@@ -215,7 +216,8 @@ const { chromium } = require("playwright");
     out.paragraph = await page.evaluate(() => {
       const hint = document.createElement("div"); hint.className = "rd-textedit-hint";
       const b = document.createElement("button"); b.className = "rd-textedit-mode"; b.textContent = "¶ Whole paragraph"; hint.append(b);
-      document.querySelector(".rd").append(hint); const r = b.getBoundingClientRect(); hint.remove(); return [r.width, r.height];
+      document.querySelector(".rd").append(hint); const r = b.getBoundingClientRect(); b.focus(); const cs = getComputedStyle(b);
+      const ring = b.matches(":focus-visible") ? cs.outlineColor === cs.color : null; hint.remove(); return [r.width, r.height, ring];
     });
     await page.evaluate(() => reader.toast("Deleted page 2", 5000, ["Undo", () => {}]));
     out.rdToastUndo = await size(page, ".rd-toast button");
