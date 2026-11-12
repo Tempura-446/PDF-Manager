@@ -460,7 +460,52 @@ def test_a_plain_page_has_no_signature_line(tmp_path):
 
 
 def test_signature_lines_made_the_kept_facts_look_again():
-    assert filefacts.LOOK == 3  # facts kept by 0.23 (no "sign_line") are worked out again
+    assert filefacts.LOOK == 4  # facts kept by 0.23 (no "sign_line") or 0.24.0 (no "sign_at") are worked out again
+
+
+# -- 0.24.1: where the line to sign on is ----------------------------------------------------
+
+def test_the_signature_line_says_where_it_is(tmp_path):
+    # Underscores after the label, on page 2: the rectangle of the underscores, the label's size.
+    found = filefacts.facts(_drawn_pdf(tmp_path / "letter.pdf",
+                                       lambda c, n: c.drawString(72, 160, "Signature: ____________________") if n == 1
+                                       else c.drawString(72, 700, "Dear customer"), pages=2))
+    at = found["sign_at"]
+    assert at["page"] == 2 and at["text"] == 12, at
+    x0, y0, x1, y1 = at["rect"]
+    label = canvas.Canvas(str(tmp_path / "_.pdf")).stringWidth("Signature: ", "Helvetica", 12)
+    assert abs(x0 - (72 + label)) < 1.5 and x1 > x0 + 100 and 155 < y0 <= y1 < 161, at
+    said = filefacts.suggestions(found)
+    assert said[0]["page"] == 2 and said[0]["line"] == at  # what Sign it places the signature on
+
+    # A drawn rule beside "Signed" (in a translated drawing): the rule, in the page's own points.
+    def rule(c, n):
+        c.translate(20, 30)
+        c.setFont("Helvetica", 10)
+        c.drawString(72, 160, "Signed")
+        c.line(120, 158, 320, 158)
+    at = filefacts.facts(_drawn_pdf(tmp_path / "rule.pdf", rule))["sign_at"]
+    assert at == {"page": 1, "rect": [140.0, 188.0, 340.0, 188.0], "text": 10.0}, at
+
+    # A label printed under its line ("____" above "Signature"): the line above it.
+    def under(c, n):
+        c.line(300, 120, 520, 120)
+        c.setFont("Helvetica", 9)
+        c.drawString(300, 108, "Signature")
+        c.drawString(72, 400, "Paid with thanks")
+    at = filefacts.facts(_drawn_pdf(tmp_path / "under.pdf", under))["sign_at"]
+    assert at == {"page": 1, "rect": [300.0, 120.0, 520.0, 120.0], "text": 9.0}, at
+
+    # Of two blanks, the one beside the label (not the "Date" one further along).
+    def two(c, n):
+        c.drawString(72, 160, "Signature: ________________   Date: ___________")
+    at = filefacts.facts(_drawn_pdf(tmp_path / "two.pdf", two))["sign_at"]
+    assert at["rect"][0] < 150 and at["rect"][2] < 260, at
+
+
+def test_no_place_is_said_without_a_line(tmp_path):
+    assert filefacts.facts(text_pdf(tmp_path / "plain.pdf"))["sign_at"] is None
+    assert "line" not in (filefacts.suggestions({"size": 1, "pages": 1, "to_sign": 1})[0])
 
 
 def test_compress_isnt_offered_for_a_compressed_or_compact_file():

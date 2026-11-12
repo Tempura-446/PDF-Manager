@@ -3234,17 +3234,75 @@ export class Reader {
     }
   }
 
-  /** Draw, type or pick a signature, then place it on the current page. */
-  async sign() {
+  /** Draw, type or pick a signature, then place it: on ``line`` when given
+   *  (a printed line to sign on, from the file's facts: {page, rect: the
+   *  blank or rule in PDF points, text: the label's size}), else about two
+   *  inches wide in the middle of what's shown. It moves and resizes like
+   *  any picture afterwards. */
+  async sign({ line = null } = {}) {
     if (!this.doc || !this.uiManager) return;
     const image = await this.#signatureDialog();
     if (!image) return;
     const file = new File([image], "signature.png", { type: "image/png" });
-    const layer = this.uiManager.currentLayer;
+    const onLine = line ? this.pdfViewer.getPageView(line.page - 1)?.annotationEditorLayer?.annotationEditorLayer : null;
+    const layer = onLine || this.uiManager?.currentLayer;
     if (!layer) { this.toast("Scroll to the page to sign, then try again."); return; }
     if (this.annotbar.hidden) this.openAnnotate();
+    const before = new Set(this.uiManager.getEditors(layer.pageIndex));
     await layer.pasteEditor({ mode: pdfjs.AnnotationEditorType.STAMP }, { bitmapFile: file });
-    this.#hint("Drag the signature into place; use the corners to resize it.", 5000);
+    const editor = [...this.uiManager.getEditors(layer.pageIndex)].find((e) => !before.has(e));
+    const placed = editor ? await this.#fitSignature(editor, onLine ? line : null) : false;
+    this.#hint(placed === "line" ? "Signed on the line. Drag it to move it; use the corners to resize it."
+      : "Drag the signature into place; use the corners to resize it.", 5000);
+  }
+
+  /** Size and place a signature just added (pdf.js makes a picture up to
+   *  three quarters of the page): on the line, its foot on the rule, at
+   *  the start of it, 1.6 times as tall as the label's letters and no
+   *  longer than the line; else 2 inches wide where it is. Says "line" or
+   *  "default", or false when the picture didn't load. */
+  async #fitSignature(editor, line) {
+    for (let i = 0; i < 150 && !(editor.width > 0); i++) await new Promise((r) => setTimeout(r, 20));
+    if (!(editor.width > 0) || !editor.parent || !editor.div) return false;
+    const [W, H] = editor.pageDimensions, [px, py] = editor.pageTranslation, turn = editor.rotation || 0;
+    const aspect = (editor.height * H) / (editor.width * W);  // the picture's height over its width
+    let rect, how = "line";
+    if (line && turn === 0 && aspect > 0) {
+      const [x0, , x1, top] = line.rect, length = Math.max(x1 - x0, 24);
+      let h = 1.6 * Math.max(line.text || 10, 4), w = h / aspect;
+      if (w > length) { w = length; h = w * aspect; }
+      rect = [x0, top, x0 + w, top + h];
+    } else {
+      how = "default";
+      let w = 144, h = w * aspect;  // 2 inches wide; a tall picture no taller than 1 inch
+      if (h > 72) { h = 72; w = h / aspect; }
+      // The middle of the part of its page that is in sight (else where pdf.js put it).
+      const [a0, b0, a1, b1] = editor.getRect(0, 0);
+      let cx = (a0 + a1) / 2, cy = (b0 + b1) / 2;
+      const view = this.pdfViewer.getPageView(editor.pageIndex), col = this.#column();
+      const page = view?.div.getBoundingClientRect();
+      if (page) {
+        const l = Math.max(page.left, col.left), r = Math.min(page.right, col.right), t = Math.max(page.top, col.top), b = Math.min(page.bottom, col.bottom);
+        if (r > l && b > t) [cx, cy] = view.viewport.convertToPdfPoint((l + r) / 2 - page.left - view.div.clientLeft, (t + b) / 2 - page.top - view.div.clientTop);
+      }
+      const [dx, dy] = turn % 180 ? [h / 2, w / 2] : [w / 2, h / 2];
+      rect = [cx - dx, cy - dy, cx + dx, cy + dy];
+    }
+    // editor.getRect turned back: where the editor's corner is, as fractions of the page.
+    const [r0, r1, r2, r3] = rect, across = r2 - r0, up = r3 - r1;
+    const [left, top, width, height] = {
+      0: [r0 - px, H + py - r3, across, up], 90: [r0 - px, H + py - r1, up, across],
+      180: [r2 - px, H + py - r1, across, up], 270: [r2 - px, H + py - r3, up, across] }[turn] || [r0 - px, H + py - r3, across, up];
+    Object.assign(editor, { x: left / W, y: top / H, width: width / W, height: height / H });
+    editor.setDims();
+    editor.fixAndSetPosition();
+    editor._onResized?.();
+    // In sight: the page column scrolls to it (a line near the foot of the page is often below).
+    await new Promise((r) => requestAnimationFrame(r));
+    const box = editor.div.getBoundingClientRect(), col = this.#column();
+    if (box.top < col.top || box.bottom > col.bottom) this.container.scrollTop += box.top - (col.top + col.bottom) / 2 + box.height / 2;
+    if (box.left < col.left || box.right > col.right) this.container.scrollLeft += box.left - (col.left + col.right) / 2 + box.width / 2;
+    return how;
   }
 
   #signatureDialog() {

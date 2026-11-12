@@ -1484,11 +1484,12 @@ async function openInReader(file) {
 const COMMON_TOOLS = [["split", "Split"], ["sign", "Sign"], ["to-word", "To Word"], ["pdfa", "Archive (PDF/A)"],
   ["to-excel", "To Excel"], ["encrypt", "Add a password"]];
 /** Sign the shown document with a drawn, typed or pictured signature (the
- *  reader's Sign dialog), on ``page`` if given (a printed line to sign on). */
-async function fpSignWithPen(page = 0) {
+ *  reader's Sign dialog), on ``page`` if given (a printed line to sign on),
+ *  on the line itself when the facts say where it is (``line``: page, rect, text). */
+async function fpSignWithPen(page = 0, line = null) {
   if (!reader?.doc) return;
   if (page) reader.goToPage(page);
-  await reader.sign();
+  await reader.sign(line && line.page === page && Array.isArray(line.rect) ? { line } : {});
 }
 /** Tools that run in the panel: one PDF in, nothing to draw or arrange on the pages. */
 const runsInPanel = (op) => !!op && op.files === "pdf" && !op.board && !op.panel && !((op.min || 1) >= 2);
@@ -1609,7 +1610,11 @@ function fpSuggest() {
   // The open one stays as it is; one already chosen (from the palette) isn't repeated.
   const cards = wanted.map((s) => {
     if (s.op === "fillable") return list.querySelector('.fp-card[data-op="fillable"]') || fpFillableCard(s);
-    if (s.op === "sign") return list.querySelector('.fp-card[data-op="sign"]') || fpSignCard(s);
+    if (s.op === "sign") {  // (kept as it is, but signing where the facts now say)
+      const card = list.querySelector('.fp-card[data-op="sign"]') || fpSignCard(s);
+      card.sug = s;
+      return card;
+    }
     const had = fp.items.get(s.op);
     if (had && had.home === list) return had.card;
     if (had && had.home === chosen) return null;
@@ -1645,9 +1650,10 @@ function fpFillableCard(s) {
 /** "Sign it": the reader's Sign dialog, then the signature goes on the page. */
 function fpSignCard(s) {
   const head = el("button", { type: "button", class: "fp-card-head", "data-op": "sign", "aria-haspopup": "dialog",
-    title: "Draw or type your signature, or use a picture of it, and place it on the page", onclick: () => fpSignWithPen(s.page || 0) },
+    title: "Draw or type your signature, or use a picture of it, and place it on the page", onclick: () => { const now = card.sug || s; fpSignWithPen(now.page || 0, now.line || null); } },
     el("span", { class: "fp-ico" }, icon("sign")), el("span", {}, el("strong", {}, s.title), el("span", {}, s.why)), icon("right", "i fp-go"));
-  return el("div", { class: "fp-card", "data-op": "sign", "data-open": "false" }, head);
+  const card = el("div", { class: "fp-card", "data-op": "sign", "data-open": "false" }, head);
+  return card;
 }
 
 /** A card: the tool's name and why, opening to its options. */
