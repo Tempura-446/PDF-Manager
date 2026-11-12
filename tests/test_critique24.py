@@ -39,7 +39,7 @@ def text_pdf(path, pages=3, words="Quarterly report"):
 
 def broken_pdf(path):
     """A real PDF cut short: its start reads, but no reader can show it."""
-    c = canvas.Canvas(str(path.with_name("_whole.pdf")))
+    c = canvas.Canvas(str(path.with_name("_whole.pdf")), invariant=1)  # (the same bytes every time)
     for n in range(6):
         for line in range(44):
             c.drawString(60, 760 - line * 16, f"Statement line {n * 44 + line}: payment received with thanks, balance carried")
@@ -47,7 +47,7 @@ def broken_pdf(path):
     c.save()
     whole = path.with_name("_whole.pdf").read_bytes()
     path.with_name("_whole.pdf").unlink()
-    path.write_bytes(whole[: len(whole) // 3])  # (Repair can mend this one: its first pages are whole)
+    path.write_bytes(whole[: len(whole) // 2])  # (Repair can mend this one: what is left holds every page)
     return path
 
 
