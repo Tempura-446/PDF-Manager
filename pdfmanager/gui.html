@@ -371,6 +371,10 @@ body.drop-first.opts-later.has-files #options-card, body.drop-first.opts-later.h
 .file-sub { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
 .badge { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 1px 7px; background: var(--surface-3); color: var(--muted); }
 .badge.warn { background: var(--err-soft); color: var(--err); }
+.result-skipped { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--err-soft); color: var(--err); font-size: 13px; overflow-wrap: anywhere; }
+.result-skipped svg.i { width: 15px; height: 15px; flex: none; margin-top: 2px; }
+.result-skipped b { font-weight: 600; }
 .order, .pb-pos, .rc-num {
   min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px;
   background: var(--text); color: var(--bg); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
@@ -778,6 +782,9 @@ body.form-folded #options-card { display: none; }
 .recent-name { display: block; font: 400 19px/1.25 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .recent-facts { display: block; font: 400 12px/1.5 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .recent-facts.flag { color: var(--accent); }
+/* Something wrong with the file ("can't be read"): the error colour, and an icon, not colour alone. */
+.recent-facts.bad, .fp-fact.bad { color: var(--err); }
+.recent-facts.bad svg.i, .fp-fact.bad svg.i { width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; stroke-width: 2; }
 .recent-when { font: 400 12px var(--mono); color: var(--faint); white-space: nowrap; }
 .recent-x { opacity: 0; margin-left: 4px; border-color: transparent; background: none; }
 .rd .recent-x { color: var(--muted); }  /* (reader.css gives the reader's buttons their parent's colour) */
@@ -813,6 +820,7 @@ body.form-folded #options-card { display: none; }
 .fp-facts { display: flex; flex-wrap: wrap; gap: 6px; }
 .fp-fact { font: 500 11.5px/1.5 var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px; }
 .fp-fact.flag { color: var(--accent); border-color: transparent; background: var(--accent-soft); }
+.fp-fact.bad { border-color: transparent; background: var(--err-soft); }
 .fp-fact.wait { height: 22px; border-color: transparent; background: var(--surface-2); animation: fp-wait 1.2s ease-in-out infinite alternate; }
 @keyframes fp-wait { to { opacity: .45; } }
 .fp-sec { display: flex; flex-direction: column; gap: 8px; }
@@ -1444,7 +1452,7 @@ function factChips(facts) {
     const at = parts.findIndex((p) => p === "PDF/A" || p === "protected");
     parts.splice(at < 0 ? parts.length : at, 0, "tagged");
   }
-  return parts.map((text) => ({ text, flag: text === "scanned, no text yet" || text === "can't be read" }));
+  return parts.map((text) => ({ text, flag: text === "scanned, no text yet", bad: text === "can't be read" }));
 }
 
 /** The reader changed tabs, or the shown document changed: follow it. */
@@ -1520,7 +1528,8 @@ function fpShowFacts(facts) {
   const chips = factChips(facts);
   fp.chips.removeAttribute("aria-busy");
   fp.chips.hidden = !chips.length;
-  fp.chips.replaceChildren(...chips.map((c) => el("span", { class: "fp-fact" + (c.flag ? " flag" : ""), role: "listitem" }, c.text)));
+  fp.chips.replaceChildren(...chips.map((c) => el("span", { class: "fp-fact" + (c.flag ? " flag" : c.bad ? " bad" : ""), role: "listitem" },
+    c.bad ? icon("alert") : null, c.text)));
   fp.facts = facts;
   fpSuggest();
 }
@@ -1817,7 +1826,8 @@ function paletteCommands() {
     if (op.id === current?.id && op.id !== "home") continue;
     list.push({ label: op.label, words: `${op.group} ${op.help || ""} ${TAGLINES[op.id] || ""}`, group: "Tools", icon: op.id,
       sub: TAGLINES[op.id] || "", run: () => select(op.id) });
-    if (doc && op.files === "pdf") {
+    // (Redact: the reader has its own, "Redact this document": one entry, not two alike.)
+    if (doc && op.files === "pdf" && op.id !== "redact") {
       list.push({ label: `${op.label}: this document`, words: `${op.group} ${TAGLINES[op.id] || ""}`, group: "This document", icon: op.id,
         run: () => fpChoose(op.id), later: true });
     }
@@ -2480,10 +2490,11 @@ async function fillRecent(host, { emptyText = "", onEmpty = null, still = () => 
     const folder = e.title !== e.name ? folderOf(e.title) : "";
     const where = names[e.name] > 1 ? folder : "";
     const line = [factsLine(e.facts), where && `in ${where}`].filter(Boolean).join(" · ");
-    const flag = !!(e.facts && (e.facts.error || (e.facts.scanned && !e.facts.has_text)));
+    const facts = factsLine(e.facts), bad = facts === "can't be read";
+    const flag = !bad && !!(e.facts && e.facts.scanned && !e.facts.has_text);
     const row = el("div", { class: "recent-row", "data-key": e.key, "data-name": e.name, "data-facts": factsLine(e.facts), "data-where": folder },
       el("button", { type: "button", class: "recent-open", title: e.title, onclick: () => e.open() },
-        el("span", {}, el("span", { class: "recent-name" }, e.name), line ? el("span", { class: "recent-facts" + (flag ? " flag" : "") }, line) : null),
+        el("span", {}, el("span", { class: "recent-name" }, e.name), line ? el("span", { class: "recent-facts" + (flag ? " flag" : bad ? " bad" : "") }, line) : null),
         el("span", { class: "recent-when" }, whenText(e.opened))),
       el("button", { type: "button", class: "chip-btn recent-x", title: "Remove from Recent", "aria-label": `Remove ${e.name} from Recent`,
         onclick: async () => {
@@ -2701,7 +2712,14 @@ PANELS.redact = {
   title: "Pages", sub: "Drag on a page to black out an area",
   async setup(host) {
     const { RegionEditor } = await import("/static/regions.js");
-    const editor = new RegionEditor(host, { mode: "redact", onChange: (boxes) => { const f = $("f-boxes"); if (f) f.value = JSON.stringify(boxes); } });
+    // The button says what happens: "Black out 3 matches" once they're found (or "Black out 5 areas" with boxes drawn).
+    const sayCount = () => {
+      if (current.panel !== "redact") return;
+      const found = items.length === 1 ? Object.values(editor.matches || {}).reduce((n, l) => n + l.length, 0) : 0;
+      const drawn = items.length === 1 ? editor.boxCount : 0, n = found + drawn;
+      $("run-label").textContent = !n ? current.action : `${current.action} ${n} ${drawn ? (n === 1 ? "area" : "areas") : (n === 1 ? "match" : "matches")}`;
+    };
+    const editor = new RegionEditor(host, { mode: "redact", onChange: (boxes) => { const f = $("f-boxes"); if (f) f.value = JSON.stringify(boxes); sayCount(); } });
     let timer = null, asked = 0;
     const findMatches = () => {
       clearTimeout(timer);
@@ -2716,7 +2734,7 @@ PANELS.redact = {
         }
         try {
           const data = await (await api("/api/redact/find", { method: "POST", body })).json();
-          if (ask === asked) editor.setMatches(data.boxes);
+          if (ask === asked) { editor.setMatches(data.boxes); sayCount(); }
         } catch (e) { /* the preview is optional */ }
       }, 450);
     };
@@ -2990,13 +3008,13 @@ async function run(preview) {
     const resultId = res.headers.get("X-Pdfm-Result-Id");
     const note = decodeURIComponent(res.headers.get("X-Pdfm-Note") || "");
     const blob = await res.blob();
-    await showResult(name, blob, resultId, note);
+    await showResult(name, blob, resultId, note, bad.map((it) => it.file.name));
   } catch (err) {
     showError(plainError(err.message), { detail: err.message, focus: true });
   } finally { busy(false); }
 }
 
-async function showResult(name, blob, resultId, note = "") {
+async function showResult(name, blob, resultId, note = "", skipped = []) {
   if (lastUrl) URL.revokeObjectURL(lastUrl);
   lastUrl = URL.createObjectURL(blob);
   const before = items.reduce((n, it) => n + it.file.size, 0);
@@ -3017,7 +3035,11 @@ async function showResult(name, blob, resultId, note = "") {
     el("div", { class: "result-body" },
       el("div", { class: "result-title" }, icon("check"), "Done"),
       el("div", { class: "result-name" }, name), subEl,
-      note ? el("div", { class: "result-note" }, ...note.split("\n").map((line) => el("div", {}, line))) : null, actions));
+      note ? el("div", { class: "result-note" }, ...note.split("\n").map((line) => el("div", {}, line))) : null,
+      // Files that couldn't be opened were left out: said again here, by name.
+      skipped.length ? el("div", { class: "result-skipped" }, icon("alert"),
+        el("span", {}, `${plural(skipped.length, "file")} ${skipped.length === 1 ? "was" : "were"} left out (can't be opened): `, el("b", {}, skipped.join(", ")))) : null,
+      actions));
   $("result").hidden = false;
   updateSummary();
   $("result").scrollIntoView({ behavior: smoothScroll(), block: "nearest" });

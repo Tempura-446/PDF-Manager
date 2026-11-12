@@ -105,7 +105,7 @@ OPERATIONS = [
      "board": {"mode": "select", "effect": "keep", "field": "pages"},
      "fields": [_f("pages", "Pages", "text", "", placeholder="1-3,5", required=True,
                    hint="updates as you click; e.g. 1-3,5 or odd")]},
-    {"id": "delete", "group": "Pages", "label": "Delete pages", "files": "pdf",
+    {"id": "delete", "group": "Pages", "label": "Delete pages", "files": "pdf", "action": "Delete pages",
      "help": "Click the pages to remove, or type them.",
      "board": {"mode": "select", "effect": "remove", "field": "pages"},
      "fields": [_f("pages", "Pages", "text", "", placeholder="2,4-6", required=True,
@@ -258,7 +258,7 @@ OPERATIONS = [
                              "top-center", "top-right", "top-left")]),
                 _f("start", "Start at", "number", 1),
                 _f("font_size", "Font size", "number", 10, min=4)]},
-    {"id": "flatten", "group": "Stamp", "label": "Flatten forms & comments", "files": "pdf",
+    {"id": "flatten", "group": "Stamp", "label": "Flatten forms & comments", "files": "pdf", "action": "Flatten",
      "help": "Make filled-in forms and comments part of the page, so they look the same "
              "everywhere and can't be changed. Links keep working.",
      "fields": [_f("forms", "Form fields", "check", True),
@@ -332,7 +332,7 @@ OPERATIONS = [
                         "open: it lifts the limits (and removes the protection).")]},
     {"id": "decrypt", "group": "Security", "label": "Remove password", "files": "pdf",
      "help": "Enter the current password in the box above the Run button.", "fields": []},
-    {"id": "redact", "group": "Security", "label": "Redact", "files": "pdf", "panel": "redact",
+    {"id": "redact", "group": "Security", "label": "Redact", "files": "pdf", "panel": "redact", "action": "Black out",
      "help": "Permanently black out names, numbers or areas. What's under the black boxes "
              "is taken out of the file for good.",
      "fields": [_f("terms", "Words or phrases", "text", "", placeholder="John Smith, 555-1234",
@@ -350,7 +350,7 @@ OPERATIONS = [
                         "notes say which."),
                 # -- end of true redaction --
                 _f("boxes", "", "hidden", "")]},
-    {"id": "sanitize", "group": "Security", "label": "Remove hidden data", "files": "pdf",
+    {"id": "sanitize", "group": "Security", "label": "Remove hidden data", "files": "pdf", "action": "Remove hidden data",
      "help": "Remove information that travels unseen inside a PDF before you share it.",
      "fields": [_f("metadata", "Author, title, dates and other document details", "check", True),
                 _f("javascript", "Scripts and actions that run programs", "check", True),

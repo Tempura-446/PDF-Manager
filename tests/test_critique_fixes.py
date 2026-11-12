@@ -133,10 +133,14 @@ def test_critique_fixes_in_a_browser(app, tmp_path, monkeypatch):
     for sub, name, amount in (("Accounts", "Invoice 2041.pdf", 120), ("Accounts", "Invoice 2042.pdf", 80), ("Letters", "Reminder.pdf", 45)):
         (found / sub).mkdir(parents=True, exist_ok=True)
         text_pdf(found / sub / name, pages=2, words=f"The balance due is {amount} euros, payable within thirty days")
+    broken = tmp_path / "Broken.pdf"
+    broken.write_bytes(b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >>\nthis is not really a pdf\n" + os.urandom(3000))
+    for p in (broken, plain):
+        gui.RecentFiles.add(p)
     opened = srv.RequestHandlerClass.opened
     cfg = {"plainId": opened.add(plain), "plainPath": str(plain), "savePath": str(plain),
            "undoId": opened.add(undo), "undoPath": str(undo), "extraPath": str(extra), "searchDir": str(found),
-           "shots": os.environ.get("CRITFIX_SHOTS")}
+           "brokenPath": str(broken), "shots": os.environ.get("CRITFIX_SHOTS")}
     run = subprocess.run([node, str(HERE / "critfix.js"), url, json.dumps(cfg)], capture_output=True, text=True,
                          encoding="utf-8", timeout=900)
     if run.returncode and "Executable doesn't exist" in run.stderr:
@@ -241,3 +245,24 @@ def test_critique_fixes_in_a_browser(app, tmp_path, monkeypatch):
         assert s["strip"] and s["height"] <= 90 and "Instrument Serif" in s["nameFont"] and "JetBrains Mono" in s["factsFont"], s
         assert s["actions"] == "1" and s["drop"] == 0 and s["dropText"] == "Add more files" and s["cardHeight"] < 240, s
         assert not t["grid3"]
+
+    # 5. "can't be read" in the error colour on the start screen (readable, with its words); the panel's chip too.
+    for theme in ("light", "dark"):
+        t = out["errors-" + theme]
+        f = t["flag"]
+        assert f["text"] == "can't be read" and f["bad"] and f["color"] == f["err"], f
+        assert t["flagContrast"] >= 4.5, (theme, t["flagContrast"])
+        assert t["chips"] == [{"text": "can't be read", "flag": False, "bad": True}], t["chips"]
+    t = out["errors-light"]
+    # Destructive tools say what happens; the rest still say Run.
+    assert t["redactLabel"] == "Black out" and t["redactCount"] == "Black out 3 matches", t
+    assert t["deleteLabel"] == "Delete pages" and t["rotateLabel"] == "Run", t
+    assert t["skipped"] == "1 file was left out (can't be opened): Broken.pdf", t["skipped"]
+    assert t["palette"].count("Redact") == 1 and t["palette"].count("Redact this document") == 1, t["palette"]
+    assert not any(p.startswith("Redact:") or "(black out" in p for p in t["palette"]), t["palette"]
+
+
+def test_destructive_tools_name_their_action():
+    ops = {op["id"]: op for op in gui.OPERATIONS}
+    assert ops["redact"]["action"] == "Black out" and ops["delete"]["action"] == "Delete pages"
+    assert ops["sanitize"]["action"] == "Remove hidden data" and ops["flatten"]["action"] == "Flatten"

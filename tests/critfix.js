@@ -371,6 +371,61 @@ const fs = require("fs");
       t.grid3 = await page.evaluate(() => document.getElementById("file-grid").classList.contains("strip"));
       await ctx.close();
     }
+    // ---- 5. Error and destructive words: a red "can't be read", verb buttons, files left out ----
+    for (const theme of ["light", "dark"]) {
+      const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: theme });
+      const page = await ctx.newPage();
+      watch(page);
+      await page.goto(url);
+      await page.waitForSelector('#home-host .recent-row[data-name="Broken.pdf"]', { timeout: 30000 });
+      const t = (out["errors-" + theme] = {});
+      t.flag = await page.evaluate(() => {
+        const f = document.querySelector('#home-host .recent-row[data-name="Broken.pdf"] .recent-facts');
+        const probe = document.createElement("span"); probe.style.color = "var(--err)"; document.body.append(probe);
+        const err = getComputedStyle(probe).color; probe.remove();
+        return { text: f.textContent, bad: f.classList.contains("bad"), color: getComputedStyle(f).color, err,
+          scanFlag: [...document.querySelectorAll("#home-host .recent-facts.flag")].map((x) => x.textContent) };
+      });
+      t.flagContrast = await contrast(page, '#home-host .recent-row[data-name="Broken.pdf"] .recent-facts');
+      t.chips = await page.evaluate(() => factChips({ error: "damaged" }));
+      if (theme === "light" || theme === "dark") await shot(page, `${theme}-1280-start`);
+      if (theme === "light") {
+        // Redact: "Black out", then "Black out 3 matches" once the words are found.
+        await page.dispatchEvent('.tools button[data-op="redact"]', "click");
+        t.redactLabel = await page.textContent("#run-label");
+        await page.setInputFiles("#file-input", cfg.plainPath);
+        await page.waitForSelector("#f-terms", { state: "visible", timeout: 30000 });
+        await page.fill("#f-terms", "Quarterly");
+        await page.waitForFunction(() => /^Black out \d+ match/.test(document.getElementById("run-label").textContent), null, { timeout: 30000 }).catch(() => {});
+        t.redactCount = await page.textContent("#run-label");
+        t.redactSeal = await page.evaluate(() => getComputedStyle(document.getElementById("run")).backgroundColor);
+        await page.dispatchEvent('.tools button[data-op="delete"]', "click");
+        t.deleteLabel = await page.textContent("#run-label");
+        await page.dispatchEvent('.tools button[data-op="rotate"]', "click");
+        t.rotateLabel = await page.textContent("#run-label");
+        // A file that can't be opened is left out, and the result card says so by name.
+        await page.dispatchEvent('.tools button[data-op="compress"]', "click");
+        await page.evaluate(() => startOver());
+        await page.setInputFiles("#file-input", [cfg.plainPath, cfg.brokenPath]);
+        await page.waitForSelector(".file-card .badge.warn", { timeout: 30000 });
+        await page.waitForFunction(() => !document.querySelector("#run").disabled, null, { timeout: 30000 });
+        await page.click("#run");
+        await page.waitForSelector("#result:not([hidden]) .result-skipped", { timeout: 60000 });
+        t.skipped = await page.textContent("#result .result-skipped");
+        await shot(page, "light-1280-compress-left-out");
+        // The palette in the reader: one Redact tool and one "Redact this document", not three alike.
+        const rd = await ctx.newPage();
+        watch(rd);
+        await rd.goto(url + "&open=" + cfg.plainId);
+        await rd.waitForSelector(".page canvas", { timeout: 60000 });
+        await rd.keyboard.press("Control+k");
+        await rd.fill("#palette-input", "redact");
+        await rd.waitForTimeout(200);
+        t.palette = await rd.$$eval(".palette-item", (rows) => rows.map((r) => (r.querySelector(".label")?.firstChild?.textContent || r.textContent).trim()).filter((x) => /redact/i.test(x)));
+        await rd.keyboard.press("Escape");
+      }
+      await ctx.close();
+    }
   } catch (e) {
     out.errors.push("FATAL " + (e.stack || e));
   }
