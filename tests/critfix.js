@@ -194,9 +194,20 @@ const fs = require("fs");
           const vis = (e) => { if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.left >= b.left - 1 && r.right <= b.right + 1 && r.right <= innerWidth; };
           const worded = [...bar.querySelectorAll(".rd-btn")].filter((x) => vis(x) && x.querySelector("span") && getComputedStyle(x.querySelector("span")).display !== "none")
             .map((x) => x.querySelector("span").textContent);
-          return { worded, save: vis(bar.querySelector(".rd-annotsave")), close: vis(bar.querySelector("button[title^='Close the annotation']")),
+          return { worded, save: vis(bar.querySelector(".rd-annotsave")), saveSealBefore: bar.querySelector(".rd-annotsave").classList.contains("seal"), close: vis(bar.querySelector("button[title^='Close the annotation']")),
             scrollW: bar.scrollWidth, clientW: bar.clientWidth, pageScroll: document.documentElement.scrollWidth > innerWidth };
         });
+        if (w === 1280 && theme === "light") {
+          // Save turns into the main (seal) action once there is something to save.
+          await page.keyboard.press("d");  // Draw
+          const box = await page.locator(".page").first().boundingBox();
+          await page.mouse.move(box.x + 120, box.y + 160);
+          await page.mouse.down();
+          for (let i = 1; i <= 8; i++) await page.mouse.move(box.x + 120 + i * 12, box.y + 160 + i * 6);
+          await page.mouse.up();
+          await page.waitForTimeout(500);
+          out.saveSealAfter = await page.evaluate(() => document.querySelector(".rd-annotsave").classList.contains("seal"));
+        }
         if (w === 1180) await shot(page, `${theme}-1180-annotate-bar`);
         if (w === 1280 && theme === "light") {
           // More tools from the keyboard: arrows open and move, Escape closes (focus back), Enter picks.

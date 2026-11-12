@@ -72,6 +72,7 @@
   --teal: var(--accent);
   --seal: #d4382c;
   --seal-ink: #ffffff;
+  --seal-hover: .92;  /* hover darkens white-on-red (lightening it fell under 4.5:1) */
   --tint-a: #dfe6f5;
   --tint-b: #f3e4de;
   --glass: rgb(255 255 255 / .72);
@@ -109,7 +110,7 @@
     --text: #eef0f3; --text-2: #c9ced6; --muted: #a4acb8; --faint: #8c95a1;
     --border: #2c3138; --border-strong: #3d444d; --input-border: #737b85;
     --accent: #5cc9c4; --accent-hover: #7fd8d3; --accent-text: #0f1114; --accent-soft: #17302f; --accent-ring: rgb(92 201 196 / .3);
-    --seal: #ef5a4c; --seal-ink: #14171c; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(40 46 54 / .88);
+    --seal: #ef5a4c; --seal-ink: #14171c; --seal-hover: 1.07; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(40 46 54 / .88);
     --glass-edge: rgb(255 255 255 / .13); --glass-hi: inset 0 1px 0 rgb(255 255 255 / .08);
     --ok: #5fd09a; --ok-soft: #173326; --warn: #e6b65e; --warn-soft: #3a2d10; --err: #f28c7e; --err-soft: #3f1f1b;
     --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 10px 28px rgb(0 0 0 / .45); --shadow-lift: 0 2px 6px rgb(0 0 0 / .45), 0 16px 40px rgb(0 0 0 / .5);
@@ -123,7 +124,7 @@
   --text: #eef0f3; --text-2: #c9ced6; --muted: #a4acb8; --faint: #8c95a1;
   --border: #2c3138; --border-strong: #3d444d; --input-border: #737b85;
   --accent: #5cc9c4; --accent-hover: #7fd8d3; --accent-text: #0f1114; --accent-soft: #17302f; --accent-ring: rgb(92 201 196 / .3);
-  --seal: #ef5a4c; --seal-ink: #14171c; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(40 46 54 / .88);
+  --seal: #ef5a4c; --seal-ink: #14171c; --seal-hover: 1.07; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(40 46 54 / .88);
     --glass-edge: rgb(255 255 255 / .13); --glass-hi: inset 0 1px 0 rgb(255 255 255 / .08);
   --ok: #5fd09a; --ok-soft: #173326; --warn: #e6b65e; --warn-soft: #3a2d10; --err: #f28c7e; --err-soft: #3f1f1b;
   --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 10px 28px rgb(0 0 0 / .45); --shadow-lift: 0 2px 6px rgb(0 0 0 / .45), 0 16px 40px rgb(0 0 0 / .5);
@@ -645,7 +646,7 @@ details.pw summary svg { width: 15px; height: 15px; }
 .btn:active { transform: scale(.98); }
 /* The one action that matters on a screen: seal red. */
 #run:not(.secondary), .btn.seal { background: var(--seal); color: var(--seal-ink); box-shadow: 0 6px 16px color-mix(in srgb, var(--seal) 30%, transparent); }
-#run:not(.secondary):hover, .btn.seal:hover { background: var(--seal); filter: brightness(1.07); }
+#run:not(.secondary):hover, .btn.seal:hover { background: var(--seal); filter: brightness(var(--seal-hover, .92)); }
 .btn.secondary { background: var(--surface); color: var(--text); border-color: var(--border-strong); box-shadow: var(--shadow); }
 /* One seal action per screen: once there's a result to save (or changes in
    the reader), Save is the main action and Run steps back. */

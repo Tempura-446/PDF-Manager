@@ -423,7 +423,7 @@ export class Reader {
     this.undoBtn = b("undo", "Undo (Ctrl+Z)", { disabled: true });
     this.redoBtn = b("redo", "Redo (Ctrl+Y)", { disabled: true });
     this.deleteBtn = b("trash", "Delete the selected annotation (Delete)", { disabled: true });
-    this.annotSaveBtn = el("button", { class: "rd-btn primary seal rd-annotsave", type: "button", title: "Save your changes (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
+    this.annotSaveBtn = el("button", { class: "rd-btn rd-annotsave", type: "button", title: "Nothing to save yet (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
     this.annotCloseBtn = b("x", "Close the annotation tools");
     // More tools: a menu of the rest; the one in use shows on its button.
     const byMode = (mode) => this.annotTools.find((t) => t.dataset.mode === mode);
@@ -4407,6 +4407,12 @@ export class Reader {
     // (The annotation bar has its own while it's open.)
     const tab = this.activeTab, open = !!(this.doc && tab && this.annotbar.hidden);
     this.saveNowBtn.hidden = !(open && tab.dirty);
+    // The annotation bar's Save is the screen's main action only once there is
+    // something to save; until then it stays quiet (it still works).
+    const pending = !!(tab && (tab.dirty || this.annotUndo || this.#changed()));
+    this.annotSaveBtn.classList.toggle("seal", pending);
+    this.annotSaveBtn.classList.toggle("primary", pending);
+    this.annotSaveBtn.title = pending ? "Save your changes (Ctrl+S)" : "Nothing to save yet (Ctrl+S)";
     this.undoNowBtn.hidden = !(open && (this.annotUndo || tab.undo?.length));
   }
 
