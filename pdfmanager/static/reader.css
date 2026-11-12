@@ -27,6 +27,9 @@
 .rd-btn.primary { color: var(--accent-text); padding: 0 14px; font-weight: 600; background: var(--accent); box-shadow: 0 1px 2px rgb(20 23 28 / .12); }
 .rd-btn.primary:hover { background: var(--accent-hover); color: var(--accent-text); }
 .rd-btn.primary:active { transform: scale(.98); }
+/* Save is the reader's main action: seal red, like Run on a tool page. */
+.rd-btn.primary.seal { color: var(--seal-ink, #fff); background: var(--seal, #d4382c); box-shadow: 0 1px 2px rgb(20 23 28 / .12); }
+.rd-btn.primary.seal:hover { color: var(--seal-ink, #fff); background: var(--seal, #d4382c); filter: brightness(var(--seal-hover, .92)); }
 .rd-page { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; margin-left: 2px; }
 .rd-page input {
   width: 52px; height: 34px; text-align: center; border: 1px solid var(--input-border); border-radius: var(--radius-sm);
@@ -200,7 +203,7 @@
 .rd-menu button .check { margin-left: auto; color: var(--accent); visibility: hidden; }
 .rd-menu button[aria-checked="true"] .check { visibility: visible; }
 .rd-menu hr { border: 0; border-top: 1px solid var(--border); margin: 6px 4px; }
-.rd-menu .label { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); padding: 8px 10px 3px; }
+.rd-menu .label { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 8px 10px 3px; }
 /* The More menu (with its Edit with list) scrolls inside the reader instead of running off it. */
 .rd > .rd-menu:not(.rd-ctxmenu):not(.rd-zoommenu) { max-height: calc(100% - 60px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 @keyframes rd-menu-pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
@@ -315,13 +318,26 @@
 .rd-swatch:hover { transform: scale(1.1); }
 .rd-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); transform: scale(1.08); }
 .rd-annotbar .rd-zoom { height: 34px; }
-@container (max-width: 1540px) { .rd-tool span { display: none; } }
+/* Other bars (measuring) go to icons in narrower windows. The annotate bar
+   keeps its words (Highlight, Note, Add text, Draw, Sign, More tools, Save)
+   down to 900px: the rest of its tools are in the More tools menu. */
+@container (max-width: 1180px) { .rd-findbar:not(.rd-annotbar) .rd-tool span { display: none; } }
+@container (max-width: 900px) { .rd-annotbar .rd-tool span { display: none; } }
+.rd-moretools > svg:last-child { width: 14px; height: 14px; margin-left: -2px; color: var(--muted); }
+.rd-moretools.on { background: var(--accent-soft); color: var(--accent); }
+.rd-moretools[aria-expanded="true"] { background: var(--surface-2); color: var(--text); }
+.rd-toolsmenu { min-width: 220px; right: auto; }
+.rd-toolsmenu .label { padding-top: 6px; }
+.rd-toolsmenu .rd-tool { height: auto; min-height: 34px; justify-content: flex-start; font-size: 14px; color: var(--text); }
+.rd-toolsmenu .rd-tool[aria-checked="true"] { background: var(--accent-soft); color: var(--accent); }
+.rd-toolsmenu .rd-tool[aria-checked="true"] svg { color: var(--accent); }
 /* Save keeps its word down to narrow windows: it is the bar's one main action. */
-@container (max-width: 900px) { .rd-annotbar .rd-btn.primary span { display: none; } }
+@container (max-width: 900px) { .rd-annotbar .rd-annotsave span { display: none; } }
 /* Save and Close stay at the bar's end when the tools scroll under them. */
-.rd-annotbar > .rd-btn.primary, .rd-annotbar > .rd-btn:last-child { position: sticky; z-index: 1; }
+.rd-annotbar > .rd-annotsave, .rd-annotbar > .rd-btn:last-child { position: sticky; z-index: 1; }
 .rd-annotbar > .rd-btn:last-child { right: 0; background: var(--surface-2); }
-.rd-annotbar > .rd-btn.primary { right: 38px; box-shadow: 0 1px 2px rgb(20 23 28 / .12), -8px 0 0 var(--surface-2); }
+.rd-annotbar > .rd-annotsave { right: 38px; background: var(--surface-2); padding: 0 14px; font-weight: 600; box-shadow: -8px 0 0 var(--surface-2); }
+.rd-annotbar > .rd-annotsave.primary { box-shadow: 0 1px 2px rgb(20 23 28 / .12), -8px 0 0 var(--surface-2); }
 
 /* ---- Signature dialog ---- */
 .rd-dialog:has(.rd-sigpad) { width: min(580px, calc(100vw - 32px)); }
@@ -353,6 +369,7 @@
 .rd-doctab-x:hover { background: var(--surface-3); color: var(--text); }
 .rd-doctab-x svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2.25; stroke-linecap: round; }
 .rd-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); flex: none; }
+.rd-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .rd-doctab-add { height: 30px; min-width: 30px; margin-bottom: 4px; }
 .rd-doctab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 

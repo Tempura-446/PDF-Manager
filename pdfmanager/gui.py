@@ -105,7 +105,7 @@ OPERATIONS = [
      "board": {"mode": "select", "effect": "keep", "field": "pages"},
      "fields": [_f("pages", "Pages", "text", "", placeholder="1-3,5", required=True,
                    hint="updates as you click; e.g. 1-3,5 or odd")]},
-    {"id": "delete", "group": "Pages", "label": "Delete pages", "files": "pdf",
+    {"id": "delete", "group": "Pages", "label": "Delete pages", "files": "pdf", "action": "Delete pages",
      "help": "Click the pages to remove, or type them.",
      "board": {"mode": "select", "effect": "remove", "field": "pages"},
      "fields": [_f("pages", "Pages", "text", "", placeholder="2,4-6", required=True,
@@ -258,7 +258,7 @@ OPERATIONS = [
                              "top-center", "top-right", "top-left")]),
                 _f("start", "Start at", "number", 1),
                 _f("font_size", "Font size", "number", 10, min=4)]},
-    {"id": "flatten", "group": "Stamp", "label": "Flatten forms & comments", "files": "pdf",
+    {"id": "flatten", "group": "Stamp", "label": "Flatten forms & comments", "files": "pdf", "action": "Flatten",
      "help": "Make filled-in forms and comments part of the page, so they look the same "
              "everywhere and can't be changed. Links keep working.",
      "fields": [_f("forms", "Form fields", "check", True),
@@ -332,7 +332,7 @@ OPERATIONS = [
                         "open: it lifts the limits (and removes the protection).")]},
     {"id": "decrypt", "group": "Security", "label": "Remove password", "files": "pdf",
      "help": "Enter the current password in the box above the Run button.", "fields": []},
-    {"id": "redact", "group": "Security", "label": "Redact", "files": "pdf", "panel": "redact",
+    {"id": "redact", "group": "Security", "label": "Redact", "files": "pdf", "panel": "redact", "action": "Black out",
      "help": "Permanently black out names, numbers or areas. What's under the black boxes "
              "is taken out of the file for good.",
      "fields": [_f("terms", "Words or phrases", "text", "", placeholder="John Smith, 555-1234",
@@ -350,7 +350,7 @@ OPERATIONS = [
                         "notes say which."),
                 # -- end of true redaction --
                 _f("boxes", "", "hidden", "")]},
-    {"id": "sanitize", "group": "Security", "label": "Remove hidden data", "files": "pdf",
+    {"id": "sanitize", "group": "Security", "label": "Remove hidden data", "files": "pdf", "action": "Remove hidden data",
      "help": "Remove information that travels unseen inside a PDF before you share it.",
      "fields": [_f("metadata", "Author, title, dates and other document details", "check", True),
                 _f("javascript", "Scripts and actions that run programs", "check", True),
@@ -1447,6 +1447,44 @@ class OpenFiles:
         with self.lock:
             return self.items.get(key)
 
+    def knows(self, path):
+        """Whether ``path`` is a file the app has open or has saved: only
+        those may be shown in the file manager."""
+        try:
+            path = Path(path).expanduser().resolve()
+        except (OSError, ValueError, TypeError):
+            return False
+        with self.lock:
+            return path in self.items.values()
+
+
+class SavedOver:
+    """What a file held before Save wrote over it, for Undo: the last few,
+    in memory, each up to LIMIT bytes (bigger files get no Undo)."""
+
+    LIMIT = 64 * 2**20
+    KEEP = 4
+
+    def __init__(self):
+        self.items = {}
+        self.lock = threading.Lock()
+
+    def add(self, path, data, stamp):
+        """Keep ``data`` (what ``path`` held); ``stamp`` is the file's stamp
+        after the save, so Undo can tell whether it has changed since."""
+        if data is None or len(data) > self.LIMIT:
+            return None
+        key = secrets.token_urlsafe(9)
+        with self.lock:
+            self.items[key] = (Path(path), data, stamp)
+            while len(self.items) > self.KEEP:
+                self.items.pop(next(iter(self.items)))
+        return key
+
+    def pop(self, key):
+        with self.lock:
+            return self.items.pop(key, None)
+
 
 class Events:
     """Messages for the app's pages, numbered; pages ask for the ones after
@@ -1686,6 +1724,7 @@ class Handler(BaseHTTPRequestHandler):
     quit_app = None  # closes the pywebview window (to restart after an update)
     quit_requested = False  # makes wait_until_closed return
     opened = None  # OpenFiles
+    saved_over = None  # SavedOver: Undo after Save wrote over a file
     work = None  # WorkFolders
     # pywebview's JavaScript bridge needs eval(); only allowed in the desktop window.
     allow_eval = False
@@ -1887,20 +1926,43 @@ class Handler(BaseHTTPRequestHandler):
                 and self.headers.get("X-Pdfm-Force") != "1"):
             return self._send(HTTPStatus.CONFLICT, {"error": f"{path.name} was changed by another "
                                                              "program", "changed": True})
-        temp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.zpdf-saving")
+        # What the file held, for Undo (not for big files: kept in memory).
+        before = None
         try:
-            temp.write_bytes(body)
-            try:
-                shutil.copymode(path, temp)
-            except OSError:
-                pass
-            os.replace(temp, path)
-        except OSError as exc:
-            temp.unlink(missing_ok=True)
-            raise UserError(f"could not save {path.name}: it may be open in another program, "
-                            f"or read-only ({exc.strerror or exc})") from None
+            if path.stat().st_size <= SavedOver.LIMIT:
+                before = path.read_bytes()
+        except OSError:
+            pass
+        _replace_file(path, body)
         RecentFiles.add(path)
+        stamp = _file_stamp(path)
+        undo = self.saved_over.add(path, before, stamp) if self.saved_over is not None else None
+        return self._send(HTTPStatus.OK, {"path": str(path), "stamp": stamp, "undo": undo})
+
+    def _unsave(self, data):
+        """Put back what a file held before Save wrote over it (the "undo"
+        that save gave). Refused when the file has changed since."""
+        item = self.saved_over.pop(str(data.get("undo", ""))) if self.saved_over is not None else None
+        if item is None:
+            raise UserError("that can no longer be undone")
+        path, before, stamp = item
+        if not path.exists() or _file_stamp(path) != stamp:
+            raise UserError(f"{path.name} has changed since it was saved, so it was left as it is")
+        _replace_file(path, before)
         return self._send(HTTPStatus.OK, {"path": str(path), "stamp": _file_stamp(path)})
+
+    def _reveal(self, data):
+        """Show a file in Explorer / Finder / the file manager: only a file
+        the app has open or has saved, never any path the page names."""
+        target = data.get("path")
+        if data.get("id") and self.opened is not None:
+            target = self.opened.get(str(data["id"]))
+        if not target or self.opened is None or not self.opened.knows(target):
+            return self._error(HTTPStatus.FORBIDDEN, "not a file ZPDF has open")
+        if not Path(target).exists():
+            raise UserError("that file is no longer there")
+        reveal_in_file_manager(Path(target).resolve())
+        return self._send(HTTPStatus.OK, {"ok": True})
 
     def _recent(self):
         """Recently opened files that still exist, each with an id the
@@ -1964,6 +2026,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._scales(body)
             if path.startswith("/api/save/"):
                 return self._save_in_place(path[len("/api/save/"):], body)
+            if path == "/api/unsave":  # Undo after Save wrote over a file
+                return self._unsave(json.loads(body or b"{}"))
+            if path == "/api/reveal":
+                return self._reveal(json.loads(body or b"{}"))
             if path == "/api/outline":
                 return self._outline(body)
             if path == "/api/redact/find":
@@ -2700,6 +2766,7 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None):
                                                "last_seen": time.monotonic(),
                                                "closed_at": None, "jobs": progress.JobStore(),
                                                "pages": {}, "events": Events(),
+                                               "saved_over": SavedOver(),
                                                "work": WorkFolders()})
     server = None
     if not port and prefer:
@@ -3004,13 +3071,16 @@ class DesktopApi:
         name, data = item
         beside = self._opened.get(near) if near else None
         folder = beside.parent if beside is not None and beside.parent.is_dir() else Path.home()
+        filename = suggested_name or name
         chosen = self._window.create_file_dialog(
-            webview.FileDialog.SAVE, directory=str(folder),
-            save_filename=suggested_name or name)
+            webview.FileDialog.SAVE, directory=str(folder), save_filename=filename,
+            file_types=_save_types(filename))
         if not chosen:
             return None
         target = Path(chosen if isinstance(chosen, str) else chosen[0])
         target.write_bytes(data)
+        if self._opened is not None:
+            self._opened.add(target)  # (so it can be shown in its folder)
         return str(target)
 
     def pick_folder(self):
@@ -3021,8 +3091,28 @@ class DesktopApi:
         return (chosen if isinstance(chosen, str) else chosen[0]) if chosen else None
 
     def reveal(self, path):
-        """Show a saved file in Explorer / Finder / the file manager."""
+        """Show a saved file in Explorer / Finder / the file manager (one
+        the app has open or has saved)."""
+        if self._opened is not None and not self._opened.knows(path):
+            raise ValueError("not a file ZPDF has open")
         reveal_in_file_manager(path)
+
+
+def _replace_file(path, data):
+    """Write ``data`` over ``path``: to a temporary file next to it first,
+    then swapped in, so a failure halfway never leaves a broken file."""
+    temp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.zpdf-saving")
+    try:
+        temp.write_bytes(data)
+        try:
+            shutil.copymode(path, temp)
+        except OSError:
+            pass
+        os.replace(temp, path)
+    except OSError as exc:
+        temp.unlink(missing_ok=True)
+        raise UserError(f"could not save {path.name}: it may be open in another program, "
+                        f"or read-only ({exc.strerror or exc})") from None
 
 
 def reveal_in_file_manager(path):
@@ -3154,6 +3244,19 @@ def _allow_autofill(window):
         window.events.before_show += before_show
     except AttributeError as exc:  # pywebview before 5 has no before_show event
         _log(f"launch: no before_show event for autofill: {exc!r}")
+
+
+SAVE_TYPES = {".pdf": "PDF files (*.pdf)", ".zip": "ZIP archives (*.zip)", ".docx": "Word documents (*.docx)",
+              ".xlsx": "Excel workbooks (*.xlsx)", ".pptx": "PowerPoint presentations (*.pptx)",
+              ".html": "Web pages (*.html)", ".png": "PNG pictures (*.png)", ".jpg": "JPEG pictures (*.jpg)",
+              ".txt": "Text files (*.txt)", ".csv": "CSV files (*.csv)"}
+
+
+def _save_types(name):
+    """The Save dialog's file type list for a file of this name: its own kind
+    first (Windows shows that, not "All files"), then all files."""
+    kind = SAVE_TYPES.get(Path(name).suffix.lower())
+    return (kind, "All files (*.*)") if kind else ("All files (*.*)",)
 
 
 def _debug_port():

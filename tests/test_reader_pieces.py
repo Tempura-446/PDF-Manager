@@ -116,7 +116,7 @@ def test_pieces_that_cant_be_had_in_a_browser(failing, tmp_path):
     assert not said(r, "Can't show"), r
     r = s["held-replaced"]
     assert r["held"] and r["back"] == {"name": "held-replaced.pdf", "pages": 16}, r
-    assert any("changed by another program" in d for d in r["dialogs"]), r  # a save says so
+    assert "changed by another program" in r["asked"] and not r["dialogs"], r  # a save says so, in the app's own dialog
     # Not all of it read yet: the tab isn't shown as something else; it says so and can be closed.
     r = s["deleted"]
     assert r["held"] is False and said(r, "Can't show “deleted.pdf” again: the file is no longer where it was"), r

@@ -109,7 +109,9 @@ export class RecipeBuilder {
   }
 
   async #remove() {
-    if (!this.name || !confirm(`Delete the recipe “${this.name}”?`)) return;
+    if (!this.name) return;
+    const ask = window.appAsk || ((title) => Promise.resolve(window.confirm(title) ? "delete" : "cancel"));
+    if (await ask(`Delete the recipe “${this.name}”?`, "It can't be brought back.", [["cancel", "Cancel"], ["delete", "Delete recipe", true]]) !== "delete") return;
     try {
       this.saved = (await this.api.remove(this.name)).recipes;
       this.#say(`Deleted “${this.name}”.`);

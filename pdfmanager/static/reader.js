@@ -275,6 +275,9 @@ function sameBytes(a, b) {
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
 }
+/** Single keys for the annotate bar's labelled tools, while it's open (n, p, r,
+ *  t, e and m are the reader's own: next, previous, rotate, panel, edit text, measure). */
+const ANNOT_KEYS = { h: "HIGHLIGHT", c: "NOTE", a: "FREETEXT", d: "INK", s: "SIGN" };
 const isTyping = (e) => /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.target.isContentEditable;
 const store = {
   get(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; } },
@@ -336,7 +339,7 @@ export class Reader {
     this.panelBtn = b("panel", "File panel", { class: "rd-btn rd-panel-btn", "aria-expanded": "false", "aria-controls": "rd-side" });
     this.panelBtn.title = "Show or hide the file panel (T)";
     // Changes not saved yet: Save and Undo come out where they're seen.
-    this.saveNowBtn = el("button", { class: "rd-btn primary rd-savenow", type: "button", hidden: true,
+    this.saveNowBtn = el("button", { class: "rd-btn primary seal rd-savenow", type: "button", hidden: true,
       title: "Save your changes (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
     this.undoNowBtn = b("undo", "Undo the last change (Ctrl+Z)", { hidden: true });
     this.homeBtn = this.onHome ? b("home", "Home: all of ZPDF's tools (your documents stay open)") : null;
@@ -375,20 +378,26 @@ export class Reader {
       el("label", {}, this.findWord, "Whole words"),
       this.findStatus, el("span", { style: "flex:1" }), this.findCloseBtn);
 
-    // Annotation bar
+    // Annotation bar: the tools used most keep their words (and a single key
+    // each, see ANNOT_KEYS); the rest are in the labelled More tools menu.
     const tool = (name, label, mode) => el("button", { class: "rd-btn rd-tool", type: "button", title: label, "aria-pressed": "false", "data-mode": mode, html: svg(name) + `<span>${label}</span>` });
     this.annotTools = [
       tool("pointer", "Select", "NONE"), tool("highlight", "Highlight", "HIGHLIGHT"),
       tool("underline", "Underline", "UNDERLINE"), tool("strike", "Strike out", "STRIKEOUT"),
-      tool("note", "Note", "NOTE"), tool("text", "Text", "FREETEXT"),
-      tool("draw", "Draw", "INK"), tool("shapes", "Shapes", "SHAPE"), tool("stamp", "Stamp", "STAMPS"), tool("image", "Picture", "STAMP"),
-      tool("edittext", "Edit text", "EDITTEXT"), tool("imgedit", "Pictures", "IMAGES"), tool("link", "Links", "LINKS"),
+      tool("note", "Note", "NOTE"), tool("text", "Add text", "FREETEXT"),
+      tool("draw", "Draw", "INK"), tool("shapes", "Shapes", "SHAPE"), tool("stamp", "Stamp", "STAMPS"), tool("image", "Add picture", "STAMP"),
+      tool("edittext", "Edit text", "EDITTEXT"), tool("imgedit", "Edit pictures", "IMAGES"), tool("link", "Links", "LINKS"),
     ];
     const tip = (mode, title) => { this.annotTools.find((b) => b.dataset.mode === mode).title = title; };
-    for (const mode of ["NONE", "UNDERLINE", "STRIKEOUT"]) this.annotTools.find((b) => b.dataset.mode === mode).classList.add("compact");
+    this.annotTools.find((b) => b.dataset.mode === "NONE").classList.add("compact");
+    tip("NONE", "Select: no tool, pick and move annotations (Esc)");
+    tip("HIGHLIGHT", "Highlight text: drag over the words (H)");
+    tip("FREETEXT", "Add text: click where the words go, then type (A)");
+    tip("INK", "Draw freehand on the page (D)");
+    tip("STAMP", "Add a picture: choose an image file, then place it");
     tip("UNDERLINE", "Underline text: select the words (or select them first, then click here)");
     tip("STRIKEOUT", "Strike out text: select the words (or select them first, then click here)");
-    tip("NOTE", "Add a note: click where it goes, then type your comment");
+    tip("NOTE", "Add a note: click where it goes, then type your comment (C)");
     tip("SHAPE", "Draw a rectangle, ellipse, cloud, arrow or line: drag on the page (Shift: square, circle, 45°)");
     tip("IMAGES", "Edit the pictures on the page: drag to move, drag a corner to resize (Shift: freely), replace or delete");
     tip("LINKS", "Edit links: click one to change where it goes or delete it; drag a box to add one");
@@ -402,8 +411,8 @@ export class Reader {
     this.shapeSelect = el("select", { class: "rd-zoom", "aria-label": "Shape", hidden: true },
       ...SHAPES.map(([v, label]) => el("option", { value: v }, label)));
     this.shapeSelect.value = store.get("pdfm-shape", "rect");
-    this.annotTools.at(-1).title = "Change words on the page: click a line of text (E)";
-    this.signBtn = el("button", { class: "rd-btn rd-tool", type: "button", title: "Add your signature", html: svg("sign") + "<span>Sign</span>" });
+    tip("EDITTEXT", "Change words on the page: click a line of text (E)");
+    this.signBtn = el("button", { class: "rd-btn rd-tool", type: "button", title: "Add your signature (S)", html: svg("sign") + "<span>Sign</span>" });
     this.certSignBtn = el("button", { class: "rd-btn rd-tool compact", type: "button", "data-mode": "CERTSIGN", "aria-pressed": "false",
       title: "Sign with a digital ID (a certificate, .pfx or .p12): drag a box where the signature goes", html: svg("badge") + "<span>Digital ID</span>" });
     this.annotTools.push(this.certSignBtn);
@@ -414,10 +423,26 @@ export class Reader {
     this.undoBtn = b("undo", "Undo (Ctrl+Z)", { disabled: true });
     this.redoBtn = b("redo", "Redo (Ctrl+Y)", { disabled: true });
     this.deleteBtn = b("trash", "Delete the selected annotation (Delete)", { disabled: true });
-    this.annotSaveBtn = el("button", { class: "rd-btn primary", type: "button", title: "Save your changes (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
+    this.annotSaveBtn = el("button", { class: "rd-btn rd-annotsave", type: "button", title: "Nothing to save yet (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
     this.annotCloseBtn = b("x", "Close the annotation tools");
+    // More tools: a menu of the rest; the one in use shows on its button.
+    const byMode = (mode) => this.annotTools.find((t) => t.dataset.mode === mode);
+    const inMenu = [["Mark text", ["UNDERLINE", "STRIKEOUT"]], ["Add", ["SHAPE", "STAMPS", "STAMP"]],
+      ["Change", ["EDITTEXT", "IMAGES", "LINKS"]], ["Protect", ["CERTSIGN", "REDACT"]]];
+    this.moreTools = inMenu.flatMap(([, modes]) => modes.map(byMode));
+    for (const item of this.moreTools) {
+      item.classList.remove("compact");
+      item.setAttribute("role", "menuitemradio");
+      item.setAttribute("aria-checked", "false");
+      item.removeAttribute("aria-pressed");
+      item.tabIndex = -1;
+    }
+    this.moreToolsMenu = el("div", { class: "rd-menu rd-toolsmenu", role: "menu", "aria-label": "More tools", hidden: true },
+      ...inMenu.flatMap(([label, modes], i) => [...(i ? [el("hr")] : []), el("div", { class: "label", "aria-hidden": "true" }, label), ...modes.map(byMode)]));
+    this.moreToolsBtn = el("button", { class: "rd-btn rd-tool rd-moretools", type: "button", "aria-haspopup": "menu", "aria-expanded": "false",
+      title: "More tools: underline, shapes, stamps, pictures, links, digital ID, redact", html: svg("more") + "<span>More tools</span>" + svg("down") });
     this.annotbar = el("div", { class: "rd-findbar rd-annotbar", hidden: true, role: "toolbar", "aria-label": "Annotate" },
-      ...this.annotTools.filter((b) => b !== this.certSignBtn && b !== this.redactBtn), this.signBtn, this.certSignBtn, this.redactBtn,
+      ...["NONE", "HIGHLIGHT", "NOTE", "FREETEXT", "INK"].map(byMode), this.signBtn, this.moreToolsBtn,
       el("span", { class: "rd-sep" }),
       el("div", { class: "rd-swatches", role: "group", "aria-label": "Colour" }, ...this.swatches), this.shapeSelect, this.stampSelect, this.stampDatedLabel, this.sizeSelect,
       this.redactHow, this.redactApplyBtn,
@@ -528,7 +553,7 @@ export class Reader {
     overlayClose.addEventListener("click", () => this.closeCompare());
     // Skip link: past the bars, to the pages (out of sight until it has focus).
     this.skipLink = el("a", { class: "skip-link rd-skip", href: "#", onclick: (e) => { e.preventDefault(); this.container.focus(); } }, "Skip to the page");
-    this.root.append(this.skipLink, toolbar, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.overlaybar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.fileInput);
+    this.root.append(this.skipLink, toolbar, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.overlaybar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.moreToolsMenu, this.fileInput);
     // A drawing in progress takes every click in the window as the next
     // stroke; end it first when the tabs, toolbar or menu are used. This
     // listens on the window before pdf.js does, so it runs first.
@@ -716,8 +741,30 @@ export class Reader {
 
     // Annotating
     this.annotateBtn.addEventListener("click", () => (this.annotbar.hidden ? this.openAnnotate() : this.closeAnnotate()));
-    for (const btn of this.annotTools) btn.addEventListener("click", () => this.#setEditMode(btn.dataset.mode, btn.dataset.mode === "STAMP"));
+    for (const btn of this.annotTools) btn.addEventListener("click", () => {
+      const fromMenu = !this.moreToolsMenu.hidden && this.moreToolsMenu.contains(btn);
+      if (fromMenu) this.#closeToolsMenu(true);
+      this.#setEditMode(btn.dataset.mode, btn.dataset.mode === "STAMP");
+    });
     this.signBtn.addEventListener("click", () => this.sign());
+    this.moreToolsBtn.addEventListener("click", () => this.#toggleToolsMenu());
+    this.moreToolsBtn.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); if (this.moreToolsMenu.hidden) this.#toggleToolsMenu(e.key === "ArrowUp" ? "last" : "checked"); }
+    });
+    // In the menu: arrows, Home and End move; Escape (or Tab) closes it, focus back on its button.
+    this.moreToolsMenu.addEventListener("keydown", (e) => {
+      const items = this.moreTools, at = items.indexOf(document.activeElement);
+      const go = (i) => { e.preventDefault(); items[(i + items.length) % items.length].focus(); };
+      if (e.key === "ArrowDown") go(at + 1);
+      else if (e.key === "ArrowUp") go(at < 0 ? items.length - 1 : at - 1);
+      else if (e.key === "Home") go(0);
+      else if (e.key === "End") go(items.length - 1);
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); this.#closeToolsMenu(true); }
+      else if (e.key === "Tab") this.#closeToolsMenu();
+    });
+    document.addEventListener("pointerdown", (e) => {
+      if (!this.moreToolsMenu.hidden && !this.moreToolsMenu.contains(e.target) && !this.moreToolsBtn.contains(e.target)) this.#closeToolsMenu();
+    });
     for (const sw of this.swatches) sw.addEventListener("click", () => this.#setColor(+sw.dataset.index));
     this.sizeSelect.addEventListener("change", () => this.#setSize(+this.sizeSelect.value));
     this.undoBtn.addEventListener("click", () => (this.textEditMode || this.markupMode ? this.#undoTextEdit() : this.uiManager?.undo()));
@@ -834,6 +881,14 @@ export class Reader {
       case "t": this.togglePanel(); break;
       case "e": this.useTool(this.textEditMode ? "NONE" : "EDITTEXT"); break;
       case "m": this.measureTool(this.measureMode === "distance" ? null : "distance"); break;
+      // The annotate bar's labelled tools, while it's open (H, C, A, D, S; again: back to Select).
+      case "h": case "c": case "a": case "d": case "s": {
+        if (this.annotbar.hidden || e.shiftKey) return;
+        const mode = ANNOT_KEYS[e.key];
+        if (mode === "SIGN") this.sign();
+        else this.#setEditMode(this.editMode === mode ? "NONE" : mode);
+        break;
+      }
       case "Home": v.currentPageNumber = 1; break;
       case "End": v.currentPageNumber = v.pagesCount; break;
       case "ArrowLeft": if (this.container.scrollWidth <= this.container.clientWidth) v.previousPage(); else return; break;
@@ -961,6 +1016,9 @@ export class Reader {
    *  there, nothing changed since it was last saved). */
   isPristine(tab = this.activeTab) { return !!(tab && tab.fileId && !tab.dirty); }
 
+  /** Draw the tab bar again (e.g. after the app marked a tab unsaved). */
+  refreshTabs() { this.#renderTabs(); }
+
   /** Switch to an open tab (e.g. back to the one a result was made from). */
   showTab(tab) { return this.#switchTo(tab); }
 
@@ -1032,7 +1090,8 @@ export class Reader {
 
   async #closeTabNow(tab) {
     if (!tab || !this.tabs.includes(tab)) return;
-    if (tab.dirty && !confirm(`Close “${tab.name}” without saving your changes?`)) return;
+    if (tab.dirty && await this.ask(`Close “${tab.name}”?`, "Your changes to it haven't been saved.",
+      [["cancel", "Cancel"], ["close", "Close without saving", true]]) !== "close") return;
     const i = this.tabs.indexOf(tab);
     this.tabs.splice(i, 1);
     if (tab === this.activeTab) {
@@ -1061,21 +1120,23 @@ export class Reader {
     const order = this.tabs.map((tab) => {
       let parts = this.tabEls.get(tab.id);
       if (!parts) {
-        const dot = el("span", { class: "rd-dot", title: "Unsaved changes" });
+        const dot = el("span", { class: "rd-dot", title: "Not saved" });
         const label = el("span", { class: "rd-doctab-label" }, tab.name);
-        const btn = el("button", { type: "button", class: "rd-doctab-name", role: "tab", title: tab.name }, dot, label);
+        const unsaved = el("span", { class: "rd-sr" }, ", unsaved");
+        const btn = el("button", { type: "button", class: "rd-doctab-name", role: "tab", title: tab.name }, dot, label, unsaved);
         btn.addEventListener("click", () => this.#switchTo(tab));
         const close = el("button", { type: "button", class: "rd-doctab-x", title: "Close", "aria-label": `Close ${tab.name}`, html: svg("x") });
         close.addEventListener("click", () => this.closeTab(tab));
         const wrap = el("div", { class: "rd-doctab" }, btn, close);
         wrap.addEventListener("auxclick", (e) => { if (e.button === 1) { e.preventDefault(); this.closeTab(tab); } });
-        parts = { wrap, btn, dot };
+        parts = { wrap, btn, dot, unsaved };
         this.tabEls.set(tab.id, parts);
       }
       const active = tab === this.activeTab;
       parts.wrap.classList.toggle("active", active);
       parts.btn.setAttribute("aria-selected", String(active));
-      parts.dot.hidden = !tab.dirty;
+      // A dot (and the word, for screen readers): changes not saved, or a tool's result not saved anywhere yet.
+      parts.dot.hidden = parts.unsaved.hidden = !(tab.dirty || tab.unsaved);
       return parts.wrap;
     });
     this.#showSaveState();
@@ -1279,7 +1340,9 @@ export class Reader {
       this.activeTab = tab;
       doc.annotationStorage.onSetModified = () => {
         tab.version = (tab.version || 0) + 1;
+        tab.savedSince = false;  // changed again after a save
         if (!tab.dirty) { tab.dirty = true; this.#renderTabs(); }
+        this.#showSaveState();
       };
       this.pdfViewer.setDocument(doc);
       this.linkService.setDocument(doc, null);
@@ -1928,6 +1991,7 @@ export class Reader {
   }
   closeAnnotate() {
     if (this.annotbar.hidden) return;
+    this.#closeToolsMenu();
     this.annotbar.hidden = true;
     this.annotateBtn.setAttribute("aria-pressed", "false");
     this.#showSaveState();
@@ -1980,7 +2044,8 @@ export class Reader {
     if (name === "NONE" && this.markupMode) name = this.markupMode;
     this.editMode = name;
     if (name === "EDITTEXT" || MARKUP.has(name)) this.undoBtn.disabled = !this.activeTab?.undo?.length;
-    for (const btn of this.annotTools) btn.setAttribute("aria-pressed", String(btn.dataset.mode === name));
+    for (const btn of this.annotTools) btn.setAttribute(this.moreTools.includes(btn) ? "aria-checked" : "aria-pressed", String(btn.dataset.mode === name));
+    this.#showMoreTools(name);
     const sizes = name === "FREETEXT" ? [[10, "10 pt"], [12, "12 pt"], [14, "14 pt"], [18, "18 pt"], [24, "24 pt"], [36, "36 pt"]]
       : name === "INK" ? [[1, "Thin"], [2, "Fine"], [4, "Medium"], [8, "Thick"], [14, "Marker"]]
       : name === "HIGHLIGHT" ? [[8, "Thin"], [12, "Normal"], [20, "Wide"]]
@@ -1993,6 +2058,33 @@ export class Reader {
     this.sizeSelect.hidden = !sizes.length;
     this.root.querySelector(".rd-swatches").hidden = !key;
     this.#showRedactBar(name);
+  }
+
+  /** The More tools button: "More tools", or the tool from its menu that's in use. */
+  #showMoreTools(name = this.editMode) {
+    const on = this.moreTools.find((t) => t.dataset.mode === name);
+    const label = on ? on.querySelector("span").textContent : "More tools";
+    this.moreToolsBtn.innerHTML = (on ? on.querySelector("svg").outerHTML : svg("more")) + `<span>${label}</span>` + svg("down");
+    this.moreToolsBtn.classList.toggle("on", !!on);
+    this.moreToolsBtn.setAttribute("aria-label", on ? `More tools (in use: ${label})` : "More tools");
+  }
+
+  #toggleToolsMenu(focus = "checked") {
+    if (!this.moreToolsMenu.hidden) { this.#closeToolsMenu(); return; }
+    const at = this.moreToolsBtn.getBoundingClientRect(), box = this.root.getBoundingClientRect();
+    this.moreToolsMenu.style.top = `${at.bottom - box.top + 6}px`;
+    this.moreToolsMenu.style.left = `${Math.max(8, Math.min(at.left - box.left, box.width - 268))}px`;
+    this.moreToolsMenu.style.right = "auto";
+    this.moreToolsMenu.hidden = false;
+    this.moreToolsBtn.setAttribute("aria-expanded", "true");
+    const items = this.moreTools;
+    (focus === "last" ? items.at(-1) : items.find((t) => t.getAttribute("aria-checked") === "true") || items[0]).focus();
+  }
+  #closeToolsMenu(refocus = false) {
+    if (this.moreToolsMenu.hidden) return;
+    this.moreToolsMenu.hidden = true;
+    this.moreToolsBtn.setAttribute("aria-expanded", "false");
+    if (refocus) this.moreToolsBtn.focus();
   }
 
   #applyAnnotParams() {
@@ -2326,8 +2418,10 @@ export class Reader {
     card.append(el("div", { class: "rd-commentbtns" },
       isReply ? null : btn("Reply", () => ask("Reply", "", (text) => text && this.#applyMarkup([{ op: "reply", page: it.page, id: it.id, text }], "Could not reply: "))),
       btn(it.text ? "Edit" : "Add comment", () => ask("Save", it.text, (text) => this.#applyMarkup([{ op: "text", page: it.page, id: it.id, text }], "Could not change the comment: "))),
-      btn("Delete", () => {
-        if (confirm(isReply ? "Delete this reply?" : `Delete this ${it.kind.toLowerCase()}${it.replies?.length ? " and its replies" : ""}?`)) {
+      btn("Delete", async () => {
+        const what = isReply ? "this reply" : `this ${it.kind.toLowerCase()}${it.replies?.length ? " and its replies" : ""}`;
+        if (await this.ask(`Delete ${what}?`, "Undo (Ctrl+Z) brings it back until you save.",
+          [["cancel", "Cancel"], ["delete", "Delete", true]]) === "delete") {
           this.#applyMarkup([{ op: "delete", page: it.page, id: it.id }], "Could not delete it: ");
         }
       })));
@@ -3921,7 +4015,8 @@ export class Reader {
       if (!tab || !this.doc) return;
       // Changes are made by rewriting the file, which a signature can't survive.
       if (!signing && tab.signatures?.length && !tab.signedWarned) {
-        if (!confirm("This document is signed. Changing it makes its signatures show as broken: they no longer cover what the document says. Change it anyway?")) return;
+        if (await this.ask("This document is signed", "Changing it makes its signatures show as broken: they no longer cover what the document says.",
+          [["cancel", "Cancel"], ["change", "Change it anyway", true]]) !== "change") return;
         tab.signedWarned = true;
       }
       this.#busy(true);
@@ -3979,7 +4074,8 @@ export class Reader {
       // Undoing goes back to the bytes before the change; anything added
       // since (drawings, form entries) would go with it.
       if ((this.#changed() || tab.bytes !== tab.afterEdit)
-          && !confirm("Undoing the change also takes away the annotations and form entries made since it. Continue?")) return;
+          && await this.ask("Undo the change?", "Undoing it also takes away the annotations and form entries made since it.",
+            [["cancel", "Cancel"], ["undo", "Undo the change", true]]) !== "undo") return;
       const previous = tab.undo.pop();
       const back = previous === tab.original;
       Object.assign(tab, { bytes: previous, afterEdit: previous, edited: !back, dirty: !back, goto: this.#view(),
@@ -4035,6 +4131,7 @@ export class Reader {
    *  computer (Ctrl+S); otherwise as a copy. */
   async save() {
     await this.chain;  // a text change still on its way is included
+    this.#finishEditing();  // a stroke or note still being made counts (Ctrl+S straight after drawing)
     const tab = this.activeTab;
     if (!this.doc || !tab) return;
     if (!tab.fileId) { await this.saveCopy(); return; }
@@ -4048,10 +4145,12 @@ export class Reader {
     try {
       let res = await put(false);
       if (res.status === 409) {
-        if (!confirm(`“${tab.name}” was changed by another program since you opened it.\n\nReplace it with your version? (Cancel saves your version as a copy instead.)`)) {
-          await this.saveCopy();
-          return;
-        }
+        // Cancel does nothing; the copy is a choice of its own.
+        const choice = await this.ask(`“${tab.name}” was changed by another program`,
+          "It changed since you opened it. Replace it with your version, or keep both by saving yours as a copy.",
+          [["cancel", "Cancel"], ["copy", "Save as a copy"], ["replace", "Replace file", true]]);
+        if (choice === "copy") { await this.saveCopy(); return; }
+        if (choice !== "replace") return;
         res = await put(true);
       }
       const answer = await res.json().catch(() => ({}));
@@ -4060,15 +4159,72 @@ export class Reader {
       Object.assign(tab, { stamp: answer.stamp, original: bytes, size: bytes.length });
       if (!tab.bytes || tab === this.activeTab && !this.bytes) tab.bytes = bytes;
       this.#markSaved(tab, version);
-      this.toast(`Saved ${tab.name}`, 2000);
+      // What the file held is kept for a while (not for big files): Undo puts it back.
+      if (answer.undo) this.toast(`Saved over ${tab.name}`, 10000, ["Undo", () => this.#unsave(tab, answer.undo)]);
+      else this.toast(`Saved over ${tab.name}`, 4000);
     } catch (e) {
       this.toast("Could not save: " + (e.message || e), 9000, ["Save as…", () => this.saveCopy()]);
     }
   }
 
+  /** Undo a save over the file: it gets back what it held; the tab keeps
+   *  the changes, unsaved again. */
+  async #unsave(tab, undo) {
+    this.toastHold?.(); this.toastHold = null;
+    this.toastEl?.remove();
+    try {
+      const res = await fetch("/api/unsave", { method: "POST", body: JSON.stringify({ undo }),
+        headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/json" } });
+      const answer = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(answer.error || res.statusText);
+      if (this.tabs.includes(tab)) {
+        Object.assign(tab, { stamp: answer.stamp, dirty: true });
+        this.#renderTabs();
+      }
+      this.toast(`Undone: ${tab.name} is as it was before. Your changes are still here, not saved.`, 6000);
+    } catch (e) {
+      this.toast("Could not undo the save: " + (e.message || e), 9000);
+    }
+  }
+
+  /** A question in the app's own dialog (never the browser's confirm()).
+   *  ``buttons``: [value, label, main?]; resolves with the value of the one
+   *  pressed. Escape and Cancel give "cancel", and focus goes back to where it was. */
+  ask(title, text, buttons) {
+    return this.#dialog(title, [text].flat().filter(Boolean).map((t) => el("p", {}, t)), buttons);
+  }
+
+  /** Show a file the app has open or saved in its folder (the server checks). */
+  async reveal(path) {
+    try {
+      const res = await fetch("/api/reveal", { method: "POST", body: JSON.stringify({ path }),
+        headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/json" } });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    } catch (e) { this.toast("Could not show it in its folder: " + (e.message || e), 6000); }
+  }
+
+  /** Save an open tab (e.g. a tool's result) as a file, the dialog starting
+   *  in the folder of the opened file ``near`` (its id). Resolves with the
+   *  path when it's known (the desktop window), true when saved elsewhere, null if not saved. */
+  async saveTab(tab, near = null) {
+    await this.chain;
+    if (!tab || !this.tabs.includes(tab)) return null;
+    const version = tab.version || 0;
+    let bytes;
+    try { bytes = tab === this.activeTab ? await this.#currentBytes() : tab.bytes || tab.original; }
+    catch (e) { this.toast("Could not save: " + (e.message || e), 9000); return null; }
+    if (!bytes) return null;
+    let done = null;
+    const name = /\.pdf$/i.test(tab.name) ? tab.name : tab.name + ".pdf";
+    await this.#saveBytes(bytes, name, (where) => { done = where || true; tab.unsaved = false; this.#markSaved(tab, version); }, near);
+    if (done && this.tabs.includes(tab)) this.#renderTabs();
+    return done;
+  }
+
   /** Save as a new file, starting in the document's own folder (Ctrl+Shift+S). */
   async saveCopy() {
     await this.chain;  // a text change still on its way is included
+    this.#finishEditing();
     if (!this.doc) return;
     const tab = this.activeTab, version = tab.version || 0;
     let bytes;
@@ -4087,7 +4243,7 @@ export class Reader {
         const res = await fetch("/api/keep", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
         const { id } = await res.json();
         const path = await api.save_result(id, name, near);
-        if (path) { saved(); this.toast("Saved to " + path, 5000, ["Show in folder", () => api.reveal(path)]); }
+        if (path) { saved(path); this.toast("Saved to " + path, 5000, ["Show in folder", () => this.reveal(path)]); }
       } catch (e) { this.toast("Could not save: " + (e.message || e)); }
       return;
     }
@@ -4255,6 +4411,12 @@ export class Reader {
     // (The annotation bar has its own while it's open.)
     const tab = this.activeTab, open = !!(this.doc && tab && this.annotbar.hidden);
     this.saveNowBtn.hidden = !(open && tab.dirty);
+    // The annotation bar's Save is the screen's main action only once there is
+    // something to save; until then it stays quiet (it still works).
+    const pending = !!(tab && (tab.dirty || (!tab.savedSince && (this.annotUndo || this.#changed()))));
+    this.annotSaveBtn.classList.toggle("seal", pending);
+    this.annotSaveBtn.classList.toggle("primary", pending);
+    this.annotSaveBtn.title = pending ? "Save your changes (Ctrl+S)" : "Nothing to save yet (Ctrl+S)";
     this.undoNowBtn.hidden = !(open && (this.annotUndo || tab.undo?.length));
   }
 
@@ -4267,13 +4429,17 @@ export class Reader {
   #markSaved(tab, version) {
     if (!tab || !this.tabs.includes(tab) || (tab.version || 0) !== version) return;  // changed since
     tab.dirty = false;
+    tab.savedSince = true;  // pdf.js's undo history outlives the save: Save goes quiet until the next change
+    try { if (tab === this.activeTab) this.doc?.annotationStorage.resetModified(); } catch (e) { /* (so the next change is noticed) */ }
     this.#renderTabs();
+    this.#showSaveState();
   }
 
   async print() {
     if (!this.doc) return;
     const doc = this.doc, total = doc.numPages;
-    if (total > 300 && !confirm(`Prepare all ${total} pages for printing? This can take a while.`)) return;
+    if (total > 300 && await this.ask(`Print all ${total} pages?`, "Preparing them can take a while.",
+      [["cancel", "Cancel"], ["print", "Prepare to print", true]]) !== "print") return;
     let box = document.getElementById("rd-print");
     if (box) box.remove();
     box = el("div", { id: "rd-print" });
@@ -5768,20 +5934,21 @@ export class Reader {
     const open = { icon: "open", label: "Open a PDF", keys: "Ctrl+O", words: "file browse", run: () => this.chooseFile() };
     if (!this.doc) return [open];
     const v = this.pdfViewer;
-    const tool = (label, mode, words = "", icon = "pen") => ({ icon, label, words: "annotate " + words, run: () => this.useTool(mode) });
+    // (Their single keys work while the annotate bar is open.)
+    const tool = (label, mode, words = "", icon = "pen", keys = "") => ({ icon, label, words: "annotate " + words, run: () => this.useTool(mode), ...(keys ? { keys } : {}) });
     const list = [
       { icon: "edittext", label: "Edit text", keys: "E", words: "change words typo rewrite paragraph add text", run: () => this.useTool("EDITTEXT") },
       { icon: "search", label: "Find in document", keys: "Ctrl+F", words: "search look for", run: () => this.openFind() },
-      tool("Highlight text", "HIGHLIGHT", "mark marker", "highlight"), tool("Add a text box", "FREETEXT", "note comment type", "text"),
-      tool("Draw", "INK", "pen ink freehand", "draw"), tool("Add a picture", "STAMP", "image photo stamp", "image"),
-      tool("Add a note", "NOTE", "comment sticky review", "note"), tool("Underline text", "UNDERLINE", "markup", "underline"),
+      tool("Highlight text", "HIGHLIGHT", "mark marker", "highlight", "H"), tool("Add text", "FREETEXT", "text box note comment type", "text", "A"),
+      tool("Draw", "INK", "pen ink freehand", "draw", "D"), tool("Add a picture", "STAMP", "image photo stamp", "image"),
+      tool("Add a note", "NOTE", "comment sticky review", "note", "C"), tool("Underline text", "UNDERLINE", "markup", "underline"),
       tool("Strike out text", "STRIKEOUT", "strikethrough delete markup", "strike"),
       tool("Draw a shape", "SHAPE", "rectangle ellipse circle cloud arrow line markup revision", "shapes"),
       tool("Stamp the page", "STAMPS", "approved draft confidential final received reviewed rubber stamp", "stamp"),
       tool("Edit pictures", "IMAGES", "image photo move resize replace delete logo", "imgedit"),
       tool("Edit links", "LINKS", "hyperlink url web address page add change remove", "link"),
       tool("Sign with a digital ID", "CERTSIGN", "certificate pfx p12 digital signature sign", "badge"),
-      tool("Redact (black out for good)", "REDACT", "redaction black out remove hide censor private confidential", "redact"),
+      tool("Redact this document", "REDACT", "redaction black out for good remove hide censor private confidential", "redact"),
       { icon: "badge", label: "Check the signatures", words: "verify valid certificate signed", run: () => this.#signatureDetails() },
       { icon: "comments", label: "Comments", words: "notes replies review list markup", run: () => { this.#setSidebar(true); this.#showTab("comments"); } },
       { icon: "sign", label: "Sign", words: "signature autograph", run: () => this.sign() },

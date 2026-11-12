@@ -72,6 +72,7 @@
   --teal: var(--accent);
   --seal: #d4382c;
   --seal-ink: #ffffff;
+  --seal-hover: .92;  /* hover darkens white-on-red (lightening it fell under 4.5:1) */
   --tint-a: #dfe6f5;
   --tint-b: #f3e4de;
   --glass: rgb(255 255 255 / .72);
@@ -109,7 +110,7 @@
     --text: #eef0f3; --text-2: #c9ced6; --muted: #a4acb8; --faint: #8c95a1;
     --border: #2c3138; --border-strong: #3d444d; --input-border: #737b85;
     --accent: #5cc9c4; --accent-hover: #7fd8d3; --accent-text: #0f1114; --accent-soft: #17302f; --accent-ring: rgb(92 201 196 / .3);
-    --seal: #ef5a4c; --seal-ink: #14171c; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(40 46 54 / .88);
+    --seal: #ef5a4c; --seal-ink: #14171c; --seal-hover: 1.07; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(40 46 54 / .88);
     --glass-edge: rgb(255 255 255 / .13); --glass-hi: inset 0 1px 0 rgb(255 255 255 / .08);
     --ok: #5fd09a; --ok-soft: #173326; --warn: #e6b65e; --warn-soft: #3a2d10; --err: #f28c7e; --err-soft: #3f1f1b;
     --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 10px 28px rgb(0 0 0 / .45); --shadow-lift: 0 2px 6px rgb(0 0 0 / .45), 0 16px 40px rgb(0 0 0 / .5);
@@ -123,7 +124,7 @@
   --text: #eef0f3; --text-2: #c9ced6; --muted: #a4acb8; --faint: #8c95a1;
   --border: #2c3138; --border-strong: #3d444d; --input-border: #737b85;
   --accent: #5cc9c4; --accent-hover: #7fd8d3; --accent-text: #0f1114; --accent-soft: #17302f; --accent-ring: rgb(92 201 196 / .3);
-  --seal: #ef5a4c; --seal-ink: #14171c; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(40 46 54 / .88);
+  --seal: #ef5a4c; --seal-ink: #14171c; --seal-hover: 1.07; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(40 46 54 / .88);
     --glass-edge: rgb(255 255 255 / .13); --glass-hi: inset 0 1px 0 rgb(255 255 255 / .08);
   --ok: #5fd09a; --ok-soft: #173326; --warn: #e6b65e; --warn-soft: #3a2d10; --err: #f28c7e; --err-soft: #3f1f1b;
   --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 10px 28px rgb(0 0 0 / .45); --shadow-lift: 0 2px 6px rgb(0 0 0 / .45), 0 16px 40px rgb(0 0 0 / .5);
@@ -205,6 +206,12 @@ main:focus { outline: none; }  /* the skip link's target: the page itself needs 
 .fly-head h2 { margin: 0; font: 400 28px/1.1 var(--display); letter-spacing: 0; }
 .fly-head span { color: var(--muted); font-size: 12px; font-family: var(--mono); }
 .fly-list { flex: 1; overflow-y: auto; padding: 2px 10px 14px; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+/* More tools than the window shows: a fade at the foot (and the head, once scrolled) says the list goes on. */
+.flyout::before, .flyout::after { content: ""; position: absolute; left: 0; right: 10px; height: 44px; pointer-events: none; opacity: 0;
+  transition: opacity var(--t) var(--ease); z-index: 1; }
+.flyout::after { bottom: 0; background: linear-gradient(transparent, var(--surface) 85%); border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
+.flyout::before { top: 58px; height: 28px; background: linear-gradient(var(--surface), transparent); }
+.flyout.more-below::after, .flyout.more-above::before { opacity: 1; }
 .fly-sec { margin: 12px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); }
 .fly-tool {
   display: grid; grid-template-columns: 34px minmax(0, 1fr); column-gap: 12px; align-items: center; width: 100%; text-align: left;
@@ -365,6 +372,10 @@ body.drop-first.opts-later.has-files #options-card, body.drop-first.opts-later.h
 .file-sub { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
 .badge { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 1px 7px; background: var(--surface-3); color: var(--muted); }
 .badge.warn { background: var(--err-soft); color: var(--err); }
+.result-skipped { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--err-soft); color: var(--err); font-size: 13px; overflow-wrap: anywhere; }
+.result-skipped svg.i { width: 15px; height: 15px; flex: none; margin-top: 2px; }
+.result-skipped b { font-weight: 600; }
 .order, .pb-pos, .rc-num {
   min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px;
   background: var(--text); color: var(--bg); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
@@ -384,6 +395,19 @@ body.drop-first.opts-later.has-files #options-card, body.drop-first.opts-later.h
 .chip-btn svg { width: 14px; height: 14px; }
 .chip-btn:disabled { opacity: .4; cursor: default; }
 @media (hover: none) { .card-actions { opacity: 1; } }
+/* One or two files: a strip, not a mostly empty grid. */
+.file-grid.strip { grid-template-columns: 1fr; gap: 8px; }
+.file-grid.strip .file-card { display: flex; align-items: center; gap: 14px; padding: 8px 10px 8px 8px; }
+.file-grid.strip .file-card:hover { transform: none; }
+.file-grid.strip .thumb { width: 46px; flex: none; border: 1px solid var(--border); border-radius: 6px; }
+.file-grid.strip .thumb svg { width: 20px; height: 20px; }
+.file-grid.strip .file-meta { flex: 1; min-width: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.file-grid.strip .file-name { font: 400 20px/1.2 var(--display); letter-spacing: 0; }
+.file-grid.strip .file-sub { font-family: var(--mono); font-size: 12px; }
+.file-grid.strip .file-sub .badge { font-family: var(--ui); }
+.file-grid.strip .order { position: static; order: -1; flex: none; }
+.file-grid.strip .card-actions { position: static; opacity: 1; flex: none; }
+.file-grid.strip .card-actions .chip-btn { box-shadow: none; width: 32px; height: 32px; }
 
 /* Page board (Reorder pages) */
 .page-board .pb-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -622,8 +646,14 @@ details.pw summary svg { width: 15px; height: 15px; }
 .btn:active { transform: scale(.98); }
 /* The one action that matters on a screen: seal red. */
 #run:not(.secondary), .btn.seal { background: var(--seal); color: var(--seal-ink); box-shadow: 0 6px 16px color-mix(in srgb, var(--seal) 30%, transparent); }
-#run:not(.secondary):hover, .btn.seal:hover { background: var(--seal); filter: brightness(1.07); }
+#run:not(.secondary):hover, .btn.seal:hover { background: var(--seal); filter: brightness(var(--seal-hover, .92)); }
 .btn.secondary { background: var(--surface); color: var(--text); border-color: var(--border-strong); box-shadow: var(--shadow); }
+/* One seal action per screen: once there's a result to save (or changes in
+   the reader), Save is the main action and Run steps back. */
+body:has(#result:not([hidden]) .btn.seal) #run:not(.secondary),
+.rd:has(.rd-savenow:not([hidden]), .rd-annotbar:not([hidden]) .rd-annotsave) .fp .btn.seal.fp-run,
+.fp:has(.fp-saveas) .btn.seal.fp-run, .fp-opts:has(.fp-done:not([hidden]) .btn.seal) .btn.seal.fp-run {
+  background: var(--surface); color: var(--text); border-color: var(--border-strong); box-shadow: var(--shadow); }
 .opts-body { display: block; }
 #options-card.has-live .opts-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); gap: 24px; align-items: start; }
 .live { position: sticky; top: 16px; }
@@ -707,7 +737,20 @@ td { word-break: break-all; }
 .search-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .search-folder { color: var(--muted); font-size: 12px; }
 .search-page { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
-.search-results mark { background: color-mix(in srgb, #ffd54a 70%, transparent); color: inherit; border-radius: 3px; padding: 0 2px; }
+/* The matched words: dark ink on the yellow in both themes (over 4.5:1). */
+.search-results mark { background: #ffd54a; color: #1d1a10; border-radius: 3px; padding: 0 2px; }
+.search-folder-row th { text-align: left; padding: 14px 12px 6px; font: 500 12px/1.4 var(--mono); color: var(--muted); text-transform: none; letter-spacing: 0;
+  overflow-wrap: anywhere; border-bottom: 1px solid var(--border); }
+.search-folder-row th svg.i { width: 14px; height: 14px; vertical-align: -2px; margin-right: 6px; color: var(--faint); }
+.search-group:first-of-type .search-folder-row th { padding-top: 8px; }
+.search-name { font-weight: 600; }
+.search-also { font-size: 12px; color: var(--muted); margin-top: 2px; }
+/* A folder tool's form, folded away above its results. */
+body.form-folded #options-card { display: none; }
+.form-recap { display: flex; align-items: center; gap: 8px; margin: -10px 0 14px; color: var(--text-2); font-size: 14px; min-width: 0; }
+.form-recap svg.i { width: 16px; height: 16px; color: var(--muted); flex: none; }
+.form-recap .recap-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.form-recap .link-btn { font-weight: 500; flex: none; }
 .search-more { color: var(--muted); font-size: 12px; }
 
 /* Start screen: one line, a drop area, Recent and "Start from several files". */
@@ -740,6 +783,9 @@ td { word-break: break-all; }
 .recent-name { display: block; font: 400 19px/1.25 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .recent-facts { display: block; font: 400 12px/1.5 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .recent-facts.flag { color: var(--accent); }
+/* Something wrong with the file ("can't be read"): the error colour, and an icon, not colour alone. */
+.recent-facts.bad, .fp-fact.bad { color: var(--err); }
+.recent-facts.bad svg.i, .fp-fact.bad svg.i { width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; stroke-width: 2; }
 .recent-when { font: 400 12px var(--mono); color: var(--faint); white-space: nowrap; }
 .recent-x { opacity: 0; margin-left: 4px; border-color: transparent; background: none; }
 .rd .recent-x { color: var(--muted); }  /* (reader.css gives the reader's buttons their parent's colour) */
@@ -775,6 +821,7 @@ td { word-break: break-all; }
 .fp-facts { display: flex; flex-wrap: wrap; gap: 6px; }
 .fp-fact { font: 500 11.5px/1.5 var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px; }
 .fp-fact.flag { color: var(--accent); border-color: transparent; background: var(--accent-soft); }
+.fp-fact.bad { border-color: transparent; background: var(--err-soft); }
 .fp-fact.wait { height: 22px; border-color: transparent; background: var(--surface-2); animation: fp-wait 1.2s ease-in-out infinite alternate; }
 @keyframes fp-wait { to { opacity: .45; } }
 .fp-sec { display: flex; flex-direction: column; gap: 8px; }
@@ -825,6 +872,9 @@ td { word-break: break-all; }
 .fp-said .saving { color: var(--ok); font-weight: 600; }
 .fp-save { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .fp-save .btn { height: 34px; padding: 0 14px; }
+.fp-save { align-items: center; }
+.fp-unsaved { font-size: 12.5px; color: var(--muted); }
+.fp-saved { color: var(--muted); overflow-wrap: anywhere; flex-basis: 100%; outline: none; }
 .fp-more { display: grid; grid-template-columns: 1fr 1fr; grid-auto-flow: row dense; gap: 6px; }
 .fp-tool { border: 1px solid var(--border); background: none; border-radius: var(--radius-sm); padding: 8px 9px; text-align: left; display: flex; gap: 7px;
   align-items: center; color: var(--text); cursor: pointer; min-width: 0; font-size: 13.5px; line-height: 1.25;
@@ -906,7 +956,8 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
     <div class="rail-groups">
       <button class="rail-btn" type="button" data-group="read" title="Read a PDF"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h7v14H4zM13 5h7v14h-7z"/></svg>Read</button>
       <button class="rail-btn" type="button" data-group="pages" aria-expanded="false" aria-controls="flyout" title="Tools for pages"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="11" height="15" rx="1.5"/><path d="M9 21h9a1 1 0 0 0 1-1V8"/></svg>Pages</button>
-      <button class="rail-btn" type="button" data-group="convert" aria-expanded="false" aria-controls="flyout" title="Tools to convert and optimize"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg>Convert</button>
+      <button class="rail-btn" type="button" data-group="improve" aria-expanded="false" aria-controls="flyout" title="Tools to make files smaller, searchable, mended and accessible"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4.5 12.6 9l4.4 1.5-4.4 1.6L11 16.5l-1.6-4.4L5 10.5 9.4 9z"/><path d="M18 3v4M16 5h4M18.5 15.5v4M16.5 17.5h4"/></svg>Improve</button>
+      <button class="rail-btn" type="button" data-group="convert" aria-expanded="false" aria-controls="flyout" title="Tools to convert to and from PDF"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg>Convert</button>
       <button class="rail-btn" type="button" data-group="protect" aria-expanded="false" aria-controls="flyout" title="Tools to protect, sign and archive"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Protect</button>
       <button class="rail-btn" type="button" data-group="all" aria-expanded="false" aria-controls="flyout" title="All tools"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg>All</button>
     </div>
@@ -938,6 +989,7 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
       <button class="fav-btn" id="fav-btn" type="button" aria-pressed="false" hidden></button>
     </div>
 
+    <div class="form-recap" id="form-recap" hidden></div>
     <div class="message err" id="error" hidden role="alert" tabindex="-1"></div>
     <section class="card result" id="result" hidden aria-live="polite"></section>
 
@@ -1059,7 +1111,7 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
       <button type="button" class="btn secondary" id="set-check-now">Check now</button>
       <span style="flex:1"></span>
       <button type="button" class="btn secondary" value="cancel" id="set-cancel">Close</button>
-      <button type="submit" class="btn" id="set-save">Save</button>
+      <button type="submit" class="btn seal" id="set-save">Save</button>
     </div>
   </form>
 </dialog>
@@ -1100,6 +1152,7 @@ const isMac = /Mac/.test(navigator.platform);
 
 // ---- icons ----------------------------------------------------------------
 const ICONS = {
+  improve: '<path d="M11 4.5 12.6 9l4.4 1.5-4.4 1.6L11 16.5l-1.6-4.4L5 10.5 9.4 9z"/><path d="M18 3v4M16 5h4M18.5 15.5v4M16.5 17.5h4"/>',
   star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>',
   home: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-6h4v6"/>',
   reader: '<path d="M2 5h6a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2z"/><path d="M22 5h-6a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h7z"/>',
@@ -1294,6 +1347,28 @@ function fadeAway(node) {
   node.classList.add("out");
   setTimeout(() => node.remove(), ms + 40);
 }
+/** A question in the app's own dialog, never the browser's confirm(): the
+ *  reader's dialog look (reader.css .rd-dialog). ``buttons``: [value, label,
+ *  main?], named by what they do. Resolves with the pressed button's value;
+ *  Cancel and Escape give "cancel" and do nothing. Focus goes back where it was. */
+function appAsk(title, text, buttons) {
+  return new Promise((resolve) => {
+    const before = document.activeElement;
+    const form = el("form", { method: "dialog" }, el("h3", {}, title), ...[text].flat().filter(Boolean).map((t) => el("p", {}, t)),
+      el("div", { class: "actions" }, ...buttons.map(([value, label, main]) => el("button", main
+        ? { value, class: "primary", type: "submit" } : { value, type: "button", onclick: () => dialog.close(value) }, label))));
+    const dialog = el("dialog", { class: "rd-dialog app-ask", "aria-label": title }, form);
+    dialog.addEventListener("cancel", () => { dialog.returnValue = "cancel"; });
+    dialog.addEventListener("close", () => {
+      resolve(dialog.returnValue || "cancel");
+      dialog.remove();
+      if (before && before.isConnected && before !== document.body) before.focus({ preventScroll: true });
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+  });
+}
+window.appAsk = appAsk;
 let toastEl = null, toastTimer = 0, toastHold = () => {};
 /** A short note that rises in and fades out: the reader's own toast in the
  *  reader, the same look (.toast) on the start screen and the tool pages. */
@@ -1378,7 +1453,7 @@ function factChips(facts) {
     const at = parts.findIndex((p) => p === "PDF/A" || p === "protected");
     parts.splice(at < 0 ? parts.length : at, 0, "tagged");
   }
-  return parts.map((text) => ({ text, flag: text === "scanned, no text yet" || text === "can't be read" }));
+  return parts.map((text) => ({ text, flag: text === "scanned, no text yet", bad: text === "can't be read" }));
 }
 
 /** The reader changed tabs, or the shown document changed: follow it. */
@@ -1454,7 +1529,8 @@ function fpShowFacts(facts) {
   const chips = factChips(facts);
   fp.chips.removeAttribute("aria-busy");
   fp.chips.hidden = !chips.length;
-  fp.chips.replaceChildren(...chips.map((c) => el("span", { class: "fp-fact" + (c.flag ? " flag" : ""), role: "listitem" }, c.text)));
+  fp.chips.replaceChildren(...chips.map((c) => el("span", { class: "fp-fact" + (c.flag ? " flag" : c.bad ? " bad" : ""), role: "listitem" },
+    c.bad ? icon("alert") : null, c.text)));
   fp.facts = facts;
   fpSuggest();
 }
@@ -1666,6 +1742,8 @@ async function fpRun(item) {
       const made = await reader.openResult(new Uint8Array(await blob.arrayBuffer()), name, password, tab);
       if (!made) { fail("the result couldn't be opened"); return; }
       made.madeBy = { label: op.label, from: tab, sizes: pct >= 5 ? `${sizes}, ${pct}% smaller` : sizes, notes };
+      made.unsaved = true;  // only in the app until it's saved: a dot on its tab, Save… in its note
+      reader.refreshTabs();
       if (fp.tab === made) fpShowNote(made);
       done.replaceChildren(icon("check"), el("div", {}, el("b", {}, made.madeBy.sizes), ". Opened beside the original as ", el("b", {}, name), "."));
       done.hidden = false;
@@ -1690,15 +1768,35 @@ async function fpRun(item) {
   }
 }
 
-/** On a tab a tool made: what was done, and the way back to the original. */
+/** On a tab a tool made: what was done, the way back to the original, and
+ *  Save… (the result is only in the app until it's saved), then Show in folder. */
 function fpShowNote(tab) {
   const m = tab.madeBy;
   if (!m) { fp.note.replaceChildren(); return; }
   const back = reader.tabs.includes(m.from)
     ? el("button", { type: "button", class: "link-btn", onclick: () => reader.showTab(m.from) }, m.from.name) : el("b", {}, m.from.name);
+  let finish = null;
+  if (tab.unsaved) {
+    const save = el("button", { type: "button", class: "btn seal fp-saveas", title: "Save it as a file, starting in the original's folder" },
+      icon("download"), "Save…");
+    save.addEventListener("click", async () => {
+      save.disabled = true;
+      try {
+        const where = await reader.saveTab(tab, m.from.fileId || null);
+        if (where) { m.savedTo = typeof where === "string" ? where : null; m.saved = true; }
+      } finally { save.disabled = false; }
+      if (fp.tab === tab && m.saved) { fpShowNote(tab); fp.note.querySelector(".fp-reveal, .fp-saved")?.focus(); }
+    });
+    finish = el("div", { class: "fp-save" }, save, el("span", { class: "fp-unsaved" }, "Not saved yet"));
+  } else if (m.saved) {
+    const reveal = m.savedTo
+      ? el("button", { type: "button", class: "btn secondary fp-reveal", onclick: () => reader.reveal(m.savedTo) }, icon("folder"), "Show in folder") : null;
+    finish = el("div", { class: "fp-save" }, el("div", { class: "fp-saved", tabindex: "-1" }, el("span", { class: "saving" }, "Saved"),
+      m.savedTo ? ` to ${m.savedTo}` : ""), reveal);
+  }
   fp.note.replaceChildren(el("div", { class: "fp-done" }, icon("check"), el("div", {},
     el("b", {}, m.label), `: ${m.sizes}. Made from `, back, ", still open in its own tab.",
-    ...m.notes.map((line) => el("div", { class: "fp-line" }, line)))));
+    ...m.notes.map((line) => el("div", { class: "fp-line" }, line)), finish)));
 }
 
 /** "<tool>: this document" from the palette: open it in the panel when it runs there. */
@@ -1729,7 +1827,8 @@ function paletteCommands() {
     if (op.id === current?.id && op.id !== "home") continue;
     list.push({ label: op.label, words: `${op.group} ${op.help || ""} ${TAGLINES[op.id] || ""}`, group: "Tools", icon: op.id,
       sub: TAGLINES[op.id] || "", run: () => select(op.id) });
-    if (doc && op.files === "pdf") {
+    // (Redact: the reader has its own, "Redact this document": one entry, not two alike.)
+    if (doc && op.files === "pdf" && op.id !== "redact") {
       list.push({ label: `${op.label}: this document`, words: `${op.group} ${TAGLINES[op.id] || ""}`, group: "This document", icon: op.id,
         run: () => fpChoose(op.id), later: true });
     }
@@ -1813,13 +1912,23 @@ document.addEventListener("keydown", (e) => {
 }, { capture: true });
 
 // ---- rail and flyout --------------------------------------------------------------
-// The rail's five groups. Each tool belongs to one of Read, Pages, Convert
-// and Protect (by the group the server gives it), and every tool is under All.
-const RAIL_GROUPS = { read: "Read", pages: "Pages", convert: "Convert", protect: "Protect", all: "All tools" };
+// The rail's groups, by what a tool does: Read, Pages, Improve, Convert and
+// Protect (from the group the server gives each tool, with a few moved by
+// hand), and every tool is under All. Tools that work on several files or a
+// folder (Recipes, the folder tools) are under no rail group: the start
+// screen's "Start from several files" and its More list them ("several").
+const RAIL_GROUPS = { read: "Read", pages: "Pages", improve: "Improve", convert: "Convert", protect: "Protect", all: "All tools",
+  several: "Several files" };
 const RAIL_OF_GROUP = { Read: "read", Combine: "pages", Pages: "pages", Layout: "pages", Stamp: "pages",
-  Optimize: "convert", Convert: "convert", Automate: "convert", Folders: "convert", Security: "protect" };
-const RAIL_OF_TOOL = { pdfa: "protect", "pdfa-check": "protect" };  // archiving sits with protecting
-const railGroup = (op) => RAIL_OF_TOOL[op.id] || RAIL_OF_GROUP[op.group] || "convert";
+  Optimize: "improve", Convert: "convert", Security: "protect", Automate: null, Folders: null };
+// Archiving sits with protecting; making accessible and flattening improve a file.
+const RAIL_OF_TOOL = { pdfa: "protect", "pdfa-check": "protect", tag: "improve", "access-check": "improve", flatten: "improve" };
+const railGroup = (op) => (op.id in RAIL_OF_TOOL ? RAIL_OF_TOOL[op.id] : op.group in RAIL_OF_GROUP ? RAIL_OF_GROUP[op.group] : "convert");
+// The headings inside a flyout, where a tool's server group would read wrong there.
+const SUB_OF_TOOL = { ocr: "Scans", clean: "Scans", tag: "Accessibility", "access-check": "Accessibility", flatten: "Optimize",
+  pdfa: "Archive", "pdfa-check": "Archive", merge: "Several PDFs", interleave: "Several PDFs", compare: "Several PDFs" };
+const SEVERAL_TOOLS = ["merge", "interleave", "compare", "recipe", "organize", "rename", "duplicates", "search"];
+const inFlyout = (op, group) => group === "all" || (group === "several" ? SEVERAL_TOOLS.includes(op.id) : railGroup(op) === group);
 let flyoutGroup = null;
 /** Every tool as a button[data-op] (the rail's index), and the flyout if it's open. */
 function renderTools() {
@@ -1830,7 +1939,7 @@ function renderTools() {
 }
 function renderFlyout(group) {
   const list = $("flyout-list");
-  const tools = ops.filter((o) => o.group && (group === "all" || railGroup(o) === group));
+  const tools = ops.filter((o) => o.group && inFlyout(o, group));
   const row = (op) => el("button", { type: "button", class: "fly-tool", "data-op": op.id,
     "aria-current": current && current.id === op.id ? "true" : "false", onclick: () => { closeFlyout(); select(op.id); } },
     el("span", { class: "ticon" }, icon(op.id)), el("strong", {}, op.label), el("small", {}, TAGLINES[op.id] || op.group));
@@ -1843,16 +1952,28 @@ function renderFlyout(group) {
       if (few.length) parts.push(el("div", { class: "fly-sec" }, title), ...few.map(row));
     }
   }
-  let sub = null;
+  // Under each heading in the order the tools come (All keeps the server's groups).
+  const subs = new Map();
   for (const op of tools) {
-    if (op.group !== sub) { sub = op.group; parts.push(el("div", { class: "fly-sec" }, sub)); }
-    parts.push(row(op));
+    const sub = group === "all" ? op.group : SUB_OF_TOOL[op.id] || op.group;
+    if (!subs.has(sub)) subs.set(sub, []);
+    subs.get(sub).push(op);
   }
+  for (const [sub, few] of subs) parts.push(el("div", { class: "fly-sec" }, sub), ...few.map(row));
   list.replaceChildren(...parts);
   $("flyout-title").textContent = RAIL_GROUPS[group];
   $("flyout-count").textContent = plural(tools.length, "tool");
+  requestAnimationFrame(flyoutCue);
 }
-function openFlyout(group) {
+/** A list longer than the window scrolls: a fade at its foot says there's more. */
+function flyoutCue() {
+  const list = $("flyout-list");
+  $("flyout").classList.toggle("more-below", list.scrollHeight - list.scrollTop - list.clientHeight > 4);
+  $("flyout").classList.toggle("more-above", list.scrollTop > 4);
+}
+let flyoutOpener = null;
+function openFlyout(group, opener = null) {
+  flyoutOpener = opener;
   flyoutGroup = group;
   renderFlyout(group);
   const fly = $("flyout");
@@ -1868,8 +1989,10 @@ function closeFlyout(refocus = false) {
   flyoutGroup = null;
   $("flyout").hidden = true;
   document.querySelectorAll(".rail-btn[aria-expanded]").forEach((b) => b.setAttribute("aria-expanded", "false"));
-  if (refocus) document.querySelector(`.rail-btn[data-group="${was}"]`)?.focus();
+  if (refocus) (document.querySelector(`.rail-btn[data-group="${was}"]`) || (flyoutOpener?.isConnected ? flyoutOpener : null))?.focus();
 }
+$("flyout-list").addEventListener("scroll", flyoutCue, { passive: true });
+window.addEventListener("resize", () => { if (flyoutGroup) flyoutCue(); });
 function toggleFlyout(group) { if (flyoutGroup === group) closeFlyout(); else openFlyout(group); }
 document.querySelectorAll(".rail-btn[data-group]").forEach((b) => b.addEventListener("click", () => {
   if (b.dataset.group === "read") { closeFlyout(); select("reader"); } else toggleFlyout(b.dataset.group);
@@ -1961,6 +2084,7 @@ async function select(id) {
   // result): keep what was typed and the result.
   const keep = id === formOp;
   formOp = id;
+  if (!keep) foldForm(null);
   const folder = current.files === null;
   $("files-card").hidden = folder;
   $("pw-box").hidden = folder || current.files === "images" || current.files === "office" || current.files === "web";
@@ -2127,6 +2251,8 @@ function renderFiles() {
     grid.append(card);
   });
   grid.hidden = items.length === 0;
+  // One or two files: a compact strip (thumbnail, name, facts, actions); three or more: the grid.
+  grid.classList.toggle("strip", items.length > 0 && items.length <= 2);
   $("drop").classList.toggle("compact", items.length > 0);
   syncDropFirst();
   const pages = items.reduce((n, it) => n + (it.pages || 0), 0);
@@ -2151,6 +2277,8 @@ function updateSummary() {
   $("kbd-hint").textContent = "";
   if (current.files === null) {
     $("summary").textContent = current.preview === false ? "Nothing on your computer is changed." : "Preview first — nothing changes until you click Apply.";
+    // (A folder tool needs no file: don't keep the last tool's "Add a file first".)
+    if (!$("run").classList.contains("busy") && !$("preview").classList.contains("busy")) { $("run").disabled = false; $("run").title = ""; }
     return;
   }
   const need = current.files === "pdf2" ? 2 : current.min || 1;
@@ -2297,7 +2425,8 @@ async function renderHome() {
       const op = ops.find((o) => o.id === id);
       return el("button", { type: "button", "data-tool": id, onclick: () => select(id) }, icon(id), el("span", {}, name || op.label, el("span", {}, line)));
     }),
-    el("button", { type: "button", class: "more", onclick: (e) => { e.stopPropagation(); openFlyout("all"); } }, "More tools"));
+    el("button", { type: "button", class: "more", "aria-haspopup": "dialog", "aria-controls": "flyout",
+      onclick: (e) => { e.stopPropagation(); openFlyout("several", e.currentTarget); } }, "More for several files"));
   parts.push(el("div", { class: "start-cols" },
     el("section", { class: "start-sec", "aria-label": "Recent files" }, el("span", { class: "lbl" }, "Recent"), recentList),
     el("section", { class: "start-sec", "aria-label": "Start from several files" }, el("span", { class: "lbl" }, "Start from several files"), multi)));
@@ -2364,10 +2493,11 @@ async function fillRecent(host, { emptyText = "", onEmpty = null, still = () => 
     const folder = e.title !== e.name ? folderOf(e.title) : "";
     const where = names[e.name] > 1 ? folder : "";
     const line = [factsLine(e.facts), where && `in ${where}`].filter(Boolean).join(" · ");
-    const flag = !!(e.facts && (e.facts.error || (e.facts.scanned && !e.facts.has_text)));
+    const facts = factsLine(e.facts), bad = facts === "can't be read";
+    const flag = !bad && !!(e.facts && e.facts.scanned && !e.facts.has_text);
     const row = el("div", { class: "recent-row", "data-key": e.key, "data-name": e.name, "data-facts": factsLine(e.facts), "data-where": folder },
       el("button", { type: "button", class: "recent-open", title: e.title, onclick: () => e.open() },
-        el("span", {}, el("span", { class: "recent-name" }, e.name), line ? el("span", { class: "recent-facts" + (flag ? " flag" : "") }, line) : null),
+        el("span", {}, el("span", { class: "recent-name" }, e.name), line ? el("span", { class: "recent-facts" + (flag ? " flag" : bad ? " bad" : "") }, line) : null),
         el("span", { class: "recent-when" }, whenText(e.opened))),
       el("button", { type: "button", class: "chip-btn recent-x", title: "Remove from Recent", "aria-label": `Remove ${e.name} from Recent`,
         onclick: async () => {
@@ -2585,7 +2715,14 @@ PANELS.redact = {
   title: "Pages", sub: "Drag on a page to black out an area",
   async setup(host) {
     const { RegionEditor } = await import("/static/regions.js");
-    const editor = new RegionEditor(host, { mode: "redact", onChange: (boxes) => { const f = $("f-boxes"); if (f) f.value = JSON.stringify(boxes); } });
+    // The button says what happens: "Black out 3 matches" once they're found (or "Black out 5 areas" with boxes drawn).
+    const sayCount = () => {
+      if (current.panel !== "redact") return;
+      const found = items.length === 1 ? Object.values(editor.matches || {}).reduce((n, l) => n + l.length, 0) : 0;
+      const drawn = items.length === 1 ? editor.boxCount : 0, n = found + drawn;
+      $("run-label").textContent = !n ? current.action : `${current.action} ${n} ${drawn ? (n === 1 ? "area" : "areas") : (n === 1 ? "match" : "matches")}`;
+    };
+    const editor = new RegionEditor(host, { mode: "redact", onChange: (boxes) => { const f = $("f-boxes"); if (f) f.value = JSON.stringify(boxes); sayCount(); } });
     let timer = null, asked = 0;
     const findMatches = () => {
       clearTimeout(timer);
@@ -2600,7 +2737,7 @@ PANELS.redact = {
         }
         try {
           const data = await (await api("/api/redact/find", { method: "POST", body })).json();
-          if (ask === asked) editor.setMatches(data.boxes);
+          if (ask === asked) { editor.setMatches(data.boxes); sayCount(); }
         } catch (e) { /* the preview is optional */ }
       }, 450);
     };
@@ -2839,6 +2976,7 @@ function collectOptions(op = current, prefix = "f-") {
 function firstMissing(op, prefix) { return op.fields.find((f) => f.required && !$(prefix + f.key).value.trim()); }
 function missingField() {
   const f = firstMissing(current, "f-");
+  if (f) foldForm(null);  // (a folded form opens to show the field)
   if (f) { showError(`Please fill in “${f.label}”.`); fieldError($("f-" + f.key), `Fill in “${f.label}” to go on.`); $("f-" + f.key).focus(); }
   return !!f;
 }
@@ -2873,13 +3011,13 @@ async function run(preview) {
     const resultId = res.headers.get("X-Pdfm-Result-Id");
     const note = decodeURIComponent(res.headers.get("X-Pdfm-Note") || "");
     const blob = await res.blob();
-    await showResult(name, blob, resultId, note);
+    await showResult(name, blob, resultId, note, bad.map((it) => it.file.name));
   } catch (err) {
     showError(plainError(err.message), { detail: err.message, focus: true });
   } finally { busy(false); }
 }
 
-async function showResult(name, blob, resultId, note = "") {
+async function showResult(name, blob, resultId, note = "", skipped = []) {
   if (lastUrl) URL.revokeObjectURL(lastUrl);
   lastUrl = URL.createObjectURL(blob);
   const before = items.reduce((n, it) => n + it.file.size, 0);
@@ -2900,7 +3038,11 @@ async function showResult(name, blob, resultId, note = "") {
     el("div", { class: "result-body" },
       el("div", { class: "result-title" }, icon("check"), "Done"),
       el("div", { class: "result-name" }, name), subEl,
-      note ? el("div", { class: "result-note" }, ...note.split("\n").map((line) => el("div", {}, line))) : null, actions));
+      note ? el("div", { class: "result-note" }, ...note.split("\n").map((line) => el("div", {}, line))) : null,
+      // Files that couldn't be opened were left out: said again here, by name.
+      skipped.length ? el("div", { class: "result-skipped" }, icon("alert"),
+        el("span", {}, `${plural(skipped.length, "file")} ${skipped.length === 1 ? "was" : "were"} left out (can't be opened): `, el("b", {}, skipped.join(", ")))) : null,
+      actions));
   $("result").hidden = false;
   updateSummary();
   $("result").scrollIntoView({ behavior: smoothScroll(), block: "nearest" });
@@ -2925,7 +3067,7 @@ async function showResult(name, blob, resultId, note = "") {
 function saveControls(blob, name, resultId, href, said, { onError = showError, download = "Download" } = {}) {
   if (isDesktop() && resultId) {
     let reveal = null;
-    const save = el("button", { class: "btn", type: "button" }, icon("download"), "Save…");
+    const save = el("button", { class: "btn seal", type: "button" }, icon("download"), "Save…");
     save.addEventListener("click", async () => {
       try {
         const path = await window.pywebview.api.save_result(resultId, name);
@@ -2940,7 +3082,7 @@ function saveControls(blob, name, resultId, href, said, { onError = showError, d
   }
   if (filesLib && filesLib.canSave) {
     // Edge or Chrome: the computer's own Save dialog (it needs a click).
-    const save = el("button", { class: "btn", type: "button" }, icon("download"), "Save…");
+    const save = el("button", { class: "btn seal", type: "button" }, icon("download"), "Save…");
     save.addEventListener("click", async () => {
       try {
         const saved = await filesLib.saveAs(blob, name);
@@ -2956,8 +3098,10 @@ async function runFolder(apply) {
   if (missingField()) return;
   const { opts } = collectOptions();
   if (apply && (opts.move === "true" || opts.delete === "true" || current.id === "rename")) {
-    const verb = current.id === "rename" ? "rename files" : opts.delete === "true" ? "delete duplicate files" : "move files";
-    if (!confirm(`This will ${verb} on your computer. Continue?`)) return;
+    const [title, label] = current.id === "rename" ? ["Rename the files?", "Rename files"]
+      : opts.delete === "true" ? ["Delete the duplicate files?", "Delete duplicates"] : ["Move the files?", "Move files"];
+    if (await appAsk(title, "This changes the files on your computer, as the preview shows.",
+      [["cancel", "Cancel"], ["go", label, true]]) !== "go") return;
   }
   busy(true, apply ? "Applying…" : "Previewing…", apply ? "run" : "preview");
   try {
@@ -2992,27 +3136,71 @@ function showSearchResults(data, query) {
   else if (best) msg = `Nothing like that in the ${plural(data.files, "PDF")} searched.`;
   const extra = data.skipped.length ? ` ${plural(data.skipped.length, "file")} couldn't be searched (password protected or unreadable).` : "";
   const said = el("div", { class: "result-sub", id: "search-summary", tabindex: "-1" }, msg + extra);
+  // Results come up under the title: the form folds into one line (with Edit) once there's something to show.
+  foldForm(pages ? `“${query}” in ${$("f-directory")?.value || "the folder"}` : null);
   $("result").replaceChildren(el("div", { class: "result-body" },
     el("div", { class: "result-title" }, icon(pages ? "check" : "alert"), "Search"), said));
   $("result").hidden = false;
   // Focus on what was found (it's read out), in sight above the action bar.
   requestAnimationFrame(() => { said.focus({ preventScroll: true }); said.scrollIntoView({ block: "nearest", behavior: smoothScroll() }); });
   if (!pages) return;
-  const tbody = el("tbody");
+  // One group per folder (its path once, as a heading), in the order the results come.
+  const folders = new Map();
   for (const m of data.matches) {
     const name = m.path.split(/[\\/]/).pop(), folder = m.path.slice(0, m.path.length - name.length - 1);
-    const open = () => openInReaderById([m.id], { page: m.page, find: best ? m.find : query });
-    const row = el("tr", { class: "search-row", tabindex: "0", role: "button", "aria-label": `Open page ${m.page} of ${name}`, title: "Open this page in the reader",
-      onclick: open, onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } } },
-      el("td", {}, el("strong", {}, name), el("div", { class: "search-folder" }, folder),
-        (m.also || []).length ? el("div", { class: "search-folder", title: m.also.join("\n") }, `The same as ${m.also[0].split(/[\\/]/).pop()}${m.also.length > 1 ? " and " + plural(m.also.length - 1, "other") : ""}`) : null),
-      el("td", { class: "search-page" }, `p. ${m.page}`),
-      el("td", {}, m.before, el("mark", {}, m.match), m.after, m.count > 1 && !best ? el("span", { class: "search-more" }, ` +${m.count - 1} more`) : null));
-    tbody.append(row);
+    if (!folders.has(folder)) folders.set(folder, []);
+    folders.get(folder).push([m, name]);
+  }
+  const groups = [];
+  for (const [folder, rows] of folders) {
+    const tbody = el("tbody", { class: "search-group" },
+      el("tr", { class: "search-folder-row" }, el("th", { colspan: "3", scope: "colgroup", class: "search-folder" }, icon("folder"), folder || "/")));
+    for (const [m, name] of rows) {
+      const open = () => openInReaderById([m.id], { page: m.page, find: best ? m.find : query });
+      // Only the words that matched are marked: the phrase found, or (best matches) the question's own words in the snippet.
+      const text = best ? markWords(m.before + m.match + m.after, query) : [m.before, el("mark", {}, m.match), m.after];
+      tbody.append(el("tr", { class: "search-row", tabindex: "0", role: "button", "aria-label": `Open page ${m.page} of ${name}`, title: "Open this page in the reader",
+        onclick: open, onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } } },
+        el("td", {}, el("strong", { class: "search-name" }, name),
+          (m.also || []).length ? el("div", { class: "search-also", title: m.also.join("\n") }, `The same as ${m.also[0].split(/[\\/]/).pop()}${m.also.length > 1 ? " and " + plural(m.also.length - 1, "other") : ""}`) : null),
+        el("td", { class: "search-page" }, `p. ${m.page}`),
+        el("td", {}, ...text, m.count > 1 && !best ? el("span", { class: "search-more" }, ` +${m.count - 1} more`) : null)));
+    }
+    groups.push(tbody);
   }
   $("result-table").replaceChildren(el("table", { class: "search-results" },
-    el("thead", {}, el("tr", {}, el("th", {}, "File"), el("th", {}, "Page"), el("th", {}, "Text"))), tbody));
+    el("thead", {}, el("tr", {}, el("th", {}, "File"), el("th", {}, "Page"), el("th", {}, "Text"))), ...groups));
   $("result-table").hidden = false;
+}
+
+/** ``text`` with the words of ``query`` marked (and words that start with
+ *  them: "owe" marks "owed"); little words such as "how" and "do" aren't. */
+const QUIET_WORDS = new Set("a an and are as at be but by can could did do does for from had has have how i if in into is it its me my much no not of on or our so than that the their them then there these they this to us was we were what when where which who whom why will with would you your".split(" "));
+function markWords(text, query) {
+  const words = [...new Set(String(query).toLowerCase().match(/[\p{L}\p{N}]+/gu) || [])].filter((w) => w.length > 1 && !QUIET_WORDS.has(w));
+  if (!words.length) return [text];
+  const esc = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${words.sort((a, b) => b.length - a.length).map(esc).join("|")})[\\p{L}\\p{N}]*`, "giu");
+  const parts = [];
+  let at = 0;
+  for (const m of text.matchAll(re)) {
+    if (m.index > at) parts.push(text.slice(at, m.index));
+    parts.push(el("mark", {}, m[0]));
+    at = m.index + m[0].length;
+  }
+  if (at < text.length) parts.push(text.slice(at));
+  return parts;
+}
+/** A folder tool's form, folded to one line ("“query” in folder · Edit") above
+ *  its results; null opens it again. */
+function foldForm(line) {
+  const recap = $("form-recap");
+  document.body.classList.toggle("form-folded", !!line);
+  recap.hidden = !line;
+  if (!line) return;
+  const edit = el("button", { type: "button", class: "link-btn", "aria-controls": "options-card", "aria-expanded": "false" }, "Edit");
+  edit.addEventListener("click", () => { foldForm(null); $("f-query")?.focus(); });
+  recap.replaceChildren(icon("search"), el("span", { class: "recap-text" }, line), el("span", { "aria-hidden": "true" }, "·"), edit);
 }
 
 function busy(on, text, which = "run") {
@@ -3166,7 +3354,8 @@ $("update-btn").addEventListener("click", () => {
 });
 $("update-later").addEventListener("click", () => $("update-dialog").close());
 $("update-go").addEventListener("click", async () => {
-  if (reader && reader.hasUnsavedChanges() && !confirm("The reader has changes that haven't been saved. Update anyway?")) return;
+  if (reader && reader.hasUnsavedChanges() && await appAsk("Update with unsaved changes?", "The reader has changes that haven't been saved: updating restarts ZPDF and they'd be lost.",
+    [["cancel", "Cancel"], ["update", "Update anyway", true]]) !== "update") return;
   const go = $("update-go"), bar = $("update-progress");
   go.disabled = true; $("update-later").disabled = true; bar.hidden = false;
   try {

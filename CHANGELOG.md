@@ -4,6 +4,51 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.23.0
+
+Clearer about saving, and easier to find your way, after a review of the
+whole interface. The look is the same.
+
+- After a tool runs in the reader's file panel, its message has Save… (the
+  folder of the original is offered first), then Show in folder. A tab
+  that isn't saved anywhere yet has a dot.
+- Saving over a file (Ctrl+S) can be undone for 10 seconds: "Saved over
+  report.pdf — Undo" puts back what the file held. (Not for files over
+  64 MB.)
+- Questions come up in ZPDF's own window, with buttons that say what they
+  do: "Replace file", "Save as a copy", "Cancel". Cancel and Escape never
+  change anything. This replaces the browser's plain boxes everywhere.
+- Save is red, like Run: the one main button. Once there is a result to
+  save, Run steps back.
+- The annotate bar keeps its words in ordinary windows: Highlight, Note,
+  Add text, Draw, Sign and Save. The rest (Underline, Strike out, Shapes,
+  Stamp, Add picture, Edit text, Edit pictures, Links, Digital ID,
+  Redact) are under More tools, which shows the one in use. "Picture" is
+  now "Add picture" and "Pictures" "Edit pictures".
+- Single keys while the annotate bar is open: H highlight, C note, A add
+  text, D draw, S sign (press again to put the tool down). They are in
+  each button's tooltip and in Ctrl+K.
+- The rail is grouped by what you want to do: Read, Pages, Improve,
+  Convert, Protect. Improve has Compress, Make searchable (OCR), Repair,
+  Clean up scans, Convert colours, Flatten and the accessibility tools.
+  The folder tools (Search PDFs, Organize, Rename, Find duplicates) and
+  Recipes are on the start screen under "Start from several files" and
+  its More, and under All. A long tool list shows that it scrolls.
+- Search PDFs: once results come, the form folds into one line ("how much
+  do I owe" in Documents · Edit) and the results sit under the title,
+  grouped by folder, with only the matching words marked. The marks are
+  easy to read in dark mode too.
+- One or two files on a tool page show as a compact strip instead of a
+  large, mostly empty card.
+- "can't be read" is shown in red on the start screen and in the file
+  panel.
+- Redact's button says "Black out" ("Black out 3 matches" once they're
+  found), Delete pages' "Delete pages", Remove hidden data's and
+  Flatten's their own name, instead of Run.
+- When a file couldn't be opened and was left out, the result says so by
+  name. The command palette has one Redact, and "Redact this document" in
+  the reader.
+
 ## 0.22.1
 
 Easier to use with the keyboard and easier to see, after a review against

@@ -119,7 +119,12 @@ const fs = require("fs");
       if (how === "replaced") {
         await page.evaluate(() => reader.rotatePages([1], 90));
         await page.waitForFunction(() => reader.activeTab.dirty && reader.loading.hidden, null, { timeout: 30000 });
-        await within(page.evaluate(() => reader.save()), 15000);
+        // The app's own dialog says so (not the browser's confirm()); Escape is Cancel.
+        const saving = page.evaluate(() => reader.save());
+        await page.waitForSelector("dialog.rd-dialog[open]", { timeout: 15000 });
+        r.asked = await page.textContent("dialog.rd-dialog[open] h3");
+        await page.keyboard.press("Escape");
+        await within(saving, 15000);
       }
       r.dialogs = page.dialogs;
       Object.assign(r, await state(page));
