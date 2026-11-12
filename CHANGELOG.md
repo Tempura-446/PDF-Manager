@@ -4,6 +4,26 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.22.1
+
+Easier to use with the keyboard and easier to see, after a review against
+common accessibility guidelines. The look is unchanged.
+
+- Text boxes and lists have borders you can see, and whatever has the
+  keyboard's focus shows a clear outline, including search results and
+  menus. The bar with Run at the bottom of a tool no longer hides it.
+- The annotate toolbar fits the window, with Save and Close always in
+  view; the Settings dialog keeps its buttons on screen in a small window.
+- After searching a folder, the results come into view.
+- A PDF that can't be opened is said to be damaged, in plain words, with
+  a way to Repair it; it no longer counts as ready to run.
+- "Skip to main content" for the keyboard; Escape closes the annotate
+  bar and puts the focus back where it was after the find bar and
+  password box; small buttons are easier to hit.
+- Removing a file from Recent can be undone. The password box has a
+  label, Show/Hide, and lets a password manager fill it in. A missing
+  setting is pointed out next to the field.
+
 ## 0.22.0
 
 - Editing text really replaces it. The old words are taken out of the

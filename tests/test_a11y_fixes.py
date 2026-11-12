@@ -126,6 +126,7 @@ def test_accessibility_fixes_in_a_browser(app, tmp_path):
         a = out[f"annot{w}"]
         assert a["save"] and a["close"] and a["undo"], (w, a)
     assert out["annot1920"]["labels"]
+    assert all(out[f"annot{w}"]["saveWord"] for w in (1024, 1280, 1440, 1920)), "Save keeps its word"
 
     # Reader: no Tab stop per page; the page view shows focus from the keyboard, not when it opens.
     assert out["textLayerTab"] and set(out["textLayerTab"]) == {-1}, out["textLayerTab"]

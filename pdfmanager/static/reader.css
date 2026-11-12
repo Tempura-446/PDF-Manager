@@ -315,7 +315,9 @@
 .rd-swatch:hover { transform: scale(1.1); }
 .rd-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); transform: scale(1.08); }
 .rd-annotbar .rd-zoom { height: 34px; }
-@container (max-width: 1540px) { .rd-tool span { display: none; } .rd-annotbar .rd-btn.primary span { display: none; } }
+@container (max-width: 1540px) { .rd-tool span { display: none; } }
+/* Save keeps its word down to narrow windows: it is the bar's one main action. */
+@container (max-width: 900px) { .rd-annotbar .rd-btn.primary span { display: none; } }
 /* Save and Close stay at the bar's end when the tools scroll under them. */
 .rd-annotbar > .rd-btn.primary, .rd-annotbar > .rd-btn:last-child { position: sticky; z-index: 1; }
 .rd-annotbar > .rd-btn:last-child { right: 0; background: var(--surface-2); }

@@ -164,6 +164,7 @@ const { chromium } = require("playwright");
         const btn = (title) => [...bar.querySelectorAll("button")].find((x) => (x.title || "").startsWith(title));
         const vis = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.left >= b.left - 1 && r.right <= b.right + 1 && r.right <= innerWidth; };
         return { save: vis(btn("Save your changes")), close: vis(btn("Close the annotation tools")), undo: vis(btn("Undo")),
+          saveWord: getComputedStyle(btn("Save your changes").querySelector("span")).display !== "none",
           scrollW: bar.scrollWidth, clientW: bar.clientWidth, labels: getComputedStyle(bar.querySelector(".rd-tool:not(.compact) span")).display !== "none" };
       });
       await c.close();
