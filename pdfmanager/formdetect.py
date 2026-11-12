@@ -626,7 +626,59 @@ def _detect_page(page, textpage, quick=False):
             if key in f:
                 item[key] = f[key]
         out.append(item)
-    return out
+    return _quick_strict(out) if quick else out
+
+
+def _staircase(fields):
+    """Indexes of boxes that are art, not fields: 3+ boxes one under another
+    that share one side (within 1pt) while the other side moves by a steady
+    step, as stripes drawn on a slant do. Only boxes with no label count: a
+    row of fields whose left sides step along with the length of their
+    labels ("Name:", "E-mail:", "Address:") is a form."""
+    art = set()
+    bare = [i for i, f in enumerate(fields) if not f["name"]]
+    for same, other in ((2, 0), (0, 2)):
+        ordered = sorted(bare, key=lambda i: fields[i]["rect"][same])
+        clusters, cur = [], []
+        for i in ordered:
+            if cur and abs(fields[i]["rect"][same] - fields[cur[0]]["rect"][same]) > 1:
+                clusters.append(cur)
+                cur = []
+            cur.append(i)
+        if cur:
+            clusters.append(cur)
+        for group in clusters:
+            group = sorted(group, key=lambda i: fields[i]["rect"][1])
+            start = 0
+            while start < len(group) - 2:
+                end, steps = start + 1, []
+                while end < len(group):
+                    step = fields[group[end]]["rect"][other] - fields[group[end - 1]]["rect"][other]
+                    mean = sum(steps) / len(steps) if steps else step
+                    if abs(step) < 1 or step * mean < 0 or abs(step - mean) > max(2, 0.35 * abs(mean)):
+                        break
+                    steps.append(step)
+                    end += 1
+                if end - start >= 3:
+                    art.update(group[start:end])
+                    start = end
+                else:
+                    start += 1
+    return art
+
+
+def _quick_strict(fields):
+    """The quick look (the "looks like a form" offer nobody asked for) is
+    stricter than Add form fields: no text field taller than wide (a sliver
+    beside a letter's outline), no staircase of boxes (stripe art), and at
+    least two of what is left must have a label near them; else nothing."""
+    fields = [f for f in fields if f["type"] not in ("text", "multiline")
+              or f["rect"][3] - f["rect"][1] <= f["rect"][2] - f["rect"][0]]
+    art = _staircase(fields)
+    fields = [f for i, f in enumerate(fields) if i not in art]
+    if sum(1 for f in fields if f["name"]) < 2:
+        return []
+    return fields
 
 
 def _radio_groups(circles, words, pt, taken):

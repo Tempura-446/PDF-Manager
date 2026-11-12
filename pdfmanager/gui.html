@@ -62,6 +62,8 @@
   --faint: #5e6773;
   --border: #d9dde3;
   --border-strong: #c3c9d1;
+  /* Text fields and selects: their edge reads at 3:1 on the card and the bars (other borders stay soft). */
+  --input-border: #808891;
   --accent: #0d6b6b;
   --accent-hover: #0a5757;
   --accent-text: #ffffff;
@@ -105,7 +107,7 @@
   :root:not([data-theme="light"]) {
     --bg: #0f1114; --sidebar: #171a1e; --surface: #1d2126; --surface-2: #242930; --surface-3: #2c3239;
     --text: #eef0f3; --text-2: #c9ced6; --muted: #a4acb8; --faint: #8c95a1;
-    --border: #2c3138; --border-strong: #3d444d;
+    --border: #2c3138; --border-strong: #3d444d; --input-border: #737b85;
     --accent: #5cc9c4; --accent-hover: #7fd8d3; --accent-text: #0f1114; --accent-soft: #17302f; --accent-ring: rgb(92 201 196 / .3);
     --seal: #ef5a4c; --seal-ink: #14171c; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(40 46 54 / .88);
     --glass-edge: rgb(255 255 255 / .13); --glass-hi: inset 0 1px 0 rgb(255 255 255 / .08);
@@ -119,7 +121,7 @@
 :root[data-theme="dark"] {
   --bg: #0f1114; --sidebar: #171a1e; --surface: #1d2126; --surface-2: #242930; --surface-3: #2c3239;
   --text: #eef0f3; --text-2: #c9ced6; --muted: #a4acb8; --faint: #8c95a1;
-  --border: #2c3138; --border-strong: #3d444d;
+  --border: #2c3138; --border-strong: #3d444d; --input-border: #737b85;
   --accent: #5cc9c4; --accent-hover: #7fd8d3; --accent-text: #0f1114; --accent-soft: #17302f; --accent-ring: rgb(92 201 196 / .3);
   --seal: #ef5a4c; --seal-ink: #14171c; --tint-a: #18223a; --tint-b: #2c1b1b; --glass: rgb(40 46 54 / .88);
     --glass-edge: rgb(255 255 255 / .13); --glass-hi: inset 0 1px 0 rgb(255 255 255 / .08);
@@ -133,6 +135,8 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
+/* Focus and scrolled-to elements stop above the sticky action bar (its height: --action-bar-h, kept by script). */
+html { scroll-padding-bottom: calc(var(--action-bar-h, 0px) + 8px); }
 body {
   background-color: var(--bg); color: var(--text);
   background-image: radial-gradient(900px 600px at 10% -5%, var(--tint-a), transparent 70%), radial-gradient(800px 560px at 95% 105%, var(--tint-b), transparent 70%);
@@ -149,6 +153,11 @@ button { touch-action: manipulation; }
 [hidden] { display: none !important; }
 kbd { font-family: var(--mono); }
 svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+/* Skip link: the first Tab stop, out of sight until it has focus. */
+.skip-link { position: fixed; top: 10px; left: 74px; z-index: 100; padding: 8px 14px; border-radius: var(--radius-sm); background: var(--surface); color: var(--text);
+  box-shadow: var(--float); font-weight: 600; text-decoration: none; }
+.skip-link:not(:focus) { width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; box-shadow: none; }
+main:focus { outline: none; }  /* the skip link's target: the page itself needs no ring */
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 .app { display: grid; grid-template-columns: 64px minmax(0, 1fr); min-height: 100vh; }
@@ -227,7 +236,7 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 
 /* ---- Dialogs ------------------------------------------------------------------------- */
 .app-dialog { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); padding: 0; width: min(520px, calc(100vw - 32px)); box-shadow: var(--float); }
-.app-dialog[open] { animation: pop-in calc(var(--t) * 1.4) var(--ease); }
+.app-dialog[open] { animation: pop-in calc(var(--t) * 1.4) var(--ease); display: flex; flex-direction: column; overflow: hidden; }
 @keyframes pop-in { from { opacity: 0; transform: translateY(-6px) scale(.99); } }
 /* Command palette (Ctrl+K): frosted, as it's only there for a moment. */
 .palette { border: 1px solid var(--glass-edge); border-radius: var(--radius-lg); color: var(--text); padding: 0;
@@ -250,9 +259,10 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 .palette-item .sub { color: var(--muted); font-size: 12.5px; }
 .palette-item[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .palette-item[aria-selected="true"] svg { color: var(--accent); }
+.palette-item[aria-selected="true"] .sub { color: color-mix(in srgb, var(--muted) 78%, var(--text)); }  /* 4.5:1 on the highlight */
 .palette-empty { color: var(--muted); padding: 18px 12px; font-size: 14px; }
 .app-dialog::backdrop { background: rgb(20 23 28 / .36); backdrop-filter: blur(3px); }
-.app-dialog form { padding: 24px 26px 22px; display: flex; flex-direction: column; gap: 10px; }
+.app-dialog form { padding: 24px 26px 0; display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; scroll-padding-bottom: 76px; }  /* (focus stops above the buttons) */
 .app-dialog h2 { margin: 0 0 2px; font: 400 28px/1.15 var(--display); letter-spacing: 0; }
 .app-dialog h3 { margin: 14px 0 2px; font-size: 14px; font-weight: 600; }
 .app-dialog p { margin: 0; font-size: 14px; }
@@ -262,12 +272,14 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 .dlg-field { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
 .dlg-field > span { font-weight: 600; color: var(--text-2); }
 .dlg-field em { font-style: normal; color: var(--ok); }
-.dlg-field input, .dlg-field select { height: 38px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; transition: border-color var(--t), box-shadow var(--t); }
+.dlg-field input, .dlg-field select { height: 38px; padding: 0 11px; border: 1px solid var(--input-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; transition: border-color var(--t), box-shadow var(--t); }
 .dlg-field.inline { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
 .dlg-field.inline select { min-width: 160px; }
 .dlg-status { min-height: 1.3em; font-size: 13px !important; color: var(--ok); }
 .dlg-status.err { color: var(--err); }
-.dlg-buttons { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+/* The buttons stay in sight when a short window makes the dialog scroll. */
+.dlg-buttons { display: flex; gap: 8px; align-items: center; margin-top: 0; padding: 8px 0 22px; flex-wrap: wrap;  /* (the dialog's bottom: no form padding below them) */
+  position: sticky; bottom: 0; z-index: 1; background: var(--surface); }
 .text-dialog { width: min(760px, calc(100vw - 32px)); }
 .text-dialog pre { margin: 0; max-height: min(60vh, 560px); overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .link-btn { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
@@ -548,7 +560,7 @@ select.re-name { width: auto; }
 .field label { display: block; font-size: 13px; font-weight: 600; color: var(--text-2); margin-bottom: 6px; }
 .field .hint { font-size: 12px; color: var(--muted); margin-top: 5px; }
 .field input[type=text], .field input[type=number], .field input[type=password], .field select, .pw-row input {
-  width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface);
+  width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--input-border); border-radius: var(--radius-sm); background: var(--surface);
   transition: border-color var(--t), box-shadow var(--t);
 }
 /* Every select draws the same chevron; every text input shows the same focus ring. */
@@ -558,15 +570,31 @@ select.re-name { width: auto; }
   background-position: right 15px center, right 10px center; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
 }
 .rd-zoom { padding-right: 24px; background-position: right 13px center, right 8px center; }
+/* Windows high contrast: the chevron (a gradient) is dropped there, so selects
+   keep the system's own arrow; the current tool and pressed toggles take
+   Highlight (else they look like the rest); focus rings are Highlight. */
+@media (forced-colors: active) {
+  .field select, .rc-picker, .rc-add, select.re-name, .dlg-field select, .rd-zoom, .rd select { appearance: auto; background-image: none; }
+  .rail-btn[aria-current="true"], .rail-btn[aria-expanded="true"], .fly-tool[aria-current="true"], .palette-item[aria-selected="true"],
+  .re-type[aria-pressed="true"], .pw-toggle[aria-pressed="true"], .fav-btn[aria-pressed="true"] {
+    forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight;
+  }
+  .rail-btn[aria-current="true"] svg.i, .fly-tool[aria-current="true"] .ticon, .palette-item[aria-selected="true"] svg,
+  .palette-item[aria-selected="true"] .sub { color: HighlightText; background: none; }
+  :focus-visible { outline-color: Highlight !important; }
+}
 .field input:focus, .field select:focus, .pw-row input:focus, .dlg-field input:focus, .dlg-field select:focus,
 .rc-picker:focus, .rc-add:focus, .rc-name:focus, .re-name:focus, .bm-title:focus, .bm-page:focus,
-.find:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.find:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--accent); box-shadow: none; }  /* 3:1, like every other ring */
+.field input[aria-invalid="true"], .field select[aria-invalid="true"] { border-color: var(--err); }
+.field .field-err { color: var(--err); }
 .field .with-btn { display: flex; gap: 6px; }
 .field .with-btn input { flex: 1; min-width: 0; }
 .field input[type=file] { font-size: 13px; max-width: 100%; }
-.field.check { display: flex; align-items: center; gap: 9px; align-self: end; padding-bottom: 9px; }
-.field.check label { margin: 0; font-weight: 400; font-size: 14px; color: var(--text); cursor: pointer; }
+.field.check { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 9px; align-self: end; padding-bottom: 9px; }
+.field.check label { flex: 1 1 0; min-width: 0; margin: 0; font-weight: 400; font-size: 14px; color: var(--text); cursor: pointer; }
 .field.check input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.field.check .hint { flex-basis: 100%; margin-left: 25px; }  /* under its label, which keeps the width beside the box */
 .field.wide { grid-column: 1 / -1; }
 .empty-note { color: var(--muted); margin: 0; font-size: 14px; }
 details.pw { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
@@ -574,6 +602,13 @@ details.pw summary { cursor: pointer; color: var(--muted); font-size: 14px; disp
 details.pw summary::-webkit-details-marker { display: none; }
 details.pw summary svg { width: 15px; height: 15px; }
 .pw-row { margin-top: 10px; max-width: 340px; }
+.pw-row label { display: block; font-size: 13px; font-weight: 600; color: var(--text-2); margin-bottom: 6px; }
+.pw-input { display: flex; gap: 6px; }
+.pw-input input { flex: 1; min-width: 0; }
+.pw-toggle { flex: none; min-width: 56px; height: 38px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface);
+  color: var(--text-2); font-size: 13px; font-weight: 600; cursor: pointer; }
+.pw-toggle:hover { background: var(--surface-2); color: var(--text); }
+.pw-toggle[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
 .pw-row .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
 
 /* Buttons */
@@ -614,7 +649,8 @@ details.pw summary svg { width: 15px; height: 15px; }
 .btn.ghost { background: transparent; color: var(--muted); border-color: transparent; box-shadow: none; }
 .btn.ghost:hover { background: var(--surface-3); color: var(--text); }
 .btn.secondary:hover { background: var(--surface-2); filter: none; }
-.btn:disabled { opacity: .6; cursor: progress; filter: none; transform: none; }
+.btn:disabled { opacity: .6; cursor: not-allowed; filter: none; transform: none; }
+body:has(.btn.busy) .btn:disabled { cursor: progress; }  /* waiting for a job, not refused */
 .btn svg { width: 16px; height: 16px; }
 .btn .spinner { display: none; width: 15px; height: 15px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
 .btn.busy .spinner { display: inline-block; }
@@ -641,6 +677,11 @@ details.pw summary svg { width: 15px; height: 15px; }
 /* Messages and results */
 .message { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: var(--radius-sm); font-size: 14px; margin-bottom: 16px; }
 .message svg { margin-top: 1px; }
+.message:focus { outline: none; }
+.message:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.message .err-more { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; font-size: 13px; }
+.message .err-more summary { cursor: pointer; }
+.message .err-more code { display: block; margin-top: 2px; font: 12px/1.4 var(--mono); color: var(--text-2); overflow-wrap: anywhere; }
 .message.err { background: var(--err-soft); color: var(--err); }
 .message.info { background: var(--surface-2); color: var(--muted); }
 .result { display: flex; gap: 18px; align-items: center; border-color: color-mix(in srgb, var(--ok) 38%, var(--border)); background: linear-gradient(180deg, color-mix(in srgb, var(--ok-soft) 55%, var(--surface)), var(--surface) 70%); }
@@ -662,7 +703,8 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: upp
 td { word-break: break-all; }
 .search-results td { word-break: normal; overflow-wrap: anywhere; }
 .search-row { cursor: pointer; transition: background var(--t); }
-.search-row:hover, .search-row:focus-visible { background: var(--accent-soft); outline: none; }
+.search-row:hover, .search-row:focus-visible { background: var(--accent-soft); }
+.search-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .search-folder { color: var(--muted); font-size: 12px; }
 .search-page { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
 .search-results mark { background: color-mix(in srgb, #ffd54a 70%, transparent); color: inherit; border-radius: 3px; padding: 0 2px; }
@@ -702,7 +744,7 @@ td { word-break: break-all; }
 .recent-x { opacity: 0; margin-left: 4px; border-color: transparent; background: none; }
 .rd .recent-x { color: var(--muted); }  /* (reader.css gives the reader's buttons their parent's colour) */
 .rd .recent-x:hover { color: var(--text); }
-.recent-row:hover .recent-x, .recent-x:focus-visible { opacity: 1; }
+.recent-row:hover .recent-x, .recent-row:focus-within .recent-x { opacity: 1; }
 @media (hover: none) { .recent-x { opacity: 1; } }
 .start-empty { color: var(--muted); margin: 0; padding: 12px 0; border-top: 1px solid var(--border); font-size: 14px; }
 .multi { display: flex; flex-direction: column; gap: 8px; }
@@ -855,6 +897,7 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
 </style>
 </head>
 <body>
+<a class="skip-link" id="skip-link" href="#main">Skip to main content</a>
 <div class="app">
   <nav class="rail" aria-label="Sections">
     <button class="rail-brand" id="brand" type="button" title="Start screen" aria-label="ZPDF start screen">
@@ -888,14 +931,14 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
     </button>
   </header>
 
-  <main>
+  <main id="main" tabindex="-1">
     <div class="page-head">
       <div class="tool-icon" id="tool-icon"></div>
       <div><h1 id="title">ZPDF</h1><p id="help"></p><button type="button" class="link-btn help-more" id="help-more" aria-expanded="false" aria-controls="help" hidden>More about this</button></div>
       <button class="fav-btn" id="fav-btn" type="button" aria-pressed="false" hidden></button>
     </div>
 
-    <div class="message err" id="error" hidden role="alert"></div>
+    <div class="message err" id="error" hidden role="alert" tabindex="-1"></div>
     <section class="card result" id="result" hidden aria-live="polite"></section>
 
     <section class="card" id="files-card">
@@ -904,12 +947,12 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
         <span class="sub" id="files-sub"></span>
       </div>
       <div class="file-grid" id="file-grid" hidden></div>
-      <label class="drop" id="drop">
-        <input type="file" id="file-input" multiple>
-        <span class="drop-icon"><svg class="i" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg></span>
+      <label class="drop" id="drop" tabindex="0" role="button" aria-labelledby="drop-title" aria-describedby="drop-hint">
+        <input type="file" id="file-input" multiple tabindex="-1">
+        <span class="drop-icon"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg></span>
         <strong id="drop-title">Drop files here or click to choose</strong>
         <small id="drop-hint"></small>
-        <button type="button" class="btn seal drop-choose" id="drop-choose"><svg class="i btn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V5M7 10l5-5 5 5M5 19h14"/></svg>Choose files</button>
+        <button type="button" class="btn seal drop-choose" id="drop-choose" tabindex="-1" aria-hidden="true"><svg class="i btn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V5M7 10l5-5 5 5M5 19h14"/></svg>Choose files</button>
       </label>
     </section>
 
@@ -936,9 +979,11 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
       <div class="opts-body"><div class="opts-main">
       <form id="form" class="fields" autocomplete="off"></form>
       <details class="pw" id="pw-box">
-        <summary><svg class="i" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Password-protected files?</summary>
+        <summary><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Password-protected files?</summary>
         <div class="pw-row">
-          <input type="password" id="pw" placeholder="Current password" aria-label="Current password" autocomplete="off">
+          <label for="pw">Current password</label>
+          <div class="pw-input"><input type="password" id="pw" autocomplete="current-password" spellcheck="false">
+            <button type="button" class="pw-toggle" id="pw-toggle" aria-pressed="false" aria-label="Show password" aria-controls="pw">Show</button></div>
           <div class="hint">Results stay protected with the same password.</div>
         </div>
       </details>
@@ -959,13 +1004,14 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
 
     <div class="action-bar"><div class="action-inner">
       <span class="summary"><span><span id="summary"></span><span class="kbd-hint" id="kbd-hint"></span></span>
+        <span class="sr-only" id="summary-live" role="status"></span>
         <span class="job-progress" id="job-progress" hidden role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100"><span id="job-bar"></span></span></span>
       <div class="buttons">
         <button class="btn secondary" id="cancel" type="button" hidden>Cancel</button>
         <button class="btn secondary" id="preview" type="button" hidden><span class="spinner"></span>Preview</button>
         <button class="btn" id="run" type="button">
           <span class="spinner"></span>
-          <svg class="i btn-icon" viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></svg>
+          <svg class="i btn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg>
           <span id="run-label">Run</span>
         </button>
       </div>
@@ -976,7 +1022,7 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
 
 <dialog class="palette" id="palette" aria-label="Commands">
   <div class="palette-search">
-    <svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
     <input id="palette-input" type="text" placeholder="Type a command, a tool or a page number" aria-label="Command" autocomplete="off" spellcheck="false"
       role="combobox" aria-expanded="true" aria-controls="palette-list">
     <kbd>Esc</kbd>
@@ -984,12 +1030,12 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
   <ul class="palette-list" id="palette-list" role="listbox"></ul>
 </dialog>
 <dialog class="app-dialog" id="settings-dialog" aria-labelledby="settings-title">
-  <form method="dialog" id="settings-form">
+  <form method="dialog" id="settings-form" tabindex="-1">
     <h2 id="settings-title">Settings</h2>
     <p class="dlg-version" id="settings-version"></p>
     <h3>Appearance</h3>
     <label class="dlg-field inline"><span>Theme</span>
-      <select id="theme"><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+      <select id="theme" autofocus><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
     <h3>Updates</h3>
     <label class="dlg-check"><input type="checkbox" id="set-check"> Check for new versions when ZPDF starts</label>
     <label class="dlg-field"><span>GitHub repository</span><input type="text" id="set-repo" spellcheck="false" autocomplete="off" placeholder="owner/name"></label>
@@ -1152,8 +1198,52 @@ function humanSize(n) {
   return (i ? n.toFixed(1) : n) + " " + u[i];
 }
 function plural(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
-function showError(text) { const e = $("error"); e.replaceChildren(icon("alert"), el("span", {}, text)); e.hidden = false; }
-function clearMessages() { $("error").hidden = true; $("result").hidden = true; $("result-table").hidden = true; }
+/** Show an error above the page. ``detail``: the technical words behind a
+ *  plain message (folded away under "Details"); ``focus``: move focus to it. */
+function showError(text, { detail = "", focus = false } = {}) {
+  const e = $("error");
+  const more = [];
+  if (/Try Repair/.test(text) && current && current.id !== "repair" && ops.some((o) => o.id === "repair")) {
+    more.push(el("button", { type: "button", class: "link-btn", onclick: () => select("repair") }, "Open Repair"));
+  }
+  if (detail && detail !== text) more.push(el("details", {}, el("summary", {}, "Details"), el("code", {}, detail)));
+  e.replaceChildren(icon("alert"), el("span", {}, text, more.length ? el("span", { class: "err-more" }, ...more) : null));
+  e.hidden = false;
+  if (focus) { e.focus({ preventScroll: true }); e.scrollIntoView({ block: "nearest", behavior: smoothScroll() }); }
+}
+/** The library's words for a file that can't be read, in plain language with a way out. */
+function plainError(message) {
+  const m = /^(.+?) is not a readable PDF \((.*)\)$/s.exec(String(message || ""));
+  if (!m) return message;
+  const name = m[1].split(/[\\/]/).pop();
+  return current && current.id === "repair"
+    ? `${name} can't be opened, even to repair it — it may not be a PDF, or be too damaged. Remove it, or try another copy.`
+    : `${name} can't be opened — it may be damaged. Try Repair, or remove it.`;
+}
+function clearMessages() {
+  $("error").hidden = true; $("result").hidden = true; $("result-table").hidden = true;
+  clearFieldErrors();
+}
+/** Required-field messages next to their fields (and the marks on the fields). */
+function clearFieldErrors() {
+  document.querySelectorAll(".field-err").forEach((m) => {
+    const input = document.querySelector(`[aria-describedby~="${m.id}"]`);
+    if (input) {
+      input.removeAttribute("aria-invalid");
+      const rest = input.getAttribute("aria-describedby").split(" ").filter((x) => x && x !== m.id).join(" ");
+      if (rest) input.setAttribute("aria-describedby", rest); else input.removeAttribute("aria-describedby");
+    }
+    m.remove();
+  });
+}
+function fieldError(input, text) {
+  const id = input.id + "-err";
+  const box = input.closest(".field") || input.parentElement;
+  box.append(el("div", { class: "hint field-err", id }, text));
+  input.setAttribute("aria-invalid", "true");
+  input.setAttribute("aria-describedby", [input.getAttribute("aria-describedby"), id].filter(Boolean).join(" "));
+  input.addEventListener("input", function gone() { input.removeEventListener("input", gone); if (document.getElementById(id)) clearFieldErrors(); });
+}
 // Each window of the app tells the server it's there, so closing one window
 // doesn't stop the app while another is still open.
 const pageId = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).slice(0, 36);
@@ -1204,17 +1294,34 @@ function fadeAway(node) {
   node.classList.add("out");
   setTimeout(() => node.remove(), ms + 40);
 }
-let toastEl = null, toastTimer = 0;
+let toastEl = null, toastTimer = 0, toastHold = () => {};
 /** A short note that rises in and fades out: the reader's own toast in the
  *  reader, the same look (.toast) on the start screen and the tool pages. */
-function appToast(message, ms = 4000) {
+function appToast(message, ms = 4000, action = null) {
   if (!message) return;
-  if (inReader() && reader) { reader.toast(message, ms); return; }
+  if (inReader() && reader) { reader.toast(message, ms, action); return; }
   toastEl?.remove();
   const t = toastEl = el("div", { class: "toast", role: "status" }, el("span", {}, message));
+  if (action) t.append(el("button", { type: "button", onclick: () => { toastHold(); fadeAway(t); action[1](); } }, action[0]));
   document.body.append(t);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => fadeAway(t), ms);
+  toastHold();
+  toastHold = () => {};
+  if (action) toastHold = holdWhileUsed(t, Math.max(ms, 10000), () => fadeAway(t));  // 10 s at least for Undo
+  else toastTimer = setTimeout(() => fadeAway(t), ms);
+}
+/** Run ``done`` after ``ms``, but not while ``node`` is hovered or has focus (the
+ *  clock stops, and goes on when they leave). Returns a function that cancels it.
+ *  (The reader's heldTimer is the same.) */
+function holdWhileUsed(node, ms, done) {
+  let left = ms, since = Date.now(), timer = setTimeout(done, ms), hover = false, focus = false;
+  const pause = () => { if (timer) { clearTimeout(timer); timer = 0; left -= Date.now() - since; } };
+  const resume = () => { if (!timer && !hover && !focus && left !== null) { since = Date.now(); timer = setTimeout(done, Math.max(left, 2000)); } };
+  node.addEventListener("pointerenter", () => { hover = true; pause(); });
+  node.addEventListener("pointerleave", () => { hover = false; resume(); });
+  node.addEventListener("focusin", () => { focus = true; pause(); });
+  node.addEventListener("focusout", (e) => { if (!node.contains(e.relatedTarget)) { focus = false; resume(); } });
+  return () => { clearTimeout(timer); timer = 0; left = null; };
 }
 
 // ---- reader -----------------------------------------------------------------
@@ -1666,7 +1773,7 @@ function renderPalette() {
     if (grouped && c.group !== group) { group = c.group; list.append(el("li", { class: "palette-group", role: "presentation" }, group)); }
     const row = el("li", { class: "palette-item", role: "option", id: `palette-${i}`, "aria-selected": String(i === palette.at),
       onclick: () => runPalette(i), onpointermove: () => { if (palette.at !== i) { palette.at = i; markPalette(); } } },
-      c.svg ? Object.assign(el("span", { class: "palette-icon" }), { innerHTML: c.svg }) : icon(ICONS[c.icon] ? c.icon : "file"), el("span", { class: "label" }, c.label, c.sub ? el("span", { class: "sub" }, " — " + c.sub) : ""),
+      c.svg ? Object.assign(el("span", { class: "palette-icon", "aria-hidden": "true" }), { innerHTML: c.svg }) : icon(ICONS[c.icon] ? c.icon : "file"), el("span", { class: "label" }, c.label, c.sub ? el("span", { class: "sub" }, " — " + c.sub) : ""),
       c.keys ? el("kbd", {}, c.keys) : "");
     list.append(row);
   });
@@ -1814,7 +1921,11 @@ document.addEventListener("keydown", (e) => {
     closeFlyout();
     openPalette();
   }
-  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !inReader()) { e.preventDefault(); $("run").click(); }
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !inReader()) {
+    e.preventDefault();
+    // A waiting Run button says why when asked from the keyboard (not while a job runs).
+    if ($("run").disabled && current && current.files !== "home" && !document.querySelector("#run.busy, #preview.busy")) run(false); else $("run").click();
+  }
 });
 
 async function select(id) {
@@ -1909,6 +2020,11 @@ function syncDropFirst() {
   document.body.classList.toggle("has-files", items.length > 0);
   const first = dropFirst(current) && !inReader() && !inHome();
   $("drop-title").textContent = items.length ? "Add more files" : first ? dropText(current) : "Drop files here or click to choose";
+  // The keyboard's way to the (hidden) file box: the "Choose files" button where it shows,
+  // else the drop area itself, as a button (Enter or Space opens the chooser).
+  const chooser = first && !items.length, d = $("drop"), b = $("drop-choose");
+  if (chooser) { d.removeAttribute("role"); d.removeAttribute("tabindex"); b.removeAttribute("tabindex"); b.removeAttribute("aria-hidden"); }
+  else { d.setAttribute("role", "button"); d.tabIndex = 0; b.tabIndex = -1; b.setAttribute("aria-hidden", "true"); }
 }
 function isPdf(f) { return f.type === "application/pdf" || /\.pdf$/i.test(f.name); }
 const WEB_ACCEPT = ".html,.htm,.xhtml,.mht,.mhtml";
@@ -1947,6 +2063,27 @@ async function inspect(it) {
   renderFiles();
 }
 
+$("pw-toggle").addEventListener("click", () => {
+  const show = $("pw").type === "password";
+  $("pw").type = show ? "text" : "password";
+  $("pw-toggle").setAttribute("aria-pressed", String(show));
+  $("pw-toggle").textContent = show ? "Hide" : "Show";
+});
+// The sticky action bar's height, for scroll-padding: what gets focus stops above it.
+{
+  const bar = document.querySelector(".action-bar");
+  const keep = () => document.documentElement.style.setProperty("--action-bar-h", `${bar.offsetHeight}px`);
+  if (window.ResizeObserver) new ResizeObserver(keep).observe(bar);
+  keep();
+}
+// Skip link: to the tool's page, or to the page view in the reader.
+$("skip-link").addEventListener("click", (e) => {
+  e.preventDefault();  // (the address keeps its #token)
+  if (inReader() && reader && reader.doc) { reader.container.focus(); return; }
+  const main = document.querySelector("main");
+  main.focus({ preventScroll: true });
+  main.scrollIntoView({ block: "start" });
+});
 let pwTimer = null;
 $("pw").addEventListener("input", () => {
   clearTimeout(pwTimer);
@@ -2000,6 +2137,11 @@ function renderFiles() {
   scheduleLive(0);
   syncPanel();
 }
+/** Files the page couldn't open (Repair is for those, so it takes them). */
+function unreadable() {
+  if (!current || current.id === "repair") return [];
+  return items.filter((it) => it.error && !it.locked && !it.loading);
+}
 function move(from, to) {
   if (to < 0 || to >= items.length || from === to) return;
   const [it] = items.splice(from, 1); items.splice(to, 0, it); renderFiles();
@@ -2014,11 +2156,17 @@ function updateSummary() {
   const need = current.files === "pdf2" ? 2 : current.min || 1;
   // A tool that can work from an address instead (Web page → PDF).
   const typed = current.url_field && ($("f-" + current.url_field)?.value || "").trim();
-  const ready = items.length >= need || !!typed;
+  const bad = unreadable(), usable = items.length - bad.length;
+  const ready = usable >= need || !!typed;
   const done = ready && !$("result").hidden;
+  const badSay = bad.length === 1 ? `${bad[0].file.name} can't be opened` : `${bad.length} files can't be opened`;
   $("summary").textContent = done ? "Done · change anything and run again, or start over"
-    : ready ? `Ready · ${plural(items.length, "file")}`
+    : ready ? `Ready · ${plural(usable, "file")}` + (bad.length ? ` · ${badSay} and will be left out` : "")
+    : bad.length ? `${badSay} — ${bad.length === 1 ? "it" : "they"} may be damaged. Try Repair, or remove ${bad.length === 1 ? "it" : "them"}.`
     : (need === 1 ? "Add a file to get started" : `Add ${current.files === "pdf2" ? "exactly 2" : "at least " + need} files`);
+  // A file that can't be opened is said once (a polite status), not again at every repaint.
+  const badNote = bad.length && !done ? $("summary").textContent : "";
+  if ($("summary-live").textContent !== badNote) $("summary-live").textContent = badNote;
   $("kbd-hint").textContent = ready && !done ? ` · ${isMac ? "⌘" : "Ctrl"}+Enter to run` : "";
   $("run-label").textContent = (current.action || "Run") + (done ? " again" : "");
   // Nothing to run on yet: the button waits (the line beside it says why).
@@ -2039,6 +2187,8 @@ function startOver() {
 const drop = $("drop");
 $("file-input").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
 $("drop-choose").addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); $("file-input").click(); });
+// The file box is hidden, so the drop area is the keyboard's way in: Enter or Space opens the chooser.
+$("drop").addEventListener("keydown", (e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); $("file-input").click(); } });
 const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
 ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { if (hasFiles(e)) { e.preventDefault(); drop.classList.add("over"); } }));
 ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, () => drop.classList.remove("over")));
@@ -2168,7 +2318,8 @@ async function recentEntries() {
   if (filesLib && filesLib.canOpen) handles = await filesLib.recentHandles().catch(() => []);
   return [
     ...(server || []).map((f) => ({ key: "path:" + f.path, name: f.name, title: f.path, facts: f.facts, opened: (f.opened || 0) * 1000,
-      open: () => openInReaderById([f.id]), forget: () => jsonApi("/api/recent/forget", { path: f.path }) })),
+      open: () => openInReaderById([f.id]), forget: () => jsonApi("/api/recent/forget", { path: f.path }),
+      restore: (gone) => jsonApi("/api/recent/restore", { items: gone?.removed || [] }) })),
     ...handles.map((h) => ({ key: "handle:" + h.key, name: h.name, title: h.name, facts: null, opened: h.opened,
       open: async () => {
         const file = await filesLib.fileFromHandle(h.handle);  // (asks to read it again: from the click)
@@ -2177,7 +2328,7 @@ async function recentEntries() {
         await select("reader");
         await reader.openFile(file);
       },
-      forget: () => filesLib.forgetHandle(h.key) })),
+      forget: () => filesLib.forgetHandle(h.key), restore: (gone) => filesLib.restoreHandle(gone) })),
   ].sort((a, b) => b.opened - a.opened).slice(0, RECENT_ROWS);
 }
 /** Fill ``host`` with the Recent rows: the name, what ZPDF knows about the file
@@ -2220,12 +2371,18 @@ async function fillRecent(host, { emptyText = "", onEmpty = null, still = () => 
         el("span", { class: "recent-when" }, whenText(e.opened))),
       el("button", { type: "button", class: "chip-btn recent-x", title: "Remove from Recent", "aria-label": `Remove ${e.name} from Recent`,
         onclick: async () => {
-          try { await e.forget(); } catch (err) { appToast("Couldn't remove it from Recent: " + (err.message || err)); return; }
+          let gone;
+          try { gone = await e.forget(); } catch (err) { appToast("Couldn't remove it from Recent: " + (err.message || err)); return; }
           const next = row.nextElementSibling || row.previousElementSibling;
           row.remove();
           relabel();
           if (!host.querySelector(".recent-row")) empty(); else next?.querySelector(".recent-x")?.focus();
-          appToast(`Removed ${e.name} from Recent`, 2500);
+          appToast(`Removed ${e.name} from Recent`, 5000, ["Undo", async () => {
+            try { await e.restore(gone); } catch (err) { appToast("Couldn't put it back: " + (err.message || err)); return; }
+            if (!host.isConnected) return;
+            await fillRecent(host, { emptyText, onEmpty, still });
+            host.querySelector(`.recent-row[data-key="${CSS.escape(e.key)}"] .recent-open`)?.focus();
+          }]);
         } }, icon("x")));
     return row;
   }));
@@ -2600,7 +2757,7 @@ function renderFields(op, form, prefix, empty) {
     }
     const wide = PATH_FIELDS.has(f.key) || (f.hint && f.hint.length > 60);
     const wrap = f.kind === "check"
-      ? el("div", { class: "field check", "data-key": f.key }, input, el("label", { for: id }, f.label))
+      ? el("div", { class: "field check" + (wide ? " wide" : ""), "data-key": f.key }, input, el("label", { for: id }, f.label))
       : el("div", { class: "field" + (wide ? " wide" : ""), "data-key": f.key }, el("label", { for: id }, f.label), control);
     if (f.hint) wrap.append(el("div", { class: "hint" }, f.hint));
     form.append(wrap);
@@ -2682,7 +2839,7 @@ function collectOptions(op = current, prefix = "f-") {
 function firstMissing(op, prefix) { return op.fields.find((f) => f.required && !$(prefix + f.key).value.trim()); }
 function missingField() {
   const f = firstMissing(current, "f-");
-  if (f) { showError(`Please fill in “${f.label}”.`); $("f-" + f.key).focus(); }
+  if (f) { showError(`Please fill in “${f.label}”.`); fieldError($("f-" + f.key), `Fill in “${f.label}” to go on.`); $("f-" + f.key).focus(); }
   return !!f;
 }
 
@@ -2692,6 +2849,13 @@ async function run(preview) {
   if (current.files === null) return runFolder(!preview);
   const need = current.files === "pdf2" ? 2 : current.min || 1;
   const typedAddress = current.url_field && ($("f-" + current.url_field)?.value || "").trim();
+  const bad = unreadable(), use = items.filter((it) => !bad.includes(it));
+  if (bad.length && use.length < need && !typedAddress) {
+    const say = bad.length === 1 ? plainError(`${bad[0].file.name} is not a readable PDF (${bad[0].error})`)
+      : `${bad.length} files can't be opened — they may be damaged. Try Repair, or remove them.`;
+    showError(say, { detail: bad.map((it) => `${it.file.name}: ${String(it.error).replace(/^.* is not a readable PDF \((.*)\)$/s, "$1")}`).join("\n"), focus: true });
+    return;
+  }
   if (items.length < need && !typedAddress) { showError(need === 1 ? (current.url_field ? "Type a web address, or add a saved web page." : "Add a file first.") : `Add ${current.files === "pdf2" ? "exactly 2" : "at least " + need} files.`); return; }
   if (missingField()) return;
   const { opts, extra } = collectOptions();
@@ -2700,7 +2864,7 @@ async function run(preview) {
   body.append("password", $("pw").value);
   for (const [k, v] of Object.entries(opts)) body.append(k, v);
   for (const [k, v] of Object.entries(extra)) for (const file of [v].flat()) body.append(k, file, file.name);
-  for (const it of items) body.append("files", it.file, it.file.name);
+  for (const it of use) body.append("files", it.file, it.file.name);  // (files that can't be opened are left out, as the bar says)
   busy(true, current.id === "ocr" ? "Recognising text — this can take a while…" : "Working…");
   try {
     const res = await runJob("/api/run", { method: "POST", body, headers: isDesktop() ? { "X-Pdfm-Keep": "1" } : {} });
@@ -2711,7 +2875,7 @@ async function run(preview) {
     const blob = await res.blob();
     await showResult(name, blob, resultId, note);
   } catch (err) {
-    showError(err.message);
+    showError(plainError(err.message), { detail: err.message, focus: true });
   } finally { busy(false); }
 }
 
@@ -2827,16 +2991,19 @@ function showSearchResults(data, query) {
     + (data.meaning ? "" : /[\u2e80-\u9fff\uac00-\ud7af]/.test(query) ? " Matched by its words: questions are understood in English only." : " Matched exactly, as a number or a code is.");
   else if (best) msg = `Nothing like that in the ${plural(data.files, "PDF")} searched.`;
   const extra = data.skipped.length ? ` ${plural(data.skipped.length, "file")} couldn't be searched (password protected or unreadable).` : "";
+  const said = el("div", { class: "result-sub", id: "search-summary", tabindex: "-1" }, msg + extra);
   $("result").replaceChildren(el("div", { class: "result-body" },
-    el("div", { class: "result-title" }, icon(pages ? "check" : "alert"), "Search"), el("div", { class: "result-sub" }, msg + extra)));
+    el("div", { class: "result-title" }, icon(pages ? "check" : "alert"), "Search"), said));
   $("result").hidden = false;
+  // Focus on what was found (it's read out), in sight above the action bar.
+  requestAnimationFrame(() => { said.focus({ preventScroll: true }); said.scrollIntoView({ block: "nearest", behavior: smoothScroll() }); });
   if (!pages) return;
   const tbody = el("tbody");
   for (const m of data.matches) {
     const name = m.path.split(/[\\/]/).pop(), folder = m.path.slice(0, m.path.length - name.length - 1);
     const open = () => openInReaderById([m.id], { page: m.page, find: best ? m.find : query });
-    const row = el("tr", { class: "search-row", tabindex: "0", title: "Open this page in the reader",
-      onclick: open, onkeydown: (e) => { if (e.key === "Enter") open(); } },
+    const row = el("tr", { class: "search-row", tabindex: "0", role: "button", "aria-label": `Open page ${m.page} of ${name}`, title: "Open this page in the reader",
+      onclick: open, onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } } },
       el("td", {}, el("strong", {}, name), el("div", { class: "search-folder" }, folder),
         (m.also || []).length ? el("div", { class: "search-folder", title: m.also.join("\n") }, `The same as ${m.also[0].split(/[\\/]/).pop()}${m.also.length > 1 ? " and " + plural(m.also.length - 1, "other") : ""}`) : null),
       el("td", { class: "search-page" }, `p. ${m.page}`),

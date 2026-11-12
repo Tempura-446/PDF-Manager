@@ -1504,8 +1504,23 @@ class RecentFiles:
 
     @classmethod
     def forget(cls, path=None):
+        """Drop one file (or all of them); returns the entries dropped, for restore()."""
         with cls.lock:
-            cls._save([] if path is None else [i for i in cls.load() if i["path"] != path])
+            items = cls.load()
+            cls._save([] if path is None else [i for i in items if i["path"] != path])
+            return items if path is None else [i for i in items if i["path"] == path]
+
+    @classmethod
+    def restore(cls, entries):
+        """Put entries that forget() dropped back, in their places (newest first)."""
+        good = [{"path": str(e["path"]), "opened": float(e.get("opened") or 0)}
+                for e in entries if isinstance(e, dict) and e.get("path")]
+        with cls.lock:
+            items = cls.load()
+            have = {os.path.normcase(i["path"]) for i in items}
+            items += [e for e in good if os.path.normcase(e["path"]) not in have]
+            items.sort(key=lambda i: i.get("opened") or 0, reverse=True)
+            cls._save(items)
 
 
 # --------------------------------------------------------------------------
@@ -2019,7 +2034,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(HTTPStatus.OK, {"ok": True})
             if path == "/api/recent/forget":
                 data = json.loads(body or b"{}")
-                RecentFiles.forget(data.get("path") if not data.get("all") else None)
+                removed = RecentFiles.forget(data.get("path") if not data.get("all") else None)
+                return self._send(HTTPStatus.OK, {"ok": True, "removed": removed})
+            if path == "/api/recent/restore":  # Undo after a forget
+                items = json.loads(body or b"{}").get("items")
+                RecentFiles.restore(items if isinstance(items, list) else [])
                 return self._send(HTTPStatus.OK, {"ok": True})
             return self._error(HTTPStatus.NOT_FOUND, "not found")
         except EXPECTED_ERRORS as exc:
@@ -3066,6 +3085,7 @@ def run_desktop(port=0, open_paths=()):
         window = webview.create_window("ZPDF", url, js_api=api, width=1180, height=820,
                                        min_size=(400, 560), background_color="#f6f6f3")
         api._window = window
+        _allow_autofill(window)
         handler.bring_to_front = lambda: _raise_window(window)
         handler.quit_app = lambda: window.destroy()
         # Keep the window's cache and settings between launches (pywebview
@@ -3097,6 +3117,43 @@ def run_desktop(port=0, open_paths=()):
     server.shutdown()
     server.server_close()
     return True
+
+
+def _allow_autofill(window):
+    """Let WebView2 offer to save and fill in passwords (autocomplete=
+    "current-password") and other form entries: both are off by default in
+    an app's WebView2, and pywebview leaves them so. Windows' EdgeChromium
+    backend only: pywebview runs its before_show event on the window's own
+    thread right after making the WebView2 control (window.native.browser.
+    webview); its CoreWebView2 is ready later, in CoreWebView2Initialization
+    Completed, where the settings are set. Anything missing or failing is
+    logged and the window opens as before."""
+    if sys.platform != "win32":
+        return
+
+    def on_ready(sender, args):
+        try:
+            if args.IsSuccess:
+                settings = sender.CoreWebView2.Settings
+                settings.IsPasswordAutosaveEnabled = True
+                settings.IsGeneralAutofillEnabled = True
+        except Exception as exc:  # noqa: BLE001 - an older WebView2 lacks these settings
+            _log(f"launch: couldn't turn on password autofill: {exc!r}")
+
+    def before_show(window):
+        try:
+            control = window.native.browser.webview
+            if getattr(control, "CoreWebView2", None) is not None:  # ready already
+                on_ready(control, type("Ready", (), {"IsSuccess": True})())
+            else:
+                control.CoreWebView2InitializationCompleted += on_ready
+        except Exception as exc:  # noqa: BLE001 - another backend (no WebView2 control)
+            _log(f"launch: no WebView2 settings to turn on autofill: {exc!r}")
+
+    try:
+        window.events.before_show += before_show
+    except AttributeError as exc:  # pywebview before 5 has no before_show event
+        _log(f"launch: no before_show event for autofill: {exc!r}")
 
 
 def _debug_port():

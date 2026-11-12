@@ -361,3 +361,62 @@ def test_boxes_inside_a_picture_are_no_form_at_a_glance(tmp_path):
     c.save()
     assert formdetect.detect(tmp_path / "cover.pdf", pages=[1], quick=True) == {}
     assert len(found.get(2, [])) >= 3, "a form drawn on the page is still a form"
+
+
+def test_stripe_art_and_letter_outlines_are_no_form_at_a_glance(tmp_path):
+    """Found on Windows: a cover with slanted stripes and outlined letters was
+    offered as a form: slivers beside the letters and a staircase of "boxes"
+    in the stripes. The quick look leaves them out; Add form fields (asked
+    for) still looks at everything, and a flat form is still found."""
+    from pdfmanager import formdetect
+
+    c = canvas.Canvas(str(tmp_path / "cover.pdf"))
+    c.setLineWidth(1.2)
+    for i in range(8):  # a staircase of stripes, all ending at the page's edge
+        c.rect(466 + i * 13, 100 + i * 21, 595 - (466 + i * 13) - 0.5, 14)
+    for i in range(6):  # slanted stripes drawn as filled parallelograms
+        p = c.beginPath()
+        x = 60 + i * 30
+        p.moveTo(x, 60)
+        p.lineTo(x + 14, 60)
+        p.lineTo(x + 114, 260)
+        p.lineTo(x + 100, 260)
+        p.close()
+        c.drawPath(p, stroke=0, fill=1)
+    t = c.beginText(60, 520)  # big letters drawn as outlines
+    t.setTextRenderMode(1)
+    t.setFont("Helvetica-Bold", 120)
+    t.textLine("A QUGH")
+    c.drawText(t)
+    c.setFont("Helvetica", 14)
+    c.drawString(60, 760, "A quarterly guide")
+    c.drawString(60, 380, "A quiet guide to good things")
+    c.save()
+    full = formdetect.detect(tmp_path / "cover.pdf")
+    assert sum(1 for f in full.get(1, []) if abs(f["rect"][2] - 594) <= 1) >= 3, full  # the staircase, when asked
+    assert formdetect.detect(tmp_path / "cover.pdf", quick=True) == {}
+
+    # The boxes measured on Windows: two slivers named from nearby words, a staircase unnamed.
+    def box(rect, name="", kind="text"):
+        return {"rect": list(rect), "type": kind, "name": name, "border": False}
+    measured = [box((300, 600, 308, 631), "A qu"), box((420, 600, 428, 631), "gu")] + [
+        box((466 + 13 * i, 145 - 17 * i, 596, 158 - 17 * i)) for i in range(8)]
+    assert formdetect._quick_strict(measured) == []
+    assert len(formdetect._staircase(measured)) == 8
+    # Two labelled fields don't carry the staircase with them.
+    kept = formdetect._quick_strict(measured + [box((120, 700, 370, 720), "Name"), box((120, 670, 370, 690), "Phone")])
+    assert [f["name"] for f in kept] == ["Name", "Phone"]
+    # A checkbox or signature taller than wide isn't a sliver.
+    assert len(formdetect._quick_strict([box((0, 0, 10, 30), "Agree", "checkbox"), box((50, 0, 60, 30), "Sign", "signature")])) == 2
+
+    # A flat form whose boxes end at one margin, their left sides stepping with the labels.
+    c = canvas.Canvas(str(tmp_path / "form.pdf"))
+    for n, label in enumerate(["Name:", "E-mail:", "Address:", "Telephone:"]):
+        y = 760 - n * 40
+        c.drawString(72, y + 6, label)
+        c.rect(72 + c.stringWidth(label) + 8, y, 480 - (c.stringWidth(label) + 8), 20)
+    c.rect(72, 560, 12, 12)
+    c.drawString(90, 562, "I agree")
+    c.save()
+    quick = formdetect.detect(tmp_path / "form.pdf", quick=True)
+    assert {"Name", "E-mail", "Address", "Telephone"} <= {f["name"] for f in quick.get(1, [])}, quick

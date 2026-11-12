@@ -29,6 +29,20 @@ function fadeOut(node) {
   setTimeout(() => node.remove(), t * 1.5 + 40);
 }
 
+/** Run ``done`` after ``ms``, but not while ``node`` (a toast) is hovered or has
+ *  focus: the clock stops then and goes on when the pointer and focus leave.
+ *  Returns a function that cancels it. */
+export function heldTimer(node, ms, done) {
+  let left = ms, since = Date.now(), timer = setTimeout(done, ms), hover = false, focus = false;
+  const pause = () => { if (timer) { clearTimeout(timer); timer = 0; left -= Date.now() - since; } };
+  const resume = () => { if (!timer && !hover && !focus && left !== null) { since = Date.now(); timer = setTimeout(done, Math.max(left, 2000)); } };
+  node.addEventListener("pointerenter", () => { hover = true; pause(); });
+  node.addEventListener("pointerleave", () => { hover = false; resume(); });
+  node.addEventListener("focusin", () => { focus = true; pause(); });
+  node.addEventListener("focusout", (e) => { if (!node.contains(e.relatedTarget)) { focus = false; resume(); } });
+  return () => { clearTimeout(timer); timer = 0; left = null; };
+}
+
 let pdfjs = null;   // pdf.js display API
 let viewer = null;  // pdf.js viewer components
 
@@ -512,7 +526,9 @@ export class Reader {
       this.#drawOverlays();
     });
     overlayClose.addEventListener("click", () => this.closeCompare());
-    this.root.append(toolbar, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.overlaybar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.fileInput);
+    // Skip link: past the bars, to the pages (out of sight until it has focus).
+    this.skipLink = el("a", { class: "skip-link rd-skip", href: "#", onclick: (e) => { e.preventDefault(); this.container.focus(); } }, "Skip to the page");
+    this.root.append(this.skipLink, toolbar, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.overlaybar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.fileInput);
     // A drawing in progress takes every click in the window as the next
     // stroke; end it first when the tabs, toolbar or menu are used. This
     // listens on the window before pdf.js does, so it runs first.
@@ -807,6 +823,8 @@ export class Reader {
     }
     if (e.key === "Escape" && this.markupMode === "IMAGES" && this.pickedImage) { this.#pickImage(null); return; }
     if (e.key === "Escape" && this.editMode && this.editMode !== "NONE") { this.#setEditMode("NONE"); return; }
+    // With no tool left on, Escape closes the annotate bar (focus back on its button).
+    if (e.key === "Escape" && !this.annotbar.hidden) { this.closeAnnotate(); this.annotateBtn.focus(); return; }
     const v = this.pdfViewer;
     switch (e.key) {
       case "n": case "j": v.nextPage(); break;
@@ -952,7 +970,11 @@ export class Reader {
     const same = this.tabs.find((t) => (file?.path && t.path === file.path)
       || (bytes && t.original && t.name === name && sameBytes(t.original, bytes))
       || (bytes && !t.original && t.headCopy && t.name === name && t.size === bytes.length  // (read in pieces, not all here yet)
-        && sameBytes(t.headCopy, bytes.subarray(0, t.headCopy.length))));
+        && sameBytes(t.headCopy, bytes.subarray(0, t.headCopy.length)))
+      // Opened by id and read in pieces (only its first piece here) while the same file is open
+      // from its bytes (e.g. a tool's file card, then Recent): the same name, size and first piece.
+      || (!bytes && file?.head && t.original && t.name === name && t.original.length === file.size
+        && sameBytes(t.original.subarray(0, file.head.length), file.head)));
     if (same) {
       if (same === this.activeTab) { if (goto) this.#goto(goto); }
       else { if (goto) same.goto = goto; await this.#switchToNow(same); }  // applied once its pages are there
@@ -1371,8 +1393,10 @@ export class Reader {
       if (goto) { this.activeTab.goto = null; this.#goto(goto); }
       this.#updatePage();
       this.#showThumbs();
-      this.container.focus({ preventScroll: true });
+      this.container.focus({ preventScroll: true, focusVisible: false });  // (no ring when a file opens)
     });
+    // pdf.js makes each page's text a Tab stop; the page view is one already (text still selects).
+    eventBus.on("textlayerrendered", ({ source }) => { const layer = source?.textLayer?.div || source?.div?.querySelector(".textLayer"); if (layer) layer.tabIndex = -1; });
     eventBus.on("pagechanging", ({ pageNumber }) => { this.#updatePage(); this.#remember(); this.#refreshScale(); if (this.measureMode) this.#geometry(pageNumber); });
     eventBus.on("pagesloaded", () => { this.#whenShown(() => this.#refreshScale()); this.#sizeThumbs(); });
     eventBus.on("annotationlayerrendered", ({ source }) => this.#nameFields(source?.div?.querySelector(".annotationLayer")));
@@ -1824,7 +1848,7 @@ export class Reader {
       if (item.items && item.items.length) {
         const open = depth === 0 && item.items.length <= 12;
         const children = el("ul", { hidden: !open }, ...build(item.items, depth + 1));
-        const twisty = el("button", { class: "twisty", type: "button", "aria-expanded": String(open), "aria-label": "Expand", html: `<svg viewBox="0 0 24 24">${ICON.twisty}</svg>` });
+        const twisty = el("button", { class: "twisty", type: "button", "aria-expanded": String(open), "aria-label": "Expand", html: `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON.twisty}</svg>` });
         twisty.addEventListener("click", () => {
           const expanded = twisty.getAttribute("aria-expanded") !== "true";
           twisty.setAttribute("aria-expanded", String(expanded));
@@ -1872,7 +1896,7 @@ export class Reader {
     this.findbar.hidden = true;
     this.findBtn.setAttribute("aria-pressed", "false");
     if (this.eventBus) this.eventBus.dispatch("findbarclose", { source: this });
-    this.container.focus({ preventScroll: true });
+    this.findBtn.focus({ preventScroll: true });  // back where it was opened from
   }
   #find(type, previous = false) {
     if (!this.eventBus) return;
@@ -3078,7 +3102,20 @@ export class Reader {
       // ``ready``: whether the main button can do its work yet; if not (Enter
       // in a box before everything needed is given) the dialog stays open.
       if (ready) form.addEventListener("submit", (e) => { if (!ready()) e.preventDefault(); });
-      dialog.addEventListener("close", () => { resolve(dialog.returnValue); dialog.remove(); });
+      const before = document.activeElement;
+      dialog.addEventListener("close", () => {
+        resolve(dialog.returnValue);
+        dialog.remove();
+        // Focus back where it was; opened with nothing focused (a file opening): the page view, or Open a PDF.
+        setTimeout(() => {
+          if (document.activeElement && document.activeElement !== document.body) return;
+          if (document.querySelector("dialog[open]")) return;
+          const back = before && before !== document.body && before.isConnected && before.getClientRects().length ? before
+            : this.doc && this.container.getClientRects().length ? this.container
+            : this.emptyOpenBtn.getClientRects().length ? this.emptyOpenBtn : this.root;
+          back.focus({ preventScroll: true });
+        }, 0);
+      });
       dialog.addEventListener("cancel", () => { dialog.returnValue = "cancel"; });
       this.root.append(dialog);
       dialog.showModal();
@@ -3086,9 +3123,25 @@ export class Reader {
   }
 
   async #askPassword(wrong) {
-    const input = el("input", { type: "password", "aria-label": "Password", autocomplete: "off" });
-    const body = [el("p", {}, `“${this.name}” is protected. Enter its password to open it.`), input];
-    if (wrong) body.push(el("div", { class: "err", role: "alert" }, "That password is incorrect."));
+    const inputId = `rd-pw-${Math.random().toString(36).slice(2)}`;
+    const input = el("input", { type: "password", id: inputId, autocomplete: "current-password", spellcheck: "false" });
+    const toggle = el("button", { type: "button", class: "pw-toggle", "aria-pressed": "false", "aria-label": "Show password" }, "Show");
+    toggle.addEventListener("click", () => {
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      toggle.setAttribute("aria-pressed", String(show));
+      toggle.textContent = show ? "Hide" : "Show";
+      input.focus();
+    });
+    const body = [el("p", {}, `“${this.name}” is protected. Enter its password to open it.`),
+      // The label names the input only; the Show button sits beside it, outside the label.
+      el("div", { class: "rd-field rd-pwfield" }, el("label", { for: inputId }, "Password"), el("span", { class: "rd-pwrow" }, input, toggle))];
+    if (wrong) {
+      const id = `rd-pw-err-${Math.random().toString(36).slice(2)}`;
+      body.push(el("div", { class: "err", role: "alert", id }, "That password is incorrect."));
+      input.setAttribute("aria-invalid", "true");
+      input.setAttribute("aria-describedby", id);
+    }
     const pending = this.#dialog("Password required", body, [["cancel", "Cancel"], ["ok", "Open", true]]);
     input.focus();
     const answer = await pending;
@@ -3183,7 +3236,11 @@ export class Reader {
     this.root.append(t);
     this.toastEl = t;
     clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => fadeOut(t), ms);
+    this.toastHold?.();
+    this.toastHold = null;
+    // A toast with a button (Undo, Save…) stays 10 s at least, and waits while it's pointed at or focused.
+    if (action) this.toastHold = heldTimer(t, Math.max(ms, 10000), () => fadeOut(t));
+    else this.toastTimer = setTimeout(() => fadeOut(t), ms);
   }
 
   // ---- changing words on the page ----------------------------------------------------
