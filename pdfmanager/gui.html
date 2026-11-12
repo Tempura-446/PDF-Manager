@@ -294,7 +294,8 @@ main:focus { outline: none; }  /* the skip link's target: the page itself needs 
 .keys-cols section { break-inside: avoid; padding-bottom: 6px; }
 .keys-cols h3 { margin: 10px 0 6px; }
 .keys-cols section:first-child h3 { margin-top: 2px; }
-.keys-cols dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 5px 12px; align-items: baseline; font-size: 13px; }
+/* (One key column for every section: openKeys sets --keys-key to the widest keys.) */
+.keys-cols dl { margin: 0; display: grid; grid-template-columns: var(--keys-key, max-content) 1fr; gap: 5px 12px; align-items: baseline; font-size: 13px; }
 .keys-cols dt { white-space: nowrap; }
 .keys-cols dd { margin: 0; color: var(--text-2); }
 .keys-cols kbd { font: 500 11.5px/1 var(--mono); color: var(--text); border: 1px solid var(--border-strong); border-bottom-width: 2px;
@@ -1970,7 +1971,11 @@ function openKeys() {
   const mac = isMac, say = (k) => (mac ? k.replace(/Ctrl\+/g, "⌘") : k);
   $("keys-body").replaceChildren(...KEYS.map(([title, rows]) => el("section", {}, el("h3", {}, title),
     el("dl", {}, ...rows.flatMap(([k, what]) => [el("dt", {}, ...say(k).split(/( or | \/ )/).map((part) => / or | \/ /.test(part) ? part : el("kbd", {}, part))), el("dd", {}, what)])))));
+  $("keys-body").style.removeProperty("--keys-key");
   $("keys-dialog").showModal();
+  // Every section's descriptions start at the same distance from its keys: the widest keys'.
+  const widest = Math.max(0, ...[...$("keys-body").querySelectorAll("dt")].map((dt) => dt.scrollWidth));  // (layout widths: the dialog may be scaling in)
+  if (widest) $("keys-body").style.setProperty("--keys-key", Math.ceil(widest) + "px");
   $("keys-close").focus();
 }
 document.addEventListener("keydown", (e) => {
