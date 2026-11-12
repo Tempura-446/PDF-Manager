@@ -2932,7 +2932,7 @@ export class Reader {
             + `${pictures.length === 1 ? "a picture" : "pictures"} (${[...new Set(pictures.map(([, why]) => why))].join("; ")}).`;
         }
         tab.redacted = true;  // Save makes a redacted copy from now on; replacing the original is asked
-        this.toast(message + " Save a redacted copy to keep it.", 12000, [["Save redacted copy…", () => this.saveRedacted(), "seal"],
+        this.toast(message + " Save a redacted copy to keep it.", 12000, [["Save redacted copy…", () => this.saveRedacted()],
           ...(tab.fileId ? [["Replace original", () => this.replaceWithRedacted()]] : [])]);
       },
     });
@@ -4328,7 +4328,11 @@ export class Reader {
     this.#finishEditing();  // a stroke or note still being made counts (Ctrl+S straight after drawing)
     const tab = this.activeTab;
     if (!this.doc || !tab) return;
-    if (tab.redacted && !replace) { await this.saveRedacted(); return; }  // a copy, not over the original
+    if (tab.redacted && !replace) {  // a copy, not over the original
+      // Already kept as a redacted copy and nothing changed since: don't make another.
+      if (tab.redactedSaved && !tab.dirty && (tab.savedSince || !this.#changed())) { this.toast("Already saved as a redacted copy", 2000); return; }
+      await this.saveRedacted(); return;
+    }
     if (!tab.fileId) { await this.saveCopy(); return; }
     if (!tab.dirty && !this.#changed()) { this.toast("No changes to save", 1500); return; }
     const version = tab.version || 0;
@@ -4424,7 +4428,7 @@ export class Reader {
     const tab = this.activeTab, version = tab.version || 0;
     let bytes;
     try { bytes = await this.#currentBytes(); } catch (e) { this.toast("Could not save the redacted copy: " + (e.message || e), 9000); return; }
-    await this.#saveBytes(bytes, this.#redactedName(tab), () => this.#markSaved(tab, version), tab?.fileId);
+    await this.#saveBytes(bytes, this.#redactedName(tab), () => { tab.redactedSaved = true; this.#markSaved(tab, version); }, tab?.fileId);
   }
 
   /** Write the redacted version over the original file, once asked. */

@@ -203,13 +203,14 @@ def test_critique24_in_a_browser(app, tmp_path, monkeypatch):
     a = out["apply"]
     assert a["text"] == "Black out 1 area" and a["seal"] and not a["disabled"] and not a["saveSeal"], a
     t = out["redactToast"]
-    assert "Save a redacted copy" in t["text"] and t["buttons"] == [["Save redacted copy…", True], ["Replace original", False]], t
+    assert "Save a redacted copy" in t["text"] and t["buttons"] == [["Save redacted copy…", False], ["Replace original", False]], t  # (the toolbar's Save is the red one)
     ra = out["replaceAsk"]
     assert ra["title"] == "Replace Payroll.pdf with the redacted version?", ra
     assert ra["text"] == "The original text can’t be recovered from it." and ra["buttons"] == ["Cancel", "Replace original"], ra
     assert out["replaceCancelled"] and out["redactUntouched"]
     saved = out["redactSave"]["saved"]
     assert len(saved) == 1 and saved[0]["name"] == "Payroll (redacted).pdf" and saved[0]["near"] == cfg["redactId"], saved
+    assert out["redactSaveAgain"] == "Already saved as a redacted copy" and out["redactSavedCount"] == 1, out
     assert not out["redactSave"]["dirty"]
 
     # 5. Files kept from the last tool: said, with Clear; no file twice; Redact waits for a choice.

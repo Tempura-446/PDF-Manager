@@ -210,6 +210,12 @@ const fs = require("fs");
       await page.waitForFunction(() => window.__saved.length > 0, null, { timeout: 20000 });
       out.redactSave = await page.evaluate(() => ({ saved: window.__saved, dirty: reader.activeTab.dirty }));
       out.redactUntouched = fs.readFileSync(cfg.redactPath).equals(before);
+      // Ctrl+S again with nothing changed: no second copy.
+      await page.waitForTimeout(300);
+      await page.keyboard.press("Control+s");
+      await page.waitForFunction(() => /Already saved/.test(document.querySelector(".rd-toast span")?.textContent || ""), null, { timeout: 10000 }).catch(() => {});
+      out.redactSaveAgain = await page.evaluate(() => document.querySelector(".rd-toast span")?.textContent || "");
+      out.redactSavedCount = await page.evaluate(() => window.__saved.length);
       await ctx.close();
     }
 
