@@ -205,6 +205,12 @@ main:focus { outline: none; }  /* the skip link's target: the page itself needs 
 .fly-head h2 { margin: 0; font: 400 28px/1.1 var(--display); letter-spacing: 0; }
 .fly-head span { color: var(--muted); font-size: 12px; font-family: var(--mono); }
 .fly-list { flex: 1; overflow-y: auto; padding: 2px 10px 14px; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+/* More tools than the window shows: a fade at the foot (and the head, once scrolled) says the list goes on. */
+.flyout::before, .flyout::after { content: ""; position: absolute; left: 0; right: 10px; height: 44px; pointer-events: none; opacity: 0;
+  transition: opacity var(--t) var(--ease); z-index: 1; }
+.flyout::after { bottom: 0; background: linear-gradient(transparent, var(--surface) 85%); border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
+.flyout::before { top: 58px; height: 28px; background: linear-gradient(var(--surface), transparent); }
+.flyout.more-below::after, .flyout.more-above::before { opacity: 1; }
 .fly-sec { margin: 12px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); }
 .fly-tool {
   display: grid; grid-template-columns: 34px minmax(0, 1fr); column-gap: 12px; align-items: center; width: 100%; text-align: left;
@@ -915,7 +921,8 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
     <div class="rail-groups">
       <button class="rail-btn" type="button" data-group="read" title="Read a PDF"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h7v14H4zM13 5h7v14h-7z"/></svg>Read</button>
       <button class="rail-btn" type="button" data-group="pages" aria-expanded="false" aria-controls="flyout" title="Tools for pages"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="11" height="15" rx="1.5"/><path d="M9 21h9a1 1 0 0 0 1-1V8"/></svg>Pages</button>
-      <button class="rail-btn" type="button" data-group="convert" aria-expanded="false" aria-controls="flyout" title="Tools to convert and optimize"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg>Convert</button>
+      <button class="rail-btn" type="button" data-group="improve" aria-expanded="false" aria-controls="flyout" title="Tools to make files smaller, searchable, mended and accessible"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4.5 12.6 9l4.4 1.5-4.4 1.6L11 16.5l-1.6-4.4L5 10.5 9.4 9z"/><path d="M18 3v4M16 5h4M18.5 15.5v4M16.5 17.5h4"/></svg>Improve</button>
+      <button class="rail-btn" type="button" data-group="convert" aria-expanded="false" aria-controls="flyout" title="Tools to convert to and from PDF"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg>Convert</button>
       <button class="rail-btn" type="button" data-group="protect" aria-expanded="false" aria-controls="flyout" title="Tools to protect, sign and archive"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Protect</button>
       <button class="rail-btn" type="button" data-group="all" aria-expanded="false" aria-controls="flyout" title="All tools"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg>All</button>
     </div>
@@ -1109,6 +1116,7 @@ const isMac = /Mac/.test(navigator.platform);
 
 // ---- icons ----------------------------------------------------------------
 const ICONS = {
+  improve: '<path d="M11 4.5 12.6 9l4.4 1.5-4.4 1.6L11 16.5l-1.6-4.4L5 10.5 9.4 9z"/><path d="M18 3v4M16 5h4M18.5 15.5v4M16.5 17.5h4"/>',
   star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>',
   home: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-6h4v6"/>',
   reader: '<path d="M2 5h6a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2z"/><path d="M22 5h-6a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h7z"/>',
@@ -1866,13 +1874,23 @@ document.addEventListener("keydown", (e) => {
 }, { capture: true });
 
 // ---- rail and flyout --------------------------------------------------------------
-// The rail's five groups. Each tool belongs to one of Read, Pages, Convert
-// and Protect (by the group the server gives it), and every tool is under All.
-const RAIL_GROUPS = { read: "Read", pages: "Pages", convert: "Convert", protect: "Protect", all: "All tools" };
+// The rail's groups, by what a tool does: Read, Pages, Improve, Convert and
+// Protect (from the group the server gives each tool, with a few moved by
+// hand), and every tool is under All. Tools that work on several files or a
+// folder (Recipes, the folder tools) are under no rail group: the start
+// screen's "Start from several files" and its More list them ("several").
+const RAIL_GROUPS = { read: "Read", pages: "Pages", improve: "Improve", convert: "Convert", protect: "Protect", all: "All tools",
+  several: "Several files" };
 const RAIL_OF_GROUP = { Read: "read", Combine: "pages", Pages: "pages", Layout: "pages", Stamp: "pages",
-  Optimize: "convert", Convert: "convert", Automate: "convert", Folders: "convert", Security: "protect" };
-const RAIL_OF_TOOL = { pdfa: "protect", "pdfa-check": "protect" };  // archiving sits with protecting
-const railGroup = (op) => RAIL_OF_TOOL[op.id] || RAIL_OF_GROUP[op.group] || "convert";
+  Optimize: "improve", Convert: "convert", Security: "protect", Automate: null, Folders: null };
+// Archiving sits with protecting; making accessible and flattening improve a file.
+const RAIL_OF_TOOL = { pdfa: "protect", "pdfa-check": "protect", tag: "improve", "access-check": "improve", flatten: "improve" };
+const railGroup = (op) => (op.id in RAIL_OF_TOOL ? RAIL_OF_TOOL[op.id] : op.group in RAIL_OF_GROUP ? RAIL_OF_GROUP[op.group] : "convert");
+// The headings inside a flyout, where a tool's server group would read wrong there.
+const SUB_OF_TOOL = { ocr: "Scans", clean: "Scans", tag: "Accessibility", "access-check": "Accessibility", flatten: "Optimize",
+  pdfa: "Archive", "pdfa-check": "Archive", merge: "Several PDFs", interleave: "Several PDFs", compare: "Several PDFs" };
+const SEVERAL_TOOLS = ["merge", "interleave", "compare", "recipe", "organize", "rename", "duplicates", "search"];
+const inFlyout = (op, group) => group === "all" || (group === "several" ? SEVERAL_TOOLS.includes(op.id) : railGroup(op) === group);
 let flyoutGroup = null;
 /** Every tool as a button[data-op] (the rail's index), and the flyout if it's open. */
 function renderTools() {
@@ -1883,7 +1901,7 @@ function renderTools() {
 }
 function renderFlyout(group) {
   const list = $("flyout-list");
-  const tools = ops.filter((o) => o.group && (group === "all" || railGroup(o) === group));
+  const tools = ops.filter((o) => o.group && inFlyout(o, group));
   const row = (op) => el("button", { type: "button", class: "fly-tool", "data-op": op.id,
     "aria-current": current && current.id === op.id ? "true" : "false", onclick: () => { closeFlyout(); select(op.id); } },
     el("span", { class: "ticon" }, icon(op.id)), el("strong", {}, op.label), el("small", {}, TAGLINES[op.id] || op.group));
@@ -1896,16 +1914,28 @@ function renderFlyout(group) {
       if (few.length) parts.push(el("div", { class: "fly-sec" }, title), ...few.map(row));
     }
   }
-  let sub = null;
+  // Under each heading in the order the tools come (All keeps the server's groups).
+  const subs = new Map();
   for (const op of tools) {
-    if (op.group !== sub) { sub = op.group; parts.push(el("div", { class: "fly-sec" }, sub)); }
-    parts.push(row(op));
+    const sub = group === "all" ? op.group : SUB_OF_TOOL[op.id] || op.group;
+    if (!subs.has(sub)) subs.set(sub, []);
+    subs.get(sub).push(op);
   }
+  for (const [sub, few] of subs) parts.push(el("div", { class: "fly-sec" }, sub), ...few.map(row));
   list.replaceChildren(...parts);
   $("flyout-title").textContent = RAIL_GROUPS[group];
   $("flyout-count").textContent = plural(tools.length, "tool");
+  requestAnimationFrame(flyoutCue);
 }
-function openFlyout(group) {
+/** A list longer than the window scrolls: a fade at its foot says there's more. */
+function flyoutCue() {
+  const list = $("flyout-list");
+  $("flyout").classList.toggle("more-below", list.scrollHeight - list.scrollTop - list.clientHeight > 4);
+  $("flyout").classList.toggle("more-above", list.scrollTop > 4);
+}
+let flyoutOpener = null;
+function openFlyout(group, opener = null) {
+  flyoutOpener = opener;
   flyoutGroup = group;
   renderFlyout(group);
   const fly = $("flyout");
@@ -1921,8 +1951,10 @@ function closeFlyout(refocus = false) {
   flyoutGroup = null;
   $("flyout").hidden = true;
   document.querySelectorAll(".rail-btn[aria-expanded]").forEach((b) => b.setAttribute("aria-expanded", "false"));
-  if (refocus) document.querySelector(`.rail-btn[data-group="${was}"]`)?.focus();
+  if (refocus) (document.querySelector(`.rail-btn[data-group="${was}"]`) || (flyoutOpener?.isConnected ? flyoutOpener : null))?.focus();
 }
+$("flyout-list").addEventListener("scroll", flyoutCue, { passive: true });
+window.addEventListener("resize", () => { if (flyoutGroup) flyoutCue(); });
 function toggleFlyout(group) { if (flyoutGroup === group) closeFlyout(); else openFlyout(group); }
 document.querySelectorAll(".rail-btn[data-group]").forEach((b) => b.addEventListener("click", () => {
   if (b.dataset.group === "read") { closeFlyout(); select("reader"); } else toggleFlyout(b.dataset.group);
@@ -2350,7 +2382,8 @@ async function renderHome() {
       const op = ops.find((o) => o.id === id);
       return el("button", { type: "button", "data-tool": id, onclick: () => select(id) }, icon(id), el("span", {}, name || op.label, el("span", {}, line)));
     }),
-    el("button", { type: "button", class: "more", onclick: (e) => { e.stopPropagation(); openFlyout("all"); } }, "More tools"));
+    el("button", { type: "button", class: "more", "aria-haspopup": "dialog", "aria-controls": "flyout",
+      onclick: (e) => { e.stopPropagation(); openFlyout("several", e.currentTarget); } }, "More for several files"));
   parts.push(el("div", { class: "start-cols" },
     el("section", { class: "start-sec", "aria-label": "Recent files" }, el("span", { class: "lbl" }, "Recent"), recentList),
     el("section", { class: "start-sec", "aria-label": "Start from several files" }, el("span", { class: "lbl" }, "Start from several files"), multi)));

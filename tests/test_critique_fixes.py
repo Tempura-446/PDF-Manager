@@ -195,3 +195,21 @@ def test_critique_fixes_in_a_browser(app, tmp_path, monkeypatch):
     for mode, key in (("HIGHLIGHT", "H"), ("NOTE", "C"), ("FREETEXT", "A"), ("INK", "D"), ("SIGN", "S")):
         assert k["tips"][mode].endswith(f"({key})"), k["tips"]
     assert not k["closed"]["bar"] and k["closed"]["mode"] != "HIGHLIGHT", k["closed"]
+
+    # 3. The rail by intent: Compress under Improve, Search PDFs under no group; never a wrong item lit.
+    rail = out["rail"]
+    assert rail["groups"] == ["Read", "Pages", "Improve", "Convert", "Protect", "All"], rail["groups"]
+    improve, convert, every = rail["flyouts"]["improve"], rail["flyouts"]["convert"], rail["flyouts"]["all"]
+    assert set(improve["tools"]) == {"repair", "compress", "color", "ocr", "clean", "flatten", "tag", "access-check"}, improve
+    assert "Optimize" in improve["heads"] and "Convert" not in improve["heads"], improve["heads"]
+    for folder_tool in ("search", "organize", "rename", "duplicates", "recipe", "compress"):
+        assert folder_tool not in convert["tools"], folder_tool
+    assert all(f["fits"] for f in rail["flyouts"].values())
+    assert every["cue"] and not every["cueAtEnd"] and every["cueAbove"], every  # a long list says it goes on
+    assert rail["lit-compress"] == ["improve"] and rail["lit-to-word"] == ["convert"] and rail["lit-flatten"] == ["improve"]
+    assert rail["lit-merge"] == ["pages"]
+    for folder_tool in ("search", "organize", "recipe"):
+        assert rail["lit-" + folder_tool] == [], (folder_tool, rail["lit-" + folder_tool])
+    sev = rail["several"]
+    assert sev["title"] == "Several files" and {"search", "organize", "rename", "duplicates", "recipe", "merge"} <= set(sev["tools"]), sev
+    assert sev["focusBack"]

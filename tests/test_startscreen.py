@@ -83,7 +83,7 @@ def test_two_files_of_one_name_are_told_apart_by_their_folder():
 def test_the_page_keeps_what_tests_and_scripts_rely_on():
     html = GUI_HTML.read_text(encoding="utf-8")
     assert 'class="tools tool-index" id="tools"' in html          # .tools button[data-op] for every tool
-    for group in ("read", "pages", "convert", "protect", "all"):
+    for group in ("read", "pages", "improve", "convert", "protect", "all"):
         assert f'data-group="{group}"' in html
     assert '<link rel="stylesheet" href="https://' not in html and "fonts.googleapis" not in html
     for font in ("instrument-sans-latin-400-normal", "instrument-serif-latin-400-normal",
@@ -141,15 +141,18 @@ def test_the_page_in_a_browser(served, tmp_path):
     assert out["findLabel"] == f"Search {len(tools)} tools"
     assert out["fonts"] == [True, True, True]                     # served from static/fonts
 
-    # The rail: five groups; every tool once under All and once in its own group.
-    assert out["groups"] == ["Read", "Pages", "Convert", "Protect", "All"]
+    # The rail: six groups (by what a tool does, 0.23); every tool once under All and at most once
+    # in a group of its own: the folder tools and Recipes are under none (the start screen has them).
+    assert out["groups"] == ["Read", "Pages", "Improve", "Convert", "Protect", "All"]
     assert sorted(out["toolButtons"]) == sorted(tools)
     flyout = out["flyout"]
     assert sorted(flyout["all"]) == sorted(tools) and len(flyout["all"]) == len(tools)
-    grouped = flyout["pages"] + flyout["convert"] + flyout["protect"] + ["reader"]
+    folders = ["recipe", "organize", "rename", "duplicates", "search"]
+    grouped = flyout["pages"] + flyout["improve"] + flyout["convert"] + flyout["protect"] + ["reader"] + folders
     assert sorted(grouped) == sorted(tools)
-    assert "rotate" in flyout["pages"] and "ocr" in flyout["convert"] and "encrypt" in flyout["protect"]
-    for group in ("pages", "convert", "protect", "all"):
+    assert "rotate" in flyout["pages"] and "ocr" in flyout["improve"] and "encrypt" in flyout["protect"]
+    assert "compress" in flyout["improve"] and "to-word" in flyout["convert"]
+    for group in ("pages", "improve", "convert", "protect", "all"):
         assert flyout[group + "Focus"] and flyout[group + "Closed"], group
     assert out["closedByOutsideClick"]
     assert out["fromFlyout"] == ["Split", True]

@@ -29,7 +29,7 @@ const { chromium } = require("playwright");
     out.groups = await page.$$eval(".rail-btn[data-group]", (bs) => bs.map((b) => b.textContent.trim()));
     out.toolButtons = await page.$$eval(".tools button[data-op]", (bs) => bs.map((b) => b.dataset.op));
     out.flyout = {};
-    for (const group of ["pages", "convert", "protect", "all"]) {
+    for (const group of ["pages", "improve", "convert", "protect", "all"]) {
       await page.click(`.rail-btn[data-group="${group}"]`);
       await page.waitForSelector("#flyout:not([hidden])");
       out.flyout[group] = await page.$$eval("#flyout .fly-tool", (bs) => bs.map((b) => b.dataset.op));

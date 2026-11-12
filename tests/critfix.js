@@ -262,6 +262,49 @@ const fs = require("fs");
         await ctx.close();
       }
     }
+    // ---- 3. The rail by intent: Improve; folder tools under no rail group ---------------------
+    {
+      const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+      const page = await ctx.newPage();
+      watch(page);
+      await page.goto(url);
+      await page.waitForSelector("#home-host .start-drop", { timeout: 30000 });
+      out.rail = { groups: await page.$$eval(".rail-btn[data-group]", (bs) => bs.map((b) => b.textContent.trim())), flyouts: {} };
+      for (const group of ["improve", "convert", "all"]) {
+        await page.click(`.rail-btn[data-group="${group}"]`);
+        await page.waitForSelector("#flyout:not([hidden])");
+        await page.waitForTimeout(100);
+        out.rail.flyouts[group] = await page.evaluate(() => ({
+          tools: [...document.querySelectorAll("#flyout .fly-tool")].map((b) => b.dataset.op),
+          heads: [...document.querySelectorAll("#flyout .fly-sec")].map((h) => h.textContent),
+          cue: document.getElementById("flyout").classList.contains("more-below"),
+          fits: document.getElementById("flyout").getBoundingClientRect().bottom <= innerHeight,
+        }));
+        if (group === "improve") await shot(page, "light-1280-improve-flyout");
+        if (group === "all") {
+          await page.evaluate(() => { const l = document.getElementById("flyout-list"); l.scrollTop = l.scrollHeight; });
+          await page.waitForTimeout(150);
+          out.rail.flyouts.all.cueAtEnd = await page.evaluate(() => document.getElementById("flyout").classList.contains("more-below"));
+          out.rail.flyouts.all.cueAbove = await page.evaluate(() => document.getElementById("flyout").classList.contains("more-above"));
+        }
+        await page.keyboard.press("Escape");
+      }
+      const lit = () => page.$$eval(".rail-btn[data-group]", (bs) => bs.filter((b) => b.getAttribute("aria-current") === "true").map((b) => b.dataset.group));
+      for (const id of ["compress", "search", "organize", "recipe", "to-word", "flatten", "merge"]) {
+        await page.dispatchEvent(`.tools button[data-op="${id}"]`, "click");
+        out.rail["lit-" + id] = await lit();
+      }
+      // The start screen's More: the tools for several files and folders; Escape goes back to it.
+      await page.click("#brand");
+      await page.waitForSelector("#home-host .multi .more");
+      await page.click("#home-host .multi .more");
+      await page.waitForSelector("#flyout:not([hidden])");
+      out.rail.several = await page.evaluate(() => ({ title: document.getElementById("flyout-title").textContent,
+        tools: [...document.querySelectorAll("#flyout .fly-tool")].map((b) => b.dataset.op) }));
+      await page.keyboard.press("Escape");
+      out.rail.several.focusBack = await page.evaluate(() => document.activeElement.classList.contains("more"));
+      await ctx.close();
+    }
   } catch (e) {
     out.errors.push("FATAL " + (e.stack || e));
   }
