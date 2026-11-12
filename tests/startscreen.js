@@ -22,7 +22,7 @@ const { chromium } = require("playwright");
       name: r.querySelector(".recent-name")?.textContent, facts: r.querySelector(".recent-facts")?.textContent })));
     out.multi = await page.$$eval(".multi button", (bs) => bs.map((b) => b.dataset.tool || b.textContent.trim()));
     out.findLabel = await page.textContent("#find-label");
-    out.fonts = await page.evaluate(() => ["Instrument Sans", "Instrument Serif", "JetBrains Mono"].map((f) => document.fonts.check(`16px "${f}"`)));
+    out.fonts = await page.evaluate(() => ["Instrument Sans", "Source Serif 4", "JetBrains Mono"].map((f) => document.fonts.check(`16px "${f}"`)));
     out.scrollWidth1280 = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
 
     // The rail: five groups, and every tool as a real button[data-op].

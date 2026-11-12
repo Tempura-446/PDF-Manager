@@ -147,7 +147,7 @@ const { chromium } = require("playwright");
     if (process.env.PFX) {
       await page.click(".rd-doctab:first-child .rd-doctab-name");
       await page.waitForFunction(() => document.querySelector(".fp-name")?.textContent === "Quarterly report.pdf");
-      await page.click('.fp-tool[data-op="sign-cert"]');
+      await page.evaluate(() => fpChoose("sign-cert"));  // Digital ID, chosen from the palette or All tools
       await page.setInputFiles("#fp-sign-cert-pfx", process.env.PFX);
       await page.fill("#fp-sign-cert-pfx_password", process.env.PFX_PASSWORD || "");
       const runsBeforeSign = await page.evaluate(() => window.__runs.length);

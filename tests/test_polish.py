@@ -129,7 +129,8 @@ def test_polish_in_a_browser(app, tmp_path):
 
     # (c) A printed form: "Make it fillable" in the panel does what the bar does; the bar stays.
     form = out["form"]
-    assert form["suggestions"] == ["Make it fillable"] and form["why"] == "It looks like a form you can't type in yet"
+    # (Its signature line is offered "Sign it" too, since 0.24.)
+    assert form["suggestions"] == ["Make it fillable", "Sign it"] and form["why"] == "It looks like a form you can't type in yet"
     assert form["bar"] and "Make it fillable" in form["barText"]
     assert out["formToast"].startswith("Added ") and "place" in out["formToast"]
     assert not out["formAfter"]["card"] and not out["formAfter"]["bar"]
@@ -137,11 +138,12 @@ def test_polish_in_a_browser(app, tmp_path):
     changes = out["changes"]
     assert changes["text"] == "Any changes except extracting pages" and changes["long"]
     assert changes["needs"] <= changes["room"], changes
-    # An empty signature field: "Sign it", which opens the signing options (one set, in the card).
+    # An empty signature field: "Sign it", which opens the reader's Sign dialog (draw or type),
+    # not the Digital ID form; the panel's Sign button opens the same dialog.
     assert out["sign"] == ["Sign it"]
     so = out["signOpen"]
-    assert so["expanded"] == "true" and so["grid"] == "true" and so["pfx"] and so["inCard"] and so["ids"] == 1
-    assert out["signClosed"] == ["false", True]
+    assert so["title"] == "Sign" and not so["pfx"], so
+    assert out["signClosed"] == [False, False]
     # The link back to the original in a result's note: its focus ring stays inside its own line.
     note = out["noteLink"]
     assert note["focusVisible"] and note["offset"] == "0px" and note["height"] + 4 <= note["line"], note

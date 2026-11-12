@@ -193,7 +193,7 @@ closed.
   commas. Click a field to move, resize, rename or remove it. Fields already
   in the file are shown striped. The fields work in any PDF reader,
   including the one here.
-- **Sign with a digital ID** signs PDFs with your certificate (a .pfx or
+- **Digital ID** (the certificate tool) signs PDFs with your certificate (a .pfx or
   .p12 file), like Acrobat: visible in a corner of a page (showing your
   name, the date and the reason) or invisible, optionally with a time from
   a timestamp server. **Check signatures** reports who signed each
@@ -213,7 +213,7 @@ closed.
   a picture of the page). **PDF → HTML** makes a web page: flowing text
   that fits any screen, or each page as it looks. No Office needed. See
   [PowerPoint and HTML](#powerpoint-and-html).
-- **Search PDFs** searches every PDF in a folder (and its sub-folders).
+- **Search a folder** searches every PDF in a folder (and its sub-folders).
   Type words or ask a question: "how much do I owe" finds the page that
   says "balance due", because pages are ranked by what they are about as
   well as by the words they share with the question, the closest first.
@@ -338,7 +338,7 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
 - **Links** (Tools → Annotate & sign → Links): links are outlined; click
   one to change where it goes (a web or email address, or a page of the
   document) or delete it, or drag a box to add one.
-- **Sign with a digital ID** (the badge button in Annotate & sign, or
+- **Digital ID** (the badge button in Annotate & sign, or
   More): drag a box where the signature goes, choose your digital ID
   (.pfx or .p12) and its password. A signed document shows a bar saying
   who signed it and whether it has been changed since; **Details** lists

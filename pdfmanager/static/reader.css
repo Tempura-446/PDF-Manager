@@ -13,7 +13,8 @@
 .rd-group { display: flex; align-items: center; gap: 2px; flex: none; }
 .rd-sep { width: 1px; height: 22px; background: var(--border-strong); opacity: .6; margin: 0 8px; flex: none; }
 .rd:has(.rd-tabbar:not([hidden])) .rd-title { visibility: hidden; }  /* the active tab is the title then */
-.rd-title { min-width: 0; flex: 1 1 auto; font: 400 19px/1.2 var(--display, inherit); letter-spacing: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 8px; }
+.rd-title { min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: 9px; font: 500 16px/1.25 var(--display, inherit); letter-spacing: 0; white-space: nowrap; overflow: hidden; padding: 0 8px; }
+.rd-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .rd-btn {
   height: 34px; min-width: 34px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-sm); background: none;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; color: var(--text-2); font-size: 14px;
@@ -180,11 +181,24 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .rd-empty-icon svg { width: 30px; height: 30px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.rd-empty h2 { margin: 0 0 6px; font: 400 30px/1.15 var(--display, inherit); letter-spacing: 0; }
+.rd-empty h2 { margin: 0 0 6px; font: 500 25px/1.2 var(--display, inherit); letter-spacing: 0; }
 .rd-empty p { margin: 0 0 20px; color: var(--muted); }
 .rd-empty .rd-btn.primary { height: 38px; padding: 0 18px; }
 .rd-empty .keys { margin: 22px auto 0; max-width: 40ch; font-size: 12px; line-height: 1.6; color: var(--faint); text-wrap: balance; }
 .rd-empty .keys span { white-space: nowrap; }
+/* A file that can't be shown: a lasting state where its pages would be. */
+.rd-broken .rd-broken-card { border-style: solid; border-color: var(--border); }
+.rd-broken .rd-broken-icon { background: var(--err-soft); color: var(--err); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--err) 16%, transparent); }
+.rd-broken .rd-broken-name { margin: 0 0 8px; font: 500 22px/1.25 var(--display, inherit); overflow-wrap: anywhere; text-wrap: balance; }
+.rd-broken .rd-broken-why { margin: 0 0 22px; color: var(--text-2); text-wrap: pretty; }
+.rd-broken-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.rd-broken-actions .rd-btn { height: 38px; padding: 0 16px; }
+.rd-broken-actions .rd-btn:not(.primary) { border-color: var(--border-strong); background: var(--surface); color: var(--text); }
+.rd-broken-actions .rd-btn:not(.primary):hover { background: var(--surface-2); }
+.rd-broken-actions .rd-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.rd-broken-actions .rd-btn.busy { cursor: progress; }
+.rd .rd-broken-said { margin: 16px 0 0; color: var(--text-2); font-size: 13px; }
+.rd .rd-broken-said:empty { display: none; }
 
 /* ---- Overlays: menu, dialogs, toasts, loading ---- */
 .rd-menu {
@@ -215,7 +229,7 @@
 .rd-dialog:has(.rd-cardbox) { width: min(820px, calc(100vw - 32px)); }
 .rd-dialog::backdrop { background: rgb(20 23 28 / .36); backdrop-filter: blur(3px); }
 .rd-dialog form { padding: 24px 26px 22px; }
-.rd-dialog h3 { margin: 0 0 12px; font: 400 26px/1.15 var(--display, inherit); letter-spacing: 0; }
+.rd-dialog h3 { margin: 0 0 12px; font: 500 21px/1.2 var(--display, inherit); letter-spacing: 0; }
 .rd-dialog p { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
 .rd-dialog input[type=password], .rd-dialog input[type=text]:not(.rd-sigtext), .rd-dialog input[type=number] {
   width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--input-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit;
@@ -241,6 +255,8 @@
 .rd-dialog .actions button:active { transform: translateY(1px); }
 .rd-dialog .actions button.primary { color: var(--accent-text); border-color: transparent; background: var(--accent); box-shadow: 0 1px 2px rgb(20 23 28 / .12); }
 .rd-dialog .actions button.primary:hover { background: var(--accent-hover); }
+.rd-dialog .actions button.primary.seal { color: var(--seal-ink, #fff); background: var(--seal, #d4382c); }
+.rd-dialog .actions button.primary.seal:hover { background: var(--seal, #d4382c); filter: brightness(var(--seal-hover, .92)); }
 .rd-props { display: grid; grid-template-columns: max-content 1fr; gap: 7px 18px; font-size: 14px; margin: 0; }
 .rd-props dt { color: var(--muted); }
 .rd-props dd { margin: 0; word-break: break-word; }
@@ -258,6 +274,11 @@
 @media (max-width: 760px) { .toast { left: 50%; max-width: calc(100vw - 32px); } }
 .rd-toast button, .toast button { border: 0; background: none; color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
   padding: 0 4px; min-width: 24px; min-height: 24px; margin: -2px -4px; }  /* a 24px target in the same pill */
+/* The main choice in a toast with two (Save redacted copy… / Replace original): a seal pill. */
+.rd-toast button.seal { background: var(--seal, #d4382c); color: var(--seal-ink, #fff); text-decoration: none; border-radius: 999px;
+  padding: 5px 12px; margin: -4px 0; white-space: nowrap; }
+.rd-toast button.seal:hover { filter: brightness(var(--seal-hover, .92)); }
+.rd-toast:has(button.seal) { border-radius: 18px; }
 @keyframes rd-rise { from { opacity: 0; transform: translate(-50%, 8px); } }
 /* Leaving: it fades and sinks a little (fadeOut in reader.js; at once when motion is reduced). */
 .rd-toast.out, .rd-toast.top.out, .toast.out { animation: rd-leave var(--t) var(--ease) forwards; pointer-events: none; }  /* out faster than in */
@@ -460,6 +481,7 @@ textarea.rd-textedit.rd-textedit-fit { white-space: pre-wrap; overflow: auto; }
   font: 12px/1.2 system-ui, sans-serif; white-space: nowrap;
 }
 .rd-textedit-box.rd-pending .rd-tf-bar { display: none; }
+.rd-tf-bar.below { bottom: auto; top: 100%; margin: 8px 0 0; }  /* no room above (the bars): under the words instead */
 .rd-tf-bar select, .rd-tf-bar input {
   height: 26px; box-sizing: border-box; border: 0; border-radius: 6px; font: inherit; color: #111; background: #fff;
 }

@@ -200,6 +200,7 @@ const fs = require("fs");
         if (w === 1280 && theme === "light") {
           // Save turns into the main (seal) action once there is something to save.
           await page.keyboard.press("d");  // Draw
+          await page.waitForTimeout(500);  // (the file panel stepped aside: the pages settle at their new width first)
           const box = await page.locator(".page").first().boundingBox();
           await page.mouse.move(box.x + 120, box.y + 160);
           await page.mouse.down();
@@ -356,7 +357,8 @@ const fs = require("fs");
           formShown: opts.getClientRects().length > 0, recap: recap.hidden ? null : recap.textContent,
           gap: Math.round(r(document.getElementById("result-table")).top - r(document.getElementById("result")).bottom),
           resultTop: Math.round(r(document.getElementById("result")).top - r(document.querySelector(".page-head")).bottom),
-          folders: [...document.querySelectorAll(".search-folder-row th")].map((th) => th.textContent),
+          folders: [...document.querySelectorAll(".search-folder-row th")].map((th) => th.title),
+          folderTexts: [...document.querySelectorAll(".search-folder-row th")].map((th) => th.textContent),
           names: [...document.querySelectorAll(".search-row .search-name")].map((n) => n.textContent),
           marks: [...document.querySelectorAll(".search-results mark")].map((m) => m.textContent),
           snippets: [...document.querySelectorAll(".search-row td:last-child")].map((td) => td.textContent),

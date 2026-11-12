@@ -86,7 +86,7 @@ def test_the_page_keeps_what_tests_and_scripts_rely_on():
     for group in ("read", "pages", "improve", "convert", "protect", "all"):
         assert f'data-group="{group}"' in html
     assert '<link rel="stylesheet" href="https://' not in html and "fonts.googleapis" not in html
-    for font in ("instrument-sans-latin-400-normal", "instrument-serif-latin-400-normal",
+    for font in ("instrument-sans-latin-400-normal", "source-serif-4-latin-500-normal",
                  "jetbrains-mono-latin-500-normal"):
         assert f"/static/fonts/{font}.woff2" in html
         assert (HERE.parent / "pdfmanager" / "static" / "fonts" / f"{font}.woff2").is_file()

@@ -165,6 +165,8 @@ const ICON = {
   stamp: '<path d="M9 3h6l-1 7h4a2 2 0 0 1 2 2v3H4v-3a2 2 0 0 1 2-2h4z"/><path d="M5 19h14"/>',
   comments: '<path d="M4 5h13v9H9l-3 3v-3H4z"/><path d="M17 9h3v8h-2v3l-3-3h-4"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
+  wrench: '<path d="M14.7 6.3a4 4 0 0 0-5.3 5.3L3 18l3 3 6.4-6.4a4 4 0 0 0 5.3-5.3l-2.5 2.5-2.3-.6-.6-2.3z"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
   access: '<circle cx="12" cy="4.5" r="1.8"/><path d="M5 8.5l7 1.5 7-1.5M12 10v4.5M12 14.5 8.5 21M12 14.5l3.5 6.5"/>',  // -- accessibility --
 };
 
@@ -228,6 +230,8 @@ const HOLD_BYTES = 64 * 1024 * 1024;
 // and for pdf.js to open a document (not counting the password prompt): a
 // request that never answers mustn't leave the reader waiting for ever.
 const PIECE_MS = 60000, WHOLE_MS = 180000, OPEN_MS = 120000;
+// pdf.js's words for a file it can't make sense of (damaged, or not a PDF).
+const DAMAGED = new Set(["InvalidPDFException", "FormatError", "UnknownErrorException", "MissingPDFException"]);
 
 /** fetch(), given up after ``ms`` (and when ``signal`` aborts). */
 function fetchFor(url, options, ms, signal = null) {
@@ -285,7 +289,7 @@ const store = {
 };
 
 export class Reader {
-  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint } = {}) {
+  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onRepair, onForgetRecent, onSaveTab } = {}) {
     this.host = host;
     this.token = token;
     this.isDesktop = isDesktop || (() => false);
@@ -298,6 +302,9 @@ export class Reader {
     this.onChange = onChange;  // the open documents or the shown one changed (the app's file panel follows)
     this.recent = recent;  // (host) => fills host with the app's Recent list (the start screen's), resolves to how many
     this.onFormHint = onFormHint;  // (tab) => the "looks like a form" check came out for tab, or was dismissed
+    this.onRepair = onRepair;  // (tab) => run Repair on a file that can't be shown; resolves when its result is open (or it failed)
+    this.onForgetRecent = onForgetRecent;  // (tab) => take a file that can't be shown off the Recent list
+    this.onSaveTab = onSaveTab;  // (tab) => save a tab the app made (a tool's result): resolves true once saved
     // Everything that changes which document is shown runs one after the
     // other (see #serial): two loads at once would show the wrong tab or
     // trip over the shared worker.
@@ -320,7 +327,11 @@ export class Reader {
 
     // Toolbar
     this.sidebarBtn = b("sidebar", "Show or hide the sidebar", { "aria-pressed": "true", disabled: true });
-    this.titleEl = el("div", { class: "rd-title" });
+    // The document's name, and a dot (with the word, for screen readers) while it has changes not saved.
+    this.titleText = el("span", { class: "rd-title-text" });
+    this.titleDot = el("span", { class: "rd-dot", title: "Not saved", hidden: true });
+    this.titleSr = el("span", { class: "rd-sr", hidden: true }, ", unsaved");
+    this.titleEl = el("div", { class: "rd-title" }, this.titleText, this.titleDot, this.titleSr);
     this.prevBtn = b("up", "Previous page", { disabled: true });
     this.nextBtn = b("down", "Next page", { disabled: true });
     this.pageInput = el("input", { type: "text", inputmode: "numeric", "aria-label": "Page number", disabled: true, autocomplete: "off" });
@@ -414,7 +425,7 @@ export class Reader {
     tip("EDITTEXT", "Change words on the page: click a line of text (E)");
     this.signBtn = el("button", { class: "rd-btn rd-tool", type: "button", title: "Add your signature (S)", html: svg("sign") + "<span>Sign</span>" });
     this.certSignBtn = el("button", { class: "rd-btn rd-tool compact", type: "button", "data-mode": "CERTSIGN", "aria-pressed": "false",
-      title: "Sign with a digital ID (a certificate, .pfx or .p12): drag a box where the signature goes", html: svg("badge") + "<span>Digital ID</span>" });
+      title: "Digital ID: sign with a certificate (.pfx or .p12); drag a box where the signature goes", html: svg("badge") + "<span>Digital ID</span>" });
     this.annotTools.push(this.certSignBtn);
     this.#buildRedact();  // reader redaction
     this.swatches = COLORS.map(([name, ink, mark], i) => el("button", { class: "rd-swatch", type: "button", title: name, "aria-label": name, "aria-pressed": String(i === 1),
@@ -440,7 +451,7 @@ export class Reader {
     this.moreToolsMenu = el("div", { class: "rd-menu rd-toolsmenu", role: "menu", "aria-label": "More tools", hidden: true },
       ...inMenu.flatMap(([label, modes], i) => [...(i ? [el("hr")] : []), el("div", { class: "label", "aria-hidden": "true" }, label), ...modes.map(byMode)]));
     this.moreToolsBtn = el("button", { class: "rd-btn rd-tool rd-moretools", type: "button", "aria-haspopup": "menu", "aria-expanded": "false",
-      title: "More tools: underline, shapes, stamps, pictures, links, digital ID, redact", html: svg("more") + "<span>More tools</span>" + svg("down") });
+      title: "More tools: underline, shapes, stamps, pictures, links, Digital ID, redact", html: svg("more") + "<span>More tools</span>" + svg("down") });
     this.annotbar = el("div", { class: "rd-findbar rd-annotbar", hidden: true, role: "toolbar", "aria-label": "Annotate" },
       ...["NONE", "HIGHLIGHT", "NOTE", "FREETEXT", "INK"].map(byMode), this.signBtn, this.moreToolsBtn,
       el("span", { class: "rd-sep" }),
@@ -500,7 +511,21 @@ export class Reader {
           .flatMap((keys, i) => [i ? " · " : "", el("span", {}, keys)]))),
       this.recentBox = el("section", { class: "rd-recent", hidden: true, "aria-label": "Recent files" },
         el("h3", {}, "Recent"), this.recentList = el("div", {})));
-    this.main = el("div", { class: "rd-main" }, this.container, this.loading, this.empty, this.measPanel);
+    // A file that can't be shown (damaged, or not a PDF): a state that stays
+    // for its tab, with a way out (Repair), not a toast that goes.
+    this.brokenName = el("h2", { class: "rd-broken-name" });
+    this.brokenRepair = el("button", { class: "rd-btn primary seal rd-broken-repair", type: "button", html: svg("wrench") + "<span>Try to repair it</span>" });
+    this.brokenForget = el("button", { class: "rd-btn rd-broken-forget", type: "button" }, "Remove from Recent");
+    this.brokenClose = el("button", { class: "rd-btn rd-broken-close", type: "button" }, "Close");
+    this.brokenSaid = el("p", { class: "rd-broken-said", role: "status" });
+    this.broken = el("div", { class: "rd-empty rd-broken", hidden: true },
+      el("section", { class: "rd-empty-card rd-broken-card", "aria-labelledby": "rd-broken-name" },
+        el("div", { class: "rd-empty-icon rd-broken-icon", html: svg("alert") }),
+        Object.assign(this.brokenName, { id: "rd-broken-name" }),
+        el("p", { class: "rd-broken-why" }, "ZPDF can’t show this file — it may be damaged."),
+        el("div", { class: "rd-broken-actions" }, this.brokenRepair, this.brokenForget, this.brokenClose),
+        this.brokenSaid));
+    this.main = el("div", { class: "rd-main" }, this.container, this.loading, this.empty, this.broken, this.measPanel);
     // The file panel: beside the pages in a wide window, over them (with a
     // scrim) in a narrow one. The app puts its content in.
     this.side = el("aside", { class: "rd-side", id: "rd-side", role: "region", "aria-label": "This file", hidden: true });
@@ -597,7 +622,7 @@ export class Reader {
       ...(this.activeTab?.fileId ? [this.#menuItem("save", "Save", () => this.save())] : []),
       this.#menuItem("save", this.activeTab?.fileId ? "Save as…" : this.#edited() ? "Save a copy with your changes…" : "Save a copy…", () => this.saveCopy()),
       this.#menuItem("layers", this.overlay ? "Stop comparing revisions" : "Compare with another revision…", () => (this.overlay ? this.closeCompare() : this.compareRevision())),
-      this.#menuItem("badge", "Sign with a digital ID…", () => this.useTool("CERTSIGN")),
+      this.#menuItem("badge", "Digital ID…", () => this.useTool("CERTSIGN")),
       this.#menuItem("fillable", "Make it fillable (find the form's fields)", () => this.makeFillable()),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
       this.#menuItem("access", "Check accessibility", () => this.checkAccessibility()),  // -- accessibility --
@@ -682,6 +707,9 @@ export class Reader {
   // ---- events -----------------------------------------------------------------
   #wire() {
     this.emptyOpenBtn.addEventListener("click", () => this.chooseFile());
+    this.brokenRepair.addEventListener("click", () => this.#repairBroken());
+    this.brokenForget.addEventListener("click", () => this.#forgetBroken());
+    this.brokenClose.addEventListener("click", () => this.closeTab(this.activeTab));
     this.fileInput.addEventListener("change", () => { const f = this.fileInput.files[0]; this.fileInput.value = ""; if (f) this.openFile(f); });
     this.sidebarBtn.addEventListener("click", () => this.toggleSidebar());
     this.prevBtn.addEventListener("click", () => this.pdfViewer.previousPage());
@@ -851,7 +879,7 @@ export class Reader {
     if (e.key === "Escape" && this.panelOpen && !this.#panelDocked()) { e.preventDefault(); this.setPanel(false, { focus: true }); return; }
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
     if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); this.print(); return; }
-    if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); if (e.shiftKey) this.saveCopy(); else this.save(); return; }
+    if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); this.#saveKey(e); return; }
     if (mod && !isTyping(e) && !this.scalebar.hidden && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")
         && this.#measureUndo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); return; }
     if (mod && e.key.toLowerCase() === "z" && !e.shiftKey && !isTyping(e) && this.activeTab?.undo?.length
@@ -1084,14 +1112,27 @@ export class Reader {
     this.#renderTabs();
   }
 
-  closeTab(tab = this.activeTab) {
-    return this.#serial(() => this.#closeTabNow(tab));
+  async closeTab(tab = this.activeTab) {
+    const answer = await this.#serial(() => this.#closeTabNow(tab));
+    if (answer !== "save") return;
+    // Save first (as Ctrl+S would; Save as for a tool's result not saved anywhere yet), then close.
+    if (tab !== this.activeTab) await this.#switchTo(tab);
+    if (tab.unsaved || !tab.fileId) await this.saveTab(tab, tab.madeBy?.from?.fileId || null);
+    else await this.save();
+    if (this.tabs.includes(tab) && !tab.dirty && !tab.unsaved) await this.#serial(() => this.#closeTabNow(tab, true));
   }
 
-  async #closeTabNow(tab) {
+  /** Close ``tab``; one with changes not saved (or a tool's result not saved
+   *  anywhere) asks first. Resolves "save" when Save was chosen: closeTab
+   *  saves it, then closes it. */
+  async #closeTabNow(tab, saved = false) {
     if (!tab || !this.tabs.includes(tab)) return;
-    if (tab.dirty && await this.ask(`Close “${tab.name}”?`, "Your changes to it haven't been saved.",
-      [["cancel", "Cancel"], ["close", "Close without saving", true]]) !== "close") return;
+    if ((tab.dirty || tab.unsaved) && !saved) {
+      const answer = await this.ask(`Close “${tab.name}”?`, tab.dirty ? "Your changes to it haven't been saved." : "It hasn't been saved anywhere yet.",
+        [["cancel", "Cancel"], ["close", "Close without saving"], ["save", tab.unsaved || !tab.fileId ? "Save…" : "Save", "seal"]]);
+      if (answer === "save") return "save";
+      if (answer !== "close") return;
+    }
     const i = this.tabs.indexOf(tab);
     this.tabs.splice(i, 1);
     if (tab === this.activeTab) {
@@ -1139,6 +1180,9 @@ export class Reader {
       parts.dot.hidden = parts.unsaved.hidden = !(tab.dirty || tab.unsaved);
       return parts.wrap;
     });
+    // With one document (no tab bar) the title says it too.
+    const shown = this.doc ? this.activeTab : null;
+    this.titleDot.hidden = this.titleSr.hidden = !(shown && (shown.dirty || shown.unsaved));
     this.#showSaveState();
     // Re-append only if the order changed, so elements stay where they are.
     const current = [...this.tabbar.children].filter((n) => n !== this.addTabBtn);
@@ -1147,11 +1191,67 @@ export class Reader {
     this.onChange?.();
   }
 
+  /** ``tab`` holds a file that can't be shown: say so where its pages would
+   *  be, with Try to repair it, Remove from Recent and Close. It stays (for
+   *  this tab) until the tab is closed. */
+  #showBroken(tab) {
+    this.activeTab = tab;
+    this.#busy(false);
+    this.empty.hidden = true;
+    this.broken.hidden = false;
+    this.brokenName.textContent = tab.name;
+    this.brokenName.title = tab.path || tab.name;
+    this.brokenRepair.hidden = !this.onRepair || (!tab.fileId && !tab.original);
+    this.brokenForget.hidden = !this.onForgetRecent || !tab.path || tab.forgotten;
+    this.brokenSaid.textContent = tab.brokenSaid || "";
+    this.titleText.textContent = tab.name;
+    this.titleEl.title = tab.name;
+    this.pageInput.value = "";
+    this.pageCount.textContent = "";
+    for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
+      this.zoomInput, this.zoomMenuBtn, this.findBtn, this.annotateBtn, this.scaleBtn]) c.disabled = true;
+    this.zoomInput.value = "";
+    this.sidebar.hidden = true;
+    this.root.classList.remove("reading");
+    if (this.active) document.title = tab.name + " — ZPDF";
+    this.onChange?.();
+  }
+
+  async #repairBroken() {
+    const tab = this.activeTab;
+    if (!tab?.broken || !this.onRepair || this.brokenRepair.disabled) return;
+    this.brokenRepair.disabled = true;
+    this.brokenRepair.classList.add("busy");
+    this.brokenRepair.lastChild.textContent = "Repairing…";
+    tab.brokenSaid = "";
+    this.brokenSaid.textContent = "";
+    try {
+      const said = await this.onRepair(tab);
+      if (said) { tab.brokenSaid = said; if (this.activeTab === tab) this.brokenSaid.textContent = said; }
+    } finally {
+      this.brokenRepair.disabled = false;
+      this.brokenRepair.classList.remove("busy");
+      this.brokenRepair.lastChild.textContent = "Try to repair it";
+    }
+  }
+
+  async #forgetBroken() {
+    const tab = this.activeTab;
+    if (!tab?.broken || !this.onForgetRecent) return;
+    try { await this.onForgetRecent(tab); } catch (e) { this.toast("Couldn't remove it from Recent: " + (e.message || e)); return; }
+    tab.forgotten = true;
+    this.brokenForget.hidden = true;
+    tab.brokenSaid = `Removed ${tab.name} from Recent.`;
+    this.brokenSaid.textContent = tab.brokenSaid;
+    this.brokenClose.focus();
+  }
+
   #showEmpty() {
     this.activeTab = null;
     this.#busy(false);
+    this.broken.hidden = true;
     this.empty.hidden = false;
-    this.titleEl.textContent = "";
+    this.titleText.textContent = "";
     this.pageInput.value = "";
     this.pageCount.textContent = "";
     for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
@@ -1294,6 +1394,11 @@ export class Reader {
   /** Show ``tab``'s document in the viewer. Returns false if it couldn't be
    *  opened (not a PDF, or the password prompt was cancelled). */
   async #load(tab) {
+    if (tab.broken) {  // (known not to open: its state again, not another try)
+      await this.#closeDocument();
+      this.#showBroken(tab);
+      return true;
+    }
     this.#busy(true);
     let pieces = null, timer = 0, tooLong = null;
     const giveUp = new Promise((_, reject) => { tooLong = reject; });
@@ -1350,10 +1455,11 @@ export class Reader {
       // (The viewer hands the document to the find controller itself once the
       // first page is drawn; doing it here too would reset a search started
       // when the pages appear, e.g. from the folder search.)
-      this.titleEl.textContent = tab.name;
+      this.titleText.textContent = tab.name;
       this.titleEl.title = tab.name;
       document.title = tab.name + " — ZPDF";
       this.empty.hidden = true;
+      this.broken.hidden = true;
       for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
         this.zoomInput, this.zoomMenuBtn, this.findBtn, this.annotateBtn, this.scaleBtn]) c.disabled = false;
       this.pageCount.textContent = `of ${doc.numPages}`;
@@ -1386,7 +1492,17 @@ export class Reader {
         // A tab left in the background whose file went away or changed: say so; it can be closed.
         this.toast(`Can't show “${tab.name}” again: ${tab.gone}.`, 15000, ["Close it", () => this.closeTab(tab)]);
       } else if (pieces?.failure) this.toast(`Could not open “${tab.name}”: ${why}`, 9000);
-      else if (!(e && e.name === "PasswordException")) {  // not just cancelled at the password prompt
+      else if (!tab.shown && this.tabs.includes(tab) && e && DAMAGED.has(e.name)) {
+        // Damaged, or not a PDF at all: a state of its own that stays, with Repair.
+        tab.broken = true;
+        if (tab.fileId) {  // Recent says so, and doesn't put it first
+          fetch("/api/recent/failed", { method: "POST", headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/json" },
+            body: JSON.stringify({ id: tab.fileId }) }).catch(() => {});
+        }
+        this.#showBroken(tab);
+        this.brokenRepair.hidden ? this.brokenClose.focus() : this.brokenRepair.focus();
+        return true;
+      } else if (!(e && e.name === "PasswordException")) {  // not just cancelled at the password prompt
         this.toast(e && e.name === "InvalidPDFException" ? `“${tab.name}” isn't a valid PDF.` : "Could not open the PDF: " + why);
       }
       return false;
@@ -1576,8 +1692,23 @@ export class Reader {
    *  comes over the pages when asked for and goes again. */
   #panelDocked() { return !this.wideQuery || this.wideQuery.matches; }
   get panelOpen() { return this.#panelDocked() ? store.get("pdfm-file-panel", true) !== false : !!this.overlayOpen; }
+  /** While the annotate bar or the find bar is open the file panel steps
+   *  aside (to its button), so the page has the room; it comes back when
+   *  they close. Its open/closed choice isn't changed. Opened again by hand
+   *  meanwhile, it stays. */
+  #stepAside() {
+    const busy = !this.annotbar.hidden || !this.findbar.hidden;
+    if (!busy) this.panelKept = false;
+    const aside = busy && !this.panelKept;
+    if (aside === !!this.panelAside) return;
+    const had = aside && this.side.contains(document.activeElement);
+    this.panelAside = aside;
+    this.#applyPanel();
+    if (had) this.container.focus({ preventScroll: true });
+  }
+
   #applyPanel() {
-    const docked = this.#panelDocked(), open = this.panelOpen;
+    const docked = this.#panelDocked(), open = this.panelOpen && !this.panelAside;
     this.side.hidden = !open;
     this.side.classList.toggle("overlay", !docked);
     this.sideScrim.hidden = !(open && !docked);
@@ -1587,13 +1718,15 @@ export class Reader {
    *  back to the page (closing). */
   setPanel(open, { focus = false } = {}) {
     const had = this.side.contains(document.activeElement);
+    if (open && this.panelAside) { this.panelAside = false; this.panelKept = true; }  // asked for by hand: it stays
+    else if (!open && this.panelAside) { this.#applyPanel(); return; }  // (already out of the way)
     if (this.#panelDocked()) store.set("pdfm-file-panel", !!open);
     else this.overlayOpen = !!open;
     this.#applyPanel();
     if (open && focus) (this.side.querySelector("button, [href], input, select, [tabindex]:not([tabindex='-1'])") || this.side).focus?.();
     if (!open && (focus || had)) (this.doc ? this.panelBtn : this.container).focus({ preventScroll: true });
   }
-  togglePanel() { this.setPanel(!this.panelOpen, { focus: !this.#panelDocked() }); }
+  togglePanel() { this.setPanel(!(this.panelOpen && !this.panelAside), { focus: !this.#panelDocked() }); }
 
   // ---- sidebar: thumbnails and bookmarks ----------------------------------------
   toggleSidebar() { this.#setSidebar(this.sidebar.hidden); store.set("pdfm-reader-sidebar", !this.sidebar.hidden); }
@@ -1946,7 +2079,11 @@ export class Reader {
 
   // ---- find -----------------------------------------------------------------
   openFind() {
+    // One tool row at a time: the annotate bar closes (what was drawn stays, unsaved changes too).
+    if (!this.annotbar.hidden) this.closeAnnotate();
+    this.#endHint();
     this.findbar.hidden = false;
+    this.#stepAside();
     this.findBtn.setAttribute("aria-pressed", "true");
     const selected = String(window.getSelection() || "").trim();
     if (selected && selected.length < 100 && !selected.includes("\n")) this.findInput.value = selected;
@@ -1958,6 +2095,7 @@ export class Reader {
     if (this.findbar.hidden) return;
     this.findbar.hidden = true;
     this.findBtn.setAttribute("aria-pressed", "false");
+    this.#stepAside();
     if (this.eventBus) this.eventBus.dispatch("findbarclose", { source: this });
     this.findBtn.focus({ preventScroll: true });  // back where it was opened from
   }
@@ -1984,7 +2122,9 @@ export class Reader {
   // ---- annotating and signing ------------------------------------------------------
   openAnnotate() {
     if (!this.doc) return;
+    if (!this.findbar.hidden) this.closeFind();
     this.annotbar.hidden = false;
+    this.#stepAside();
     this.annotateBtn.setAttribute("aria-pressed", "true");
     this.#showSaveState();
     this.#showEditMode(this.editMode || "NONE");
@@ -1996,6 +2136,8 @@ export class Reader {
     this.annotateBtn.setAttribute("aria-pressed", "false");
     this.#showSaveState();
     if (this.editMode && this.editMode !== "NONE") this.#setEditMode("NONE");
+    this.#endHint();
+    this.#stepAside();
   }
 
   #modeName(mode) {
@@ -2007,9 +2149,10 @@ export class Reader {
   #setEditMode(name, create = false) {
     if (!this.pdfViewer || !this.doc) return;
     const editText = name === "EDITTEXT";
+    this.#endHint();  // the last tool's hint goes with it
     if (editText && !this.textEditHinted) {
       this.textEditHinted = true;
-      this.toast("Click a line to change it, Shift+click for its whole paragraph, or click an empty spot to add words. Old words can stay in the file underneath — to remove text for good, use Redact.", 8000);
+      this.#hint("Click a line to change it, Shift+click for its whole paragraph, or click an empty spot to add words. Old words can stay in the file underneath — to remove text for good, use Redact.", 8000);
     }
     const markup = MARKUP.has(name), custom = editText || markup;
     if (name !== "NONE" || custom) this.measureTool(null);
@@ -2291,6 +2434,7 @@ export class Reader {
     const cancel = el("button", { type: "button", class: "rd-btn" }, "Cancel");
     const box = el("div", { class: "rd-notebox", style: `left:${at.x}px;top:${at.y}px` }, text, el("div", { class: "rd-notebtns" }, cancel, add));
     at.view.div.append(box);
+    this.#keepInColumn(box, at);
     this.noteBox = box;
     const done = () => {
       const words = text.value.trim();
@@ -2299,10 +2443,13 @@ export class Reader {
     };
     add.addEventListener("click", done);
     cancel.addEventListener("click", () => this.#cancelMarkup());
+    this.noteCommit = () => { if (box.isConnected) done(); this.noteCommit = null; };
     text.addEventListener("keydown", (e) => {
       e.stopPropagation();
       if (e.key === "Escape") this.#cancelMarkup();
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) done();
+      // Ctrl+S here: the note goes in, then the document is saved (as anywhere else in the reader).
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && !e.altKey) { e.preventDefault(); this.#saveKey(e); }
     });
     setTimeout(() => text.focus(), 0);
   }
@@ -2449,14 +2596,14 @@ export class Reader {
   /** Pictures or Links mode: outlines over the pages' pictures or links. */
   #objectBoxes() {
     this.viewerEl?.querySelectorAll(".rd-objbox, .rd-objtools, .rd-linkdraft").forEach((n) => n.remove());
-    if (this.markupMode === "CERTSIGN") this.toast("Drag a box where your signature should appear, then choose your digital ID.", 5000);
+    if (this.markupMode === "CERTSIGN") this.#hint("Drag a box where your signature should appear, then choose your Digital ID.", 5000);
     if ((this.markupMode !== "IMAGES" && this.markupMode !== "LINKS") || !this.doc) return;
     for (let i = 0; i < this.pdfViewer.pagesCount; i++) {
       if (this.pdfViewer.getPageView(i)?.canvas?.width) this.#drawObjectBoxes(i + 1);
     }
     if (this.markupMode === "IMAGES" && !this.imagesHinted) {
       this.imagesHinted = true;
-      this.toast("Click a picture to pick it: drag it to move it, drag a corner to resize it (Shift: freely), or replace or delete it.", 6000);
+      this.#hint("Click a picture to pick it: drag it to move it, drag a corner to resize it (Shift: freely), or replace or delete it.", 6000);
     }
   }
 
@@ -2673,8 +2820,9 @@ export class Reader {
       store.set("pdfm-redact-how", this.redactHow.value);
       this.root.dataset.redact = this.redactHow.value;
     });
-    this.redactApplyBtn = el("button", { class: "rd-btn primary", type: "button", hidden: true, disabled: true,
-      title: "Black out the marked areas for good", html: svg("redact") + "<span>Apply</span>" });
+    // The verb, in the Redact page's style: "Black out 3 areas", seal red.
+    this.redactApplyBtn = el("button", { class: "rd-btn primary seal rd-redact-apply", type: "button", hidden: true, disabled: true,
+      title: "Black out the marked areas for good", html: svg("redact") + "<span>Black out</span>" });
     this.redactApplyBtn.addEventListener("click", () => this.#applyRedactions());
   }
 
@@ -2698,18 +2846,19 @@ export class Reader {
     if (!this.redactHow) return;
     this.redactHow.hidden = this.redactApplyBtn.hidden = !on;
     this.root.dataset.redact = on ? this.redactHow.value : "";
-    if (on) this.#showRedactCount();
+    if (on) this.#showRedactCount(); else this.#showSaveState();
     if (on && !this.redactHinted) {
       this.redactHinted = true;
-      this.toast("Drag boxes over what should go (or choose Select words), then Apply redactions. Click × on a mark to remove it.", 7000);
+      this.#hint("Drag boxes over what should go (or choose Select words), then Black out. Click × on a mark to remove it.", 7000);
     }
   }
 
   #showRedactCount() {
     const n = this.#redactCount();
     this.redactApplyBtn.disabled = !n;
-    this.redactApplyBtn.querySelector("span").textContent = n ? `Apply (${n})` : "Apply";
+    this.redactApplyBtn.querySelector("span").textContent = n ? `Black out ${n} ${n === 1 ? "area" : "areas"}` : "Black out";
     this.redactApplyBtn.title = n ? `Black out the ${n === 1 ? "marked area" : n + " marked areas"} for good` : "Mark something to black out first";
+    this.#showSaveState();
   }
 
   #addRedactions(n, rects) {
@@ -2764,11 +2913,11 @@ export class Reader {
   async #applyRedactions() {
     const tab = this.activeTab, marks = this.#redactMarks(tab), count = this.#redactCount(tab);
     if (!tab || !count) { this.toast("Mark something first: drag a box over it, or choose Select words."); return; }
-    const answer = await this.#dialog("Apply redactions?", [
+    const answer = await this.#dialog(`Black out ${count === 1 ? "this area" : count + " areas"}?`, [
       el("p", {}, `This removes what's under the ${count === 1 ? "marked area" : count + " marked areas"} for good once you save: `
         + "the words, the covered parts of pictures, and comments or form fields there. The rest of the page stays as it is."),
-      el("p", {}, "Until then, Undo (Ctrl+Z) brings it back.")],
-      [["cancel", "Cancel"], ["ok", "Apply redactions", true]]);
+      el("p", {}, "Until then, Undo (Ctrl+Z) brings it back. Saving makes a redacted copy beside the original, unless you choose to replace it.")],
+      [["cancel", "Cancel"], ["ok", count === 1 ? "Black out 1 area" : `Black out ${count} areas`, true]]);
     if (answer !== "ok") return;
     const boxes = Object.fromEntries(Object.entries(marks).filter(([, list]) => list.length));
     await this.#changeDocument((bytes, t) => this.#post("/api/redact/apply", bytes, t, { boxes: JSON.stringify(boxes) }), {
@@ -2782,7 +2931,9 @@ export class Reader {
           message += ` Page${pictures.length === 1 ? "" : "s"} ${pictures.map(([p]) => p).join(", ")} became `
             + `${pictures.length === 1 ? "a picture" : "pictures"} (${[...new Set(pictures.map(([, why]) => why))].join("; ")}).`;
         }
-        this.toast(message + " Save to make it permanent.", 8000, ["Save", () => this.save()]);
+        tab.redacted = true;  // Save makes a redacted copy from now on; replacing the original is asked
+        this.toast(message + " Save a redacted copy to keep it.", 12000, [["Save redacted copy…", () => this.saveRedacted()],
+          ...(tab.fileId ? [["Replace original", () => this.replaceWithRedacted()]] : [])]);
       },
     });
     if (this.markupMode === "REDACT") this.#showRedactCount();
@@ -2798,8 +2949,8 @@ export class Reader {
     const location = el("input", { type: "text", placeholder: "e.g. Vancouver", "aria-label": "Location" });
     const stamp = el("input", { type: "text", placeholder: "none (e.g. http://timestamp.digicert.com)", "aria-label": "Timestamp server",
       value: store.get("pdfm-timestamp-url", "") });
-    const answer = await this.#dialog("Sign with a digital ID", [
-      el("p", {}, "Your digital ID is a .pfx or .p12 file with your certificate. The signature seals the document: a change after signing shows up when it's checked."),
+    const answer = await this.#dialog("Digital ID", [
+      el("p", {}, "Your Digital ID is a .pfx or .p12 file with your certificate. The signature seals the document: a change after signing shows up when it's checked."),
       el("label", { class: "rd-field" }, "Digital ID file", pfx), el("label", { class: "rd-field" }, "Its password", password),
       el("label", { class: "rd-field" }, "Reason (optional)", reason), el("label", { class: "rd-field" }, "Location (optional)", location),
       el("label", { class: "rd-field" }, "Timestamp server (optional)", stamp)],
@@ -2807,7 +2958,7 @@ export class Reader {
       { ready: () => { if (pfx.files[0]) return true; pfx.focus(); return false; } });  // (Enter before a digital ID is chosen: to the file box, nothing lost)
     if (answer !== "ok") return;
     const file = pfx.files[0];
-    if (!file) { this.toast("Choose your digital ID file (.pfx or .p12)."); return; }
+    if (!file) { this.toast("Choose your Digital ID file (.pfx or .p12)."); return; }
     store.set("pdfm-timestamp-url", stamp.value.trim());
     const tab = this.activeTab, version = tab?.version || 0;
     await this.#changeDocument((bytes, t) => {
@@ -3093,7 +3244,7 @@ export class Reader {
     if (!layer) { this.toast("Scroll to the page to sign, then try again."); return; }
     if (this.annotbar.hidden) this.openAnnotate();
     await layer.pasteEditor({ mode: pdfjs.AnnotationEditorType.STAMP }, { bitmapFile: file });
-    this.toast("Drag the signature into place; use the corners to resize it.", 5000);
+    this.#hint("Drag the signature into place; use the corners to resize it.", 5000);
   }
 
   #signatureDialog() {
@@ -3166,6 +3317,34 @@ export class Reader {
     });
   }
 
+  /** The part of the pages the reader can see now: the page column, under
+   *  the bars and left of a docked file panel (and its scrollbar). */
+  #column() {
+    const c = this.container.getBoundingClientRect();
+    return { left: c.left + 8, top: c.top + 8, right: c.left + this.container.clientWidth - 8, bottom: c.top + this.container.clientHeight - 8 };
+  }
+  /** A box put on a page at ``at`` (x, y in the page's own pixels): moved
+   *  left or up (opening above the point) when it would cross the edge of
+   *  what can be seen, so its buttons are never under the panel or a bar. */
+  #keepInColumn(box, at) {
+    const col = this.#column(), r = box.getBoundingClientRect();
+    let x = at.x, y = at.y;
+    if (r.right > col.right) x -= Math.min(r.right - col.right, r.left - col.left);
+    if (r.left < col.left) x += col.left - r.left;
+    if (r.bottom > col.bottom) y = r.top - r.height - 12 >= col.top ? at.y - r.height - 12 : at.y - (r.bottom - col.bottom);
+    box.style.left = `${x}px`;
+    box.style.top = `${y}px`;
+  }
+  /** The text-look bar over a box being edited: below it when there's no
+   *  room above, shifted left when it would run under the panel. */
+  #keepBarInColumn(bar) {
+    if (!bar.isConnected) return;
+    const col = this.#column();
+    let r = bar.getBoundingClientRect();
+    if (r.top < col.top) { bar.classList.add("below"); r = bar.getBoundingClientRect(); }
+    if (r.right > col.right) bar.style.left = `${-Math.min(r.right - col.right, r.left - col.left)}px`;
+  }
+
   /** The drawn part of a canvas as a PNG with a transparent background. */
   async #trim(canvas) {
     const { width, height } = canvas;
@@ -3190,7 +3369,7 @@ export class Reader {
       const main = buttons.some(([, , primary]) => primary);
       const form = el("form", { method: "dialog" }, el("h3", {}, title), ...body,
         el("div", { class: "actions" }, ...buttons.map(([value, label, primary]) => (primary || !main
-          ? el("button", { value, class: primary ? "primary" : null, type: "submit" }, label)
+          ? el("button", { value, class: primary ? (primary === "seal" ? "primary seal" : "primary") : null, type: "submit" }, label)
           : el("button", { value, type: "button", onclick: () => dialog.close(value) }, label)))));
       const dialog = el("dialog", { class: "rd-dialog" }, form);
       // ``ready``: whether the main button can do its work yet; if not (Enter
@@ -3318,11 +3497,24 @@ export class Reader {
   }
   // -- end of accessibility --
 
+  /** A toast that explains the tool just chosen: it goes when that tool or
+   *  its bar does, or when another bar opens (see #endHint). */
+  #hint(message, ms) {
+    this.toast(message, ms);
+    this.hintEl = this.toastEl;
+  }
+  #endHint() {
+    if (this.hintEl && this.hintEl === this.toastEl) { clearTimeout(this.toastTimer); this.toastEl.remove(); this.toastEl = null; }
+    this.hintEl = null;
+  }
+
   toast(message, ms = 4000, action = null) {
     if (!message) return;
     if (this.toastEl) this.toastEl.remove();
     const t = el("div", { class: "rd-toast", role: "status" }, el("span", {}, message));
-    if (action) t.append(el("button", { type: "button", onclick: action[1] }, action[0]));
+    // ``action``: [label, run] for one button, or [[label, run, "seal"], [label, run]] for more.
+    const actions = !action ? [] : Array.isArray(action[0]) ? action : [action];
+    for (const [label, run, kind] of actions) t.append(el("button", { type: "button", class: kind || null, onclick: run }, label));
     if (this.scalebar && !this.scalebar.hidden) {  // over the drawing's top, not its title block
       t.classList.add("top");
       t.style.top = `${this.body.offsetTop + 12}px`;
@@ -3827,6 +4019,7 @@ export class Reader {
     const bar = el("div", { class: "rd-tf-bar", role: "toolbar", "aria-label": "Text look" },
       fontSel, sizeIn, el("span", { class: "rd-tf-group" }, boldBtn, italicBtn), colorIn, alignGroup);
     box.append(bar);
+    requestAnimationFrame(() => this.#keepBarInColumn(bar));
 
     const generic = /serif|times|roman|georgia|garamond|cambria|book|palatino/i.test(own) && !/sans/i.test(own) ? "serif"
       : /mono|courier|consol/i.test(own) ? "monospace" : "sans-serif";
@@ -4129,11 +4322,17 @@ export class Reader {
 
   /** Save the changes into the file itself when it was opened from this
    *  computer (Ctrl+S); otherwise as a copy. */
-  async save() {
+  async save({ replace = false } = {}) {
+    this.noteCommit?.();  // a note typed but not added yet goes in first
     await this.chain;  // a text change still on its way is included
     this.#finishEditing();  // a stroke or note still being made counts (Ctrl+S straight after drawing)
     const tab = this.activeTab;
     if (!this.doc || !tab) return;
+    if (tab.redacted && !replace) {  // a copy, not over the original
+      // Already kept as a redacted copy and nothing changed since: don't make another.
+      if (tab.redactedSaved && !tab.dirty && (tab.savedSince || !this.#changed())) { this.toast("Already saved as a redacted copy", 2000); return; }
+      await this.saveRedacted(); return;
+    }
     if (!tab.fileId) { await this.saveCopy(); return; }
     if (!tab.dirty && !this.#changed()) { this.toast("No changes to save", 1500); return; }
     const version = tab.version || 0;
@@ -4206,6 +4405,42 @@ export class Reader {
   /** Save an open tab (e.g. a tool's result) as a file, the dialog starting
    *  in the folder of the opened file ``near`` (its id). Resolves with the
    *  path when it's known (the desktop window), true when saved elsewhere, null if not saved. */
+  /** Ctrl+S, or Shift for Save as. A tab with blacked-out parts saves a
+   *  redacted copy (see saveRedacted), never over its original unasked. */
+  #saveKey(e) {
+    if (e.shiftKey) this.saveCopy();
+    else this.save();
+  }
+
+  /** "<name> (redacted).pdf" for a tab with blacked-out parts. */
+  #redactedName(tab = this.activeTab) {
+    return (tab?.name || "document.pdf").replace(/(?: \(redacted\))?(\.pdf)?$/i, "") + " (redacted).pdf";
+  }
+
+  /** Save what's shown, blacked-out parts and all, as a copy beside the
+   *  original: "<name> (redacted).pdf", the Save dialog starting in the
+   *  original's folder (a download in a plain browser). */
+  async saveRedacted() {
+    this.noteCommit?.();
+    await this.chain;
+    this.#finishEditing();
+    if (!this.doc) return;
+    const tab = this.activeTab, version = tab.version || 0;
+    let bytes;
+    try { bytes = await this.#currentBytes(); } catch (e) { this.toast("Could not save the redacted copy: " + (e.message || e), 9000); return; }
+    await this.#saveBytes(bytes, this.#redactedName(tab), () => { tab.redactedSaved = true; this.#markSaved(tab, version); }, tab?.fileId);
+  }
+
+  /** Write the redacted version over the original file, once asked. */
+  async replaceWithRedacted() {
+    const tab = this.activeTab;
+    if (!tab?.fileId) { await this.saveRedacted(); return; }
+    const answer = await this.ask(`Replace ${tab.name} with the redacted version?`, "The original text can’t be recovered from it.",
+      [["cancel", "Cancel"], ["replace", "Replace original", true]]);
+    if (answer !== "replace" || this.activeTab !== tab) return;
+    await this.save({ replace: true });
+  }
+
   async saveTab(tab, near = null) {
     await this.chain;
     if (!tab || !this.tabs.includes(tab)) return null;
@@ -4413,10 +4648,13 @@ export class Reader {
     this.saveNowBtn.hidden = !(open && tab.dirty);
     // The annotation bar's Save is the screen's main action only once there is
     // something to save; until then it stays quiet (it still works).
+    // (While areas are marked for Redact, Black out is that action: Save waits, quiet.)
+    const marked = this.markupMode === "REDACT" && !!tab && this.#redactCount(tab) > 0;
     const pending = !!(tab && (tab.dirty || (!tab.savedSince && (this.annotUndo || this.#changed()))));
-    this.annotSaveBtn.classList.toggle("seal", pending);
-    this.annotSaveBtn.classList.toggle("primary", pending);
-    this.annotSaveBtn.title = pending ? "Save your changes (Ctrl+S)" : "Nothing to save yet (Ctrl+S)";
+    this.annotSaveBtn.classList.toggle("seal", pending && !marked);
+    this.annotSaveBtn.classList.toggle("primary", pending && !marked);
+    this.annotSaveBtn.title = !pending ? "Nothing to save yet (Ctrl+S)"
+      : tab.redacted ? "Save a redacted copy beside the original (Ctrl+S)" : "Save your changes (Ctrl+S)";
     this.undoNowBtn.hidden = !(open && (this.annotUndo || tab.undo?.length));
   }
 
@@ -5947,11 +6185,11 @@ export class Reader {
       tool("Stamp the page", "STAMPS", "approved draft confidential final received reviewed rubber stamp", "stamp"),
       tool("Edit pictures", "IMAGES", "image photo move resize replace delete logo", "imgedit"),
       tool("Edit links", "LINKS", "hyperlink url web address page add change remove", "link"),
-      tool("Sign with a digital ID", "CERTSIGN", "certificate pfx p12 digital signature sign", "badge"),
+      tool("Digital ID", "CERTSIGN", "sign with a digital id certificate pfx p12 digital signature sign", "badge"),
       tool("Redact this document", "REDACT", "redaction black out for good remove hide censor private confidential", "redact"),
       { icon: "badge", label: "Check the signatures", words: "verify valid certificate signed", run: () => this.#signatureDetails() },
       { icon: "comments", label: "Comments", words: "notes replies review list markup", run: () => { this.#setSidebar(true); this.#showTab("comments"); } },
-      { icon: "sign", label: "Sign", words: "signature autograph", run: () => this.sign() },
+      { icon: "sign", label: "Sign", sub: "draw or type your signature", words: "signature autograph pen draw type initials", run: () => this.sign() },
       { icon: "cw", label: "Rotate the view clockwise", keys: "R", words: "turn right", run: () => this.rotate(90) },
       { icon: "ccw", label: "Rotate the view counter-clockwise", keys: "Shift+R", words: "turn left anticlockwise", run: () => this.rotate(-90) },
       { icon: "cw", label: "Turn this page clockwise (in the file)", words: "rotate page save", run: () => this.rotatePages([v.currentPageNumber], 90) },
@@ -6006,6 +6244,8 @@ export class Reader {
     await this.chain;
     if (!this.doc || !this.onEdit) return;
     const bytes = await this.#currentBytes();
-    this.onEdit(toolId, new File([bytes], this.#copyName(), { type: "application/pdf" }), this.password);
+    const file = new File([bytes], this.#copyName(), { type: "application/pdf" });
+    if (this.isPristine()) file.openedId = this.activeTab.fileId;  // the same file handed over twice is one file
+    this.onEdit(toolId, file, this.password);
   }
 }

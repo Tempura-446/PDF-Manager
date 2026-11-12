@@ -211,7 +211,7 @@ def test_critique_fixes_in_a_browser(app, tmp_path, monkeypatch):
         assert k["tips"][mode].endswith(f"({key})"), k["tips"]
     assert not k["closed"]["bar"] and k["closed"]["mode"] != "HIGHLIGHT", k["closed"]
 
-    # 3. The rail by intent: Compress under Improve, Search PDFs under no group; never a wrong item lit.
+    # 3. The rail by intent: Compress under Improve, Search a folder under no group; never a wrong item lit.
     rail = out["rail"]
     assert rail["groups"] == ["Read", "Pages", "Improve", "Convert", "Protect", "All"], rail["groups"]
     improve, convert, every = rail["flyouts"]["improve"], rail["flyouts"]["convert"], rail["flyouts"]["all"]
@@ -236,7 +236,8 @@ def test_critique_fixes_in_a_browser(app, tmp_path, monkeypatch):
         assert t["help"] <= 75, t["help"]
         assert not t["formShown"] and t["recap"].startswith("“how much is the balance due” in ") and t["recap"].endswith("Edit"), t
         assert str(found) in t["recap"] and t["resultTop"] < 60 and t["gap"] < 40, t
-        assert sorted(t["folders"]) == [str(found / "Accounts"), str(found / "Letters")], t["folders"]
+        assert sorted(t["folders"]) == [str(found / "Accounts"), str(found / "Letters")], t["folders"]  # (the tooltip)
+        assert sorted(t["folderTexts"]) == ["Accounts", "Letters"], t["folderTexts"]  # below the searched folder
         assert set(t["names"]) == {"Invoice 2041.pdf", "Invoice 2042.pdf", "Reminder.pdf"}, t["names"]
         assert all(label.startswith("Open page ") and label.endswith(".pdf") for label in t["labels"])
         assert t["marks"] and {m.lower() for m in t["marks"]} <= {"balance", "due"}, t["marks"]
@@ -246,7 +247,7 @@ def test_critique_fixes_in_a_browser(app, tmp_path, monkeypatch):
         assert t["exactMarks"] and {m.lower() for m in t["exactMarks"]} == {"balance due"}, t["exactMarks"]
         # One file: a compact strip (serif name, mono facts, actions shown); three: the grid.
         s = t["strip"]
-        assert s["strip"] and s["height"] <= 90 and "Instrument Serif" in s["nameFont"] and "JetBrains Mono" in s["factsFont"], s
+        assert s["strip"] and s["height"] <= 90 and "Source Serif 4" in s["nameFont"] and "JetBrains Mono" in s["factsFont"], s
         assert s["actions"] == "1" and s["drop"] == 0 and s["dropText"] == "Add more files" and s["cardHeight"] < 240, s
         assert not t["grid3"]
 

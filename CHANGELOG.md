@@ -4,6 +4,56 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.24.0
+
+Sign means signing, a damaged file has a way out, and the page gets more
+room, after a second review of the interface and a check on Windows. The
+look is the same.
+
+- Sign, everywhere, is your own signature: drawn, typed or a picture of
+  it, placed on the page. The file panel's Sign and its "Sign it"
+  suggestion open that, no longer the certificate form. Signing with a
+  certificate (.pfx or .p12) is now called Digital ID, in the tool list,
+  the annotate bar's More tools and Ctrl+K.
+- "Sign it" is also suggested for a file with a printed place to sign: a
+  "Signature" or "Sign here" line on one of its first pages.
+- A file the reader can't show no longer flashes a message and leaves an
+  empty reader. Its name stays where the pages would be, with "ZPDF can't
+  show this file — it may be damaged.", Try to repair it (the repaired copy
+  opens in a new tab, not saved yet), Remove from Recent and Close. Recent
+  says "can't be opened" in red until the file changes, and a file that
+  wouldn't open no longer jumps to the top of Recent.
+- While the annotate bar or the find bar is open, the file panel steps
+  aside so the page has the room, and comes back when they close (open it
+  by hand meanwhile and it stays). Find and annotate are one row at a
+  time. The note box and the text look bar stay in sight instead of
+  running under the panel or the bars, and a tool's tip goes away with the
+  tool.
+- With one document open, the dot for unsaved changes is beside its name
+  too. Ctrl+S while typing a note adds the note, then saves.
+- After blacking out areas in the reader, Save writes a copy beside the
+  original, "name (redacted).pdf". Replace original is there too, and asks
+  first, since the original text can't be recovered. The reader's button
+  says "Black out 3 areas", like the Redact page.
+- Closing a tab with unsaved changes offers Save as well as Close without
+  saving.
+- Files kept when you switch tools are said: "2 files kept from Compress
+  · Clear". The same file is never in the list twice. Redact says "Choose
+  what to black out" and waits until you have; an error after a run
+  starts with a capital and shows by the Run button too.
+- Make it smaller is no longer suggested for a file Compress just made, or
+  for one that is already small for its pages.
+- Search PDFs is called Search a folder everywhere. Its results head each
+  folder by the part below the folder you searched, and a copy elsewhere
+  names the other copy and its folder. What you typed is still there when
+  you come back to it, until ZPDF is closed.
+- Tool descriptions in the rail's lists take two lines instead of being
+  cut off.
+- Ctrl+K knows other words: shrink, join, combine, lock, protect, unlock,
+  sign. "Keyboard shortcuts" there, or ?, lists the keys ZPDF answers to.
+- File names are set in Source Serif 4, which is wider and easier to read
+  than before; its 1 no longer looks like l.
+
 ## 0.23.0
 
 Clearer about saving, and easier to find your way, after a review of the

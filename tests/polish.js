@@ -166,21 +166,23 @@ const { chromium } = require("playwright");
     watch(page);
     await page.goto(url + "&open=" + signId);
     await page.waitForSelector(".page canvas", { timeout: 60000 });
-    await page.waitForSelector('.rd-side .fp-card-head[data-op="sign-cert"]', { timeout: 30000 });
+    await page.waitForSelector('.rd-side .fp-card-head[data-op="sign"]', { timeout: 30000 });
     out.sign = await page.evaluate(() => [...document.querySelectorAll(".rd-side .fp-sec:not([hidden]) .fp-card-head strong")].map((s) => s.textContent));
-    await page.click('.fp-card-head[data-op="sign-cert"]');
-    await page.waitForSelector("#fp-opts-sign-cert .fp-run", { timeout: 10000 });
+    // "Sign it" is the drawn or typed signature: the reader's Sign dialog, not the Digital ID form.
+    await page.click('.fp-card-head[data-op="sign"]');
+    await page.waitForSelector("dialog.rd-dialog[open] .rd-sigpad", { timeout: 10000 });
     out.signOpen = await page.evaluate(() => ({
-      expanded: document.querySelector('.fp-card-head[data-op="sign-cert"]').getAttribute("aria-expanded"),
-      grid: document.querySelector('.fp-tool[data-op="sign-cert"]').getAttribute("aria-expanded"),
-      pfx: !!document.getElementById("fp-sign-cert-pfx"), inCard: !!document.querySelector('.fp-card[data-op="sign-cert"] #fp-opts-sign-cert'),
-      ids: document.querySelectorAll("#fp-opts-sign-cert").length,
+      title: document.querySelector("dialog.rd-dialog[open] h3").textContent,
+      pfx: !!document.getElementById("fp-sign-cert-pfx"),
     }));
-    // The common Sign button now opens and closes the same options.
-    await page.click('.fp-tool[data-op="sign-cert"]');
-    await page.waitForTimeout(500);
-    out.signClosed = await page.evaluate(() => [document.querySelector('.fp-card-head[data-op="sign-cert"]').getAttribute("aria-expanded"),
-      document.getElementById("fp-opts-sign-cert").hidden]);
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+    // The common Sign button opens the same dialog.
+    await page.click('.fp-tool[data-op="sign"]');
+    await page.waitForSelector("dialog.rd-dialog[open] .rd-sigpad", { timeout: 10000 });
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+    out.signClosed = await page.evaluate(() => [!!document.querySelector("dialog[open]"), !!document.getElementById("fp-opts-sign-cert")]);
     // A result opened beside the original: the note's link back, focused from the keyboard.
     await page.click('.fp-tool[data-op="encrypt"]');
     await page.fill("#fp-encrypt-new_password", "secret");
@@ -222,9 +224,9 @@ const { chromium } = require("playwright");
     page = await calm.newPage();
     watch(page);
     await page.goto(url + "&open=" + signId);
-    await page.waitForSelector('.rd-side .fp-card-head[data-op="sign-cert"]', { timeout: 60000 });
-    out.calm.card = await timing('.fp-card[data-op="sign-cert"]');
-    await page.click('.fp-card-head[data-op="sign-cert"]');
+    await page.waitForSelector('.rd-side .fp-card-head[data-op="sign"]', { timeout: 60000 });
+    out.calm.card = await timing('.fp-card[data-op="sign"]');
+    await page.evaluate(() => fpChoose("sign-cert"));
     out.calm.opts = await page.evaluate(() => { const b = document.getElementById("fp-opts-sign-cert"); return [b.getAnimations().length, b.classList.contains("sliding"), b.hidden]; });
     await page.evaluate(() => reader.toast("Hello"));
     out.calm.readerToast = await timing(".rd-toast");

@@ -14,14 +14,39 @@ from pdfmanager import appdata
 SAMPLE = 10            # pages looked at for text and scans
 BIG_PICTURE = 400_000  # pixels from which a picture can be a page's scan
 REMEMBERED = 300       # files whose facts are kept
-LOOK = 2               # raised when facts are worked out differently, so kept ones are looked at again
+LOOK = 3               # raised when facts are worked out differently, so kept ones are looked at again
 TEXT_SHOWING = {"Tj", "TJ", "'", '"'}
+# A printed place to sign: the word near a rule or a run of underscores.
+SIGN_WORDS = re.compile(r"\b(signature|signed|sign here|unterschrift|signé|firma)\b", re.I)
+UNDERSCORES = re.compile(r"_{4,}|\.{8,}")
+RULE = 72  # points: a line at least this long, and flat, can be written on
+
+
+def _strings(operands):
+    """The characters a text operator shows, as far as a simple font tells
+    (an embedded CID font's codes don't read as letters: no matter here)."""
+    out = []
+    for operand in operands:
+        try:
+            items = list(operand) if not hasattr(operand, "__bytes__") else [operand]
+        except TypeError:
+            items = [operand]
+        for item in items:
+            if hasattr(item, "__bytes__"):
+                try:
+                    out.append(bytes(item).decode("latin-1"))
+                except Exception:
+                    pass
+    return "".join(out)
 
 
 def _page_look(page, pikepdf):
     """(shows text, shows text a reader can see, holds a picture big enough
-    to be its scan). The text OCR puts on a scan is invisible (render mode
-    3); a designed page with large photos has text people read."""
+    to be its scan, has a printed line to sign on). The text OCR puts on a
+    scan is invisible (render mode 3); a designed page with large photos has
+    text people read. The signature line: "Signature", "Signed" or "Sign
+    here" in the page's text, and underscores or a drawn flat rule to write
+    on; read from the instructions only, nothing drawn."""
     text = visible = picture = False
     resources = page.get("/Resources")
     seen = set()
@@ -44,6 +69,7 @@ def _page_look(page, pikepdf):
                 pictures(xobject.get("/Resources"), depth + 1)
 
     pictures(resources)
+    words, rule, start = [], False, None
     try:
         mode, saved = 0, []
         for operands, operator in pikepdf.parse_content_stream(page):
@@ -58,10 +84,24 @@ def _page_look(page, pikepdf):
                 text = True
                 if mode != 3:
                     visible = True
-                    break
+                    if len(words) < 400:
+                        words.append(_strings(operands))
+            elif rule:
+                continue
+            elif operator == "m" and len(operands) == 2:
+                start = (float(operands[0]), float(operands[1]))
+            elif operator == "l" and len(operands) == 2 and start:
+                x, y = float(operands[0]), float(operands[1])
+                rule = abs(y - start[1]) < 1 and abs(x - start[0]) >= RULE
+                start = (x, y)
+            elif operator == "re" and len(operands) == 4:
+                w, h = abs(float(operands[2])), abs(float(operands[3]))
+                rule = w >= RULE and h <= 2
     except Exception:
         pass
-    return text, visible, picture
+    said = " ".join(words)
+    sign = bool(SIGN_WORDS.search(said)) and (rule or bool(UNDERSCORES.search(said)))
+    return text, visible, picture, sign
 
 
 def _fields(pdf, pikepdf):
@@ -105,7 +145,8 @@ def _pdfa(pdf, pikepdf):
 def facts(path, password=None):
     """{"size", "pages", "protected", "scanned", "has_text", "form_fields",
     "signatures", "to_sign" (signature fields still empty), "tagged",
-    "pdfa"} of the PDF at ``path``. A file that
+    "pdfa", "sign_line" (the first page with a printed line to sign on, 0
+    for none)} of the PDF at ``path``. A file that
     needs a password it wasn't given has "protected" and no page count; one
     that can't be read has {"size", "pages": None, "error"}."""
     import pikepdf
@@ -124,10 +165,12 @@ def facts(path, password=None):
     try:
         with pdf:
             count = len(pdf.pages)
-            texts = pictures = sampled = 0
+            texts = pictures = sampled = sign_line = 0
             for page in list(pdf.pages)[:SAMPLE]:
                 sampled += 1
-                text, visible, picture = _page_look(page, pikepdf)
+                text, visible, picture, sign = _page_look(page, pikepdf)
+                if sign and not sign_line:
+                    sign_line = sampled
                 texts += text
                 pictures += picture and not visible  # a page of its own picture, or one with OCR text
             filled, signed, unsigned = _fields(pdf, pikepdf)
@@ -139,6 +182,7 @@ def facts(path, password=None):
                 "tagged": isinstance(marked, pikepdf.Dictionary) and marked.get("/Marked") is True
                 and "/StructTreeRoot" in pdf.Root,
                 "pdfa": _pdfa(pdf, pikepdf),
+                "sign_line": sign_line,
             }
     except Exception:  # a file damaged past its first page
         return {"size": size, "pages": None, "error": "can't be read"}
@@ -147,9 +191,21 @@ def facts(path, password=None):
 BIG = 1_000_000  # bytes from which making a file smaller is worth offering
 
 
-def suggestions(found):
+SMALL_PAGE = 200_000  # bytes a page: below this a file is already compact
+
+
+def small_for_its_pages(found):
+    """Already compact for its pages: little to gain from Compress."""
+    pages = found.get("pages") or 0
+    return bool(pages) and found.get("size", 0) < SMALL_PAGE * pages
+
+
+def suggestions(found, made_by=None):
     """What to offer for a file with these facts, most useful first:
-    [{"op": tool id, "title", "why"}], three at most."""
+    [{"op": tool id, "title", "why"}], three at most. "sign" is the drawn
+    or typed signature (the reader's Sign), not a tool; its "page" says
+    where. ``made_by``: the tool that made this file, if one did (a file
+    just compressed isn't offered Compress again)."""
     if found.get("error"):
         return [{"op": "repair", "title": "Repair it",
                  "why": "This file can't be read as it is; a repair often brings it back"}]
@@ -159,7 +215,7 @@ def suggestions(found):
     if found.get("scanned") and not found.get("has_text"):
         out.append({"op": "ocr", "title": "Make it searchable",
                     "why": "Read the text so you can search and copy it"})
-    if found.get("size", 0) >= BIG:
+    if found.get("size", 0) >= BIG and made_by != "compress" and not small_for_its_pages(found):
         why = ("Scanned pages shrink a lot, and their text stays sharp" if found.get("scanned")
                else "Reduce its pictures for sending or storing")
         out.append({"op": "compress", "title": "Make it smaller", "why": why})
@@ -167,8 +223,11 @@ def suggestions(found):
         out.append({"op": "verify-sig", "title": "Check its signatures",
                     "why": "See who signed it and whether it was changed afterwards"})
     if found.get("to_sign"):
-        out.append({"op": "sign-cert", "title": "Sign it",
+        out.append({"op": "sign", "title": "Sign it",
                     "why": "It has a place for a signature that is still empty"})
+    elif found.get("sign_line") and not found.get("signatures"):
+        out.append({"op": "sign", "title": "Sign it", "page": found["sign_line"],
+                    "why": f"Page {found['sign_line']} has a line for your signature"})
     return out[:3]
 
 
