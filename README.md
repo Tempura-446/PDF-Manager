@@ -121,9 +121,11 @@ closed.
   reopen a recent file. Each recent file says what it is: its pages and
   size, and whether it is scanned, searchable, protected, signed or a
   form.
-- The tools are behind a slim **rail** at the side: Read, Pages, Convert,
-  Protect and All. The search box at the top (**Ctrl+K**, or **/**) finds
-  any tool by name or by what it does.
+- The tools are behind a slim **rail** at the side, by what you want to
+  do: Read, Pages, Improve (smaller, searchable, mended, accessible),
+  Convert, Protect and All. The tools for several files or a folder are on
+  the start screen under *Start from several files*. The search box at the
+  top (**Ctrl+K**, or **/**) finds any tool by name or by what it does.
 - **Pin** the tools you use most (the ☆ Pin button by a tool's name): they
   show first under All and on the start screen. In a narrow window the
   rail becomes a strip along the top.
@@ -310,7 +312,10 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   hold Shift for squares, circles and 45° lines), add pictures, and sign
   by drawing, typing your name or using a picture of your signature
   (remembered on this computer if you like). Colours and sizes,
-  undo/redo, and **Save** with your changes. Notes, underlines, strikeouts
+  undo/redo, and **Save** with your changes. Highlight, Note, Add text,
+  Draw and Sign are on the bar, with single keys while it's open (**H**,
+  **C**, **A**, **D**, **S**); the other tools are under **More tools**.
+  Saving over the file (**Ctrl+S**) can be undone for 10 seconds. Notes, underlines, strikeouts
   and shapes are standard PDF annotations with their own appearance, so
   Acrobat and other viewers show them the same, and they print. Use
   *Flatten forms & comments* afterwards to make them part of the page.
@@ -324,7 +329,7 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   **Import** adds comments from one (Acrobat reads and writes XFDF).
 - **Document properties** shows what a protected PDF allows (printing,
   changes, copying) and the attached files, each with **Save**.
-- **Pictures** (Tools → Annotate & sign → Pictures): every picture on the
+- **Edit pictures** (Annotate & sign → More tools → Edit pictures): every picture on the
   page is outlined; drag one to move it, drag a corner to resize it (it
   keeps its proportions; hold Shift to stretch it), or **Replace** or
   **Delete** it. Only the picture changes, the rest of the page stays as
