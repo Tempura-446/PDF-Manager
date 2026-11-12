@@ -899,7 +899,7 @@ export class Reader {
     if (e.key === "Escape" && this.markupMode === "IMAGES" && this.pickedImage) { this.#pickImage(null); return; }
     if (e.key === "Escape" && this.editMode && this.editMode !== "NONE") { this.#setEditMode("NONE"); return; }
     // With no tool left on, Escape closes the annotate bar (focus back on its button).
-    if (e.key === "Escape" && !this.annotbar.hidden) { this.closeAnnotate(); this.annotateBtn.focus(); return; }
+    if (e.key === "Escape" && !this.annotbar.hidden) { this.closeAnnotate(); if (this.findbar.hidden) this.annotateBtn.focus(); return; }
     const v = this.pdfViewer;
     switch (e.key) {
       case "n": case "j": v.nextPage(); break;
@@ -1605,6 +1605,7 @@ export class Reader {
   }
 
   async #closeDocument() {
+    this.gaveWay = null;  // (no bar comes back for a document that is going)
     this.closeFind();
     await this.closeCompare();
     this.closeAnnotate();
@@ -2083,10 +2084,18 @@ export class Reader {
 
   // ---- find -----------------------------------------------------------------
   openFind() {
-    // One tool row at a time: the annotate bar closes (what was drawn stays, unsaved changes too).
-    if (!this.annotbar.hidden) this.closeAnnotate();
-    this.#endHint();
+    // One tool row at a time: the annotate bar gives way (what was drawn
+    // stays, unsaved changes too) and comes back when find closes.
+    // (The find bar shows first, so the file panel stays aside meanwhile.)
+    const wasHidden = this.findbar.hidden;
     this.findbar.hidden = false;
+    if (!this.annotbar.hidden) {
+      const mode = this.editMode;
+      this.gaveWay = null;
+      this.closeAnnotate();
+      this.gaveWay = { bar: "annotate", mode };
+    } else if (wasHidden) this.gaveWay = null;
+    this.#endHint();
     this.#stepAside();
     this.findBtn.setAttribute("aria-pressed", "true");
     const selected = String(window.getSelection() || "").trim();
@@ -2097,8 +2106,14 @@ export class Reader {
   }
   closeFind() {
     if (this.findbar.hidden) return;
+    const back = this.gaveWay?.bar === "annotate" && this.doc ? this.gaveWay : null;
+    this.gaveWay = null;
     this.findbar.hidden = true;
     this.findBtn.setAttribute("aria-pressed", "false");
+    if (back) {  // the annotate bar it opened over, with its tool
+      this.openAnnotate();
+      if (back.mode && back.mode !== "NONE") this.#setEditMode(back.mode);
+    }
     this.#stepAside();
     if (this.eventBus) this.eventBus.dispatch("findbarclose", { source: this });
     this.findBtn.focus({ preventScroll: true });  // back where it was opened from
@@ -2126,8 +2141,14 @@ export class Reader {
   // ---- annotating and signing ------------------------------------------------------
   openAnnotate() {
     if (!this.doc) return;
-    if (!this.findbar.hidden) this.closeFind();
+    // Over the find bar: it gives way, and comes back when this bar closes.
+    const wasHidden = this.annotbar.hidden;
     this.annotbar.hidden = false;
+    if (!this.findbar.hidden) {
+      this.gaveWay = null;
+      this.closeFind();
+      this.gaveWay = { bar: "find" };
+    } else if (wasHidden) this.gaveWay = null;
     this.#stepAside();
     this.annotateBtn.setAttribute("aria-pressed", "true");
     this.#showSaveState();
@@ -2141,6 +2162,14 @@ export class Reader {
     this.#showSaveState();
     if (this.editMode && this.editMode !== "NONE") this.#setEditMode("NONE");
     this.#endHint();
+    const back = this.gaveWay?.bar === "find" && this.doc;
+    this.gaveWay = null;
+    if (back) {  // the find bar it opened over
+      this.findbar.hidden = false;
+      this.findBtn.setAttribute("aria-pressed", "true");
+      this.findInput.focus();
+      if (this.findInput.value) this.#find("");
+    }
     this.#stepAside();
   }
 
