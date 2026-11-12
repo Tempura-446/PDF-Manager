@@ -143,6 +143,9 @@ const fs = require("fs");
       // A note being typed goes in with Ctrl+S (before the save).
       await page.keyboard.press("Control+s");
       await page.waitForTimeout(1500);
+      // (The note and the save done, so the find bar below meets a settled document: on a busy machine they take longer.)
+      await page.waitForFunction(() => reader.doc && reader.loading.hidden && !reader.activeTab.dirty && !document.querySelector(".rd-annotbar").hidden
+        && [...document.querySelectorAll(".rd-toast")].some((t) => /Saved over/.test(t.textContent)), null, { timeout: 30000 });
       r.noteSaved = await page.evaluate(() => ({ box: !!document.querySelector(".rd-notebox") }));
       // The find bar: one row at a time, and the panel still aside.
       await page.keyboard.press("Control+f");

@@ -4,6 +4,27 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.24.1
+
+Small fixes after a check of 0.24.0 on Windows. The look is the same.
+
+- "Sign it" puts your signature on the file's signature line: at the
+  start of the line, standing on it, about as tall as handwriting next to
+  the label and never longer than the line. It still moves and resizes
+  like any signature. Sign without a known line places it about 2 inches
+  wide in the middle of what you see, no longer large across the page.
+- Undoing your only change (or every change since the last save) takes
+  away the unsaved dot and quiets Save again; Redo brings them back.
+- Opening the find bar while annotating, then closing it, brings the
+  annotate bar back with its tool, and the file panel stays aside. The
+  same the other way round.
+- In the keyboard shortcuts list, the descriptions start at the same
+  place in every section.
+- Turning a page just after switching tabs turns it in the tab you
+  switched to, and no longer logs an error. Page changes asked for while
+  a tab is still being shown wait for it, instead of being made from the
+  other tab's pages.
+
 ## 0.24.0
 
 Sign means signing, a damaged file has a way out, and the page gets more
