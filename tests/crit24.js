@@ -153,7 +153,7 @@ const fs = require("fs");
       r.after = await state();
       // Opened by hand while annotating: it stays.
       await page.evaluate(() => reader.openAnnotate());
-      await page.click(".rd-panel-btn");
+      await page.evaluate(() => reader.togglePanel());  // (as the panel button and T do)
       r.byHand = await state();
       await page.evaluate(() => reader.closeAnnotate());
       // The mode's hint goes with the mode.
