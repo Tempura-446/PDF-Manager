@@ -207,6 +207,13 @@ const fs = require("fs");
           await page.mouse.up();
           await page.waitForTimeout(500);
           out.saveSealAfter = await page.evaluate(() => document.querySelector(".rd-annotsave").classList.contains("seal"));
+          // Found on Windows: Ctrl+S straight after drawing said "No changes to save".
+          await page.keyboard.press("Control+s");
+          await page.waitForFunction(() => /Saved/.test(document.querySelector(".rd-toast span")?.textContent || ""), null, { timeout: 20000 })
+            .catch(() => {});
+          out.saveRightAfterDrawing = await page.evaluate(() => document.querySelector(".rd-toast span")?.textContent || "");
+          await page.waitForTimeout(300);
+          out.saveSealAfterSaving = await page.evaluate(() => document.querySelector(".rd-annotsave").classList.contains("seal"));
         }
         if (w === 1180) await shot(page, `${theme}-1180-annotate-bar`);
         if (w === 1280 && theme === "light") {
@@ -323,8 +330,14 @@ const fs = require("fs");
       watch(page);
       await page.goto(url);
       await page.waitForSelector("#home-host .start-drop", { timeout: 30000 });
+      if (theme === "light") {
+        // Found on Windows: after Redact (no file, Run disabled), Search kept "Add a file first".
+        await page.dispatchEvent('.tools button[data-op="redact"]', "click");
+        await page.waitForTimeout(200);
+      }
       await page.dispatchEvent('.tools button[data-op="search"]', "click");
       const t = (out["search-" + theme] = {});
+      t.runEnabled = await page.evaluate(() => !document.getElementById("run").disabled);
       t.help = await page.evaluate(() => {
         const help = document.getElementById("help");
         const probe = document.createElement("span"); probe.textContent = "0".repeat(10); probe.style.cssText = "position:absolute;visibility:hidden";

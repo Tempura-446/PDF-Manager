@@ -3071,9 +3071,10 @@ class DesktopApi:
         name, data = item
         beside = self._opened.get(near) if near else None
         folder = beside.parent if beside is not None and beside.parent.is_dir() else Path.home()
+        filename = suggested_name or name
         chosen = self._window.create_file_dialog(
-            webview.FileDialog.SAVE, directory=str(folder),
-            save_filename=suggested_name or name)
+            webview.FileDialog.SAVE, directory=str(folder), save_filename=filename,
+            file_types=_save_types(filename))
         if not chosen:
             return None
         target = Path(chosen if isinstance(chosen, str) else chosen[0])
@@ -3243,6 +3244,19 @@ def _allow_autofill(window):
         window.events.before_show += before_show
     except AttributeError as exc:  # pywebview before 5 has no before_show event
         _log(f"launch: no before_show event for autofill: {exc!r}")
+
+
+SAVE_TYPES = {".pdf": "PDF files (*.pdf)", ".zip": "ZIP archives (*.zip)", ".docx": "Word documents (*.docx)",
+              ".xlsx": "Excel workbooks (*.xlsx)", ".pptx": "PowerPoint presentations (*.pptx)",
+              ".html": "Web pages (*.html)", ".png": "PNG pictures (*.png)", ".jpg": "JPEG pictures (*.jpg)",
+              ".txt": "Text files (*.txt)", ".csv": "CSV files (*.csv)"}
+
+
+def _save_types(name):
+    """The Save dialog's file type list for a file of this name: its own kind
+    first (Windows shows that, not "All files"), then all files."""
+    kind = SAVE_TYPES.get(Path(name).suffix.lower())
+    return (kind, "All files (*.*)") if kind else ("All files (*.*)",)
 
 
 def _debug_port():

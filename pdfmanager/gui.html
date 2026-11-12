@@ -2277,6 +2277,8 @@ function updateSummary() {
   $("kbd-hint").textContent = "";
   if (current.files === null) {
     $("summary").textContent = current.preview === false ? "Nothing on your computer is changed." : "Preview first — nothing changes until you click Apply.";
+    // (A folder tool needs no file: don't keep the last tool's "Add a file first".)
+    if (!$("run").classList.contains("busy") && !$("preview").classList.contains("busy")) { $("run").disabled = false; $("run").title = ""; }
     return;
   }
   const need = current.files === "pdf2" ? 2 : current.min || 1;

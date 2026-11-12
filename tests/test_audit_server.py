@@ -473,14 +473,15 @@ def test_save_as_starts_next_to_the_opened_file(tmp_path, monkeypatch):
     results, opened = gui.ResultCache(), gui.OpenFiles()
     api = gui.DesktopApi(results, opened)
 
-    def dialog(kind, directory, save_filename):
-        seen["directory"] = directory
+    def dialog(kind, directory, save_filename, file_types=()):
+        seen["directory"], seen["types"] = directory, file_types
         return str(folder / save_filename)
 
     api._window = types.SimpleNamespace(create_file_dialog=dialog)
     key = results.add("a (edited).pdf", b"%PDF-1.4 x")
     assert api.save_result(key, "a (edited).pdf", opened.add(src)) == str(folder / "a (edited).pdf")
     assert seen["directory"] == str(folder)
+    assert seen["types"][0] == "PDF files (*.pdf)", "Windows offers PDF files first, not All files"
     key = results.add("b.pdf", b"%PDF-1.4 y")
     api.save_result(key, "b.pdf")
     assert seen["directory"] == str(Path.home())

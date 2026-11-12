@@ -1340,7 +1340,9 @@ export class Reader {
       this.activeTab = tab;
       doc.annotationStorage.onSetModified = () => {
         tab.version = (tab.version || 0) + 1;
+        tab.savedSince = false;  // changed again after a save
         if (!tab.dirty) { tab.dirty = true; this.#renderTabs(); }
+        this.#showSaveState();
       };
       this.pdfViewer.setDocument(doc);
       this.linkService.setDocument(doc, null);
@@ -4129,6 +4131,7 @@ export class Reader {
    *  computer (Ctrl+S); otherwise as a copy. */
   async save() {
     await this.chain;  // a text change still on its way is included
+    this.#finishEditing();  // a stroke or note still being made counts (Ctrl+S straight after drawing)
     const tab = this.activeTab;
     if (!this.doc || !tab) return;
     if (!tab.fileId) { await this.saveCopy(); return; }
@@ -4221,6 +4224,7 @@ export class Reader {
   /** Save as a new file, starting in the document's own folder (Ctrl+Shift+S). */
   async saveCopy() {
     await this.chain;  // a text change still on its way is included
+    this.#finishEditing();
     if (!this.doc) return;
     const tab = this.activeTab, version = tab.version || 0;
     let bytes;
@@ -4409,7 +4413,7 @@ export class Reader {
     this.saveNowBtn.hidden = !(open && tab.dirty);
     // The annotation bar's Save is the screen's main action only once there is
     // something to save; until then it stays quiet (it still works).
-    const pending = !!(tab && (tab.dirty || this.annotUndo || this.#changed()));
+    const pending = !!(tab && (tab.dirty || (!tab.savedSince && (this.annotUndo || this.#changed()))));
     this.annotSaveBtn.classList.toggle("seal", pending);
     this.annotSaveBtn.classList.toggle("primary", pending);
     this.annotSaveBtn.title = pending ? "Save your changes (Ctrl+S)" : "Nothing to save yet (Ctrl+S)";
@@ -4425,7 +4429,10 @@ export class Reader {
   #markSaved(tab, version) {
     if (!tab || !this.tabs.includes(tab) || (tab.version || 0) !== version) return;  // changed since
     tab.dirty = false;
+    tab.savedSince = true;  // pdf.js's undo history outlives the save: Save goes quiet until the next change
+    try { if (tab === this.activeTab) this.doc?.annotationStorage.resetModified(); } catch (e) { /* (so the next change is noticed) */ }
     this.#renderTabs();
+    this.#showSaveState();
   }
 
   async print() {

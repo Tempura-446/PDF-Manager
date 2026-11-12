@@ -185,6 +185,9 @@ def test_critique_fixes_in_a_browser(app, tmp_path, monkeypatch):
 
     # 2. The annotate bar keeps its words at 1180, 1280 and 1440, fits, and Save and Close show.
     assert not out["annot1280"]["saveSealBefore"] and out["saveSealAfter"], "Save is quiet until there is something to save"
+    assert out["saveRightAfterDrawing"].startswith("Saved"), out["saveRightAfterDrawing"]
+    assert not out["saveSealAfterSaving"], "and quiet again once saved"
+    assert out["search-light"]["runEnabled"], "Search can run after a tool that wanted a file"
     for key in ("annot1180", "annot1180dark", "annot1280", "annot1440"):
         a = out[key]
         for word in ("Highlight", "Note", "Add text", "Draw", "Sign", "More tools", "Save"):
