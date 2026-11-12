@@ -305,6 +305,72 @@ const fs = require("fs");
       out.rail.several.focusBack = await page.evaluate(() => document.activeElement.classList.contains("more"));
       await ctx.close();
     }
+    // ---- 4. Tool pages: Search results under the title, grouped; the strip for one or two files ----
+    for (const theme of ["light", "dark"]) {
+      const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: theme });
+      const page = await ctx.newPage();
+      watch(page);
+      await page.goto(url);
+      await page.waitForSelector("#home-host .start-drop", { timeout: 30000 });
+      await page.dispatchEvent('.tools button[data-op="search"]', "click");
+      const t = (out["search-" + theme] = {});
+      t.help = await page.evaluate(() => {
+        const help = document.getElementById("help");
+        const probe = document.createElement("span"); probe.textContent = "0".repeat(10); probe.style.cssText = "position:absolute;visibility:hidden";
+        help.append(probe); const ch = probe.getBoundingClientRect().width / 10; probe.remove();
+        return Math.round(help.getBoundingClientRect().width / ch);
+      });
+      await page.fill("#f-directory", cfg.searchDir);
+      await page.fill("#f-query", "how much is the balance due");
+      await page.click("#run");
+      await page.waitForSelector(".search-row", { timeout: 120000 });
+      await page.waitForTimeout(300);
+      Object.assign(t, await page.evaluate(() => {
+        const r = (e) => e.getBoundingClientRect();
+        const opts = document.getElementById("options-card"), recap = document.getElementById("form-recap");
+        return {
+          formShown: opts.getClientRects().length > 0, recap: recap.hidden ? null : recap.textContent,
+          gap: Math.round(r(document.getElementById("result-table")).top - r(document.getElementById("result")).bottom),
+          resultTop: Math.round(r(document.getElementById("result")).top - r(document.querySelector(".page-head")).bottom),
+          folders: [...document.querySelectorAll(".search-folder-row th")].map((th) => th.textContent),
+          names: [...document.querySelectorAll(".search-row .search-name")].map((n) => n.textContent),
+          marks: [...document.querySelectorAll(".search-results mark")].map((m) => m.textContent),
+          snippets: [...document.querySelectorAll(".search-row td:last-child")].map((td) => td.textContent),
+          labels: [...document.querySelectorAll(".search-row")].map((row) => row.getAttribute("aria-label")),
+        };
+      }));
+      t.markContrast = await contrast(page, ".search-results mark");
+      if (theme === "light" || theme === "dark") await shot(page, `${theme}-1280-search-results`);
+      // Edit opens the form again, focus in the words box.
+      await page.click("#form-recap .link-btn");
+      t.edit = await page.evaluate(() => ({ formShown: document.getElementById("options-card").getClientRects().length > 0,
+        recap: !document.getElementById("form-recap").hidden, focus: document.activeElement.id }));
+      // Exact words: the phrase found is what's marked.
+      await page.selectOption("#f-how", "exact");
+      await page.fill("#f-query", "balance due");
+      await page.click("#run");
+      await page.waitForSelector("#form-recap:not([hidden])", { timeout: 60000 });
+      t.exactMarks = await page.$$eval(".search-results mark", (ms) => ms.map((m) => m.textContent));
+
+      // Compress with one file: the strip; three files: the grid.
+      await page.dispatchEvent('.tools button[data-op="compress"]', "click");
+      await page.setInputFiles("#file-input", cfg.plainPath);
+      await page.waitForFunction(() => !document.querySelector("#file-grid .thumb .loading"), null, { timeout: 30000 });
+      await page.waitForTimeout(300);
+      t.strip = await page.evaluate(() => {
+        const grid = document.getElementById("file-grid"), card = grid.querySelector(".file-card");
+        const cs = (sel) => getComputedStyle(card.querySelector(sel));
+        return { strip: grid.classList.contains("strip"), height: Math.round(card.getBoundingClientRect().height),
+          nameFont: cs(".file-name").fontFamily, factsFont: cs(".file-sub").fontFamily, actions: cs(".card-actions").opacity,
+          cardHeight: Math.round(document.getElementById("files-card").getBoundingClientRect().height),
+          drop: document.getElementById("drop").tabIndex, dropText: document.getElementById("drop-title").textContent };
+      });
+      if (theme === "light" || theme === "dark") await shot(page, `${theme}-1280-compress-one-file`);
+      await page.setInputFiles("#file-input", [cfg.undoPath, cfg.extraPath]);
+      await page.waitForFunction(() => document.querySelectorAll("#file-grid .file-card").length === 3, null, { timeout: 30000 });
+      t.grid3 = await page.evaluate(() => document.getElementById("file-grid").classList.contains("strip"));
+      await ctx.close();
+    }
   } catch (e) {
     out.errors.push("FATAL " + (e.stack || e));
   }

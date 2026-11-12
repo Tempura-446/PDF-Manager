@@ -127,9 +127,16 @@ def test_critique_fixes_in_a_browser(app, tmp_path, monkeypatch):
     docs.mkdir()
     plain = text_pdf(docs / "Quarterly report.pdf")
     undo = text_pdf(docs / "Minutes.pdf", pages=2, words="Meeting minutes")
+    extra = text_pdf(docs / "Notes.pdf", pages=1, words="Notes")
+    # A folder to search: two sub-folders, the words in a file in each.
+    found = tmp_path / "Archive"
+    for sub, name, amount in (("Accounts", "Invoice 2041.pdf", 120), ("Accounts", "Invoice 2042.pdf", 80), ("Letters", "Reminder.pdf", 45)):
+        (found / sub).mkdir(parents=True, exist_ok=True)
+        text_pdf(found / sub / name, pages=2, words=f"The balance due is {amount} euros, payable within thirty days")
     opened = srv.RequestHandlerClass.opened
     cfg = {"plainId": opened.add(plain), "plainPath": str(plain), "savePath": str(plain),
-           "undoId": opened.add(undo), "undoPath": str(undo), "shots": os.environ.get("CRITFIX_SHOTS")}
+           "undoId": opened.add(undo), "undoPath": str(undo), "extraPath": str(extra), "searchDir": str(found),
+           "shots": os.environ.get("CRITFIX_SHOTS")}
     run = subprocess.run([node, str(HERE / "critfix.js"), url, json.dumps(cfg)], capture_output=True, text=True,
                          encoding="utf-8", timeout=900)
     if run.returncode and "Executable doesn't exist" in run.stderr:
@@ -213,3 +220,24 @@ def test_critique_fixes_in_a_browser(app, tmp_path, monkeypatch):
     sev = rail["several"]
     assert sev["title"] == "Several files" and {"search", "organize", "rename", "duplicates", "recipe", "merge"} <= set(sev["tools"]), sev
     assert sev["focusBack"]
+
+    # 4. Search: the form folds to one line, results under the title, grouped by folder;
+    # only the words are marked, dark ink on yellow in both themes.
+    for theme in ("light", "dark"):
+        t = out["search-" + theme]
+        assert t["help"] <= 75, t["help"]
+        assert not t["formShown"] and t["recap"].startswith("“how much is the balance due” in ") and t["recap"].endswith("Edit"), t
+        assert str(found) in t["recap"] and t["resultTop"] < 60 and t["gap"] < 40, t
+        assert sorted(t["folders"]) == [str(found / "Accounts"), str(found / "Letters")], t["folders"]
+        assert set(t["names"]) == {"Invoice 2041.pdf", "Invoice 2042.pdf", "Reminder.pdf"}, t["names"]
+        assert all(label.startswith("Open page ") and label.endswith(".pdf") for label in t["labels"])
+        assert t["marks"] and {m.lower() for m in t["marks"]} <= {"balance", "due"}, t["marks"]
+        assert all(len(m) < len(s) / 3 for m, s in zip(t["marks"], t["snippets"])), "not the whole snippet"
+        assert t["markContrast"] >= 4.5, (theme, t["markContrast"])
+        assert t["edit"] == {"formShown": True, "recap": False, "focus": "f-query"}, t["edit"]
+        assert t["exactMarks"] and {m.lower() for m in t["exactMarks"]} == {"balance due"}, t["exactMarks"]
+        # One file: a compact strip (serif name, mono facts, actions shown); three: the grid.
+        s = t["strip"]
+        assert s["strip"] and s["height"] <= 90 and "Instrument Serif" in s["nameFont"] and "JetBrains Mono" in s["factsFont"], s
+        assert s["actions"] == "1" and s["drop"] == 0 and s["dropText"] == "Add more files" and s["cardHeight"] < 240, s
+        assert not t["grid3"]
