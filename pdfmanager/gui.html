@@ -1516,7 +1516,7 @@ function fpSync() {
   if (fresh) fpRender(tab);
   else if (fp.name.textContent !== tab.name) fp.name.textContent = tab.name;
   // Facts again when it changed (saved, edited); a moment later, so a run of edits asks once.
-  const key = [tab.id, tab.version || 0, tab.dirty ? 1 : 0, tab.fileId || "", tab.password ? 1 : 0].join("|");
+  const key = [tab.id, tab.version || 0, tab.dirty ? 1 : 0, tab.fileId || "", tab.password ? 1 : 0, tab.madeBy?.op || ""].join("|");  // (what made it: a Compress result isn't offered Compress)
   if (key === fp.key) return;
   fp.key = key;
   clearTimeout(fp.timer);

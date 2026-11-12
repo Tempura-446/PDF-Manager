@@ -129,7 +129,8 @@ def test_polish_in_a_browser(app, tmp_path):
 
     # (c) A printed form: "Make it fillable" in the panel does what the bar does; the bar stays.
     form = out["form"]
-    assert form["suggestions"] == ["Make it fillable"] and form["why"] == "It looks like a form you can't type in yet"
+    # (Its signature line is offered "Sign it" too, since 0.24.)
+    assert form["suggestions"] == ["Make it fillable", "Sign it"] and form["why"] == "It looks like a form you can't type in yet"
     assert form["bar"] and "Make it fillable" in form["barText"]
     assert out["formToast"].startswith("Added ") and "place" in out["formToast"]
     assert not out["formAfter"]["card"] and not out["formAfter"]["bar"]

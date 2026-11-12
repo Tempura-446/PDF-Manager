@@ -200,6 +200,7 @@ const fs = require("fs");
         if (w === 1280 && theme === "light") {
           // Save turns into the main (seal) action once there is something to save.
           await page.keyboard.press("d");  // Draw
+          await page.waitForTimeout(500);  // (the file panel stepped aside: the pages settle at their new width first)
           const box = await page.locator(".page").first().boundingBox();
           await page.mouse.move(box.x + 120, box.y + 160);
           await page.mouse.down();
