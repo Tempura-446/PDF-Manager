@@ -357,11 +357,12 @@ OPERATIONS = [
                 _f("attachments", "Attached files", "check", True),
                 _f("comments", "Comments, highlights and notes", "check", False)]},
     # -- digital ID signatures (certsign.py) --
-    {"id": "sign-cert", "group": "Security", "label": "Sign with a digital ID", "files": "pdf",
-     "action": "Sign",
-     "help": "Sign with your digital ID (a .pfx or .p12 certificate file), like Acrobat's "
+    {"id": "sign-cert", "group": "Security", "label": "Digital ID", "files": "pdf",
+     "action": "Sign with Digital ID",
+     "help": "Sign with your Digital ID: a certificate file (.pfx or .p12), like Acrobat's "
              "“Sign with a digital ID”. Anyone can then check who signed and that nothing "
-             "changed since. Sign last: any later change except more signatures breaks it.",
+             "changed since. Sign last: any later change except more signatures breaks it. "
+             "To draw or type your signature instead, open the file and choose Sign.",
      "fields": [_f("pfx", "Digital ID (.pfx or .p12 file)", "file", None, accept=".pfx,.p12"),
                 _f("pfx_password", "Digital ID password", "password", ""),
                 _f("reason", "Reason", "text", "", placeholder="I approve this document"),
@@ -1532,13 +1533,49 @@ class RecentFiles:
         except OSError:
             pass  # a recent-files list isn't worth failing over
 
+    @staticmethod
+    def _stamp(path):
+        try:
+            st = Path(path).stat()
+            return [st.st_size, st.st_mtime_ns]
+        except OSError:
+            return None
+
     @classmethod
     def add(cls, path):
+        """To the top of the list: opened now. A file the reader couldn't
+        open last time, unchanged since, stays where it is (it may open
+        now; see failed())."""
         path = str(Path(path).resolve())
         with cls.lock:
-            items = [i for i in cls.load() if os.path.normcase(i["path"]) != os.path.normcase(path)]
-            items.insert(0, {"path": path, "opened": time.time()})
+            items = cls.load()
+            had = next((i for i in items if os.path.normcase(i["path"]) == os.path.normcase(path)), None)
+            if had and had.get("failed") and had["failed"] == cls._stamp(path):
+                return
+            items = [i for i in items if i is not had]
+            items.insert(0, {"path": path, "opened": time.time(), "before": had.get("opened") if had else 0})
             cls._save(items)
+
+    @classmethod
+    def failed(cls, path):
+        """The reader couldn't open the file: say so in Recent (until the
+        file changes) and put it back where it was before this open."""
+        path = str(Path(path).resolve())
+        with cls.lock:
+            items = cls.load()
+            had = next((i for i in items if os.path.normcase(i["path"]) == os.path.normcase(path)), None)
+            if had is None:
+                had = {"path": path, "before": 0}
+                items.append(had)
+            had["failed"] = cls._stamp(path)
+            if "before" in had:
+                had["opened"] = had.pop("before") or 0
+            items.sort(key=lambda i: i.get("opened") or 0, reverse=True)
+            cls._save(items)
+
+    @classmethod
+    def is_failed(cls, item):
+        return bool(item.get("failed")) and item["failed"] == cls._stamp(item["path"])
 
     @classmethod
     def forget(cls, path=None):
@@ -1810,7 +1847,8 @@ class Handler(BaseHTTPRequestHandler):
             if target is None or not target.is_file():
                 return self._error(HTTPStatus.NOT_FOUND, "that file is no longer available")
             found = filefacts.remembered(target)
-            return self._send(HTTPStatus.OK, {**found, "suggestions": filefacts.suggestions(found)})
+            made_by = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("made_by", [None])[0]
+            return self._send(HTTPStatus.OK, {**found, "suggestions": filefacts.suggestions(found, made_by)})
         if path == "/api/recent":
             return self._recent()
         if path == "/api/events":
@@ -1973,7 +2011,7 @@ class Handler(BaseHTTPRequestHandler):
             if path.is_file() and self.opened is not None:
                 files.append({"id": self.opened.add(path), "name": path.name, "path": str(path),
                               "folder": str(path.parent), "opened": item.get("opened"),
-                              "facts": filefacts.remembered(path)})
+                              "facts": filefacts.remembered(path), "failed": RecentFiles.is_failed(item)})
         return self._send(HTTPStatus.OK, {"files": files})
 
     def do_POST(self):
@@ -2102,6 +2140,12 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(body or b"{}")
                 removed = RecentFiles.forget(data.get("path") if not data.get("all") else None)
                 return self._send(HTTPStatus.OK, {"ok": True, "removed": removed})
+            if path == "/api/recent/failed":  # the reader couldn't open it
+                target = self.opened.get(str(data.get("id", ""))) if self.opened is not None else None
+                if target is None:
+                    raise UserError("that file is no longer available")
+                RecentFiles.failed(target)
+                return self._send(HTTPStatus.OK, {"ok": True})
             if path == "/api/recent/restore":  # Undo after a forget
                 items = json.loads(body or b"{}").get("items")
                 RecentFiles.restore(items if isinstance(items, list) else [])
@@ -2692,7 +2736,7 @@ class Handler(BaseHTTPRequestHandler):
             path = Path(tmp) / "file.pdf"
             path.write_bytes(uploads[0][2])
             found = filefacts.facts(path, fields.get("password") or None)
-        return self._send(HTTPStatus.OK, {**found, "suggestions": filefacts.suggestions(found)})
+        return self._send(HTTPStatus.OK, {**found, "suggestions": filefacts.suggestions(found, fields.get("made_by") or None)})
 
     def _inspect(self, body):
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)

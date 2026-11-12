@@ -137,11 +137,12 @@ def test_polish_in_a_browser(app, tmp_path):
     changes = out["changes"]
     assert changes["text"] == "Any changes except extracting pages" and changes["long"]
     assert changes["needs"] <= changes["room"], changes
-    # An empty signature field: "Sign it", which opens the signing options (one set, in the card).
+    # An empty signature field: "Sign it", which opens the reader's Sign dialog (draw or type),
+    # not the Digital ID form; the panel's Sign button opens the same dialog.
     assert out["sign"] == ["Sign it"]
     so = out["signOpen"]
-    assert so["expanded"] == "true" and so["grid"] == "true" and so["pfx"] and so["inCard"] and so["ids"] == 1
-    assert out["signClosed"] == ["false", True]
+    assert so["title"] == "Sign" and not so["pfx"], so
+    assert out["signClosed"] == [False, False]
     # The link back to the original in a result's note: its focus ring stays inside its own line.
     note = out["noteLink"]
     assert note["focusVisible"] and note["offset"] == "0px" and note["height"] + 4 <= note["line"], note

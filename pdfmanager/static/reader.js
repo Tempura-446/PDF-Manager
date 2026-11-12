@@ -414,7 +414,7 @@ export class Reader {
     tip("EDITTEXT", "Change words on the page: click a line of text (E)");
     this.signBtn = el("button", { class: "rd-btn rd-tool", type: "button", title: "Add your signature (S)", html: svg("sign") + "<span>Sign</span>" });
     this.certSignBtn = el("button", { class: "rd-btn rd-tool compact", type: "button", "data-mode": "CERTSIGN", "aria-pressed": "false",
-      title: "Sign with a digital ID (a certificate, .pfx or .p12): drag a box where the signature goes", html: svg("badge") + "<span>Digital ID</span>" });
+      title: "Digital ID: sign with a certificate (.pfx or .p12); drag a box where the signature goes", html: svg("badge") + "<span>Digital ID</span>" });
     this.annotTools.push(this.certSignBtn);
     this.#buildRedact();  // reader redaction
     this.swatches = COLORS.map(([name, ink, mark], i) => el("button", { class: "rd-swatch", type: "button", title: name, "aria-label": name, "aria-pressed": String(i === 1),
@@ -440,7 +440,7 @@ export class Reader {
     this.moreToolsMenu = el("div", { class: "rd-menu rd-toolsmenu", role: "menu", "aria-label": "More tools", hidden: true },
       ...inMenu.flatMap(([label, modes], i) => [...(i ? [el("hr")] : []), el("div", { class: "label", "aria-hidden": "true" }, label), ...modes.map(byMode)]));
     this.moreToolsBtn = el("button", { class: "rd-btn rd-tool rd-moretools", type: "button", "aria-haspopup": "menu", "aria-expanded": "false",
-      title: "More tools: underline, shapes, stamps, pictures, links, digital ID, redact", html: svg("more") + "<span>More tools</span>" + svg("down") });
+      title: "More tools: underline, shapes, stamps, pictures, links, Digital ID, redact", html: svg("more") + "<span>More tools</span>" + svg("down") });
     this.annotbar = el("div", { class: "rd-findbar rd-annotbar", hidden: true, role: "toolbar", "aria-label": "Annotate" },
       ...["NONE", "HIGHLIGHT", "NOTE", "FREETEXT", "INK"].map(byMode), this.signBtn, this.moreToolsBtn,
       el("span", { class: "rd-sep" }),
@@ -597,7 +597,7 @@ export class Reader {
       ...(this.activeTab?.fileId ? [this.#menuItem("save", "Save", () => this.save())] : []),
       this.#menuItem("save", this.activeTab?.fileId ? "Save as…" : this.#edited() ? "Save a copy with your changes…" : "Save a copy…", () => this.saveCopy()),
       this.#menuItem("layers", this.overlay ? "Stop comparing revisions" : "Compare with another revision…", () => (this.overlay ? this.closeCompare() : this.compareRevision())),
-      this.#menuItem("badge", "Sign with a digital ID…", () => this.useTool("CERTSIGN")),
+      this.#menuItem("badge", "Digital ID…", () => this.useTool("CERTSIGN")),
       this.#menuItem("fillable", "Make it fillable (find the form's fields)", () => this.makeFillable()),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
       this.#menuItem("access", "Check accessibility", () => this.checkAccessibility()),  // -- accessibility --
@@ -2449,7 +2449,7 @@ export class Reader {
   /** Pictures or Links mode: outlines over the pages' pictures or links. */
   #objectBoxes() {
     this.viewerEl?.querySelectorAll(".rd-objbox, .rd-objtools, .rd-linkdraft").forEach((n) => n.remove());
-    if (this.markupMode === "CERTSIGN") this.toast("Drag a box where your signature should appear, then choose your digital ID.", 5000);
+    if (this.markupMode === "CERTSIGN") this.toast("Drag a box where your signature should appear, then choose your Digital ID.", 5000);
     if ((this.markupMode !== "IMAGES" && this.markupMode !== "LINKS") || !this.doc) return;
     for (let i = 0; i < this.pdfViewer.pagesCount; i++) {
       if (this.pdfViewer.getPageView(i)?.canvas?.width) this.#drawObjectBoxes(i + 1);
@@ -2798,8 +2798,8 @@ export class Reader {
     const location = el("input", { type: "text", placeholder: "e.g. Vancouver", "aria-label": "Location" });
     const stamp = el("input", { type: "text", placeholder: "none (e.g. http://timestamp.digicert.com)", "aria-label": "Timestamp server",
       value: store.get("pdfm-timestamp-url", "") });
-    const answer = await this.#dialog("Sign with a digital ID", [
-      el("p", {}, "Your digital ID is a .pfx or .p12 file with your certificate. The signature seals the document: a change after signing shows up when it's checked."),
+    const answer = await this.#dialog("Digital ID", [
+      el("p", {}, "Your Digital ID is a .pfx or .p12 file with your certificate. The signature seals the document: a change after signing shows up when it's checked."),
       el("label", { class: "rd-field" }, "Digital ID file", pfx), el("label", { class: "rd-field" }, "Its password", password),
       el("label", { class: "rd-field" }, "Reason (optional)", reason), el("label", { class: "rd-field" }, "Location (optional)", location),
       el("label", { class: "rd-field" }, "Timestamp server (optional)", stamp)],
@@ -2807,7 +2807,7 @@ export class Reader {
       { ready: () => { if (pfx.files[0]) return true; pfx.focus(); return false; } });  // (Enter before a digital ID is chosen: to the file box, nothing lost)
     if (answer !== "ok") return;
     const file = pfx.files[0];
-    if (!file) { this.toast("Choose your digital ID file (.pfx or .p12)."); return; }
+    if (!file) { this.toast("Choose your Digital ID file (.pfx or .p12)."); return; }
     store.set("pdfm-timestamp-url", stamp.value.trim());
     const tab = this.activeTab, version = tab?.version || 0;
     await this.#changeDocument((bytes, t) => {
@@ -5947,11 +5947,11 @@ export class Reader {
       tool("Stamp the page", "STAMPS", "approved draft confidential final received reviewed rubber stamp", "stamp"),
       tool("Edit pictures", "IMAGES", "image photo move resize replace delete logo", "imgedit"),
       tool("Edit links", "LINKS", "hyperlink url web address page add change remove", "link"),
-      tool("Sign with a digital ID", "CERTSIGN", "certificate pfx p12 digital signature sign", "badge"),
+      tool("Digital ID", "CERTSIGN", "sign with a digital id certificate pfx p12 digital signature sign", "badge"),
       tool("Redact this document", "REDACT", "redaction black out for good remove hide censor private confidential", "redact"),
       { icon: "badge", label: "Check the signatures", words: "verify valid certificate signed", run: () => this.#signatureDetails() },
       { icon: "comments", label: "Comments", words: "notes replies review list markup", run: () => { this.#setSidebar(true); this.#showTab("comments"); } },
-      { icon: "sign", label: "Sign", words: "signature autograph", run: () => this.sign() },
+      { icon: "sign", label: "Sign", sub: "draw or type your signature", words: "signature autograph pen draw type initials", run: () => this.sign() },
       { icon: "cw", label: "Rotate the view clockwise", keys: "R", words: "turn right", run: () => this.rotate(90) },
       { icon: "ccw", label: "Rotate the view counter-clockwise", keys: "Shift+R", words: "turn left anticlockwise", run: () => this.rotate(-90) },
       { icon: "cw", label: "Turn this page clockwise (in the file)", words: "rotate page save", run: () => this.rotatePages([v.currentPageNumber], 90) },

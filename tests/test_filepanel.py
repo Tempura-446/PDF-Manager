@@ -54,8 +54,9 @@ def test_the_common_tools_are_real_tools_and_the_tray_is_gone():
     html = GUI_HTML.read_text(encoding="utf-8")
     common = re.search(r"const COMMON_TOOLS = \[(.*?)\];", html, re.S).group(1)
     ids = re.findall(r'\["([a-z-]+)", "', common)
-    assert ids == ["split", "sign-cert", "to-word", "pdfa", "to-excel", "encrypt"]
-    assert set(ids) <= {op["id"] for op in gui.OPERATIONS}
+    # "sign" is the reader's own Sign (drawn or typed); the certificate tool, Digital ID, is in All tools.
+    assert ids == ["split", "sign", "to-word", "pdfa", "to-excel", "encrypt"]
+    assert set(ids) - {"sign"} <= {op["id"] for op in gui.OPERATIONS}
     for name in ("reader.js", "reader.css"):
         assert "rd-tray" not in (STATIC / name).read_text(encoding="utf-8")
 
@@ -99,9 +100,10 @@ def test_the_file_panel_in_a_browser(app, tmp_path):
     assert scan["flagged"] == ["scanned, no text yet"]
     assert scan["headings"] == ["Suggested for this file", "Or do something else"]
     assert scan["suggestions"] == ["Make it searchable"]
-    assert [c[0] for c in scan["common"]] == ["split", "sign-cert", "to-word", "pdfa", "to-excel", "encrypt"]
+    assert [c[0] for c in scan["common"]] == ["split", "sign", "to-word", "pdfa", "to-excel", "encrypt"]
     assert scan["common"][0][2] is None                    # Split hands over to its page (it has a board)
-    assert all(c[2] == "false" for c in scan["common"][1:])  # the others open in place
+    assert scan["common"][1][2] is None                    # Sign opens the signature dialog
+    assert all(c[2] == "false" for c in scan["common"][2:])  # the others open in place
     assert scan["all"] == f"All {len(gui.OPERATIONS)} tools"
     # The suggestion opens to its options (focus goes in) and closes (focus comes back).
     assert out["ocrOpen"]["expanded"] == "true" and out["ocrOpen"]["run"] and out["ocrOpen"]["focusInside"]

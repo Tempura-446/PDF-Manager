@@ -297,10 +297,10 @@ def test_a_file_with_a_place_to_sign_is_offered_signing(tmp_path):
     pdf.save(tmp_path / "to-sign.pdf")
     found = filefacts.facts(tmp_path / "to-sign.pdf")
     assert found["to_sign"] == 1 and found["signatures"] == 0 and found["form_fields"] == 0
-    assert [s["op"] for s in filefacts.suggestions(found)] == ["sign-cert"]
+    assert [s["op"] for s in filefacts.suggestions(found)] == ["sign"]  # the drawn or typed signature
     assert filefacts.facts(text_pdf(tmp_path / "plain.pdf"))["to_sign"] == 0
     # Signed already: checking comes before signing again.
-    assert ops({"size": 1, "pages": 1, "signatures": 1, "to_sign": 1}) == ["verify-sig", "sign-cert"]
+    assert ops({"size": 1, "pages": 1, "signatures": 1, "to_sign": 1}) == ["verify-sig", "sign"]
 
 
 def test_a_handed_over_file_lets_the_running_app_come_forward(monkeypatch, tmp_path):
@@ -420,3 +420,52 @@ def test_stripe_art_and_letter_outlines_are_no_form_at_a_glance(tmp_path):
     c.save()
     quick = formdetect.detect(tmp_path / "form.pdf", quick=True)
     assert {"Name", "E-mail", "Address", "Telephone"} <= {f["name"] for f in quick.get(1, [])}, quick
+
+
+# -- 0.24: a printed line to sign on -------------------------------------------------------
+
+def _drawn_pdf(path, draw, pages=1):
+    c = canvas.Canvas(str(path))
+    for n in range(pages):
+        draw(c, n)
+        c.showPage()
+    c.save()
+    return Path(path)
+
+
+def test_a_printed_signature_line_is_offered_signing(tmp_path):
+    underscores = _drawn_pdf(tmp_path / "letter.pdf",
+                             lambda c, n: c.drawString(72, 160, "Signature: ____________________") if n == 1
+                             else c.drawString(72, 700, "Dear customer"), pages=2)
+    found = filefacts.facts(underscores)
+    assert found["sign_line"] == 2
+    said = filefacts.suggestions(found)
+    assert [s["op"] for s in said] == ["sign"] and said[0]["title"] == "Sign it" and said[0]["page"] == 2
+
+    # The word over a drawn rule counts too.
+    def rule(c, n):
+        c.drawString(72, 160, "Signed")
+        c.line(120, 158, 320, 158)
+    assert filefacts.facts(_drawn_pdf(tmp_path / "rule.pdf", rule))["sign_line"] == 1
+
+
+def test_a_plain_page_has_no_signature_line(tmp_path):
+    found = filefacts.facts(text_pdf(tmp_path / "plain.pdf"))
+    assert found["sign_line"] == 0 and filefacts.suggestions(found) == []
+    # The word alone ("the signature of the treaty") is no place to sign; nor a rule alone.
+    words = _drawn_pdf(tmp_path / "words.pdf", lambda c, n: c.drawString(72, 700, "The signature of the treaty was in 1990"))
+    assert filefacts.facts(words)["sign_line"] == 0
+    line = _drawn_pdf(tmp_path / "line.pdf", lambda c, n: (c.drawString(72, 700, "Total"), c.line(72, 690, 400, 690)))
+    assert filefacts.facts(line)["sign_line"] == 0
+
+
+def test_signature_lines_made_the_kept_facts_look_again():
+    assert filefacts.LOOK == 3  # facts kept by 0.23 (no "sign_line") are worked out again
+
+
+def test_compress_isnt_offered_for_a_compressed_or_compact_file():
+    base = {"pages": 3, "protected": False, "scanned": False, "has_text": True, "signatures": 0}
+    assert ops({**base, "size": 9_000_000}) == ["compress"]
+    assert filefacts.suggestions({**base, "size": 9_000_000}, made_by="compress") == []
+    # 1.2 MB over 40 pages is 30 KB a page: already small.
+    assert ops({**base, "size": 1_200_000, "pages": 40}) == []
