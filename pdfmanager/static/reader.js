@@ -1449,6 +1449,9 @@ export class Reader {
         if (!tab.dirty) { tab.dirty = true; this.#renderTabs(); }
         this.#showSaveState();
       };
+      // (Undo can bring it back to how it was opened or saved: see #checkSaved.)
+      doc.annotationStorage.onResetModified = () => this.#checkSaved(tab);
+      tab.clean = tab.dirty ? null : { doc, print: "" };
       this.pdfViewer.setDocument(doc);
       this.linkService.setDocument(doc, null);
       this.scripting.setDocument(doc).catch(() => {});  // a form without scripts works as before
@@ -1557,6 +1560,7 @@ export class Reader {
     eventBus.on("annotationeditormodechanged", ({ mode }) => this.#showEditMode(this.#modeName(mode)));
     eventBus.on("editingstateschanged", ({ details }) => {
       this.annotUndo = !!details.hasSomethingToUndo;
+      this.#checkSaved();
       this.#showSaveState();
       this.undoBtn.disabled = !details.hasSomethingToUndo;
       this.redoBtn.disabled = !details.hasSomethingToRedo;
@@ -4279,7 +4283,7 @@ export class Reader {
         if (!this.tabs.includes(tab)) return;
         (tab.undo ||= []).push(bytes);
         if (tab.undo.length > 30) tab.undo.shift();
-        Object.assign(tab, { bytes: changed, afterEdit: changed, edited: true, dirty: true,
+        Object.assign(tab, { bytes: changed, afterEdit: changed, edited: true, dirty: true, clean: null,
           version: (tab.version || 0) + 1 });
         if (tab === this.activeTab) { tab.goto = goto ? goto(this.#view()) : this.#view(); await this.#reloadEditing(tab); }
         else this.#renderTabs();
@@ -4329,7 +4333,7 @@ export class Reader {
             [["cancel", "Cancel"], ["undo", "Undo the change", true]]) !== "undo") return;
       const previous = tab.undo.pop();
       const back = previous === tab.original;
-      Object.assign(tab, { bytes: previous, afterEdit: previous, edited: !back, dirty: !back, goto: this.#view(),
+      Object.assign(tab, { bytes: previous, afterEdit: previous, edited: !back, dirty: !back, clean: null, goto: this.#view(),
         version: (tab.version || 0) + 1 });
       await this.#reloadEditing(tab);
       this.toast("Change undone", 1500);
@@ -4435,7 +4439,7 @@ export class Reader {
       const answer = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(answer.error || res.statusText);
       if (this.tabs.includes(tab)) {
-        Object.assign(tab, { stamp: answer.stamp, dirty: true });
+        Object.assign(tab, { stamp: answer.stamp, dirty: true, clean: null });
         this.#renderTabs();
       }
       this.toast(`Undone: ${tab.name} is as it was before. Your changes are still here, not saved.`, 6000);
@@ -4726,7 +4730,39 @@ export class Reader {
     if (!tab || !this.tabs.includes(tab) || (tab.version || 0) !== version) return;  // changed since
     tab.dirty = false;
     tab.savedSince = true;  // pdf.js's undo history outlives the save: Save goes quiet until the next change
+    tab.clean = tab === this.activeTab && this.doc ? { doc: this.doc, print: this.#annotPrint() } : null;
     try { if (tab === this.activeTab) this.doc?.annotationStorage.resetModified(); } catch (e) { /* (so the next change is noticed) */ }
+    this.#renderTabs();
+    this.#showSaveState();
+  }
+
+  /** What the annotations and form entries not in the file yet are, as
+   *  text: the same text, the same changes. (Each editor as it would be
+   *  saved, without its picture's pixels.) */
+  #annotPrint(doc = this.doc) {
+    const parts = [];
+    for (const [key, value] of doc?.annotationStorage || []) {
+      let said = value;
+      if (typeof value?.serialize === "function") { try { said = value.serialize(false); } catch (e) { said = "?"; } }
+      if (said) parts.push(key + ":" + JSON.stringify(said));
+    }
+    return parts.join("\n");
+  }
+
+  /** pdf.js's Undo and Redo don't say when the document is back as it was
+   *  opened or last saved. It is when the shown document is the one it was
+   *  then (no page or text change since: those load the document again)
+   *  and its annotations and entries are the same: then it isn't changed
+   *  (no dot, Save quiet). Anything else than that state is a change. */
+  #checkSaved(tab = this.activeTab) {
+    const clean = tab?.clean;
+    if (!clean || tab !== this.activeTab || !this.doc || clean.doc !== this.doc) return;
+    const same = this.#annotPrint() === clean.print;
+    if (same === !tab.dirty) return;
+    tab.dirty = !same;
+    tab.savedSince = same;
+    if (same) { try { this.doc.annotationStorage.resetModified(); } catch (e) { /* (so the next change is noticed) */ } }
+    else tab.version = (tab.version || 0) + 1;
     this.#renderTabs();
     this.#showSaveState();
   }
