@@ -1424,6 +1424,8 @@ async function ensureReader() {
     onChange: () => fpSync(),
     recent: (host) => fillRecent(host, { onEmpty: () => { const box = host.closest(".rd-recent"); if (box) box.hidden = true; } }),
     onFormHint: (tab) => { if (fp.tab === tab) fpSuggest(); },
+    onRepair: (tab) => repairInReader(tab),
+    onForgetRecent: (tab) => jsonApi("/api/recent/forget", { path: tab.path }),
   });
   return reader;
 }
@@ -1824,6 +1826,39 @@ function fpShowNote(tab) {
   fp.note.replaceChildren(el("div", { class: "fp-done" }, icon("check"), el("div", {},
     el("b", {}, m.label), `: ${m.sizes}. Made from `, back, ", still open in its own tab.",
     ...m.notes.map((line) => el("div", { class: "fp-line" }, line)), finish)));
+}
+
+/** A file the reader can't show: run Repair on it (by its id when it's a
+ *  file on this computer) and open what comes out in a new tab beside it,
+ *  not saved anywhere yet, like the panel's results. Resolves to what to say
+ *  under the buttons when that didn't work, else nothing. */
+async function repairInReader(tab) {
+  const op = ops.find((o) => o.id === "repair");
+  if (!op) return "The Repair tool isn't available.";
+  const body = new FormData();
+  body.append("op", "repair");
+  for (const f of op.fields || []) if (f.kind === "check") body.append(f.key, f.default ? "true" : "false");
+  const name = /\.pdf$/i.test(tab.name) ? tab.name : tab.name + ".pdf";
+  if (tab.fileId) body.append("ids", tab.fileId);
+  else body.append("files", new File([tab.original], name, { type: "application/pdf" }));
+  const ui = { start() {}, message() {}, progress() {}, cancelled() {}, end() {} };
+  try {
+    const res = await runJob("/api/run", { method: "POST", body, headers: isDesktop() ? { "X-Pdfm-Keep": "1" } : {} }, ui);
+    if (!res) return "Cancelled: nothing was changed.";
+    const made = decodeURIComponent(res.headers.get("X-Pdfm-Filename") || "") || name.replace(/\.pdf$/i, "_repaired.pdf");
+    const notes = decodeURIComponent(res.headers.get("X-Pdfm-Note") || "").split("\n").filter(Boolean);
+    const bytes = new Uint8Array(await (await res.blob()).arrayBuffer());
+    const tabNow = await reader.openResult(bytes, made, null, tab);
+    if (!tabNow || tabNow.broken) { if (tabNow) reader.closeTab(tabNow); return "Repair made a file, but it can’t be shown either. The file may be damaged past mending."; }
+    tabNow.madeBy = { op: "repair", label: op.label, from: tab, sizes: humanSize(bytes.length).replace(" ", "\u00a0"), notes };
+    tabNow.unsaved = true;
+    reader.refreshTabs();
+    if (fp.tab === tabNow) fpShowNote(tabNow);
+    reader.toast(`Opened ${made} in a new tab`, 5000);
+    return "";
+  } catch (e) {
+    return `Repair couldn’t mend it: ${String(e.message || e).replace(/\.$/, "")}.`;
+  }
 }
 
 /** "<tool>: this document" from the palette: open it in the panel when it runs there. */
@@ -2474,7 +2509,7 @@ async function recentEntries() {
   if (filesLib && filesLib.canOpen) handles = await filesLib.recentHandles().catch(() => []);
   return [
     ...(server || []).map((f) => ({ key: "path:" + f.path, name: f.name, title: f.path, facts: f.facts, opened: (f.opened || 0) * 1000,
-      open: () => openInReaderById([f.id]), forget: () => jsonApi("/api/recent/forget", { path: f.path }),
+      failed: !!f.failed, open: () => openInReaderById([f.id]), forget: () => jsonApi("/api/recent/forget", { path: f.path }),
       restore: (gone) => jsonApi("/api/recent/restore", { items: gone?.removed || [] }) })),
     ...handles.map((h) => ({ key: "handle:" + h.key, name: h.name, title: h.name, facts: null, opened: h.opened,
       open: async () => {
@@ -2513,18 +2548,19 @@ async function fillRecent(host, { emptyText = "", onEmpty = null, still = () => 
     for (const r of rows) {
       const facts = r.querySelector(".recent-facts");
       const text = [r.dataset.facts, count[r.dataset.name] > 1 && r.dataset.where && `in ${r.dataset.where}`].filter(Boolean).join(" · ");
-      if (facts) { facts.textContent = text; facts.hidden = !text; }
+      if (facts) { (facts.querySelector(".recent-facts-text") || facts).textContent = text; facts.hidden = !text; }
     }
   };
   host.replaceChildren(...entries.map((e) => {
     const folder = e.title !== e.name ? folderOf(e.title) : "";
     const where = names[e.name] > 1 ? folder : "";
-    const line = [factsLine(e.facts), where && `in ${where}`].filter(Boolean).join(" · ");
-    const facts = factsLine(e.facts), bad = facts === "can't be read";
+    // (The reader couldn't open it last time, and it hasn't changed since: said in the error style.)
+    const facts = e.failed ? "can't be opened" : factsLine(e.facts), bad = e.failed || facts === "can't be read";
+    const line = [facts, where && `in ${where}`].filter(Boolean).join(" · ");
     const flag = !bad && !!(e.facts && e.facts.scanned && !e.facts.has_text);
-    const row = el("div", { class: "recent-row", "data-key": e.key, "data-name": e.name, "data-facts": factsLine(e.facts), "data-where": folder },
+    const row = el("div", { class: "recent-row", "data-key": e.key, "data-name": e.name, "data-facts": facts, "data-where": folder },
       el("button", { type: "button", class: "recent-open", title: e.title, onclick: () => e.open() },
-        el("span", {}, el("span", { class: "recent-name" }, e.name), line ? el("span", { class: "recent-facts" + (flag ? " flag" : bad ? " bad" : "") }, line) : null),
+        el("span", {}, el("span", { class: "recent-name" }, e.name), line ? el("span", { class: "recent-facts" + (flag ? " flag" : bad ? " bad" : "") }, bad ? icon("alert") : null, el("span", { class: "recent-facts-text" }, line)) : null),
         el("span", { class: "recent-when" }, whenText(e.opened))),
       el("button", { type: "button", class: "chip-btn recent-x", title: "Remove from Recent", "aria-label": `Remove ${e.name} from Recent`,
         onclick: async () => {

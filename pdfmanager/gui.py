@@ -2141,6 +2141,7 @@ class Handler(BaseHTTPRequestHandler):
                 removed = RecentFiles.forget(data.get("path") if not data.get("all") else None)
                 return self._send(HTTPStatus.OK, {"ok": True, "removed": removed})
             if path == "/api/recent/failed":  # the reader couldn't open it
+                data = json.loads(body or b"{}")
                 target = self.opened.get(str(data.get("id", ""))) if self.opened is not None else None
                 if target is None:
                     raise UserError("that file is no longer available")

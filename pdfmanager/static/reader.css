@@ -185,6 +185,19 @@
 .rd-empty .rd-btn.primary { height: 38px; padding: 0 18px; }
 .rd-empty .keys { margin: 22px auto 0; max-width: 40ch; font-size: 12px; line-height: 1.6; color: var(--faint); text-wrap: balance; }
 .rd-empty .keys span { white-space: nowrap; }
+/* A file that can't be shown: a lasting state where its pages would be. */
+.rd-broken .rd-broken-card { border-style: solid; border-color: var(--border); }
+.rd-broken .rd-broken-icon { background: var(--err-soft); color: var(--err); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--err) 16%, transparent); }
+.rd-broken .rd-broken-name { margin: 0 0 8px; font: 500 22px/1.25 var(--display, inherit); overflow-wrap: anywhere; text-wrap: balance; }
+.rd-broken .rd-broken-why { margin: 0 0 22px; color: var(--text-2); text-wrap: pretty; }
+.rd-broken-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.rd-broken-actions .rd-btn { height: 38px; padding: 0 16px; }
+.rd-broken-actions .rd-btn:not(.primary) { border-color: var(--border-strong); background: var(--surface); color: var(--text); }
+.rd-broken-actions .rd-btn:not(.primary):hover { background: var(--surface-2); }
+.rd-broken-actions .rd-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.rd-broken-actions .rd-btn.busy { cursor: progress; }
+.rd .rd-broken-said { margin: 16px 0 0; color: var(--text-2); font-size: 13px; }
+.rd .rd-broken-said:empty { display: none; }
 
 /* ---- Overlays: menu, dialogs, toasts, loading ---- */
 .rd-menu {

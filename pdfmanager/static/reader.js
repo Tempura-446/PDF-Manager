@@ -165,6 +165,8 @@ const ICON = {
   stamp: '<path d="M9 3h6l-1 7h4a2 2 0 0 1 2 2v3H4v-3a2 2 0 0 1 2-2h4z"/><path d="M5 19h14"/>',
   comments: '<path d="M4 5h13v9H9l-3 3v-3H4z"/><path d="M17 9h3v8h-2v3l-3-3h-4"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
+  wrench: '<path d="M14.7 6.3a4 4 0 0 0-5.3 5.3L3 18l3 3 6.4-6.4a4 4 0 0 0 5.3-5.3l-2.5 2.5-2.3-.6-.6-2.3z"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
   access: '<circle cx="12" cy="4.5" r="1.8"/><path d="M5 8.5l7 1.5 7-1.5M12 10v4.5M12 14.5 8.5 21M12 14.5l3.5 6.5"/>',  // -- accessibility --
 };
 
@@ -228,6 +230,8 @@ const HOLD_BYTES = 64 * 1024 * 1024;
 // and for pdf.js to open a document (not counting the password prompt): a
 // request that never answers mustn't leave the reader waiting for ever.
 const PIECE_MS = 60000, WHOLE_MS = 180000, OPEN_MS = 120000;
+// pdf.js's words for a file it can't make sense of (damaged, or not a PDF).
+const DAMAGED = new Set(["InvalidPDFException", "FormatError", "UnknownErrorException", "MissingPDFException"]);
 
 /** fetch(), given up after ``ms`` (and when ``signal`` aborts). */
 function fetchFor(url, options, ms, signal = null) {
@@ -285,7 +289,7 @@ const store = {
 };
 
 export class Reader {
-  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint } = {}) {
+  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onRepair, onForgetRecent, onSaveTab } = {}) {
     this.host = host;
     this.token = token;
     this.isDesktop = isDesktop || (() => false);
@@ -298,6 +302,9 @@ export class Reader {
     this.onChange = onChange;  // the open documents or the shown one changed (the app's file panel follows)
     this.recent = recent;  // (host) => fills host with the app's Recent list (the start screen's), resolves to how many
     this.onFormHint = onFormHint;  // (tab) => the "looks like a form" check came out for tab, or was dismissed
+    this.onRepair = onRepair;  // (tab) => run Repair on a file that can't be shown; resolves when its result is open (or it failed)
+    this.onForgetRecent = onForgetRecent;  // (tab) => take a file that can't be shown off the Recent list
+    this.onSaveTab = onSaveTab;  // (tab) => save a tab the app made (a tool's result): resolves true once saved
     // Everything that changes which document is shown runs one after the
     // other (see #serial): two loads at once would show the wrong tab or
     // trip over the shared worker.
@@ -500,7 +507,21 @@ export class Reader {
           .flatMap((keys, i) => [i ? " · " : "", el("span", {}, keys)]))),
       this.recentBox = el("section", { class: "rd-recent", hidden: true, "aria-label": "Recent files" },
         el("h3", {}, "Recent"), this.recentList = el("div", {})));
-    this.main = el("div", { class: "rd-main" }, this.container, this.loading, this.empty, this.measPanel);
+    // A file that can't be shown (damaged, or not a PDF): a state that stays
+    // for its tab, with a way out (Repair), not a toast that goes.
+    this.brokenName = el("h2", { class: "rd-broken-name" });
+    this.brokenRepair = el("button", { class: "rd-btn primary seal rd-broken-repair", type: "button", html: svg("wrench") + "<span>Try to repair it</span>" });
+    this.brokenForget = el("button", { class: "rd-btn rd-broken-forget", type: "button" }, "Remove from Recent");
+    this.brokenClose = el("button", { class: "rd-btn rd-broken-close", type: "button" }, "Close");
+    this.brokenSaid = el("p", { class: "rd-broken-said", role: "status" });
+    this.broken = el("div", { class: "rd-empty rd-broken", hidden: true },
+      el("section", { class: "rd-empty-card rd-broken-card", "aria-labelledby": "rd-broken-name" },
+        el("div", { class: "rd-empty-icon rd-broken-icon", html: svg("alert") }),
+        Object.assign(this.brokenName, { id: "rd-broken-name" }),
+        el("p", { class: "rd-broken-why" }, "ZPDF can’t show this file — it may be damaged."),
+        el("div", { class: "rd-broken-actions" }, this.brokenRepair, this.brokenForget, this.brokenClose),
+        this.brokenSaid));
+    this.main = el("div", { class: "rd-main" }, this.container, this.loading, this.empty, this.broken, this.measPanel);
     // The file panel: beside the pages in a wide window, over them (with a
     // scrim) in a narrow one. The app puts its content in.
     this.side = el("aside", { class: "rd-side", id: "rd-side", role: "region", "aria-label": "This file", hidden: true });
@@ -682,6 +703,9 @@ export class Reader {
   // ---- events -----------------------------------------------------------------
   #wire() {
     this.emptyOpenBtn.addEventListener("click", () => this.chooseFile());
+    this.brokenRepair.addEventListener("click", () => this.#repairBroken());
+    this.brokenForget.addEventListener("click", () => this.#forgetBroken());
+    this.brokenClose.addEventListener("click", () => this.closeTab(this.activeTab));
     this.fileInput.addEventListener("change", () => { const f = this.fileInput.files[0]; this.fileInput.value = ""; if (f) this.openFile(f); });
     this.sidebarBtn.addEventListener("click", () => this.toggleSidebar());
     this.prevBtn.addEventListener("click", () => this.pdfViewer.previousPage());
@@ -1147,9 +1171,65 @@ export class Reader {
     this.onChange?.();
   }
 
+  /** ``tab`` holds a file that can't be shown: say so where its pages would
+   *  be, with Try to repair it, Remove from Recent and Close. It stays (for
+   *  this tab) until the tab is closed. */
+  #showBroken(tab) {
+    this.activeTab = tab;
+    this.#busy(false);
+    this.empty.hidden = true;
+    this.broken.hidden = false;
+    this.brokenName.textContent = tab.name;
+    this.brokenName.title = tab.path || tab.name;
+    this.brokenRepair.hidden = !this.onRepair || (!tab.fileId && !tab.original);
+    this.brokenForget.hidden = !this.onForgetRecent || !tab.path || tab.forgotten;
+    this.brokenSaid.textContent = tab.brokenSaid || "";
+    this.titleEl.textContent = tab.name;
+    this.titleEl.title = tab.name;
+    this.pageInput.value = "";
+    this.pageCount.textContent = "";
+    for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
+      this.zoomInput, this.zoomMenuBtn, this.findBtn, this.annotateBtn, this.scaleBtn]) c.disabled = true;
+    this.zoomInput.value = "";
+    this.sidebar.hidden = true;
+    this.root.classList.remove("reading");
+    if (this.active) document.title = tab.name + " — ZPDF";
+    this.onChange?.();
+  }
+
+  async #repairBroken() {
+    const tab = this.activeTab;
+    if (!tab?.broken || !this.onRepair || this.brokenRepair.disabled) return;
+    this.brokenRepair.disabled = true;
+    this.brokenRepair.classList.add("busy");
+    this.brokenRepair.lastChild.textContent = "Repairing…";
+    tab.brokenSaid = "";
+    this.brokenSaid.textContent = "";
+    try {
+      const said = await this.onRepair(tab);
+      if (said) { tab.brokenSaid = said; if (this.activeTab === tab) this.brokenSaid.textContent = said; }
+    } finally {
+      this.brokenRepair.disabled = false;
+      this.brokenRepair.classList.remove("busy");
+      this.brokenRepair.lastChild.textContent = "Try to repair it";
+    }
+  }
+
+  async #forgetBroken() {
+    const tab = this.activeTab;
+    if (!tab?.broken || !this.onForgetRecent) return;
+    try { await this.onForgetRecent(tab); } catch (e) { this.toast("Couldn't remove it from Recent: " + (e.message || e)); return; }
+    tab.forgotten = true;
+    this.brokenForget.hidden = true;
+    tab.brokenSaid = `Removed ${tab.name} from Recent.`;
+    this.brokenSaid.textContent = tab.brokenSaid;
+    this.brokenClose.focus();
+  }
+
   #showEmpty() {
     this.activeTab = null;
     this.#busy(false);
+    this.broken.hidden = true;
     this.empty.hidden = false;
     this.titleEl.textContent = "";
     this.pageInput.value = "";
@@ -1294,6 +1374,11 @@ export class Reader {
   /** Show ``tab``'s document in the viewer. Returns false if it couldn't be
    *  opened (not a PDF, or the password prompt was cancelled). */
   async #load(tab) {
+    if (tab.broken) {  // (known not to open: its state again, not another try)
+      await this.#closeDocument();
+      this.#showBroken(tab);
+      return true;
+    }
     this.#busy(true);
     let pieces = null, timer = 0, tooLong = null;
     const giveUp = new Promise((_, reject) => { tooLong = reject; });
@@ -1354,6 +1439,7 @@ export class Reader {
       this.titleEl.title = tab.name;
       document.title = tab.name + " — ZPDF";
       this.empty.hidden = true;
+      this.broken.hidden = true;
       for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
         this.zoomInput, this.zoomMenuBtn, this.findBtn, this.annotateBtn, this.scaleBtn]) c.disabled = false;
       this.pageCount.textContent = `of ${doc.numPages}`;
@@ -1386,7 +1472,17 @@ export class Reader {
         // A tab left in the background whose file went away or changed: say so; it can be closed.
         this.toast(`Can't show “${tab.name}” again: ${tab.gone}.`, 15000, ["Close it", () => this.closeTab(tab)]);
       } else if (pieces?.failure) this.toast(`Could not open “${tab.name}”: ${why}`, 9000);
-      else if (!(e && e.name === "PasswordException")) {  // not just cancelled at the password prompt
+      else if (!tab.shown && this.tabs.includes(tab) && e && DAMAGED.has(e.name)) {
+        // Damaged, or not a PDF at all: a state of its own that stays, with Repair.
+        tab.broken = true;
+        if (tab.fileId) {  // Recent says so, and doesn't put it first
+          fetch("/api/recent/failed", { method: "POST", headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/json" },
+            body: JSON.stringify({ id: tab.fileId }) }).catch(() => {});
+        }
+        this.#showBroken(tab);
+        this.brokenRepair.hidden ? this.brokenClose.focus() : this.brokenRepair.focus();
+        return true;
+      } else if (!(e && e.name === "PasswordException")) {  // not just cancelled at the password prompt
         this.toast(e && e.name === "InvalidPDFException" ? `“${tab.name}” isn't a valid PDF.` : "Could not open the PDF: " + why);
       }
       return false;
