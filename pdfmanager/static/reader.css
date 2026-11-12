@@ -318,7 +318,19 @@
 .rd-swatch:hover { transform: scale(1.1); }
 .rd-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); transform: scale(1.08); }
 .rd-annotbar .rd-zoom { height: 34px; }
-@container (max-width: 1540px) { .rd-tool span { display: none; } }
+/* Other bars (measuring) go to icons in narrower windows. The annotate bar
+   keeps its words (Highlight, Note, Add text, Draw, Sign, More tools, Save)
+   down to 900px: the rest of its tools are in the More tools menu. */
+@container (max-width: 1180px) { .rd-findbar:not(.rd-annotbar) .rd-tool span { display: none; } }
+@container (max-width: 900px) { .rd-annotbar .rd-tool span { display: none; } }
+.rd-moretools > svg:last-child { width: 14px; height: 14px; margin-left: -2px; color: var(--muted); }
+.rd-moretools.on { background: var(--accent-soft); color: var(--accent); }
+.rd-moretools[aria-expanded="true"] { background: var(--surface-2); color: var(--text); }
+.rd-toolsmenu { min-width: 220px; right: auto; }
+.rd-toolsmenu .label { padding-top: 6px; }
+.rd-toolsmenu .rd-tool { height: auto; min-height: 34px; justify-content: flex-start; font-size: 14px; color: var(--text); }
+.rd-toolsmenu .rd-tool[aria-checked="true"] { background: var(--accent-soft); color: var(--accent); }
+.rd-toolsmenu .rd-tool[aria-checked="true"] svg { color: var(--accent); }
 /* Save keeps its word down to narrow windows: it is the bar's one main action. */
 @container (max-width: 900px) { .rd-annotbar .rd-btn.primary span { display: none; } }
 /* Save and Close stay at the bar's end when the tools scroll under them. */

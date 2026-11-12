@@ -275,6 +275,9 @@ function sameBytes(a, b) {
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
 }
+/** Single keys for the annotate bar's labelled tools, while it's open (n, p, r,
+ *  t, e and m are the reader's own: next, previous, rotate, panel, edit text, measure). */
+const ANNOT_KEYS = { h: "HIGHLIGHT", c: "NOTE", a: "FREETEXT", d: "INK", s: "SIGN" };
 const isTyping = (e) => /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.target.isContentEditable;
 const store = {
   get(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; } },
@@ -375,20 +378,26 @@ export class Reader {
       el("label", {}, this.findWord, "Whole words"),
       this.findStatus, el("span", { style: "flex:1" }), this.findCloseBtn);
 
-    // Annotation bar
+    // Annotation bar: the tools used most keep their words (and a single key
+    // each, see ANNOT_KEYS); the rest are in the labelled More tools menu.
     const tool = (name, label, mode) => el("button", { class: "rd-btn rd-tool", type: "button", title: label, "aria-pressed": "false", "data-mode": mode, html: svg(name) + `<span>${label}</span>` });
     this.annotTools = [
       tool("pointer", "Select", "NONE"), tool("highlight", "Highlight", "HIGHLIGHT"),
       tool("underline", "Underline", "UNDERLINE"), tool("strike", "Strike out", "STRIKEOUT"),
-      tool("note", "Note", "NOTE"), tool("text", "Text", "FREETEXT"),
-      tool("draw", "Draw", "INK"), tool("shapes", "Shapes", "SHAPE"), tool("stamp", "Stamp", "STAMPS"), tool("image", "Picture", "STAMP"),
-      tool("edittext", "Edit text", "EDITTEXT"), tool("imgedit", "Pictures", "IMAGES"), tool("link", "Links", "LINKS"),
+      tool("note", "Note", "NOTE"), tool("text", "Add text", "FREETEXT"),
+      tool("draw", "Draw", "INK"), tool("shapes", "Shapes", "SHAPE"), tool("stamp", "Stamp", "STAMPS"), tool("image", "Add picture", "STAMP"),
+      tool("edittext", "Edit text", "EDITTEXT"), tool("imgedit", "Edit pictures", "IMAGES"), tool("link", "Links", "LINKS"),
     ];
     const tip = (mode, title) => { this.annotTools.find((b) => b.dataset.mode === mode).title = title; };
-    for (const mode of ["NONE", "UNDERLINE", "STRIKEOUT"]) this.annotTools.find((b) => b.dataset.mode === mode).classList.add("compact");
+    this.annotTools.find((b) => b.dataset.mode === "NONE").classList.add("compact");
+    tip("NONE", "Select: no tool, pick and move annotations (Esc)");
+    tip("HIGHLIGHT", "Highlight text: drag over the words (H)");
+    tip("FREETEXT", "Add text: click where the words go, then type (A)");
+    tip("INK", "Draw freehand on the page (D)");
+    tip("STAMP", "Add a picture: choose an image file, then place it");
     tip("UNDERLINE", "Underline text: select the words (or select them first, then click here)");
     tip("STRIKEOUT", "Strike out text: select the words (or select them first, then click here)");
-    tip("NOTE", "Add a note: click where it goes, then type your comment");
+    tip("NOTE", "Add a note: click where it goes, then type your comment (C)");
     tip("SHAPE", "Draw a rectangle, ellipse, cloud, arrow or line: drag on the page (Shift: square, circle, 45°)");
     tip("IMAGES", "Edit the pictures on the page: drag to move, drag a corner to resize (Shift: freely), replace or delete");
     tip("LINKS", "Edit links: click one to change where it goes or delete it; drag a box to add one");
@@ -402,8 +411,8 @@ export class Reader {
     this.shapeSelect = el("select", { class: "rd-zoom", "aria-label": "Shape", hidden: true },
       ...SHAPES.map(([v, label]) => el("option", { value: v }, label)));
     this.shapeSelect.value = store.get("pdfm-shape", "rect");
-    this.annotTools.at(-1).title = "Change words on the page: click a line of text (E)";
-    this.signBtn = el("button", { class: "rd-btn rd-tool", type: "button", title: "Add your signature", html: svg("sign") + "<span>Sign</span>" });
+    tip("EDITTEXT", "Change words on the page: click a line of text (E)");
+    this.signBtn = el("button", { class: "rd-btn rd-tool", type: "button", title: "Add your signature (S)", html: svg("sign") + "<span>Sign</span>" });
     this.certSignBtn = el("button", { class: "rd-btn rd-tool compact", type: "button", "data-mode": "CERTSIGN", "aria-pressed": "false",
       title: "Sign with a digital ID (a certificate, .pfx or .p12): drag a box where the signature goes", html: svg("badge") + "<span>Digital ID</span>" });
     this.annotTools.push(this.certSignBtn);
@@ -416,8 +425,24 @@ export class Reader {
     this.deleteBtn = b("trash", "Delete the selected annotation (Delete)", { disabled: true });
     this.annotSaveBtn = el("button", { class: "rd-btn primary seal rd-annotsave", type: "button", title: "Save your changes (Ctrl+S)", html: svg("save") + "<span>Save</span>" });
     this.annotCloseBtn = b("x", "Close the annotation tools");
+    // More tools: a menu of the rest; the one in use shows on its button.
+    const byMode = (mode) => this.annotTools.find((t) => t.dataset.mode === mode);
+    const inMenu = [["Mark text", ["UNDERLINE", "STRIKEOUT"]], ["Add", ["SHAPE", "STAMPS", "STAMP"]],
+      ["Change", ["EDITTEXT", "IMAGES", "LINKS"]], ["Protect", ["CERTSIGN", "REDACT"]]];
+    this.moreTools = inMenu.flatMap(([, modes]) => modes.map(byMode));
+    for (const item of this.moreTools) {
+      item.classList.remove("compact");
+      item.setAttribute("role", "menuitemradio");
+      item.setAttribute("aria-checked", "false");
+      item.removeAttribute("aria-pressed");
+      item.tabIndex = -1;
+    }
+    this.moreToolsMenu = el("div", { class: "rd-menu rd-toolsmenu", role: "menu", "aria-label": "More tools", hidden: true },
+      ...inMenu.flatMap(([label, modes], i) => [...(i ? [el("hr")] : []), el("div", { class: "label", "aria-hidden": "true" }, label), ...modes.map(byMode)]));
+    this.moreToolsBtn = el("button", { class: "rd-btn rd-tool rd-moretools", type: "button", "aria-haspopup": "menu", "aria-expanded": "false",
+      title: "More tools: underline, shapes, stamps, pictures, links, digital ID, redact", html: svg("more") + "<span>More tools</span>" + svg("down") });
     this.annotbar = el("div", { class: "rd-findbar rd-annotbar", hidden: true, role: "toolbar", "aria-label": "Annotate" },
-      ...this.annotTools.filter((b) => b !== this.certSignBtn && b !== this.redactBtn), this.signBtn, this.certSignBtn, this.redactBtn,
+      ...["NONE", "HIGHLIGHT", "NOTE", "FREETEXT", "INK"].map(byMode), this.signBtn, this.moreToolsBtn,
       el("span", { class: "rd-sep" }),
       el("div", { class: "rd-swatches", role: "group", "aria-label": "Colour" }, ...this.swatches), this.shapeSelect, this.stampSelect, this.stampDatedLabel, this.sizeSelect,
       this.redactHow, this.redactApplyBtn,
@@ -528,7 +553,7 @@ export class Reader {
     overlayClose.addEventListener("click", () => this.closeCompare());
     // Skip link: past the bars, to the pages (out of sight until it has focus).
     this.skipLink = el("a", { class: "skip-link rd-skip", href: "#", onclick: (e) => { e.preventDefault(); this.container.focus(); } }, "Skip to the page");
-    this.root.append(this.skipLink, toolbar, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.overlaybar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.fileInput);
+    this.root.append(this.skipLink, toolbar, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.overlaybar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.moreToolsMenu, this.fileInput);
     // A drawing in progress takes every click in the window as the next
     // stroke; end it first when the tabs, toolbar or menu are used. This
     // listens on the window before pdf.js does, so it runs first.
@@ -716,8 +741,30 @@ export class Reader {
 
     // Annotating
     this.annotateBtn.addEventListener("click", () => (this.annotbar.hidden ? this.openAnnotate() : this.closeAnnotate()));
-    for (const btn of this.annotTools) btn.addEventListener("click", () => this.#setEditMode(btn.dataset.mode, btn.dataset.mode === "STAMP"));
+    for (const btn of this.annotTools) btn.addEventListener("click", () => {
+      const fromMenu = !this.moreToolsMenu.hidden && this.moreToolsMenu.contains(btn);
+      if (fromMenu) this.#closeToolsMenu(true);
+      this.#setEditMode(btn.dataset.mode, btn.dataset.mode === "STAMP");
+    });
     this.signBtn.addEventListener("click", () => this.sign());
+    this.moreToolsBtn.addEventListener("click", () => this.#toggleToolsMenu());
+    this.moreToolsBtn.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); if (this.moreToolsMenu.hidden) this.#toggleToolsMenu(e.key === "ArrowUp" ? "last" : "checked"); }
+    });
+    // In the menu: arrows, Home and End move; Escape (or Tab) closes it, focus back on its button.
+    this.moreToolsMenu.addEventListener("keydown", (e) => {
+      const items = this.moreTools, at = items.indexOf(document.activeElement);
+      const go = (i) => { e.preventDefault(); items[(i + items.length) % items.length].focus(); };
+      if (e.key === "ArrowDown") go(at + 1);
+      else if (e.key === "ArrowUp") go(at < 0 ? items.length - 1 : at - 1);
+      else if (e.key === "Home") go(0);
+      else if (e.key === "End") go(items.length - 1);
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); this.#closeToolsMenu(true); }
+      else if (e.key === "Tab") this.#closeToolsMenu();
+    });
+    document.addEventListener("pointerdown", (e) => {
+      if (!this.moreToolsMenu.hidden && !this.moreToolsMenu.contains(e.target) && !this.moreToolsBtn.contains(e.target)) this.#closeToolsMenu();
+    });
     for (const sw of this.swatches) sw.addEventListener("click", () => this.#setColor(+sw.dataset.index));
     this.sizeSelect.addEventListener("change", () => this.#setSize(+this.sizeSelect.value));
     this.undoBtn.addEventListener("click", () => (this.textEditMode || this.markupMode ? this.#undoTextEdit() : this.uiManager?.undo()));
@@ -834,6 +881,14 @@ export class Reader {
       case "t": this.togglePanel(); break;
       case "e": this.useTool(this.textEditMode ? "NONE" : "EDITTEXT"); break;
       case "m": this.measureTool(this.measureMode === "distance" ? null : "distance"); break;
+      // The annotate bar's labelled tools, while it's open (H, C, A, D, S; again: back to Select).
+      case "h": case "c": case "a": case "d": case "s": {
+        if (this.annotbar.hidden || e.shiftKey) return;
+        const mode = ANNOT_KEYS[e.key];
+        if (mode === "SIGN") this.sign();
+        else this.#setEditMode(this.editMode === mode ? "NONE" : mode);
+        break;
+      }
       case "Home": v.currentPageNumber = 1; break;
       case "End": v.currentPageNumber = v.pagesCount; break;
       case "ArrowLeft": if (this.container.scrollWidth <= this.container.clientWidth) v.previousPage(); else return; break;
@@ -1934,6 +1989,7 @@ export class Reader {
   }
   closeAnnotate() {
     if (this.annotbar.hidden) return;
+    this.#closeToolsMenu();
     this.annotbar.hidden = true;
     this.annotateBtn.setAttribute("aria-pressed", "false");
     this.#showSaveState();
@@ -1986,7 +2042,8 @@ export class Reader {
     if (name === "NONE" && this.markupMode) name = this.markupMode;
     this.editMode = name;
     if (name === "EDITTEXT" || MARKUP.has(name)) this.undoBtn.disabled = !this.activeTab?.undo?.length;
-    for (const btn of this.annotTools) btn.setAttribute("aria-pressed", String(btn.dataset.mode === name));
+    for (const btn of this.annotTools) btn.setAttribute(this.moreTools.includes(btn) ? "aria-checked" : "aria-pressed", String(btn.dataset.mode === name));
+    this.#showMoreTools(name);
     const sizes = name === "FREETEXT" ? [[10, "10 pt"], [12, "12 pt"], [14, "14 pt"], [18, "18 pt"], [24, "24 pt"], [36, "36 pt"]]
       : name === "INK" ? [[1, "Thin"], [2, "Fine"], [4, "Medium"], [8, "Thick"], [14, "Marker"]]
       : name === "HIGHLIGHT" ? [[8, "Thin"], [12, "Normal"], [20, "Wide"]]
@@ -1999,6 +2056,33 @@ export class Reader {
     this.sizeSelect.hidden = !sizes.length;
     this.root.querySelector(".rd-swatches").hidden = !key;
     this.#showRedactBar(name);
+  }
+
+  /** The More tools button: "More tools", or the tool from its menu that's in use. */
+  #showMoreTools(name = this.editMode) {
+    const on = this.moreTools.find((t) => t.dataset.mode === name);
+    const label = on ? on.querySelector("span").textContent : "More tools";
+    this.moreToolsBtn.innerHTML = (on ? on.querySelector("svg").outerHTML : svg("more")) + `<span>${label}</span>` + svg("down");
+    this.moreToolsBtn.classList.toggle("on", !!on);
+    this.moreToolsBtn.setAttribute("aria-label", on ? `More tools (in use: ${label})` : "More tools");
+  }
+
+  #toggleToolsMenu(focus = "checked") {
+    if (!this.moreToolsMenu.hidden) { this.#closeToolsMenu(); return; }
+    const at = this.moreToolsBtn.getBoundingClientRect(), box = this.root.getBoundingClientRect();
+    this.moreToolsMenu.style.top = `${at.bottom - box.top + 6}px`;
+    this.moreToolsMenu.style.left = `${Math.max(8, Math.min(at.left - box.left, box.width - 268))}px`;
+    this.moreToolsMenu.style.right = "auto";
+    this.moreToolsMenu.hidden = false;
+    this.moreToolsBtn.setAttribute("aria-expanded", "true");
+    const items = this.moreTools;
+    (focus === "last" ? items.at(-1) : items.find((t) => t.getAttribute("aria-checked") === "true") || items[0]).focus();
+  }
+  #closeToolsMenu(refocus = false) {
+    if (this.moreToolsMenu.hidden) return;
+    this.moreToolsMenu.hidden = true;
+    this.moreToolsBtn.setAttribute("aria-expanded", "false");
+    if (refocus) this.moreToolsBtn.focus();
   }
 
   #applyAnnotParams() {
@@ -5837,13 +5921,14 @@ export class Reader {
     const open = { icon: "open", label: "Open a PDF", keys: "Ctrl+O", words: "file browse", run: () => this.chooseFile() };
     if (!this.doc) return [open];
     const v = this.pdfViewer;
-    const tool = (label, mode, words = "", icon = "pen") => ({ icon, label, words: "annotate " + words, run: () => this.useTool(mode) });
+    // (Their single keys work while the annotate bar is open.)
+    const tool = (label, mode, words = "", icon = "pen", keys = "") => ({ icon, label, words: "annotate " + words, run: () => this.useTool(mode), ...(keys ? { keys } : {}) });
     const list = [
       { icon: "edittext", label: "Edit text", keys: "E", words: "change words typo rewrite paragraph add text", run: () => this.useTool("EDITTEXT") },
       { icon: "search", label: "Find in document", keys: "Ctrl+F", words: "search look for", run: () => this.openFind() },
-      tool("Highlight text", "HIGHLIGHT", "mark marker", "highlight"), tool("Add a text box", "FREETEXT", "note comment type", "text"),
-      tool("Draw", "INK", "pen ink freehand", "draw"), tool("Add a picture", "STAMP", "image photo stamp", "image"),
-      tool("Add a note", "NOTE", "comment sticky review", "note"), tool("Underline text", "UNDERLINE", "markup", "underline"),
+      tool("Highlight text", "HIGHLIGHT", "mark marker", "highlight", "H"), tool("Add text", "FREETEXT", "text box note comment type", "text", "A"),
+      tool("Draw", "INK", "pen ink freehand", "draw", "D"), tool("Add a picture", "STAMP", "image photo stamp", "image"),
+      tool("Add a note", "NOTE", "comment sticky review", "note", "C"), tool("Underline text", "UNDERLINE", "markup", "underline"),
       tool("Strike out text", "STRIKEOUT", "strikethrough delete markup", "strike"),
       tool("Draw a shape", "SHAPE", "rectangle ellipse circle cloud arrow line markup revision", "shapes"),
       tool("Stamp the page", "STAMPS", "approved draft confidential final received reviewed rubber stamp", "stamp"),

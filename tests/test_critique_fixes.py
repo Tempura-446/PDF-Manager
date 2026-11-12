@@ -171,3 +171,27 @@ def test_critique_fixes_in_a_browser(app, tmp_path, monkeypatch):
     rc = out["resultCard"]
     assert rc["save"] == "Save…" and rc["saveBg"] != rc["runBg"] and rc["seals"] == 1, rc
     assert out["settingsSave"]
+
+    # 2. The annotate bar keeps its words at 1180, 1280 and 1440, fits, and Save and Close show.
+    for key in ("annot1180", "annot1180dark", "annot1280", "annot1440"):
+        a = out[key]
+        for word in ("Highlight", "Note", "Add text", "Draw", "Sign", "More tools", "Save"):
+            assert word in a["worded"], (key, word, a["worded"])
+        assert a["save"] and a["close"] and a["scrollW"] <= a["clientW"] and not a["pageScroll"], (key, a)
+    # More tools: a labelled menu button, keyboard operable; the tool in use shows on it.
+    m = out["menuOpen"]
+    assert m["open"] and m["expanded"] == "true" and m["role"] == "menuitemradio" and m["focus"] == "Underline", m
+    assert m["items"] == ["Underline", "Strike out", "Shapes", "Stamp", "Add picture", "Edit text", "Edit pictures", "Links",
+                          "Digital ID", "Redact"], m
+    assert out["menuDown"]["focus"] == "Strike out" and out["menuEnd"]["focus"] == "Redact"
+    e = out["menuEsc"]
+    assert not e["open"] and e["expanded"] == "false" and e["focus"] == "More tools" and e["barOpen"], e
+    p = out["menuPicked"]
+    assert not p["open"] and p["button"] == "Shapes" and p["on"] and "Shapes" in p["label"] and p["focus"] == "Shapes", p
+    # Single keys while the bar is open (not in a box, not with the bar closed); n is still the next page.
+    k = out["keys"]
+    assert [k["h"], k["c"], k["a"], k["d"]] == ["HIGHLIGHT", "NOTE", "FREETEXT", "INK"] and k["again"] == "NONE", k
+    assert k["button"] == "true" and k["next"] and k["typing"] != "HIGHLIGHT" and k["sign"] == "Sign", k
+    for mode, key in (("HIGHLIGHT", "H"), ("NOTE", "C"), ("FREETEXT", "A"), ("INK", "D"), ("SIGN", "S")):
+        assert k["tips"][mode].endswith(f"({key})"), k["tips"]
+    assert not k["closed"]["bar"] and k["closed"]["mode"] != "HIGHLIGHT", k["closed"]

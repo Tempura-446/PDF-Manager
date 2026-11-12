@@ -179,6 +179,89 @@ const fs = require("fs");
       out.settingsSave = await page.evaluate(() => document.querySelector("#set-save").classList.contains("seal"));
       await ctx.close();
     }
+    // ---- 2. The annotate bar: words for the tools used most, More tools, single keys ---------
+    for (const [w, h] of [[1180, 820], [1280, 800], [1440, 900]]) {
+      for (const theme of w === 1180 ? ["light", "dark"] : ["light"]) {
+        const ctx = await browser.newContext({ viewport: { width: w, height: h }, colorScheme: theme });
+        const page = await ctx.newPage();
+        watch(page);
+        await page.goto(url + "&open=" + cfg.plainId);
+        await page.waitForSelector(".page canvas", { timeout: 60000 });
+        await page.click(".rd-toolbar button[title^='Annotate']");
+        await page.waitForSelector(".rd-annotbar:not([hidden])");
+        out[`annot${w}${theme === "dark" ? "dark" : ""}`] = await page.evaluate(() => {
+          const bar = document.querySelector(".rd-annotbar"), b = bar.getBoundingClientRect();
+          const vis = (e) => { if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.left >= b.left - 1 && r.right <= b.right + 1 && r.right <= innerWidth; };
+          const worded = [...bar.querySelectorAll(".rd-btn")].filter((x) => vis(x) && x.querySelector("span") && getComputedStyle(x.querySelector("span")).display !== "none")
+            .map((x) => x.querySelector("span").textContent);
+          return { worded, save: vis(bar.querySelector(".rd-annotsave")), close: vis(bar.querySelector("button[title^='Close the annotation']")),
+            scrollW: bar.scrollWidth, clientW: bar.clientWidth, pageScroll: document.documentElement.scrollWidth > innerWidth };
+        });
+        if (w === 1180) await shot(page, `${theme}-1180-annotate-bar`);
+        if (w === 1280 && theme === "light") {
+          // More tools from the keyboard: arrows open and move, Escape closes (focus back), Enter picks.
+          await page.focus(".rd-moretools");
+          await page.keyboard.press("ArrowDown");
+          const menu = () => page.evaluate(() => ({
+            open: !document.querySelector(".rd-toolsmenu").hidden, expanded: document.querySelector(".rd-moretools").getAttribute("aria-expanded"),
+            focus: document.activeElement.textContent.trim(), role: document.activeElement.getAttribute("role"),
+            items: [...document.querySelectorAll(".rd-toolsmenu [role=menuitemradio]")].map((x) => x.textContent.trim()),
+            button: document.querySelector(".rd-moretools").textContent.trim(), on: document.querySelector(".rd-moretools").classList.contains("on"),
+            label: document.querySelector(".rd-moretools").getAttribute("aria-label"),
+          }));
+          out.menuOpen = await menu();
+          await shot(page, "light-1180-more-tools-menu");
+          await page.keyboard.press("ArrowDown");
+          out.menuDown = await menu();
+          await page.keyboard.press("End");
+          out.menuEnd = await menu();
+          await page.keyboard.press("Escape");
+          out.menuEsc = await menu();
+          out.menuEsc.barOpen = await page.isVisible(".rd-annotbar");
+          await page.keyboard.press("Enter");
+          await page.waitForSelector(".rd-toolsmenu:not([hidden])");
+          await page.keyboard.press("Home");
+          for (let i = 0; i < 2; i++) await page.keyboard.press("ArrowDown");  // Underline, Strike out, Shapes
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(200);
+          out.menuPicked = await menu();
+          // Single keys, while the bar is open and focus isn't in a box.
+          await page.focus(".rd-container");
+          const mode = () => page.evaluate(() => reader.editMode);
+          out.keys = {};
+          for (const k of ["h", "c", "a", "d"]) { await page.keyboard.press(k); out.keys[k] = await mode(); }
+          await page.keyboard.press("d");
+          out.keys.again = await mode();
+          await page.keyboard.press("h");
+          out.keys.button = await page.evaluate(() => document.querySelector(".rd-annotbar [data-mode=HIGHLIGHT]").getAttribute("aria-pressed"));
+          out.keys.tips = await page.evaluate(() => {
+            const t = Object.fromEntries(["HIGHLIGHT", "NOTE", "FREETEXT", "INK"].map((m) => [m, document.querySelector(`.rd-annotbar [data-mode=${m}]`).title]));
+            t.SIGN = document.querySelector(".rd-annotbar button[title^='Add your signature']").title;
+            return t;
+          });
+          await page.keyboard.press("Escape");
+          const pageBefore = await page.evaluate(() => reader.pdfViewer.currentPageNumber);
+          await page.keyboard.press("n");
+          out.keys.next = (await page.evaluate(() => reader.pdfViewer.currentPageNumber)) === pageBefore + 1;
+          // In a box, a key is just a letter.
+          await page.click(".rd-page input");
+          await page.keyboard.press("h");
+          out.keys.typing = await mode();
+          await page.focus(".rd-container");
+          await page.keyboard.press("s");
+          await page.waitForSelector("dialog.rd-dialog[open]", { timeout: 5000 });
+          out.keys.sign = await page.textContent("dialog.rd-dialog[open] h3");
+          await page.keyboard.press("Escape");
+          // The bar closed: the keys do nothing.
+          await page.waitForTimeout(200);
+          await page.click(".rd-toolbar button[title^='Annotate']");
+          await page.focus(".rd-container");
+          await page.keyboard.press("h");
+          out.keys.closed = { mode: await mode(), bar: await page.isVisible(".rd-annotbar") };
+        }
+        await ctx.close();
+      }
+    }
   } catch (e) {
     out.errors.push("FATAL " + (e.stack || e));
   }
