@@ -16,6 +16,7 @@ import { BASE, DOC_OPTIONS, destroyTask, loadPdfjs as loadLibrary, openDocument 
 import * as files from "./files.js";
 import * as measure from "./measure.js";
 import { Overlay } from "./overlay.js";
+import { TabState, deriveUi, closePrompt, saveAction } from "./tabstate.js";
 let snap = null;  // snapping to a drawing's lines (snap.js); the reader works without it
 const snapReady = import("./snap.js").then((m) => { snap = m; }, () => {});
 
@@ -212,7 +213,6 @@ function el(tag, attrs = {}, ...children) {
   for (const c of children) if (c != null) node.append(c);
   return node;
 }
-let tabSeq = 0;
 // A file opened from this computer comes in pieces: the first this long (a
 // file no bigger is whole in it, and is held here in full), the rest as pages
 // are shown (the whole file only when a change or save needs it).
@@ -916,7 +916,7 @@ export class Reader {
     if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); this.#saveKey(e); return; }
     if (mod && !isTyping(e) && !this.scalebar.hidden && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")
         && this.#measureUndo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); return; }
-    if (mod && e.key.toLowerCase() === "z" && !e.shiftKey && !isTyping(e) && this.activeTab?.undo?.length
+    if (mod && e.key.toLowerCase() === "z" && !e.shiftKey && !isTyping(e) && this.activeTab?.undoDepth
         && (this.textEditMode || this.markupMode || this.annotbar.hidden)) { e.preventDefault(); this.#undoTextEdit(); return; }
     if (e.key === "Escape" && !this.ctxMenu.hidden) { this.#closeContextMenu(); return; }
     if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); this.pdfViewer.increaseScale(); return; }
@@ -1057,7 +1057,7 @@ export class Reader {
       if (at >= 0 && this.tabs.indexOf(tab) !== at + 1) {
         this.tabs.splice(this.tabs.indexOf(tab), 1);
         this.tabs.splice(at + 1, 0, tab);
-        this.#renderTabs();
+        this.#refresh();
       }
       const wrap = this.tabEls?.get(tab.id)?.wrap;  // it slides in, once
       wrap?.classList.add("rd-new");
@@ -1079,7 +1079,7 @@ export class Reader {
   isPristine(tab = this.activeTab) { return !!(tab && tab.fileId && !tab.dirty); }
 
   /** Draw the tab bar again (e.g. after the app marked a tab unsaved). */
-  refreshTabs() { this.#renderTabs(); }
+  refreshTabs() { this.#refresh(); }
 
   /** Switch to an open tab (e.g. back to the one a result was made from). */
   showTab(tab) { return this.#switchTo(tab); }
@@ -1097,23 +1097,22 @@ export class Reader {
         && sameBytes(t.original.subarray(0, file.head.length), file.head)));
     if (same) {
       if (same === this.activeTab) { if (goto) this.#goto(goto); }
-      else { if (goto) same.goto = goto; await this.#switchToNow(same); }  // applied once its pages are there
+      else { if (goto) same.aim(goto); await this.#switchToNow(same); }  // applied once its pages are there
       return;
     }
     const previous = this.activeTab;
     await this.#stash();
-    // edited: bytes holds changes made here; dirty: changes not saved to a file
-    // yet; version: counts every change, so a save knows what it included.
-    const tab = { id: ++tabSeq, original: bytes, bytes, name, password, edited: false, dirty: false, version: 0, goto, ...file };
+    const tab = new TabState({ bytes, name, password, goto, file }, (t, what) => this.#tabChanged(t, what));
     this.tabs.push(tab);
     if (!(await this.#load(tab))) {
       this.tabs.splice(this.tabs.indexOf(tab), 1);
+      tab.closed();
       if (!(previous && this.tabs.includes(previous) && await this.#load(previous))) {
         await this.#closeDocument();
         this.#showEmpty();
       }
     }
-    this.#renderTabs();
+    this.#refresh();
   }
 
   /** Keep the open tab's unsaved annotations and form entries in its bytes
@@ -1121,14 +1120,15 @@ export class Reader {
   async #stash() {
     const tab = this.activeTab;
     this.#finishEditing();
+    if (!tab) return;
     // The tool in use comes back with the tab (see pagesinit): with one on,
     // pdf.js makes its annotations, unsaved ones kept in its bytes too,
     // editors again, to pick, move, resize or delete.
-    if (tab) tab.tool = this.doc && !this.annotbar.hidden ? this.editMode || "NONE" : null;
-    if (!tab || !this.doc || !this.#changed()) return;
+    const tool = this.doc && !this.annotbar.hidden ? this.editMode || "NONE" : null;
+    tab.stashed({ tool });
+    if (!this.doc || !this.#changed()) return;
     try {
-      tab.bytes = await this.#savedDocument(tab);
-      tab.edited = true;
+      tab.stashed({ tool, bytes: await this.#savedDocument(tab) });
     } catch (e) {
       this.toast(`Your unsaved changes to “${tab.name}” couldn't be kept: ${e.message || e}`, 9000);
     }
@@ -1150,7 +1150,7 @@ export class Reader {
       await this.#closeDocument();
       this.#showEmpty();
     }
-    this.#renderTabs();
+    this.#refresh();
   }
 
   async closeTab(tab = this.activeTab) {
@@ -1160,7 +1160,7 @@ export class Reader {
     if (tab !== this.activeTab) await this.#switchTo(tab);
     if (tab.unsaved || !tab.fileId) await this.saveTab(tab, tab.madeBy?.from?.fileId || null);
     else await this.save();
-    if (this.tabs.includes(tab) && !tab.dirty && !tab.unsaved) await this.#serial(() => this.#closeTabNow(tab, true));
+    if (this.tabs.includes(tab) && !tab.needsSaving) await this.#serial(() => this.#closeTabNow(tab, true));
   }
 
   /** Close ``tab``; one with changes not saved (or a tool's result not saved
@@ -1168,30 +1168,72 @@ export class Reader {
    *  saves it, then closes it. */
   async #closeTabNow(tab, saved = false) {
     if (!tab || !this.tabs.includes(tab)) return;
-    if ((tab.dirty || tab.unsaved) && !saved) {
-      const answer = await this.ask(`Close “${tab.name}”?`, tab.dirty ? "Your changes to it haven't been saved." : "It hasn't been saved anywhere yet.",
-        [["cancel", "Cancel"], ["close", "Close without saving"], ["save", tab.unsaved || !tab.fileId ? "Save…" : "Save", "seal"]]);
+    const prompt = closePrompt(tab);
+    if (prompt && !saved) {
+      const answer = await this.ask(prompt.title, prompt.text, [["cancel", "Cancel"], ["close", "Close without saving"], ["save", prompt.save, "seal"]]);
       if (answer === "save") return "save";
       if (answer !== "close") return;
     }
     const i = this.tabs.indexOf(tab);
     this.tabs.splice(i, 1);
+    tab.closed();
     if (tab === this.activeTab) {
       this.activeTab = null;
       const next = this.tabs[i] || this.tabs[i - 1];
       if (!next || !(await this.#load(next))) { await this.#closeDocument(); this.#showEmpty(); }
     }
-    this.#renderTabs();
+    this.#refresh();
   }
 
-  /** Any tab with changes that haven't been saved to a file? */
+  /** Any tab that would be lost on closing ZPDF: changes not saved to a
+   *  file, or a tool's result not saved anywhere (the tabs with a dot, whose
+   *  own close asks too; see deriveUi). */
   hasUnsavedChanges() {
-    return this.tabs.some((t) => t.dirty);
+    return deriveUi(null, this.tabs).anyUnsaved;
   }
 
-  /** Show the tab bar. Tabs keep their elements (a click mustn't land on an
+  /** A tab's state changed (one of its transitions): show what follows.
+   *  (The app hears of it too, except for one more change to a tab already
+   *  unsaved: nothing it shows changes then.) */
+  #tabChanged(tab, what) {
+    if (this.tabs.includes(tab)) this.#refresh({ notify: what !== "annotation" && what !== "loaded" });
+  }
+
+  /** Show what follows from the open tabs' state, all of it in one place:
+   *  the tab bar and its dots, the title (and its dot), the Save and Undo
+   *  buttons, the window's title (see deriveUi). ``notify``: tell the app
+   *  (its file panel follows the shown document). */
+  #refresh({ notify = true } = {}) {
+    if (!this.saveNowBtn) return;
+    this.#drawTabBar();
+    const tab = this.activeTab;
+    const ui = this.ui = deriveUi(tab, this.tabs, {
+      shown: !!this.doc, annotating: !this.annotbar.hidden, annotUndo: !!this.annotUndo, changed: this.#changed(),
+      // (While areas are marked for Redact, Black out is the main action: Save waits, quiet.)
+      marked: this.markupMode === "REDACT" && !!tab && this.#redactCount(tab) > 0, active: this.active,
+    });
+    // A dot (and the word, for screen readers): changes not saved, or a tool's result not saved anywhere yet.
+    for (const [id, parts] of this.tabEls) parts.dot.hidden = parts.unsaved.hidden = !ui.dots.get(id);
+    // With one document (no tab bar) the title says it too.
+    this.titleDot.hidden = this.titleSr.hidden = !ui.titleDot;
+    this.titleText.textContent = ui.heading;
+    this.titleEl.title = ui.heading;
+    if (ui.title) document.title = ui.title;
+    // Save and Undo in the toolbar while there are changes to keep or take
+    // back (the annotation bar has its own while it's open); the annotation
+    // bar's Save is the screen's main action only once there is something to
+    // save (it still works).
+    this.saveNowBtn.hidden = !ui.saveNow;
+    this.undoNowBtn.hidden = !ui.undoNow;
+    this.annotSaveBtn.classList.toggle("seal", ui.annotSave.main);
+    this.annotSaveBtn.classList.toggle("primary", ui.annotSave.main);
+    this.annotSaveBtn.title = ui.annotSave.title;
+    if (notify) this.onChange?.();
+  }
+
+  /** The tab bar. Tabs keep their elements (a click mustn't land on an
    *  element that was replaced halfway through it). */
-  #renderTabs() {
+  #drawTabBar() {
     this.tabbar.hidden = this.tabs.length < 2;
     this.tabEls ||= new Map();
     for (const [id, parts] of this.tabEls) if (!this.tabs.some((t) => t.id === id)) { parts.wrap.remove(); this.tabEls.delete(id); }
@@ -1217,19 +1259,12 @@ export class Reader {
       const active = tab === this.activeTab;
       parts.wrap.classList.toggle("active", active);
       parts.btn.setAttribute("aria-selected", String(active));
-      // A dot (and the word, for screen readers): changes not saved, or a tool's result not saved anywhere yet.
-      parts.dot.hidden = parts.unsaved.hidden = !(tab.dirty || tab.unsaved);
       return parts.wrap;
     });
-    // With one document (no tab bar) the title says it too.
-    const shown = this.doc ? this.activeTab : null;
-    this.titleDot.hidden = this.titleSr.hidden = !(shown && (shown.dirty || shown.unsaved));
-    this.#showSaveState();
     // Re-append only if the order changed, so elements stay where they are.
     const current = [...this.tabbar.children].filter((n) => n !== this.addTabBtn);
     if (current.length !== order.length || current.some((n, i) => n !== order[i])) this.tabbar.replaceChildren(...order, this.addTabBtn);
     else if (!this.addTabBtn.isConnected) this.tabbar.append(this.addTabBtn);
-    this.onChange?.();
   }
 
   /** ``tab`` holds a file that can't be shown: say so where its pages would
@@ -1245,8 +1280,6 @@ export class Reader {
     this.brokenRepair.hidden = !this.onRepair || (!tab.fileId && !tab.original);
     this.brokenForget.hidden = !this.onForgetRecent || !tab.path || tab.forgotten;
     this.brokenSaid.textContent = tab.brokenSaid || "";
-    this.titleText.textContent = tab.name;
-    this.titleEl.title = tab.name;
     this.pageInput.value = "";
     this.pageCount.textContent = "";
     for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
@@ -1254,8 +1287,7 @@ export class Reader {
     this.zoomInput.value = "";
     this.sidebar.hidden = true;
     this.root.classList.remove("reading");
-    if (this.active) document.title = tab.name + " — ZPDF";
-    this.onChange?.();
+    this.#refresh();
   }
 
   async #repairBroken() {
@@ -1264,11 +1296,11 @@ export class Reader {
     this.brokenRepair.disabled = true;
     this.brokenRepair.classList.add("busy");
     this.brokenRepair.lastChild.textContent = "Repairing…";
-    tab.brokenSaid = "";
+    tab.say("");
     this.brokenSaid.textContent = "";
     try {
       const said = await this.onRepair(tab);
-      if (said) { tab.brokenSaid = said; if (this.activeTab === tab) this.brokenSaid.textContent = said; }
+      if (said) { tab.say(said); if (this.activeTab === tab) this.brokenSaid.textContent = said; }
     } finally {
       this.brokenRepair.disabled = false;
       this.brokenRepair.classList.remove("busy");
@@ -1280,9 +1312,9 @@ export class Reader {
     const tab = this.activeTab;
     if (!tab?.broken || !this.onForgetRecent) return;
     try { await this.onForgetRecent(tab); } catch (e) { this.toast("Couldn't remove it from Recent: " + (e.message || e)); return; }
-    tab.forgotten = true;
+    tab.forgot();
     this.brokenForget.hidden = true;
-    tab.brokenSaid = `Removed ${tab.name} from Recent.`;
+    tab.say(`Removed ${tab.name} from Recent.`);
     this.brokenSaid.textContent = tab.brokenSaid;
     this.brokenClose.focus();
   }
@@ -1292,7 +1324,6 @@ export class Reader {
     this.#busy(false);
     this.broken.hidden = true;
     this.empty.hidden = false;
-    this.titleText.textContent = "";
     this.pageInput.value = "";
     this.pageCount.textContent = "";
     for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
@@ -1300,9 +1331,8 @@ export class Reader {
     this.zoomInput.value = "";
     this.sidebar.hidden = true;
     this.root.classList.remove("reading");
-    if (this.active) document.title = "PDF reader — ZPDF";
     setTimeout(() => { if (!this.doc && !this.opening) this.refreshRecent(); }, 0);  // (see show())
-    this.onChange?.();
+    this.#refresh();
   }
 
   /** The first piece of a file that is read in pieces (``tab.url``), asked
@@ -1320,10 +1350,10 @@ export class Reader {
     const size = Number((res.headers.get("Content-Range") || "").split("/")[1]) || 0;
     if (bad || size !== tab.size) {
       const e = bad || Object.assign(new Error("another program changed the file since it was opened here"), { gone: true });
-      if (e.gone) tab.gone = e.message;
+      if (e.gone) tab.fileGone(e.message);
       throw e;
     }
-    tab.head = new Uint8Array(await res.arrayBuffer());
+    tab.firstPiece(new Uint8Array(await res.arrayBuffer()));
   }
 
   /** Where pdf.js gets the pieces of a file that isn't held here in full:
@@ -1339,9 +1369,7 @@ export class Reader {
    *  answered with empty bytes, which pdf.js reads as nothing to draw; the
    *  document is then ``poisoned``: it is never written out (#savedDocument). */
   #pieces(tab) {
-    const head = tab.head;
-    tab.head = null;
-    const source = new pdfjs.PDFDataRangeTransport(tab.size, head);
+    const source = new pdfjs.PDFDataRangeTransport(tab.size, tab.head);
     const stop = new AbortController();
     const pending = new Map();  // begin -> end of the pieces pdf.js waits for
     source.failed = new Promise((_, reject) => { source.fail = reject; });
@@ -1368,7 +1396,7 @@ export class Reader {
         if (stop.signal.aborted || !pending.has(begin)) return;
         if (source.data) { source.serve(source.data); return; }
         if (again && !e.gone) { setTimeout(() => ask(begin, end, false), 300); return; }
-        if (e.gone) tab.gone ||= e.message;
+        if (e.gone) tab.fileGone(e.message);
         if (source.failure) { source.giveUp(); return; }
         source.failure = String(e.message || e);
         source.fail(new Error(source.failure));
@@ -1387,7 +1415,7 @@ export class Reader {
     };
     source.abort = () => { stop.abort(); pending.clear(); };
     source.waiting = () => pending.size > 0;
-    tab.source = source;
+    tab.piecesFrom(source);  // (pdf.js takes the first piece)
     return source;
   }
 
@@ -1398,14 +1426,14 @@ export class Reader {
   #readAll(tab) {
     if (tab.bytes) return Promise.resolve(tab.bytes);
     if (tab.gone) return Promise.reject(new Error(tab.gone));
-    tab.reading ||= (async () => {
+    if (!tab.reading) tab.readingAll((async () => {
       const from = tab.headCopy?.length || 0;
       let res;
       try {
         res = await fetchFor(tab.url, { headers: { "X-Pdfm-Token": this.token, Range: `bytes=${from}-${tab.size - 1}` } }, WHOLE_MS);
       } catch (e) { throw new Error("the file couldn't be read: " + (e.message || e)); }
       const bad = await pieceError(res, tab);
-      if (bad) { if (bad.gone) tab.gone = bad.message; throw bad; }
+      if (bad) { if (bad.gone) tab.fileGone(bad.message); throw bad; }
       let rest;
       try { rest = new Uint8Array(await res.arrayBuffer()); } catch (e) { throw new Error("the file couldn't be read: " + (e.message || e)); }
       if (from + rest.length !== tab.size) throw new Error("the file couldn't be read in full");
@@ -1413,15 +1441,13 @@ export class Reader {
       if (from) all.set(tab.headCopy);
       all.set(rest, from);
       if (tab.source) { tab.source.data = all; tab.source.serve(all); }
-      if (!tab.bytes) {
-        tab.bytes = tab.original = all;
-        if (tab === this.activeTab && !this.bytes) this.bytes = all;
-      }
-      tab.headCopy = null;
+      const had = tab.bytes;
+      tab.readInFull(all);
+      if (!had && tab === this.activeTab && !this.bytes) this.bytes = all;
       return tab.bytes;
-    })();
+    })());
     const reading = tab.reading;
-    reading.catch(() => { if (tab.reading === reading) tab.reading = null; });
+    reading.catch(() => { if (tab.reading === reading) tab.readingAll(null); });
     return reading;
   }
 
@@ -1469,7 +1495,8 @@ export class Reader {
         this.#busy(false);
         this.#askPassword(reason === pdfjs.PasswordResponses.INCORRECT_PASSWORD).then((pw) => {
           if (pw === null) { destroyTask(task); tooLong(Object.assign(new Error("cancelled"), { name: "PasswordException" })); return; }
-          this.password = tab.password = pw;
+          tab.unlocked(pw);
+          this.password = pw;
           this.#busy(true);
           arm();
           update(pw);
@@ -1487,18 +1514,12 @@ export class Reader {
       if (!(doc.numPages >= 1)) throw unusable();
       try { await Promise.race([doc.getPage(1), giveUp]); } catch (e) { if (e && e.message === "opening it took too long") throw e; throw unusable(); }
       clearTimeout(timer);
-      tab.shown = true;
       this.doc = doc;
       this.activeTab = tab;
-      doc.annotationStorage.onSetModified = () => {
-        tab.version = (tab.version || 0) + 1;
-        tab.savedSince = false;  // changed again after a save
-        if (!tab.dirty) { tab.dirty = true; this.#renderTabs(); }
-        this.#showSaveState();
-      };
-      // (Undo can bring it back to how it was opened or saved: see #checkSaved.)
-      doc.annotationStorage.onResetModified = () => this.#checkSaved(tab);
-      tab.clean = tab.dirty ? null : { doc, print: "" };
+      doc.annotationStorage.onSetModified = () => tab.annotationChanged();
+      // (Undo can bring it back to how it was opened or saved: see #compareAnnotations.)
+      doc.annotationStorage.onResetModified = () => this.#compareAnnotations(tab);
+      tab.loaded(doc);
       this.pdfViewer.setDocument(doc);
       this.linkService.setDocument(doc, null);
       // (The viewer hands the document to its form scripting itself once the
@@ -1508,9 +1529,6 @@ export class Reader {
       // (The viewer hands the document to the find controller itself once the
       // first page is drawn; doing it here too would reset a search started
       // when the pages appear, e.g. from the folder search.)
-      this.titleText.textContent = tab.name;
-      this.titleEl.title = tab.name;
-      document.title = tab.name + " — ZPDF";
       this.empty.hidden = true;
       this.broken.hidden = true;
       for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
@@ -1547,7 +1565,7 @@ export class Reader {
       } else if (pieces?.failure) this.toast(`Could not open “${tab.name}”: ${why}`, 9000);
       else if (!tab.shown && this.tabs.includes(tab) && e && DAMAGED.has(e.name)) {
         // Damaged, or not a PDF at all: a state of its own that stays, with Repair.
-        tab.broken = true;
+        tab.broke();
         if (tab.fileId) {  // Recent says so, and doesn't put it first
           fetch("/api/recent/failed", { method: "POST", headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/json" },
             body: JSON.stringify({ id: tab.fileId }) }).catch(() => {});
@@ -1619,8 +1637,8 @@ export class Reader {
     eventBus.on("annotationeditormodechanged", ({ mode }) => this.#showEditMode(this.#modeName(mode)));
     eventBus.on("editingstateschanged", ({ details }) => {
       this.annotUndo = !!details.hasSomethingToUndo;
-      this.#checkSaved();
-      this.#showSaveState();
+      this.#compareAnnotations();
+      this.#refresh({ notify: false });
       this.undoBtn.disabled = !details.hasSomethingToUndo;
       this.redoBtn.disabled = !details.hasSomethingToRedo;
       this.deleteBtn.disabled = !details.hasSelectedEditor;
@@ -1631,13 +1649,12 @@ export class Reader {
       this.pdfViewer.currentScaleValue = saved?.scale || "auto";
       if (saved?.page > 1 && saved.page <= this.doc.numPages) this.pdfViewer.currentPageNumber = saved.page;
       if (saved?.rotation) this.pdfViewer.pagesRotation = saved.rotation;
-      const goto = this.activeTab?.goto;
-      if (goto) { this.activeTab.goto = null; this.#goto(goto); }
-      const tab = this.activeTab, tool = tab?.tool;
+      const goto = this.activeTab?.arrived();
+      if (goto) this.#goto(goto);
+      const tab = this.activeTab, tool = tab?.restored();
       if (tool) {
         // (Once a page's editing layer is drawn: before that, pdf.js's viewer
         // still announces the tool it had, and could leave its own unchanged.)
-        tab.tool = null;
         let done = false, timer = 0;
         const restore = () => {
           if (done) return;
@@ -1704,7 +1721,7 @@ export class Reader {
     // pdf.js won't let go of the document soon, the reader doesn't wait.
     const wait = pieces && (pieces.poisoned || pieces.waiting()) ? 2000 : 10000;
     pieces?.giveUp();
-    this.#showSaveState();
+    this.#refresh({ notify: false });
     if (doc) {
       closeOff(doc);
       this.pdfViewer.setDocument(null);
@@ -2242,7 +2259,7 @@ export class Reader {
     } else if (wasHidden) this.gaveWay = null;
     this.#stepAside();
     this.annotateBtn.setAttribute("aria-pressed", "true");
-    this.#showSaveState();
+    this.#refresh({ notify: false });
     this.#showEditMode(this.editMode || "NONE");
   }
   closeAnnotate() {
@@ -2250,7 +2267,7 @@ export class Reader {
     this.#closeToolsMenu();
     this.annotbar.hidden = true;
     this.annotateBtn.setAttribute("aria-pressed", "false");
-    this.#showSaveState();
+    this.#refresh({ notify: false });
     if (this.editMode && this.editMode !== "NONE") this.#setEditMode("NONE");
     this.#endHint();
     const back = this.gaveWay?.bar === "find" && this.doc;
@@ -2358,7 +2375,7 @@ export class Reader {
     if (name === "NONE" && this.textEditMode) name = "EDITTEXT";
     if (name === "NONE" && this.markupMode) name = this.markupMode;
     this.editMode = name;
-    if (name === "EDITTEXT" || MARKUP.has(name)) this.undoBtn.disabled = !this.activeTab?.undo?.length;
+    if (name === "EDITTEXT" || MARKUP.has(name)) this.undoBtn.disabled = !this.activeTab?.undoDepth;
     for (const btn of this.annotTools) btn.setAttribute(this.moreTools.includes(btn) ? "aria-checked" : "aria-pressed", String(btn.dataset.mode === name));
     this.#showMoreTools(name);
     const sizes = name === "FREETEXT" ? [[10, "10 pt"], [12, "12 pt"], [14, "14 pt"], [18, "18 pt"], [24, "24 pt"], [36, "36 pt"]]
@@ -3018,7 +3035,7 @@ export class Reader {
     if (!this.redactHow) return;
     this.redactHow.hidden = this.redactApplyBtn.hidden = !on;
     this.root.dataset.redact = on ? this.redactHow.value : "";
-    if (on) this.#showRedactCount(); else this.#showSaveState();
+    if (on) this.#showRedactCount(); else this.#refresh({ notify: false });
     if (on && !this.redactHinted) {
       this.redactHinted = true;
       this.#hint("Drag boxes over what should go (or choose Select words), then Black out. Click × on a mark to remove it.", 7000);
@@ -3030,7 +3047,7 @@ export class Reader {
     this.redactApplyBtn.disabled = !n;
     this.redactApplyBtn.querySelector("span").textContent = n ? `Black out ${n} ${n === 1 ? "area" : "areas"}` : "Black out";
     this.redactApplyBtn.title = n ? `Black out the ${n === 1 ? "marked area" : n + " marked areas"} for good` : "Mark something to black out first";
-    this.#showSaveState();
+    this.#refresh({ notify: false });
   }
 
   #addRedactions(n, rects) {
@@ -3094,6 +3111,7 @@ export class Reader {
     const boxes = Object.fromEntries(Object.entries(marks).filter(([, list]) => list.length));
     await this.#changeDocument((bytes, t) => this.#post("/api/redact/apply", bytes, t, { boxes: JSON.stringify(boxes) }), {
       failure: "Could not redact: ",
+      kind: "redact",  // Save makes a redacted copy from now on; replacing the original is asked
       after: (res) => {
         let done = {};
         try { done = JSON.parse(res.headers.get("X-Pdfm-Redacted") || "{}"); } catch (e) { /* the default words do */ }
@@ -3103,7 +3121,6 @@ export class Reader {
           message += ` Page${pictures.length === 1 ? "" : "s"} ${pictures.map(([p]) => p).join(", ")} became `
             + `${pictures.length === 1 ? "a picture" : "pictures"} (${[...new Set(pictures.map(([, why]) => why))].join("; ")}).`;
         }
-        tab.redacted = true;  // Save makes a redacted copy from now on; replacing the original is asked
         this.toast(message + " Save a redacted copy to keep it.", 12000, [["Save redacted copy…", () => this.saveRedacted()],
           ...(tab.fileId ? [["Replace original", () => this.replaceWithRedacted()]] : [])]);
       },
@@ -4495,7 +4512,7 @@ export class Reader {
   /** Replace the open document with what ``make(bytes, tab)`` gets back from
    *  the server, keeping the old bytes for Undo. In the queue: a save or a tab
    *  switch asked for meanwhile waits for it. */
-  #changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false } = {}) {
+  #changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false, kind = "page" } = {}) {
     return this.#serial(async () => {
       const tab = this.activeTab;
       if (!tab || !this.doc) return;
@@ -4512,12 +4529,10 @@ export class Reader {
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
         const changed = new Uint8Array(await res.arrayBuffer());
         if (!this.tabs.includes(tab)) return;
-        (tab.undo ||= []).push(bytes);
-        if (tab.undo.length > 30) tab.undo.shift();
-        Object.assign(tab, { bytes: changed, afterEdit: changed, edited: true, dirty: true, clean: null,
-          version: (tab.version || 0) + 1 });
-        if (tab === this.activeTab) { tab.goto = goto ? goto(this.#view()) : this.#view(); await this.#reloadEditing(tab); }
-        else this.#renderTabs();
+        if (kind === "redact") tab.redactionsApplied(bytes, changed);
+        else if (kind === "text") tab.textEdited(bytes, changed);
+        else tab.pageEdited(bytes, changed);
+        if (tab === this.activeTab) { tab.aim(goto ? goto(this.#view()) : this.#view()); await this.#reloadEditing(tab); }
         after?.(res);
       } catch (e) {
         this.toast(failure + (e.message || e));
@@ -4530,6 +4545,7 @@ export class Reader {
   #applyTextEdit(edit) {
     return this.#changeDocument((bytes, tab) => this.#post("/api/text/edit", bytes, tab, { edits: JSON.stringify([edit]) }), {
       failure: "Could not change the text: ",
+      kind: "text",
       after: (res) => {
         // Say when the words couldn't get the document's own font.
         let used = [];
@@ -4556,16 +4572,13 @@ export class Reader {
   #undoTextEdit() {
     return this.#serial(async () => {
       const tab = this.activeTab;
-      if (!tab?.undo?.length) return;
+      if (!tab?.undoDepth) return;
       // Undoing goes back to the bytes before the change; anything added
       // since (drawings, form entries) would go with it.
       if ((this.#changed() || tab.bytes !== tab.afterEdit)
           && await this.ask("Undo the change?", "Undoing it also takes away the annotations and form entries made since it.",
             [["cancel", "Cancel"], ["undo", "Undo the change", true]]) !== "undo") return;
-      const previous = tab.undo.pop();
-      const back = previous === tab.original;
-      Object.assign(tab, { bytes: previous, afterEdit: previous, edited: !back, dirty: !back, clean: null, goto: this.#view(),
-        version: (tab.version || 0) + 1 });
+      tab.editUndone(this.#view());
       await this.#reloadEditing(tab);
       this.toast("Change undone", 1500);
     });
@@ -4575,14 +4588,14 @@ export class Reader {
   async #reloadEditing(tab) {
     const editing = this.textEditMode ? "EDITTEXT" : this.markupMode, picked = this.pickedImage;
     await this.#load(tab);
-    this.#renderTabs();
+    this.#refresh();
     if (tab !== this.activeTab) return;
     if (editing) {
       this.openAnnotate();
       this.#setEditMode(editing);
       if (editing === "IMAGES" && picked) this.pickedImage = picked;  // the picture just moved stays picked
     }
-    this.undoBtn.disabled = !tab.undo?.length;
+    this.undoBtn.disabled = !tab.undoDepth;
   }
 
   // ---- saving, printing, editing ------------------------------------------------
@@ -4602,7 +4615,7 @@ export class Reader {
     if (!this.bytes && this.doc) {
       const tab = this.activeTab;
       if (tab?.url) await this.#readAll(tab);
-      else if (tab && !tab.bytes) tab.bytes = tab.original = await bounded(this.doc.getData(), WHOLE_MS, "reading the document took too long");
+      else if (tab && !tab.bytes) tab.readInFull(await bounded(this.doc.getData(), WHOLE_MS, "reading the document took too long"));
       if (tab === this.activeTab) this.bytes = tab.bytes;
     }
     return this.bytes;
@@ -4621,14 +4634,15 @@ export class Reader {
     this.#finishEditing();  // a stroke or note still being made counts (Ctrl+S straight after drawing)
     const tab = this.activeTab;
     if (!this.doc || !tab) return;
-    if (tab.redacted && !replace) {  // a copy, not over the original
-      // Already kept as a redacted copy and nothing changed since: don't make another.
-      if (tab.redactedSaved && !tab.dirty && (tab.savedSince || !this.#changed())) { this.toast("Already saved as a redacted copy", 2000); return; }
-      await this.saveRedacted(); return;
-    }
-    if (!tab.fileId) { await this.saveCopy(); return; }
-    if (!tab.dirty && !this.#changed()) { this.toast("No changes to save", 1500); return; }
-    const version = tab.version || 0;
+    // What Save does follows from the tab's state (see saveAction): a tab with
+    // blacked-out parts saves a redacted copy, not over the original (and
+    // not again when one is saved and nothing changed since).
+    const action = saveAction(tab, { changed: this.#changed(), replace });
+    if (action === "already redacted") { this.toast("Already saved as a redacted copy", 2000); return; }
+    if (action === "redacted copy") { await this.saveRedacted(); return; }
+    if (action === "as") { await this.saveCopy(); return; }
+    if (action === "nothing") { this.toast("No changes to save", 1500); return; }
+    const version = tab.version;
     let bytes;
     try { bytes = await this.#currentBytes(); } catch (e) { this.toast("Could not save: " + (e.message || e), 9000, ["Save as…", () => this.saveCopy()]); return; }
     const put = (force) => fetch("/api/save/" + encodeURIComponent(tab.fileId), { method: "POST", body: bytes,
@@ -4648,9 +4662,7 @@ export class Reader {
       const answer = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(answer.error || res.statusText);
       // The file now holds these bytes (and a file read in pieces is in memory now).
-      Object.assign(tab, { stamp: answer.stamp, original: bytes, size: bytes.length });
-      if (!tab.bytes || tab === this.activeTab && !this.bytes) tab.bytes = bytes;
-      this.#markSaved(tab, version);
+      this.#saved(tab, "in place", { version, bytes, stamp: answer.stamp, keep: tab === this.activeTab && !this.bytes });
       // What the file held is kept for a while (not for big files): Undo puts it back.
       if (answer.undo) this.toast(`Saved over ${tab.name}`, 10000, ["Undo", () => this.#unsave(tab, answer.undo)]);
       else this.toast(`Saved over ${tab.name}`, 4000);
@@ -4669,10 +4681,7 @@ export class Reader {
         headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/json" } });
       const answer = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(answer.error || res.statusText);
-      if (this.tabs.includes(tab)) {
-        Object.assign(tab, { stamp: answer.stamp, dirty: true, clean: null });
-        this.#renderTabs();
-      }
+      if (this.tabs.includes(tab)) tab.saveUndone(answer.stamp);
       this.toast(`Undone: ${tab.name} is as it was before. Your changes are still here, not saved.`, 6000);
     } catch (e) {
       this.toast("Could not undo the save: " + (e.message || e), 9000);
@@ -4718,10 +4727,10 @@ export class Reader {
     await this.chain;
     this.#finishEditing();
     if (!this.doc) return;
-    const tab = this.activeTab, version = tab.version || 0;
+    const tab = this.activeTab, version = tab.version;
     let bytes;
     try { bytes = await this.#currentBytes(); } catch (e) { this.toast("Could not save the redacted copy: " + (e.message || e), 9000); return; }
-    await this.#saveBytes(bytes, this.#redactedName(tab), () => { tab.redactedSaved = true; this.#markSaved(tab, version); }, tab?.fileId);
+    await this.#saveBytes(bytes, this.#redactedName(tab), () => this.#saved(tab, "redacted", { version }), tab?.fileId);
   }
 
   /** Write the redacted version over the original file, once asked. */
@@ -4737,15 +4746,14 @@ export class Reader {
   async saveTab(tab, near = null) {
     await this.chain;
     if (!tab || !this.tabs.includes(tab)) return null;
-    const version = tab.version || 0;
+    const version = tab.version;
     let bytes;
     try { bytes = tab === this.activeTab ? await this.#currentBytes() : tab.bytes || tab.original; }
     catch (e) { this.toast("Could not save: " + (e.message || e), 9000); return null; }
     if (!bytes) return null;
     let done = null;
     const name = /\.pdf$/i.test(tab.name) ? tab.name : tab.name + ".pdf";
-    await this.#saveBytes(bytes, name, (where) => { done = where || true; tab.unsaved = false; this.#markSaved(tab, version); }, near);
-    if (done && this.tabs.includes(tab)) this.#renderTabs();
+    await this.#saveBytes(bytes, name, (where) => { done = where || true; this.#saved(tab, "as", { version, made: true }); }, near);
     return done;
   }
 
@@ -4754,10 +4762,10 @@ export class Reader {
     await this.chain;  // a text change still on its way is included
     this.#finishEditing();
     if (!this.doc) return;
-    const tab = this.activeTab, version = tab.version || 0;
+    const tab = this.activeTab, version = tab.version;
     let bytes;
     try { bytes = await this.#currentBytes(); } catch (e) { this.toast("Could not save a copy: " + (e.message || e), 9000); return; }
-    await this.#saveBytes(bytes, this.#copyName(), () => this.#markSaved(tab, version), tab?.fileId);
+    await this.#saveBytes(bytes, this.#copyName(), () => this.#saved(tab, "as", { version }), tab?.fileId);
   }
 
   /** Save ``bytes`` as a file the person picks (or download it); the
@@ -4945,39 +4953,21 @@ export class Reader {
     try { this.uiManager?.endCurrentEditing?.(); } catch (e) { /* nothing being edited */ }
   }
 
-  /** The tab's changes up to ``version`` are in a file now. */
-  /** Save and Undo in the toolbar while there are changes to keep or take back. */
-  #showSaveState() {
-    if (!this.saveNowBtn) return;
-    // (The annotation bar has its own while it's open.)
-    const tab = this.activeTab, open = !!(this.doc && tab && this.annotbar.hidden);
-    this.saveNowBtn.hidden = !(open && tab.dirty);
-    // The annotation bar's Save is the screen's main action only once there is
-    // something to save; until then it stays quiet (it still works).
-    // (While areas are marked for Redact, Black out is that action: Save waits, quiet.)
-    const marked = this.markupMode === "REDACT" && !!tab && this.#redactCount(tab) > 0;
-    const pending = !!(tab && (tab.dirty || (!tab.savedSince && (this.annotUndo || this.#changed()))));
-    this.annotSaveBtn.classList.toggle("seal", pending && !marked);
-    this.annotSaveBtn.classList.toggle("primary", pending && !marked);
-    this.annotSaveBtn.title = !pending ? "Nothing to save yet (Ctrl+S)"
-      : tab.redacted ? "Save a redacted copy beside the original (Ctrl+S)" : "Save your changes (Ctrl+S)";
-    this.undoNowBtn.hidden = !(open && (this.annotUndo || tab.undo?.length));
-  }
-
   /** Take back the last change: an annotation if one was just made, else a page or text change. */
   #undoLast() {
     if (this.annotUndo && this.uiManager) this.uiManager.undo();
-    else if (this.activeTab?.undo?.length) this.#undoTextEdit();
+    else if (this.activeTab?.undoDepth) this.#undoTextEdit();
   }
 
-  #markSaved(tab, version) {
-    if (!tab || !this.tabs.includes(tab) || (tab.version || 0) !== version) return;  // changed since
-    tab.dirty = false;
-    tab.savedSince = true;  // pdf.js's undo history outlives the save: Save goes quiet until the next change
-    tab.clean = tab === this.activeTab && this.doc ? { doc: this.doc, print: this.#annotPrint() } : null;
-    try { if (tab === this.activeTab) this.doc?.annotationStorage.resetModified(); } catch (e) { /* (so the next change is noticed) */ }
-    this.#renderTabs();
-    this.#showSaveState();
+  /** ``tab``'s changes up to ``version`` are in a file now (see TabState.saved;
+   *  ``how``: "in place", "as" or "redacted"). pdf.js's undo history outlives
+   *  the save: Save goes quiet until the next change, and Undo back to here
+   *  is unchanged again. */
+  #saved(tab, how, details) {
+    if (!tab || !this.tabs.includes(tab)) return;
+    const here = tab === this.activeTab && this.doc;
+    const current = tab.saved(how, { ...details, doc: here ? this.doc : null, print: here ? this.#annotPrint() : "" });
+    try { if (current && here) this.doc.annotationStorage.resetModified(); } catch (e) { /* (so the next change is noticed) */ }
   }
 
   /** What the annotations and form entries not in the file yet are, as
@@ -4997,18 +4987,13 @@ export class Reader {
    *  opened or last saved. It is when the shown document is the one it was
    *  then (no page or text change since: those load the document again)
    *  and its annotations and entries are the same: then it isn't changed
-   *  (no dot, Save quiet). Anything else than that state is a change. */
-  #checkSaved(tab = this.activeTab) {
-    const clean = tab?.clean;
-    if (!clean || tab !== this.activeTab || !this.doc || clean.doc !== this.doc) return;
-    const same = this.#annotPrint() === clean.print;
-    if (same === !tab.dirty) return;
-    tab.dirty = !same;
-    tab.savedSince = same;
-    if (same) { try { this.doc.annotationStorage.resetModified(); } catch (e) { /* (so the next change is noticed) */ } }
-    else tab.version = (tab.version || 0) + 1;
-    this.#renderTabs();
-    this.#showSaveState();
+   *  (no dot, Save quiet). Anything else than that state is a change
+   *  (see TabState.annotationsAre). */
+  #compareAnnotations(tab = this.activeTab) {
+    if (!tab || tab !== this.activeTab || !this.doc || tab.clean?.doc !== this.doc) return;
+    if (tab.annotationsAre(this.doc, this.#annotPrint()) === "saved") {
+      try { this.doc.annotationStorage.resetModified(); } catch (e) { /* (so the next change is noticed) */ }
+    }
   }
 
   print() {
