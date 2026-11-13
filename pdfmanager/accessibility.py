@@ -2063,7 +2063,7 @@ def _tag_pages(pdf, path, password, alt, result):
                                     stripped)
     finally:
         if plumber is not None:
-            plumber.close()
+            tables.close(plumber)
     _heading_levels([e for e in _walk(elements) if e.S == "P"])
     pages_info = {"infos": infos}
     return elements, pages_info, sample

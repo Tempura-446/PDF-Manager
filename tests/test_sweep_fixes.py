@@ -119,3 +119,43 @@ def test_a_huge_page_is_drawn_with_fewer_pixels_not_out_of_memory(tmp_path, monk
                 image = Image.open(io.BytesIO(z.read(z.namelist()[0])))
         assert image.width * image.height <= 2_020_000
         assert round(image.info["dpi"][0]) < 150  # the picture still says how big the page is
+
+
+def _raw_pdf(page_dict):
+    """A one-page PDF written by hand, with ``page_dict`` in its page."""
+    content = b"BT /F1 24 Tf 72 700 Td (Hello odd boxes) Tj ET"
+    objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+               f"<< /Type /Page /Parent 2 0 R {page_dict} /Contents 4 0 R /Resources << /Font << /F1 << "
+               "/Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>",
+               f"<< /Length {len(content)} >>\nstream\n".encode() + content + b"\nendstream"]
+    out = bytearray(b"%PDF-1.7\n")
+    offsets = []
+    for n, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += f"{n} 0 obj\n".encode() + (body.encode() if isinstance(body, str) else body) + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    out += b"".join(f"{o:010d} 00000 n \n".encode() for o in offsets)
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return bytes(out)
+
+
+@pytest.mark.parametrize("box", ["/MediaBox [(0) 0 612 792]", "/MediaBox [0 0 612]"])
+@pytest.mark.parametrize("op", ["to-word", "to-html", "tag", "to-excel"])
+def test_a_page_box_pdfplumber_cant_read_converts_or_says_so(tmp_path, op, box):
+    src = tmp_path / "box.pdf"
+    src.write_bytes(_raw_pdf(box))
+    opts = {"to-word": {"engine": "basic"}}.get(op, {})
+    try:
+        name, data, notes = run(op, [src], opts, tmp_path)
+    except gui.EXPECTED_ERRORS as exc:
+        assert op == "to-excel" and "box.pdf" in str(exc)
+        return
+    assert data
+    if op == "to-word":
+        import io
+
+        import docx
+
+        text = " ".join(p.text for p in docx.Document(io.BytesIO(data)).paragraphs)
+        assert "Hello odd boxes" in text

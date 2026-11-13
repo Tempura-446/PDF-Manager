@@ -1100,10 +1100,13 @@ def _damaged_errors():
     of: a damaged file is the file's problem, told plainly, not a crash."""
     import pikepdf
     import pypdfium2
+    from pdfminer.psexceptions import PSException
+    from pdfplumber.utils.exceptions import MalformedPDFException, PdfminerException
     from PIL import Image
     from pypdf.errors import PyPdfError
 
-    return (PyPdfError, pikepdf.PdfError, pypdfium2.PdfiumError, Image.DecompressionBombError)
+    return (PyPdfError, pikepdf.PdfError, pypdfium2.PdfiumError, Image.DecompressionBombError,
+            PSException, PdfminerException, MalformedPDFException)
 
 
 def _plainly(exc):

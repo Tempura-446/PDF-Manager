@@ -73,12 +73,30 @@ def _open(path, password):
     # A file with only an owner password opens with an empty password.
     for candidate in dict.fromkeys([password or "", ""]):
         try:
-            return pdfplumber.open(str(path), password=candidate)
+            plumber = pdfplumber.open(str(path), password=candidate)
         except PDFPasswordIncorrect:
             continue
         except Exception as exc:  # pdfminer's parsing errors
             raise core.PdfManagerError(f"{path} can't be read for tables ({exc})") from None
+        try:
+            plumber.pages  # its pages are read when first asked for: a damaged page tree stops it here
+        except Exception:
+            close(plumber)
+            raise core.PdfManagerError(f"{path} can't be read for tables: part of it is damaged "
+                                       "(Repair may fix it)") from None
+        return plumber
     raise core.PdfManagerError(f"wrong password for {path}")
+
+
+def close(plumber):
+    """Close what tables._open opened; never stops on a page it can't read."""
+    try:
+        plumber.close()
+    except Exception:
+        try:
+            plumber.stream.close()
+        except Exception:
+            pass
 
 
 def _clean(cell):
