@@ -3304,16 +3304,14 @@ export class Reader {
     const onLine = line ? (await this.#editorLayer(line.page - 1)) || (current?.pageIndex === line.page - 1 ? current : null) : null;
     const layer = onLine || this.uiManager?.currentLayer;
     if (!layer) { this.toast("Scroll to the page to sign, then try again."); return; }
-    const before = new Set(this.uiManager.getEditors(layer.pageIndex));
-    await layer.pasteEditor({ mode: pdfjs.AnnotationEditorType.STAMP }, { bitmapFile: file });
-    // (The picture can join the page a moment after the paste is done: wait for it, up to 5 s.)
-    let editor = null;
-    for (let i = 0; i < 250 && !editor; i++) {
-      editor = [...this.uiManager.getEditors(layer.pageIndex)].find((e) => !before.has(e)) || null;
-      if (!editor) await new Promise((r) => setTimeout(r, 20));
-    }
-    const placed = editor ? await this.#fitSignature(editor, onLine ? line : null) : false;
-    this.#hint(placed === "line" ? "Signed on the line. Drag it to move it; use the corners to resize it."
+    // The picture's size first: pdf.js then makes the editor at its final
+    // place and size and lays it out itself once the picture is in (see #placeSignature).
+    const bitmap = await createImageBitmap(file).catch(() => null);
+    const aspect = bitmap && bitmap.width > 0 ? bitmap.height / bitmap.width : 0;
+    bitmap?.close();
+    const editor = aspect > 0 ? await this.#placeSignature(layer, file, aspect, onLine ? line : null) : null;
+    if (!editor || !(await this.#shownSignature(editor))) { this.toast("The signature couldn't be placed."); return; }
+    this.#hint(editor.signedOn === "line" ? "Signed on the line. Drag it to move it; use the corners to resize it."
       : "Drag the signature into place; use the corners to resize it.", 5000);
   }
 
@@ -3331,30 +3329,46 @@ export class Reader {
     return get();
   }
 
-  /** Size and place a signature just added (pdf.js makes a picture up to
-   *  three quarters of the page): on the line, its foot on the rule, at
-   *  the start of it, 1.6 times as tall as the label's letters and no
-   *  longer than the line; else 2 inches wide where it is. Says "line" or
-   *  "default", or false when the picture didn't load. */
-  async #fitSignature(editor, line) {
-    for (let i = 0; i < 250 && !(editor.width > 0); i++) await new Promise((r) => setTimeout(r, 20));
-    if (!(editor.width > 0) || !editor.parent || !editor.div) return false;
-    const [W, H] = editor.pageDimensions, [px, py] = editor.pageTranslation, turn = editor.rotation || 0;
-    const aspect = (editor.height * H) / (editor.width * W);  // the picture's height over its width
-    let rect, how = "line";
-    if (line && turn === 0 && aspect > 0) {
+  /** Add a signature picture (``aspect``: its height over its width) to
+   *  ``layer``: on the line, its foot on the rule, at the start of it, 1.6
+   *  times as tall as the label's letters and no longer than the line; else
+   *  2 inches wide in the middle of what's shown of the page. The editor is
+   *  made where it goes, at its size, before its picture is read, the way
+   *  pdf.js makes a picture that isn't centred: its own layout (when the
+   *  picture comes in, and on every zoom, turn or selection after) starts
+   *  from there. (Pasted in the middle at the picture's own size and then
+   *  moved, as before, pdf.js's state still held the first place.) Returns
+   *  the editor, or null. */
+  async #placeSignature(layer, file, aspect, line) {
+    const mode = pdfjs.AnnotationEditorType.STAMP;
+    // The picture tool on, through the viewer (pdf.js's paste switches only
+    // its editors, and the viewer then still thinks no tool is on: Select or
+    // Esc did nothing, and the pages weren't drawn for editing).
+    if (this.uiManager.getMode() !== mode) {
+      const on = new Promise((resolve) => {
+        const seen = (e) => { if (e.mode === mode) { this.eventBus.off("annotationeditormodechanged", seen); resolve(); } };
+        this.eventBus.on("annotationeditormodechanged", seen);
+        setTimeout(() => { this.eventBus.off("annotationeditormodechanged", seen); resolve(); }, 3000);
+      });
+      this.#setEditMode("STAMP");
+      await on;
+      if (!this.uiManager || this.uiManager.getMode() !== mode || !layer.div) return null;
+    }
+    layer.updateToolbar({ mode });
+    const { rotation: turn, rawDims: { pageWidth: W, pageHeight: H, pageX: px, pageY: py } } = layer.viewport;
+    let rect;
+    if (line && turn === 0) {
       const [x0, , x1, top] = line.rect, length = Math.max(x1 - x0, 24);
       let h = 1.6 * Math.max(line.text || 10, 4), w = h / aspect;
       if (w > length) { w = length; h = w * aspect; }
       rect = [x0, top, x0 + w, top + h];
     } else {
-      how = "default";
+      line = null;
       let w = 144, h = w * aspect;  // 2 inches wide; a tall picture no taller than 1 inch
       if (h > 72) { h = 72; w = h / aspect; }
-      // The middle of the part of its page that is in sight (else where pdf.js put it).
-      const [a0, b0, a1, b1] = editor.getRect(0, 0);
-      let cx = (a0 + a1) / 2, cy = (b0 + b1) / 2;
-      const view = this.pdfViewer.getPageView(editor.pageIndex), col = this.#column();
+      // The middle of the part of its page that is in sight (else of the page).
+      let cx = px + W / 2, cy = py + H / 2;
+      const view = this.pdfViewer.getPageView(layer.pageIndex), col = this.#column();
       const page = view?.div.getBoundingClientRect();
       if (page) {
         const l = Math.max(page.left, col.left), r = Math.min(page.right, col.right), t = Math.max(page.top, col.top), b = Math.min(page.bottom, col.bottom);
@@ -3368,16 +3382,25 @@ export class Reader {
     const [left, top, width, height] = {
       0: [r0 - px, H + py - r3, across, up], 90: [r0 - px, H + py - r1, up, across],
       180: [r2 - px, H + py - r1, across, up], 270: [r2 - px, H + py - r3, up, across] }[turn] || [r0 - px, H + py - r3, across, up];
-    Object.assign(editor, { x: left / W, y: top / H, width: width / W, height: height / H });
-    editor.setDims();
-    editor.fixAndSetPosition();
-    editor._onResized?.();
-    // In sight: the page column scrolls to it (a line near the foot of the page is often below).
+    const editor = layer.createAndAddNewEditor({ offsetX: 0, offsetY: 0 }, false, { bitmapFile: file });
+    if (!editor) return null;
+    // (Its picture is still being read: pdf.js takes this place and size when it's in.)
+    Object.assign(editor, { x: left / W, y: top / H, width: width / W, height: height / H, signedOn: line ? "line" : "default" });
+    return editor;
+  }
+
+  /** Wait (up to 5 s) for a signature's picture to be in and drawn, then
+   *  scroll the page column to it (a line near the foot of the page is
+   *  often below). False if it never came. */
+  async #shownSignature(editor) {
+    const drawn = () => editor.div && !editor.div.hidden && editor.div.querySelector("canvas");
+    for (let i = 0; i < 250 && !drawn(); i++) await new Promise((r) => setTimeout(r, 20));
+    if (!drawn() || !editor.parent) return false;
     await new Promise((r) => requestAnimationFrame(r));
     const box = editor.div.getBoundingClientRect(), col = this.#column();
     if (box.top < col.top || box.bottom > col.bottom) this.container.scrollTop += box.top - (col.top + col.bottom) / 2 + box.height / 2;
     if (box.left < col.left || box.right > col.right) this.container.scrollLeft += box.left - (col.left + col.right) / 2 + box.width / 2;
-    return how;
+    return true;
   }
 
   #signatureDialog() {
