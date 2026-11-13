@@ -11,86 +11,28 @@
 // (highlight, text, drawing, pictures) and signing, document properties,
 // hand tool, dark pages, full screen, printing, saving a copy and handing the
 // document to one of the app's tools.
+//
+// Reader is one object; its parts are in files of their own, each a class
+// Reader extends (see Measuring in measuring.js): tabs.js (the open documents,
+// switching, closing, the tab bar and the save state shown), annotate.js,
+// sign.js, find.js, textedit-ui.js (the text editor box) and measuring.js.
+// A tab's state is a TabState (tabstate.js); what the modules share is in
+// readerkit.js. Here: building the reader, keys, opening and showing a
+// document, the sidebar, saving, printing, pages, dialogs.
 
-import { BASE, DOC_OPTIONS, destroyTask, loadPdfjs as loadLibrary, openDocument } from "./pdfjs.js";
+import { BASE, DOC_OPTIONS, destroyTask, openDocument } from "./pdfjs.js";
 import * as files from "./files.js";
-import * as measure from "./measure.js";
 import { Overlay } from "./overlay.js";
-let snap = null;  // snapping to a drawing's lines (snap.js); the reader works without it
-const snapReady = import("./snap.js").then((m) => { snap = m; }, () => {});
+import { COLORS, el, fadeOut, heldTimer, ICON, isTyping, MIN_ZOOM, MAX_ZOOM, pdfjs, store, svg, viewer, loadPdfjs } from "./readerkit.js";
+import { Annotating } from "./annotate.js";
+import { Finding } from "./find.js";
+import { Measuring } from "./measuring.js";
+import { Signing } from "./sign.js";
+import { Tabs } from "./tabs.js";
+import { TextEditing } from "./textedit-ui.js";
+import { saveAction } from "./tabstate.js";
+export { heldTimer, loadPdfjs } from "./readerkit.js";
 
-/** Take ``node`` away with its leaving animation (the .out class), or at once
- *  when motion is reduced (the --t token is 0 then). */
-function fadeOut(node) {
-  if (!node.isConnected) return;
-  const t = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--t")) || 0;
-  if (!t) { node.remove(); return; }
-  node.classList.add("out");
-  setTimeout(() => node.remove(), t * 1.5 + 40);
-}
-
-/** Run ``done`` after ``ms``, but not while ``node`` (a toast) is hovered or has
- *  focus: the clock stops then and goes on when the pointer and focus leave.
- *  Returns a function that cancels it. */
-export function heldTimer(node, ms, done) {
-  let left = ms, since = Date.now(), timer = setTimeout(done, ms), hover = false, focus = false;
-  const pause = () => { if (timer) { clearTimeout(timer); timer = 0; left -= Date.now() - since; } };
-  const resume = () => { if (!timer && !hover && !focus && left !== null) { since = Date.now(); timer = setTimeout(done, Math.max(left, 2000)); } };
-  node.addEventListener("pointerenter", () => { hover = true; pause(); });
-  node.addEventListener("pointerleave", () => { hover = false; resume(); });
-  node.addEventListener("focusin", () => { focus = true; pause(); });
-  node.addEventListener("focusout", (e) => { if (!node.contains(e.relatedTarget)) { focus = false; resume(); } });
-  return () => { clearTimeout(timer); timer = 0; left = null; };
-}
-
-let pdfjs = null;   // pdf.js display API
-let viewer = null;  // pdf.js viewer components
-
-/** Fetch a script or stylesheet the page is about to need, alongside what's loading now. */
-function preload(rel, href, as = null) {
-  if (document.querySelector(`link[rel="${rel}"][href="${href}"]`)) return;
-  const link = document.createElement("link");
-  link.rel = rel; link.href = href;
-  if (as) link.as = as;
-  document.head.append(link);
-}
-
-/** pdf.js's stylesheet, once (resolves when it applies, or failed to load).
- *  It is fetched at once but takes its place after the page's own styles, as
- *  it always has: where a stylesheet stands decides which rule wins. */
-async function loadViewerCss() {
-  if (document.querySelector("link[data-pdfjs]")) return;
-  const href = BASE + "web/pdf_viewer.css";
-  if (document.readyState === "loading") {
-    preload("preload", href, "style");
-    await new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true }));
-    if (document.querySelector("link[data-pdfjs]")) return;
-  }
-  const link = document.createElement("link");
-  link.rel = "stylesheet"; link.href = href; link.dataset.pdfjs = "";
-  document.head.append(link);
-  await new Promise((resolve) => { link.onload = resolve; link.onerror = resolve; });
-}
-
-let pdfjsReady = null;
-/** pdf.js and its viewer components. Started as soon as this file is read:
- *  the library, its worker, the viewer and its stylesheet load side by side,
- *  so the reader is ready by the time it's opened. */
-export function loadPdfjs() {
-  pdfjsReady ||= (async () => {
-    // (The viewer reads the API from globalThis when it runs, so it can only
-    // run after the library; fetching it doesn't have to wait.)
-    preload("modulepreload", BASE + "web/pdf_viewer.mjs");
-    const css = loadViewerCss();
-    pdfjs = await loadLibrary();
-    globalThis.pdfjsLib = pdfjs;
-    viewer = await import(BASE + "web/pdf_viewer.mjs");
-    await css;
-  })();
-  pdfjsReady.catch(() => { pdfjsReady = null; });  // try again next time
-  return pdfjsReady;
-}
-loadPdfjs().catch(() => {});
 
 /** What a protected PDF allows, from pdf.js's list of allowed permissions. */
 function permissionText(allowed) {
@@ -106,113 +48,19 @@ function fieldEntries(fields) {
   return fields instanceof Map ? [...fields.entries()] : Object.entries(fields || {});
 }
 
-const ICON = {
-  sidebar: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
-  panel: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
-  open: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
-  prev: '<path d="m15 18-6-6 6-6"/>', next: '<path d="m9 18 6-6-6-6"/>',
-  up: '<path d="m18 15-6-6-6 6"/>', down: '<path d="m6 9 6 6 6-6"/>',
-  minus: '<path d="M5 12h14"/>', plus: '<path d="M12 5v14M5 12h14"/>',
-  ccw: '<path d="M4 11a8 8 0 1 1 2.3 5.7"/><path d="M4 4v7h7"/>', cw: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
-  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>', more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
-  x: '<path d="M18 6 6 18M6 6l12 12"/>', check: '<path d="M20 6 9 17l-5-5"/>',
-  book: '<path d="M2 5h6a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2z"/><path d="M22 5h-6a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h7z"/>',
-  spread: '<rect x="2" y="5" width="9" height="14" rx="1"/><rect x="13" y="5" width="9" height="14" rx="1"/>',
-  hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v6M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-6-2.4l-3.6-3.6a2 2 0 0 1 2.8-2.8L7 15"/>',
-  moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
-  full: '<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/>',
-  print: '<path d="M6 9V2h12v7"/><rect x="6" y="14" width="12" height="8"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>',
-  save: '<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>', home: '<path d="M4 11 12 4l8 7"/><path d="M6 9.5V20h12V9.5"/>', info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
-  tool: '<path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3-3 8-8-1.3-1.3a4 4 0 0 0-5-5z"/><path d="m4 20 4-4"/>',
-  twisty: '<path d="m9 6 6 6-6 6"/>',
-  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
-  list: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
-  path: '<path d="M3 18 9 9l5 6 7-10"/><circle cx="3" cy="18" r="1.3"/><circle cx="9" cy="9" r="1.3"/><circle cx="14" cy="15" r="1.3"/><circle cx="21" cy="5" r="1.3"/>',
-  straight: '<path d="M5 4v15h15"/><path d="M9 15h7V8" stroke-dasharray="2.5 2.5"/>',
-  copypage: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2"/><path d="M14 12v5M11.5 14.5h5"/>',
-  command: '<path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z"/>',
-  sliders: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
-  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
-  pen: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
-  pointer: '<path d="m4 4 7 17 2.5-7.5L21 11z"/>',
-  highlight: '<path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/>',
-  text: '<path d="M5 6V4h14v2M12 4v16M9 20h6"/>',
-  draw: '<path d="M3 17c3-3 5-9 8-9s1 8 4 8 4-4 6-6"/>',
-  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
-  sign: '<path d="M3 17c2-1 3-5 5-5s0 5 2 5 3-6 5-6 1 6 3 6 2-2 3-2"/><path d="M3 21h18"/>',
-  edittext: '<path d="M4 7V5h11v2M9.5 5v13M7 18h4"/><path d="m14 20 6.5-6.5-2-2L12 18v2z"/>',
-  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
-  redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
-  ruler: '<path d="M3 16.5 16.5 3 21 7.5 7.5 21z"/><path d="m7.5 12 2 2M10.5 9l2 2M13.5 6l2 2"/>',
-  area: '<path d="M4 7 11 3l9 5-2.5 11L6 20z"/><circle cx="4" cy="7" r="1.2"/><circle cx="11" cy="3" r="1.2"/><circle cx="20" cy="8" r="1.2"/>',
-  screen: '<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
-  note: '<path d="M4 5h16v11H10l-4 4v-4H4z"/><path d="M8 9h8M8 12h5"/>',
-  imgedit: '<rect x="3" y="3" width="14" height="14" rx="2"/><path d="m3 13 4-4 6 6"/><path d="M14 20h7M17.5 16.5v7" transform="translate(-1 -3)"/>',
-  fillable: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h4M7 14h4"/><rect x="13" y="7.5" width="5" height="3" rx=".5"/><rect x="13" y="12.5" width="3" height="3" rx=".5"/>',
-  badge: '<path d="M12 2l2.4 1.8 3 .2.9 2.9 2.3 1.9-.9 2.9.9 2.9-2.3 1.9-.9 2.9-3 .2L12 22l-2.4-1.8-3-.2-.9-2.9-2.3-1.9.9-2.9-.9-2.9 2.3-1.9.9-2.9 3-.2z"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
-  link: '<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/>',
-  redact: '<path d="M4 6h16M4 18h9"/><rect x="4" y="10" width="13" height="4" rx="1" fill="currentColor"/>',
-  layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
-  rect: '<rect x="4" y="6" width="16" height="12" rx="1"/><circle cx="4" cy="6" r="1.4"/><circle cx="20" cy="18" r="1.4"/>',
-  cutout: '<rect x="3" y="4" width="18" height="16" rx="1"/><rect x="9" y="9" width="7" height="6" stroke-dasharray="2 2"/>',
-  count: '<circle cx="7" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="12" cy="17" r="3"/>',
-  angle: '<path d="M4 20h16M4 20 15 6"/><path d="M10.5 20a6.5 6.5 0 0 0-2.3-5"/>',
-  csv: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h8"/>',
-  pdfin: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M12 11v6M9 14l3 3 3-3"/>',
-  underline: '<path d="M7 4v6a5 5 0 0 0 10 0V4"/><path d="M5 20h14"/>',
-  strike: '<path d="M16 6.5C15 5 13.6 4.5 12 4.5c-2.2 0-4 1.2-4 3.2 0 1.5 1 2.4 2.6 3"/><path d="M4 12h16"/><path d="M8 17.5c1 1.4 2.4 2 4 2 2.3 0 4-1.3 4-3.3 0-.8-.3-1.5-.8-2"/>',
-  shapes: '<rect x="3" y="11" width="9" height="9" rx="1"/><circle cx="16" cy="8" r="5"/>',
-  stamp: '<path d="M9 3h6l-1 7h4a2 2 0 0 1 2 2v3H4v-3a2 2 0 0 1 2-2h4z"/><path d="M5 19h14"/>',
-  comments: '<path d="M4 5h13v9H9l-3 3v-3H4z"/><path d="M17 9h3v8h-2v3l-3-3h-4"/>',
-  trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
-  wrench: '<path d="M14.7 6.3a4 4 0 0 0-5.3 5.3L3 18l3 3 6.4-6.4a4 4 0 0 0 5.3-5.3l-2.5 2.5-2.3-.6-.6-2.3z"/>',
-  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
-  access: '<circle cx="12" cy="4.5" r="1.8"/><path d="M5 8.5l7 1.5 7-1.5M12 10v4.5M12 14.5 8.5 21M12 14.5l3.5 6.5"/>',  // -- accessibility --
-};
 
-// Annotation colours (highlights use the pale versions, as on paper).
-const COLORS = [["Black", "#000000", "#bdbdbd"], ["Blue", "#1f4fd8", "#80ebff"], ["Red", "#d52b1e", "#ff4f5f"],
-  ["Green", "#1f8a3b", "#53ffbc"], ["Yellow", "#b8860b", "#ffff98"]];
-// Notes, underline, strikeout and shapes: the reader's own tools, written into
-// the file by the server (markup.py) as standard annotations.
-const MARKUP = new Set(["NOTE", "UNDERLINE", "STRIKEOUT", "SHAPE", "IMAGES", "LINKS", "CERTSIGN", "STAMPS", "REDACT"]);
 // Rubber stamps: their words (markup.py draws them in their colours).
 const STAMPS = ["APPROVED", "NOT APPROVED", "REVIEWED", "RECEIVED", "DRAFT", "FINAL", "CONFIDENTIAL",
   "FOR COMMENT", "VOID"];
 const SHAPES = [["rect", "Rectangle"], ["ellipse", "Ellipse"], ["cloud", "Cloud"], ["arrow", "Arrow"], ["line", "Line"]];
-const KIND_NAMES = { Text: "Note", FreeText: "Text", Highlight: "Highlight", Underline: "Underline", StrikeOut: "Strikeout",
-  Squiggly: "Squiggly", Square: "Rectangle", Circle: "Ellipse", Line: "Line", Polygon: "Shape", PolyLine: "Lines",
-  Ink: "Drawing", Stamp: "Stamp", Caret: "Insert", FileAttachment: "Attachment", Sound: "Sound" };
 const HIGHLIGHT_COLORS = "yellow=#FFFF98,green=#53FFBC,blue=#80EBFF,pink=#FFCBE6,red=#FF4F5F";
-const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
 
-const MIN_ZOOM = 0.1, MAX_ZOOM = 10;  // what the viewer can draw
-let measureSeq = 0;  // numbers the measurements
-// Measurement groups' colours, in the order the groups are made.
-const GROUP_COLORS = ["#2b6cb0", "#c0392b", "#1f8a3b", "#c77700", "#7b3fb5", "#0f8a8a", "#b83280", "#5a6b2c"];
-const MEASURE_KINDS = { distance: "Length", path: "Path", area: "Area", count: "Count", angle: "Angle" };
-const SNAP_PX = 12;  // how close (on screen) a measuring click snaps to a line of the drawing
-const GEOMETRY_PAGES = 8;  // how many pages' lines to keep per document
-const isScale = (s) => !!s && typeof s === "object" && Number.isFinite(s.ratio) && s.ratio > 0 && (s.units === "ft" || s.units === "m") && typeof s.label === "string";
 
 const ZOOM_PRESETS = [
   ["auto", "Automatic"], ["page-fit", "Fit page"], ["page-width", "Fit width"], ["page-actual", "Actual size"], ["true-size", "True paper size"],
   ["0.5", "50%"], ["0.75", "75%"], ["1", "100%"], ["1.25", "125%"], ["1.5", "150%"], ["2", "200%"], ["3", "300%"], ["4", "400%"],
 ];
 
-function el(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (k === "class") node.className = v;
-    else if (k === "html") node.innerHTML = v;
-    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
-    else if (v === true) node.setAttribute(k, "");
-    else if (v !== false && v != null) node.setAttribute(k, v);
-  }
-  for (const c of children) if (c != null) node.append(c);
-  return node;
-}
-let tabSeq = 0;
 // A file opened from this computer comes in pieces: the first this long (a
 // file no bigger is whole in it, and is held here in full), the rest as pages
 // are shown (the whole file only when a change or save needs it).
@@ -289,28 +137,13 @@ async function pieceError(res, tab) {
 }
 const header = (res, name) => { try { return decodeURIComponent(res.headers.get(name) || ""); } catch (e) { return ""; } };
 
-/** A box on the page (PDF coordinates) as [x0, y0, x1, y1] on screen, within the page. */
-function viewRect(viewport, [x0, y0, x1, y1]) {
-  const [a, b] = viewport.convertToViewportPoint(x0, y0), [c, d] = viewport.convertToViewportPoint(x1, y1);
-  return [a, b, c, d];
-}
-
-function sameBytes(a, b) {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
 /** Single keys for the annotate bar's labelled tools, while it's open (n, p, r,
  *  t, e and m are the reader's own: next, previous, rotate, panel, edit text, measure). */
 const ANNOT_KEYS = { h: "HIGHLIGHT", c: "NOTE", a: "FREETEXT", d: "INK", s: "SIGN" };
-const isTyping = (e) => /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.target.isContentEditable;
-const store = {
-  get(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; } },
-  set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* storage unavailable */ } },
-};
 
-export class Reader {
+export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measuring(Object)))))) {
   constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onRepair, onForgetRecent, onSaveTab } = {}) {
+    super();
     this.host = host;
     this.token = token;
     this.isDesktop = isDesktop || (() => false);
@@ -394,21 +227,7 @@ export class Reader {
       this.undoNowBtn, this.saveNowBtn, this.scaleBtn,
       el("div", { class: "rd-group" }, this.findBtn, this.annotateBtn, this.moreBtn, this.panelBtn));
 
-    // Find bar
-    this.findInput = el("input", { type: "search", placeholder: "Find in document", "aria-label": "Find in document", autocomplete: "off", spellcheck: "false" });
-    this.findPrevBtn = b("up", "Previous match (Shift+Enter)");
-    this.findNextBtn = b("down", "Next match (Enter)");
-    this.findCase = el("input", { type: "checkbox" });
-    this.findWord = el("input", { type: "checkbox" });
-    this.findAll = el("input", { type: "checkbox", checked: true });
-    this.findStatus = el("span", { class: "rd-findstatus", "aria-live": "polite" });
-    this.findCloseBtn = b("x", "Close find bar (Esc)");
-    this.findbar = el("div", { class: "rd-findbar", hidden: true },
-      this.findInput, this.findPrevBtn, this.findNextBtn,
-      el("label", {}, this.findAll, "Highlight all"),
-      el("label", {}, this.findCase, "Match case"),
-      el("label", {}, this.findWord, "Whole words"),
-      this.findStatus, el("span", { style: "flex:1" }), this.findCloseBtn);
+    this._buildFind();  // the find bar (find.js)
 
     // Annotation bar: the tools used most keep their words (and a single key
     // each, see ANNOT_KEYS); the rest are in the labelled More tools menu.
@@ -448,7 +267,7 @@ export class Reader {
     this.certSignBtn = el("button", { class: "rd-btn rd-tool compact", type: "button", "data-mode": "CERTSIGN", "aria-pressed": "false",
       title: "Digital ID: sign with a certificate (.pfx or .p12); drag a box where the signature goes", html: svg("badge") + "<span>Digital ID</span>" });
     this.annotTools.push(this.certSignBtn);
-    this.#buildRedact();  // reader redaction
+    this._buildRedact();  // reader redaction
     this.swatches = COLORS.map(([name, ink, mark], i) => el("button", { class: "rd-swatch", type: "button", title: name, "aria-label": name, "aria-pressed": String(i === 1),
       style: `--ink:${ink};--mark:${mark}`, "data-index": i }));
     this.sizeSelect = el("select", { class: "rd-zoom", "aria-label": "Line thickness or text size" });
@@ -481,7 +300,7 @@ export class Reader {
       el("span", { class: "rd-sep" }), this.undoBtn, this.redoBtn, this.deleteBtn,
       el("span", { style: "flex:1" }), this.annotSaveBtn, this.annotCloseBtn);
 
-    this.#buildScaleBar();
+    this._buildScaleBar();
 
     // Sidebar
     this.thumbsTab = el("button", { class: "rd-tab", type: "button", role: "tab", "aria-selected": "true" }, "Pages");
@@ -495,12 +314,12 @@ export class Reader {
     // (The file box isn't put on the page: the reader has one file box of its own.)
     const pickXfdf = () => {
       const input = el("input", { type: "file", accept: ".xfdf,.xml" });
-      input.addEventListener("change", () => { if (input.files[0]) this.#importComments(input.files[0]); });
+      input.addEventListener("change", () => { if (input.files[0]) this._importComments(input.files[0]); });
       input.click();
     };
     const commentActions = el("div", { class: "rd-commentactions" },
-      commentBtn("Summary", "A PDF listing every comment, page by page", () => this.#commentSummary()),
-      commentBtn("Export", "Save the comments as an XFDF file, to send or to add to another copy", () => this.#exportComments()),
+      commentBtn("Summary", "A PDF listing every comment, page by page", () => this._commentSummary()),
+      commentBtn("Export", "Save the comments as an XFDF file, to send or to add to another copy", () => this._exportComments()),
       commentBtn("Import…", "Add comments from an XFDF file (from Acrobat or another copy)", pickXfdf));
     // -- end of comment summary and XFDF --
     this.commentsPanel = el("div", { class: "rd-panel rd-commentspanel", role: "tabpanel", hidden: true },
@@ -606,7 +425,7 @@ export class Reader {
     const outside = [this.tabbar, toolbar, this.side, this.scalebar, this.menu, this.ctxMenu];
     window.addEventListener("pointerdown", (e) => {
       if (!outside.some((area) => area.contains(e.target))) return;
-      this.#finishEditing();
+      this._finishEditing();
     }, { capture: true });
     this.host.append(this.root);
     this.#wire();
@@ -708,7 +527,7 @@ export class Reader {
         el("span", {}, label), el("span", { class: "check", html: svg("check") }));
       item.addEventListener("click", () => {
         this.#closeZoomMenu();
-        if (value === "true-size") this.#viewAt("true");
+        if (value === "true-size") this._viewAt("true");
         else this.pdfViewer.currentScaleValue = value;
         this.container.focus();
       });
@@ -775,30 +594,19 @@ export class Reader {
     this.authorInput.addEventListener("change", () => store.set("pdfm-author", this.authorInput.value.trim()));
     this.shapeSelect.addEventListener("change", () => store.set("pdfm-shape", this.shapeSelect.value));
 
-    // Find
-    this.findInput.addEventListener("input", () => this.#find(""));
-    this.findInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); this.#find("again", e.shiftKey); }
-      if (e.key === "Escape") { e.preventDefault(); this.closeFind(); }
-    });
-    this.findNextBtn.addEventListener("click", () => this.#find("again", false));
-    this.findPrevBtn.addEventListener("click", () => this.#find("again", true));
-    this.findCase.addEventListener("change", () => this.#find("casesensitivitychange"));
-    this.findWord.addEventListener("change", () => this.#find("entirewordchange"));
-    this.findAll.addEventListener("change", () => this.#find("highlightallchange"));
-    this.findCloseBtn.addEventListener("click", () => this.closeFind());
+    this._wireFind();
 
     // Annotating
     this.annotateBtn.addEventListener("click", () => (this.annotbar.hidden ? this.openAnnotate() : this.closeAnnotate()));
     for (const btn of this.annotTools) btn.addEventListener("click", () => {
       const fromMenu = !this.moreToolsMenu.hidden && this.moreToolsMenu.contains(btn);
-      if (fromMenu) this.#closeToolsMenu(true);
-      this.#setEditMode(btn.dataset.mode, btn.dataset.mode === "STAMP");
+      if (fromMenu) this._closeToolsMenu(true);
+      this._setEditMode(btn.dataset.mode, btn.dataset.mode === "STAMP");
     });
     this.signBtn.addEventListener("click", () => this.sign());
-    this.moreToolsBtn.addEventListener("click", () => this.#toggleToolsMenu());
+    this.moreToolsBtn.addEventListener("click", () => this._toggleToolsMenu());
     this.moreToolsBtn.addEventListener("keydown", (e) => {
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); if (this.moreToolsMenu.hidden) this.#toggleToolsMenu(e.key === "ArrowUp" ? "last" : "checked"); }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); if (this.moreToolsMenu.hidden) this._toggleToolsMenu(e.key === "ArrowUp" ? "last" : "checked"); }
     });
     // In the menu: arrows, Home and End move; Escape (or Tab) closes it, focus back on its button.
     this.moreToolsMenu.addEventListener("keydown", (e) => {
@@ -808,15 +616,15 @@ export class Reader {
       else if (e.key === "ArrowUp") go(at < 0 ? items.length - 1 : at - 1);
       else if (e.key === "Home") go(0);
       else if (e.key === "End") go(items.length - 1);
-      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); this.#closeToolsMenu(true); }
-      else if (e.key === "Tab") this.#closeToolsMenu();
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); this._closeToolsMenu(true); }
+      else if (e.key === "Tab") this._closeToolsMenu();
     });
     document.addEventListener("pointerdown", (e) => {
-      if (!this.moreToolsMenu.hidden && !this.moreToolsMenu.contains(e.target) && !this.moreToolsBtn.contains(e.target)) this.#closeToolsMenu();
+      if (!this.moreToolsMenu.hidden && !this.moreToolsMenu.contains(e.target) && !this.moreToolsBtn.contains(e.target)) this._closeToolsMenu();
     });
-    for (const sw of this.swatches) sw.addEventListener("click", () => this.#setColor(+sw.dataset.index));
-    this.sizeSelect.addEventListener("change", () => this.#setSize(+this.sizeSelect.value));
-    this.undoBtn.addEventListener("click", () => (this.textEditMode || this.markupMode ? this.#undoTextEdit() : this.uiManager?.undo()));
+    for (const sw of this.swatches) sw.addEventListener("click", () => this._setColor(+sw.dataset.index));
+    this.sizeSelect.addEventListener("change", () => this._setSize(+this.sizeSelect.value));
+    this.undoBtn.addEventListener("click", () => (this.textEditMode || this.markupMode ? this._undoTextEdit() : this.uiManager?.undo()));
     this.redoBtn.addEventListener("click", () => this.uiManager?.redo());
     this.deleteBtn.addEventListener("click", () => this.uiManager?.delete());
     this.annotSaveBtn.addEventListener("click", () => this.save());
@@ -875,12 +683,12 @@ export class Reader {
     this.#wireThumbs();
 
     // Measuring: clicks on a page place the points.
-    this.container.addEventListener("pointerdown", (e) => this.#measureDown(e), true);
-    this.container.addEventListener("pointermove", (e) => this.#measureMove(e));
-    window.addEventListener("pointerup", () => this.#measureUp());
+    this.container.addEventListener("pointerdown", (e) => this._measureDown(e), true);
+    this.container.addEventListener("pointermove", (e) => this._measureMove(e));
+    window.addEventListener("pointerup", () => this._measureUp());
 
     // Edit text tool: click a line of text to change it.
-    this.container.addEventListener("click", (e) => this.#textClick(e), true);
+    this.container.addEventListener("click", (e) => this._textClick(e), true);
 
     // Select (no tool): a click on a signature, drawing, text box or
     // highlight picks it (pdf.js's own way is a double-click).
@@ -892,13 +700,13 @@ export class Reader {
     this.container.addEventListener("pointerup", (e) => {
       const still = pressed && Math.hypot(e.clientX - pressed[0], e.clientY - pressed[1]) < 5 && e.timeStamp - pressed[2] < 800;
       pressed = null;
-      if (still) this.#pickOnClick(e);
+      if (still) this._pickOnClick(e);
     });
 
     // Notes and shapes: click or drag on a page; underline and strike out: select words.
-    this.container.addEventListener("pointerdown", (e) => this.#markupDown(e), true);
-    this.container.addEventListener("pointermove", (e) => this.#markupMove(e));
-    window.addEventListener("pointerup", (e) => this.#markupUp(e));
+    this.container.addEventListener("pointerdown", (e) => this._markupDown(e), true);
+    this.container.addEventListener("pointermove", (e) => this._markupMove(e));
+    window.addEventListener("pointerup", (e) => this._markupUp(e));
 
     document.addEventListener("keydown", (e) => this.#onKey(e));
   }
@@ -913,25 +721,25 @@ export class Reader {
     if (e.key === "Escape" && this.panelOpen && !this.#panelDocked()) { e.preventDefault(); this.setPanel(false, { focus: true }); return; }
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
     if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); this.print(); return; }
-    if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); this.#saveKey(e); return; }
+    if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); this._saveKey(e); return; }
     if (mod && !isTyping(e) && !this.scalebar.hidden && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")
-        && this.#measureUndo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); return; }
-    if (mod && e.key.toLowerCase() === "z" && !e.shiftKey && !isTyping(e) && this.activeTab?.undo?.length
-        && (this.textEditMode || this.markupMode || this.annotbar.hidden)) { e.preventDefault(); this.#undoTextEdit(); return; }
+        && this._measureUndo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); return; }
+    if (mod && e.key.toLowerCase() === "z" && !e.shiftKey && !isTyping(e) && this.activeTab?.undoDepth
+        && (this.textEditMode || this.markupMode || this.annotbar.hidden)) { e.preventDefault(); this._undoTextEdit(); return; }
     if (e.key === "Escape" && !this.ctxMenu.hidden) { this.#closeContextMenu(); return; }
     if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); this.pdfViewer.increaseScale(); return; }
     if (mod && e.key === "-") { e.preventDefault(); this.pdfViewer.decreaseScale(); return; }
     if (mod && e.key === "0") { e.preventDefault(); this.pdfViewer.currentScaleValue = "auto"; return; }
     if (mod || e.altKey || isTyping(e)) return;
-    if (this.measureMode && this.#measureKey(e)) { e.preventDefault(); return; }
+    if (this.measureMode && this._measureKey(e)) { e.preventDefault(); return; }
     if (e.key === "Escape" && !this.findbar.hidden) { this.closeFind(); return; }
     if (this.markupMode === "IMAGES" && this.pickedImage && !isTyping(e) && (e.key === "Delete" || e.key === "Backspace")) {
       e.preventDefault();
-      this.#editImage("delete");
+      this._editImage("delete");
       return;
     }
-    if (e.key === "Escape" && this.markupMode === "IMAGES" && this.pickedImage) { this.#pickImage(null); return; }
-    if (e.key === "Escape" && this.editMode && this.editMode !== "NONE") { this.#setEditMode("NONE"); return; }
+    if (e.key === "Escape" && this.markupMode === "IMAGES" && this.pickedImage) { this._pickImage(null); return; }
+    if (e.key === "Escape" && this.editMode && this.editMode !== "NONE") { this._setEditMode("NONE"); return; }
     // With no tool left on, Escape closes the annotate bar (focus back on its button).
     if (e.key === "Escape" && !this.annotbar.hidden) { this.closeAnnotate(); if (this.findbar.hidden) this.annotateBtn.focus(); return; }
     const v = this.pdfViewer;
@@ -948,7 +756,7 @@ export class Reader {
         if (this.annotbar.hidden || e.shiftKey) return;
         const mode = ANNOT_KEYS[e.key];
         if (mode === "SIGN") this.sign();
-        else this.#setEditMode(this.editMode === mode ? "NONE" : mode);
+        else this._setEditMode(this.editMode === mode ? "NONE" : mode);
         break;
       }
       case "Home": v.currentPageNumber = 1; break;
@@ -1019,7 +827,7 @@ export class Reader {
       const file = { fileId: id, path: header(res, "X-Pdfm-Path"), stamp: res.headers.get("X-Pdfm-Stamp") || "",
         size: Number((res.headers.get("Content-Range") || "").split("/")[1]) || head.length };
       if (head.length >= file.size) await this.openBytes(head, name, null, goto, file);
-      else await this.#serial(() => this.#openBytesNow(null, name, null, goto, { ...file, url, head, headCopy: head.slice() }));  // the rest in pieces
+      else await this._serial(() => this._openBytesNow(null, name, null, goto, { ...file, url, head, headCopy: head.slice() }));  // the rest in pieces
     } catch (e) {
       this.toast("Could not open the file: " + (e.message || e));
     } finally {
@@ -1027,209 +835,6 @@ export class Reader {
       if (!this.opening && !this.doc && this.active) this.refreshRecent();  // nothing opened after all
       this.#busy(false);
     }
-  }
-
-  /** Run ``fn`` after the document changes started before it. */
-  #serial(fn) {
-    const run = this.chain.then(() => fn());
-    this.chain = run.catch(() => {});
-    return run;
-  }
-
-  async openFile(file, password = null) {
-    await this.openBytes(new Uint8Array(await file.arrayBuffer()), file.name || "document.pdf", password);
-  }
-
-  /** Open a PDF in a new tab, or switch to its tab if it's already open. */
-  openBytes(bytes, name, password = null, goto = null, file = null) {
-    return this.#serial(() => this.#openBytesNow(bytes, name, password, goto, file));
-  }
-
-  /** A tool's result: a new tab right after ``beside`` (the tab it was made
-   *  from, which stays open as it was), shown. Resolves with the new tab, or
-   *  null if it couldn't be opened. */
-  openResult(bytes, name, password, beside) {
-    return this.#serial(async () => {
-      await this.#openBytesNow(bytes, name, password, null, null);
-      const tab = this.activeTab;
-      if (!tab || tab.name !== name) return null;
-      const at = this.tabs.indexOf(beside);
-      if (at >= 0 && this.tabs.indexOf(tab) !== at + 1) {
-        this.tabs.splice(this.tabs.indexOf(tab), 1);
-        this.tabs.splice(at + 1, 0, tab);
-        this.#renderTabs();
-      }
-      const wrap = this.tabEls?.get(tab.id)?.wrap;  // it slides in, once
-      wrap?.classList.add("rd-new");
-      wrap?.addEventListener("animationend", () => wrap.classList.remove("rd-new"), { once: true });
-      return tab;
-    });
-  }
-
-  /** What the shown tab holds now, its unsaved changes included (for a tool
-   *  run on it); the tab itself stays as it is, unsaved changes and all. */
-  async currentBytes() {
-    await this.chain;
-    if (!this.doc) return null;
-    return await this.#currentBytes();
-  }
-
-  /** Whether the file on this computer holds what ``tab`` shows (opened from
-   *  there, nothing changed since it was last saved). */
-  isPristine(tab = this.activeTab) { return !!(tab && tab.fileId && !tab.dirty); }
-
-  /** Draw the tab bar again (e.g. after the app marked a tab unsaved). */
-  refreshTabs() { this.#renderTabs(); }
-
-  /** Switch to an open tab (e.g. back to the one a result was made from). */
-  showTab(tab) { return this.#switchTo(tab); }
-
-  /** ``file``: where a document opened from this computer lives (fileId,
-   *  path, stamp, size; url when it's read in pieces, bytes then null). */
-  async #openBytesNow(bytes, name, password, goto, file = null) {
-    const same = this.tabs.find((t) => (file?.path && t.path === file.path)
-      || (bytes && t.original && t.name === name && sameBytes(t.original, bytes))
-      || (bytes && !t.original && t.headCopy && t.name === name && t.size === bytes.length  // (read in pieces, not all here yet)
-        && sameBytes(t.headCopy, bytes.subarray(0, t.headCopy.length)))
-      // Opened by id and read in pieces (only its first piece here) while the same file is open
-      // from its bytes (e.g. a tool's file card, then Recent): the same name, size and first piece.
-      || (!bytes && file?.head && t.original && t.name === name && t.original.length === file.size
-        && sameBytes(t.original.subarray(0, file.head.length), file.head)));
-    if (same) {
-      if (same === this.activeTab) { if (goto) this.#goto(goto); }
-      else { if (goto) same.goto = goto; await this.#switchToNow(same); }  // applied once its pages are there
-      return;
-    }
-    const previous = this.activeTab;
-    await this.#stash();
-    // edited: bytes holds changes made here; dirty: changes not saved to a file
-    // yet; version: counts every change, so a save knows what it included.
-    const tab = { id: ++tabSeq, original: bytes, bytes, name, password, edited: false, dirty: false, version: 0, goto, ...file };
-    this.tabs.push(tab);
-    if (!(await this.#load(tab))) {
-      this.tabs.splice(this.tabs.indexOf(tab), 1);
-      if (!(previous && this.tabs.includes(previous) && await this.#load(previous))) {
-        await this.#closeDocument();
-        this.#showEmpty();
-      }
-    }
-    this.#renderTabs();
-  }
-
-  /** Keep the open tab's unsaved annotations and form entries in its bytes
-   *  before another document takes its place in the viewer. */
-  async #stash() {
-    const tab = this.activeTab;
-    this.#finishEditing();
-    // The tool in use comes back with the tab (see pagesinit): with one on,
-    // pdf.js makes its annotations, unsaved ones kept in its bytes too,
-    // editors again, to pick, move, resize or delete.
-    if (tab) tab.tool = this.doc && !this.annotbar.hidden ? this.editMode || "NONE" : null;
-    if (!tab || !this.doc || !this.#changed()) return;
-    try {
-      tab.bytes = await this.#savedDocument(tab);
-      tab.edited = true;
-    } catch (e) {
-      this.toast(`Your unsaved changes to “${tab.name}” couldn't be kept: ${e.message || e}`, 9000);
-    }
-  }
-
-  #switchTo(tab) {
-    // (Until it is shown, the viewer still holds the tab before: a turn of
-    // the view asked for meanwhile waits for it, see rotate.)
-    this.switching = (this.switching || 0) + 1;
-    return this.#serial(() => this.#switchToNow(tab)).finally(() => { this.switching--; });
-  }
-
-  async #switchToNow(tab) {
-    if (tab === this.activeTab || !this.tabs.includes(tab)) return;
-    const previous = this.activeTab;
-    await this.#stash();
-    // (A tab that can't be shown: the one shown before comes back.)
-    if (!(await this.#load(tab)) && !(previous && this.tabs.includes(previous) && await this.#load(previous))) {
-      await this.#closeDocument();
-      this.#showEmpty();
-    }
-    this.#renderTabs();
-  }
-
-  async closeTab(tab = this.activeTab) {
-    const answer = await this.#serial(() => this.#closeTabNow(tab));
-    if (answer !== "save") return;
-    // Save first (as Ctrl+S would; Save as for a tool's result not saved anywhere yet), then close.
-    if (tab !== this.activeTab) await this.#switchTo(tab);
-    if (tab.unsaved || !tab.fileId) await this.saveTab(tab, tab.madeBy?.from?.fileId || null);
-    else await this.save();
-    if (this.tabs.includes(tab) && !tab.dirty && !tab.unsaved) await this.#serial(() => this.#closeTabNow(tab, true));
-  }
-
-  /** Close ``tab``; one with changes not saved (or a tool's result not saved
-   *  anywhere) asks first. Resolves "save" when Save was chosen: closeTab
-   *  saves it, then closes it. */
-  async #closeTabNow(tab, saved = false) {
-    if (!tab || !this.tabs.includes(tab)) return;
-    if ((tab.dirty || tab.unsaved) && !saved) {
-      const answer = await this.ask(`Close “${tab.name}”?`, tab.dirty ? "Your changes to it haven't been saved." : "It hasn't been saved anywhere yet.",
-        [["cancel", "Cancel"], ["close", "Close without saving"], ["save", tab.unsaved || !tab.fileId ? "Save…" : "Save", "seal"]]);
-      if (answer === "save") return "save";
-      if (answer !== "close") return;
-    }
-    const i = this.tabs.indexOf(tab);
-    this.tabs.splice(i, 1);
-    if (tab === this.activeTab) {
-      this.activeTab = null;
-      const next = this.tabs[i] || this.tabs[i - 1];
-      if (!next || !(await this.#load(next))) { await this.#closeDocument(); this.#showEmpty(); }
-    }
-    this.#renderTabs();
-  }
-
-  /** Any tab with changes that haven't been saved to a file? */
-  hasUnsavedChanges() {
-    return this.tabs.some((t) => t.dirty);
-  }
-
-  /** Show the tab bar. Tabs keep their elements (a click mustn't land on an
-   *  element that was replaced halfway through it). */
-  #renderTabs() {
-    this.tabbar.hidden = this.tabs.length < 2;
-    this.tabEls ||= new Map();
-    for (const [id, parts] of this.tabEls) if (!this.tabs.some((t) => t.id === id)) { parts.wrap.remove(); this.tabEls.delete(id); }
-    if (!this.addTabBtn) {
-      this.addTabBtn = el("button", { type: "button", class: "rd-btn rd-doctab-add", title: "Open another PDF", "aria-label": "Open another PDF", html: svg("plus") });
-      this.addTabBtn.addEventListener("click", () => this.chooseFile());
-    }
-    const order = this.tabs.map((tab) => {
-      let parts = this.tabEls.get(tab.id);
-      if (!parts) {
-        const dot = el("span", { class: "rd-dot", title: "Not saved" });
-        const label = el("span", { class: "rd-doctab-label" }, tab.name);
-        const unsaved = el("span", { class: "rd-sr" }, ", unsaved");
-        const btn = el("button", { type: "button", class: "rd-doctab-name", role: "tab", title: tab.name }, dot, label, unsaved);
-        btn.addEventListener("click", () => this.#switchTo(tab));
-        const close = el("button", { type: "button", class: "rd-doctab-x", title: "Close", "aria-label": `Close ${tab.name}`, html: svg("x") });
-        close.addEventListener("click", () => this.closeTab(tab));
-        const wrap = el("div", { class: "rd-doctab" }, btn, close);
-        wrap.addEventListener("auxclick", (e) => { if (e.button === 1) { e.preventDefault(); this.closeTab(tab); } });
-        parts = { wrap, btn, dot, unsaved };
-        this.tabEls.set(tab.id, parts);
-      }
-      const active = tab === this.activeTab;
-      parts.wrap.classList.toggle("active", active);
-      parts.btn.setAttribute("aria-selected", String(active));
-      // A dot (and the word, for screen readers): changes not saved, or a tool's result not saved anywhere yet.
-      parts.dot.hidden = parts.unsaved.hidden = !(tab.dirty || tab.unsaved);
-      return parts.wrap;
-    });
-    // With one document (no tab bar) the title says it too.
-    const shown = this.doc ? this.activeTab : null;
-    this.titleDot.hidden = this.titleSr.hidden = !(shown && (shown.dirty || shown.unsaved));
-    this.#showSaveState();
-    // Re-append only if the order changed, so elements stay where they are.
-    const current = [...this.tabbar.children].filter((n) => n !== this.addTabBtn);
-    if (current.length !== order.length || current.some((n, i) => n !== order[i])) this.tabbar.replaceChildren(...order, this.addTabBtn);
-    else if (!this.addTabBtn.isConnected) this.tabbar.append(this.addTabBtn);
-    this.onChange?.();
   }
 
   /** ``tab`` holds a file that can't be shown: say so where its pages would
@@ -1245,8 +850,6 @@ export class Reader {
     this.brokenRepair.hidden = !this.onRepair || (!tab.fileId && !tab.original);
     this.brokenForget.hidden = !this.onForgetRecent || !tab.path || tab.forgotten;
     this.brokenSaid.textContent = tab.brokenSaid || "";
-    this.titleText.textContent = tab.name;
-    this.titleEl.title = tab.name;
     this.pageInput.value = "";
     this.pageCount.textContent = "";
     for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
@@ -1254,8 +857,7 @@ export class Reader {
     this.zoomInput.value = "";
     this.sidebar.hidden = true;
     this.root.classList.remove("reading");
-    if (this.active) document.title = tab.name + " — ZPDF";
-    this.onChange?.();
+    this._refresh();
   }
 
   async #repairBroken() {
@@ -1264,11 +866,11 @@ export class Reader {
     this.brokenRepair.disabled = true;
     this.brokenRepair.classList.add("busy");
     this.brokenRepair.lastChild.textContent = "Repairing…";
-    tab.brokenSaid = "";
+    tab.say("");
     this.brokenSaid.textContent = "";
     try {
       const said = await this.onRepair(tab);
-      if (said) { tab.brokenSaid = said; if (this.activeTab === tab) this.brokenSaid.textContent = said; }
+      if (said) { tab.say(said); if (this.activeTab === tab) this.brokenSaid.textContent = said; }
     } finally {
       this.brokenRepair.disabled = false;
       this.brokenRepair.classList.remove("busy");
@@ -1280,19 +882,18 @@ export class Reader {
     const tab = this.activeTab;
     if (!tab?.broken || !this.onForgetRecent) return;
     try { await this.onForgetRecent(tab); } catch (e) { this.toast("Couldn't remove it from Recent: " + (e.message || e)); return; }
-    tab.forgotten = true;
+    tab.forgot();
     this.brokenForget.hidden = true;
-    tab.brokenSaid = `Removed ${tab.name} from Recent.`;
+    tab.say(`Removed ${tab.name} from Recent.`);
     this.brokenSaid.textContent = tab.brokenSaid;
     this.brokenClose.focus();
   }
 
-  #showEmpty() {
+  _showEmpty() {
     this.activeTab = null;
     this.#busy(false);
     this.broken.hidden = true;
     this.empty.hidden = false;
-    this.titleText.textContent = "";
     this.pageInput.value = "";
     this.pageCount.textContent = "";
     for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
@@ -1300,9 +901,8 @@ export class Reader {
     this.zoomInput.value = "";
     this.sidebar.hidden = true;
     this.root.classList.remove("reading");
-    if (this.active) document.title = "PDF reader — ZPDF";
     setTimeout(() => { if (!this.doc && !this.opening) this.refreshRecent(); }, 0);  // (see show())
-    this.onChange?.();
+    this._refresh();
   }
 
   /** The first piece of a file that is read in pieces (``tab.url``), asked
@@ -1320,10 +920,10 @@ export class Reader {
     const size = Number((res.headers.get("Content-Range") || "").split("/")[1]) || 0;
     if (bad || size !== tab.size) {
       const e = bad || Object.assign(new Error("another program changed the file since it was opened here"), { gone: true });
-      if (e.gone) tab.gone = e.message;
+      if (e.gone) tab.fileGone(e.message);
       throw e;
     }
-    tab.head = new Uint8Array(await res.arrayBuffer());
+    tab.firstPiece(new Uint8Array(await res.arrayBuffer()));
   }
 
   /** Where pdf.js gets the pieces of a file that isn't held here in full:
@@ -1339,9 +939,7 @@ export class Reader {
    *  answered with empty bytes, which pdf.js reads as nothing to draw; the
    *  document is then ``poisoned``: it is never written out (#savedDocument). */
   #pieces(tab) {
-    const head = tab.head;
-    tab.head = null;
-    const source = new pdfjs.PDFDataRangeTransport(tab.size, head);
+    const source = new pdfjs.PDFDataRangeTransport(tab.size, tab.head);
     const stop = new AbortController();
     const pending = new Map();  // begin -> end of the pieces pdf.js waits for
     source.failed = new Promise((_, reject) => { source.fail = reject; });
@@ -1368,7 +966,7 @@ export class Reader {
         if (stop.signal.aborted || !pending.has(begin)) return;
         if (source.data) { source.serve(source.data); return; }
         if (again && !e.gone) { setTimeout(() => ask(begin, end, false), 300); return; }
-        if (e.gone) tab.gone ||= e.message;
+        if (e.gone) tab.fileGone(e.message);
         if (source.failure) { source.giveUp(); return; }
         source.failure = String(e.message || e);
         source.fail(new Error(source.failure));
@@ -1387,7 +985,7 @@ export class Reader {
     };
     source.abort = () => { stop.abort(); pending.clear(); };
     source.waiting = () => pending.size > 0;
-    tab.source = source;
+    tab.piecesFrom(source);  // (pdf.js takes the first piece)
     return source;
   }
 
@@ -1398,14 +996,14 @@ export class Reader {
   #readAll(tab) {
     if (tab.bytes) return Promise.resolve(tab.bytes);
     if (tab.gone) return Promise.reject(new Error(tab.gone));
-    tab.reading ||= (async () => {
+    if (!tab.reading) tab.readingAll((async () => {
       const from = tab.headCopy?.length || 0;
       let res;
       try {
         res = await fetchFor(tab.url, { headers: { "X-Pdfm-Token": this.token, Range: `bytes=${from}-${tab.size - 1}` } }, WHOLE_MS);
       } catch (e) { throw new Error("the file couldn't be read: " + (e.message || e)); }
       const bad = await pieceError(res, tab);
-      if (bad) { if (bad.gone) tab.gone = bad.message; throw bad; }
+      if (bad) { if (bad.gone) tab.fileGone(bad.message); throw bad; }
       let rest;
       try { rest = new Uint8Array(await res.arrayBuffer()); } catch (e) { throw new Error("the file couldn't be read: " + (e.message || e)); }
       if (from + rest.length !== tab.size) throw new Error("the file couldn't be read in full");
@@ -1413,20 +1011,18 @@ export class Reader {
       if (from) all.set(tab.headCopy);
       all.set(rest, from);
       if (tab.source) { tab.source.data = all; tab.source.serve(all); }
-      if (!tab.bytes) {
-        tab.bytes = tab.original = all;
-        if (tab === this.activeTab && !this.bytes) this.bytes = all;
-      }
-      tab.headCopy = null;
+      const had = tab.bytes;
+      tab.readInFull(all);
+      if (!had && tab === this.activeTab && !this.bytes) this.bytes = all;
       return tab.bytes;
-    })();
+    })());
     const reading = tab.reading;
-    reading.catch(() => { if (tab.reading === reading) tab.reading = null; });
+    reading.catch(() => { if (tab.reading === reading) tab.readingAll(null); });
     return reading;
   }
 
   /** The shown document with its unsaved annotations and form entries. */
-  async #savedDocument(tab) {
+  async _savedDocument(tab) {
     if (this.pieces?.poisoned) throw new Error(`part of the file couldn't be read (${this.pieces.failure || "it stopped answering"}); close it and open it again`);
     if (tab?.url && !tab.bytes) await this.#readAll(tab);  // (pdf.js needs every piece to write it out)
     return await bounded(this.doc.saveDocument(), WHOLE_MS, "writing the document took too long");
@@ -1434,9 +1030,9 @@ export class Reader {
 
   /** Show ``tab``'s document in the viewer. Returns false if it couldn't be
    *  opened (not a PDF, or the password prompt was cancelled). */
-  async #load(tab) {
+  async _load(tab) {
     if (tab.broken) {  // (known not to open: its state again, not another try)
-      await this.#closeDocument();
+      await this._closeDocument();
       this.#showBroken(tab);
       return true;
     }
@@ -1448,7 +1044,7 @@ export class Reader {
     try {
       await loadPdfjs();
       this.#ensureViewer();
-      await this.#closeDocument();
+      await this._closeDocument();
       if (!tab.bytes && !tab.head) await this.#firstPiece(tab);
       this.bytes = tab.bytes;
       this.name = tab.name;
@@ -1469,7 +1065,8 @@ export class Reader {
         this.#busy(false);
         this.#askPassword(reason === pdfjs.PasswordResponses.INCORRECT_PASSWORD).then((pw) => {
           if (pw === null) { destroyTask(task); tooLong(Object.assign(new Error("cancelled"), { name: "PasswordException" })); return; }
-          this.password = tab.password = pw;
+          tab.unlocked(pw);
+          this.password = pw;
           this.#busy(true);
           arm();
           update(pw);
@@ -1487,18 +1084,12 @@ export class Reader {
       if (!(doc.numPages >= 1)) throw unusable();
       try { await Promise.race([doc.getPage(1), giveUp]); } catch (e) { if (e && e.message === "opening it took too long") throw e; throw unusable(); }
       clearTimeout(timer);
-      tab.shown = true;
       this.doc = doc;
       this.activeTab = tab;
-      doc.annotationStorage.onSetModified = () => {
-        tab.version = (tab.version || 0) + 1;
-        tab.savedSince = false;  // changed again after a save
-        if (!tab.dirty) { tab.dirty = true; this.#renderTabs(); }
-        this.#showSaveState();
-      };
-      // (Undo can bring it back to how it was opened or saved: see #checkSaved.)
-      doc.annotationStorage.onResetModified = () => this.#checkSaved(tab);
-      tab.clean = tab.dirty ? null : { doc, print: "" };
+      doc.annotationStorage.onSetModified = () => tab.annotationChanged();
+      // (Undo can bring it back to how it was opened or saved: see #compareAnnotations.)
+      doc.annotationStorage.onResetModified = () => this.#compareAnnotations(tab);
+      tab.loaded(doc);
       this.pdfViewer.setDocument(doc);
       this.linkService.setDocument(doc, null);
       // (The viewer hands the document to its form scripting itself once the
@@ -1508,9 +1099,6 @@ export class Reader {
       // (The viewer hands the document to the find controller itself once the
       // first page is drawn; doing it here too would reset a search started
       // when the pages appear, e.g. from the folder search.)
-      this.titleText.textContent = tab.name;
-      this.titleEl.title = tab.name;
-      document.title = tab.name + " — ZPDF";
       this.empty.hidden = true;
       this.broken.hidden = true;
       for (const c of [this.sidebarBtn, this.prevBtn, this.nextBtn, this.pageInput, this.zoomOutBtn, this.zoomInBtn,
@@ -1523,8 +1111,8 @@ export class Reader {
       this.pickedPages = new Set();
       this.#renderPageBar();
       this.#buildOutline();
-      this.#listComments();
-      this.#loadMeasures();
+      this._listComments();
+      this._loadMeasures();
       this.sigbar.hidden = true;
       this.formbar.hidden = true;
       this.#whenShown(() => { this.#checkSignatures(); this.#checkForm(); });
@@ -1539,7 +1127,7 @@ export class Reader {
       return true;
     } catch (e) {
       clearTimeout(timer);
-      await this.#closeDocument();
+      await this._closeDocument();
       const why = pieces?.failure || (e && e.message) || String(e);
       if (tab.gone && tab.shown && this.tabs.includes(tab)) {
         // A tab left in the background whose file went away or changed: say so; it can be closed.
@@ -1547,7 +1135,7 @@ export class Reader {
       } else if (pieces?.failure) this.toast(`Could not open “${tab.name}”: ${why}`, 9000);
       else if (!tab.shown && this.tabs.includes(tab) && e && DAMAGED.has(e.name)) {
         // Damaged, or not a PDF at all: a state of its own that stays, with Repair.
-        tab.broken = true;
+        tab.broke();
         if (tab.fileId) {  // Recent says so, and doesn't put it first
           fetch("/api/recent/failed", { method: "POST", headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/json" },
             body: JSON.stringify({ id: tab.fileId }) }).catch(() => {});
@@ -1610,34 +1198,33 @@ export class Reader {
         if (this.doc && ["auto", "page-width", "page-fit", "page-height"].includes(value)) this.pdfViewer.currentScaleValue = value;
       });
     }).observe(this.main);
-    eventBus.on("annotationeditoruimanager", ({ uiManager }) => { this.uiManager = uiManager; this.#applyAnnotParams(); });
+    eventBus.on("annotationeditoruimanager", ({ uiManager }) => { this.uiManager = uiManager; this._applyAnnotParams(); });
     // pdf.js asks to switch tools itself, e.g. after a picture is pasted, or
     // for a click (double-click on one in the file) on an annotation with no
     // tool on: that one is then picked, to move, resize or delete.
     eventBus.on("switchannotationeditormode", ({ mode, editId = null, mustEnterInEditMode = false, editComment = false }) =>
-      this.#setEditMode(this.#modeName(mode), false, editId ? { editId, mustEnterInEditMode, editComment } : null));
-    eventBus.on("annotationeditormodechanged", ({ mode }) => this.#showEditMode(this.#modeName(mode)));
+      this._setEditMode(this._modeName(mode), false, editId ? { editId, mustEnterInEditMode, editComment } : null));
+    eventBus.on("annotationeditormodechanged", ({ mode }) => this._showEditMode(this._modeName(mode)));
     eventBus.on("editingstateschanged", ({ details }) => {
       this.annotUndo = !!details.hasSomethingToUndo;
-      this.#checkSaved();
-      this.#showSaveState();
+      this.#compareAnnotations();
+      this._refresh({ notify: false });
       this.undoBtn.disabled = !details.hasSomethingToUndo;
       this.redoBtn.disabled = !details.hasSomethingToRedo;
       this.deleteBtn.disabled = !details.hasSelectedEditor;
     });
 
     eventBus.on("pagesinit", () => {
-      const saved = store.get("pdfm-pos:" + this.#key(), null);
+      const saved = store.get("pdfm-pos:" + this._key(), null);
       this.pdfViewer.currentScaleValue = saved?.scale || "auto";
       if (saved?.page > 1 && saved.page <= this.doc.numPages) this.pdfViewer.currentPageNumber = saved.page;
       if (saved?.rotation) this.pdfViewer.pagesRotation = saved.rotation;
-      const goto = this.activeTab?.goto;
-      if (goto) { this.activeTab.goto = null; this.#goto(goto); }
-      const tab = this.activeTab, tool = tab?.tool;
+      const goto = this.activeTab?.arrived();
+      if (goto) this._goto(goto);
+      const tab = this.activeTab, tool = tab?.restored();
       if (tool) {
         // (Once a page's editing layer is drawn: before that, pdf.js's viewer
         // still announces the tool it had, and could leave its own unchanged.)
-        tab.tool = null;
         let done = false, timer = 0;
         const restore = () => {
           if (done) return;
@@ -1647,7 +1234,7 @@ export class Reader {
           setTimeout(() => {
             if (this.activeTab !== tab || !this.doc || !this.uiManager) return;
             this.openAnnotate();
-            if (tool in pdfjs.AnnotationEditorType && tool !== "NONE") this.#setEditMode(tool);
+            if (tool in pdfjs.AnnotationEditorType && tool !== "NONE") this._setEditMode(tool);
           }, 0);
         };
         eventBus.on("annotationeditorlayerrendered", restore);
@@ -1659,31 +1246,31 @@ export class Reader {
     });
     // pdf.js makes each page's text a Tab stop; the page view is one already (text still selects).
     eventBus.on("textlayerrendered", ({ source }) => { const layer = source?.textLayer?.div || source?.div?.querySelector(".textLayer"); if (layer) layer.tabIndex = -1; });
-    eventBus.on("pagechanging", ({ pageNumber }) => { this.#updatePage(); this.#remember(); this.#refreshScale(); if (this.measureMode) this.#geometry(pageNumber); });
-    eventBus.on("pagesloaded", () => { this.#whenShown(() => this.#refreshScale()); this.#sizeThumbs(); });
+    eventBus.on("pagechanging", ({ pageNumber }) => { this.#updatePage(); this.#remember(); this._refreshScale(); if (this.measureMode) this._geometry(pageNumber); });
+    eventBus.on("pagesloaded", () => { this.#whenShown(() => this._refreshScale()); this.#sizeThumbs(); });
     eventBus.on("annotationlayerrendered", ({ source }) => this.#nameFields(source?.div?.querySelector(".annotationLayer")));
     eventBus.on("pagerendered", ({ pageNumber }) => {
-      this.#drawMeasures(pageNumber);
-      if (this.markupMode === "IMAGES" || this.markupMode === "LINKS") this.#drawObjectBoxes(pageNumber);
-      this.#drawRedactions(pageNumber);
+      this._drawMeasures(pageNumber);
+      if (this.markupMode === "IMAGES" || this.markupMode === "LINKS") this._drawObjectBoxes(pageNumber);
+      this._drawRedactions(pageNumber);
       if (this.overlay) this.overlay.draw(this.pdfViewer.getPageView(pageNumber - 1), pageNumber).catch(() => {});
     });
     eventBus.on("scalechanging", ({ scale, presetValue }) => {
       const value = presetValue || String(scale);
       const preset = ZOOM_PRESETS.find(([v]) => v === value || (!presetValue && Math.abs(parseFloat(v) - scale) < 0.001));
-      if (!presetValue && Math.abs(scale - this.#trueZoom()) < 0.001) this.zoomPreset = "true-size";
+      if (!presetValue && Math.abs(scale - this._trueZoom()) < 0.001) this.zoomPreset = "true-size";
       else this.zoomPreset = preset ? preset[0] : "custom";
       this.#showZoom(scale);
-      this.#syncViewAt();
+      this._syncViewAt();
       this.#remember();
-      requestAnimationFrame(() => this.#drawAllMeasures());
+      requestAnimationFrame(() => this._drawAllMeasures());
     });
-    eventBus.on("rotationchanging", () => { this.#remember(); requestAnimationFrame(() => this.#drawAllMeasures()); });
-    eventBus.on("updatefindmatchescount", ({ matchesCount }) => this.#findResult(null, matchesCount));
-    eventBus.on("updatefindcontrolstate", ({ state, matchesCount }) => this.#findResult(state, matchesCount));
+    eventBus.on("rotationchanging", () => { this.#remember(); requestAnimationFrame(() => this._drawAllMeasures()); });
+    eventBus.on("updatefindmatchescount", ({ matchesCount }) => this._findResult(null, matchesCount));
+    eventBus.on("updatefindcontrolstate", ({ state, matchesCount }) => this._findResult(state, matchesCount));
   }
 
-  async #closeDocument() {
+  async _closeDocument() {
     this.gaveWay = null;  // (no bar comes back for a document that is going)
     this.closeFind();
     await this.closeCompare();
@@ -1704,7 +1291,7 @@ export class Reader {
     // pdf.js won't let go of the document soon, the reader doesn't wait.
     const wait = pieces && (pieces.poisoned || pieces.waiting()) ? 2000 : 10000;
     pieces?.giveUp();
-    this.#showSaveState();
+    this._refresh({ notify: false });
     if (doc) {
       closeOff(doc);
       this.pdfViewer.setDocument(null);
@@ -1720,10 +1307,10 @@ export class Reader {
     }
   }
 
-  #key() { return this.doc ? this.doc.fingerprints[0] : ""; }
+  _key() { return this.doc ? this.doc.fingerprints[0] : ""; }
   #remember() {
     if (!this.doc) return;
-    store.set("pdfm-pos:" + this.#key(), {
+    store.set("pdfm-pos:" + this._key(), {
       page: this.pdfViewer.currentPageNumber, scale: this.pdfViewer.currentScaleValue, rotation: this.pdfViewer.pagesRotation,
     });
   }
@@ -1759,7 +1346,7 @@ export class Reader {
 
   rotate(delta) {
     // Just after a tab was picked, the one before is still showing: turn the picked one once it's there.
-    if (this.switching) { this.#serial(() => this.rotate(delta)); return; }
+    if (this.switching) { this._serial(() => this.rotate(delta)); return; }
     if (!this.doc) return;
     // (Pages not laid out yet: after they are, and after the turn remembered for the file.)
     if (!this.pdfViewer.pagesCount) { const doc = this.doc; this.eventBus.on("pagesinit", () => { if (this.doc === doc) this.rotate(delta); }, { once: true }); return; }
@@ -1792,7 +1379,7 @@ export class Reader {
    *  aside (to its button), so the page has the room; it comes back when
    *  they close. Its open/closed choice isn't changed. Opened again by hand
    *  meanwhile, it stays. */
-  #stepAside() {
+  _stepAside() {
     const busy = !this.annotbar.hidden || !this.findbar.hidden;
     if (!busy) this.panelKept = false;
     const aside = busy && !this.panelKept;
@@ -1837,7 +1424,7 @@ export class Reader {
       tab.setAttribute("aria-selected", String(name === which));
       panel.hidden = name !== which;
     }
-    if (which === "comments") this.#listComments();
+    if (which === "comments") this._listComments();
     if (which === "thumbs") this.#showThumbs();
   }
 
@@ -2162,966 +1749,27 @@ export class Reader {
 
   /** Show page ``page`` and search for ``find`` from there; ``scale`` and
    *  ``top``/``left`` (scroll position) bring back an earlier view. */
-  #goto({ page, find, scale, top, left } = {}) {
+  _goto({ page, find, scale, top, left } = {}) {
     if (scale) this.pdfViewer.currentScaleValue = scale;
     if (page && page <= this.pdfViewer.pagesCount) this.pdfViewer.currentPageNumber = page;
     if (top != null) { this.container.scrollTop = top; this.container.scrollLeft = left || 0; }
     if (find) {
       this.openFind();
       this.findInput.value = find;
-      this.#find("");
+      this._find("");
     }
   }
-
-  // ---- find -----------------------------------------------------------------
-  openFind() {
-    // One tool row at a time: the annotate bar gives way (what was drawn
-    // stays, unsaved changes too) and comes back when find closes.
-    // (The find bar shows first, so the file panel stays aside meanwhile.)
-    const wasHidden = this.findbar.hidden;
-    this.findbar.hidden = false;
-    if (!this.annotbar.hidden) {
-      const mode = this.editMode;
-      this.gaveWay = null;
-      this.closeAnnotate();
-      this.gaveWay = { bar: "annotate", mode };
-    } else if (wasHidden) this.gaveWay = null;
-    this.#endHint();
-    this.#stepAside();
-    this.findBtn.setAttribute("aria-pressed", "true");
-    const selected = String(window.getSelection() || "").trim();
-    if (selected && selected.length < 100 && !selected.includes("\n")) this.findInput.value = selected;
-    this.findInput.focus();
-    this.findInput.select();
-    if (this.findInput.value) this.#find("");
-  }
-  closeFind() {
-    if (this.findbar.hidden) return;
-    const back = this.gaveWay?.bar === "annotate" && this.doc ? this.gaveWay : null;
-    this.gaveWay = null;
-    this.findbar.hidden = true;
-    this.findBtn.setAttribute("aria-pressed", "false");
-    if (back) {  // the annotate bar it opened over, with its tool
-      this.openAnnotate();
-      if (back.mode && back.mode !== "NONE") this.#setEditMode(back.mode);
-    }
-    this.#stepAside();
-    if (this.eventBus) this.eventBus.dispatch("findbarclose", { source: this });
-    this.findBtn.focus({ preventScroll: true });  // back where it was opened from
-  }
-  #find(type, previous = false) {
-    if (!this.eventBus) return;
-    this.eventBus.dispatch("find", {
-      source: this, type, query: this.findInput.value,
-      caseSensitive: this.findCase.checked, entireWord: this.findWord.checked,
-      highlightAll: this.findAll.checked, findPrevious: previous, matchDiacritics: false,
-    });
-  }
-  #findResult(state, matchesCount) {
-    const { FindState } = viewer;
-    const query = this.findInput.value;
-    this.findInput.classList.toggle("notfound", state === FindState.NOT_FOUND && !!query);
-    if (!query) { this.findStatus.textContent = ""; return; }
-    if (state === FindState.NOT_FOUND) { this.findStatus.textContent = "No matches"; return; }
-    if (state === FindState.PENDING) { this.findStatus.textContent = "Searching…"; return; }
-    const { current = 0, total = 0 } = matchesCount || {};
-    if (total) this.findStatus.textContent = `${current || "–"} of ${total}${total >= 1000 ? "+" : ""}`;
-    if (state === FindState.WRAPPED) this.toast("Reached the end — continued from the other end", 1500);
-  }
-
-  // ---- annotating and signing ------------------------------------------------------
-  openAnnotate() {
-    if (!this.doc) return;
-    // Over the find bar: it gives way, and comes back when this bar closes.
-    const wasHidden = this.annotbar.hidden;
-    this.annotbar.hidden = false;
-    if (!this.findbar.hidden) {
-      this.gaveWay = null;
-      this.closeFind();
-      this.gaveWay = { bar: "find" };
-    } else if (wasHidden) this.gaveWay = null;
-    this.#stepAside();
-    this.annotateBtn.setAttribute("aria-pressed", "true");
-    this.#showSaveState();
-    this.#showEditMode(this.editMode || "NONE");
-  }
-  closeAnnotate() {
-    if (this.annotbar.hidden) return;
-    this.#closeToolsMenu();
-    this.annotbar.hidden = true;
-    this.annotateBtn.setAttribute("aria-pressed", "false");
-    this.#showSaveState();
-    if (this.editMode && this.editMode !== "NONE") this.#setEditMode("NONE");
-    this.#endHint();
-    const back = this.gaveWay?.bar === "find" && this.doc;
-    this.gaveWay = null;
-    if (back) {  // the find bar it opened over
-      this.findbar.hidden = false;
-      this.findBtn.setAttribute("aria-pressed", "true");
-      this.findInput.focus();
-      if (this.findInput.value) this.#find("");
-    }
-    this.#stepAside();
-  }
-
-  #modeName(mode) {
-    return Object.entries(pdfjs.AnnotationEditorType).find(([, v]) => v === mode)?.[0] || "NONE";
-  }
-
-  /** With Select on (the annotate bar open, no tool), a click on an
-   *  annotation this reader can edit picks it, to move, resize or delete:
-   *  one placed here, and one already in the file (also after another tab
-   *  was shown and this one came back, when they are all in the file). pdf.js
-   *  picks those only on a double-click (its "switchannotationeditormode"
-   *  with the annotation's id); a click asks it the same, without starting to
-   *  type in a text box. Links, form fields and selecting text are left as
-   *  they were. */
-  #pickOnClick(e) {
-    if (e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
-    if (!this.doc || !this.uiManager || this.annotbar.hidden || this.editMode !== "NONE" || this.textEditMode
-      || this.markupMode || this.measureMode || this.container.classList.contains("hand")) return;
-    if (e.target.closest?.("a, input, select, textarea, button, [contenteditable='true'], .linkAnnotation, .widgetAnnotation, .popup")) return;
-    const sel = window.getSelection();
-    if (sel && !sel.isCollapsed) return;  // words were being selected
-    const n = Number(e.target.closest?.(".page")?.dataset.pageNumber);
-    const view = n && this.pdfViewer.getPageView(n - 1);
-    if (!view) return;
-    const under = (box) => {
-      if (!box || box.hidden || box.closest("[hidden]")) return false;
-      const r = box.getBoundingClientRect();
-      return r.width > 0 && r.height > 0 && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
-    };
-    let hit = null;  // (the last one found is drawn on top)
-    // Editors (placed here, or changed and not saved yet) ...
-    for (const ed of this.uiManager.getEditors(n - 1)) {
-      if (!ed.isEmpty() && under(ed.div)) hit = { mode: ed.mode, editId: ed.annotationElementId || ed.id };
-    }
-    // ... and annotations in the file that pdf.js can edit.
-    if (!hit) {
-      for (const a of view.annotationLayer?.annotationLayer?.getEditableAnnotations() || []) {
-        if (a.annotationEditorType !== undefined && under(a.container)) hit = { mode: a.annotationEditorType, editId: a.data.id };
-      }
-    }
-    if (!hit || this.#modeName(hit.mode) === "NONE") return;
-    e.preventDefault();
-    e.stopPropagation();
-    // (pdf.js turns on the annotation's tool, makes the page's editors and
-    // selects the one with this id.)
-    this.#setEditMode(this.#modeName(hit.mode), false, { editId: hit.editId, mustEnterInEditMode: false, editComment: false });
-  }
-
-  /** Switch the pdf.js editing tool: NONE (select), HIGHLIGHT, FREETEXT, INK
-   *  or STAMP; or EDITTEXT, this reader's own tool for changing words. */
-  #setEditMode(name, create = false, pick = null) {
-    if (!this.pdfViewer || !this.doc) return;
-    const editText = name === "EDITTEXT";
-    this.#endHint();  // the last tool's hint goes with it
-    if (editText && !this.textEditHinted) {
-      this.textEditHinted = true;
-      this.#hint("Click a line to change it, Shift+click for its whole paragraph, or click an empty spot to add words. Old words can stay in the file underneath — to remove text for good, use Redact.", 8000);
-    }
-    const markup = MARKUP.has(name), custom = editText || markup;
-    if (name !== "NONE" || custom) this.measureTool(null);
-    this.textEditMode = editText;
-    this.markupMode = markup ? name : null;
-    this.#cancelMarkup();
-    this.root.classList.toggle("rd-edittext", editText);
-    this.root.classList.toggle("rd-markup", markup);
-    this.root.dataset.markup = markup ? name.toLowerCase() : "";
-    this.pickedImage = null;
-    this.#objectBoxes();
-    if (custom) name = "NONE";
-    const mode = pdfjs.AnnotationEditorType[name];
-    if (mode === undefined) return;
-    if (this.annotbar.hidden && (name !== "NONE" || custom)) this.openAnnotate();
-    // Back to no tool with a picked annotation still focused (Esc after
-    // picking one): pdf.js would see it focused again as the page's editors
-    // are put away, pick it again, and turn its tool back on.
-    if (mode === pdfjs.AnnotationEditorType.NONE && document.activeElement?.closest?.(".annotationEditorLayer")) {
-      this.container.focus({ preventScroll: true, focusVisible: false });
-    }
-    try {
-      if (!(custom && this.pdfViewer.annotationEditorMode === mode)) this.pdfViewer.annotationEditorMode = { mode, ...pick };
-    } catch (e) {
-      // (Turning the tools off on a document that has just been replaced, e.g. after signing, isn't news.)
-      if (!custom) { if (name !== "NONE") this.toast("Annotating isn't available for this document."); return; }
-    }
-    this.#showEditMode(name);
-    // Words selected before choosing Underline or Strike out get it straight away.
-    if (this.markupMode === "UNDERLINE" || this.markupMode === "STRIKEOUT") this.#markSelection();
-    if (this.markupMode === "REDACT") this.#redactSelection();
-    // "Picture" asks for an image file straight away.
-    if (create && this.uiManager) setTimeout(() => this.uiManager.updateParams(pdfjs.AnnotationEditorParamsType.CREATE, null), 50);
-  }
-
-  #showEditMode(name) {
-    if (name === "NONE" && this.textEditMode) name = "EDITTEXT";
-    if (name === "NONE" && this.markupMode) name = this.markupMode;
-    this.editMode = name;
-    if (name === "EDITTEXT" || MARKUP.has(name)) this.undoBtn.disabled = !this.activeTab?.undo?.length;
-    for (const btn of this.annotTools) btn.setAttribute(this.moreTools.includes(btn) ? "aria-checked" : "aria-pressed", String(btn.dataset.mode === name));
-    this.#showMoreTools(name);
-    const sizes = name === "FREETEXT" ? [[10, "10 pt"], [12, "12 pt"], [14, "14 pt"], [18, "18 pt"], [24, "24 pt"], [36, "36 pt"]]
-      : name === "INK" ? [[1, "Thin"], [2, "Fine"], [4, "Medium"], [8, "Thick"], [14, "Marker"]]
-      : name === "HIGHLIGHT" ? [[8, "Thin"], [12, "Normal"], [20, "Wide"]]
-      : name === "SHAPE" ? [[1, "Thin"], [2, "Medium"], [4, "Thick"], [8, "Heavy"]] : [];
-    const key = { FREETEXT: "text", INK: "ink", HIGHLIGHT: "mark", SHAPE: "shape", NOTE: "note", UNDERLINE: "line", STRIKEOUT: "line" }[name];
-    this.shapeSelect.hidden = name !== "SHAPE";
-    this.stampSelect.hidden = this.stampDatedLabel.hidden = name !== "STAMPS";
-    const chosen = this.annotParams?.size?.[key] ?? (key === "shape" ? 2 : undefined);
-    this.sizeSelect.replaceChildren(...sizes.map(([v, label]) => el("option", { value: v, selected: v === chosen }, label)));
-    this.sizeSelect.hidden = !sizes.length;
-    this.root.querySelector(".rd-swatches").hidden = !key;
-    this.#showRedactBar(name);
-  }
-
-  /** The More tools button: "More tools", or the tool from its menu that's in use. */
-  #showMoreTools(name = this.editMode) {
-    const on = this.moreTools.find((t) => t.dataset.mode === name);
-    const label = on ? on.querySelector("span").textContent : "More tools";
-    this.moreToolsBtn.innerHTML = (on ? on.querySelector("svg").outerHTML : svg("more")) + `<span>${label}</span>` + svg("down");
-    this.moreToolsBtn.classList.toggle("on", !!on);
-    this.moreToolsBtn.setAttribute("aria-label", on ? `More tools (in use: ${label})` : "More tools");
-  }
-
-  #toggleToolsMenu(focus = "checked") {
-    if (!this.moreToolsMenu.hidden) { this.#closeToolsMenu(); return; }
-    const at = this.moreToolsBtn.getBoundingClientRect(), box = this.root.getBoundingClientRect();
-    this.moreToolsMenu.style.top = `${at.bottom - box.top + 6}px`;
-    this.moreToolsMenu.style.left = `${Math.max(8, Math.min(at.left - box.left, box.width - 268))}px`;
-    this.moreToolsMenu.style.right = "auto";
-    this.moreToolsMenu.hidden = false;
-    this.moreToolsBtn.setAttribute("aria-expanded", "true");
-    const items = this.moreTools;
-    (focus === "last" ? items.at(-1) : items.find((t) => t.getAttribute("aria-checked") === "true") || items[0]).focus();
-  }
-  #closeToolsMenu(refocus = false) {
-    if (this.moreToolsMenu.hidden) return;
-    this.moreToolsMenu.hidden = true;
-    this.moreToolsBtn.setAttribute("aria-expanded", "false");
-    if (refocus) this.moreToolsBtn.focus();
-  }
-
-  #applyAnnotParams() {
-    this.annotParams ||= store.get("pdfm-annot", { color: 1, size: { text: 12, ink: 2, mark: 12 } });
-    this.#setColor(this.annotParams.color, false);
-    for (const [key, value] of Object.entries(this.annotParams.size)) this.#setSize(value, key, false);
-  }
-
-  #setColor(index, remember = true) {
-    const [, ink, mark] = COLORS[index] || COLORS[1];
-    for (const sw of this.swatches) sw.setAttribute("aria-pressed", String(+sw.dataset.index === index));
-    const P = pdfjs.AnnotationEditorParamsType;
-    if (this.uiManager) {
-      // Applies to the selected annotations, or else to new ones.
-      this.uiManager.updateParams(P.FREETEXT_COLOR, ink);
-      this.uiManager.updateParams(P.INK_COLOR, ink);
-      this.uiManager.updateParams(P.HIGHLIGHT_COLOR, mark);
-    }
-    if (remember) { this.annotParams.color = index; store.set("pdfm-annot", this.annotParams); }
-  }
-
-  #setSize(value, key = { FREETEXT: "text", INK: "ink", HIGHLIGHT: "mark", SHAPE: "shape" }[this.editMode], remember = true) {
-    if (!key || !value) return;
-    const P = pdfjs.AnnotationEditorParamsType;
-    const type = { text: P.FREETEXT_SIZE, ink: P.INK_THICKNESS, mark: P.HIGHLIGHT_THICKNESS }[key];
-    if (this.uiManager && type !== undefined) this.uiManager.updateParams(type, value);
-    if (remember) { this.annotParams.size[key] = value; store.set("pdfm-annot", this.annotParams); }
-  }
-
-  // ---- notes, underline, strikeout, shapes and comments (markup.py) ---------------
-  /** The colour picked in the annotation bar, as #rrggbb. */
-  #markupColor() {
-    const [, ink] = COLORS[this.annotParams?.color ?? 1] || COLORS[1];
-    return ink;
-  }
-
-  /** Where a pointer event is on a page: { n, pt (PDF), view, box } or null. */
-  #pointOnPage(e) {
-    const pageEl = e.target.closest?.(".page") || document.elementFromPoint(e.clientX, e.clientY)?.closest?.(".page");
-    const n = Number(pageEl?.dataset.pageNumber);
-    const view = n ? this.pdfViewer.getPageView(n - 1) : null;
-    if (!view?.div || !view.viewport) return null;
-    const box = view.div.getBoundingClientRect();
-    const x = e.clientX - box.left - view.div.clientLeft, y = e.clientY - box.top - view.div.clientTop;
-    const pt = view.viewport.convertToPdfPoint(x, y);
-    return Number.isFinite(pt[0]) && Number.isFinite(pt[1]) ? { n, pt, view, x, y } : null;
-  }
-
-  /** Send ``changes`` (see markup.py) to be written into the document. */
-  #applyMarkup(changes, failure = "Could not add that: ") {
-    return this.#changeDocument((bytes, tab) => this.#post("/api/markup", bytes, tab, {
-      changes: JSON.stringify(changes), author: this.authorInput.value.trim() }), { failure });
-  }
-
-  #cancelMarkup() {
-    this.shapeDraft?.el.remove();
-    this.shapeDraft = null;
-    this.noteBox?.remove();
-    this.noteBox = null;
-  }
-
-  #markupDown(e) {
-    const mode = this.markupMode;
-    if (!mode || e.button !== 0 || mode === "UNDERLINE" || mode === "STRIKEOUT" || (mode === "REDACT" && this.#redactByText())) return;
-    if (e.target.closest?.(".rd-notebox, .rd-objbox, .rd-objtools, a, input, textarea, select, button")) return;
-    const at = this.#pointOnPage(e);
-    if (mode === "IMAGES") { if (at) this.#pickImage(null); return; }  // a click beside the pictures lets go
-    if (!at) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (mode === "NOTE") { this.#openNoteBox(at); return; }
-    if (mode === "LINKS") { this.#drawLinkBox(e, at); return; }
-    if (mode === "CERTSIGN") { this.#dragBox(at, "Drag a box where the signature goes.", (rect) => this.#signWithId(at.n, rect)); return; }
-    if (mode === "STAMPS") { this.#placeStamp(at); return; }
-    if (mode === "REDACT") { this.#dragBox(at, "Drag a box over what should be blacked out.", (rect) => this.#addRedactions(at.n, [rect])); return; }
-    // SHAPE: drag out the shape; it's drawn on screen until the file has it.
-    this.#cancelMarkup();
-    const svgEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svgEl.setAttribute("class", "rd-shapedraft");
-    at.view.div.append(svgEl);
-    this.shapeDraft = { el: svgEl, start: at, end: at, kind: this.shapeSelect.value, pointer: e.pointerId };
-    this.container.setPointerCapture?.(e.pointerId);
-  }
-
-  #markupMove(e) {
-    const d = this.shapeDraft;
-    if (!d || e.pointerId !== d.pointer) return;
-    const view = d.start.view, box = view.div.getBoundingClientRect();
-    let x = e.clientX - box.left - view.div.clientLeft, y = e.clientY - box.top - view.div.clientTop;
-    const line = d.kind === "arrow" || d.kind === "line";
-    if (e.shiftKey) {  // a square or circle; a line at 45° steps
-      const dx = x - d.start.x, dy = y - d.start.y;
-      if (line) {
-        const a = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4), len = Math.hypot(dx, dy);
-        x = d.start.x + len * Math.cos(a); y = d.start.y + len * Math.sin(a);
-      } else {
-        const side = Math.max(Math.abs(dx), Math.abs(dy));
-        x = d.start.x + Math.sign(dx || 1) * side; y = d.start.y + Math.sign(dy || 1) * side;
-      }
-    }
-    d.end = { x, y, pt: view.viewport.convertToPdfPoint(x, y) };
-    const color = this.#markupColor(), width = Math.max(1, (this.annotParams?.size?.shape || 2) * view.viewport.scale);
-    const [x0, y0, x1, y1] = [Math.min(d.start.x, x), Math.min(d.start.y, y), Math.max(d.start.x, x), Math.max(d.start.y, y)];
-    const shape = d.kind === "ellipse" ? `<ellipse cx="${(x0 + x1) / 2}" cy="${(y0 + y1) / 2}" rx="${(x1 - x0) / 2}" ry="${(y1 - y0) / 2}"/>`
-      : line ? `<line x1="${d.start.x}" y1="${d.start.y}" x2="${x}" y2="${y}"${d.kind === "arrow" ? ' marker-end="url(#rd-arrowhead)"' : ""}/>`
-      : `<rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}"${d.kind === "cloud" ? ' stroke-dasharray="2 3" rx="6"' : ""}/>`;
-    d.el.innerHTML = `<defs><marker id="rd-arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">`
-      + `<path d="M0 0 10 5 0 10z" fill="${color}"/></marker></defs><g fill="none" stroke="${color}" stroke-width="${width}">${shape}</g>`;
-  }
-
-  #markupUp(e) {
-    const mode = this.markupMode;
-    if (!mode) return;
-    if (mode === "UNDERLINE" || mode === "STRIKEOUT") {
-      if (e.target.closest?.(".rd-container")) setTimeout(() => this.#markSelection(), 0);
-      return;
-    }
-    if (mode === "REDACT") {
-      if (this.#redactByText() && e.target.closest?.(".rd-container")) setTimeout(() => this.#redactSelection(), 0);
-      return;
-    }
-    const d = this.shapeDraft;
-    if (!d || e.pointerId !== d.pointer) return;
-    this.#markupMove(e);
-    this.shapeDraft = null;
-    const { start, end, kind } = d;
-    if (Math.hypot(end.x - start.x, end.y - start.y) < 4) { d.el.remove(); return; }  // a click, not a drag
-    const page = start.n, color = this.#markupColor(), width = this.annotParams?.size?.shape || 2;
-    const change = kind === "arrow" || kind === "line"
-      ? { op: "add", page, kind, points: [start.pt, end.pt], color, width }
-      : { op: "add", page, kind, rect: [start.pt[0], start.pt[1], end.pt[0], end.pt[1]], color, width };
-    this.#applyMarkup([change]).finally(() => d.el.remove());
-  }
-
-  // -- stamps --
-  /** A stamp where the page was clicked (the usual size), or in the box
-   *  dragged out. */
-  #placeStamp(at) {
-    const view = at.view, draft = el("div", { class: "rd-linkdraft rd-stampdraft", style: `left:${at.x}px;top:${at.y}px;width:0;height:0` });
-    view.div.append(draft);
-    const box = view.div.getBoundingClientRect(), ox = box.left + view.div.clientLeft, oy = box.top + view.div.clientTop;
-    let end = [at.x, at.y];
-    const move = (ev) => {
-      end = [ev.clientX - ox, ev.clientY - oy];
-      Object.assign(draft.style, { left: Math.min(at.x, end[0]) + "px", top: Math.min(at.y, end[1]) + "px",
-        width: Math.abs(end[0] - at.x) + "px", height: Math.abs(end[1] - at.y) + "px" });
-    };
-    const up = async () => {
-      window.removeEventListener("pointermove", move);
-      draft.remove();
-      const dated = this.stampDated.checked, s = view.viewport.scale;
-      let a = [at.x, at.y], b = end;
-      if (Math.abs(end[0] - at.x) < 12 || Math.abs(end[1] - at.y) < 8) {  // a click: the usual size, centred there
-        const w = 160 * s, h = (dated ? 50 : 42) * s;
-        a = [at.x - w / 2, at.y - h / 2]; b = [at.x + w / 2, at.y + h / 2];
-      }
-      let label = this.stampSelect.value;
-      if (!label) {
-        const words = el("input", { type: "text", value: store.get("pdfm-stamp-own", ""), placeholder: "e.g. PAID", "aria-label": "Stamp words", maxlength: "60" });
-        setTimeout(() => words.focus(), 0);
-        if (await this.#dialog("Your own stamp", [el("label", { class: "rd-field" }, "Words on the stamp", words)],
-          [["cancel", "Cancel"], ["ok", "Stamp", true]]) !== "ok" || !words.value.trim()) return;
-        label = words.value.trim();
-        store.set("pdfm-stamp-own", label);
-      }
-      store.set("pdfm-stamp", this.stampSelect.value);
-      store.set("pdfm-stamp-dated", dated);
-      const p = view.viewport.convertToPdfPoint(...a), q = view.viewport.convertToPdfPoint(...b);
-      const rect = [Math.min(p[0], q[0]), Math.min(p[1], q[1]), Math.max(p[0], q[0]), Math.max(p[1], q[1])];
-      this.#applyMarkup([{ op: "add", page: at.n, kind: "stamp", rect, label, dated }], "Could not stamp the page: ");
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up, { once: true });
-  }
-  // -- end of stamps --
-
-  /** Underline or strike out the selected words. */
-  #markSelection() {
-    const kind = { UNDERLINE: "underline", STRIKEOUT: "strikeout" }[this.markupMode];
-    const sel = window.getSelection();
-    if (!kind || !sel || sel.isCollapsed || !sel.rangeCount) return;
-    const pages = new Map();
-    for (const r of sel.getRangeAt(0).getClientRects()) {
-      if (r.width < 1 || r.height < 1) continue;
-      const at = this.#pointOnPage({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, target: document.body });
-      if (!at || !this.container.contains(at.view.div)) continue;
-      const box = at.view.div.getBoundingClientRect(), dx = box.left + at.view.div.clientLeft, dy = box.top + at.view.div.clientTop;
-      const a = at.view.viewport.convertToPdfPoint(r.left - dx, r.top - dy), b = at.view.viewport.convertToPdfPoint(r.right - dx, r.bottom - dy);
-      const rect = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
-      if (!pages.has(at.n)) pages.set(at.n, []);
-      pages.get(at.n).push(rect);
-    }
-    if (!pages.size) return;
-    sel.removeAllRanges();
-    const color = this.#markupColor();
-    this.#applyMarkup([...pages].map(([page, rects]) => ({ op: "add", page, kind, rects, color })));
-  }
-
-  /** A box to type a note into, where the page was clicked. */
-  #openNoteBox(at) {
-    this.#cancelMarkup();
-    const text = el("textarea", { rows: 4, placeholder: "Your comment", "aria-label": "Note" });
-    const add = el("button", { type: "button", class: "rd-btn primary" }, "Add note");
-    const cancel = el("button", { type: "button", class: "rd-btn" }, "Cancel");
-    const box = el("div", { class: "rd-notebox", style: `left:${at.x}px;top:${at.y}px` }, text, el("div", { class: "rd-notebtns" }, cancel, add));
-    at.view.div.append(box);
-    this.#keepInColumn(box, at);
-    this.noteBox = box;
-    const done = () => {
-      const words = text.value.trim();
-      this.#cancelMarkup();
-      if (words) this.#applyMarkup([{ op: "add", page: at.n, kind: "note", at: at.pt, text: words, color: "#f5c400" }]);
-    };
-    add.addEventListener("click", done);
-    cancel.addEventListener("click", () => this.#cancelMarkup());
-    this.noteCommit = () => { if (box.isConnected) done(); this.noteCommit = null; };
-    text.addEventListener("keydown", (e) => {
-      e.stopPropagation();
-      if (e.key === "Escape") this.#cancelMarkup();
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) done();
-      // Ctrl+S here: the note goes in, then the document is saved (as anywhere else in the reader).
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && !e.altKey) { e.preventDefault(); this.#saveKey(e); }
-    });
-    setTimeout(() => text.focus(), 0);
-  }
-
-  // ---- the Comments tab --------------------------------------------------------------
-  /** Every annotation with what's written on it, by page, replies under what they answer. */
-  async #listComments() {
-    const doc = this.doc, list = this.commentsList;
-    if (!doc || this.commentsPanel.hidden) return;
-    const seq = (this.commentsSeq = (this.commentsSeq || 0) + 1);
-    list.replaceChildren(el("p", { class: "rd-muted" }, "Reading comments…"));
-    const items = [];
-    for (let n = 1; n <= doc.numPages; n++) {
-      let annots = [];
-      try { annots = await (await doc.getPage(n)).getAnnotations({ intent: "display" }); } catch (e) { /* skip the page */ }
-      if (seq !== this.commentsSeq || doc !== this.doc) return;
-      for (const a of annots) {
-        if (!KIND_NAMES[a.subtype] || a.replyType === "Group") continue;
-        items.push({ page: n, id: a.id, kind: a.subtype === "Line" && a.lineEndings?.[1] && a.lineEndings[1] !== "None" ? "Arrow" : KIND_NAMES[a.subtype],
-          text: a.contentsObj?.str || "", author: a.titleObj?.str || "", date: a.modificationDate || a.creationDate,
-          reply: a.inReplyTo || null, rect: a.rect, color: a.color });
-      }
-    }
-    const byId = new Map(items.map((it) => [it.id, it]));
-    const top = items.filter((it) => !it.reply || !byId.has(it.reply));
-    for (const it of items) if (it.reply && byId.has(it.reply)) (byId.get(it.reply).replies ||= []).push(it);
-    const fresh = this.#changed() ? [el("p", { class: "rd-muted" }, "Highlights and drawings not saved yet show here once you save or add a note.")] : [];
-    if (!top.length) {
-      list.replaceChildren(...fresh, el("p", { class: "rd-muted" }, "No comments or markup yet. Use Note, Underline, Strike out or Shapes in Annotate & sign."));
-      return;
-    }
-    list.replaceChildren(...fresh, ...top.map((it) => this.#commentCard(it)));
-  }
-
-  // -- comment summary and XFDF --
-  async #commentRequest(what, extra = null) {
-    await this.chain;
-    const tab = this.activeTab;
-    const body = new FormData();
-    body.append("file", new Blob([await this.#currentBytes()], { type: "application/pdf" }), "file.pdf");
-    body.append("password", tab?.password || "");
-    body.append("name", this.name || "document.pdf");
-    if (extra) body.append("xfdf", extra, extra.name);
-    const res = await fetch(`/api/comments/${what}`, { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-    return res;
-  }
-
-  /** A PDF listing the comments, opened in a new tab. */
-  async #commentSummary() {
-    if (!this.doc) return;
-    try {
-      const res = await this.#commentRequest("summary");
-      const stem = (this.name || "document").replace(/\.pdf$/i, "");
-      await this.openBytes(new Uint8Array(await res.arrayBuffer()), `${stem} — comments.pdf`);
-    } catch (e) { this.toast("Couldn't make the summary: " + (e.message || e)); }
-  }
-
-  async #exportComments() {
-    if (!this.doc) return;
-    try {
-      const res = await this.#commentRequest("export");
-      const n = Number(res.headers.get("X-Pdfm-Count")) || 0;
-      if (!n) { this.toast("This document has no comments to export."); return; }
-      const stem = (this.name || "document").replace(/\.pdf$/i, "");
-      await this.#saveBytes(new Uint8Array(await res.arrayBuffer()), `${stem}.xfdf`, () => {}, this.activeTab?.fileId);
-    } catch (e) { this.toast("Couldn't export the comments: " + (e.message || e)); }
-  }
-
-  #importComments(file) {
-    return this.#changeDocument(async (bytes, tab) => {
-      const body = new FormData();
-      body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
-      body.append("password", tab.password || "");
-      body.append("xfdf", file, file.name);
-      return fetch("/api/comments/import", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
-    }, {
-      failure: "Couldn't add the comments: ",
-      after: (res) => {
-        const n = Number(res.headers.get("X-Pdfm-Added")) || 0, skipped = res.headers.get("X-Pdfm-Skipped");
-        this.toast(n ? `Added ${n} comment${n === 1 ? "" : "s"}${skipped ? ` (some kinds couldn't be added: ${skipped})` : ""}.`
-          : "Nothing to add: these comments are already here.");
-        this.#listComments();
-      },
-    });
-  }
-  // -- end of comment summary and XFDF --
-
-  #commentCard(it, isReply = false) {
-    const date = (raw) => {
-      const d = raw && pdfjs.PDFDateString.toDateObject(raw);
-      return d ? d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
-    };
-    const swatch = it.color ? `rgb(${[...it.color].join(",")})` : "transparent";
-    const head = el("div", { class: "rd-commenthead" },
-      el("i", { class: "rd-commentdot", style: `background:${swatch}` }),
-      el("b", {}, isReply ? "Reply" : it.kind), el("span", {}, it.author ? " · " + it.author : ""),
-      el("span", { class: "rd-muted" }, ` · p. ${this.labels?.[it.page - 1] || it.page}`));
-    const body = el("p", { class: "rd-commenttext" + (it.text ? "" : " rd-muted") }, it.text || "No comment");
-    const when = el("div", { class: "rd-muted rd-commentdate" }, date(it.date));
-    const btn = (label, fn) => { const b = el("button", { type: "button", class: "rd-linkbtn" }, label); b.addEventListener("click", (e) => { e.stopPropagation(); fn(); }); return b; };
-    const card = el("article", { class: "rd-comment" + (isReply ? " reply" : ""), tabindex: "0" }, head, body, when);
-    const ask = (label, value, apply) => {
-      card.querySelector(".rd-commentedit")?.remove();
-      const area = el("textarea", { rows: 3, "aria-label": label }, value);
-      const ok = el("button", { type: "button", class: "rd-btn primary" }, label);
-      const box = el("div", { class: "rd-commentedit" }, area, el("div", { class: "rd-notebtns" }, btn("Cancel", () => box.remove()), ok));
-      ok.addEventListener("click", (e) => { e.stopPropagation(); apply(area.value.trim()); });
-      area.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) ok.click(); if (e.key === "Escape") box.remove(); });
-      card.append(box);
-      area.focus();
-    };
-    card.append(el("div", { class: "rd-commentbtns" },
-      isReply ? null : btn("Reply", () => ask("Reply", "", (text) => text && this.#applyMarkup([{ op: "reply", page: it.page, id: it.id, text }], "Could not reply: "))),
-      btn(it.text ? "Edit" : "Add comment", () => ask("Save", it.text, (text) => this.#applyMarkup([{ op: "text", page: it.page, id: it.id, text }], "Could not change the comment: "))),
-      btn("Delete", async () => {
-        const what = isReply ? "this reply" : `this ${it.kind.toLowerCase()}${it.replies?.length ? " and its replies" : ""}`;
-        if (await this.ask(`Delete ${what}?`, "Undo (Ctrl+Z) brings it back until you save.",
-          [["cancel", "Cancel"], ["delete", "Delete", true]]) === "delete") {
-          this.#applyMarkup([{ op: "delete", page: it.page, id: it.id }], "Could not delete it: ");
-        }
-      })));
-    card.addEventListener("click", () => this.#showComment(it));
-    card.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === card) this.#showComment(it); });
-    for (const r of it.replies || []) card.append(this.#commentCard(r, true));
-    return card;
-  }
-
-  /** Scroll to an annotation and flash it. */
-  #showComment(it) {
-    const [x0, y0, x1, y1] = it.rect || [0, 0, 0, 0];
-    this.pdfViewer.scrollPageIntoView({ pageNumber: it.page, destArray: [null, { name: "XYZ" }, x0 - 40, y1 + 60, null] });
-    setTimeout(() => {
-      const view = this.pdfViewer.getPageView(it.page - 1);
-      if (!view?.div || !view.viewport) return;
-      const [a, b, c, d] = viewRect(view.viewport, [x0, y0, x1, y1]);
-      const flash = el("div", { class: "rd-flash", style: `left:${Math.min(a, c) - 4}px;top:${Math.min(b, d) - 4}px;width:${Math.abs(c - a) + 8}px;height:${Math.abs(d - b) + 8}px` });
-      view.div.append(flash);
-      setTimeout(() => flash.remove(), 1600);
-    }, 150);
-  }
-
-  // ---- pictures and links on the page (pageimages.py, markup.py) -------------------
-  /** Pictures or Links mode: outlines over the pages' pictures or links. */
-  #objectBoxes() {
-    this.viewerEl?.querySelectorAll(".rd-objbox, .rd-objtools, .rd-linkdraft").forEach((n) => n.remove());
-    if (this.markupMode === "CERTSIGN") this.#hint("Drag a box where your signature should appear, then choose your Digital ID.", 5000);
-    if ((this.markupMode !== "IMAGES" && this.markupMode !== "LINKS") || !this.doc) return;
-    for (let i = 0; i < this.pdfViewer.pagesCount; i++) {
-      if (this.pdfViewer.getPageView(i)?.canvas?.width) this.#drawObjectBoxes(i + 1);
-    }
-    if (this.markupMode === "IMAGES" && !this.imagesHinted) {
-      this.imagesHinted = true;
-      this.#hint("Click a picture to pick it: drag it to move it, drag a corner to resize it (Shift: freely), or replace or delete it.", 6000);
-    }
-  }
-
-  /** The pictures of the shown document, by page (asked once per change of it). */
-  #imagesOf(tab) {
-    if (tab.imagesFor !== (tab.version || 0) || !tab.images) {
-      tab.imagesFor = tab.version || 0;
-      tab.images = (async () => {
-        const body = new FormData();
-        body.append("file", new Blob([await this.#fullBytes()], { type: "application/pdf" }), "file.pdf");
-        body.append("password", tab.password || "");
-        const res = await fetch("/api/images/list", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
-        return res.ok ? (await res.json()).pages || {} : {};
-      })().catch(() => ({}));
-    }
-    return tab.images;
-  }
-
-  /** Where a link goes: { url } or { page }. */
-  async #linkTarget(a) {
-    if (a.url || a.unsafeUrl) return { url: a.url || a.unsafeUrl };
-    try {
-      let dest = a.dest;
-      if (typeof dest === "string") dest = await this.doc.getDestination(dest);
-      if (Array.isArray(dest) && dest[0]) {
-        const index = typeof dest[0] === "object" ? await this.doc.getPageIndex(dest[0]) : dest[0];
-        return { page: index + 1 };
-      }
-    } catch (e) { /* somewhere this reader can't name */ }
-    return {};
-  }
-
-  async #drawObjectBoxes(n) {
-    const view = this.pdfViewer.getPageView(n - 1), tab = this.activeTab, mode = this.markupMode, doc = this.doc;
-    if (!view?.div || !view.viewport || !tab) return;
-    let items = [];
-    if (mode === "IMAGES") items = (await this.#imagesOf(tab))[n] || [];
-    else if (mode === "LINKS") {
-      try { items = (await (await doc.getPage(n)).getAnnotations({ intent: "display" })).filter((a) => a.subtype === "Link"); } catch (e) { items = []; }
-    }
-    if (mode !== this.markupMode || doc !== this.doc) return;
-    view.div.querySelectorAll(".rd-objbox, .rd-objtools").forEach((x) => x.remove());
-    const vp = view.viewport;
-    for (const item of items) {
-      const [a, b, c, d] = viewRect(vp, item.box || item.rect);
-      const box = el("div", { class: "rd-objbox" + (mode === "LINKS" ? " link" : "") + (item.editable === false ? " locked" : ""),
-        style: `left:${Math.min(a, c)}px;top:${Math.min(b, d)}px;width:${Math.abs(c - a)}px;height:${Math.abs(d - b)}px` });
-      if (mode === "IMAGES") {
-        box.title = item.editable === false ? "This picture is drawn as part of a group, so it can't be edited here" : "Drag to move; click to pick it";
-        if (item.editable !== false) for (const h of ["nw", "ne", "sw", "se"]) box.append(el("i", { class: "rd-handle " + h, "data-handle": h }));
-        box.addEventListener("pointerdown", (e) => this.#grabImage(e, n, item, box));
-      } else {
-        const target = await this.#linkTarget(item);
-        box.title = target.url ? `Goes to ${target.url}` : target.page ? `Goes to page ${target.page}` : "A link";
-        box.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); });
-        box.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); this.#editLink(n, item, null, target); });
-      }
-      view.div.append(box);
-      if (mode === "IMAGES" && this.pickedImage?.page === n && this.pickedImage.index === item.index) this.#pickImage({ page: n, item, box }, false);
-    }
-  }
-
-  /** Pick a picture (null: none): its handles and Replace / Delete. */
-  #pickImage(picked, redraw = true) {
-    this.viewerEl.querySelectorAll(".rd-objbox.picked").forEach((b) => b.classList.remove("picked"));
-    this.viewerEl.querySelectorAll(".rd-objtools").forEach((t) => t.remove());
-    this.pickedImage = picked ? { page: picked.page, index: picked.item.index } : null;
-    if (!picked) return;
-    picked.box.classList.add("picked");
-    const btn = (icon, label, fn) => {
-      const b = el("button", { type: "button", class: "rd-btn", html: svg(icon) + `<span>${label}</span>` });
-      b.addEventListener("pointerdown", (e) => e.stopPropagation());
-      b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
-      return b;
-    };
-    const tools = el("div", { class: "rd-objtools", style: `left:${picked.box.offsetLeft}px;top:${Math.max(0, picked.box.offsetTop - 42)}px` },
-      btn("image", "Replace…", () => this.#editImage("replace")), btn("trash", "Delete", () => this.#editImage("delete")));
-    picked.box.parentElement.append(tools);
-    if (redraw) picked.box.focus?.();
-  }
-
-  /** Drag a picture (or one of its corners) to move (or resize) it. */
-  #grabImage(e, page, item, box) {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (item.editable === false) { this.toast("That picture is drawn as part of a group, so it can't be edited here.", 4000); return; }
-    this.#pickImage({ page, item, box }, false);
-    const handle = e.target.dataset?.handle || null;
-    const start = { x: e.clientX, y: e.clientY, left: box.offsetLeft, top: box.offsetTop, width: box.offsetWidth, height: box.offsetHeight };
-    const ratio = start.width / Math.max(1, start.height);
-    let moved = false;
-    const move = (ev) => {
-      const dx = ev.clientX - start.x, dy = ev.clientY - start.y;
-      if (!moved && Math.hypot(dx, dy) < 3) return;
-      moved = true;
-      let { left, top, width, height } = start;
-      if (!handle) { left += dx; top += dy; }
-      else {
-        if (handle.includes("e")) width = start.width + dx;
-        if (handle.includes("w")) width = start.width - dx;
-        if (handle.includes("s")) height = start.height + dy;
-        if (handle.includes("n")) height = start.height - dy;
-        width = Math.max(8, width); height = Math.max(8, height);
-        if (!ev.shiftKey) {  // the picture keeps its proportions
-          if (Math.abs(dx) * start.height >= Math.abs(dy) * start.width) height = width / ratio; else width = height * ratio;
-        }
-        if (handle.includes("w")) left = start.left + start.width - width;
-        if (handle.includes("n")) top = start.top + start.height - height;
-      }
-      Object.assign(box.style, { left: left + "px", top: top + "px", width: width + "px", height: height + "px" });
-      this.viewerEl.querySelectorAll(".rd-objtools").forEach((t) => { t.style.left = left + "px"; t.style.top = Math.max(0, top - 42) + "px"; });
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      if (!moved) return;
-      const view = this.pdfViewer.getPageView(page - 1), vp = view.viewport;
-      const [x0, y0] = vp.convertToPdfPoint(box.offsetLeft, box.offsetTop);
-      const [x1, y1] = vp.convertToPdfPoint(box.offsetLeft + box.offsetWidth, box.offsetTop + box.offsetHeight);
-      this.#changeImages([{ op: "move", page, index: item.index, box: [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)] }]);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up, { once: true });
-  }
-
-  async #editImage(op) {
-    const picked = this.pickedImage;
-    if (!picked) return;
-    if (op === "delete") { this.pickedImage = null; await this.#changeImages([{ op: "delete", page: picked.page, index: picked.index }]); return; }
-    const file = await new Promise((resolve) => {
-      const input = el("input", { type: "file", accept: "image/png,image/jpeg,image/gif,image/webp,image/bmp,image/tiff", hidden: true });
-      input.addEventListener("change", () => { resolve(input.files[0] || null); input.remove(); });
-      input.addEventListener("cancel", () => { resolve(null); input.remove(); });
-      this.root.append(input);
-      input.click();
-    });
-    if (file) await this.#changeImages([{ op: "replace", page: picked.page, index: picked.index, picture: "picture0" }], [file]);
-  }
-
-  #changeImages(changes, files = []) {
-    return this.#changeDocument((bytes, tab) => {
-      const body = new FormData();
-      body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
-      body.append("password", tab.password || "");
-      body.append("changes", JSON.stringify(changes));
-      files.forEach((f, i) => body.append("picture" + i, f, f.name || "picture"));
-      return fetch("/api/images/edit", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
-    }, { failure: "Could not change the picture: " });
-  }
-
-  /** Links mode: drag a box on the page for a new link. */
-  #drawLinkBox(e, at) {
-    this.#dragBox(at, "Drag a box over what should be clickable to add a link.", (rect) => this.#editLink(at.n, null, rect));
-  }
-
-  /** Drag out a box on the page from ``at``; ``done(rect)`` gets it in PDF coordinates. */
-  #dragBox(at, tooSmall, done) {
-    const view = at.view, draft = el("div", { class: "rd-linkdraft", style: `left:${at.x}px;top:${at.y}px;width:0;height:0` });
-    view.div.append(draft);
-    const box = view.div.getBoundingClientRect(), ox = box.left + view.div.clientLeft, oy = box.top + view.div.clientTop;
-    let end = [at.x, at.y];
-    const move = (ev) => {
-      end = [ev.clientX - ox, ev.clientY - oy];
-      Object.assign(draft.style, { left: Math.min(at.x, end[0]) + "px", top: Math.min(at.y, end[1]) + "px",
-        width: Math.abs(end[0] - at.x) + "px", height: Math.abs(end[1] - at.y) + "px" });
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      draft.remove();
-      if (Math.abs(end[0] - at.x) < 6 || Math.abs(end[1] - at.y) < 6) { this.toast(tooSmall, 3000); return; }
-      const a = view.viewport.convertToPdfPoint(at.x, at.y), b = view.viewport.convertToPdfPoint(...end);
-      done([Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])]);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up, { once: true });
-  }
-
-  /** Change where a link goes, or delete it; or say where a new one goes. */
-  async #editLink(n, link, rect, target = {}) {
-    const toWeb = el("input", { type: "radio", name: "rd-linkto", value: "web" });
-    const toPage = el("input", { type: "radio", name: "rd-linkto", value: "page" });
-    const url = el("input", { type: "text", value: target.url || "", placeholder: "https://example.com or name@example.com", "aria-label": "Web or email address" });
-    const page = el("input", { type: "number", min: "1", max: String(this.doc.numPages), value: target.page ? String(target.page) : "", "aria-label": "Page" });
-    (target.page && !target.url ? toPage : toWeb).checked = true;
-    url.addEventListener("input", () => { toWeb.checked = true; });
-    page.addEventListener("input", () => { toPage.checked = true; });
-    setTimeout(() => (toPage.checked ? page : url).focus(), 0);
-    const answer = await this.#dialog(link ? "Link" : "New link", [
-      el("label", { class: "rd-field" }, el("span", {}, toWeb, " Goes to a web or email address"), url),
-      el("label", { class: "rd-field" }, el("span", {}, toPage, ` Goes to a page of this document (1–${this.doc.numPages})`), page)],
-      link ? [["delete", "Delete the link"], ["cancel", "Cancel"], ["ok", "Save", true]] : [["cancel", "Cancel"], ["ok", "Add the link", true]]);
-    if (answer === "delete") { await this.#applyMarkup([{ op: "delete", page: n, id: link.id }], "Could not delete the link: "); return; }
-    if (answer !== "ok") return;
-    const where = toPage.checked ? { to_page: Number(page.value) } : { url: url.value.trim() };
-    if (!where.url && !where.to_page) { this.toast("Say where the link goes."); return; }
-    if (link) await this.#applyMarkup([{ op: "link", page: n, id: link.id, ...where }], "Could not change the link: ");
-    else await this.#applyMarkup([{ op: "add", page: n, kind: "link", rect, ...where }], "Could not add the link: ");
-  }
-
-  // -- reader redaction --------------------------------------------------------------------
-  // Mark areas to black out (drag boxes, or select words), then Apply sends
-  // them to /api/redact/apply (redact.py, method "remove"): what's under them
-  // is taken out of the file and black boxes are drawn. The marks belong to
-  // the tab and to the version of the document they were made on.
-
-  #buildRedact() {
-    this.redactBtn = el("button", { class: "rd-btn rd-tool", type: "button", "data-mode": "REDACT", "aria-pressed": "false",
-      title: "Redact: mark what should be blacked out for good, then Apply", html: svg("redact") + "<span>Redact</span>" });
-    this.annotTools.push(this.redactBtn);
-    this.redactHow = el("select", { class: "rd-zoom", "aria-label": "How to mark", hidden: true },
-      el("option", { value: "box" }, "Draw boxes"), el("option", { value: "text" }, "Select words"));
-    this.redactHow.value = store.get("pdfm-redact-how", "box");
-    this.redactHow.addEventListener("change", () => {
-      store.set("pdfm-redact-how", this.redactHow.value);
-      this.root.dataset.redact = this.redactHow.value;
-    });
-    // The verb, in the Redact page's style: "Black out 3 areas", seal red.
-    this.redactApplyBtn = el("button", { class: "rd-btn primary seal rd-redact-apply", type: "button", hidden: true, disabled: true,
-      title: "Black out the marked areas for good", html: svg("redact") + "<span>Black out</span>" });
-    this.redactApplyBtn.addEventListener("click", () => this.#applyRedactions());
-  }
-
-  #redactByText() { return this.redactHow?.value === "text"; }
-
-  /** The tab's marks, {page: [[x0, y0, x1, y1]]} in PDF points; marks made on
-   *  an earlier version of the document are dropped (its pages may have moved). */
-  #redactMarks(tab = this.activeTab) {
-    if (!tab) return {};
-    const version = tab.version || 0;
-    if (tab.redactMarks?.version !== version) tab.redactMarks = { version, pages: {} };
-    return tab.redactMarks.pages;
-  }
-
-  #redactCount(tab = this.activeTab) {
-    return Object.values(this.#redactMarks(tab)).reduce((n, list) => n + list.length, 0);
-  }
-
-  #showRedactBar(name) {
-    const on = name === "REDACT";
-    if (!this.redactHow) return;
-    this.redactHow.hidden = this.redactApplyBtn.hidden = !on;
-    this.root.dataset.redact = on ? this.redactHow.value : "";
-    if (on) this.#showRedactCount(); else this.#showSaveState();
-    if (on && !this.redactHinted) {
-      this.redactHinted = true;
-      this.#hint("Drag boxes over what should go (or choose Select words), then Black out. Click × on a mark to remove it.", 7000);
-    }
-  }
-
-  #showRedactCount() {
-    const n = this.#redactCount();
-    this.redactApplyBtn.disabled = !n;
-    this.redactApplyBtn.querySelector("span").textContent = n ? `Black out ${n} ${n === 1 ? "area" : "areas"}` : "Black out";
-    this.redactApplyBtn.title = n ? `Black out the ${n === 1 ? "marked area" : n + " marked areas"} for good` : "Mark something to black out first";
-    this.#showSaveState();
-  }
-
-  #addRedactions(n, rects) {
-    const list = (this.#redactMarks()[n] ||= []);
-    for (const r of rects) list.push(r.map((v) => Math.round(v * 100) / 100));
-    this.#drawRedactions(n);
-    this.#showRedactCount();
-  }
-
-  /** Red outlines (with a remove button) over the marks on page ``n``. */
-  #drawRedactions(n) {
-    const view = this.pdfViewer?.getPageView(n - 1);
-    if (!view?.div || !view.viewport) return;
-    view.div.querySelectorAll(".rd-redactmark").forEach((x) => x.remove());
-    const list = this.#redactMarks()[n] || [];
-    list.forEach((rect, i) => {
-      const [a, b, c, d] = viewRect(view.viewport, rect);
-      const remove = el("button", { type: "button", class: "rd-redactx", title: "Remove this mark", "aria-label": "Remove this mark", html: svg("x") });
-      remove.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); });
-      remove.addEventListener("click", (e) => {
-        e.stopPropagation();
-        list.splice(i, 1);
-        this.#drawRedactions(n);
-        this.#showRedactCount();
-      });
-      view.div.append(el("div", { class: "rd-redactmark", title: "Marked for redaction",
-        style: `left:${Math.min(a, c)}px;top:${Math.min(b, d)}px;width:${Math.abs(c - a)}px;height:${Math.abs(d - b)}px` }, remove));
-    });
-  }
-
-  /** Mark the selected words (one box per line piece, a little padded). */
-  #redactSelection() {
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || !sel.rangeCount) return;
-    const pages = new Map();
-    for (const r of sel.getRangeAt(0).getClientRects()) {
-      if (r.width < 1 || r.height < 1) continue;
-      const at = this.#pointOnPage({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, target: document.body });
-      if (!at || !this.container.contains(at.view.div)) continue;
-      const box = at.view.div.getBoundingClientRect(), dx = box.left + at.view.div.clientLeft, dy = box.top + at.view.div.clientTop;
-      const a = at.view.viewport.convertToPdfPoint(r.left - dx, r.top - dy), b = at.view.viewport.convertToPdfPoint(r.right - dx, r.bottom - dy);
-      const pad = 0.75;
-      const rect = [Math.min(a[0], b[0]) - pad, Math.min(a[1], b[1]) - pad, Math.max(a[0], b[0]) + pad, Math.max(a[1], b[1]) + pad];
-      if (!pages.has(at.n)) pages.set(at.n, []);
-      pages.get(at.n).push(rect);
-    }
-    if (!pages.size) return;
-    sel.removeAllRanges();
-    for (const [n, rects] of pages) this.#addRedactions(n, rects);
-  }
-
-  async #applyRedactions() {
-    const tab = this.activeTab, marks = this.#redactMarks(tab), count = this.#redactCount(tab);
-    if (!tab || !count) { this.toast("Mark something first: drag a box over it, or choose Select words."); return; }
-    const answer = await this.#dialog(`Black out ${count === 1 ? "this area" : count + " areas"}?`, [
-      el("p", {}, `This removes what's under the ${count === 1 ? "marked area" : count + " marked areas"} for good once you save: `
-        + "the words, the covered parts of pictures, and comments or form fields there. The rest of the page stays as it is."),
-      el("p", {}, "Until then, Undo (Ctrl+Z) brings it back. Saving makes a redacted copy beside the original, unless you choose to replace it.")],
-      [["cancel", "Cancel"], ["ok", count === 1 ? "Black out 1 area" : `Black out ${count} areas`, true]]);
-    if (answer !== "ok") return;
-    const boxes = Object.fromEntries(Object.entries(marks).filter(([, list]) => list.length));
-    await this.#changeDocument((bytes, t) => this.#post("/api/redact/apply", bytes, t, { boxes: JSON.stringify(boxes) }), {
-      failure: "Could not redact: ",
-      after: (res) => {
-        let done = {};
-        try { done = JSON.parse(res.headers.get("X-Pdfm-Redacted") || "{}"); } catch (e) { /* the default words do */ }
-        const pictures = Object.entries(done.pictures || {});
-        let message = `Blacked out ${done.areas || count} area${(done.areas || count) === 1 ? "" : "s"}.`;
-        if (pictures.length) {
-          message += ` Page${pictures.length === 1 ? "" : "s"} ${pictures.map(([p]) => p).join(", ")} became `
-            + `${pictures.length === 1 ? "a picture" : "pictures"} (${[...new Set(pictures.map(([, why]) => why))].join("; ")}).`;
-        }
-        tab.redacted = true;  // Save makes a redacted copy from now on; replacing the original is asked
-        this.toast(message + " Save a redacted copy to keep it.", 12000, [["Save redacted copy…", () => this.saveRedacted()],
-          ...(tab.fileId ? [["Replace original", () => this.replaceWithRedacted()]] : [])]);
-      },
-    });
-    if (this.markupMode === "REDACT") this.#showRedactCount();
-  }
-  // -- end of reader redaction --
 
   // ---- digital ID signatures (certsign.py) --------------------------------------------
   /** Sign the document with a digital ID, its signature shown in ``rect`` on page ``n``. */
-  async #signWithId(n, rect) {
+  async _signWithId(n, rect) {
     const pfx = el("input", { type: "file", accept: ".pfx,.p12,application/x-pkcs12", "aria-label": "Digital ID file" });
     const password = el("input", { type: "password", autocomplete: "off", "aria-label": "Digital ID password" });
     const reason = el("input", { type: "text", placeholder: "e.g. I approve this document", "aria-label": "Reason" });
     const location = el("input", { type: "text", placeholder: "e.g. Vancouver", "aria-label": "Location" });
     const stamp = el("input", { type: "text", placeholder: "none (e.g. http://timestamp.digicert.com)", "aria-label": "Timestamp server",
       value: store.get("pdfm-timestamp-url", "") });
-    const answer = await this.#dialog("Digital ID", [
+    const answer = await this._dialog("Digital ID", [
       el("p", {}, "Your Digital ID is a .pfx or .p12 file with your certificate. The signature seals the document: a change after signing shows up when it's checked."),
       el("label", { class: "rd-field" }, "Digital ID file", pfx), el("label", { class: "rd-field" }, "Its password", password),
       el("label", { class: "rd-field" }, "Reason (optional)", reason), el("label", { class: "rd-field" }, "Location (optional)", location),
@@ -3133,7 +1781,7 @@ export class Reader {
     if (!file) { this.toast("Choose your Digital ID file (.pfx or .p12)."); return; }
     store.set("pdfm-timestamp-url", stamp.value.trim());
     const tab = this.activeTab, version = tab?.version || 0;
-    await this.#changeDocument((bytes, t) => {
+    await this._changeDocument((bytes, t) => {
       const body = new FormData();
       body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
       body.append("pfx", file, file.name);
@@ -3142,7 +1790,7 @@ export class Reader {
       return fetch("/api/sign/cert", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
     }, { failure: "Could not sign: ", signing: true });
     if ((tab?.version || 0) !== version) {
-      if (this.markupMode === "CERTSIGN") this.#setEditMode("NONE");
+      if (this.markupMode === "CERTSIGN") this._setEditMode("NONE");
       tab.signedWarned = false;
       this.toast("Signed. Save it now: anything changed after this shows as changed after signing.", 7000, ["Save", () => this.save()]);
     }
@@ -3166,7 +1814,7 @@ export class Reader {
     const body = new FormData();
     if (this.isPristine(tab)) body.append("id", tab.fileId);
     else {
-      const bytes = tab === this.activeTab ? await this.#fullBytes() : tab.bytes;  // (annotations not saved yet don't matter here)
+      const bytes = tab === this.activeTab ? await this._fullBytes() : tab.bytes;  // (annotations not saved yet don't matter here)
       if (!bytes) return null;
       body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
     }
@@ -3279,7 +1927,7 @@ export class Reader {
   makeFillable() {
     if (!this.doc) return;
     this.formbar.hidden = true;
-    return this.#changeDocument((bytes, tab) => this.#post("/api/form/fillable", bytes, tab), {
+    return this._changeDocument((bytes, tab) => this._post("/api/form/fillable", bytes, tab), {
       failure: "Couldn't make it fillable: ",
       after: (res) => {
         const n = Number(res.headers.get("X-Pdfm-Fields")) || 0;
@@ -3335,7 +1983,7 @@ export class Reader {
       el("small", {}, [s.time ? "Signed " + when(s.time) + (s.time_source === "timestamp" ? " (time from a timestamp server)" : " (time from the signer's computer)") : "",
         s.reason ? "Reason: " + s.reason : "", s.location ? "Location: " + s.location : "", s.page ? "Page " + s.page : "",
         s.issuer ? "Certificate from " + s.issuer : ""].filter(Boolean).join(" · "))));
-    await this.#dialog("Signatures", [el("ul", { class: "rd-siglist" }, ...items)], [["ok", "Close", true]]);
+    await this._dialog("Signatures", [el("ul", { class: "rd-siglist" }, ...items)], [["ok", "Close", true]]);
   }
 
   // ---- comparing revisions (overlay.js) -------------------------------------------
@@ -3344,7 +1992,7 @@ export class Reader {
   async compareRevision() {
     if (!this.doc) return;
     const others = this.tabs.filter((t) => t !== this.activeTab);
-    const answer = await this.#dialog("Compare with another revision", [el("p", {},
+    const answer = await this._dialog("Compare with another revision", [el("p", {},
       "The other version is drawn over this one, page by page: what both have is black, what's only in that version red, "
       + "and what's only in this one blue. Pick the other version:")],
       [...others.map((t) => ["tab:" + t.id, t.name]), ["file", "Choose a file…"], ["cancel", "Cancel"]]);
@@ -3406,248 +2054,8 @@ export class Reader {
     }
   }
 
-  /** Draw, type or pick a signature, then place it: on ``line`` when given
-   *  (a printed line to sign on, from the file's facts: {page, rect: the
-   *  blank or rule in PDF points, text: the label's size}), else about two
-   *  inches wide in the middle of what's shown. It moves and resizes like
-   *  any picture afterwards. */
-  async sign({ line = null } = {}) {
-    if (!this.doc || !this.uiManager) return;
-    const image = await this.#signatureDialog();
-    if (!image) return;
-    const file = new File([image], "signature.png", { type: "image/png" });
-    // Annotating first: until then the line's page may have no layer to put
-    // pictures on yet (just after the file opened), which put the signature
-    // in the middle of the view instead of on its line.
-    if (this.annotbar.hidden) this.openAnnotate();
-    // (The layer pdf.js uses for the page shown stands in when the line's page
-    // has none of its own yet, e.g. in a window that was minimized.)
-    const current = this.uiManager?.currentLayer;
-    const onLine = line ? (await this.#editorLayer(line.page - 1)) || (current?.pageIndex === line.page - 1 ? current : null) : null;
-    const layer = onLine || this.uiManager?.currentLayer;
-    if (!layer) { this.toast("Scroll to the page to sign, then try again."); return; }
-    // The picture's size first: pdf.js then makes the editor at its final
-    // place and size and lays it out itself once the picture is in (see #placeSignature).
-    const bitmap = await createImageBitmap(file).catch(() => null);
-    const aspect = bitmap && bitmap.width > 0 ? bitmap.height / bitmap.width : 0;
-    bitmap?.close();
-    const editor = aspect > 0 ? await this.#placeSignature(layer, file, aspect, onLine ? line : null) : null;
-    if (!editor || !(await this.#shownSignature(editor))) { this.toast("The signature couldn't be placed."); return; }
-    this.#hint(editor.signedOn === "line" ? "Signed on the line. Drag it to move it; use the corners to resize it."
-      : "Drag the signature into place; use the corners to resize it.", 5000);
-  }
-
-  /** The layer pdf.js puts pictures on for page ``index``, once there:
-   *  the page is brought into view to have it drawn when it isn't yet
-   *  (waits up to 3 seconds; null if it never comes). */
-  async #editorLayer(index) {
-    const get = () => this.pdfViewer.getPageView(index)?.annotationEditorLayer?.annotationEditorLayer || null;
-    if (get()) return get();
-    if (index >= 0 && index < (this.pdfViewer.pagesCount || 0)) {
-      const view = this.pdfViewer.getPageView(index), top = view?.div?.getBoundingClientRect(), col = this.#column();
-      if (!top || top.bottom < col.top || top.top > col.bottom) this.pdfViewer.currentPageNumber = index + 1;
-    }
-    for (let i = 0; i < 150 && !get(); i++) await new Promise((r) => setTimeout(r, 20));
-    return get();
-  }
-
-  /** Add a signature picture (``aspect``: its height over its width) to
-   *  ``layer``: on the line, its foot on the rule, at the start of it, 1.6
-   *  times as tall as the label's letters and no longer than the line; else
-   *  2 inches wide in the middle of what's shown of the page. The editor is
-   *  made where it goes, at its size, before its picture is read, the way
-   *  pdf.js makes a picture that isn't centred: its own layout (when the
-   *  picture comes in, and on every zoom, turn or selection after) starts
-   *  from there. (Pasted in the middle at the picture's own size and then
-   *  moved, as before, pdf.js's state still held the first place.) Returns
-   *  the editor, or null. */
-  async #placeSignature(layer, file, aspect, line) {
-    const mode = pdfjs.AnnotationEditorType.STAMP;
-    // The picture tool on, through the viewer (pdf.js's paste switches only
-    // its editors, and the viewer then still thinks no tool is on: Select or
-    // Esc did nothing, and the pages weren't drawn for editing).
-    if (this.uiManager.getMode() !== mode) {
-      const on = new Promise((resolve) => {
-        const seen = (e) => { if (e.mode === mode) { this.eventBus.off("annotationeditormodechanged", seen); resolve(); } };
-        this.eventBus.on("annotationeditormodechanged", seen);
-        // (It answers in a moment; when it doesn't, pdf.js's own switch below
-        // does it, rather than the signature taking seconds to appear.)
-        setTimeout(() => { this.eventBus.off("annotationeditormodechanged", seen); resolve(); }, 2000);
-      });
-      this.#setEditMode("STAMP");
-      await on;
-      if (!this.uiManager || !layer.div) return null;
-      if (this.uiManager.getMode() !== mode) await this.uiManager.updateMode(mode);  // (the viewer didn't answer: as pdf.js's paste)
-    }
-    layer.updateToolbar({ mode });
-    const { rotation: turn, rawDims: { pageWidth: W, pageHeight: H, pageX: px, pageY: py } } = layer.viewport;
-    let rect;
-    if (line && turn === 0) {
-      const [x0, , x1, top] = line.rect, length = Math.max(x1 - x0, 24);
-      let h = 1.6 * Math.max(line.text || 10, 4), w = h / aspect;
-      if (w > length) { w = length; h = w * aspect; }
-      rect = [x0, top, x0 + w, top + h];
-    } else {
-      line = null;
-      let w = 144, h = w * aspect;  // 2 inches wide; a tall picture no taller than 1 inch
-      if (h > 72) { h = 72; w = h / aspect; }
-      // The middle of the part of its page that is in sight (else of the page).
-      let cx = px + W / 2, cy = py + H / 2;
-      const view = this.pdfViewer.getPageView(layer.pageIndex), col = this.#column();
-      const page = view?.div.getBoundingClientRect();
-      if (page) {
-        const l = Math.max(page.left, col.left), r = Math.min(page.right, col.right), t = Math.max(page.top, col.top), b = Math.min(page.bottom, col.bottom);
-        if (r > l && b > t) [cx, cy] = view.viewport.convertToPdfPoint((l + r) / 2 - page.left - view.div.clientLeft, (t + b) / 2 - page.top - view.div.clientTop);
-      }
-      const [dx, dy] = turn % 180 ? [h / 2, w / 2] : [w / 2, h / 2];
-      rect = [cx - dx, cy - dy, cx + dx, cy + dy];
-    }
-    // editor.getRect turned back: where the editor's corner is, as fractions of the page.
-    const [r0, r1, r2, r3] = rect, across = r2 - r0, up = r3 - r1;
-    const [left, top, width, height] = {
-      0: [r0 - px, H + py - r3, across, up], 90: [r0 - px, H + py - r1, up, across],
-      180: [r2 - px, H + py - r1, across, up], 270: [r2 - px, H + py - r3, up, across] }[turn] || [r0 - px, H + py - r3, across, up];
-    const editor = layer.createAndAddNewEditor({ offsetX: 0, offsetY: 0 }, false, { bitmapFile: file });
-    if (!editor) return null;
-    // (Its picture is still being read: pdf.js takes this place and size when it's in.)
-    Object.assign(editor, { x: left / W, y: top / H, width: width / W, height: height / H, signedOn: line ? "line" : "default" });
-    return editor;
-  }
-
-  /** Wait (up to 5 s) for a signature's picture to be in and drawn, then
-   *  scroll the page column to it (a line near the foot of the page is
-   *  often below). False if it never came. */
-  async #shownSignature(editor) {
-    const drawn = () => editor.div && !editor.div.hidden && editor.div.querySelector("canvas");
-    for (let i = 0; i < 250 && !drawn(); i++) await new Promise((r) => setTimeout(r, 20));
-    if (!drawn() || !editor.parent) return false;
-    await new Promise((r) => requestAnimationFrame(r));
-    const box = editor.div.getBoundingClientRect(), col = this.#column();
-    if (box.top < col.top || box.bottom > col.bottom) this.container.scrollTop += box.top - (col.top + col.bottom) / 2 + box.height / 2;
-    if (box.left < col.left || box.right > col.right) this.container.scrollLeft += box.left - (col.left + col.right) / 2 + box.width / 2;
-    return true;
-  }
-
-  #signatureDialog() {
-    const saved = store.get("pdfm-signature", null);
-    const W = 520, H = 180, ratio = Math.min(window.devicePixelRatio || 1, 2);
-    const pad = el("canvas", { class: "rd-sigpad", width: W * ratio, height: H * ratio, "aria-label": "Draw your signature here" });
-    const ctx = pad.getContext("2d");
-    ctx.scale(ratio, ratio);
-    ctx.lineCap = ctx.lineJoin = "round"; ctx.lineWidth = 2.6; ctx.strokeStyle = "#111";
-    let drawn = false, last = null;
-    const point = (e) => { const r = pad.getBoundingClientRect(); return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height]; };
-    pad.addEventListener("pointerdown", (e) => { pad.setPointerCapture(e.pointerId); last = point(e); drawn = true; ctx.beginPath(); ctx.arc(last[0], last[1], 1.2, 0, 7); ctx.fillStyle = "#111"; ctx.fill(); });
-    pad.addEventListener("pointermove", (e) => {
-      if (!last) return;
-      const p = point(e);
-      ctx.beginPath(); ctx.moveTo(...last); ctx.lineTo(...p); ctx.stroke();
-      last = p;
-    });
-    pad.addEventListener("pointerup", () => { last = null; });
-    // Focus in it as the dialog opens, to type straight away. No form
-    // filling: WebView2's (turned on for passwords, see gui._allow_autofill)
-    // can open its list of saved names over the box as the first letters
-    // are typed, and a signature isn't a form entry.
-    const typed = el("input", { type: "text", class: "rd-sigtext", placeholder: "Or type your name", "aria-label": "Type your name",
-      autocomplete: "off", autofocus: true, spellcheck: "false" });
-    const clear = () => { ctx.clearRect(0, 0, W, H); drawn = false; };
-    typed.addEventListener("input", () => {
-      clear();
-      if (!typed.value.trim()) return;
-      ctx.fillStyle = "#111";
-      let size = 64;
-      do { ctx.font = `italic ${size}px "Segoe Script", "Brush Script MT", "Lucida Handwriting", "Apple Chancery", cursive`; size -= 4; }
-      while (ctx.measureText(typed.value).width > W - 40 && size > 16);
-      ctx.textBaseline = "middle"; ctx.textAlign = "center";
-      ctx.fillText(typed.value, W / 2, H / 2);
-      drawn = true;
-    });
-    const pick = el("input", { type: "file", accept: "image/*", hidden: true });
-    let picked = null;
-    pick.addEventListener("change", async () => {
-      const f = pick.files[0];
-      if (!f) return;
-      const img = new Image();
-      img.src = URL.createObjectURL(f);
-      await img.decode().catch(() => {});
-      clear();
-      const s = Math.min((W - 20) / img.width, (H - 20) / img.height, 1);
-      ctx.drawImage(img, (W - img.width * s) / 2, (H - img.height * s) / 2, img.width * s, img.height * s);
-      URL.revokeObjectURL(img.src);
-      drawn = true; picked = f;
-    });
-    const remember = el("input", { type: "checkbox", checked: true });
-    const body = [
-      el("p", {}, "Draw your signature with the mouse, pen or finger, type your name, or use a picture of your signature."),
-      pad,
-      el("div", { class: "rd-sigrow" }, typed,
-        el("button", { type: "button", class: "rd-btn", onclick: () => pick.click() }, "Picture…"),
-        el("button", { type: "button", class: "rd-btn", onclick: () => { typed.value = ""; clear(); } }, "Clear"), pick),
-      el("label", { class: "rd-sigremember" }, remember, "Remember this signature on this computer"),
-    ];
-    const buttons = [["cancel", "Cancel"], ["ok", "Place signature", true]];
-    if (saved) buttons.splice(1, 0, ["saved", "Use saved signature"]);
-    return this.#dialog("Sign", body, buttons).then(async (answer) => {
-      if (answer === "ok" && !drawn && saved) answer = "saved";  // (Enter with nothing drawn: the saved one)
-      if (answer === "saved") return (await fetch(saved)).blob();
-      if (answer !== "ok") return null;
-      if (!drawn) { this.toast("Draw or type a signature first."); return null; }
-      const blob = picked && !typed.value ? picked : await this.#trim(pad);
-      if (remember.checked) {
-        const reader = new FileReader();
-        reader.onload = () => store.set("pdfm-signature", reader.result);
-        reader.readAsDataURL(blob);
-      }
-      return blob;
-    });
-  }
-
-  /** The part of the pages the reader can see now: the page column, under
-   *  the bars and left of a docked file panel (and its scrollbar). */
-  #column() {
-    const c = this.container.getBoundingClientRect();
-    return { left: c.left + 8, top: c.top + 8, right: c.left + this.container.clientWidth - 8, bottom: c.top + this.container.clientHeight - 8 };
-  }
-  /** A box put on a page at ``at`` (x, y in the page's own pixels): moved
-   *  left or up (opening above the point) when it would cross the edge of
-   *  what can be seen, so its buttons are never under the panel or a bar. */
-  #keepInColumn(box, at) {
-    const col = this.#column(), r = box.getBoundingClientRect();
-    let x = at.x, y = at.y;
-    if (r.right > col.right) x -= Math.min(r.right - col.right, r.left - col.left);
-    if (r.left < col.left) x += col.left - r.left;
-    if (r.bottom > col.bottom) y = r.top - r.height - 12 >= col.top ? at.y - r.height - 12 : at.y - (r.bottom - col.bottom);
-    box.style.left = `${x}px`;
-    box.style.top = `${y}px`;
-  }
-  /** The text-look bar over a box being edited: below it when there's no
-   *  room above, shifted left when it would run under the panel. */
-  #keepBarInColumn(bar) {
-    if (!bar.isConnected) return;
-    const col = this.#column();
-    let r = bar.getBoundingClientRect();
-    if (r.top < col.top) { bar.classList.add("below"); r = bar.getBoundingClientRect(); }
-    if (r.right > col.right) bar.style.left = `${-Math.min(r.right - col.right, r.left - col.left)}px`;
-  }
-
-  /** The drawn part of a canvas as a PNG with a transparent background. */
-  async #trim(canvas) {
-    const { width, height } = canvas;
-    const data = canvas.getContext("2d").getImageData(0, 0, width, height).data;
-    let x0 = width, y0 = height, x1 = -1, y1 = -1;
-    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-      if (data[(y * width + x) * 4 + 3] > 8) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
-    }
-    const m = 6, out = document.createElement("canvas");
-    x0 = Math.max(0, x0 - m); y0 = Math.max(0, y0 - m); x1 = Math.min(width - 1, x1 + m); y1 = Math.min(height - 1, y1 + m);
-    out.width = Math.max(1, x1 - x0 + 1); out.height = Math.max(1, y1 - y0 + 1);
-    out.getContext("2d").drawImage(canvas, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
-    return new Promise((resolve) => out.toBlob(resolve, "image/png"));
-  }
-
   // ---- dialogs ----------------------------------------------------------------
-  #dialog(title, body, buttons, { ready = null } = {}) {
+  _dialog(title, body, buttons, { ready = null } = {}) {
     return new Promise((resolve) => {
       // Enter in a box of the dialog presses the form's first submit button:
       // that has to be the main one ("Open", not the "Cancel" before it), so
@@ -3701,7 +2109,7 @@ export class Reader {
       input.setAttribute("aria-invalid", "true");
       input.setAttribute("aria-describedby", id);
     }
-    const pending = this.#dialog("Password required", body, [["cancel", "Cancel"], ["ok", "Open", true]]);
+    const pending = this._dialog("Password required", body, [["cancel", "Cancel"], ["ok", "Open", true]]);
     input.focus();
     const answer = await pending;
     return answer === "ok" ? input.value : null;
@@ -3752,10 +2160,10 @@ export class Reader {
       parts.push(el("h3", {}, `Attached files (${attached.length})`), el("ul", { class: "rd-attached" },
         ...attached.map((a) => el("li", {}, el("span", {}, a.filename, a.description ? el("small", {}, " — " + a.description) : null),
           el("small", {}, size(a.content?.length || 0)),
-          el("button", { type: "button", class: "rd-btn", onclick: () => this.#saveBytes(a.content, a.filename, () => {}, this.activeTab?.fileId) }, "Save…")))));
+          el("button", { type: "button", class: "rd-btn", onclick: () => this._saveBytes(a.content, a.filename, () => {}, this.activeTab?.fileId) }, "Save…")))));
     }
     // -- end of limits and attached files --
-    await this.#dialog("Document properties", parts, [["ok", "Close", true]]);
+    await this._dialog("Document properties", parts, [["ok", "Close", true]]);
   }
 
   // -- accessibility --
@@ -3768,7 +2176,7 @@ export class Reader {
     let result;
     try {
       const body = new FormData();
-      body.append("file", new Blob([await this.#fullBytes()], { type: "application/pdf" }), "file.pdf");
+      body.append("file", new Blob([await this._fullBytes()], { type: "application/pdf" }), "file.pdf");
       body.append("password", tab.password || "");
       const res = await fetch("/api/accessibility/check", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
@@ -3785,18 +2193,18 @@ export class Reader {
     if (items.length) body.push(el("ul", { class: "rd-siglist" }, ...items));
     body.push(el("p", { class: "rd-muted", style: "margin-top: 16px" }, result.note));
     const fix = !result.passed && this.onEdit && this.tools.some(([id]) => id === "tag");
-    const answer = await this.#dialog("Accessibility", body, [...(fix ? [["tag", "Make accessible…"]] : []), ["ok", "Close", true]]);
+    const answer = await this._dialog("Accessibility", body, [...(fix ? [["tag", "Make accessible…"]] : []), ["ok", "Close", true]]);
     if (answer === "tag") this.#edit("tag");
   }
   // -- end of accessibility --
 
   /** A toast that explains the tool just chosen: it goes when that tool or
    *  its bar does, or when another bar opens (see #endHint). */
-  #hint(message, ms) {
+  _hint(message, ms) {
     this.toast(message, ms);
     this.hintEl = this.toastEl;
   }
-  #endHint() {
+  _endHint() {
     if (this.hintEl && this.hintEl === this.toastEl) { clearTimeout(this.toastTimer); this.toastEl.remove(); this.toastEl = null; }
     this.hintEl = null;
   }
@@ -3822,668 +2230,13 @@ export class Reader {
     else this.toastTimer = setTimeout(() => fadeOut(t), ms);
   }
 
-  // ---- changing words on the page ----------------------------------------------------
-  /** Edit text tool: a click on a line of text opens a box to retype it. */
-  #textClick(e) {
-    if (!this.textEditMode || e.button !== 0) return;
-    if (e.target.closest?.(".rd-textedit-box")) return;  // inside the open editor
-    const pageEl = e.target.closest?.(".page");
-    const pageNumber = Number(pageEl?.dataset.pageNumber);
-    if (!pageNumber || window.getSelection()?.toString().length > 1) return;
-    const span = e.target.closest?.(".textLayer span");
-    e.preventDefault();
-    e.stopPropagation();
-    // The words that show at the click (not old ones covered by a change).
-    const line = span && !span.classList.contains("markedContent") && span.textContent.trim()
-      ? this.#lineOf(span, pageEl, e.clientX, e.clientY) : this.#lineOf(null, pageEl, e.clientX, e.clientY);
-    if (line) {
-      const at = line.spans.find((it) => it.r.left <= e.clientX && e.clientX <= it.r.right) || line.spans[0];
-      this.#openTextEditor(at.s, pageEl, pageNumber, e.shiftKey ? "paragraph" : "line");
-    } else {
-      this.#openNewText(e, pageEl, pageNumber);  // an empty spot: new words there
-    }
-  }
-
-  /** The lines of text on a page as drawn: [{spans, left, top, right, bottom, h}],
-   *  top to bottom. Words next to each other share a line; a far-off column doesn't. */
-  /** The page's words that show: [{s: span, r: its box}]. A change covers
-   *  the old words and writes them again later on the page; the old ones
-   *  are still in the file (and in pdf.js's text) under the new ones. */
-  #shownSpans(pageEl) {
-    const all = [...pageEl.querySelectorAll(".textLayer span")]
-      .filter((s) => !s.classList.contains("markedContent") && s.textContent.trim())
-      .map((s) => ({ s, r: s.getBoundingClientRect() }));
-    if (all.length > 4000) return all;  // a drawing full of labels: take them all
-    return all.filter((it, i) => {
-      const area = it.r.width * it.r.height;
-      if (!area) return false;
-      let under = 0;
-      for (let j = i + 1; j < all.length; j++) {
-        const o = all[j].r;
-        const w = Math.min(it.r.right, o.right) - Math.max(it.r.left, o.left);
-        const h = Math.min(it.r.bottom, o.bottom) - Math.max(it.r.top, o.top);
-        if (w > 0 && h > it.r.height * 0.5) under += w * h;
-      }
-      return under < area * 0.5;
-    });
-  }
-
-  /** The words on the line at a span (or a point): next to each other,
-   *  without the gap of another column. Or null. */
-  #lineOf(span, pageEl, x, y) {
-    const lines = this.#pageLines(pageEl, 1.2);
-    return lines.find((l) => l.spans.some((it) => it.s === span))
-      || lines.find((l) => x >= l.left - 2 && x <= l.right + 2 && y >= l.top - 1 && y <= l.bottom + 1) || null;
-  }
-
-  #pageLines(pageEl, apart = 2.5) {
-    const items = this.#shownSpans(pageEl)
-      .sort((a, b) => (a.r.top + a.r.bottom) / 2 - (b.r.top + b.r.bottom) / 2 || a.r.left - b.r.left);
-    const lines = [];
-    for (const it of items) {
-      const h = it.r.height, cy = (it.r.top + it.r.bottom) / 2;
-      const line = lines.find((l) => Math.abs((l.top + l.bottom) / 2 - cy) < Math.min(l.h, h) * 0.5
-        && it.r.left - l.right < Math.max(l.h, h) * apart && l.left - it.r.right < Math.max(l.h, h) * apart);
-      if (line) {
-        line.spans.push(it);
-        Object.assign(line, { left: Math.min(line.left, it.r.left), right: Math.max(line.right, it.r.right),
-          top: Math.min(line.top, it.r.top), bottom: Math.max(line.bottom, it.r.bottom), h: Math.max(line.h, h) });
-      } else {
-        lines.push({ spans: [it], left: it.r.left, right: it.r.right, top: it.r.top, bottom: it.r.bottom, h });
-      }
-    }
-    for (const l of lines) l.spans.sort((a, b) => a.r.left - b.r.left);
-    return lines.sort((a, b) => a.top - b.top);
-  }
-
-  static #middle(node) {
-    const r = node.getBoundingClientRect();
-    return [r.left + r.width / 2, r.top + r.height / 2];
-  }
-
-  static #lineText(line) {
-    let text = "";
-    line.spans.forEach((it, i) => {
-      const prev = line.spans[i - 1];
-      if (prev && !/\s$/.test(text) && !/^\s/.test(it.s.textContent) && it.r.left - prev.r.right > line.h * 0.12) text += " ";
-      text += it.s.textContent;
-    });
-    return text.replace(/\s+/g, " ").trim();
-  }
-
-  /** The paragraph around ``span``: the lines above and below it set the same way. */
-  #paragraphOf(span, pageEl) {
-    const lines = this.#pageLines(pageEl);
-    let at = lines.findIndex((l) => l.spans.some((it) => it.s === span));
-    if (at < 0) return null;
-    // Lines of one paragraph: close below each other, in one column, and in
-    // the same type (a heading or a differently set paragraph is another).
-    const type = (l) => {
-      const st = l.spans[0].s.style;
-      return [parseFloat(st.getPropertyValue("--font-height")) || l.h, st.fontFamily];
-    };
-    const close = (a, b) => {
-      const gap = b.top - a.bottom, h = Math.min(a.h, b.h);
-      const [fa, ka] = type(a), [fb, kb] = type(b);
-      return gap > -h * 0.3 && gap < h * 1.1 && Math.abs(a.h - b.h) < h * 0.35
-        && Math.abs(fa - fb) <= Math.max(fa, fb) * 0.08 && ka === kb
-        && b.left < a.right && b.right > a.left && Math.abs(b.left - a.left) < h * 3;
-    };
-    let first = at, last = at;
-    // A paragraph is a column of lines: only neighbours in that column count.
-    const column = (l) => l.left < lines[at].right && l.right > lines[at].left;
-    const above = (i) => { for (let j = i - 1; j >= 0; j--) if (column(lines[j])) return j; return -1; };
-    const below = (i) => { for (let j = i + 1; j < lines.length; j++) if (column(lines[j])) return j; return -1; };
-    for (let j = above(first); j >= 0 && close(lines[j], lines[first]); j = above(first)) first = j;
-    for (let j = below(last); j >= 0 && close(lines[last], lines[j]); j = below(last)) last = j;
-    const chosen = lines.slice(first, last + 1).filter((l, i, all) => i === 0 || i === all.length - 1 || column(l));
-    let text = "";
-    for (const line of chosen) {
-      const words = Reader.#lineText(line);
-      if (/[a-z]-$/.test(text) && /^[a-z]/.test(words)) text = text.slice(0, -1) + words;  // a word broken over two lines
-      else text += (text ? " " : "") + words;
-    }
-    return {
-      text, left: Math.min(...chosen.map((l) => l.left)), right: Math.max(...chosen.map((l) => l.right)),
-      top: chosen[0].top, bottom: chosen.at(-1).bottom, h: lines[at].h, lines: chosen.length,
-      first: chosen[0].spans[0].s,  // its first words, for the look
-      lead: chosen.length > 1 ? (chosen.at(-1).top - chosen[0].top) / (chosen.length - 1) : lines[at].h * 1.2,
-    };
-  }
-
-  /** A box on the page for typing: [wrapper, input or textarea]. */
-  /** How words of the page look on screen, to type over them in place:
-   *  {family, size, left, baseline (screen px), color, background}, from
-   *  the text pdf.js read (its font is the document's own), or null. */
-  async #textLook(span, pageNumber) {
-    try {
-      const view = this.pdfViewer.getPageView(pageNumber - 1);
-      if (!view?.pdfPage || view.viewport.rotation % 360 !== 0) return null;
-      this.textContents ||= new WeakMap();
-      let content = this.textContents.get(view.pdfPage);
-      if (!content) {
-        content = await view.pdfPage.getTextContent();
-        this.textContents.set(view.pdfPage, content);
-      }
-      const layer = span.closest(".textLayer")?.getBoundingClientRect();
-      if (!layer || !span.isConnected) return null;
-      const r = span.getBoundingClientRect();
-      const [a, b, c, d, e, f] = view.viewport.transform;
-      let best = null, far = Infinity;
-      for (const item of content.items) {
-        if (!item.str || item.str !== span.textContent) continue;
-        const [ia, ib, ic, id, ie, iff] = item.transform;
-        const tx = [a * ia + c * ib, b * ia + d * ib, a * ic + c * id, b * ic + d * id, a * ie + c * iff + e, b * ie + d * iff + f];
-        const size = Math.hypot(tx[2], tx[3]);
-        if (Math.abs(tx[1]) > size * 0.01 || Math.abs(tx[2]) > size * 0.01) continue;  // not level
-        const dist = Math.abs(layer.left + tx[4] - r.left) + Math.abs(layer.top + tx[5] - (r.top + r.height * 0.8));
-        if (dist < far) { far = dist; best = { item, tx, size }; }
-      }
-      if (!best || far > best.size) return null;
-      const { item, tx, size } = best;
-      const generic = content.styles[item.fontName]?.fontFamily || "sans-serif";
-      let real = null;  // the font's own name, for the copy installed on this computer
-      try { if (view.pdfPage.commonObjs.has(item.fontName)) real = view.pdfPage.commonObjs.get(item.fontName); } catch (err) { /* not read yet */ }
-      const name = String(real?.name || "").replace(/^[A-Z]{6}\+/, "");
-      const bold = !!(real?.bold || real?.black) || /bold|black|heavy|semibold|demi/i.test(name);
-      const italic = !!real?.italic || /italic|oblique/i.test(name);
-      const look = { size, left: layer.left + tx[4], baseline: layer.top + tx[5], width: r.width, fontName: name,
-        weight: bold ? "bold" : "", style: italic ? "italic" : "", ...this.#pageColours(span.closest(".page"), r) };
-      // The document's font as pdf.js loaded it shows the words just as on the
-      // page, unless it mixed up its letters (fonts cut down for a PDF can
-      // map a letter to the wrong shape); so it's checked against the page,
-      // then the same font installed here, then a plain one of its kind.
-      const candidates = [];
-      if ([...document.fonts].some((ff) => ff.family.replace(/["']/g, "") === item.fontName && ff.status === "loaded")) {
-        candidates.push({ family: `"${item.fontName}", ${generic}`, weight: "", style: "" });
-      }
-      const base = name.replace(/[-,]?(bold|italic|oblique|regular|roman|book|semibold|black|medium|light|mt|ps)+$/gi, "").replace(/(ps)?mt$/i, "");
-      for (const n of new Set([base.replace(/([a-z])([A-Z])/g, "$1 $2"), base, name.replace(/[-,]/g, " ")])) {
-        if (n && /^[\w .]+$/.test(n)) candidates.push({ family: `"${n}", ${generic}`, weight: look.weight, style: look.style });
-      }
-      const pageEl = span.closest(".page");
-      for (const c of candidates) {
-        if (this.#inkMatches(pageEl, { ...look, ...c }, span.textContent, r)) return { ...look, ...c };
-      }
-      return { ...look, family: generic };
-    } catch (err) {
-      return null;  // the plain box will do
-    }
-  }
-
-  /** The paper and ink colours around a box on the page as drawn. */
-  #pageColours(pageEl, r) {
-    const out = { background: "#fff", color: "#111" };
-    try {
-      const canvas = pageEl?.querySelector("canvas");
-      if (!canvas) return out;
-      const cr = canvas.getBoundingClientRect(), k = canvas.width / cr.width;
-      const x0 = Math.max(0, Math.floor((r.left - cr.left) * k) - 3), y0 = Math.max(0, Math.floor((r.top - cr.top) * k) - 3);
-      const w = Math.min(canvas.width - x0, Math.ceil(r.width * k) + 6), h = Math.min(canvas.height - y0, Math.ceil(r.height * k) + 6);
-      if (w < 2 || h < 2) return out;
-      const px = canvas.getContext("2d").getImageData(x0, y0, w, h).data;
-      const edge = [];
-      for (let x = 0; x < w; x++) edge.push((x) * 4, ((h - 1) * w + x) * 4);
-      for (let y = 0; y < h; y++) edge.push(y * w * 4, (y * w + w - 1) * 4);
-      const mid = (ch) => { const v = edge.map((i) => px[i + ch]).sort((p, q) => p - q); return v[v.length >> 1]; };
-      const bg = [mid(0), mid(1), mid(2)];
-      let ink = null, most = 60;
-      for (let i = 0; i < px.length; i += 4) {
-        const dist = Math.abs(px[i] - bg[0]) + Math.abs(px[i + 1] - bg[1]) + Math.abs(px[i + 2] - bg[2]);
-        if (dist > most) { most = dist; ink = [px[i], px[i + 1], px[i + 2]]; }
-      }
-      out.background = `rgb(${bg.join(" ")})`;
-      if (ink) out.color = `rgb(${ink.join(" ")})`;
-    } catch (err) { /* a canvas that can't be read: black on white */ }
-    return out;
-  }
-
-  /** The spacing that makes ``text`` in a font as wide as on the page:
-   *  {letter, word} in px, or {}. */
-  #fitSpacing(text, look, width) {
-    const natural = this.#textWidth(text, look), spaces = text.split(" ").length - 1;
-    const diff = width - natural;
-    if (Math.abs(diff) <= 0.5 || text.length < 2) return {};
-    return diff > 0 && spaces ? { word: Math.min(diff / spaces, look.size * 1.5) }
-      : { letter: Math.max(-look.size * 0.25, Math.min(diff / (text.length - 1), look.size * 0.25)) };
-  }
-
-  /** Whether ``text`` drawn in the look's font lands on the page's own ink
-   *  in the box ``r`` (same letters, same shapes). */
-  #inkMatches(pageEl, look, text, r) {
-    try {
-      const canvas = pageEl?.querySelector("canvas");
-      if (!canvas || !text.trim()) return false;
-      const cr = canvas.getBoundingClientRect(), k = canvas.width / cr.width;
-      const x0 = Math.max(0, Math.floor((r.left - cr.left) * k)), y0 = Math.max(0, Math.floor((r.top - cr.top) * k));
-      const w = Math.min(canvas.width - x0, Math.ceil(r.width * k) + 2), h = Math.min(canvas.height - y0, Math.ceil(r.height * k) + 2);
-      if (w < 4 || h < 4) return false;
-      const page = canvas.getContext("2d").getImageData(x0, y0, w, h).data;
-      const off = document.createElement("canvas");
-      off.width = w; off.height = h;
-      const c = off.getContext("2d", { willReadFrequently: true });
-      const spacing = this.#fitSpacing(text, look, r.width);
-      c.font = `${look.style || ""} ${look.weight || ""} ${look.size * k}px ${look.family}`;
-      if ("letterSpacing" in c) c.letterSpacing = `${(spacing.letter || 0) * k}px`;
-      if ("wordSpacing" in c) c.wordSpacing = `${(spacing.word || 0) * k}px`;
-      c.fillText(text, (look.left - cr.left) * k - x0, (look.baseline - cr.top) * k - y0);
-      const ours = c.getImageData(0, 0, w, h).data;
-      const lum = (d, i) => d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11;
-      let bg = 0;
-      for (let x = 0; x < w; x++) bg += lum(page, x * 4) + lum(page, ((h - 1) * w + x) * 4);
-      bg /= 2 * w;
-      const inkA = new Uint8Array(w * h), inkB = new Uint8Array(w * h);
-      for (let i = 0; i < w * h; i++) {
-        inkA[i] = Math.abs(lum(page, i * 4) - bg) > 70 ? 1 : 0;
-        inkB[i] = ours[i * 4 + 3] > 110 ? 1 : 0;
-      }
-      const near = (ink, i) => {  // ink within a pixel
-        const x = i % w, y = (i / w) | 0;
-        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-          const xx = x + dx, yy = y + dy;
-          if (xx >= 0 && yy >= 0 && xx < w && yy < h && ink[yy * w + xx]) return true;
-        }
-        return false;
-      };
-      let a = 0, b = 0, ab = 0, ba = 0;
-      for (let i = 0; i < w * h; i++) {
-        if (inkA[i]) { a++; if (near(inkB, i)) ab++; }
-        if (inkB[i]) { b++; if (near(inkA, i)) ba++; }
-      }
-      return a > 0 && b > 0 && ab / a > 0.96 && ba / b > 0.96;
-    } catch (err) {
-      return false;
-    }
-  }
-
-  /** Where the baseline sits in a line box of ``lineHeight`` (px from its top). */
-  static #baselineIn(look, lineHeight) {
-    const probe = el("div", {}, "Hg", el("span"));
-    Object.assign(probe.style, { position: "absolute", visibility: "hidden", left: "-9999px", top: "0", whiteSpace: "pre",
-      fontFamily: look.family, fontSize: `${look.size}px`, fontWeight: look.weight || "", fontStyle: look.style || "",
-      lineHeight: `${lineHeight}px` });
-    Object.assign(probe.lastChild.style, { display: "inline-block", width: "0", height: "0", verticalAlign: "baseline" });
-    document.body.append(probe);
-    const at = probe.lastChild.offsetTop;
-    probe.remove();
-    return at;
-  }
-
-  /** How wide ``text`` is in a font, in px. */
-  #textWidth(text, look) {
-    this.measureCtx ||= document.createElement("canvas").getContext("2d");
-    this.measureCtx.font = `${look.style || ""} ${look.weight || ""} ${look.size}px ${look.family}`;
-    return this.measureCtx.measureText(text).width;
-  }
-
-  /** A box on the page for typing: [wrapper, input or textarea]. With a
-   *  ``look``, the words in it sit exactly on the page's own: same font,
-   *  size, spacing, colour and baseline, so nothing moves as you type. */
-  #editorBox(pageEl, { left, top, width, height, fontSize, fontFamily, multiline, value, label, hint, look, lineHeight }) {
-    const page = pageEl.getBoundingClientRect();
-    const field = multiline
-      ? el("textarea", { class: "rd-textedit", spellcheck: "true", "aria-label": label })
-      : el("input", { type: "text", class: "rd-textedit", spellcheck: "true", "aria-label": label });
-    field.value = value;
-    // Double-clicking a word selects the space after it too (Chromium on
-    // Windows), so typing a replacement swallowed the space: select the word.
-    field.addEventListener("dblclick", () => {
-      let { selectionStart: start, selectionEnd: end } = field;
-      while (end > start && /\s/.test(field.value[end - 1])) end--;
-      if (end !== field.selectionEnd) field.setSelectionRange(start, end);
-    });
-    const box = el("div", { class: "rd-textedit-box" }, field, el("div", { class: "rd-textedit-hint" }, ...hint));
-    if (look) {
-      const lh = lineHeight || Math.round(look.size * 1.3 * 100) / 100;
-      const spacing = look.spacing || {};
-      field.classList.add("rd-textedit-fit");
-      Object.assign(field.style, { fontFamily: look.family, fontSize: `${look.size}px`, lineHeight: `${lh}px`,
-        fontWeight: look.weight || "", fontStyle: look.style || "",
-        color: look.color, background: look.background, width: `${width}px`, height: `${multiline ? height : lh}px`,
-        letterSpacing: spacing.letter ? `${spacing.letter}px` : "", wordSpacing: spacing.word ? `${spacing.word}px` : "" });
-      left = look.left;
-      top = look.baseline - Reader.#baselineIn(look, lh);
-      Object.assign(box.style, { left: `${left - page.left - pageEl.clientLeft}px`, top: `${top - page.top - pageEl.clientTop}px` });
-      if (!multiline) {  // grows with the words
-        const grow = () => {
-          const t = field.value;
-          const w = this.#textWidth(t, look) + (spacing.letter || 0) * t.length
-            + (spacing.word || 0) * (t.split(" ").length - 1) + look.size;
-          field.style.width = `${Math.max(width, Math.ceil(w))}px`;
-        };
-        field.addEventListener("input", grow);
-        grow();
-      }
-      return [box, field];
-    }
-    Object.assign(field.style, { width: `${width}px`, height: `${height}px`, fontSize: `${fontSize}px`, fontFamily: fontFamily || "" });
-    Object.assign(box.style, { left: `${left - page.left - pageEl.clientLeft - 3}px`, top: `${top - page.top - pageEl.clientTop - 2}px` });
-    return [box, field];
-  }
-
-  async #openTextEditor(span, pageEl, pageNumber, mode = "line") {
-    this.#closeTextEditor(false);
-    const ticket = (this.editTicket = (this.editTicket || 0) + 1);
-    const viewport = this.pdfViewer.getPageView(pageNumber - 1).viewport;
-    const sideways = viewport.rotation % 180 !== 0;
-    const paragraph = mode === "paragraph" && !sideways ? this.#paragraphOf(span, pageEl) : null;
-    const first = paragraph ? paragraph.first
-      : (!sideways && this.#lineOf(span, pageEl, ...Reader.#middle(span))?.spans[0].s) || span;
-    const look = await this.#textLook(first, pageNumber);
-    if (ticket !== this.editTicket || !span.isConnected || !this.textEditMode) return;  // clicked elsewhere meanwhile
-    const layer = pageEl.querySelector(".textLayer").getBoundingClientRect();
-    const r = span.getBoundingClientRect();
-    // A line is all its words, however pdf.js split them up.
-    const line = !paragraph && !sideways ? this.#lineOf(span, pageEl, r.left + r.width / 2, r.top + r.height / 2) : null;
-    const area = paragraph || line || { left: r.left, right: r.right, top: r.top, bottom: r.bottom, h: sideways ? r.width : r.height };
-    const original = paragraph ? paragraph.text : line ? Reader.#lineText(line) : span.textContent;
-    // With the view turned, the line runs up or down the screen: size the box
-    // from the line's own length and height.
-    const lineW = sideways ? r.height : area.right - area.left, lineH = area.h;
-    // The page's spacing, so the typed words line up with the page's to the end.
-    if (look && !paragraph) look.spacing = this.#fitSpacing(original, look, area.right - look.left);
-    const toggle = el("button", { type: "button", class: "rd-textedit-mode", title: paragraph ? "Change this line only" : "Rewrite the whole paragraph (or Shift+click a line)" },
-      paragraph ? "One line" : "¶ Whole paragraph");
-    toggle.disabled = sideways;
-    const lead = paragraph ? paragraph.lead : null;
-    const [box, field] = this.#editorBox(pageEl, {
-      left: area.left, top: area.top, multiline: !!paragraph, value: original, look, lineHeight: lead,
-      width: look ? (paragraph ? lineW + look.size * 0.6 : Math.max(lineW + look.size, 80)) : Math.max(lineW + (paragraph ? 16 : 40), 80),
-      height: paragraph ? (look ? lead * (paragraph.lines + 1) : area.bottom - area.top + lineH * 1.5) : lineH + 4,
-      fontSize: Math.max(8, lineH * 0.8), fontFamily: getComputedStyle(span).fontFamily,
-      label: paragraph ? "New paragraph (Ctrl+Enter to change, Esc to cancel)" : "New text (Enter to change, Esc to cancel)",
-      hint: [el("span", {}, paragraph ? "Ctrl+Enter to change · Esc to cancel" : "Enter to change · Esc to cancel"), toggle],
-    });
-    // The words' box in PDF points (measured from the page as drawn).
-    const [ax, ay] = viewport.convertToPdfPoint(area.left - layer.left, area.top - layer.top);
-    const [bx, by] = viewport.convertToPdfPoint(area.right - layer.left, area.bottom - layer.top);
-    const rect = [Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)];
-    toggle.addEventListener("pointerdown", (e) => e.preventDefault());  // keeps the field's focus
-    toggle.addEventListener("click", () => {
-      this.#closeTextEditor(false);
-      this.#openTextEditor(span, pageEl, pageNumber, paragraph ? "line" : "paragraph");
-    });
-    // The words as shown go along, so only what was changed is drawn again.
-    const picked = this.#fontPicker(box, field, look, viewport, { paragraph: !!paragraph, size: lineH });
-    this.#startEditing(box, field, pageEl, original, (text) =>
-      this.#applyTextEdit({ page: pageNumber, rect, text, ...(paragraph ? { paragraph: true } : { old: original }),
-        ...picked.choices() }), picked.changed);
-  }
-
-  /** New words where the page was clicked; they take the look of the nearest text. */
-  async #openNewText(e, pageEl, pageNumber) {
-    this.#closeTextEditor(true);
-    const ticket = (this.editTicket = (this.editTicket || 0) + 1);
-    const at = { clientX: e.clientX, clientY: e.clientY };
-    const viewport = this.pdfViewer.getPageView(pageNumber - 1).viewport;
-    let near = null, best = Infinity;
-    for (const line of this.#pageLines(pageEl)) {
-      const d = Math.hypot(Math.max(line.left - at.clientX, 0, at.clientX - line.right), Math.max(line.top - at.clientY, 0, at.clientY - line.bottom) * 2);
-      if (d < best) { best = d; near = line; }
-    }
-    const look = near ? await this.#textLook(near.spans[0].s, pageNumber) : null;
-    if (ticket !== this.editTicket || !pageEl.isConnected || !this.textEditMode) return;
-    const layer = pageEl.querySelector(".textLayer")?.getBoundingClientRect() || pageEl.getBoundingClientRect();
-    if (look) {  // the new words' top left at the click, as they'll be drawn
-      Object.assign(look, { left: at.clientX, baseline: at.clientY + look.size * 0.8 },
-        this.#pageColours(pageEl, { left: at.clientX, top: at.clientY, width: 40, height: look.size }));
-      if (near) look.color = this.#pageColours(pageEl, near.spans[0].r).color;
-    }
-    const h = near ? near.h : 16 * viewport.scale;
-    const [box, field] = this.#editorBox(pageEl, {
-      left: at.clientX, top: at.clientY, width: look ? Math.max(160, look.size * 8) : 240, height: look ? look.size * 1.2 : h + 4,
-      fontSize: Math.max(8, h * 0.8), multiline: true, lineHeight: look ? look.size * 1.2 : null,
-      fontFamily: near ? getComputedStyle(near.spans[0].s).fontFamily : "", value: "", look,
-      label: "New text (Enter to add, Shift+Enter for a new line, Esc to cancel)",
-      hint: [el("span", {}, "New text · Enter to add · Shift+Enter new line · Esc to cancel")],
-    });
-    field.dataset.enter = "apply";  // Enter adds the words; Shift+Enter starts a new line
-    field.rows = 1;
-    const [x, y] = viewport.convertToPdfPoint(at.clientX - layer.left, at.clientY - layer.top);
-    const picked = this.#fontPicker(box, field, look, viewport, { newText: true, size: h });
-    this.#startEditing(box, field, pageEl, "", (text) => this.#applyTextEdit({ page: pageNumber, at: [x, y], text,
-      ...picked.choices() }));
-  }
-
-  #startEditing(box, field, pageEl, original, apply, restyled = null) {
-    let done = false;
-    const finish = (keep) => {
-      if (done) return;
-      done = true;
-      if (this.textEditor?.box === box) this.textEditor = null;
-      if (keep && (field.value !== original || restyled?.()) && (original || field.value.trim())) {
-        // The typed words stay showing where they go until the page is
-        // drawn again with them, so nothing flickers back to the old ones.
-        box.classList.add("rd-pending");
-        field.readOnly = true;
-        field.blur();
-        Promise.resolve(apply(field.value)).finally(() => box.remove());
-      } else {
-        box.remove();
-      }
-    };
-    field.addEventListener("keydown", (e) => {
-      e.stopPropagation();
-      const multiline = field.tagName === "TEXTAREA";
-      if (e.key === "Enter" && (!multiline || e.ctrlKey || e.metaKey || (field.dataset.enter === "apply" && !e.shiftKey))) { e.preventDefault(); finish(true); }
-      if (e.key === "Escape") { e.preventDefault(); finish(false); }
-    });
-    field.addEventListener("blur", () => setTimeout(() => { if (!done && !box.contains(document.activeElement)) finish(true); }));
-    pageEl.append(box);
-    this.textEditor = { box, finish };
-    field.focus();
-    field.select();
-  }
-
-  #closeTextEditor(keep) { this.textEditor?.finish(keep); }
-
-  // -- text font picker and reflow --
-  /** The bar above the text editor to choose how the words look: font,
-   *  size, bold, italic, colour and (for more than a word) alignment. The
-   *  field shows the choice as it's made. Returns {choices(): what changed,
-   *  as the server takes it, changed(): whether anything did}. */
-  #fontPicker(box, field, look, viewport, { paragraph = false, newText = false, size = 16 } = {}) {
-    const scale = viewport.scale || 1;
-    const start = {
-      font: "", size: Math.round(((look?.size || size * 0.8) / scale) * 2) / 2,
-      bold: look?.weight === "bold", italic: look?.style === "italic",
-      color: Reader.#hexColour(look?.color || "#000000"), align: "",
-    };
-    const now = { ...start };
-    const own = Reader.#familyOf(look?.fontName || "");
-    const fontSel = el("select", { class: "rd-tf-font", title: "Font", "aria-label": "Font" },
-      el("option", { value: "" }, own ? `${own} (as is)` : "Same font"));
-    const sizeIn = el("input", { class: "rd-tf-size", type: "number", min: "1", max: "500", step: "0.5", value: String(start.size),
-      title: "Size (points)", "aria-label": "Font size in points" });
-    const toggle = (label, title, key) => el("button", { type: "button", class: `rd-tf-btn rd-tf-${key}`, title,
-      "aria-label": title, "aria-pressed": String(now[key]) }, label);
-    const boldBtn = toggle("B", "Bold (Ctrl+B)", "bold"), italicBtn = toggle("I", "Italic (Ctrl+I)", "italic");
-    const colorIn = el("input", { class: "rd-tf-color", type: "color", value: start.color, title: "Colour", "aria-label": "Text colour" });
-    const aligns = [["left", "Align left", "M4 6h16M4 10h10M4 14h16M4 18h10"], ["center", "Centre", "M4 6h16M7 10h10M4 14h16M7 18h10"],
-      ["right", "Align right", "M4 6h16M10 10h10M4 14h16M10 18h10"], ["justify", "Justify", "M4 6h16M4 10h16M4 14h16M4 18h16"]]
-      .map(([value, title, d]) => {
-        const b = el("button", { type: "button", class: "rd-tf-btn rd-tf-align", title, "aria-label": title, "aria-pressed": "false",
-          html: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>` });
-        b.dataset.align = value;
-        return b;
-      });
-    const alignGroup = el("span", { class: "rd-tf-group", role: "group", "aria-label": "Alignment" }, ...aligns);
-    aligns[3].hidden = !paragraph && !newText;  // one line: set within its old width; justifying needs more lines
-    const bar = el("div", { class: "rd-tf-bar", role: "toolbar", "aria-label": "Text look" },
-      fontSel, sizeIn, el("span", { class: "rd-tf-group" }, boldBtn, italicBtn), colorIn, alignGroup);
-    box.append(bar);
-    requestAnimationFrame(() => this.#keepBarInColumn(bar));
-
-    const generic = /serif|times|roman|georgia|garamond|cambria|book|palatino/i.test(own) && !/sans/i.test(own) ? "serif"
-      : /mono|courier|consol/i.test(own) ? "monospace" : "sans-serif";
-    const original = look ? { family: look.family, size: look.size, weight: look.weight, style: look.style, color: look.color } : null;
-    const lineHeight = parseFloat(field.style.lineHeight) || 0;
-    const show = () => {
-      const k = now.size / start.size;
-      const family = now.font ? Reader.#cssFamily(now.font, generic) : original?.family || "";
-      if (look) Object.assign(look, { family, size: original.size * k, weight: now.bold ? "bold" : "", style: now.italic ? "italic" : "" });
-      Object.assign(field.style, {
-        fontFamily: family, fontWeight: now.bold ? "bold" : "normal", fontStyle: now.italic ? "italic" : "normal",
-        color: now.color !== start.color || !original ? now.color : original.color, textAlign: now.align === "justify" ? "justify" : now.align || "",
-      });
-      if (look) field.style.fontSize = `${look.size}px`;
-      else field.style.fontSize = `${Math.max(8, now.size * scale)}px`;
-      if (lineHeight) field.style.lineHeight = `${lineHeight * k}px`;
-      if (now.font || now.bold !== start.bold || now.italic !== start.italic) {
-        field.style.letterSpacing = field.style.wordSpacing = "";  // the page's spacing was for its own font
-      }
-      if (paragraph && lineHeight) field.style.height = `${Math.max(parseFloat(field.style.height) || 0, lineHeight * k * 2)}px`;
-      fit();
-    };
-    // New words: the box grows with the longest line and the number of lines.
-    const fit = () => {
-      if (!newText) return field.dispatchEvent(new Event("input"));
-      const lines = field.value.split("\n");
-      const m = look || { family: getComputedStyle(field).fontFamily, size: parseFloat(field.style.fontSize) || 16 };
-      const w = Math.max(...lines.map((t) => this.#textWidth(t, m)), 0) + m.size;
-      const lh = parseFloat(field.style.lineHeight) || m.size * 1.25;
-      Object.assign(field.style, { width: `${Math.max(look ? look.size * 4 : 160, Math.ceil(w))}px`, height: `${Math.ceil(lh * lines.length + 2)}px` });
-    };
-    if (newText) field.addEventListener("input", fit);
-
-    const press = () => {
-      boldBtn.setAttribute("aria-pressed", String(now.bold));
-      italicBtn.setAttribute("aria-pressed", String(now.italic));
-      for (const b of aligns) b.setAttribute("aria-pressed", String(b.dataset.align === now.align));
-      show();
-    };
-    for (const b of [boldBtn, italicBtn, ...aligns]) b.addEventListener("pointerdown", (e) => e.preventDefault());  // the field keeps the focus
-    boldBtn.addEventListener("click", () => { now.bold = !now.bold; press(); });
-    italicBtn.addEventListener("click", () => { now.italic = !now.italic; press(); });
-    for (const b of aligns) b.addEventListener("click", () => { now.align = now.align === b.dataset.align ? "" : b.dataset.align; press(); });
-    fontSel.addEventListener("change", () => { now.font = fontSel.value; show(); });
-    sizeIn.addEventListener("input", () => {
-      const v = parseFloat(sizeIn.value);
-      if (v >= 1 && v <= 500) { now.size = v; show(); }
-    });
-    colorIn.addEventListener("input", () => { now.color = colorIn.value; show(); });
-    field.addEventListener("keydown", (e) => {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
-      const key = e.key.toLowerCase();
-      if (key === "b" || key === "i") {
-        e.preventDefault();
-        now[key === "b" ? "bold" : "italic"] = !now[key === "b" ? "bold" : "italic"];
-        press();
-      }
-    });
-    // The bar's own keys: Enter applies, Esc cancels; nothing reaches the reader's shortcuts.
-    bar.addEventListener("keydown", (e) => {
-      e.stopPropagation();
-      if (e.key === "Escape") { e.preventDefault(); this.textEditor?.finish(false); }
-      if (e.key === "Enter" && e.target.tagName !== "BUTTON") { e.preventDefault(); this.textEditor?.finish(true); }
-    });
-    // Leaving the bar for the page is like leaving the field: the change is made.
-    bar.addEventListener("focusout", () => setTimeout(() => {
-      if (box.isConnected && !box.contains(document.activeElement) && this.textEditor?.box === box) this.textEditor.finish(true);
-    }));
-
-    this.#fontChoices().then((choices) => {
-      if (!choices || !fontSel.isConnected) return;
-      const ownKey = Reader.#familyKey(own);
-      const group = (label, names) => {
-        const items = (names || []).filter((n) => Reader.#familyKey(n) !== ownKey);
-        if (items.length) fontSel.append(el("optgroup", { label }, ...items.map((n) => el("option", { value: n }, n))));
-      };
-      group("In this document", choices.document);
-      group("On this computer", choices.installed);
-      group("More on this computer", choices.more);
-      group(choices.pdfa ? "Standard (embedded, PDF/A)" : "Standard", choices.standard);
-    });
-
-    const changes = () => {
-      const out = {};
-      if (now.font) out.font = now.font;
-      if (Math.abs(now.size - start.size) >= 0.25) out.size = now.size;
-      if (now.bold !== start.bold) out.bold = now.bold;
-      if (now.italic !== start.italic) out.italic = now.italic;
-      if (now.color !== start.color) out.color = Reader.#rgb01(now.color);
-      if (now.align) out.align = now.align;
-      return out;
-    };
-    return { choices: changes, changed: () => Object.keys(changes()).length > 0 };
-  }
-
-  /** The fonts to offer (see /api/text/fonts), asked once per version of the document. */
-  async #fontChoices() {
-    const tab = this.activeTab;
-    if (!tab) return null;
-    if (tab.fontChoices?.version !== tab.version) {
-      const ask = async () => {
-        try {
-          const bytes = tab.bytes || await this.#currentBytes();
-          const res = await this.#post("/api/text/fonts", bytes, tab);
-          return res.ok ? await res.json() : null;
-        } catch (e) {
-          return null;  // the editor works without the list: the font as is, size, colour
-        }
-      };
-      tab.fontChoices = { version: tab.version, promise: ask() };
-    }
-    return tab.fontChoices.promise;
-  }
-
-  /** Notes on a change: the font it got when one was picked, a smaller
-   *  size, words that ran on into the next column: [sentence]. */
-  #fontNotes(used) {
-    const notes = [];
-    for (const u of used) {
-      if (u.asked && u.matched === false) {
-        notes.push(u.reason === "pdfa"
-          ? `This is a PDF/A file, which needs every font inside it; ${u.asked} isn't, so ${u.font} was used.`
-          : `${u.asked} can't show those letters in that style here, so ${u.font} was used.`);
-      }
-      if (u.size) notes.push(`The text was made a little smaller (${u.size} pt) to fit.`);
-      if (u.linked) notes.push("What didn't fit in its column runs on at the top of the next one.");
-    }
-    return notes;
-  }
-
-  /** The last change again, its text made a little smaller to fit the page. */
-  async #shrinkToFit(edit) {
-    await this.#undoTextEdit();
-    return this.#applyTextEdit({ ...edit, fit: "shrink" });
-  }
-
-  /** "ABCDEF+TimesNewRomanPS-BoldMT" → "Times New Roman". */
-  static #familyOf(name) {
-    let family = String(name || "").replace(/^[A-Z]{6}\+/, "").split(/[-,]/)[0];
-    family = family.replace(/(PS)?MT$|PS$/, "").replace(/([a-z])([A-Z])/g, "$1 $2");
-    return family.replace(/\s+(Bold|Italic|Oblique|Regular|BoldItalic)$/i, "").trim();
-  }
-
-  static #familyKey(name) { return String(name || "").toLowerCase().replace(/[^a-z0-9]/g, ""); }
-
-  /** A CSS font-family for a family picked in the list. */
-  static #cssFamily(name, generic) {
-    const standard = { helvetica: "Helvetica, Arial, sans-serif", times: '"Times New Roman", Times, serif',
-      courier: '"Courier New", Courier, monospace' }[Reader.#familyKey(name)];
-    return standard || `"${name.replace(/["\\]/g, "")}", ${generic}`;
-  }
-
-  static #hexColour(css) {
-    const m = String(css).match(/\d+(\.\d+)?/g);
-    if (/^#[0-9a-f]{6}$/i.test(css)) return css.toLowerCase();
-    if (!m || m.length < 3) return "#000000";
-    return "#" + m.slice(0, 3).map((v) => Math.max(0, Math.min(255, Math.round(+v))).toString(16).padStart(2, "0")).join("");
-  }
-
-  static #rgb01(hex) {
-    return [1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) / 255 * 1000) / 1000);
-  }
-  // -- end of text font picker and reflow --
-
   /** The view (page, zoom, scroll), to come back to after reloading. */
   #view() {
     return { page: this.pdfViewer.currentPageNumber, scale: this.pdfViewer.currentScaleValue,
       top: this.container.scrollTop, left: this.container.scrollLeft };
   }
 
-  #post(url, bytes, tab, fields = {}, files = []) {
+  _post(url, bytes, tab, fields = {}, files = []) {
     const body = new FormData();
     body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
     body.append("password", tab.password || "");
@@ -4495,8 +2248,8 @@ export class Reader {
   /** Replace the open document with what ``make(bytes, tab)`` gets back from
    *  the server, keeping the old bytes for Undo. In the queue: a save or a tab
    *  switch asked for meanwhile waits for it. */
-  #changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false } = {}) {
-    return this.#serial(async () => {
+  _changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false, kind = "page" } = {}) {
+    return this._serial(async () => {
       const tab = this.activeTab;
       if (!tab || !this.doc) return;
       // Changes are made by rewriting the file, which a signature can't survive.
@@ -4507,17 +2260,15 @@ export class Reader {
       }
       this.#busy(true);
       try {
-        const bytes = await this.#currentBytes();
+        const bytes = await this._currentBytes();
         const res = await make(bytes, tab);
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
         const changed = new Uint8Array(await res.arrayBuffer());
         if (!this.tabs.includes(tab)) return;
-        (tab.undo ||= []).push(bytes);
-        if (tab.undo.length > 30) tab.undo.shift();
-        Object.assign(tab, { bytes: changed, afterEdit: changed, edited: true, dirty: true, clean: null,
-          version: (tab.version || 0) + 1 });
-        if (tab === this.activeTab) { tab.goto = goto ? goto(this.#view()) : this.#view(); await this.#reloadEditing(tab); }
-        else this.#renderTabs();
+        if (kind === "redact") tab.redactionsApplied(bytes, changed);
+        else if (kind === "text") tab.textEdited(bytes, changed);
+        else tab.pageEdited(bytes, changed);
+        if (tab === this.activeTab) { tab.aim(goto ? goto(this.#view()) : this.#view()); await this.#reloadEditing(tab); }
         after?.(res);
       } catch (e) {
         this.toast(failure + (e.message || e));
@@ -4527,15 +2278,16 @@ export class Reader {
     });
   }
 
-  #applyTextEdit(edit) {
-    return this.#changeDocument((bytes, tab) => this.#post("/api/text/edit", bytes, tab, { edits: JSON.stringify([edit]) }), {
+  _applyTextEdit(edit) {
+    return this._changeDocument((bytes, tab) => this._post("/api/text/edit", bytes, tab, { edits: JSON.stringify([edit]) }), {
       failure: "Could not change the text: ",
+      kind: "text",
       after: (res) => {
         // Say when the words couldn't get the document's own font.
         let used = [];
         try { used = JSON.parse(res.headers.get("X-Pdfm-Fonts") || "[]"); } catch (e) {}
         const other = used.find((u) => u.kind !== "same" && !u.asked);
-        const notes = this.#fontNotes(used);
+        const notes = this._fontNotes(used);
         if (other) {
           notes.push(other.kind === "installed"
             ? `This PDF's copy of the font lacks some of those letters, so ${other.font} from this computer was used.`
@@ -4545,7 +2297,7 @@ export class Reader {
         if (used.some((u) => u.taller)) notes.push("The paragraph now takes more lines than before, so it may run into what's below it. Undo with Ctrl+Z.");
         if (used.some((u) => u.overflow) && !edit.fit) {
           notes.push("The text no longer fits on the page, so the text below it wasn't moved. Shorten it, or let it shrink a little.");
-          return this.toast(notes.join(" "), 12000, ["Shrink to fit", () => this.#shrinkToFit(edit)]);
+          return this.toast(notes.join(" "), 12000, ["Shrink to fit", () => this._shrinkToFit(edit)]);
         }
         if (used.some((u) => u.overflow)) notes.push("Even a little smaller, the text doesn't fit on the page, so the text below it wasn't moved.");
         if (notes.length) this.toast(notes.join(" "), 8000);
@@ -4553,19 +2305,16 @@ export class Reader {
     });
   }
 
-  #undoTextEdit() {
-    return this.#serial(async () => {
+  _undoTextEdit() {
+    return this._serial(async () => {
       const tab = this.activeTab;
-      if (!tab?.undo?.length) return;
+      if (!tab?.undoDepth) return;
       // Undoing goes back to the bytes before the change; anything added
       // since (drawings, form entries) would go with it.
-      if ((this.#changed() || tab.bytes !== tab.afterEdit)
+      if ((this._changed() || tab.bytes !== tab.afterEdit)
           && await this.ask("Undo the change?", "Undoing it also takes away the annotations and form entries made since it.",
             [["cancel", "Cancel"], ["undo", "Undo the change", true]]) !== "undo") return;
-      const previous = tab.undo.pop();
-      const back = previous === tab.original;
-      Object.assign(tab, { bytes: previous, afterEdit: previous, edited: !back, dirty: !back, clean: null, goto: this.#view(),
-        version: (tab.version || 0) + 1 });
+      tab.editUndone(this.#view());
       await this.#reloadEditing(tab);
       this.toast("Change undone", 1500);
     });
@@ -4574,35 +2323,35 @@ export class Reader {
   /** Show the tab's changed bytes, staying in the Edit text tool if it was on. */
   async #reloadEditing(tab) {
     const editing = this.textEditMode ? "EDITTEXT" : this.markupMode, picked = this.pickedImage;
-    await this.#load(tab);
-    this.#renderTabs();
+    await this._load(tab);
+    this._refresh();
     if (tab !== this.activeTab) return;
     if (editing) {
       this.openAnnotate();
-      this.#setEditMode(editing);
+      this._setEditMode(editing);
       if (editing === "IMAGES" && picked) this.pickedImage = picked;  // the picture just moved stays picked
     }
-    this.undoBtn.disabled = !tab.undo?.length;
+    this.undoBtn.disabled = !tab.undoDepth;
   }
 
   // ---- saving, printing, editing ------------------------------------------------
   /** Filled-in form fields or annotations that aren't in the file yet. */
-  #changed() { return !!(this.doc && this.doc.annotationStorage.size > 0); }
-  #edited() { return this.#changed() || !!this.activeTab?.edited; }
+  _changed() { return !!(this.doc && this.doc.annotationStorage.size > 0); }
+  #edited() { return this._changed() || !!this.activeTab?.edited; }
 
-  async #currentBytes() {
-    this.#finishEditing();
-    if (!this.#changed()) return await this.#fullBytes();
-    return await this.#savedDocument(this.activeTab);
+  async _currentBytes() {
+    this._finishEditing();
+    if (!this._changed()) return await this._fullBytes();
+    return await this._savedDocument(this.activeTab);
   }
 
   /** The shown document's bytes; a file read in pieces is read in full now
    *  (and rejects, saying why, when that can't be done). */
-  async #fullBytes() {
+  async _fullBytes() {
     if (!this.bytes && this.doc) {
       const tab = this.activeTab;
       if (tab?.url) await this.#readAll(tab);
-      else if (tab && !tab.bytes) tab.bytes = tab.original = await bounded(this.doc.getData(), WHOLE_MS, "reading the document took too long");
+      else if (tab && !tab.bytes) tab.readInFull(await bounded(this.doc.getData(), WHOLE_MS, "reading the document took too long"));
       if (tab === this.activeTab) this.bytes = tab.bytes;
     }
     return this.bytes;
@@ -4618,19 +2367,20 @@ export class Reader {
   async save({ replace = false } = {}) {
     this.noteCommit?.();  // a note typed but not added yet goes in first
     await this.chain;  // a text change still on its way is included
-    this.#finishEditing();  // a stroke or note still being made counts (Ctrl+S straight after drawing)
+    this._finishEditing();  // a stroke or note still being made counts (Ctrl+S straight after drawing)
     const tab = this.activeTab;
     if (!this.doc || !tab) return;
-    if (tab.redacted && !replace) {  // a copy, not over the original
-      // Already kept as a redacted copy and nothing changed since: don't make another.
-      if (tab.redactedSaved && !tab.dirty && (tab.savedSince || !this.#changed())) { this.toast("Already saved as a redacted copy", 2000); return; }
-      await this.saveRedacted(); return;
-    }
-    if (!tab.fileId) { await this.saveCopy(); return; }
-    if (!tab.dirty && !this.#changed()) { this.toast("No changes to save", 1500); return; }
-    const version = tab.version || 0;
+    // What Save does follows from the tab's state (see saveAction): a tab with
+    // blacked-out parts saves a redacted copy, not over the original (and
+    // not again when one is saved and nothing changed since).
+    const action = saveAction(tab, { changed: this._changed(), replace });
+    if (action === "already redacted") { this.toast("Already saved as a redacted copy", 2000); return; }
+    if (action === "redacted copy") { await this.saveRedacted(); return; }
+    if (action === "as") { await this.saveCopy(); return; }
+    if (action === "nothing") { this.toast("No changes to save", 1500); return; }
+    const version = tab.version;
     let bytes;
-    try { bytes = await this.#currentBytes(); } catch (e) { this.toast("Could not save: " + (e.message || e), 9000, ["Save as…", () => this.saveCopy()]); return; }
+    try { bytes = await this._currentBytes(); } catch (e) { this.toast("Could not save: " + (e.message || e), 9000, ["Save as…", () => this.saveCopy()]); return; }
     const put = (force) => fetch("/api/save/" + encodeURIComponent(tab.fileId), { method: "POST", body: bytes,
       headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/pdf", "X-Pdfm-Stamp": tab.stamp || "",
         ...(force ? { "X-Pdfm-Force": "1" } : {}) } });
@@ -4648,9 +2398,7 @@ export class Reader {
       const answer = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(answer.error || res.statusText);
       // The file now holds these bytes (and a file read in pieces is in memory now).
-      Object.assign(tab, { stamp: answer.stamp, original: bytes, size: bytes.length });
-      if (!tab.bytes || tab === this.activeTab && !this.bytes) tab.bytes = bytes;
-      this.#markSaved(tab, version);
+      this.#saved(tab, "in place", { version, bytes, stamp: answer.stamp, keep: tab === this.activeTab && !this.bytes });
       // What the file held is kept for a while (not for big files): Undo puts it back.
       if (answer.undo) this.toast(`Saved over ${tab.name}`, 10000, ["Undo", () => this.#unsave(tab, answer.undo)]);
       else this.toast(`Saved over ${tab.name}`, 4000);
@@ -4669,10 +2417,7 @@ export class Reader {
         headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/json" } });
       const answer = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(answer.error || res.statusText);
-      if (this.tabs.includes(tab)) {
-        Object.assign(tab, { stamp: answer.stamp, dirty: true, clean: null });
-        this.#renderTabs();
-      }
+      if (this.tabs.includes(tab)) tab.saveUndone(answer.stamp);
       this.toast(`Undone: ${tab.name} is as it was before. Your changes are still here, not saved.`, 6000);
     } catch (e) {
       this.toast("Could not undo the save: " + (e.message || e), 9000);
@@ -4683,7 +2428,7 @@ export class Reader {
    *  ``buttons``: [value, label, main?]; resolves with the value of the one
    *  pressed. Escape and Cancel give "cancel", and focus goes back to where it was. */
   ask(title, text, buttons) {
-    return this.#dialog(title, [text].flat().filter(Boolean).map((t) => el("p", {}, t)), buttons);
+    return this._dialog(title, [text].flat().filter(Boolean).map((t) => el("p", {}, t)), buttons);
   }
 
   /** Show a file the app has open or saved in its folder (the server checks). */
@@ -4700,7 +2445,7 @@ export class Reader {
    *  path when it's known (the desktop window), true when saved elsewhere, null if not saved. */
   /** Ctrl+S, or Shift for Save as. A tab with blacked-out parts saves a
    *  redacted copy (see saveRedacted), never over its original unasked. */
-  #saveKey(e) {
+  _saveKey(e) {
     if (e.shiftKey) this.saveCopy();
     else this.save();
   }
@@ -4716,12 +2461,12 @@ export class Reader {
   async saveRedacted() {
     this.noteCommit?.();
     await this.chain;
-    this.#finishEditing();
+    this._finishEditing();
     if (!this.doc) return;
-    const tab = this.activeTab, version = tab.version || 0;
+    const tab = this.activeTab, version = tab.version;
     let bytes;
-    try { bytes = await this.#currentBytes(); } catch (e) { this.toast("Could not save the redacted copy: " + (e.message || e), 9000); return; }
-    await this.#saveBytes(bytes, this.#redactedName(tab), () => { tab.redactedSaved = true; this.#markSaved(tab, version); }, tab?.fileId);
+    try { bytes = await this._currentBytes(); } catch (e) { this.toast("Could not save the redacted copy: " + (e.message || e), 9000); return; }
+    await this._saveBytes(bytes, this.#redactedName(tab), () => this.#saved(tab, "redacted", { version }), tab?.fileId);
   }
 
   /** Write the redacted version over the original file, once asked. */
@@ -4737,32 +2482,31 @@ export class Reader {
   async saveTab(tab, near = null) {
     await this.chain;
     if (!tab || !this.tabs.includes(tab)) return null;
-    const version = tab.version || 0;
+    const version = tab.version;
     let bytes;
-    try { bytes = tab === this.activeTab ? await this.#currentBytes() : tab.bytes || tab.original; }
+    try { bytes = tab === this.activeTab ? await this._currentBytes() : tab.bytes || tab.original; }
     catch (e) { this.toast("Could not save: " + (e.message || e), 9000); return null; }
     if (!bytes) return null;
     let done = null;
     const name = /\.pdf$/i.test(tab.name) ? tab.name : tab.name + ".pdf";
-    await this.#saveBytes(bytes, name, (where) => { done = where || true; tab.unsaved = false; this.#markSaved(tab, version); }, near);
-    if (done && this.tabs.includes(tab)) this.#renderTabs();
+    await this._saveBytes(bytes, name, (where) => { done = where || true; this.#saved(tab, "as", { version, made: true }); }, near);
     return done;
   }
 
   /** Save as a new file, starting in the document's own folder (Ctrl+Shift+S). */
   async saveCopy() {
     await this.chain;  // a text change still on its way is included
-    this.#finishEditing();
+    this._finishEditing();
     if (!this.doc) return;
-    const tab = this.activeTab, version = tab.version || 0;
+    const tab = this.activeTab, version = tab.version;
     let bytes;
-    try { bytes = await this.#currentBytes(); } catch (e) { this.toast("Could not save a copy: " + (e.message || e), 9000); return; }
-    await this.#saveBytes(bytes, this.#copyName(), () => this.#markSaved(tab, version), tab?.fileId);
+    try { bytes = await this._currentBytes(); } catch (e) { this.toast("Could not save a copy: " + (e.message || e), 9000); return; }
+    await this._saveBytes(bytes, this.#copyName(), () => this.#saved(tab, "as", { version }), tab?.fileId);
   }
 
   /** Save ``bytes`` as a file the person picks (or download it); the
    *  dialog starts next to the opened file ``near`` (its id). */
-  async #saveBytes(bytes, name, saved = () => {}, near = null) {
+  async _saveBytes(bytes, name, saved = () => {}, near = null) {
     const api = this.api();
     if (this.isDesktop() && api && api.save_result) {
       const body = new FormData();
@@ -4819,11 +2563,11 @@ export class Reader {
       if (selection) items.push(item("copy", "Copy", () => navigator.clipboard?.writeText(selection).then(() => this.toast("Copied", 1200), () => {}), "Ctrl+C"));
       const span = e.target.closest?.(".textLayer span");
       if (span && !span.classList.contains("markedContent") && span.textContent.trim()) {
-        items.push(item("edittext", "Edit this text", () => { this.useTool("EDITTEXT"); this.#openTextEditor(span, pageEl, page, "line"); }));
-        items.push(item("edittext", "Rewrite this paragraph", () => { this.useTool("EDITTEXT"); this.#openTextEditor(span, pageEl, page, "paragraph"); }));
+        items.push(item("edittext", "Edit this text", () => { this.useTool("EDITTEXT"); this._openTextEditor(span, pageEl, page, "line"); }));
+        items.push(item("edittext", "Rewrite this paragraph", () => { this.useTool("EDITTEXT"); this._openTextEditor(span, pageEl, page, "paragraph"); }));
       }
       const at = { clientX: e.clientX, clientY: e.clientY };
-      items.push(item("text", "Add text here", () => { this.useTool("EDITTEXT"); this.#openNewText(at, pageEl, page); }));
+      items.push(item("text", "Add text here", () => { this.useTool("EDITTEXT"); this._openNewText(at, pageEl, page); }));
       items.push(el("hr"));
     }
     items.push(
@@ -4858,14 +2602,14 @@ export class Reader {
    *  if another one is shown by its turn, nothing is changed. */
   #arrange(plan, { inserts = [], message = "", page = null } = {}) {
     const asked = this.doc;
-    return this.#changeDocument((bytes, tab) => {
+    return this._changeDocument((bytes, tab) => {
       if (typeof plan !== "function" && this.doc !== asked) throw new Error("the document changed meanwhile, so nothing was changed");
       const pages = typeof plan === "function" ? plan(this.doc.numPages) : plan;
-      return this.#post("/api/pages/arrange", bytes, tab, { plan: JSON.stringify(pages) }, inserts);
+      return this._post("/api/pages/arrange", bytes, tab, { plan: JSON.stringify(pages) }, inserts);
     }, {
       failure: "Could not change the pages: ",
       goto: (view) => ({ page: page || view.page, scale: view.scale }),
-      after: () => { if (message) this.toast(message, 5000, ["Undo", () => this.#undoTextEdit()]); },
+      after: () => { if (message) this.toast(message, 5000, ["Undo", () => this._undoTextEdit()]); },
     });
   }
   rotatePages(pages, delta) {
@@ -4924,15 +2668,15 @@ export class Reader {
     const tab = this.activeTab;
     this.#busy(true);
     try {
-      const bytes = await this.#currentBytes();
+      const bytes = await this._currentBytes();
       const plan = [...pages].sort((a, b) => a - b).map((page) => ({ page }));
-      const res = await this.#post("/api/pages/arrange", bytes, tab, { plan: JSON.stringify(plan) });
+      const res = await this._post("/api/pages/arrange", bytes, tab, { plan: JSON.stringify(plan) });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
       const out = new Uint8Array(await res.arrayBuffer());
       const stem = this.name.replace(/\.pdf$/i, "");
       const label = pages.length === 1 ? `page ${pages[0]}` : `${pages.length} pages`;
       this.#busy(false);
-      await this.#saveBytes(out, `${stem} (${label}).pdf`);
+      await this._saveBytes(out, `${stem} (${label}).pdf`);
     } catch (e) {
       this.toast("Could not extract the pages: " + (e.message || e));
     } finally {
@@ -4941,43 +2685,25 @@ export class Reader {
   }
 
   /** Commit the annotation being drawn or typed. */
-  #finishEditing() {
+  _finishEditing() {
     try { this.uiManager?.endCurrentEditing?.(); } catch (e) { /* nothing being edited */ }
-  }
-
-  /** The tab's changes up to ``version`` are in a file now. */
-  /** Save and Undo in the toolbar while there are changes to keep or take back. */
-  #showSaveState() {
-    if (!this.saveNowBtn) return;
-    // (The annotation bar has its own while it's open.)
-    const tab = this.activeTab, open = !!(this.doc && tab && this.annotbar.hidden);
-    this.saveNowBtn.hidden = !(open && tab.dirty);
-    // The annotation bar's Save is the screen's main action only once there is
-    // something to save; until then it stays quiet (it still works).
-    // (While areas are marked for Redact, Black out is that action: Save waits, quiet.)
-    const marked = this.markupMode === "REDACT" && !!tab && this.#redactCount(tab) > 0;
-    const pending = !!(tab && (tab.dirty || (!tab.savedSince && (this.annotUndo || this.#changed()))));
-    this.annotSaveBtn.classList.toggle("seal", pending && !marked);
-    this.annotSaveBtn.classList.toggle("primary", pending && !marked);
-    this.annotSaveBtn.title = !pending ? "Nothing to save yet (Ctrl+S)"
-      : tab.redacted ? "Save a redacted copy beside the original (Ctrl+S)" : "Save your changes (Ctrl+S)";
-    this.undoNowBtn.hidden = !(open && (this.annotUndo || tab.undo?.length));
   }
 
   /** Take back the last change: an annotation if one was just made, else a page or text change. */
   #undoLast() {
     if (this.annotUndo && this.uiManager) this.uiManager.undo();
-    else if (this.activeTab?.undo?.length) this.#undoTextEdit();
+    else if (this.activeTab?.undoDepth) this._undoTextEdit();
   }
 
-  #markSaved(tab, version) {
-    if (!tab || !this.tabs.includes(tab) || (tab.version || 0) !== version) return;  // changed since
-    tab.dirty = false;
-    tab.savedSince = true;  // pdf.js's undo history outlives the save: Save goes quiet until the next change
-    tab.clean = tab === this.activeTab && this.doc ? { doc: this.doc, print: this.#annotPrint() } : null;
-    try { if (tab === this.activeTab) this.doc?.annotationStorage.resetModified(); } catch (e) { /* (so the next change is noticed) */ }
-    this.#renderTabs();
-    this.#showSaveState();
+  /** ``tab``'s changes up to ``version`` are in a file now (see TabState.saved;
+   *  ``how``: "in place", "as" or "redacted"). pdf.js's undo history outlives
+   *  the save: Save goes quiet until the next change, and Undo back to here
+   *  is unchanged again. */
+  #saved(tab, how, details) {
+    if (!tab || !this.tabs.includes(tab)) return;
+    const here = tab === this.activeTab && this.doc;
+    const current = tab.saved(how, { ...details, doc: here ? this.doc : null, print: here ? this.#annotPrint() : "" });
+    try { if (current && here) this.doc.annotationStorage.resetModified(); } catch (e) { /* (so the next change is noticed) */ }
   }
 
   /** What the annotations and form entries not in the file yet are, as
@@ -4997,18 +2723,13 @@ export class Reader {
    *  opened or last saved. It is when the shown document is the one it was
    *  then (no page or text change since: those load the document again)
    *  and its annotations and entries are the same: then it isn't changed
-   *  (no dot, Save quiet). Anything else than that state is a change. */
-  #checkSaved(tab = this.activeTab) {
-    const clean = tab?.clean;
-    if (!clean || tab !== this.activeTab || !this.doc || clean.doc !== this.doc) return;
-    const same = this.#annotPrint() === clean.print;
-    if (same === !tab.dirty) return;
-    tab.dirty = !same;
-    tab.savedSince = same;
-    if (same) { try { this.doc.annotationStorage.resetModified(); } catch (e) { /* (so the next change is noticed) */ } }
-    else tab.version = (tab.version || 0) + 1;
-    this.#renderTabs();
-    this.#showSaveState();
+   *  (no dot, Save quiet). Anything else than that state is a change
+   *  (see TabState.annotationsAre). */
+  #compareAnnotations(tab = this.activeTab) {
+    if (!tab || tab !== this.activeTab || !this.doc || tab.clean?.doc !== this.doc) return;
+    if (tab.annotationsAre(this.doc, this.#annotPrint()) === "saved") {
+      try { this.doc.annotationStorage.resetModified(); } catch (e) { /* (so the next change is noticed) */ }
+    }
   }
 
   print() {
@@ -5063,1451 +2784,12 @@ export class Reader {
     if (!this.doc) return;
     if (name === "NONE") { this.closeAnnotate(); return; }
     this.openAnnotate();
-    this.#setEditMode(name, name === "STAMP");
+    this._setEditMode(name, name === "STAMP");
   }
   editWith(toolId) { return this.#edit(toolId); }
   goToPage(n) { if (this.doc && n >= 1 && n <= this.pdfViewer.pagesCount) this.pdfViewer.currentPageNumber = n; }
   showBookmarks() { this.#setSidebar(true); this.#showTab("outline"); }
 
-  // ---- drawing scale and measuring ---------------------------------------------
-  // For to-scale drawings such as house plans: each sheet's scale (read from
-  // the sheet, or set by hand), zoom to true paper size or to a drawing
-  // scale on a calibrated screen, and a tool to measure lengths and areas.
-
-  #buildScaleBar() {
-    const option = (value, label) => el("option", { value }, label);
-    const group = (label, scales) => el("optgroup", { label }, ...scales.map((sc) => option("s:" + measure.ALL_SCALES.indexOf(sc), sc.label)));
-    this.sheetScaleSelect = el("select", { class: "rd-zoom rd-scale-select", "aria-label": "Drawing scale of this sheet" });
-    this.sheetDetected = option("detected", "");
-    this.sheetCustom = option("custom", "");
-    this.sheetScaleSelect.append(option("", "Not set"), this.sheetDetected, this.sheetCustom,
-      group("Architectural", measure.ARCHITECTURAL), group("Engineering", measure.ENGINEERING),
-      group("Metric", measure.METRIC), option("full", measure.FULL_SIZE.label));
-    this.fromDimensionBtn = el("button", { class: "rd-btn rd-tool", type: "button", "aria-pressed": "false",
-      title: "Click both ends of a line whose real length you know, such as a dimension", html: svg("ruler") + "<span>From a dimension</span>" });
-    this.viewAtSelect = el("select", { class: "rd-zoom", "aria-label": "Zoom to scale",
-      title: "Zoom so the drawing is its true paper size on your screen, or looks as if printed at another scale" });
-    this.distanceBtn = el("button", { class: "rd-btn rd-tool", type: "button", "aria-pressed": "false",
-      title: "Measure a length: click both ends (M). Clicks snap to the drawing's lines (Alt: no snapping); hold Shift to keep it straight.", html: svg("ruler") + "<span>Distance</span>" });
-    this.pathBtn = el("button", { class: "rd-btn rd-tool", type: "button", "aria-pressed": "false",
-      title: "Measure a run of lines (walls, a baseboard): click along it, then Enter or double-click for the total", html: svg("path") + "<span>Path</span>" });
-    this.areaBtn = el("button", { class: "rd-btn rd-tool", type: "button", "aria-pressed": "false",
-      title: "Measure an area: click its corners, then click the first one again (or press Enter)", html: svg("area") + "<span>Area</span>" });
-    const tool = (mode, icon, label, title) => el("button", { class: "rd-btn rd-tool", type: "button", "aria-pressed": "false", "data-measure": mode, title, html: svg(icon) + `<span>${label}</span>` });
-    this.rectBtn = tool("rect", "rect", "Rectangle", "Measure a rectangular area: click two opposite corners");
-    this.cutoutBtn = tool("cutout", "cutout", "Cut-out", "Take an opening (a stair, a shaft, a column) out of an area: click its corners inside the area, then the first one again (or Enter)");
-    this.countBtn = tool("count", "count", "Count", "Count things (outlets, doors, fixtures): click each one. Enter starts a new count.");
-    this.angleBtn = tool("angle", "angle", "Angle", "Measure an angle: click a point on one line, the corner, then a point on the other line");
-    this.clearMeasuresBtn = el("button", { class: "rd-btn", type: "button", title: "Remove every measurement", "aria-label": "Remove every measurement", html: svg("trash") });
-    this.straightOnly = !!store.get("pdfm-measure-straight", false);
-    this.straightBtn = el("button", { class: "rd-btn rd-tool", type: "button", "aria-pressed": String(this.straightOnly),
-      title: "Straight only: lines go across or up and down, never at a slant (Shift: steps of 45°)", html: svg("straight") + "<span>Straight</span>" });
-    this.units = store.get("pdfm-measure-units", "auto");
-    this.listBtn = el("button", { class: "rd-btn rd-tool", type: "button", "aria-pressed": "false",
-      title: "The list of measurements: values, totals, units, copy", html: svg("list") + "<span>List</span>" });
-    this.listCount = el("b", { class: "rd-count", hidden: true });
-    this.listBtn.append(this.listCount);
-    this.measPanel = el("aside", { class: "rd-measpanel", hidden: true, "aria-label": "Measurements" });
-    this.calibrateBtn = el("button", { class: "rd-btn", type: "button", title: "Calibrate the screen: match the app to it, so true paper size really is",
-      "aria-label": "Calibrate the screen", html: svg("screen") });
-    this.compareBtn = el("button", { class: "rd-btn", type: "button", title: "Compare with another revision of the drawing: changes show in red and blue",
-      "aria-label": "Compare with another revision", html: svg("layers") });
-    this.compareBtn.addEventListener("click", () => (this.overlay ? this.closeCompare() : this.compareRevision()));
-    const close = el("button", { class: "rd-btn", type: "button", title: "Close the scale bar", "aria-label": "Close the scale bar", html: svg("x") });
-    this.scalebar = el("div", { class: "rd-findbar rd-scalebar", hidden: true, role: "toolbar", "aria-label": "Scale and measuring" },
-      el("label", {}, "Sheet scale", this.sheetScaleSelect), this.fromDimensionBtn, el("span", { class: "rd-sep" }),
-      el("label", {}, "Zoom to scale", this.viewAtSelect), el("span", { class: "rd-sep" }),
-      this.distanceBtn, this.pathBtn, this.areaBtn, this.rectBtn, this.cutoutBtn, this.countBtn, this.angleBtn, this.straightBtn,
-      el("span", { class: "rd-sep" }), this.listBtn, this.clearMeasuresBtn,
-      el("span", { style: "flex:1" }), this.compareBtn, this.calibrateBtn, close);
-    this.sheetScaleSelect.addEventListener("change", () => this.#pickSheetScale(this.sheetScaleSelect.value));
-    this.fromDimensionBtn.addEventListener("click", () => this.measureTool(this.measureMode === "calibrate" ? null : "calibrate"));
-    this.viewAtSelect.addEventListener("change", () => { if (this.viewAtSelect.value) this.#viewAt(this.viewAtSelect.value); });
-    this.distanceBtn.addEventListener("click", () => this.measureTool(this.measureMode === "distance" ? null : "distance"));
-    this.areaBtn.addEventListener("click", () => this.measureTool(this.measureMode === "area" ? null : "area"));
-    for (const btn of [this.rectBtn, this.cutoutBtn, this.countBtn, this.angleBtn]) {
-      btn.addEventListener("click", () => {
-        if (btn.dataset.measure === "count" && this.measureMode === "count" && this.countTarget) {  // again: a new count
-          this.countTarget = null;
-          this.toast("Next clicks start a new count", 1500);
-          return;
-        }
-        this.measureTool(this.measureMode === btn.dataset.measure ? null : btn.dataset.measure);
-      });
-    }
-    this.pathBtn.addEventListener("click", () => {
-      if (this.measureMode === "path" && this.draft?.pts.length > 1) { this.#finishMeasure(); return; }  // the button again: done
-      this.measureTool(this.measureMode === "path" ? null : "path");
-    });
-    this.clearMeasuresBtn.addEventListener("click", () => this.clearMeasures());
-    this.straightBtn.addEventListener("click", () => {
-      this.straightOnly = !this.straightOnly;
-      store.set("pdfm-measure-straight", this.straightOnly);
-      this.straightBtn.setAttribute("aria-pressed", String(this.straightOnly));
-    });
-    this.listBtn.addEventListener("click", () => this.#toggleMeasPanel());
-    this.calibrateBtn.addEventListener("click", () => this.calibrateScreen());
-    close.addEventListener("click", () => this.toggleScaleBar(false));
-  }
-
-  toggleScaleBar(open = this.scalebar.hidden) {
-    if (open && !this.doc) return;
-    this.scalebar.hidden = !open;
-    this.scaleBtn.setAttribute("aria-expanded", String(open));
-    if (open) this.#refreshScale(true);
-    else this.measureTool(null);
-  }
-
-  /** The scale of page ``n``: set by hand for that page, else read from the
-   *  sheet, else the one last set by hand in this document. null if none. */
-  #pageScale(n) {
-    const tab = this.activeTab;
-    if (!tab) return null;
-    const own = tab.scales?.[n];
-    if (own === false) return null;
-    return own || tab.detected?.get(n) || tab.scales?.["*"] || null;
-  }
-
-  #scaleKey() { return "pdfm-scale:" + this.#key(); }
-
-  /** The current page's scale: what is known is shown at once. Reading it
-   *  from the sheet (once per page) waits until the page is drawn and has
-   *  been stayed on for a moment: the text is read by the same pdf.js worker
-   *  that draws the pages, and a page that is only passed isn't read at all.
-   *  ``now``: asked for (the scale bar was opened), so no waiting to see
-   *  whether the page is stayed on. */
-  #refreshScale(now = false) {
-    const tab = this.activeTab, doc = this.doc;
-    if (!tab || !doc) return;
-    if (!tab.scales) {
-      const saved = store.get(this.#scaleKey(), {});
-      tab.scales = {};
-      if (saved && typeof saved === "object") for (const [k, v] of Object.entries(saved)) if (v === false || isScale(v)) tab.scales[k] = v;
-    }
-    tab.detected ||= new Map();
-    this.#showScale();
-    clearTimeout(this.scaleTimer);
-    const n = this.pdfViewer.currentPageNumber || 1;
-    if (tab.detected.has(n)) return;
-    // While measuring, a scale stored in the PDF is looked up at once (it's
-    // already here: one answer from the server for every page); reading the
-    // sheet's text still waits for the page to be drawn.
-    this.scaleTimer = setTimeout(() => this.#readScale(tab, doc, n, now), now || this.measureMode ? 0 : 400);
-  }
-
-  async #readScale(tab, doc, n, now = false) {
-    const here = () => doc === this.doc && tab === this.activeTab && (this.pdfViewer.currentPageNumber || 1) === n;
-    if (!here() || tab.detected.has(n) || tab.readingScale === n) return;
-    tab.readingScale = n;
-    try {
-      // A scale the drawing program stored in the PDF is exact; the one
-      // written on the sheet is read from its text.
-      tab.stored ||= this.#storedScales(tab);
-      const stored = (await tab.stored)[n]?.[0];
-      if (!here()) return;
-      if (!stored && !now) {
-        await this.#drawn(n);
-        if (!here()) return;  // left meanwhile: read when it's come back to
-      }
-      if (stored) {
-        const near = measure.nearestScale(stored.ratio, stored.units);
-        const label = stored.label || (near.off < 0.005 ? near.scale.label : `1:${+stored.ratio.toFixed(stored.ratio < 10 ? 2 : 0)}`);
-        tab.detected.set(n, { ratio: stored.ratio, units: stored.units, label, stored: true });
-      }
-      else try {
-        const page = await doc.getPage(n);
-        const content = await page.getTextContent();
-        const text = content.items.map((i) => (i.str || "") + (i.hasEOL ? "\n" : " ")).join("");
-        tab.detected.set(n, measure.findScale(text));
-      } catch (e) { tab.detected.set(n, null); /* no text: no scale */ }
-    } finally {
-      if (tab.readingScale === n) tab.readingScale = 0;
-    }
-    if (doc === this.doc && tab === this.activeTab) this.#showScale();
-  }
-
-  /** Resolves when page ``n`` is drawn (at once if it is), or left for another page. */
-  #drawn(n) {
-    const view = this.pdfViewer.getPageView(n - 1);
-    if (!view || view.renderingState === 3) return Promise.resolve();
-    return new Promise((resolve) => {
-      const bus = this.eventBus;
-      const done = () => { bus.off("pagerendered", rendered); bus.off("pagechanging", done); clearTimeout(timer); resolve(); };
-      const rendered = (e) => { if (e.pageNumber === n) done(); };
-      const timer = setTimeout(done, 15000);  // (a page that can't be drawn)
-      bus.on("pagerendered", rendered);
-      bus.on("pagechanging", done);
-    });
-  }
-
-  /** {page: [viewport scale, biggest first]} stored in the PDF (see viewports.py). */
-  async #storedScales(tab) {
-    try {
-      const body = new FormData();
-      if (tab.fileId && !tab.edited) body.append("id", tab.fileId);
-      else {
-        const bytes = tab === this.activeTab ? await this.#fullBytes() : tab.bytes;  // (annotations don't matter here)
-        if (!bytes) return {};
-        body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
-      }
-      if (tab.password) body.append("password", tab.password);
-      const res = await fetch("/api/scales", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
-      return res.ok ? (await res.json()).pages || {} : {};
-    } catch (e) {
-      return {};
-    }
-  }
-
-  #showScale() {
-    if (!this.doc) return;
-    const n = this.pdfViewer.currentPageNumber || 1;
-    const scale = this.#pageScale(n);
-    const own = this.activeTab?.scales?.[n];
-    const detected = this.activeTab?.detected?.get(n);
-    this.scaleLabel.textContent = scale ? (scale.custom ? "≈ " + scale.label.replace(/^.*\((.*)\)$/, "$1") : scale.label) : "Scale";
-    this.scaleBtn.classList.toggle("set", !!scale);
-    this.sheetDetected.hidden = !detected;
-    this.sheetDetected.textContent = detected ? `${detected.label} (${detected.stored ? "stored in the PDF" : "from the sheet"})` : "";
-    const custom = scale?.custom ? scale : null;
-    this.sheetCustom.hidden = !custom;
-    this.sheetCustom.textContent = custom ? custom.label : "";
-    let value = "";
-    if (scale && scale === detected && !own) value = "detected";
-    else if (custom) value = "custom";
-    else if (scale && scale.ratio === 1) value = "full";
-    else if (scale) {
-      const i = measure.ALL_SCALES.findIndex((sc) => sc.label === scale.label && sc.ratio === scale.ratio);
-      value = i >= 0 ? "s:" + i : "";
-    }
-    this.sheetScaleSelect.value = value;
-    // "Show at": true paper size, or a drawing scale of the same kind as this sheet's.
-    const options = [el("option", { value: "" }, "Not to scale"), el("option", { value: "true" }, "True paper size")];
-    if (scale) {
-      const kind = (sc) => (sc.units === "m" ? "m" : sc.label.includes("= 1'-0") ? "arch" : "eng");
-      const same = measure.ALL_SCALES.filter((sc) => (scale.custom ? sc.units === scale.units : kind(sc) === kind(scale)));
-      options.push(el("optgroup", { label: "As if printed at" }, ...same.map((sc) => el("option", { value: "s:" + measure.ALL_SCALES.indexOf(sc) }, sc.label))));
-    }
-    this.viewAtSelect.replaceChildren(...options);
-    this.#syncViewAt();
-    this.#drawAllMeasures();
-  }
-
-  #pickSheetScale(value) {
-    const tab = this.activeTab;
-    if (!tab || value === "custom") return;
-    const n = this.pdfViewer.currentPageNumber || 1;
-    tab.scales ||= {};
-    if (value === "detected") delete tab.scales[n];
-    else if (value === "") tab.scales[n] = false;
-    else {
-      const scale = value === "full" ? measure.FULL_SIZE : measure.ALL_SCALES[+value.slice(2)];
-      tab.scales[n] = scale;
-      tab.scales["*"] = scale;  // and for pages that show no scale of their own
-    }
-    store.set(this.#scaleKey(), tab.scales);
-    this.#showScale();
-  }
-
-  #setPageScale(n, scale) {
-    const tab = this.activeTab;
-    tab.scales ||= {};
-    tab.scales[n] = scale;
-    tab.scales["*"] = scale;
-    store.set(this.#scaleKey(), tab.scales);
-    this.#showScale();
-  }
-
-  /** The zoom at which a page shows at its true printed size on this screen. */
-  #trueZoom() {
-    const devicePpi = this.#screenPpi();
-    const cssPpi = devicePpi ? devicePpi / (window.devicePixelRatio || 1) : 96;
-    return cssPpi / 96;  // at 100%, pdf.js draws 96 CSS pixels to the inch
-  }
-
-  /** The screen's pixels per inch, as calibrated (kept here as well as in
-   *  storage, which may be unavailable); null if not yet, or nonsense. */
-  #screenPpi() {
-    const ppi = this.screenPpi ?? store.get("pdfm-screen-ppi", null);
-    return Number.isFinite(ppi) && ppi >= 30 && ppi <= 1000 ? ppi : null;
-  }
-
-  /** Zoom to true paper size ("true") or so the drawing looks as if drawn at
-   *  another scale ("s:<index>"). */
-  async #viewAt(value) {
-    if (!this.doc) return;
-    if (!this.#screenPpi() && !(await this.calibrateScreen(true))) { this.#syncZoomSelect(); this.#syncViewAt(); return; }
-    let zoom = this.#trueZoom(), what = "true paper size";
-    if (value !== "true") {
-      const target = measure.ALL_SCALES[+value.slice(2)];
-      const scale = this.#pageScale(this.pdfViewer.currentPageNumber || 1);
-      if (!target || !scale) { this.toast("Set this sheet's scale first."); return; }
-      zoom *= scale.ratio / target.ratio;
-      what = target.label;
-    }
-    const wanted = zoom;
-    zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
-    if (!Number.isFinite(zoom)) { this.toast("That zoom can't be worked out; calibrate the screen again."); return; }
-    this.pdfViewer.currentScale = zoom;
-    if (zoom !== wanted) this.toast(`That would be ${Math.round(wanted * 100)}%; the viewer stops at ${Math.round(zoom * 100)}%.`, 4000);
-    this.#syncViewAt();
-    this.toast(`Showing the drawing at ${what} on your screen`, 2500);
-  }
-
-  /** Zoom to scale shows what the zoom is now: true paper size, as if
-   *  printed at a scale, or not to scale (and the zoom). */
-  #syncViewAt() {
-    const sel = this.viewAtSelect;
-    if (!sel?.options.length || !this.pdfViewer || !this.doc) return;
-    const zoom = this.pdfViewer.currentScale;
-    let value = "";
-    if (this.#screenPpi() && Number.isFinite(zoom)) {
-      const t = this.#trueZoom(), same = (z) => Math.abs(zoom / z - 1) < 0.002;
-      const scale = this.#pageScale(this.pdfViewer.currentPageNumber || 1);
-      if (same(t)) value = "true";
-      else if (scale) {
-        for (const o of sel.options) {
-          const target = o.value.startsWith("s:") ? measure.ALL_SCALES[+o.value.slice(2)] : null;
-          if (target && same(t * scale.ratio / target.ratio)) { value = o.value; break; }
-        }
-      }
-    }
-    sel.options[0].textContent = value || !Number.isFinite(zoom) ? "Not to scale" : `Not to scale (${Math.round(zoom * 100)}%)`;
-    sel.value = value;
-  }
-
-  #syncZoomSelect() {
-    if (this.pdfViewer) this.eventBus.dispatch("scalechanging", { source: this, scale: this.pdfViewer.currentScale, presetValue: this.pdfViewer.currentScaleValue });
-  }
-
-  /** Ask how big the screen's pixels really are: match a bank card, or give
-   *  the screen's diagonal. Resolves true once calibrated. */
-  async calibrateScreen(first = false) {
-    const dpr = window.devicePixelRatio || 1;
-    let cssPpi = (this.#screenPpi() || 96 * dpr) / dpr;
-    const CARD_W = 3.370, CARD_H = 2.125;  // a bank card, in inches (85.6 × 54 mm)
-    const card = el("div", { class: "rd-card" }, el("span", {}, "Bank card"));
-    const ruler = el("div", { class: "rd-ruler", "aria-hidden": "true" });
-    let rulerUnit = store.get("pdfm-ruler-unit", "in") === "cm" ? "cm" : "in";
-    const marks = () => {
-      const count = rulerUnit === "cm" ? 15 : 6;
-      ruler.replaceChildren(...Array.from({ length: count + 1 }, (_, i) => el("i", { style: `left:${(i / count) * 100}%` }, el("b", {}, String(i)))),
-        el("span", { style: `left:${50 / count}%` }, rulerUnit === "cm" ? "15 cm" : "6 inches"));
-    };
-    const unitBtn = (unit, label) => {
-      const b = el("button", { type: "button", class: "rd-segbtn", "aria-pressed": String(rulerUnit === unit) }, label);
-      b.addEventListener("click", () => {
-        rulerUnit = unit;
-        store.set("pdfm-ruler-unit", unit);
-        for (const other of b.parentElement.children) other.setAttribute("aria-pressed", String(other === b));
-        marks();
-        show();
-      });
-      return b;
-    };
-    const units = el("div", { class: "rd-seg", role: "group", "aria-label": "Ruler" }, unitBtn("in", "Inches"), unitBtn("cm", "Centimetres"));
-    marks();
-    const slider = el("input", { type: "range", min: "40", max: "320", step: "0.25", "aria-label": "Card size" });
-    const diagonal = el("input", { type: "number", min: "5", max: "100", step: "0.1", placeholder: "e.g. 24", "aria-label": "Screen diagonal in inches" });
-    const show = () => {
-      card.style.width = `${CARD_W * cssPpi}px`;
-      card.style.height = `${CARD_H * cssPpi}px`;
-      ruler.style.width = `${(rulerUnit === "cm" ? 15 / 2.54 : 6) * cssPpi}px`;
-      slider.value = String(cssPpi);
-    };
-    slider.addEventListener("input", () => { cssPpi = +slider.value; diagonal.value = ""; show(); });
-    diagonal.addEventListener("input", () => {
-      const d = +diagonal.value, w = screen?.width, h = screen?.height;
-      if (d >= 5 && w > 0 && h > 0) { cssPpi = Math.min(320, Math.max(40, Math.hypot(w, h) / d)); show(); }
-    });
-    show();
-    const body = [
-      el("p", {}, first ? "To show drawings at their real size, ZPDF needs to know how big your screen's pixels are. This is done once."
-        : "Make true paper size match the real world on this screen."),
-      el("p", {}, "Hold a ruler or a bank card against the screen and drag the slider until the ruler's marks, or the card's outline, match exactly (a ruler is the more exact):"),
-      units, el("div", { class: "rd-cardbox" }, ruler, card), slider,
-      el("p", { class: "rd-or" }, "Or type your screen's size (its diagonal, as sold):"),
-      el("label", { class: "rd-diag" }, diagonal, "inches"),
-    ];
-    const answer = await this.#dialog("Calibrate your screen", body, [["cancel", "Cancel"], ["ok", "Save", true]]);
-    if (answer !== "ok" || !Number.isFinite(cssPpi)) return false;
-    this.screenPpi = cssPpi * dpr;
-    store.set("pdfm-screen-ppi", this.screenPpi);
-    this.toast("Screen calibrated: true paper size now matches the real world.", 3000);
-    if (this.zoomPreset === "true-size" && this.pdfViewer) this.pdfViewer.currentScale = this.#trueZoom();
-    return true;
-  }
-
-  /** Start measuring ("distance" or "area"), set the scale from a line of
-   *  known length ("calibrate"), or stop (null). */
-  measureTool(mode) {
-    if (mode && !this.doc) return;
-    if (!mode && !this.measureMode) return;
-    if (mode) {
-      if (this.textEditMode || (this.editMode && this.editMode !== "NONE")) this.#setEditMode("NONE");
-      this.closeAnnotate();
-      if (this.scalebar.hidden) this.toggleScaleBar(true);
-      if (this.container.classList.contains("hand")) this.toggleHand();
-    }
-    const page = this.draft?.page, aimPage = this.aim?.page;
-    this.measureMode = mode;
-    this.draft = null;
-    this.aim = null;
-    this.pick = null;
-    this.pendingDrag = null;
-    if (this.dragging) { this.dragging = null; this.container.classList.remove("rd-dragging"); }
-    this.container.style.cursor = "";
-    if (page) this.#drawMeasures(page);
-    if (aimPage && aimPage !== page) this.#drawMeasures(aimPage);
-    if (mode) { this.#geometry(this.pdfViewer.currentPageNumber || 1); this.#refreshScale(true); }  // start reading the lines and the scale now
-    this.root.classList.toggle("rd-measuring", !!mode);
-    this.distanceBtn.setAttribute("aria-pressed", String(mode === "distance"));
-    this.areaBtn.setAttribute("aria-pressed", String(mode === "area"));
-    this.pathBtn.setAttribute("aria-pressed", String(mode === "path"));
-    for (const btn of [this.rectBtn, this.cutoutBtn, this.countBtn, this.angleBtn]) btn.setAttribute("aria-pressed", String(mode === btn.dataset.measure));
-    this.countTarget = null;
-    if (!mode) this.selected = null;
-    this.fromDimensionBtn.setAttribute("aria-pressed", String(mode === "calibrate"));
-    if (mode === "path") this.toast("Click along the run of lines; Enter, a double-click or Path again for the total. Backspace takes back a point.", 5000);
-    else if (mode === "count") this.toast("Click each thing to count it; each gets a number. Enter (or Count again) starts a new count, e.g. for another kind of fixture.", 6000);
-    else if (mode === "cutout") this.toast("Click the corners of the opening inside an area, then the first corner again (or Enter): it's taken off that area.", 6000);
-    else if (mode === "angle") this.toast("Click a point on one line, then the corner, then a point on the other line.", 5000);
-    else if (mode === "calibrate") this.toast("Click both ends of a line whose real length you know, such as a dimension's extension lines. Clicks snap to the drawing's lines.", 6000);
-    else if (mode && !this.#pageScale(this.pdfViewer.currentPageNumber || 1)) {
-      this.toast("This sheet's scale isn't set, so lengths show as on paper. Pick it under Sheet scale, or use Set from a dimension.", 6000);
-    } else if (mode && !this.activeTab.scaleChecked) {
-      const n = this.pdfViewer.currentPageNumber || 1;
-      if (this.#pageScale(n) === this.activeTab.detected?.get(n) && !this.#pageScale(n).stored) {
-        this.activeTab.scaleChecked = true;
-        this.toast(`The scale ${this.#pageScale(n).label} was read from the sheet. Measure one written dimension to check it before relying on it.`, 7000);
-      }
-    }
-  }
-
-  clearMeasures() {
-    if (this.activeTab?.measures?.length) this.#rememberMeasures();
-    if (this.activeTab) this.activeTab.measures = [];
-    this.selected = null;
-    this.draft = null;
-    this.#drawAllMeasures();
-  }
-
-  /** The lines of page ``n`` (see snap.js), read from the file the first
-   *  time they're needed; null while they're being read. */
-  #geometry(n) {
-    const tab = this.activeTab, doc = this.doc;
-    if (!tab || !doc) return null;
-    tab.geometry ||= new Map();
-    const have = tab.geometry.get(n);
-    if (have !== undefined) {
-      if (have) { tab.geometry.delete(n); tab.geometry.set(n, have); }  // most recently used, kept longest
-      return have || null;
-    }
-    tab.geometry.set(n, false);  // being read
-    const done = (geometry, why) => {
-      if (doc !== this.doc) return;
-      tab.geometry.set(n, geometry);
-      // Lines of pages long left are let go of; the ones being read stay.
-      for (const [page, g] of tab.geometry) {
-        if (tab.geometry.size <= GEOMETRY_PAGES) break;
-        if (g && page !== n) tab.geometry.delete(page);
-      }
-      if (this.measureMode && this.pdfViewer.currentPageNumber === n && !tab.noLinesHinted) {
-        let hint = null;
-        if (why) hint = "This sheet's lines couldn't be read, so points go exactly where you click: zoom in close.";
-        else if (!geometry.count) hint = "This sheet has no line work to snap to (a scan?): points go exactly where you click, so zoom in close.";
-        else if (geometry.truncated) hint = "This sheet has more lines than can be read; snapping covers the first part of it.";
-        if (hint) { tab.noLinesHinted = true; this.toast(hint, 6000); }
-      }
-      if (this.draft?.page === n || this.aim?.page === n) this.#drawMeasures(n);
-    };
-    snapReady
-      .then(() => { if (!snap) throw new Error("snapping unavailable"); return doc.getPage(n); })
-      .then((page) => page.getOperatorList({ annotationMode: pdfjs.AnnotationMode.DISABLE }))
-      .then((ops) => snap.buildFromOperatorList(ops, pdfjs.OPS))
-      .then((geometry) => done(geometry, null), (e) => done(null, e));
-    return null;
-  }
-
-  /** Where a pointer event is on a page: its number, its view and the point
-   *  on the page, in PDF units and on screen (relative to the page). While
-   *  measuring, the point snaps to the drawing's lines (Alt: no snapping):
-   *  ``choices`` says how many points there were to snap to there, and Tab
-   *  picks the next one. With a point to go on from (``from``, else the last
-   *  one placed), Shift keeps the line at a multiple of 45° and Straight
-   *  only at a multiple of 90°. ``snapped`` says what it landed on, ``segs``
-   *  the lines of the drawing it's on. */
-  #pageAt(e, only = null, from = undefined) {
-    const pageEl = e.target.closest?.(".page");
-    const n = Number(pageEl?.dataset.pageNumber);
-    if (!n || (only && n !== only)) return null;
-    const view = this.pdfViewer.getPageView(n - 1);
-    if (!view?.div || !view.viewport) return null;
-    const box = view.div.getBoundingClientRect();
-    const x = e.clientX - box.left - view.div.clientLeft, y = e.clientY - box.top - view.div.clientTop;
-    const raw = view.viewport.convertToPdfPoint(x, y);
-    if (!Number.isFinite(raw[0]) || !Number.isFinite(raw[1])) return null;
-    let pdf = raw;
-    if (from === undefined) {
-      const pts = this.draft?.page === n ? this.draft.pts : null;
-      from = pts?.length ? pts.at(-1) : null;
-    }
-    let ortho = null;
-    const step = e.shiftKey ? Math.PI / 4 : this.straightOnly ? Math.PI / 2 : 0;
-    if (step && from) {  // keep it straight
-      ortho = Math.round(Math.atan2(pdf[1] - from[1], pdf[0] - from[0]) / step) * step;
-      const len = Math.hypot(pdf[0] - from[0], pdf[1] - from[1]);
-      pdf = [from[0] + len * Math.cos(ortho), from[1] + len * Math.sin(ortho)];
-    }
-    let snapped = null, segs = null, cands = [], index = 0;
-    if (this.measureMode && !e.altKey) {
-      try {
-        const geometry = this.#geometry(n);
-        cands = geometry?.candidates(pdf, SNAP_PX / view.viewport.scale, { from, ortho }) || [];
-        if (cands.length) {
-          const kept = this.pick && this.pick.page === n && Math.hypot(e.clientX - this.pick.x, e.clientY - this.pick.y) < 6;
-          index = kept ? ((this.pick.index % cands.length) + cands.length) % cands.length : 0;
-          const c = cands[index];
-          if (Number.isFinite(c.x) && Number.isFinite(c.y)) { pdf = [c.x, c.y]; snapped = c.kind; segs = c.segs; }
-        }
-      } catch (err) {
-        // Snapping failing must never stop a measurement: the point stays where it was clicked.
-        this.activeTab.geometry?.set(n, null);
-        cands = [];
-      }
-    }
-    return { page: n, view, x, y, raw, pdf, snapped, segs, cands, index };
-  }
-
-  /** The measurement under the pointer: a point of it to move (``index``),
-   *  or the whole of it (``index`` null: its line, edges or label). */
-  #hitMeasure(e) {
-    const pageEl = e.target.closest?.(".page");
-    const n = Number(pageEl?.dataset.pageNumber);
-    const items = (this.activeTab?.measures || []).filter((m) => m.page === n);
-    if (!n || !items.length) return null;
-    const view = this.pdfViewer.getPageView(n - 1);
-    if (!view?.div || !view.viewport) return null;
-    const box = view.div.getBoundingClientRect();
-    const x = e.clientX - box.left - view.div.clientLeft, y = e.clientY - box.top - view.div.clientTop;
-    const screen = (m) => m.pts.map((p) => view.viewport.convertToViewportPoint(...p));
-    for (let k = items.length - 1; k >= 0; k--) {
-      const pts = screen(items[k]);
-      const i = pts.findIndex(([px, py]) => Math.hypot(px - x, py - y) <= 8);
-      if (i >= 0) return { m: items[k], index: i, page: n };
-    }
-    const toSegment = ([ax, ay], [bx, by]) => {
-      const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
-      const t = len2 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / len2)) : 0;
-      return Math.hypot(ax + t * dx - x, ay + t * dy - y);
-    };
-    for (let k = items.length - 1; k >= 0; k--) {
-      const m = items[k], pts = screen(m);
-      const edges = m.kind === "area" ? pts.map((p, i) => [p, pts[(i + 1) % pts.length]])
-        : m.kind === "count" ? [] : pts.slice(1).map((p, i) => [pts[i], p]);
-      if (edges.some(([a, b]) => toSegment(a, b) <= 5)) return { m, index: null, page: n };
-      const label = this.labelBoxes?.get(m.id);
-      if (label && x >= label.x && x <= label.x + label.width && y >= label.y && y <= label.y + label.height) return { m, index: null, page: n };
-    }
-    return null;
-  }
-
-  #measureDown(e) {
-    if (!this.measureMode || e.button !== 0) return;
-    // On a measurement already made: drag it (or a point of it) to move it;
-    // a click without dragging measures from there as usual.
-    if (!this.draft && this.measureMode !== "calibrate") {
-      const hit = this.#hitMeasure(e);
-      if (hit) this.selected = { id: hit.m.id, index: hit.index };
-      if (hit) {
-        e.preventDefault();
-        e.stopPropagation();
-        const at = this.#pageAt(e, hit.page, null);
-        this.pendingDrag = { hit, x: e.clientX, y: e.clientY, start: at?.raw,
-          event: { target: e.target, clientX: e.clientX, clientY: e.clientY, shiftKey: e.shiftKey, altKey: e.altKey, button: 0,
-            preventDefault() {}, stopPropagation() {} } };
-        return;
-      }
-    }
-    this.#measureClick(e);
-  }
-
-  #measureClick(e) {
-    const at = this.#pageAt(e, this.draft?.page);
-    if (!at) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (this.measureMode === "count") { this.#countAt(at); return; }
-    if (!this.draft) {
-      this.draft = { page: at.page, kind: this.measureMode, pts: [at.pdf], hover: null };
-      this.#drawMeasures(at.page);
-      return;
-    }
-    const d = this.draft;
-    if (d.kind === "angle" && d.pts.length < 2) { d.pts.push(at.pdf); this.#drawMeasures(at.page); return; }
-    if (d.kind === "area" || d.kind === "path" || d.kind === "cutout") {
-      const screen = (p) => at.view.viewport.convertToViewportPoint(...p);
-      const [fx, fy] = screen(d.pts[0]), [lx, ly] = screen(d.pts.at(-1));
-      const closed = d.kind !== "path";
-      const nearFirst = closed && d.pts.length >= 3 && Math.hypot(at.x - fx, at.y - fy) < 9;
-      const onLast = Math.hypot(at.x - lx, at.y - ly) < 4;  // the second click of a double-click
-      if (nearFirst || (onLast && d.pts.length >= (closed ? 3 : 2))) { this.#finishMeasure(); return; }
-      if (!onLast) d.pts.push(at.pdf);
-      this.#drawMeasures(at.page);
-      return;
-    }
-    d.pts.push(at.pdf);
-    this.#finishMeasure();
-  }
-
-  #measureMove(e) {
-    if (!this.measureMode) return;
-    this.lastMove = e;
-    if (this.pick && Math.hypot(e.clientX - this.pick.x, e.clientY - this.pick.y) >= 6) this.pick = null;
-    if (this.pendingDrag && Math.hypot(e.clientX - this.pendingDrag.x, e.clientY - this.pendingDrag.y) > 3) {
-      const { hit, start } = this.pendingDrag;
-      this.pendingDrag = null;
-      this.#rememberMeasures();
-      this.dragging = { ...hit, start, orig: hit.m.pts.map((p) => [...p]), origHoles: hit.m.holes?.map((h) => h.map((p) => [...p])) };
-      this.container.classList.add("rd-dragging");
-    }
-    if (this.pendingDrag) return;
-    if (this.dragging) { this.#dragMeasure(e); return; }
-    const at = this.#pageAt(e, this.draft?.page);
-    const before = this.aim?.page;
-    this.aim = at ? { page: at.page, x: at.x, y: at.y, raw: at.raw, pdf: at.pdf, snapped: at.snapped, segs: at.segs, cands: at.cands, index: at.index } : null;
-    if (this.draft && at) this.draft.hover = at.pdf;
-    if (!this.draft) {
-      const hit = at && this.measureMode !== "calibrate" ? this.#hitMeasure(e) : null;
-      this.container.style.cursor = hit ? (hit.index === null ? "grab" : "move") : "";
-    }
-    if (this.moveFrame) return;
-    this.moveFrame = requestAnimationFrame(() => {
-      this.moveFrame = null;
-      const n = this.aim?.page || this.draft?.page;
-      if (n) this.#drawMeasures(n);
-      if (before && before !== n) this.#drawMeasures(before);
-    });
-  }
-
-  /** Move a measurement, or one of its points, with the pointer. */
-  #dragMeasure(e) {
-    const g = this.dragging, m = g.m;
-    if (g.index === null) {  // the whole of it: by how far the pointer went
-      const at = this.#pageAt(e, g.page, null);
-      if (!at || !g.start) return;
-      const dx = at.raw[0] - g.start[0], dy = at.raw[1] - g.start[1];
-      m.pts = g.orig.map(([x, y]) => [x + dx, y + dy]);
-      if (g.origHoles) m.holes = g.origHoles.map((h) => h.map(([x, y]) => [x + dx, y + dy]));
-      this.aim = null;
-    } else {  // one point: it snaps, kept straight from its neighbour with Shift or Straight only
-      const other = m.kind === "area" ? m.pts[(g.index + m.pts.length - 1) % m.pts.length]
-        : m.kind === "path" ? m.pts[g.index ? g.index - 1 : 1]
-        : m.kind === "angle" ? m.pts[g.index === 1 ? 0 : 1]
-        : m.kind === "count" ? null : m.pts[1 - g.index];
-      const at = this.#pageAt(e, g.page, other);
-      if (!at) return;
-      m.pts[g.index] = at.pdf;
-      this.aim = { page: at.page, x: at.x, y: at.y, raw: at.raw, pdf: at.pdf, snapped: at.snapped, segs: at.segs, cands: at.cands, index: at.index };
-    }
-    if (this.moveFrame) return;
-    this.moveFrame = requestAnimationFrame(() => { this.moveFrame = null; this.#drawMeasures(g.page); this.#renderMeasPanel(); });
-  }
-
-  #measureUp() {
-    if (this.pendingDrag) {  // pressed on a measurement without moving: an ordinary click
-      const { event } = this.pendingDrag;
-      this.pendingDrag = null;
-      this.#measureClick(event);
-      return;
-    }
-    if (!this.dragging) return;
-    const page = this.dragging.page;
-    this.dragging = null;
-    this.aim = null;
-    this.container.classList.remove("rd-dragging");
-    this.#drawMeasures(page);
-    this.#renderMeasPanel();
-  }
-
-  async #finishMeasure() {
-    const d = this.draft;
-    this.draft = null;
-    if (!d) return;
-    if (d.kind === "calibrate") { this.#drawMeasures(d.page); await this.#scaleFromLine(d); return; }
-    const least = { area: 3, cutout: 3, angle: 3 }[d.kind] || 2;
-    if (d.pts.length < least) { this.#drawMeasures(d.page); return; }
-    const tab = this.activeTab;
-    tab.measures ||= [];
-    if (d.kind === "cutout") { this.#addCutout(d); return; }
-    const rect = d.kind === "rect";
-    if (rect) {  // two corners on one line are no rectangle
-      const view = this.pdfViewer.getPageView(d.page - 1)?.viewport;
-      const [ax, ay] = view.convertToViewportPoint(...d.pts[0]), [bx, by] = view.convertToViewportPoint(...d.pts[1]);
-      if (Math.abs(bx - ax) < 3 || Math.abs(by - ay) < 3) { this.#drawMeasures(d.page); this.toast("Click two opposite corners of the rectangle.", 3000); return; }
-    }
-    this.#rememberMeasures();
-    const m = { id: ++measureSeq, page: d.page, kind: rect ? "area" : d.kind, pts: rect ? measure.rectangle(d.pts[0], d.pts[1]) : d.pts };
-    if (tab.measureGroup) m.group = tab.measureGroup;
-    tab.measures.push(m);
-    this.selected = { id: m.id, index: m.pts.length - 1 };  // the arrow keys nudge the last point
-    this.#drawMeasures(d.page);
-    // The list opens with the first measurement, unless it was closed before.
-    if (this.measPanel.hidden && !store.get("pdfm-measure-list-closed", false)) this.#toggleMeasPanel(true, false);
-    else this.#renderMeasPanel();
-  }
-
-  /** Count mode: a click adds a numbered mark to the count being made on
-   *  this page (a new count after Enter, or on another page). */
-  #countAt(at) {
-    const tab = this.activeTab;
-    tab.measures ||= [];
-    this.#rememberMeasures();
-    let m = tab.measures.find((x) => x.id === this.countTarget && x.page === at.page);
-    if (!m) {
-      m = { id: ++measureSeq, page: at.page, kind: "count", pts: [] };
-      if (tab.measureGroup) m.group = tab.measureGroup;
-      tab.measures.push(m);
-      this.countTarget = m.id;
-    }
-    m.pts.push(at.pdf);
-    this.selected = { id: m.id, index: m.pts.length - 1 };
-    this.#drawMeasures(at.page);
-    if (this.measPanel.hidden && !store.get("pdfm-measure-list-closed", false)) this.#toggleMeasPanel(true, false);
-    else this.#renderMeasPanel();
-  }
-
-  /** A cut-out (``d``, just drawn) comes off the area it's drawn in. */
-  #addCutout(d) {
-    const tab = this.activeTab, middle = measure.centre(d.pts);
-    const area = [...tab.measures].reverse().find((m) => m.page === d.page && m.kind === "area" && measure.inside(middle, m.pts));
-    if (!area) {
-      this.#drawMeasures(d.page);
-      this.toast("Draw the cut-out inside an area you've measured: it's taken off that area.", 5000);
-      return;
-    }
-    this.#rememberMeasures();
-    (area.holes ||= []).push(d.pts);
-    this.selected = { id: area.id, index: null };
-    this.#drawMeasures(d.page);
-    this.#renderMeasPanel();
-  }
-
-  /** Set the scale from a line of known length (``d``, just drawn): ask how
-   *  long it really is, show what scale that makes and the standard scale
-   *  it matches, and set it for this sheet or every sheet. */
-  async #scaleFromLine(d) {
-    const length = measure.distance(d.pts[0], d.pts[1]) * (this.pdfViewer.getPageView(d.page - 1).pdfPage?.userUnit || 1);
-    if (length < 1) return;
-    const current = this.#pageScale(d.page);
-    const units = current?.units || "ft";
-    const name = (scale) => (scale.custom ? scale.label.replace(/^Set from a dimension \((.*)\)$/, "≈ $1") : scale.label);
-    const now = el("p", { class: "rd-now" }, current
-      ? `At the current scale (${name(current)}), that line measures ${measure.formatLength(length, current, this.units)}.`
-      : `On the paper, that line is ${(length / 72).toFixed(3)} in long.`);
-    const input = el("input", { type: "text", placeholder: units === "m" ? "e.g. 3.6 m or 3600 mm" : "e.g. 12'-6\" or 3.6 m", "aria-label": "Real length", autocomplete: "off" });
-    const error = el("div", { class: "err", role: "alert", hidden: true }, "Type a length such as 12'-6\", 150\", 3.6 m or 3600 mm.");
-    const result = el("div", { class: "rd-scaleresult", hidden: true });
-    const radio = (group, value, label, checked) => el("label", { class: "rd-radio" },
-      el("input", { type: "radio", name: group, value, checked: checked || null }), el("span", {}, label));
-    const scope = el("fieldset", { class: "rd-scope" }, el("legend", {}, "Use it for"),
-      radio("rd-scope", "page", `This sheet (page ${this.labels?.[d.page - 1] || d.page})`, true),
-      radio("rd-scope", "all", `Every sheet in this document (${this.doc.numPages})`));
-    let pick = null;  // what the typed length makes: { exact, near }
-    const update = () => {
-      error.hidden = true;
-      const real = measure.parseLength(input.value, units);
-      const ratio = real ? real.inches / (length / 72) : NaN;
-      if (!real || !(ratio >= 0.05 && ratio <= 20000)) { pick = null; result.hidden = true; return; }
-      const exact = measure.scaleFrom(length, real), near = measure.nearestScale(ratio, real.units);
-      pick = { exact, near: near && near.off < 0.03 ? near : null };
-      if (pick.near && pick.near.off < 0.001) {  // the same thing: no choice to make
-        result.replaceChildren(el("p", {}, `That makes the scale ${pick.near.scale.label}, a standard scale.`));
-        result.append(el("input", { type: "radio", name: "rd-which", value: "near", checked: true, hidden: true }));
-      } else if (pick.near) {
-        const pct = (pick.near.off * 100).toFixed(pick.near.off < 0.001 ? 2 : 1);
-        result.replaceChildren(el("p", {}, "That makes the scale:"),
-          radio("rd-which", "near", `${pick.near.scale.label}, the standard scale it matches (${pct}% off)`, pick.near.off < 0.01),
-          radio("rd-which", "exact", `exactly as measured, ${name(exact)}`, pick.near.off >= 0.01));
-      } else {
-        result.replaceChildren(el("p", {}, `That makes the scale ${name(exact)} (no standard scale is close).`));
-      }
-      result.hidden = false;
-    };
-    input.addEventListener("input", update);
-    for (;;) {
-      const pending = this.#dialog("How long is that line?", [now, el("p", {}, "Type its real length, as the drawing gives it:"), input, error, result, scope],
-        [["cancel", "Cancel"], ["ok", "Set the scale", true]]);
-      input.focus();
-      const answer = await pending;
-      if (answer !== "ok") { this.measureTool(null); return; }
-      update();
-      if (pick) break;
-      const real = measure.parseLength(input.value, units);
-      const ratio = real ? real.inches / (length / 72) : NaN;
-      error.textContent = real ? `That would make the scale 1:${ratio < 1 ? ratio.toFixed(3) : Math.round(ratio)}, which doesn't look like a drawing scale. Check the length and the points you clicked.`
-        : "Type a length such as 12'-6\", 150\", 3.6 m or 3600 mm.";
-      error.hidden = false;
-    }
-    const useNear = pick.near && result.querySelector("input[value=near]")?.checked;
-    const scale = useNear ? pick.near.scale : pick.exact;
-    const all = scope.querySelector("input[value=all]")?.checked;
-    if (all) {
-      const tab = this.activeTab;
-      tab.scales ||= {};
-      for (let p = 1; p <= this.doc.numPages; p++) tab.scales[p] = scale;
-      tab.scales["*"] = scale;
-      store.set(this.#scaleKey(), tab.scales);
-      this.#showScale();
-    } else {
-      this.#setPageScale(d.page, scale);
-    }
-    this.measureTool("distance");
-    this.toast(`Scale set to ${name(scale)}${all ? " for every sheet" : ""}. Click two points to measure.`, 5000);
-  }
-
-  /** Esc, Enter, Backspace and Tab while measuring. True if the key was used. */
-  #measureKey(e) {
-    if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey) return false;
-    if (e.key === "Tab" && this.aim?.cands?.length > 1 && this.lastMove) {
-      // Lines close together: the next point there is to snap to.
-      const step = e.shiftKey ? -1 : 1;
-      this.pick = { page: this.aim.page, x: this.lastMove.clientX, y: this.lastMove.clientY, index: (this.aim.index || 0) + step };
-      this.#measureMove(this.lastMove);
-      return true;
-    }
-    if (e.key === "Escape") {
-      if (this.draft) { const n = this.draft.page; this.draft = null; this.#drawMeasures(n); }
-      else if (this.selected) { const m = this.#selectedMeasure(); this.selected = null; if (m) this.#drawMeasures(m.page); }
-      else this.measureTool(null);
-      return true;
-    }
-    if (e.key === "Enter" && ["area", "path", "cutout"].includes(this.draft?.kind)) { this.#finishMeasure(); return true; }
-    if (e.key === "Enter" && this.measureMode === "count") {
-      if (this.countTarget) this.toast("Next clicks start a new count", 1500);
-      this.countTarget = null;
-      return true;
-    }
-    if (e.key.startsWith("Arrow") && !this.draft && this.#selectedMeasure()) {
-      const step = e.shiftKey ? 10 : 1;
-      const [dx, dy] = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
-      this.#nudge(dx, dy);
-      return true;
-    }
-    if (e.key === "Backspace" || e.key === "Delete") {
-      if (this.draft && this.draft.pts.length > 1) { this.draft.pts.pop(); this.#drawMeasures(this.draft.page); }
-      else if (this.draft) { const n = this.draft.page; this.draft = null; this.#drawMeasures(n); }
-      else if (this.#selectedMeasure()?.kind === "count" && this.#selectedMeasure().pts.length > 1) {  // one mark of a count
-        const m = this.#selectedMeasure();
-        this.#rememberMeasures();
-        m.pts.splice(Number.isInteger(this.selected.index) ? this.selected.index : m.pts.length - 1, 1);
-        this.selected = { id: m.id, index: m.pts.length - 1 };
-        this.#drawMeasures(m.page);
-        this.#renderMeasPanel();
-      } else if (this.#selectedMeasure()) this.#deleteMeasure(this.selected.id);
-      else if (this.activeTab?.measures?.length) this.#deleteMeasure(this.activeTab.measures.at(-1).id);
-      return true;
-    }
-    return false;
-  }
-
-  #selectedMeasure() {
-    return this.selected ? (this.activeTab?.measures || []).find((m) => m.id === this.selected.id) || null : null;
-  }
-
-  /** Move the selected point (or measurement) by (dx, dy) pixels on screen. */
-  #nudge(dx, dy) {
-    const m = this.#selectedMeasure();
-    const view = m && this.pdfViewer.getPageView(m.page - 1);
-    if (!view?.viewport) return;
-    const vp = view.viewport;
-    const [x0, y0] = vp.convertToPdfPoint(0, 0), [x1, y1] = vp.convertToPdfPoint(dx, dy);
-    const ddx = x1 - x0, ddy = y1 - y0;
-    // Arrow presses close together are one step to undo.
-    const now = performance.now();
-    if (!this.nudging || this.nudging.id !== m.id || this.nudging.index !== this.selected.index || now - this.nudging.at > 1200) this.#rememberMeasures();
-    this.nudging = { id: m.id, index: this.selected.index, at: now };
-    const move = (p) => [p[0] + ddx, p[1] + ddy];
-    if (this.selected.index === null || this.selected.index === undefined) {
-      m.pts = m.pts.map(move);
-      if (m.holes) m.holes = m.holes.map((h) => h.map(move));
-    }
-    else m.pts[this.selected.index] = move(m.pts[this.selected.index]);
-    this.#drawMeasures(m.page);
-    this.#renderMeasPanel();
-  }
-
-  // ---- undo and redo for measuring ----------------------------------------------------
-  /** Keep how the measurements are now, before changing them. */
-  #rememberMeasures() {
-    const tab = this.activeTab;
-    if (!tab) return;
-    tab.measureHistory ||= { undo: [], redo: [] };
-    tab.measureHistory.undo.push(JSON.stringify(tab.measures || []));
-    if (tab.measureHistory.undo.length > 200) tab.measureHistory.undo.shift();
-    tab.measureHistory.redo = [];
-    this.nudging = null;
-  }
-
-  /** Ctrl+Z (or Ctrl+Y / Ctrl+Shift+Z with ``redo``) for measurements.
-   *  True if there was something to take back (or bring back). */
-  #measureUndo(redo) {
-    const tab = this.activeTab, h = tab?.measureHistory;
-    const from = redo ? h?.redo : h?.undo, to = redo ? h?.undo : h?.redo;
-    if (!from?.length) return false;
-    to.push(JSON.stringify(tab.measures || []));
-    const pages = new Set((tab.measures || []).map((m) => m.page));
-    tab.measures = JSON.parse(from.pop());
-    for (const m of tab.measures) { pages.add(m.page); measureSeq = Math.max(measureSeq, m.id || 0); }
-    this.selected = null;
-    this.nudging = null;
-    this.draft = null;
-    for (const n of pages) this.#drawMeasures(n);
-    this.#renderMeasPanel();
-    this.toast(redo ? "Measurement change redone" : "Measurement change undone", 1500);
-    return true;
-  }
-
-  #drawAllMeasures() {
-    if (!this.pdfViewer || !this.doc) return;
-    const pages = new Set([...(this.activeTab?.measures || []).map((m) => m.page), ...(this.draft ? [this.draft.page] : [])]);
-    for (const layer of this.viewerEl.querySelectorAll("svg.rd-measures")) pages.add(Number(layer.closest(".page")?.dataset.pageNumber));
-    for (const n of pages) if (n) this.#drawMeasures(n);
-    this.#renderMeasPanel();
-  }
-
-  /** Draw page ``n``'s measurements (and the one being made) over it. */
-  #drawMeasures(n) {
-    try { this.#drawMeasuresOn(n); } catch (e) { /* a bad point or scale: the page itself is unaffected */ }
-  }
-
-  /** A measurement's value: { text, sub, real (inches or square inches,
-   *  when the sheet has a scale), units (the sheet's) }. */
-  #measureValue(m) {
-    const scale = this.#pageScale(m.page);
-    const uu = this.pdfViewer.getPageView(m.page - 1)?.pdfPage?.userUnit || 1;
-    if (m.kind === "count") {
-      const n = m.pts.length;
-      return { text: `${n} ${n === 1 ? "item" : "items"}`, sub: "", real: null, count: n, units: scale?.units };
-    }
-    if (m.kind === "angle") {
-      const deg = measure.angle(m.pts[0], m.pts[1], m.pts[2]);
-      return { text: `${deg.toFixed(1)}°`, sub: "", real: null, angle: deg, units: scale?.units };
-    }
-    if (m.kind === "area") {
-      const a = measure.netArea(m.pts, m.holes) * uu * uu, holes = m.holes?.length || 0;
-      return { text: measure.formatArea(a, scale, this.units),
-        sub: "perimeter " + measure.formatLength(measure.perimeter(m.pts) * uu, scale, this.units)
-          + (holes ? ` · less ${holes} cut-out${holes === 1 ? "" : "s"}` : ""),
-        real: scale ? a / 5184 * scale.ratio * scale.ratio : null, units: scale?.units };
-    }
-    const len = measure.pathLength(m.pts) * uu;
-    return { text: measure.formatLength(len, scale, this.units), sub: m.kind === "path" ? `${m.pts.length - 1} segments` : "",
-      real: scale ? measure.realInches(len, scale) : null, units: scale?.units };
-  }
-
-  /** The colour of measurement group ``name`` (by the order groups were
-   *  made); null for no group. */
-  #groupColor(name) {
-    if (!name) return null;
-    const groups = this.activeTab?.measureGroups || [];
-    const i = groups.indexOf(name);
-    return GROUP_COLORS[(i < 0 ? groups.length : i) % GROUP_COLORS.length];
-  }
-
-  #drawMeasuresOn(n) {
-    if (!this.pdfViewer || !this.doc) return;
-    const view = this.pdfViewer.getPageView(n - 1);
-    if (!view?.div) return;
-    const items = (this.activeTab?.measures || []).filter((m) => m.page === n);
-    const d = this.draft?.page === n ? this.draft : null;
-    const aim = this.measureMode && this.aim?.page === n ? this.aim : null;
-    let layer = view.div.querySelector(":scope > svg.rd-measures");
-    if (!items.length && !d && !aim) { layer?.remove(); return; }
-    const NS = "http://www.w3.org/2000/svg";
-    const make = (tag, attrs = {}) => { const node = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v); return node; };
-    if (!layer) { layer = make("svg", { class: "rd-measures", "aria-hidden": "true" }); view.div.append(layer); }
-    layer.replaceChildren();
-    const vp = view.viewport, scale = this.#pageScale(n);
-    const uu = view.pdfPage?.userUnit || 1;  // a page can declare its unit bigger than a point
-    const length = (pts) => measure.formatLength(pts * uu, scale, this.units);
-    const area = (pts2) => measure.formatArea(pts2 * uu * uu, scale, this.units);
-    const xy = (p) => vp.convertToViewportPoint(...p);
-    let into = layer;  // where the measurement being drawn goes (its own group, in its colour)
-    this.labelBoxes ||= new Map();
-    // A label on a white backing, so lines of the drawing don't run through it.
-    let named = null;  // the name of the measurement being drawn, on its main label
-    const label = (x, y, lines, cls = "", id = null) => {
-      if (id !== null && named) lines = [named, ...lines];
-      const g = make("g");
-      const text = make("text", { x, y, class: "rd-measure-label" + cls, "text-anchor": "middle" });
-      lines.forEach((line, i) => {
-        const span = make("tspan", { x, dy: i ? "1.25em" : `${0.35 - (lines.length - 1) * 0.62}em` });
-        span.textContent = line;
-        text.append(span);
-      });
-      g.append(text);
-      into.append(g);
-      try {
-        const b = text.getBBox();
-        const pill = { x: b.x - 6, y: b.y - 3, width: b.width + 12, height: b.height + 6 };
-        g.insertBefore(make("rect", { ...pill, rx: 6, class: "rd-measure-pill" + cls }), text);
-        if (id !== null) this.labelBoxes.set(id, pill);
-      } catch (err) { /* not laid out: the text alone */ }
-    };
-    const dot = (x, y, picked = false) => into.append(make("circle", { cx: x, cy: y, r: picked ? 5.5 : 3.5, class: "rd-measure-dot" + (picked ? " picked" : "") }));
-    const sel = this.measureMode ? this.selected : null;
-    const isPicked = (id, i) => sel && sel.id === id && (sel.index === null || sel.index === undefined || sel.index === i);
-    const drawLine = (a, b, { draft = false, calibrate = false, hot = "", id = null } = {}) => {
-      const [ax, ay] = xy(a), [bx, by] = xy(b);
-      into.append(make("line", { x1: ax, y1: ay, x2: bx, y2: by, class: "rd-measure-line" + (draft ? " draft" : "") + (calibrate ? " calibrate" : "") + hot }));
-      dot(ax, ay, isPicked(id, 0)); dot(bx, by, isPicked(id, 1));
-      if (calibrate || Math.hypot(bx - ax, by - ay) < 2) return;
-      // the label beside the line's middle, on its upper side
-      let nx = -(by - ay), ny = bx - ax;
-      const len = Math.hypot(nx, ny);
-      nx /= len; ny /= len;
-      if (ny > 0) { nx = -nx; ny = -ny; }
-      label((ax + bx) / 2 + nx * 15, (ay + by) / 2 + ny * 15, [length(measure.distance(a, b))], hot, id);
-    };
-    const drawArea = (pts, { draft = false, hot = "", id = null, holes = [], cutout = false } = {}) => {
-      const screen = pts.map(xy);
-      if (holes.length) {  // the area with its openings left out
-        const ring = (ps) => "M" + ps.map((p) => xy(p).join(" ")).join("L") + "Z";
-        into.append(make("path", { d: ring(pts) + holes.map(ring).join(""), "fill-rule": "evenodd", class: "rd-measure-area" + hot }));
-        for (const h of holes) into.append(make("polygon", { points: h.map((p) => xy(p).join(",")).join(" "), class: "rd-measure-hole" }));
-      } else {
-        into.append(make(draft ? "polyline" : "polygon", { points: screen.map((p) => p.join(",")).join(" "),
-          class: "rd-measure-area" + (draft ? " draft" : "") + (cutout ? " cutout" : "") + hot }));
-      }
-      screen.forEach(([x, y], i) => dot(x, y, isPicked(id, i)));
-      if (pts.length < 3) return;
-      const [cx, cy] = measure.centre(screen);
-      if (cutout) { label(cx, cy, ["cut-out " + area(measure.polygonArea(pts))], " area"); return; }
-      label(cx, cy, [area(measure.netArea(pts, holes)), "perimeter " + length(measure.perimeter(pts))], " area" + hot, id);
-    };
-    // Counted things: a numbered mark on each, the count by the first.
-    const drawCount = (pts, { hot = "", id = null } = {}) => {
-      pts.map(xy).forEach(([x, y], i) => {
-        into.append(make("circle", { cx: x, cy: y, r: isPicked(id, i) ? 11 : 9, class: "rd-measure-count" + hot }));
-        const t = make("text", { x, y, class: "rd-measure-countnum", "text-anchor": "middle", dy: "0.35em" });
-        t.textContent = String(i + 1);
-        into.append(t);
-      });
-      if (!pts.length) return;
-      const [x, y] = xy(pts[0]);
-      label(x, y - 24, [`${pts.length} ${pts.length === 1 ? "item" : "items"}`], hot, id);
-    };
-    // An angle: its two arms from the corner, an arc between them, the degrees.
-    const drawAngle = (pts, { draft = false, hot = "", id = null } = {}) => {
-      const screen = pts.map(xy);
-      if (screen.length > 1) {
-        for (const i of [0, 2]) {
-          if (!screen[i]) continue;
-          const [ax, ay] = screen[1], [bx, by] = screen[i];
-          into.append(make("line", { x1: ax, y1: ay, x2: bx, y2: by, class: "rd-measure-line" + (draft ? " draft" : "") + hot }));
-        }
-      }
-      screen.forEach(([x, y], i) => dot(x, y, isPicked(id, i)));
-      if (screen.length < 3) return;
-      const [vx, vy] = screen[1];
-      const a1 = Math.atan2(screen[0][1] - vy, screen[0][0] - vx), a2 = Math.atan2(screen[2][1] - vy, screen[2][0] - vx);
-      let span = a2 - a1;
-      while (span > Math.PI) span -= 2 * Math.PI;
-      while (span < -Math.PI) span += 2 * Math.PI;
-      const r = 26, mid = a1 + span / 2;
-      into.append(make("path", { d: `M${vx + r * Math.cos(a1)} ${vy + r * Math.sin(a1)}A${r} ${r} 0 0 ${span > 0 ? 1 : 0} ${vx + r * Math.cos(a2)} ${vy + r * Math.sin(a2)}`,
-        class: "rd-measure-arc" + hot }));
-      label(vx + 50 * Math.cos(mid), vy + 50 * Math.sin(mid), [`${measure.angle(pts[0], pts[1], pts[2]).toFixed(1)}°`], hot, id);
-    };
-    // A run of lines: each segment's length beside it, the total at its end.
-    const drawPath = (pts, { draft = false, hot = "", id = null } = {}) => {
-      const screen = pts.map(xy);
-      into.append(make("polyline", { points: screen.map((p) => p.join(",")).join(" "), class: "rd-measure-line rd-measure-path" + (draft ? " draft" : "") + hot }));
-      screen.forEach(([x, y], i) => dot(x, y, isPicked(id, i)));
-      if (pts.length < 2) return;
-      if (pts.length > 2) {
-        for (let i = 1; i < pts.length; i++) {
-          const [ax, ay] = screen[i - 1], [bx, by] = screen[i];
-          if (Math.hypot(bx - ax, by - ay) < 60) continue;  // too short for its own label
-          let nx = -(by - ay), ny = bx - ax;
-          const len = Math.hypot(nx, ny);
-          nx /= len; ny /= len;
-          if (ny > 0) { nx = -nx; ny = -ny; }
-          label((ax + bx) / 2 + nx * 13, (ay + by) / 2 + ny * 13, [length(measure.distance(pts[i - 1], pts[i]))], " seg" + hot);
-        }
-      }
-      const [ex, ey] = screen.at(-1), [px, py] = screen.at(-2);
-      const ux = ex - px, uy = ey - py, ul = Math.hypot(ux, uy) || 1;
-      label(ex + (ux / ul) * 34, ey + (uy / ul) * 18 - 4, [(pts.length > 2 ? "total " : "") + length(measure.pathLength(pts))], " total" + hot, id);
-    };
-    for (const m of items) {
-      const opts = { hot: m.id === this.hot || m === this.dragging?.m || (sel && sel.id === m.id) ? " hot" : "", id: m.id };
-      const color = this.#groupColor(m.group);
-      into = make("g", color ? { style: `--mc:${color}` } : {});
-      layer.append(into);
-      named = m.label || null;
-      if (m.kind === "area") drawArea(m.pts, { ...opts, holes: m.holes || [] });
-      else if (m.kind === "path") drawPath(m.pts, opts);
-      else if (m.kind === "count") drawCount(m.pts, opts);
-      else if (m.kind === "angle") drawAngle(m.pts, opts);
-      else drawLine(m.pts[0], m.pts[1], opts);
-    }
-    into = layer;
-    named = null;
-    if (d) {
-      const pts = d.hover ? [...d.pts, d.hover] : d.pts;
-      const color = this.#groupColor(this.activeTab?.measureGroup);
-      if (color) { into = make("g", { style: `--mc:${color}` }); layer.append(into); }
-      if (d.kind === "area") drawArea(pts, { draft: true });
-      else if (d.kind === "cutout") drawArea(pts, { draft: true, cutout: true });
-      else if (d.kind === "rect") { if (pts.length > 1) drawArea(measure.rectangle(pts[0], pts[1]), { draft: true }); else { const [x, y] = xy(pts[0]); dot(x, y); } }
-      else if (d.kind === "path") drawPath(pts, { draft: true });
-      else if (d.kind === "angle") drawAngle(pts, { draft: true });
-      else if (pts.length > 1) drawLine(pts[0], pts[1], { draft: true, calibrate: d.kind === "calibrate" });
-      else { const [x, y] = xy(pts[0]); dot(x, y); }
-      into = layer;
-    }
-    if (!aim || !aim.snapped) return;
-    // What the next click would land on: the line(s) it's on, a mark, and
-    // when there's more than one thing close by, a magnified view and Tab.
-    const geometry = this.activeTab?.geometry?.get(n) || null;
-    if (geometry && aim.segs) {
-      for (const i of aim.segs) {
-        const [x1, y1, x2, y2] = geometry.segment(i);
-        const [sx, sy] = xy([x1, y1]), [ex, ey] = xy([x2, y2]);
-        layer.append(make("line", { x1: sx, y1: sy, x2: ex, y2: ey, class: "rd-snap-seg" }));
-      }
-    }
-    const [x, y] = xy(aim.pdf), r = 7;
-    const shapes = {
-      end: () => make("rect", { x: x - r, y: y - r, width: 2 * r, height: 2 * r }),
-      cross: () => make("path", { d: `M${x - r} ${y - r}L${x + r} ${y + r}M${x + r} ${y - r}L${x - r} ${y + r}` }),
-      mid: () => make("path", { d: `M${x} ${y - r}L${x + r} ${y + r}L${x - r} ${y + r}Z` }),
-      perp: () => make("path", { d: `M${x - r} ${y - r}V${y + r}H${x + r}M${x - r} ${y}H${x}V${y + r}` }),
-      on: () => make("circle", { cx: x, cy: y, r }),
-    };
-    const mark = (shapes[aim.snapped] || shapes.on)();
-    mark.setAttribute("class", "rd-snap");
-    layer.append(mark);
-    const words = { end: "end of line", cross: "crossing", mid: "middle", perp: "perpendicular", on: "on line" };
-    const many = aim.cands?.length > 1;
-    const hint = make("text", { x: x + 12, y: y - 10, class: "rd-measure-label rd-snap-hint" });
-    hint.textContent = words[aim.snapped] + (many ? `  ·  Tab: next (${aim.index + 1} of ${aim.cands.length})` : "");
-    layer.append(hint);
-    if (many && geometry) this.#drawLoupe(layer, make, geometry, vp, aim);
-  }
-
-  /** A magnified view of the drawing's lines around the pointer, with the
-   *  points there are to snap to and the one chosen, for lines close together. */
-  #drawLoupe(layer, make, geometry, vp, aim) {
-    const R = 58, Z = 5;  // radius on screen, magnification
-    const [cx, cy] = [aim.x, aim.y];
-    const ox = cx + R + 28, oy = cy - R - 28;  // up and to the right of the pointer
-    const toLoupe = (p) => { const [sx, sy] = vp.convertToViewportPoint(...p); return [ox + (sx - cx) * Z, oy + (sy - cy) * Z]; };
-    const id = `rd-loupe-${aim.page}`;
-    const g = make("g", { class: "rd-loupe" });
-    const clip = make("clipPath", { id });
-    clip.append(make("circle", { cx: ox, cy: oy, r: R }));
-    g.append(clip, make("circle", { cx: ox, cy: oy, r: R, class: "rd-loupe-bg" }));
-    const inner = make("g", { "clip-path": `url(#${id})` });
-    const reach = (R / Z + 2) / vp.scale;
-    const chosen = new Set(aim.segs || []);
-    let drawn = 0;
-    for (const i of geometry.near(aim.raw[0], aim.raw[1], reach)) {
-      if (drawn++ > 400) break;
-      const [x1, y1, x2, y2] = geometry.segment(i);
-      const [ax, ay] = toLoupe([x1, y1]), [bx, by] = toLoupe([x2, y2]);
-      inner.append(make("line", { x1: ax, y1: ay, x2: bx, y2: by, class: chosen.has(i) ? "rd-loupe-target" : "rd-loupe-line" }));
-    }
-    for (const [k, c] of (aim.cands || []).slice(0, 12).entries()) {
-      const [px, py] = toLoupe([c.x, c.y]);
-      inner.append(make("circle", { cx: px, cy: py, r: k === aim.index ? 5 : 3.5, class: k === aim.index ? "rd-loupe-pick" : "rd-loupe-cand" }));
-    }
-    const [rx, ry] = toLoupe(aim.raw);  // where the pointer itself is
-    inner.append(make("path", { d: `M${rx - 7} ${ry}H${rx + 7}M${rx} ${ry - 7}V${ry + 7}`, class: "rd-loupe-cross" }));
-    g.append(inner, make("circle", { cx: ox, cy: oy, r: R, class: "rd-loupe-ring" }));
-    layer.append(g);
-  }
-
-  // ---- the list of measurements ---------------------------------------------------
-  #toggleMeasPanel(open = this.measPanel.hidden, byHand = true) {
-    this.measPanel.hidden = !open;
-    this.listBtn.setAttribute("aria-pressed", String(open));
-    if (byHand) store.set("pdfm-measure-list-closed", !open);
-    this.#renderMeasPanel();
-  }
-
-  /** Lengths, areas and counts of ``list`` added up (in real units). */
-  #totals(list) {
-    const t = { lengths: 0, nLengths: 0, areas: 0, nAreas: 0, items: 0, nCounts: 0, unscaled: 0, sheet: null };
-    for (const m of list) {
-      const v = this.#measureValue(m);
-      if (m.kind === "count") { t.items += v.count; t.nCounts++; continue; }
-      if (m.kind === "angle") continue;
-      if (v.real === null) { t.unscaled++; continue; }
-      t.sheet ||= v.units;
-      if (m.kind === "area") { t.areas += v.real; t.nAreas++; } else { t.lengths += v.real; t.nLengths++; }
-    }
-    return t;
-  }
-
-  #totalsText(t) {
-    return [t.nLengths ? measure.formatInches(t.lengths, this.units, t.sheet) : "", t.nAreas ? measure.formatSquareInches(t.areas, this.units, t.sheet) : "",
-      t.nCounts ? `${t.items} ${t.items === 1 ? "item" : "items"}` : ""].filter(Boolean).join(" · ");
-  }
-
-  #renderMeasPanel() {
-    if (!this.measPanel) return;
-    const tab = this.activeTab && this.doc ? this.activeTab : null;
-    const items = tab?.measures || [];
-    this.#persistMeasures();
-    this.listCount.hidden = !items.length;
-    this.listCount.textContent = String(items.length);
-    if (this.measPanel.hidden) return;
-    const units = el("select", { class: "rd-zoom", "aria-label": "Units" }, ...measure.UNITS.map(([v, l]) => el("option", { value: v }, l)));
-    units.value = this.units;
-    units.addEventListener("change", () => { this.units = units.value; store.set("pdfm-measure-units", this.units); this.#drawAllMeasures(); });
-    const close = el("button", { class: "rd-btn", type: "button", title: "Close the list", "aria-label": "Close the list", html: svg("x") });
-    close.addEventListener("click", () => this.#toggleMeasPanel(false));
-    const head = el("div", { class: "rd-mhead" }, el("strong", {}, "Measurements"), close);
-    const unitRow = el("label", { class: "rd-munits" }, "Show in", units);
-    // The group new measurements go in (each group has its colour and subtotal).
-    const groups = tab?.measureGroups || [];
-    const groupSel = el("select", { class: "rd-zoom", "aria-label": "Group for new measurements" },
-      el("option", { value: "" }, "No group"), ...groups.map((g) => el("option", { value: g }, g)), el("option", { value: "\u0000new" }, "New group…"));
-    groupSel.value = tab?.measureGroup || "";
-    groupSel.addEventListener("change", async () => {
-      if (!tab) return;
-      if (groupSel.value === "\u0000new") {
-        const name = await this.#askGroupName();
-        if (name) { if (!groups.includes(name)) (tab.measureGroups ||= []).push(name); tab.measureGroup = name; }
-      } else tab.measureGroup = groupSel.value || null;
-      this.#renderMeasPanel();
-    });
-    const groupRow = el("label", { class: "rd-munits" }, "New ones go in", groupSel);
-    if (!items.length) {
-      this.measPanel.replaceChildren(head, unitRow, groupRow, el("p", { class: "rd-mempty" },
-        "Click two points with Distance, along a run of walls with Path, the corners of a room with Area (or two corners with Rectangle), "
-        + "openings inside an area with Cut-out, each fixture with Count, or three points with Angle. Drag a measurement to move it, or a point of it "
-        + "to change it; arrow keys nudge the selected point. Ctrl+Z undoes. Measurements are kept with the file on this computer."));
-      return;
-    }
-    const kindIcon = { area: "area", path: "path", count: "count", angle: "angle" };
-    const row = (m, i) => {
-      const v = this.#measureValue(m);
-      const del = el("button", { class: "rd-mdel", type: "button", title: "Delete this measurement", "aria-label": `Delete measurement ${i + 1}`, html: svg("x") });
-      del.addEventListener("click", (e) => { e.stopPropagation(); this.#deleteMeasure(m.id); });
-      const edit = el("button", { class: "rd-mdel", type: "button", title: "Name it, or put it in a group", "aria-label": `Name measurement ${i + 1}`, html: svg("pen") });
-      edit.addEventListener("click", (e) => { e.stopPropagation(); this.#editMeasure(m); });
-      const color = this.#groupColor(m.group);
-      const li = el("li", { class: "rd-mrow" + (this.hot === m.id ? " hot" : ""), tabindex: "0", title: "Show it on the page", style: color ? `--mc:${color}` : null },
-        el("span", { class: "rd-mkind", html: svg(kindIcon[m.kind] || "ruler") }),
-        el("span", { class: "rd-mval" }, m.label ? el("em", {}, m.label) : null, v.text, v.sub ? el("small", {}, v.sub) : null),
-        el("span", { class: "rd-mpage" }, `p. ${this.labels?.[m.page - 1] || m.page}`), edit, del);
-      li.addEventListener("mouseenter", () => this.#hotMeasure(m.id));
-      li.addEventListener("mouseleave", () => this.#hotMeasure(null));
-      li.addEventListener("click", () => { this.selected = { id: m.id, index: null }; this.#showMeasure(m); });
-      li.addEventListener("dblclick", () => this.#editMeasure(m));
-      li.addEventListener("keydown", (e) => { if (e.key === "Enter") this.#showMeasure(m); if (e.key === "Delete") this.#deleteMeasure(m.id); if (e.key === "F2") this.#editMeasure(m); });
-      return li;
-    };
-    // By group (in the order the groups were made), the ungrouped first.
-    const sections = [null, ...groups].map((g) => [g, items.filter((m) => (m.group || null) === g)]).filter(([, list]) => list.length);
-    const grouped = sections.some(([g]) => g);
-    let k = 0;
-    const list = el("ol", { class: "rd-mlist" });
-    for (const [g, members] of sections) {
-      if (grouped) {
-        const color = this.#groupColor(g);
-        list.append(el("li", { class: "rd-mgroup", style: color ? `--mc:${color}` : null },
-          el("i", { class: "rd-mgroupdot" }), el("b", {}, g || "No group"), el("span", {}, this.#totalsText(this.#totals(members)))));
-      }
-      for (const m of members) list.append(row(m, k++));
-    }
-    const t = this.#totals(items), totals = [];
-    if (t.nLengths > 1) totals.push(el("div", {}, el("span", {}, `Total length (${t.nLengths})`), el("b", {}, measure.formatInches(t.lengths, this.units, t.sheet))));
-    if (t.nAreas > 1) totals.push(el("div", {}, el("span", {}, `Total area (${t.nAreas})`), el("b", {}, measure.formatSquareInches(t.areas, this.units, t.sheet))));
-    if (t.nCounts > 1) totals.push(el("div", {}, el("span", {}, `Total count (${t.nCounts})`), el("b", {}, `${t.items} items`)));
-    if (t.unscaled && totals.length) totals.push(el("small", {}, `${t.unscaled} on a sheet without a scale ${t.unscaled === 1 ? "is" : "are"} left out.`));
-    const button = (icon, label, title, fn) => { const b = el("button", { class: "rd-btn", type: "button", title, html: svg(icon) + `<span>${label}</span>` }); b.addEventListener("click", fn); return b; };
-    const foot = el("div", { class: "rd-mfoot" },
-      button("copy", "Copy", "Copy the measurements, to paste in a spreadsheet or an email", () => this.#copyMeasures()),
-      button("csv", "CSV", "Save the measurements as a CSV file, for Excel or an estimate", () => this.#exportMeasures()),
-      button("pdfin", "Into PDF", "Write the measurements into the PDF as measurement annotations, so they show in any viewer and print", () => this.#measuresIntoPdf()),
-      el("span", { style: "flex:1" }),
-      button("trash", "", "Remove every measurement", () => this.clearMeasures()));
-    this.measPanel.replaceChildren(...[head, unitRow, groupRow, list, totals.length ? el("div", { class: "rd-mtotals" }, ...totals) : null, foot].filter(Boolean));
-  }
-
-  /** Ask for a new group's name. */
-  async #askGroupName(value = "") {
-    const input = el("input", { type: "text", value, placeholder: "e.g. Bedroom floors, Outlets", "aria-label": "Group name" });
-    setTimeout(() => input.focus(), 0);
-    const answer = await this.#dialog("New group", [el("p", {}, "Measurements in a group share a colour and are added up together."), input],
-      [["cancel", "Cancel"], ["ok", "Make the group", true]]);
-    return answer === "ok" ? input.value.trim().slice(0, 60) : "";
-  }
-
-  /** Name a measurement and pick its group. */
-  async #editMeasure(m) {
-    const tab = this.activeTab;
-    if (!tab) return;
-    const name = el("input", { type: "text", value: m.label || "", placeholder: "e.g. Living room, North wall", "aria-label": "Name" });
-    const groups = tab.measureGroups || [];
-    const group = el("select", { "aria-label": "Group" }, el("option", { value: "" }, "No group"), ...groups.map((g) => el("option", { value: g }, g)),
-      el("option", { value: "\u0000new" }, "New group…"));
-    group.value = m.group || "";
-    setTimeout(() => name.select(), 0);
-    const answer = await this.#dialog("Measurement", [el("label", { class: "rd-field" }, "Name", name), el("label", { class: "rd-field" }, "Group", group)],
-      [["cancel", "Cancel"], ["ok", "Save", true]]);
-    if (answer !== "ok") return;
-    let g = group.value;
-    if (g === "\u0000new") {
-      g = await this.#askGroupName();
-      if (g && !groups.includes(g)) (tab.measureGroups ||= []).push(g);
-    }
-    this.#rememberMeasures();
-    m.label = name.value.trim().slice(0, 80) || undefined;
-    m.group = g || undefined;
-    this.#drawMeasures(m.page);
-    this.#renderMeasPanel();
-  }
-
-  // ---- measurements kept with the file, as a spreadsheet, in the PDF ------------------
-  /** Where a document's measurements are kept on this computer: by the
-   *  file's place (a saved file keeps them), else by the document itself. */
-  #measuresStore(tab = this.activeTab) {
-    if (!tab) return null;
-    if (tab.path) return "pdfm-measures:path:" + tab.path.toLowerCase();
-    return tab === this.activeTab && this.doc ? "pdfm-measures:doc:" + this.doc.fingerprints[0] : null;
-  }
-
-  #persistMeasures() {
-    const tab = this.activeTab, key = tab?.measuresLoaded && this.#measuresStore(tab);
-    if (!key) return;
-    const data = { measures: tab.measures || [], groups: tab.measureGroups || [], group: tab.measureGroup || null };
-    const text = JSON.stringify(data);
-    if (text === tab.measuresSaved) return;
-    tab.measuresSaved = text;
-    if (!data.measures.length && !data.groups.length) { try { localStorage.removeItem(key); } catch (e) { /* no storage */ } return; }
-    store.set(key, data);
-  }
-
-  /** Bring back the measurements made on this document before. */
-  #loadMeasures() {
-    const tab = this.activeTab, key = this.#measuresStore(tab);
-    if (!tab || tab.measuresLoaded || !key) return;
-    tab.measuresLoaded = true;
-    const data = store.get(key, null);
-    const ok = (m) => m && Number.isInteger(m.page) && m.page >= 1 && m.page <= this.doc.numPages && Array.isArray(m.pts)
-      && m.pts.every((p) => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite)) && MEASURE_KINDS[m.kind];
-    const kept = Array.isArray(data?.measures) ? data.measures.filter(ok) : [];
-    if (tab.measures?.length || (!kept.length && !data?.groups?.length)) return;
-    for (const m of kept) measureSeq = Math.max(measureSeq, m.id || 0);
-    tab.measures = kept.map((m) => ({ ...m, id: m.id || ++measureSeq }));
-    tab.measureGroups = Array.isArray(data.groups) ? data.groups.filter((g) => typeof g === "string") : [];
-    tab.measureGroup = tab.measureGroups.includes(data.group) ? data.group : null;
-    tab.measuresSaved = JSON.stringify({ measures: tab.measures, groups: tab.measureGroups, group: tab.measureGroup });
-    if (kept.length) {
-      this.listCount.hidden = false;
-      this.listCount.textContent = String(kept.length);
-      this.toast(`${kept.length} measurement${kept.length === 1 ? "" : "s"} from last time are back.`, 5000,
-        ["Show", () => { this.toggleScaleBar(true); this.#toggleMeasPanel(true); }]);
-    }
-  }
-
-  /** The measurements as rows of a table (for Copy and CSV). */
-  #measureRows() {
-    const rows = [["Group", "Name", "Page", "Kind", "Measured", "Quantity", "Unit", "Perimeter"]];
-    for (const m of this.activeTab?.measures || []) {
-      const v = this.#measureValue(m);
-      let quantity = "", unit = "";
-      if (m.kind === "count") [quantity, unit] = [v.count, "items"];
-      else if (m.kind === "angle") [quantity, unit] = [+v.angle.toFixed(2), "°"];
-      else if (v.real !== null) [quantity, unit] = measure.plainNumber(v.real, m.kind === "area", v.units);
-      rows.push([m.group || "", m.label || "", this.labels?.[m.page - 1] || m.page, MEASURE_KINDS[m.kind] || "Length", v.text, quantity, unit,
-        m.kind === "area" ? v.sub.replace(/^perimeter /, "").replace(/ · .*$/, "") : ""]);
-    }
-    return rows;
-  }
-
-  /** Write the measurements into the PDF as measurement annotations (see
-   *  markup.py): they show in any viewer and print. They leave the list. */
-  async #measuresIntoPdf() {
-    const tab = this.activeTab, items = tab?.measures || [];
-    if (!items.length) return;
-    const answer = await this.#dialog("Put the measurements in the PDF", [el("p", {},
-      `${items.length === 1 ? "The measurement becomes" : `The ${items.length} measurements become`} part of the document: measurement `
-      + "annotations with their values and names, which show in Acrobat and other viewers, print, and are listed under Comments. "
-      + "They leave this list; Ctrl+Z on the page takes them out of the PDF again.")],
-      [["cancel", "Cancel"], ["ok", "Put them in the PDF", true]]);
-    if (answer !== "ok") return;
-    const changes = items.map((m) => {
-      const v = this.#measureValue(m), scale = this.#pageScale(m.page);
-      return { op: "add", page: m.page, kind: "measure", shape: m.kind, points: m.pts, holes: m.holes || [],
-        label: m.label || "", group: m.group || "", value: v.text, sub: m.kind === "area" ? v.sub : "",
-        color: this.#groupColor(m.group) || "#1f4fd8",
-        scale: scale ? { ratio: scale.ratio, units: scale.units, label: scale.label } : null };
-    });
-    const version = tab.version || 0;
-    await this.#applyMarkup(changes, "Could not put the measurements in the PDF: ");
-    if ((tab.version || 0) === version) return;  // it didn't work (and said so)
-    this.#rememberMeasures();
-    tab.measures = [];
-    this.selected = null;
-    this.#drawAllMeasures();
-    this.toast(`${items.length === 1 ? "The measurement is" : `${items.length} measurements are`} in the PDF now. Save to keep them.`, 4000);
-  }
-
-  async #exportMeasures() {
-    const items = this.activeTab?.measures || [];
-    if (!items.length) return;
-    const cell = (c) => /[",\n]/.test(String(c)) ? `"${String(c).replace(/"/g, '""')}"` : String(c);
-    const text = "﻿" + this.#measureRows().map((r) => r.map(cell).join(",")).join("\r\n") + "\r\n";  // (the BOM: Excel reads it as UTF-8)
-    const stem = this.name.replace(/\.pdf$/i, "");
-    await this.#saveBytes(new TextEncoder().encode(text), `${stem} measurements.csv`, () => {}, this.activeTab?.fileId);
-  }
-
-  #deleteMeasure(id) {
-    const tab = this.activeTab;
-    const m = tab?.measures?.find((x) => x.id === id);
-    if (!m) return;
-    this.#rememberMeasures();
-    tab.measures = tab.measures.filter((x) => x !== m);
-    if (this.selected?.id === id) this.selected = null;
-    if (this.hot === id) this.hot = null;
-    this.#drawMeasures(m.page);
-    this.#renderMeasPanel();
-  }
-
-  #hotMeasure(id) {
-    const pages = new Set();
-    for (const m of this.activeTab?.measures || []) if (m.id === id || m.id === this.hot) pages.add(m.page);
-    this.hot = id;
-    for (const n of pages) this.#drawMeasures(n);
-    for (const row of this.measPanel.querySelectorAll(".rd-mrow")) row.classList.remove("hot");
-  }
-
-  /** Scroll to a measurement and make it stand out for a moment. */
-  #showMeasure(m) {
-    const xs = m.pts.map((p) => p[0]), ys = m.pts.map((p) => p[1]);
-    this.pdfViewer.scrollPageIntoView({ pageNumber: m.page, destArray: [null, { name: "XYZ" }, Math.min(...xs) - 60, Math.max(...ys) + 60, null] });
-    this.#hotMeasure(m.id);
-    clearTimeout(this.hotTimer);
-    this.hotTimer = setTimeout(() => { if (this.hot === m.id) this.#hotMeasure(null); }, 1500);
-  }
-
-  async #copyMeasures() {
-    const items = this.activeTab?.measures || [];
-    const lines = this.#measureRows().map((r) => r.join("\t"));
-    for (const t of this.measPanel.querySelectorAll(".rd-mtotals > div")) lines.push(["", t.firstChild.textContent, "", "", t.lastChild.textContent].join("\t"));
-    try {
-      await navigator.clipboard.writeText(lines.join("\n"));
-      this.toast(`Copied ${items.length} measurement${items.length === 1 ? "" : "s"}.`, 2000);
-    } catch (e) {
-      this.toast("Couldn't copy to the clipboard.");
-    }
-  }
 
   /** What there is to do with the open document, for the command palette:
    *  [{label, keys?, words?, run}]. */
@@ -6546,7 +2828,7 @@ export class Reader {
       { icon: "full", label: "Fit page", words: "zoom whole", run: () => { v.currentScaleValue = "page-fit"; } },
       { icon: "spread", label: "Fit width", words: "zoom", run: () => { v.currentScaleValue = "page-width"; } },
       { icon: "plus", label: "Actual size", words: "zoom 100%", run: () => { v.currentScaleValue = "page-actual"; } },
-      { icon: "ruler", label: "True paper size", words: "zoom real scale blueprint plan drawing", run: () => this.#viewAt("true") },
+      { icon: "ruler", label: "True paper size", words: "zoom real scale blueprint plan drawing", run: () => this._viewAt("true") },
       { icon: "ruler", label: "Measure a distance", keys: "M", words: "length dimension blueprint plan scale ruler snap", run: () => this.measureTool("distance") },
       { icon: "area", label: "Measure an area", words: "room square feet metres blueprint plan scale", run: () => this.measureTool("area") },
       { icon: "rect", label: "Measure a rectangle", words: "room area two corners blueprint takeoff", run: () => this.measureTool("rect") },
@@ -6555,10 +2837,10 @@ export class Reader {
       { icon: "angle", label: "Measure an angle", words: "degrees corner slope", run: () => this.measureTool("angle") },
       { icon: "layers", label: this.overlay ? "Stop comparing revisions" : "Compare with another revision", words: "overlay difference drawing changes old new version",
         run: () => (this.overlay ? this.closeCompare() : this.compareRevision()) },
-      { icon: "csv", label: "Save the measurements as CSV", words: "excel spreadsheet export takeoff", run: () => this.#exportMeasures() },
-      { icon: "pdfin", label: "Put the measurements in the PDF", words: "annotations save keep markup", run: () => this.#measuresIntoPdf() },
+      { icon: "csv", label: "Save the measurements as CSV", words: "excel spreadsheet export takeoff", run: () => this._exportMeasures() },
+      { icon: "pdfin", label: "Put the measurements in the PDF", words: "annotations save keep markup", run: () => this._measuresIntoPdf() },
       { icon: "path", label: "Measure a run of lines (path)", words: "polyline walls total length baseboard blueprint", run: () => this.measureTool("path") },
-      { icon: "list", label: "List of measurements", words: "totals copy units blueprint takeoff", run: () => { this.toggleScaleBar(true); this.#toggleMeasPanel(true); } },
+      { icon: "list", label: "List of measurements", words: "totals copy units blueprint takeoff", run: () => { this.toggleScaleBar(true); this._toggleMeasPanel(true); } },
       { icon: "straight", label: this.straightOnly ? "Measure at any angle" : "Measure straight lines only", words: "horizontal vertical orthogonal blueprint", run: () => this.straightBtn.click() },
       { icon: "ruler", label: "Set the drawing scale from a dimension", words: "blueprint plan calibrate known length", run: () => this.measureTool("calibrate") },
       { icon: "ruler", label: "Drawing scale", words: "blueprint plan sheet show at measure", run: () => this.toggleScaleBar(true) },
@@ -6586,7 +2868,7 @@ export class Reader {
   async #edit(toolId) {
     await this.chain;
     if (!this.doc || !this.onEdit) return;
-    const bytes = await this.#currentBytes();
+    const bytes = await this._currentBytes();
     const file = new File([bytes], this.#copyName(), { type: "application/pdf" });
     if (this.isPristine()) file.openedId = this.activeTab.fileId;  // the same file handed over twice is one file
     this.onEdit(toolId, file, this.password);

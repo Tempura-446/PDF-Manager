@@ -4,6 +4,30 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.29.0
+
+Mostly behind the scenes: the reader now keeps each open document's state
+in one place, and everything it shows about saving (the dot on a tab and
+by the title, the Save button, closing a tab, Ctrl+S) follows from it, so
+they can no longer disagree. The reader's code is also split into parts
+(tabs, annotating, Sign, find, the text editor box, measuring). Things
+that were wrong and are now right:
+
+- **Undo after Black out** brought the words back, but Save still made a
+  "(redacted)" copy and called itself "Save a redacted copy". It saves as
+  usual again.
+- **Undo after saving**: with annotations saved, turning, deleting or
+  moving a page and then undoing it left the unsaved dot and a red Save,
+  although the document was as saved.
+- **Ctrl+S straight after saving** saved the file again (and offered Undo
+  again) although nothing had changed; it now says "No changes to save",
+  as the Save button already showed.
+- **Undo of "Saved over"** put the file back, but a page change undone after
+  that could show the document as saved when it wasn't.
+- **Closing ZPDF or updating it** now warns about a tool's result that was
+  never saved anywhere (its tab has the dot, and closing the tab already
+  asked).
+
 ## 0.28.0
 
 Safety nets, mostly behind the scenes: checks that catch a kind of mistake

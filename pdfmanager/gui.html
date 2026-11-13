@@ -1941,9 +1941,8 @@ async function fpRun(item) {
       const password = op.id === "encrypt" ? (opts.new_password || null) : op.id === "decrypt" ? null : tab.password;
       const made = await reader.openResult(new Uint8Array(await blob.arrayBuffer()), name, password, tab);
       if (!made) { fail("the result couldn't be opened"); return; }
-      made.madeBy = { op: op.id, label: op.label, from: tab, sizes: pct >= 5 ? `${sizes}, ${pct}% smaller` : sizes, notes };
-      made.unsaved = true;  // only in the app until it's saved: a dot on its tab, Save… in its note
-      reader.refreshTabs();
+      // Only in the app until it's saved: a dot on its tab, Save… in its note.
+      made.made({ op: op.id, label: op.label, from: tab, sizes: pct >= 5 ? `${sizes}, ${pct}% smaller` : sizes, notes });
       if (fp.tab === made) fpShowNote(made);
       done.replaceChildren(icon("check"), el("div", {}, el("b", {}, made.madeBy.sizes), ". Opened beside the original as ", el("b", {}, name), "."));
       done.hidden = false;
@@ -2022,9 +2021,7 @@ async function repairInReader(tab) {
     const bytes = new Uint8Array(await (await res.blob()).arrayBuffer());
     const tabNow = await reader.openResult(bytes, made, null, tab);
     if (!tabNow || tabNow.broken) { if (tabNow) reader.closeTab(tabNow); return "Repair made a file, but it can’t be shown either. The file may be damaged past mending."; }
-    tabNow.madeBy = { op: "repair", label: op.label, from: tab, sizes: humanSize(bytes.length).replace(" ", "\u00a0"), notes };
-    tabNow.unsaved = true;
-    reader.refreshTabs();
+    tabNow.made({ op: "repair", label: op.label, from: tab, sizes: humanSize(bytes.length).replace(" ", "\u00a0"), notes });
     if (fp.tab === tabNow) fpShowNote(tabNow);
     reader.toast(`Opened ${made} in a new tab`, 5000);
     return "";
@@ -3239,10 +3236,8 @@ async function scanMake() {
     await select("reader");
     const tab = await reader.openResult(bytes, name, null, null);
     if (!tab) { scanSay("The PDF was made but couldn’t be shown.", true); return; }
-    tab.madeBy = { op: "scan", label: "Scan", from: null, pages: scanState.pages.length,
-      sizes: `${plural(scanState.pages.length, "page")} scanned, ${humanSize(bytes.length).replace(" ", " ")}`, notes };
-    tab.unsaved = true;
-    reader.refreshTabs();
+    tab.made({ op: "scan", label: "Scan", from: null, pages: scanState.pages.length,
+      sizes: `${plural(scanState.pages.length, "page")} scanned, ${humanSize(bytes.length).replace(" ", " ")}`, notes });
     if (fp.tab === tab) fpShowNote(tab);
     reader.toast(`Opened ${name} in a new tab. It isn’t saved yet: Save asks where.`, 6000);
   } catch (e) {
