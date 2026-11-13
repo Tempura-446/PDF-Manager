@@ -4,6 +4,25 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.25.0
+
+A design pass: the same look, made consistent. The tools work as before.
+
+- One set of type sizes everywhere, in the app and the reader: six, from
+  12px to 24px. The small labels, keys and file facts that were 11px are
+  12px now, easier to read, and the labels in capitals share one spacing.
+  The rail's buttons are a little wider for their labels.
+- One set of corners and shadows. The odd ones (a corner of 6, 10 or 12
+  pixels here and there, a shadow made up on the spot) use the shared ones.
+- What a search found shows in a plain banner; green is kept for a job
+  done. A folder tool's preview, which hasn't changed anything yet, is
+  plain too.
+- A tool's description is about 70 letters a line instead of 95.
+- Redact: Match upper/lower case and Whole words only sit beside the words
+  they apply to, and the kinds of numbers to black out have a row of their
+  own.
+- After Esc closes a group of tools, the rail button under the pointer no
+  longer looks like a second current group.
 ## 0.24.4
 
 Small fixes. The look is the same.
