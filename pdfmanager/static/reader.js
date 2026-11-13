@@ -1594,6 +1594,7 @@ export class Reader {
     let refit = 0, lastW = 0, lastH = 0;
     new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
+      if (!width || !height) return;  // hidden (another page of the app is shown): nothing to fit to
       if (Math.abs(width - lastW) < 4 && Math.abs(height - lastH) < 100) return;
       lastW = width;
       lastH = height;

@@ -942,6 +942,104 @@ body.form-folded #options-card { display: none; }
 .rd .fp .link-btn, .rd .fp .fp-all { color: var(--accent); }
 .rd .fp .link-btn:hover { color: var(--accent-hover); }
 
+/* ---- Scan: paper to a searchable PDF (a scanner, or phone photos) ---------------------- */
+body.scan-mode main > :not(#scan-host, .page-head, #error) { display: none !important; }
+.scan { display: grid; grid-template-columns: minmax(290px, 350px) minmax(0, 1fr); gap: 16px; align-items: start; max-width: 1180px; padding-bottom: 32px; }
+.scan .card { margin: 0; }
+.scan-setup { display: flex; flex-direction: column; gap: 16px; }
+.scan-setup fieldset, .scan-setup .scan-part { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.scan-setup fieldset:disabled { opacity: .55; }
+.scan-field { display: flex; flex-direction: column; gap: 6px; border: 0; margin: 0; padding: 0; min-width: 0; }
+.scan-field > legend, .scan-field > label { padding: 0; margin-bottom: 6px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
+.scan-field select { width: 100%; }
+.scan-row { display: flex; gap: 6px; }
+.scan-row select { flex: 1; min-width: 0; }
+.scan-row .chip-btn { width: 38px; height: 38px; flex: none; }
+.scan-sep { height: 1px; background: var(--border); margin: 2px 0; }
+/* A choice of a few: a segmented control made of radio buttons (arrow keys move between them). */
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; padding: 3px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface-2); }
+.seg label { position: relative; display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 4px 8px;
+  border-radius: var(--radius-xs); color: var(--text-2); font-size: var(--fs-sm); font-weight: 600; line-height: 1.2; text-align: center; cursor: pointer;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), box-shadow var(--t) var(--ease); }
+.seg label:hover { color: var(--text); }
+.seg input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.seg label:has(input:checked) { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
+.seg label:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 1px; }
+.seg label:has(input:disabled) { color: var(--faint); cursor: not-allowed; text-decoration: line-through; text-decoration-thickness: 1px; }
+.seg input:disabled { cursor: not-allowed; }
+.seg svg.i { width: 17px; height: 17px; flex: none; }
+.seg.big label { min-height: 44px; font-size: var(--fs-base); }
+.scan-note { display: flex; gap: 9px; align-items: flex-start; margin: 0; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-2);
+  color: var(--text-2); font-size: var(--fs-sm); line-height: 1.45; }
+.scan-note svg.i { width: 16px; height: 16px; flex: none; margin-top: 1px; color: var(--muted); }
+.scan-drop { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 20px 14px; text-align: center; cursor: pointer;
+  border: 1.5px dashed var(--faint); border-radius: var(--radius); background: var(--surface); color: var(--text-2); font-size: var(--fs-sm);
+  transition: border-color var(--t) var(--ease), background var(--t) var(--ease); }
+.scan-drop:hover, .scan-drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface)); }
+.scan-drop:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.scan-drop > svg.i { width: 22px; height: 22px; color: var(--muted); }
+.scan-drop b { color: var(--text); font-weight: 600; }
+.scan-go { width: 100%; }
+.scan-checks { display: flex; flex-direction: column; gap: 10px; }
+.scan-checks .field.check { padding: 0; align-self: stretch; }
+.scan-checks .hint { margin-left: 25px; }
+.scan-setup p.hint { margin: -8px 0 0; font-size: var(--fs-xs); color: var(--muted); }
+/* The pages, as they arrive. */
+.scan-pages { display: flex; flex-direction: column; min-height: min(70vh, 640px); }
+.scan-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); gap: 12px; align-content: start; flex: 1;
+  list-style: none; margin: 0; padding: 2px; }
+.scan-tile { position: relative; padding: 8px 8px 6px; border: 1.5px solid transparent; border-radius: var(--radius-sm); cursor: grab; outline: none;
+  transition: background var(--t) var(--ease), border-color var(--t) var(--ease); }
+.scan-tile:hover, .scan-tile:focus-within { background: var(--surface-2); }
+.scan-tile:focus-visible { border-color: var(--focus); }
+.scan-tile.dragging { opacity: .35; }
+.scan-tile.drop-before { box-shadow: -3px 0 0 var(--accent); }
+.scan-tile.drop-after { box-shadow: 3px 0 0 var(--accent); }
+.scan-tile.fresh { animation: rise calc(var(--t) * 2) var(--ease); }
+.scan-thumb { aspect-ratio: 1 / 1.25; display: grid; place-items: center; overflow: hidden; }
+.scan-thumb img { display: block; max-width: 100%; max-height: 100%; background: #fff; border-radius: var(--radius-2xs); box-shadow: var(--shadow-page);
+  transition: transform calc(var(--t) * 1.4) var(--ease); }
+.scan-thumb .loading { width: 20px; height: 20px; border: 2px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+.scan-num { position: absolute; top: 4px; left: 4px; z-index: 1; }
+.scan-cap { display: flex; justify-content: center; gap: 6px; align-items: center; min-height: 20px; margin-top: 6px; font-size: var(--fs-xs); color: var(--muted);
+  font-variant-numeric: tabular-nums; }
+.scan-flag { font-size: var(--fs-xs); font-weight: 600; border-radius: var(--radius-pill); padding: 1px 7px; background: var(--warn-soft); color: var(--warn); }
+.scan-acts { display: flex; justify-content: center; gap: 4px; margin-top: 4px; opacity: 0; transition: opacity var(--t); }
+.scan-tile:hover .scan-acts, .scan-tile:focus-within .scan-acts { opacity: 1; }
+@media (hover: none) { .scan-acts { opacity: 1; } }
+.scan-acts .chip-btn { width: 28px; height: 28px; }
+.scan-acts .chip-btn.turn-left svg { transform: scaleX(-1); }
+.scan-add { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; aspect-ratio: 1 / 1.25; margin: 8px; padding: 10px;
+  border: 1.5px dashed var(--border-strong); border-radius: var(--radius-sm); background: none; color: var(--accent); font: inherit; font-size: var(--fs-sm);
+  font-weight: 600; cursor: pointer; text-align: center; transition: border-color var(--t), background var(--t); }
+.scan-add:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface)); }
+.scan-add:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.scan-add svg.i { width: 22px; height: 22px; }
+.scan-add:disabled { color: var(--faint); cursor: progress; }
+.scan-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 280px; padding: 24px;
+  border: 1.5px dashed var(--border); border-radius: var(--radius); color: var(--muted); text-align: center; }
+.scan-empty svg.i { width: 34px; height: 34px; color: var(--faint); stroke-width: 1.4; }
+.scan-empty b { color: var(--text); font: 500 var(--fs-lg)/1.2 var(--display); }
+.scan-empty p { margin: 0; max-width: 44ch; text-wrap: balance; }
+.scan-msg { margin: 0 0 12px; }
+.scan-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.scan-state { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.scan-status { margin: 0; color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.scan-bar { height: 4px; border-radius: var(--radius-pill); background: var(--border); overflow: hidden; }
+.scan-bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--accent); transition: width calc(var(--t) * 4) ease; }
+.scan-foot .btn { flex: none; }
+@media (forced-colors: active) {
+  .seg label:has(input:checked) { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .seg label:has(input:disabled) { color: GrayText; }
+  .scan-tile:focus-visible, .scan-tile.drop-before, .scan-tile.drop-after { outline: 2px solid Highlight; }
+  .scan-bar i { background: Highlight; }
+}
+@media (prefers-reduced-motion: reduce) { .scan-tile.fresh { animation: none; } .scan-thumb img { transition: none; } }
+@media (max-width: 960px) { .scan { grid-template-columns: minmax(0, 1fr); } }
+/* The start screen's ways in: open a PDF, or scan paper. */
+.start-acts { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+
 /* Home mode: only the start screen. */
 body.home-mode main > :not(#home-host) { display: none !important; }
 body.home-mode main { padding-top: 34px; }
@@ -1101,6 +1199,7 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
     <div class="spacer"></div>
 
     <section id="home-host" class="start" hidden aria-label="Start"></section>
+    <div id="scan-host" class="scan" hidden></div>
     <div id="reader-host"></div>
 
     <div class="action-bar"><div class="action-inner">
@@ -1242,6 +1341,7 @@ const ICONS = {
   encrypt: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   decrypt: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/>',
   "from-images": '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
+  scan: '<path d="M6 11V4h8l4 4v3"/><path d="M14 4v4h4"/><rect x="3" y="11" width="18" height="8" rx="2"/><path d="M7 15h6"/>',
   "to-images": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="m8 17 3-3 2 2 2-2 2 2"/>',
   text: '<path d="M4 6h16M4 12h16M4 18h10"/>',
   clean: '<path d="m5 19 9-9"/><path d="M14 10 19 5"/><path d="M15 3v2M19 7h2M16.5 3.5l1 1M3 21l2-2"/><path d="M9 4H5a2 2 0 0 0-2 2v4M21 14v4a2 2 0 0 1-2 2h-4"/>',
@@ -1873,7 +1973,7 @@ async function fpRun(item) {
 function fpShowNote(tab) {
   const m = tab.madeBy;
   if (!m) { fp.note.replaceChildren(); return; }
-  const back = reader.tabs.includes(m.from)
+  const back = !m.from ? null : reader.tabs.includes(m.from)
     ? el("button", { type: "button", class: "link-btn", onclick: () => reader.showTab(m.from) }, m.from.name) : el("b", {}, m.from.name);
   let finish = null;
   if (tab.unsaved) {
@@ -1882,7 +1982,7 @@ function fpShowNote(tab) {
     save.addEventListener("click", async () => {
       save.disabled = true;
       try {
-        const where = await reader.saveTab(tab, m.from.fileId || null);
+        const where = await reader.saveTab(tab, m.from?.fileId || null);
         if (where) { m.savedTo = typeof where === "string" ? where : null; m.saved = true; }
       } finally { save.disabled = false; }
       if (fp.tab === tab && m.saved) { fpShowNote(tab); fp.note.querySelector(".fp-reveal, .fp-saved")?.focus(); }
@@ -1894,8 +1994,9 @@ function fpShowNote(tab) {
     finish = el("div", { class: "fp-save" }, el("div", { class: "fp-saved", tabindex: "-1" }, el("span", { class: "saving" }, "Saved"),
       m.savedTo ? ` to ${m.savedTo}` : ""), reveal);
   }
+  const made = back ? [`: ${m.sizes}. Made from `, back, ", still open in its own tab."] : [`: ${m.sizes}, cleaned up and made into this PDF.`];
   fp.note.replaceChildren(el("div", { class: "fp-done" }, icon("check"), el("div", {},
-    el("b", {}, m.label), `: ${m.sizes}. Made from `, back, ", still open in its own tab.",
+    el("b", {}, m.label), ...made,
     ...m.notes.map((line) => el("div", { class: "fp-line" }, line)), finish)));
 }
 
@@ -1976,6 +2077,7 @@ const SYNONYMS = {
   decrypt: "unlock open remove password", "sign-cert": "sign signature certificate", split: "separate cut divide",
   redact: "hide censor black out", ocr: "recognise recognize scan text searchable", "to-word": "docx word edit",
   search: "find look for folder", rotate: "turn", delete: "remove pages", repair: "fix mend broken damaged",
+  scan: "scanner paper camera photo phone digitise digitize feeder flatbed wia",
 };
 
 // ---- keyboard shortcuts (?, or "shortcuts" in the palette) ------------------------
@@ -2104,7 +2206,8 @@ const RAIL_OF_TOOL = { pdfa: "protect", "pdfa-check": "protect", tag: "improve",
 const railGroup = (op) => (op.id in RAIL_OF_TOOL ? RAIL_OF_TOOL[op.id] : op.group in RAIL_OF_GROUP ? RAIL_OF_GROUP[op.group] : "convert");
 // The headings inside a flyout, where a tool's server group would read wrong there.
 const SUB_OF_TOOL = { ocr: "Scans", clean: "Scans", tag: "Accessibility", "access-check": "Accessibility", flatten: "Optimize",
-  pdfa: "Archive", "pdfa-check": "Archive", merge: "Several PDFs", interleave: "Several PDFs", compare: "Several PDFs" };
+  pdfa: "Archive", "pdfa-check": "Archive", merge: "Several PDFs", interleave: "Several PDFs", compare: "Several PDFs",
+  scan: "Create", "from-images": "Create", "from-office": "Create", web: "Create" };
 const SEVERAL_TOOLS = ["merge", "interleave", "compare", "recipe", "organize", "rename", "duplicates", "search"];
 const inFlyout = (op, group) => group === "all" || (group === "several" ? SEVERAL_TOOLS.includes(op.id) : railGroup(op) === group);
 let flyoutGroup = null;
@@ -2222,6 +2325,7 @@ document.addEventListener("keydown", (e) => {
     closeFlyout();
     openPalette();
   }
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && inScan()) { e.preventDefault(); scanMake(); return; }
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !inReader()) {
     e.preventDefault();
     // A waiting Run button says why when asked from the keyboard (not while a job runs).
@@ -2232,9 +2336,11 @@ document.addEventListener("keydown", (e) => {
 async function select(id) {
   current = ops.find((o) => o.id === id);
   closeFlyout();
-  const readerMode = current.files === "reader", homeMode = current.files === "home";
+  const readerMode = current.files === "reader", homeMode = current.files === "home", scanMode = current.files === "scan";
   document.body.classList.toggle("reader-mode", readerMode);
   document.body.classList.toggle("home-mode", homeMode);
+  document.body.classList.toggle("scan-mode", scanMode);
+  $("scan-host").hidden = !scanMode;
   const first = !readerMode && !homeMode && dropFirst(current);
   document.body.classList.toggle("drop-first", first);
   document.body.classList.toggle("opts-later", first && !current.url_field);  // (Web page → PDF: an address can do instead of files)
@@ -2252,6 +2358,7 @@ async function select(id) {
   showHelp(current.help || defaultHelp(current) || (dropFirst(current) ? TAGLINES[id] || "" : ""));
   document.title = homeMode ? "ZPDF" : current.label + " — ZPDF";
   if (homeMode) { renderHome(); return; }
+  if (scanMode) { clearMessages(); await renderScan(); return; }
   if (readerMode) {
     await ensureReader();
     reader.show();
@@ -2359,7 +2466,7 @@ function defaultHelp(op) { return op.files === "pdf" ? "Add one or more PDFs. Se
 /** Tools that start from several files, or from files that aren't a PDF
  *  (images, Office files, web pages): their page opens on one big drop area.
  *  (Folder tools start from a folder typed under Options: no files at all.) */
-function dropFirst(op) { return !!op && typeof op.files === "string" && op.files !== "home" && op.files !== "reader" && (op.files !== "pdf" || (op.min || 1) >= 2); }
+function dropFirst(op) { return !!op && typeof op.files === "string" && !["home", "reader", "scan"].includes(op.files) && (op.files !== "pdf" || (op.min || 1) >= 2); }
 const NUMBER_WORDS = ["", "one", "two", "three", "four", "five"];
 /** What the big drop area asks for, in the tool's own words. */
 function dropText(op) {
@@ -2510,7 +2617,7 @@ function move(from, to) {
   const [it] = items.splice(from, 1); items.splice(to, 0, it); renderFiles();
 }
 function updateSummary() {
-  if (!current || current.files === "home") return;
+  if (!current || current.files === "home" || current.files === "scan") return;
   $("kbd-hint").textContent = "";
   if (current.files === null) {
     $("summary").textContent = current.preview === false ? "Nothing on your computer is changed." : "Preview first — nothing changes until you click Apply.";
@@ -2580,6 +2687,7 @@ document.addEventListener("drop", (e) => {
     const pdf = [...e.dataTransfer.files].find(isPdf);
     if (pdf) reader.openFile(pdf);
   } else if (current.files === "home") openFilesInReader(e.dataTransfer.files);
+  else if (current.files === "scan") scanAddPhotos(e.dataTransfer.files);
   else addFiles(e.dataTransfer.files);
 });
 
@@ -2602,7 +2710,7 @@ const TAGLINES = {
   comments: "List comments, or send them as XFDF", web: "Save a web page as a PDF", attach: "Attach files to a PDF, or remove them", labels: "Number pages i, ii, iii then 1, 2, 3", repair: "Mend damaged files; open fast online",
   "sign-cert": "Sign with a certificate (.pfx or .p12), like Acrobat", "verify-sig": "See who signed and if anything changed",
   tag: "Tag for screen readers, like Acrobat's Autotag", "access-check": "See what keeps screen readers out, and how to fix it",  // -- accessibility --
-  "from-images": "Turn photos and scans into a PDF", "to-images": "Save pages as PNG or JPG", text: "Get the text out",
+  scan: "Scanner or phone photos to a searchable PDF", "from-images": "Turn photos and scans into a PDF", "to-images": "Save pages as PNG or JPG", text: "Get the text out",
   media: "Extract pictures and attached files", "to-word": "Convert to an editable Word file", "from-office": "Turn Office documents into PDFs",
   "to-excel": "Put tables into a spreadsheet",
   /* -- pptx and html -- */
@@ -2656,7 +2764,10 @@ async function renderHome() {
   const drop = el("div", { class: "start-drop", role: "button", tabindex: "0", "aria-label": "Open PDFs to read" },
     icon("upload"),
     el("div", {}, el("b", {}, "Drop PDFs here"), ", or choose them from your computer.", el("br"), "Nothing leaves this PC."),
-    el("button", { type: "button", class: "btn seal", onclick: (e) => { e.stopPropagation(); input.click(); } }, icon("reader"), "Open a PDF"));
+    el("div", { class: "start-acts" },
+      el("button", { type: "button", class: "btn seal", onclick: (e) => { e.stopPropagation(); input.click(); } }, icon("reader"), "Open a PDF"),
+      ops.some((o) => o.id === "scan") ? el("button", { type: "button", class: "btn secondary", "data-tool": "scan", title: TAGLINES.scan,
+        onclick: (e) => { e.stopPropagation(); select("scan"); } }, icon("scan"), "Scan paper") : null));
   drop.addEventListener("click", () => input.click());
   drop.addEventListener("keydown", (e) => { if (e.target === drop && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); input.click(); } });
   drop.addEventListener("dragover", (e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); drop.classList.add("over"); } });
@@ -2683,6 +2794,460 @@ async function renderHome() {
   host.replaceChildren(...parts);
   host.hidden = false;
   await fillRecent(recentList, { emptyText: "PDFs you open show up here.", still: inHome });
+}
+
+// ---- Scan: paper to a searchable PDF --------------------------------------------------------
+// Pages come from a scanner (Windows: WIA, scanner.py) or from phone photos
+// (each page found and flattened, pagephoto.py). They gather in a strip,
+// to put in order, turn, take out or scan again; Make PDF cleans them up,
+// reads their text and opens the PDF in the reader, not saved yet. The
+// pages are kept by the server (a "box") while the app is open.
+const scanState = { box: null, pages: [], known: new Set(), status: null, devices: null, busy: false, job: null,
+  thumbs: new Map(), built: false, polled: 0, cancelled: false };
+const inScan = () => current && current.files === "scan";
+const SCAN_DEFAULTS = { source: "scanner", mode: "grey", dpi: "300", from: "flatbed", look: "document", paper: "auto",
+  straighten: true, remove_blank: true, upright: true, ocr: true };
+function scanPrefs() {
+  let kept = {};
+  try { kept = JSON.parse(localStorage.getItem("pdfm-scan") || "{}") || {}; } catch (e) { kept = {}; }
+  return { ...SCAN_DEFAULTS, ...kept };
+}
+const scanValue = (name) => document.querySelector(`#scan-host input[name="scan-${name}"]:checked`)?.value;
+function scanSettings() {
+  return { source: scanValue("source") || "scanner", mode: scanValue("mode") || "grey", dpi: $("scan-dpi")?.value || "300",
+    from: scanValue("from") || "flatbed", look: scanValue("look") || "document", paper: $("scan-paper")?.value || "auto",
+    straighten: !!$("scan-straighten")?.checked, remove_blank: !!$("scan-blank")?.checked,
+    upright: !!$("scan-upright")?.checked, ocr: !!$("scan-ocr")?.checked };
+}
+function keepScanPrefs() { try { localStorage.setItem("pdfm-scan", JSON.stringify(scanSettings())); } catch (e) { /* not kept */ } }
+/** A few choices as radio buttons in a row (a segmented control). */
+function scanSeg(name, legend, choices, value, { big = false, describedBy = null } = {}) {
+  return el("fieldset", { class: "scan-field", id: `scan-${name}-set` }, el("legend", {}, legend),
+    el("div", { class: "seg" + (big ? " big" : "") }, ...choices.map(([v, text, ic]) => el("label", {},
+      el("input", { type: "radio", name: `scan-${name}`, value: v, checked: v === value, id: `scan-${name}-${v}`,
+        "aria-describedby": describedBy }), ic ? icon(ic) : null, el("span", {}, text)))));
+}
+function scanCheck(id, label, on, hint = "") {
+  const box = el("input", { type: "checkbox", id, checked: on });
+  const hintId = id + "-hint";
+  if (hint) box.setAttribute("aria-describedby", hintId);
+  return el("div", { class: "field check" }, box, el("label", { for: id }, label), hint ? el("div", { class: "hint", id: hintId }, hint) : null);
+}
+async function scanBox() {
+  if (!scanState.box) scanState.box = (await jsonApi("/api/scan/box", {})).box;
+  return scanState.box;
+}
+function buildScan() {
+  const host = $("scan-host"), prefs = scanPrefs();
+  const photoInput = el("input", { type: "file", id: "scan-photo-input", accept: "image/jpeg,image/png,image/*", multiple: true, hidden: true });
+  photoInput.addEventListener("change", () => { if (photoInput.files.length) scanAddPhotos(photoInput.files); photoInput.value = ""; });
+  const replaceInput = el("input", { type: "file", id: "scan-replace-input", accept: "image/jpeg,image/png,image/*", hidden: true });
+  replaceInput.addEventListener("change", () => { if (replaceInput.files.length) scanAddPhotos(replaceInput.files, replaceInput.dataset.page); replaceInput.value = ""; });
+  const drop = el("div", { class: "scan-drop", id: "scan-drop", role: "button", tabindex: "0", "aria-label": "Add photos of pages" },
+    icon("from-images"), el("div", {}, el("b", {}, "Drop photos of pages here"), el("br"), "one page a photo, in order"),
+    el("button", { type: "button", class: "btn secondary", tabindex: "-1", onclick: (e) => { e.stopPropagation(); photoInput.click(); } }, icon("upload"), "Choose photos"));
+  drop.addEventListener("click", () => photoInput.click());
+  drop.addEventListener("keydown", (e) => { if (e.target === drop && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); photoInput.click(); } });
+  drop.addEventListener("dragover", (e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); drop.classList.add("over"); } });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => { drop.classList.remove("over"); if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); scanAddPhotos(e.dataTransfer.files); } });
+
+  const scannerPart = el("fieldset", { class: "scan-part", id: "scan-scanner-part" },
+    el("legend", { class: "sr-only" }, "Scanner settings"),
+    el("div", { class: "scan-field field" }, el("label", { for: "scan-device" }, "Scanner"),
+      el("div", { class: "scan-row" }, el("select", { id: "scan-device" }, el("option", { value: "" }, "Looking for scanners…")),
+        el("button", { type: "button", class: "chip-btn", id: "scan-refresh", title: "Look for scanners again", "aria-label": "Look for scanners again",
+          onclick: () => scanDevices(true) }, icon("rotate")))),
+    scanSeg("mode", "Colour", [["grey", "Greyscale"], ["colour", "Colour"], ["bw", "Black and white"]], prefs.mode),
+    el("div", { class: "scan-field field" }, el("label", { for: "scan-dpi" }, "Resolution"),
+      el("select", { id: "scan-dpi" }, ...[["150", "150 dpi: quick, smaller"], ["200", "200 dpi"], ["300", "300 dpi: best for documents"]]
+        .map(([v, t]) => el("option", { value: v, selected: v === String(prefs.dpi) }, t)))),
+    scanSeg("from", "Paper from", [["flatbed", "Glass (flatbed)"], ["feeder", "Document feeder"]], prefs.from, { describedBy: "scan-from-hint" }),
+    el("p", { class: "hint", id: "scan-from-hint", hidden: true }),
+    el("button", { type: "button", class: "btn scan-go", id: "scan-go", onclick: () => scanAcquire() }, icon("scan"), el("span", { id: "scan-go-label" }, "Scan")));
+  const photosPart = el("div", { class: "scan-part", id: "scan-photos-part", role: "group", "aria-label": "Photo settings" },
+    drop, photoInput, replaceInput,
+    scanSeg("look", "Look", [["document", "Document"], ["colour", "Keep colours"], ["photo", "As taken"]], prefs.look, { describedBy: "scan-look-hint" }),
+    el("p", { class: "hint", id: "scan-look-hint" }, "Document evens out shadows and makes the paper white and the ink dark."),
+    el("div", { class: "scan-field field" }, el("label", { for: "scan-paper" }, "Page size"),
+      el("select", { id: "scan-paper" }, ...[["auto", "A4 or Letter, by the page’s shape"], ["a4", "A4"], ["letter", "Letter"]]
+        .map(([v, t]) => el("option", { value: v, selected: v === prefs.paper }, t)))));
+  const setup = el("section", { class: "card scan-setup", "aria-label": "Where the pages come from" },
+    scanSeg("source", "Pages from", [["scanner", "Scanner", "scan"], ["photos", "Photos", "from-images"]], prefs.source, { big: true, describedBy: "scan-why" }),
+    el("p", { class: "scan-note", id: "scan-why", hidden: true }),
+    scannerPart, photosPart,
+    el("div", { class: "scan-sep", role: "presentation" }),
+    el("fieldset", { class: "scan-field" }, el("legend", {}, "When making the PDF"),
+      el("div", { class: "scan-checks" },
+        scanCheck("scan-straighten", "Straighten crooked pages", prefs.straighten),
+        scanCheck("scan-blank", "Take out blank pages", prefs.remove_blank),
+        scanCheck("scan-upright", "Turn pages the right way up", prefs.upright),
+        scanCheck("scan-ocr", "Make the text searchable", prefs.ocr))));
+
+  const pagesCard = el("section", { class: "card scan-pages", "aria-labelledby": "scan-pages-title" },
+    el("div", { class: "card-head" }, el("h2", { id: "scan-pages-title" }, "Pages"), el("span", { class: "sub", id: "scan-count" })),
+    el("div", { class: "message err scan-msg", id: "scan-msg", role: "alert", hidden: true }),
+    el("ol", { class: "scan-strip", id: "scan-strip", "aria-label": "Pages, in order", "aria-describedby": "scan-keys" }),
+    el("p", { class: "sr-only", id: "scan-keys" }, "On a page: Alt and the arrow keys move it, R turns it right, Shift+R left, Delete takes it out. Ctrl+Enter makes the PDF."),
+    el("div", { class: "scan-empty", id: "scan-empty" }, icon("scan"), el("b", {}, "No pages yet"),
+      el("p", { id: "scan-empty-text" }, "Scan a page, or add photos of pages. They show up here as they arrive.")),
+    el("div", { class: "scan-foot" },
+      el("div", { class: "scan-state" }, el("p", { class: "scan-status", id: "scan-status", role: "status" }),
+        el("div", { class: "scan-bar", id: "scan-bar", role: "progressbar", "aria-label": "Progress", "aria-valuemin": "0", "aria-valuemax": "100", hidden: true }, el("i"))),
+      el("button", { type: "button", class: "btn secondary", id: "scan-cancel", hidden: true, onclick: scanCancel }, "Cancel"),
+      el("button", { type: "button", class: "btn ghost", id: "scan-clear", onclick: scanClear }, "Clear pages"),
+      el("button", { type: "button", class: "btn seal", id: "scan-make", onclick: () => scanMake() },
+        el("span", { class: "spinner" }), icon("file", "i btn-icon"), "Make PDF")),
+    el("span", { class: "sr-only", id: "scan-said", "aria-live": "polite" }));
+  host.replaceChildren(setup, pagesCard);
+  host.addEventListener("change", (e) => {
+    if (e.target.name === "scan-source" || e.target.name === "scan-from") scanShowParts();
+    if (e.target.id === "scan-device") scanShowParts();
+    if (e.target.name === "scan-look") scanRender();
+    keepScanPrefs();
+  });
+  scanState.built = true;
+}
+/** What can be chosen now: the scanner's settings or the photos', the feeder when the scanner has one. */
+function scanShowParts() {
+  const s = scanSettings(), st = scanState.status;
+  const scannerOk = !!st?.scanner?.available;
+  const scannerRadio = $("scan-source-scanner");
+  scannerRadio.disabled = !scannerOk;
+  if (!scannerOk && s.source === "scanner" && st) { $("scan-source-photos").checked = true; }
+  const source = scanValue("source");
+  const why = $("scan-why");
+  why.hidden = scannerOk || !st;
+  if (!scannerOk && st) why.replaceChildren(icon("alert"), el("span", {}, `The scanner can’t be used here. ${st.scanner.reason} Photos work on any computer.`));
+  $("scan-scanner-part").hidden = source !== "scanner";
+  $("scan-photos-part").hidden = source !== "photos";
+  const device = (scanState.devices || []).find((d) => d.id === $("scan-device").value);
+  const feeder = $("scan-from-feeder"), hint = $("scan-from-hint");
+  feeder.disabled = !!device && !device.feeder;
+  $("scan-from-flatbed").disabled = !!device && !device.flatbed;
+  if (feeder.disabled && feeder.checked) $("scan-from-flatbed").checked = true;
+  hint.hidden = !(device && !device.feeder);
+  hint.textContent = device && !device.feeder ? "This scanner has no document feeder." : "";
+  $("scan-go").disabled = scanState.busy || !device;
+  $("scan-go-label").textContent = scanState.pages.length && scanValue("from") === "flatbed" ? "Scan another page" : "Scan";
+  $("scan-upright").disabled = !st?.upright;
+  $("scan-ocr").disabled = !st?.ocr;
+  for (const [id, off, text] of [["scan-upright", !st?.upright, "Needs the built-in OCR engine or Tesseract."],
+    ["scan-ocr", !st?.ocr, "Needs the built-in OCR engine (see the OCR tool)."]]) {
+    const box = $(id), row = box.closest(".field");
+    row.querySelector(".hint")?.remove();
+    if (off && st) { row.append(el("div", { class: "hint", id: id + "-hint" }, text)); box.setAttribute("aria-describedby", id + "-hint"); }
+    else box.removeAttribute("aria-describedby");
+  }
+  scanRender();
+}
+async function renderScan() {
+  if (!scanState.built) buildScan();
+  $("scan-host").hidden = false;
+  scanShowParts();
+  if (!scanState.status) {
+    try { scanState.status = await (await api("/api/scan/status")).json(); }
+    catch (e) { scanState.status = { scanner: { available: false, reason: String(e.message || e) }, ocr: null, upright: false }; }
+    scanShowParts();
+    if (scanState.status.scanner.available) scanDevices();
+  }
+}
+async function scanDevices(again = false) {
+  const select = $("scan-device"), was = select.value || scanPrefs().device;
+  select.replaceChildren(el("option", { value: "" }, "Looking for scanners…"));
+  $("scan-refresh").disabled = true;
+  try {
+    const { devices } = await (await api("/api/scan/devices")).json();
+    scanState.devices = devices;
+    select.replaceChildren(...(devices.length ? devices.map((d) => el("option", { value: d.id, selected: d.id === was }, d.name))
+      : [el("option", { value: "" }, "No scanner found")]));
+    if (!devices.length) scanSay("No scanner was found. Check that it is switched on and connected, then press ↻ to look again. Or use Photos.", true);
+    else if (again) scanSay(`${plural(devices.length, "scanner")} found.`);
+  } catch (e) {
+    scanState.devices = [];
+    select.replaceChildren(el("option", { value: "" }, "No scanner found"));
+    scanSay(capital(e.message || e), true);
+  } finally { $("scan-refresh").disabled = false; scanShowParts(); }
+}
+/** A line under the pages: what's happening, or (``bad``) what went wrong. */
+function scanSay(text, bad = false) {
+  const msg = $("scan-msg");
+  if (bad) { msg.replaceChildren(icon("alert"), el("span", {}, text)); msg.hidden = false; $("scan-status").textContent = ""; }
+  else { msg.hidden = true; $("scan-status").textContent = text; }
+}
+function scanBusy(on, cancellable = true) {
+  scanState.busy = on;
+  $("scan-make").disabled = on || !scanState.pages.length;
+  $("scan-make").classList.toggle("busy", on && scanState.making);
+  $("scan-clear").disabled = on || !scanState.pages.length;
+  $("scan-cancel").hidden = !on || !cancellable;
+  $("scan-cancel").disabled = false;
+  $("scan-cancel").textContent = "Cancel";
+  if (!on) { $("scan-bar").hidden = true; scanState.making = false; }
+  document.querySelectorAll("#scan-strip .scan-acts .chip-btn, .scan-add").forEach((b) => { b.disabled = on; });
+  scanShowParts();
+}
+const scanJobUi = {
+  start(id) { scanState.job = id; scanState.cancelled = false; },
+  message(text) { $("scan-status").textContent = capital(text); if (scanState.pollPages) scanPoll(); },
+  progress(fraction) {
+    const bar = $("scan-bar"), pct = Math.round(fraction * 100);
+    bar.hidden = false; bar.firstChild.style.width = `${Math.max(3, pct)}%`; bar.setAttribute("aria-valuenow", String(pct));
+  },
+  cancelled() { scanState.cancelled = true; },
+  end() { scanState.job = null; },
+};
+async function scanCancel() {
+  if (!scanState.job) return;
+  $("scan-cancel").disabled = true; $("scan-cancel").textContent = "Cancelling…";
+  try { await api(`/api/job/${scanState.job}/cancel`, { method: "POST" }); } catch (e) { /* it may just have finished */ }
+}
+/** Pages the server has that the strip doesn't yet (they arrive one by one from a feeder). */
+async function scanPoll(force = false) {
+  if (!scanState.box || (!force && Date.now() - scanState.polled < 600)) return;
+  scanState.polled = Date.now();
+  try {
+    const { pages } = await (await api(`/api/scan/pages?box=${encodeURIComponent(scanState.box)}`)).json();
+    scanTake(pages);
+  } catch (e) { /* next time */ }
+}
+function scanTake(pages, at = null) {
+  let added = 0;
+  for (const p of pages) {
+    if (scanState.known.has(p.id)) continue;
+    scanState.known.add(p.id);
+    const page = { ...p, turn: 0, fresh: true };
+    if (at === null) scanState.pages.push(page); else scanState.pages.splice(at + added, 0, page);
+    added++;
+  }
+  if (added) { scanRender(); $("scan-said").textContent = `${plural(scanState.pages.length, "page")}`; }
+  return added;
+}
+async function scanAcquire(replace = null) {
+  const device = $("scan-device").value;
+  if (!device) { scanSay("Choose a scanner first.", true); return; }
+  if (scanState.busy) return;
+  const s = scanSettings();
+  const feeder = !replace && s.from === "feeder";
+  scanSay(feeder ? "Scanning the pages in the feeder…" : "Scanning…");
+  scanBusy(true, feeder);
+  scanState.pollPages = !replace;
+  const before = scanState.pages.length;
+  try {
+    const box = await scanBox();
+    const res = await runJob("/api/scan/acquire", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ box, device, mode: s.mode, dpi: Number(s.dpi), source: feeder ? "feeder" : "flatbed" }) }, scanJobUi);
+    if (!res) { await scanPoll(true); scanSay(`Stopped. ${scanState.pages.length > before ? "The pages scanned so far are kept." : "Nothing was scanned."}`); return; }
+    const data = await res.json();
+    if (replace) {
+      const at = scanState.pages.findIndex((p) => p.id === replace);
+      const [fresh] = data.pages;
+      if (fresh && at >= 0) {
+        scanState.known.add(fresh.id);
+        scanState.pages.splice(at, 1, { ...fresh, turn: 0, fresh: true });
+        scanRender();
+        scanSay(`Page ${at + 1} scanned again.`);
+        scanFocusTile(at);
+      }
+      return;
+    }
+    scanTake(data.pages);
+    const got = scanState.pages.length - before;
+    scanSay(feeder ? `${plural(got, "page")} scanned from the feeder.`
+      : `Page ${scanState.pages.length} scanned. Put the next page on the glass and press Scan another page, or Make PDF when you’re done.`);
+  } catch (e) {
+    await scanPoll(true);
+    scanSay(capital(e.message || e), true);
+  } finally { scanState.pollPages = false; scanBusy(false); }
+}
+async function scanAddPhotos(list, replace = null) {
+  const files = [...list].filter((f) => isImage(f) || /\.(jpe?g|png|tiff?|bmp|webp)$/i.test(f.name));
+  if (!files.length) { scanSay("Choose photos of pages (JPG or PNG).", true); return; }
+  if (scanState.busy) return;
+  if (scanValue("source") !== "photos") { $("scan-source-photos").checked = true; scanShowParts(); keepScanPrefs(); }
+  scanSay(`Finding the page in ${files.length === 1 ? "the photo" : plural(files.length, "photo")}…`);
+  scanBusy(true);
+  try {
+    const box = await scanBox();
+    const body = new FormData();
+    body.append("box", box);
+    body.append("straighten", $("scan-straighten").checked ? "true" : "false");
+    for (const f of replace ? files.slice(0, 1) : files) body.append("files", f, f.name);
+    const res = await runJob("/api/scan/photos", { method: "POST", body }, scanJobUi);
+    if (!res) { scanSay("Stopped: no photos were added."); return; }
+    const data = await res.json();
+    if (replace) {
+      const at = scanState.pages.findIndex((p) => p.id === replace);
+      const [fresh] = data.pages;
+      if (fresh && at >= 0) { scanState.known.add(fresh.id); scanState.pages.splice(at, 1, { ...fresh, turn: 0, fresh: true }); scanRender(); scanFocusTile(at); }
+    } else scanTake(data.pages);
+    const lost = data.pages.filter((p) => !p.found).length;
+    const parts = [`${plural(data.pages.length, "photo")} added.`];
+    if (lost) parts.push(`In ${lost === 1 ? "one" : lost} of them the page’s edges weren’t clear, so ${lost === 1 ? "it is" : "they are"} kept whole (only straightened). A darker background behind the page helps.`);
+    if (data.skipped.length) {
+      scanSay(`${data.skipped.join(", ")} couldn’t be read: use JPG or PNG photos (on an iPhone: Settings → Camera → Formats → Most Compatible). ${parts.join(" ")}`, true);
+    } else scanSay(parts.join(" "));
+  } catch (e) {
+    scanSay(capital(e.message || e), true);
+  } finally { scanBusy(false); }
+}
+function scanThumbUrl(p) {
+  const look = p.photo ? scanValue("look") || "document" : "document";
+  const key = `${p.id}|${look}`;
+  const known = scanState.thumbs.get(key);
+  if (known) return known;
+  const pending = api(`/api/scan/thumb?box=${encodeURIComponent(scanState.box)}&page=${encodeURIComponent(p.id)}&look=${look}`)
+    .then((r) => r.blob()).then((b) => URL.createObjectURL(b)).catch(() => "");
+  scanState.thumbs.set(key, pending);
+  return pending;
+}
+/** The picture turned ``turn`` degrees, as big as its box allows. */
+function scanTurnStyle(p) {
+  const w = p.width || 1, h = p.height || 1.25, bw = 1, bh = 1.25;
+  const flat = Math.min(bw / w, bh / h), side = Math.min(bw / h, bh / w);
+  const scale = p.turn % 180 ? side / flat : 1;
+  return `rotate(${p.turn}deg) scale(${scale.toFixed(3)})`;
+}
+let scanDragId = null;
+function scanRender() {
+  if (!scanState.built) return;
+  const strip = $("scan-strip"), n = scanState.pages.length;
+  $("scan-count").textContent = n ? plural(n, "page") : "";
+  $("scan-empty").hidden = !!n;
+  strip.hidden = !n;
+  $("scan-make").disabled = scanState.busy || !n;
+  $("scan-clear").disabled = scanState.busy || !n;
+  const canScan = !!scanState.status?.scanner?.available && !!$("scan-device")?.value;
+  const tiles = scanState.pages.map((p, i) => {
+    const img = el("img", { alt: "", draggable: "false", style: `transform: ${scanTurnStyle(p)}` });
+    const thumb = el("div", { class: "scan-thumb" }, el("span", { class: "loading", "aria-hidden": "true" }));
+    Promise.resolve(scanThumbUrl(p)).then((url) => { if (url) { img.src = url; thumb.replaceChildren(img); } });
+    const num = i + 1;
+    const act = (cls, ic, label, fn) => el("button", { type: "button", class: "chip-btn " + cls, title: label, "aria-label": `${label}: page ${num}`,
+      disabled: scanState.busy, onclick: (e) => { e.stopPropagation(); fn(); } }, icon(ic));
+    const again = p.photo
+      ? act("again", "upload", "Replace with another photo", () => { $("scan-replace-input").dataset.page = p.id; $("scan-replace-input").click(); })
+      : canScan ? act("again", "scan", "Scan this page again", () => scanAcquire(p.id)) : null;
+    const label = [`Page ${num} of ${n}`, p.turn ? `turned ${p.turn}°` : "", p.photo && p.found === false ? "edges not found, photo kept whole" : ""].filter(Boolean).join(", ");
+    const tile = el("li", { class: "scan-tile" + (p.fresh ? " fresh" : ""), tabindex: "0", draggable: "true", "data-id": p.id, "aria-label": label,
+      "aria-roledescription": "page" },
+      el("span", { class: "pb-pos scan-num", "aria-hidden": "true" }, String(num)),
+      thumb,
+      el("div", { class: "scan-cap", "aria-hidden": "true" }, p.photo ? (p.found === false ? el("span", { class: "scan-flag", title: "The page’s edges weren’t found: the photo is kept whole" }, "No edges found") : "Photo")
+        : `${p.dpi || ""} dpi`),
+      el("div", { class: "scan-acts" },
+        act("turn-left", "rotate", "Turn left", () => scanTurn(p.id, -90)),
+        act("turn-right", "rotate", "Turn right", () => scanTurn(p.id, 90)),
+        again,
+        act("remove", "delete", "Take out", () => scanRemove(p.id))));
+    p.fresh = false;
+    tile.addEventListener("keydown", (e) => scanTileKey(e, p.id));
+    tile.addEventListener("dragstart", (e) => { scanDragId = p.id; tile.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", p.id); });
+    tile.addEventListener("dragend", () => { scanDragId = null; document.querySelectorAll(".scan-tile").forEach((t) => t.classList.remove("dragging", "drop-before", "drop-after")); });
+    tile.addEventListener("dragover", (e) => {
+      if (!scanDragId || scanDragId === p.id) return;
+      e.preventDefault();
+      const r = tile.getBoundingClientRect(), after = e.clientX > r.left + r.width / 2;
+      tile.classList.toggle("drop-before", !after); tile.classList.toggle("drop-after", after);
+    });
+    tile.addEventListener("dragleave", () => tile.classList.remove("drop-before", "drop-after"));
+    tile.addEventListener("drop", (e) => {
+      if (!scanDragId) return;
+      e.preventDefault(); e.stopPropagation();
+      const after = tile.classList.contains("drop-after");
+      const from = scanState.pages.findIndex((x) => x.id === scanDragId);
+      let to = scanState.pages.findIndex((x) => x.id === p.id) + (after ? 1 : 0);
+      if (from < to) to--;
+      scanMove(from, to);
+    });
+    return tile;
+  });
+  const extra = [];
+  const s = scanSettings();
+  if (n && s.source === "scanner" && s.from === "flatbed" && canScan) {
+    extra.push(el("li", { class: "scan-more" }, el("button", { type: "button", class: "scan-add", id: "scan-add", disabled: scanState.busy, onclick: () => scanAcquire() },
+      icon("scan"), "Scan another page")));
+  } else if (n && s.source === "photos") {
+    extra.push(el("li", { class: "scan-more" }, el("button", { type: "button", class: "scan-add", id: "scan-add", disabled: scanState.busy, onclick: () => $("scan-photo-input").click() },
+      icon("upload"), "Add more photos")));
+  }
+  strip.replaceChildren(...tiles, ...extra);
+}
+function scanFocusTile(i) { requestAnimationFrame(() => document.querySelectorAll("#scan-strip .scan-tile")[i]?.focus()); }
+function scanMove(from, to) {
+  if (from < 0 || to < 0 || to >= scanState.pages.length || from === to) return;
+  const [p] = scanState.pages.splice(from, 1);
+  scanState.pages.splice(to, 0, p);
+  scanRender();
+  $("scan-said").textContent = `Page moved to position ${to + 1} of ${scanState.pages.length}`;
+  scanFocusTile(to);
+}
+function scanTurn(id, by) {
+  const p = scanState.pages.find((x) => x.id === id);
+  if (!p) return;
+  p.turn = (p.turn + by + 360) % 360;
+  const i = scanState.pages.indexOf(p);
+  const img = document.querySelectorAll("#scan-strip .scan-tile")[i]?.querySelector("img");
+  if (img) img.style.transform = scanTurnStyle(p);  // turns in place, no redraw
+  const tile = document.querySelectorAll("#scan-strip .scan-tile")[i];
+  tile?.setAttribute("aria-label", `Page ${i + 1} of ${scanState.pages.length}${p.turn ? `, turned ${p.turn}°` : ""}`);
+  $("scan-said").textContent = `Page ${i + 1} turned ${by > 0 ? "right" : "left"}`;
+}
+function scanRemove(id) {
+  const i = scanState.pages.findIndex((x) => x.id === id);
+  if (i < 0) return;
+  const [gone] = scanState.pages.splice(i, 1);
+  scanRender();
+  appToast(`Page ${i + 1} taken out`, 6000, ["Undo", () => { scanState.pages.splice(Math.min(i, scanState.pages.length), 0, gone); scanRender(); scanFocusTile(i); }]);
+  if (scanState.pages.length) scanFocusTile(Math.min(i, scanState.pages.length - 1)); else $("scan-go")?.focus();
+}
+function scanClear() {
+  if (!scanState.pages.length) return;
+  const kept = scanState.pages.slice();
+  scanState.pages = [];
+  scanRender();
+  scanSay("");
+  appToast(`${plural(kept.length, "page")} cleared`, 6000, ["Undo", () => { scanState.pages = kept; scanRender(); }]);
+}
+function scanTileKey(e, id) {
+  const i = scanState.pages.findIndex((x) => x.id === id);
+  if (e.target !== e.currentTarget) return;
+  if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowUp")) { e.preventDefault(); scanMove(i, i - 1); }
+  else if (e.altKey && (e.key === "ArrowRight" || e.key === "ArrowDown")) { e.preventDefault(); scanMove(i, i + 1); }
+  else if (e.key === "ArrowLeft" || e.key === "ArrowUp") { e.preventDefault(); scanFocusTile(Math.max(0, i - 1)); }
+  else if (e.key === "ArrowRight" || e.key === "ArrowDown") { e.preventDefault(); scanFocusTile(Math.min(scanState.pages.length - 1, i + 1)); }
+  else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); scanRemove(id); }
+  else if (e.key.toLowerCase() === "r" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); scanTurn(id, e.shiftKey ? -90 : 90); }
+}
+async function scanMake() {
+  if (scanState.busy || !scanState.pages.length) return;
+  const s = scanSettings();
+  scanState.making = true;
+  scanSay(s.ocr && !$("scan-ocr").disabled ? "Making the PDF and reading its text: this can take a while…" : "Making the PDF…");
+  scanBusy(true);
+  try {
+    const box = await scanBox();
+    const body = { box, pages: scanState.pages.map((p) => ({ id: p.id, turn: p.turn })), straighten: s.straighten, remove_blank: s.remove_blank,
+      upright: s.upright && !$("scan-upright").disabled, ocr: s.ocr && !$("scan-ocr").disabled, look: s.look, paper: s.paper };
+    const res = await runJob("/api/scan/make", { method: "POST", body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json", ...(isDesktop() ? { "X-Pdfm-Keep": "1" } : {}) } }, scanJobUi);
+    if (!res) { scanSay("Stopped: no PDF was made. The pages are still here."); return; }
+    const name = decodeURIComponent(res.headers.get("X-Pdfm-Filename") || "") || "Scan.pdf";
+    const notes = decodeURIComponent(res.headers.get("X-Pdfm-Note") || "").split("\n").filter(Boolean);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    scanSay(`Made ${name}: it’s open in the reader, not saved yet. The pages stay here until you clear them.`);
+    await select("reader");
+    const tab = await reader.openResult(bytes, name, null, null);
+    if (!tab) { scanSay("The PDF was made but couldn’t be shown.", true); return; }
+    tab.madeBy = { op: "scan", label: "Scan", from: null, pages: scanState.pages.length,
+      sizes: `${plural(scanState.pages.length, "page")} scanned, ${humanSize(bytes.length).replace(" ", " ")}`, notes };
+    tab.unsaved = true;
+    reader.refreshTabs();
+    if (fp.tab === tab) fpShowNote(tab);
+    reader.toast(`Opened ${name} in a new tab. It isn’t saved yet: Save asks where.`, 6000);
+  } catch (e) {
+    scanSay(capital(e.message || e), true);
+  } finally { scanBusy(false); }
 }
 
 // ---- Recent files: one list, on the start screen and under the reader's "Open a PDF" ----

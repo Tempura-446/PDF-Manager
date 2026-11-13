@@ -253,6 +253,49 @@ listens on `127.0.0.1` and requires a random token that only the app
 window (or the link `pdfm gui` prints) knows, so other websites and other
 computers can't use it.
 
+## Scan: paper to a searchable PDF
+
+**Scan paper** on the start screen (or Scan, under Convert) turns paper
+into a PDF in one place. The pages come from:
+
+- **a scanner** (Windows): ZPDF lists the scanners Windows knows (through
+  Windows Image Acquisition, part of Windows; no other program is needed).
+  Choose colour, greyscale or black and white, 150, 200 or 300 dpi
+  (300 greyscale is best for documents), and the glass or the document
+  feeder. The feeder gives every page in it; the glass one page each time
+  you press **Scan another page**. An empty feeder, a busy or offline
+  scanner are said plainly, and Cancel stops between pages.
+- **photos** taken with a phone (any computer): ZPDF finds the page's four
+  edges in each photo, flattens it as if it had been scanned, crops and
+  straightens it, and gives it a clean look: shadows evened out, the paper
+  white, the ink dark (**Keep colours** keeps coloured ink and stamps;
+  **As taken** changes nothing). A page whose edges aren't clear (a white
+  page on a white table, a page that runs out of the photo) keeps the whole
+  photo, only straightened: a darker background behind the page helps.
+  Photos must be JPG or PNG (on an iPhone: Settings → Camera → Formats →
+  Most Compatible).
+
+The pages gather in a strip as they arrive: drag them into another order
+(or Alt+arrow keys), turn them, take them out, or scan one again. **Make
+PDF** straightens crooked pages, takes out blank ones, turns sideways
+pages upright, makes the text searchable (the built-in OCR engine, or
+Tesseract), sizes each page from the scan's resolution (photos go on A4
+or Letter, whichever fits their shape) and compresses it like Compress
+does for scans. The PDF opens in the reader as a new tab, not saved yet:
+Save asks where.
+
+From the command line:
+
+```bash
+pdfm scan --list                               # the scanners
+pdfm scan -o letter.pdf                        # one page from the glass, Enter for the next
+pdfm scan --feeder --mode colour --dpi 200 -o pile.pdf
+pdfm photos-to-pdf IMG_0101.jpg IMG_0102.jpg -o receipt.pdf --look colour
+```
+
+Both take `--no-ocr`, `--language`, `--keep-blank`, `--no-straighten` and
+`--no-upright`.
+
 ## PDF reader
 
 Choose **Read** on the rail, run `pdfm view report.pdf`,
