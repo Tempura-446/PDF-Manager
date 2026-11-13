@@ -4,6 +4,19 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.24.4
+
+Small fixes. The look is the same.
+
+- With Select, a single click on a signature or a drawing picks it, ready
+  to move, resize or delete, also after you switch to another tab and
+  back. (Before, it took a double-click.) Esc after picking one goes back
+  to Select instead of leaving its tool on. Links, form fields and
+  selecting text work as before.
+- Switching tabs while a long file is still being laid out can't leave an
+  error behind any more.
+- The automatic checks run on current versions of GitHub's actions.
+
 ## 0.24.3
 
 Two small things from a check of 0.24.2 on Windows.
