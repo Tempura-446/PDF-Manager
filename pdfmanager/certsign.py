@@ -381,6 +381,26 @@ def _open_for_update(data, password, name, reader=None):
     return writer
 
 
+def _recount(writer, pages):
+    """A page tree whose /Count is wrong (5 for one page, -1) is put right
+    in the signed update: viewers would look for pages that aren't there.
+    (Only a flat tree, the common case; a deeper one is left as it is.)"""
+    from pyhanko.pdf_utils import generic
+
+    try:
+        ref = writer.root.raw_get("/Pages")
+        tree = ref.get_object()
+        kids = tree.get("/Kids") or []
+        if int(tree.get("/Count", -1)) == pages or len(kids) != pages:
+            return
+        if any(kid.get_object().get("/Type") == "/Pages" for kid in kids):
+            return
+        tree["/Count"] = generic.NumberObject(pages)
+        writer.mark_update(ref)
+    except Exception:  # noqa: BLE001 (an odd tree: signed as it is)
+        pass
+
+
 def _widget_refs(field_ref):
     """Object numbers of a (pyHanko) signature field and its widgets."""
     found = set()
@@ -442,6 +462,7 @@ def sign(path, output, pfx, pfx_password=None, *, page=None, box=None, field=Non
     if field and (page is not None or box is not None):
         raise core.PdfManagerError("sign an existing field or a new place on a page, not both")
     writer = _open_for_update(Path(path).read_bytes(), password, name, reader)
+    _recount(writer, len(reader.pages))
 
     existing = {}
     for fq_name, value, ref in fields.enumerate_sig_fields(writer.prev, filled_status=None):

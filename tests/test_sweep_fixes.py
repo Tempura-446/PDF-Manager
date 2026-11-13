@@ -460,3 +460,21 @@ def test_what_is_left_of_a_damaged_file_that_still_trips_a_tool_is_said_plainly(
     # A file that wasn't damaged: a fault of the tool's own stays one (it's logged and reported).
     with pytest.raises(AttributeError):
         run("rotate", [text_pdf(tmp_path / "good.pdf")], {"degrees": "90"}, tmp_path)
+
+
+def test_signing_puts_a_wrong_page_count_right_and_the_signature_holds(tmp_path):
+    import pypdfium2 as pdfium
+
+    from pdfmanager import certsign
+
+    src = tmp_path / "count.pdf"
+    src.write_bytes(_raw_pdf("/MediaBox [0 0 612 792]").replace(b"/Count 1", b"/Count 5"))
+    pfx = make_id(tmp_path / "id.pfx")[0]
+    name, data, notes = run("sign-cert", [src], {"pfx_password": PFX_PASSWORD, "appearance": "visible",
+                                                 "page": "last", "position": "bottom-right", "size": "medium"},
+                            tmp_path, {"pfx": pfx, "pfx[]": [pfx]})
+    out = tmp_path / "signed.pdf"
+    out.write_bytes(data)
+    doc = pdfium.PdfDocument(str(out))
+    assert len(doc) == 1 and doc[0].get_size() == (612.0, 792.0)
+    assert certsign.verify(out)[0]["intact"]
