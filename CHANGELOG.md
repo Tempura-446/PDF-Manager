@@ -4,6 +4,40 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.26.0
+
+Scan: paper to a searchable PDF, in one place.
+
+- **Scan paper** on the start screen (and Scan under Convert, or in the
+  search box) opens a page of its own. The pages come from a scanner or
+  from photos taken with a phone.
+- On Windows, ZPDF lists the scanners Windows knows and scans from them
+  through Windows Image Acquisition, which comes with Windows: no other
+  program, and no PowerShell, so it works with Smart App Control. Colour,
+  greyscale or black and white; 150, 200 or 300 dpi (300 greyscale to
+  start with); the glass, one page each press of "Scan another page", or
+  every page in the document feeder, arriving one by one. An empty
+  feeder, a busy, offline or jammed scanner are said in plain words, and
+  Cancel stops between pages and keeps the pages scanned so far. Where
+  scanning can't work (not Windows, or no Windows Image Acquisition) the
+  Scanner choice is off and says why; Photos works everywhere.
+- Photos: the page's four edges are found in each photo and the page is
+  flattened, cropped and straightened. A clean look evens out shadows
+  and makes the paper white and the ink dark; "Keep colours" keeps
+  coloured ink and stamps, "As taken" changes nothing. When the edges
+  aren't clear, the whole photo is kept (only straightened), and its
+  page says so.
+- The pages gather in a strip as they arrive: drag them into another
+  order (or Alt+arrow keys), turn them, take them out (with Undo), or scan
+  one again.
+- Make PDF straightens crooked pages, takes out blank ones, turns
+  sideways pages upright, reads the text (the built-in OCR engine, or
+  Tesseract), sizes each page from the scan's resolution (photos go on
+  A4 or Letter, whichever fits their shape), compresses it as Compress
+  does scans, and opens it in the reader as a new tab, not saved yet.
+- From the command line: `pdfm scan` (with `--list`, `--scanner`,
+  `--feeder`, `--mode`, `--dpi`) and `pdfm photos-to-pdf`.
+
 ## 0.25.0
 
 A design pass: the same look, made consistent. The tools work as before.
