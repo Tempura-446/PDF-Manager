@@ -158,11 +158,13 @@ def test_a_page_box_pdfplumber_cant_read_converts_or_says_so(tmp_path, op, box):
     assert data
     if op == "to-word":
         import io
+        import re
+        import zipfile
 
-        import docx
-
-        text = " ".join(p.text for p in docx.Document(io.BytesIO(data)).paragraphs)
-        assert "Hello odd boxes" in text
+        # (The words straight from the .docx: python-docx is an optional extra.)
+        xml = zipfile.ZipFile(io.BytesIO(data)).read("word/document.xml").decode("utf-8")
+        text = "".join(re.findall(r"<w:t(?:\s[^>]*)?>([^<]*)</w:t>", xml))
+        assert "Hello odd boxes" in text, text[:300]
 
 
 def test_a_page_without_its_type_is_signed(tmp_path):
