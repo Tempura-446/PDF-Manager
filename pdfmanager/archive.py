@@ -319,12 +319,12 @@ def find_ghostscript():
         if found:
             return found
     if sys.platform == "win32":
-        from pdfmanager.scan import program_dirs, registry_subkey_values
+        from pdfmanager import winprograms
 
         found = []
-        for base in program_dirs():
+        for base in winprograms.program_dirs():
             found += (base / "gs").glob("gs*/bin/gswin*c.exe")
-        for dll in registry_subkey_values(r"SOFTWARE\GPL Ghostscript", "GS_DLL"):
+        for dll in winprograms.registry_subkey_values(r"SOFTWARE\GPL Ghostscript", "GS_DLL"):
             found += Path(str(dll)).parent.glob("gswin*c.exe")  # next to bin\gsdll64.dll
         found = [exe for exe in found if exe.is_file()]
         if found:

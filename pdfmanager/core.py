@@ -544,16 +544,36 @@ def split(path, outdir, every=None, ranges=None, prefix=None, password=None, boo
     return written
 
 
+def outline_items(reader):
+    """The bookmarks of an open document: [{"title", "page" (1-based),
+    "level" (0 = top)}] (outline.get_outline opens the file for it)."""
+    items = []
+
+    def walk(entries, level):
+        for entry in entries:
+            if isinstance(entry, list):
+                walk(entry, level + 1)
+                continue
+            try:
+                page = reader.get_destination_page_number(entry)
+            except Exception:
+                page = None
+            if page is None or page < 0:
+                continue  # points outside the document (e.g. a web link)
+            items.append({"title": str(entry.title or ""), "page": page + 1, "level": level})
+
+    walk(reader.outline, 0)
+    return items
+
+
 def _bookmark_groups(path, total, level, password=None):
     """[(bookmark title, 0-based pages)] for splitting at the bookmarks of
     ``level`` or above (1 = top level). The pages before the first bookmark
     come first, with the title None."""
-    from pdfmanager import outline  # outline uses this module
-
     if level not in (1, 2):
         raise PdfManagerError("the bookmark level must be 1 (top level) or 2")
     starts = {}  # first page -> title; of several bookmarks on one page, the first
-    for item in sorted(outline.get_outline(path, password), key=lambda i: i["page"]):
+    for item in sorted(outline_items(open_pdf(path, password)), key=lambda i: i["page"]):
         if item["level"] < level:
             starts.setdefault(item["page"] - 1, item["title"])
     if not starts:
@@ -1265,10 +1285,10 @@ def encrypt(path, output, user_password, owner_password=None, password=None, per
     open password (``user_password``, which may be empty: anyone can open
     it) can do; the permissions password (``owner_password``) lifts the
     limits, so it must differ from the open password."""
-    from pdfmanager import filetools
+    from pdfmanager import pdfpermissions
 
     reader = open_pdf(path, password)
-    restricted = filetools.restricts(permissions)
+    restricted = pdfpermissions.restricts(permissions)
     if restricted and (not owner_password or owner_password == user_password):
         raise PdfManagerError("to limit printing, copying or changes, set a permissions "
                               "password different from the password to open it")
@@ -1300,7 +1320,7 @@ def encrypt(path, output, user_password, owner_password=None, password=None, per
     writer = clone_document(reader)
     if "/Metadata" in writer._root_object:  # an encrypted file can't be PDF/A
         del writer._root_object["/Metadata"]
-    extra = {"permissions_flag": filetools.pypdf_flags(permissions)} if permissions else {}
+    extra = {"permissions_flag": pdfpermissions.pypdf_flags(permissions)} if permissions else {}
     writer.encrypt(user_password=user_password or "", owner_password=owner_password,
                    algorithm="AES-256", **extra)
     return _write(writer, output)
@@ -1331,13 +1351,13 @@ def decrypt(path, output, password):
     except ImportError:
         pikepdf = None
     if pikepdf is not None and reader.is_encrypted:
-        from pdfmanager import filetools
+        from pdfmanager import pdfpermissions
 
         try:
             with pikepdf.open(path, password=password or "") as pdf:
-                if not pdf.owner_password_matched and filetools.restricts(pdf.allow):
+                if not pdf.owner_password_matched and pdfpermissions.restricts(pdf.allow):
                     raise PdfManagerError(
-                        f"this PDF limits what can be done with it ({filetools.describe(pdf.allow)}):"
+                        f"this PDF limits what can be done with it ({pdfpermissions.describe(pdf.allow)}):"
                         " removing its protection needs its permissions password")
         except pikepdf.PdfError:
             pass  # qpdf can't read it: pypdf already could

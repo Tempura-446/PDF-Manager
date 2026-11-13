@@ -867,7 +867,7 @@ def find_verapdf():
     places = [home / "verapdf", Path("/opt/verapdf"), Path("/usr/local/verapdf"),
               home / "Applications" / "verapdf"]
     if sys.platform == "win32":
-        from pdfmanager.scan import program_dirs
+        from pdfmanager.winprograms import program_dirs
 
         places = [home / "veraPDF", home / "verapdf"] + [base / "veraPDF" for base in program_dirs()]
     for place in places:

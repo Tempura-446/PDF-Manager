@@ -23,24 +23,8 @@ LINE = re.compile(r"^(?P<indent>[ \t]*)(?:[-*•]\s*)?(?P<title>.*?)\s*\(p(?:age
 
 
 def get_outline(path, password=None):
-    reader = core.open_pdf(path, password)
-    items = []
-
-    def walk(entries, level):
-        for entry in entries:
-            if isinstance(entry, list):
-                walk(entry, level + 1)
-                continue
-            try:
-                page = reader.get_destination_page_number(entry)
-            except Exception:
-                page = None
-            if page is None or page < 0:
-                continue  # points outside the document (e.g. a web link)
-            items.append({"title": str(entry.title or ""), "page": page + 1, "level": level})
-
-    walk(reader.outline, 0)
-    return items
+    """[{"title", "page" (1-based), "level" (0 = top)}] for the bookmarks."""
+    return core.outline_items(core.open_pdf(path, password))
 
 
 def _check(items, total):
