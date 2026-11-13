@@ -263,3 +263,54 @@ def test_document_details_that_are_the_page_tree_are_left_alone(tmp_path, op):
         assert reader.metadata["/Title"] == "New title"
         with pikepdf.open(out) as pdf:
             assert "/Title" not in pdf.Root.Pages
+
+
+def test_ocr_with_tesseract_keeps_form_fields_and_a_portfolios_pages(tmp_path, monkeypatch):
+    import types
+
+    from pdfmanager import ocr
+
+    asked = {}
+    fake = types.ModuleType("ocrmypdf")
+    exceptions = types.ModuleType("ocrmypdf.exceptions")
+    exceptions.ExitCodeException = type("ExitCodeException", (Exception,), {})
+    exceptions.MissingDependencyError = type("Missing", (Exception,), {})
+
+    def fake_ocr(src, out, **kwargs):
+        asked.update(kwargs)
+        Path(out).write_bytes(Path(src).read_bytes())
+
+    fake.ocr = fake_ocr
+    monkeypatch.setitem(sys.modules, "ocrmypdf", fake)
+    monkeypatch.setitem(sys.modules, "ocrmypdf.exceptions", exceptions)
+    monkeypatch.setattr(ocr.scan, "add_programs_to_path", lambda: None)
+    monkeypatch.setattr(ocr, "_tesseract_languages", lambda: {"eng"})
+    ocr._run_tesseract(text_pdf(tmp_path / "a.pdf"), tmp_path / "b.pdf", "eng", False, False)
+    # OCRmyPDF's PDF/A goes through Ghostscript, which loses form fields and
+    # prints a portfolio's attachments instead of its pages.
+    assert asked["output_type"] == "pdf"
+
+
+def test_ocr_of_a_portfolio_keeps_its_own_pages(tmp_path):
+    from pypdf import PdfReader
+
+    from pdfmanager import ocr
+
+    if not ocr.tesseract_available():
+        pytest.skip("needs Tesseract")
+    src = text_pdf(tmp_path / "cover.pdf", pages=2)
+    blank = tmp_path / "blank.pdf"
+    c = canvas.Canvas(str(blank))
+    for _ in range(3):
+        c.showPage()
+    c.save()
+
+    def portfolio(pdf):
+        pdf.attachments["blank.pdf"] = pikepdf.AttachedFileSpec(pdf, blank.read_bytes())
+        pdf.Root.Collection = pikepdf.Dictionary(Type=pikepdf.Name.Collection, View=pikepdf.Name.T)
+    edit(src, portfolio)
+    name, data, notes = run("ocr", [src], {"engine": "tesseract", "language": "eng"}, tmp_path)
+    out = tmp_path / "out.pdf"
+    out.write_bytes(data)
+    reader = PdfReader(out)
+    assert len(reader.pages) == 2 and "quick brown fox" in reader.pages[0].extract_text()

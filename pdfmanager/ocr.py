@@ -703,9 +703,12 @@ def _run_tesseract(source, output, language, force, deskew, rotate=True):
     # install has; without it OCR still runs, the pages just stay as they are.
     rotate = rotate and "osd" in _tesseract_languages()
     try:
+        # A plain PDF out, not PDF/A: OCRmyPDF makes PDF/A with Ghostscript,
+        # which drops form fields and prints a portfolio's attached files in
+        # place of its pages. (PDF/A is a tool of its own.)
         ocrmypdf.ocr(str(source), str(output), language=language.split("+"),
                      skip_text=not force, force_ocr=force, deskew=deskew, rotate_pages=rotate,
-                     progress_bar=False)
+                     progress_bar=False, output_type="pdf")
     except MissingDependencyError as exc:
         raise core.PdfManagerError(f"OCR is missing a program: {exc}") from None
     except ExitCodeException as exc:
