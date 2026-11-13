@@ -1097,7 +1097,10 @@ export class Reader {
   }
 
   #switchTo(tab) {
-    return this.#serial(() => this.#switchToNow(tab));
+    // (Until it is shown, the viewer still holds the tab before: a turn of
+    // the view asked for meanwhile waits for it, see rotate.)
+    this.switching = (this.switching || 0) + 1;
+    return this.#serial(() => this.#switchToNow(tab)).finally(() => { this.switching--; });
   }
 
   async #switchToNow(tab) {
@@ -1680,7 +1683,15 @@ export class Reader {
     else this.#updatePage();
   }
 
-  rotate(delta) { this.pdfViewer.pagesRotation = (this.pdfViewer.pagesRotation + delta + 360) % 360; this.#rebuildThumbsSoon(); }
+  rotate(delta) {
+    // Just after a tab was picked, the one before is still showing: turn the picked one once it's there.
+    if (this.switching) { this.#serial(() => this.rotate(delta)); return; }
+    if (!this.doc) return;
+    // (Pages not laid out yet: after they are, and after the turn remembered for the file.)
+    if (!this.pdfViewer.pagesCount) { const doc = this.doc; this.eventBus.on("pagesinit", () => { if (this.doc === doc) this.rotate(delta); }, { once: true }); return; }
+    this.pdfViewer.pagesRotation = (this.pdfViewer.pagesRotation + delta + 360) % 360;
+    this.#rebuildThumbsSoon();
+  }
 
   toggleSpread() {
     const { SpreadMode } = viewer;
@@ -3283,16 +3294,33 @@ export class Reader {
     const image = await this.#signatureDialog();
     if (!image) return;
     const file = new File([image], "signature.png", { type: "image/png" });
-    const onLine = line ? this.pdfViewer.getPageView(line.page - 1)?.annotationEditorLayer?.annotationEditorLayer : null;
+    // Annotating first: until then the line's page may have no layer to put
+    // pictures on yet (just after the file opened), which put the signature
+    // in the middle of the view instead of on its line.
+    if (this.annotbar.hidden) this.openAnnotate();
+    const onLine = line ? await this.#editorLayer(line.page - 1) : null;
     const layer = onLine || this.uiManager?.currentLayer;
     if (!layer) { this.toast("Scroll to the page to sign, then try again."); return; }
-    if (this.annotbar.hidden) this.openAnnotate();
     const before = new Set(this.uiManager.getEditors(layer.pageIndex));
     await layer.pasteEditor({ mode: pdfjs.AnnotationEditorType.STAMP }, { bitmapFile: file });
     const editor = [...this.uiManager.getEditors(layer.pageIndex)].find((e) => !before.has(e));
     const placed = editor ? await this.#fitSignature(editor, onLine ? line : null) : false;
     this.#hint(placed === "line" ? "Signed on the line. Drag it to move it; use the corners to resize it."
       : "Drag the signature into place; use the corners to resize it.", 5000);
+  }
+
+  /** The layer pdf.js puts pictures on for page ``index``, once there:
+   *  the page is brought into view to have it drawn when it isn't yet
+   *  (waits up to 3 seconds; null if it never comes). */
+  async #editorLayer(index) {
+    const get = () => this.pdfViewer.getPageView(index)?.annotationEditorLayer?.annotationEditorLayer || null;
+    if (get()) return get();
+    if (index >= 0 && index < (this.pdfViewer.pagesCount || 0)) {
+      const view = this.pdfViewer.getPageView(index), top = view?.div?.getBoundingClientRect(), col = this.#column();
+      if (!top || top.bottom < col.top || top.top > col.bottom) this.pdfViewer.currentPageNumber = index + 1;
+    }
+    for (let i = 0; i < 150 && !get(); i++) await new Promise((r) => setTimeout(r, 20));
+    return get();
   }
 
   /** Size and place a signature just added (pdf.js makes a picture up to

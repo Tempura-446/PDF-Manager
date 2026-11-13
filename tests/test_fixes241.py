@@ -93,6 +93,8 @@ def test_fixes241_in_a_browser(app, tmp_path):
     # on the rule at the line's start, 1.6 times the label's height, and resizable like any picture.
     for theme in ("light", "dark"):
         s = out["sign-" + theme]
+        if s.get("handle") is not None:
+            assert s["handle"] >= 9, s["handle"]
         if s.get("deleteIcon"):
             assert s["deleteIcon"]["lineHeight"] != "250px", s["deleteIcon"]
             assert s["deleteIcon"]["icon"] <= s["deleteIcon"]["button"] + 1, s["deleteIcon"]
@@ -152,3 +154,10 @@ def test_fixes241_in_a_browser(app, tmp_path):
         assert not t["errors"], t
         assert t["active"] == 0 and t["rotateA"] == (90 * n) % 360 and t["rotateB"] == 0, t
         assert t["pagesA"] == 3 and t["pagesB"] == 2, t
+    # R just after clicking the other tab turns that tab (a quarter more than it had),
+    # never the one left; the tabs take turns being clicked: 0, 1, 0.
+    turns = [t["shown"] for t in out["viewTurn"]]
+    for t in out["viewTurn"]:
+        assert not t["errors"], t
+        assert t["back"] == t["start"]["turn"], out["viewTurn"]
+    assert turns == [90, 90, 180], out["viewTurn"]

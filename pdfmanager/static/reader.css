@@ -778,3 +778,12 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
    below its button. */
 .rd .editToolbar { line-height: normal; }
 .rd .editToolbar .basic { display: inline-flex; align-items: center; justify-content: center; }
+
+/* The corner handles of a selected picture, signature or note: 10px
+   instead of pdf.js's 6px, and easier still to catch with a mouse (an
+   invisible margin around each takes the press too). */
+.rd .annotationEditorLayer {
+  --resizer-size: 10px;
+  --resizer-shift: calc(0px - (var(--outline-width) + var(--resizer-size)) / 2 - var(--outline-around-width));
+}
+.rd .annotationEditorLayer .resizer::after { content: ""; position: absolute; inset: -6px; }

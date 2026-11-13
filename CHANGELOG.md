@@ -22,6 +22,12 @@ Small fixes after a check of 0.24.0 on Windows. The look is the same.
   place in every section.
 - The delete button on a selected picture or signature shows its icon
   in the button again, not far below it.
+- The corner handles of a selected picture, signature or note are larger
+  and easier to catch with the mouse.
+- "Sign it" straight after opening a file also finds the line (the first
+  time, it could put the signature in the middle of the view instead).
+- Pressing R straight after clicking another tab turns that tab, not the
+  one you left.
 - Turning a page just after switching tabs turns it in the tab you
   switched to, and no longer logs an error. Page changes asked for while
   a tab is still being shown wait for it, instead of being made from the

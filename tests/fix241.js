@@ -65,6 +65,9 @@ const { chromium } = require("playwright");
       s.deleteIcon = await page.evaluate(() => { const b = document.querySelector(".editToolbar .deleteButton"); if (!b) return null;
         const r = b.getBoundingClientRect(), st = getComputedStyle(b, "::before");
         return { lineHeight: getComputedStyle(b).lineHeight, button: r.height, icon: parseFloat(st.height) }; });
+      // Its corner handles: big enough to catch with a mouse.
+      s.handle = await page.evaluate(() => { const h = [...document.querySelectorAll(".annotationEditorLayer .resizer")].find((x) => x.getBoundingClientRect().width > 0);
+        return h ? h.getBoundingClientRect().width : null; });
       if (theme === "light") {
         // Undo the only change: not changed any more. Redo: changed again.
         await page.keyboard.press("Control+z");
@@ -191,6 +194,28 @@ const { chromium } = require("playwright");
         got.rotateB = await page.evaluate(async () => (await reader.doc.getPage(1)).rotate);
         got.pagesB = await page.evaluate(() => reader.doc.numPages);
         r.push({ delay, ...got, errors: errors.splice(0) });
+      }
+      // R (turn the view) pressed at once after clicking the other tab, while the
+      // tab left still has changes to keep (which takes a moment): the clicked
+      // tab turns, the one left doesn't.
+      const v = (out.viewTurn = []);
+      for (let round = 0; round < 3; round++) {
+        await page.evaluate(() => { reader.doc.annotationStorage.setValue("pdfm-test-" + Math.random(), { value: "x" }); });
+        const start = await page.evaluate(() => ({ left: reader.tabs.indexOf(reader.activeTab), turn: reader.pdfViewer.pagesRotation }));
+        const other = start.left === 0 ? 2 : 1;
+        await page.click(`.rd-doctab:nth-child(${other}) .rd-doctab-name`);
+        await page.keyboard.press("r");
+        await page.waitForFunction((i) => reader.doc && reader.activeTab === reader.tabs[i] && reader.loading.hidden, other - 1, { timeout: 20000 });
+        await page.waitForTimeout(800);
+        const shown = await page.evaluate(() => reader.pdfViewer.pagesRotation);
+        await page.click(`.rd-doctab:nth-child(${start.left + 1}) .rd-doctab-name`);
+        await page.waitForFunction((i) => reader.doc && reader.activeTab === reader.tabs[i] && reader.loading.hidden, start.left, { timeout: 20000 });
+        await page.waitForTimeout(800);
+        const back = await page.evaluate(() => reader.pdfViewer.pagesRotation);
+        v.push({ round, start, shown, back, errors: errors.splice(0) });
+        await page.click(`.rd-doctab:nth-child(${other}) .rd-doctab-name`);
+        await page.waitForFunction((i) => reader.doc && reader.activeTab === reader.tabs[i] && reader.loading.hidden, other - 1, { timeout: 20000 });
+        await page.waitForTimeout(500);
       }
       await ctx.close();
     }
