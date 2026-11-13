@@ -14,7 +14,7 @@ from pdfmanager import appdata
 SAMPLE = 10            # pages looked at for text and scans
 BIG_PICTURE = 400_000  # pixels from which a picture can be a page's scan
 REMEMBERED = 300       # files whose facts are kept
-LOOK = 4              # raised when facts are worked out differently, so kept ones are looked at again
+LOOK = 5              # raised when facts are worked out differently, so kept ones are looked at again
 TEXT_SHOWING = {"Tj", "TJ", "'", '"'}
 # A printed place to sign: the word near a rule or a run of underscores.
 SIGN_WORDS = re.compile(r"\b(signature|signed|sign here|unterschrift|signé|firma)\b", re.I)
@@ -271,7 +271,35 @@ def facts(path, password=None):
     except Exception:  # a file damaged past its first page
         return {"size": size, "pages": None, "error": "can't be read"}
     found["sign_at"] = _sign_place(path, password, sign_line, lines) if sign_line else None
+    found["signed_on_line"] = bool(found["sign_at"]) and _drawn_on(path, password, found["sign_at"])
     return found
+
+
+DRAWN = ("/Stamp", "/Ink", "/FreeText")  # how a signature put on with the reader (or another app) is kept
+
+
+def _drawn_on(path, password, at):
+    """Whether a picture, drawing or typed text sits on the line ``at``
+    (facts' "sign_at"): someone signed there already, by hand rather than
+    with a certificate."""
+    import pikepdf
+
+    x0, y0, x1, y1 = at["rect"]
+    size = at.get("text") or 12
+    top = y1 + 4 * size  # (a signature stands on its line, about as tall as handwriting)
+    try:
+        with pikepdf.open(path, password=password or "") as pdf:
+            page = pdf.pages[at["page"] - 1]
+            for annot in page.obj.get("/Annots", None) or []:
+                if annot.get("/Subtype") not in DRAWN or "/Rect" not in annot:
+                    continue
+                r = [float(v) for v in annot.Rect]
+                a0, b0, a1, b1 = min(r[0], r[2]), min(r[1], r[3]), max(r[0], r[2]), max(r[1], r[3])
+                if a0 < x1 and a1 > x0 and b0 < top and b1 > y0 - size:
+                    return True
+    except Exception:
+        return False
+    return False
 
 
 BIG = 1_000_000  # bytes from which making a file smaller is worth offering
@@ -311,7 +339,7 @@ def suggestions(found, made_by=None):
     if found.get("to_sign"):
         out.append({"op": "sign", "title": "Sign it",
                     "why": "It has a place for a signature that is still empty"})
-    elif found.get("sign_line") and not found.get("signatures"):
+    elif found.get("sign_line") and not found.get("signatures") and not found.get("signed_on_line"):
         out.append({"op": "sign", "title": "Sign it", "page": found["sign_line"], "line": found.get("sign_at"),
                     "why": f"Page {found['sign_line']} has a line for your signature"})
     return out[:3]

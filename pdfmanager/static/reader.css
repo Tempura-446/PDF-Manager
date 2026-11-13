@@ -787,3 +787,8 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
   --resizer-shift: calc(0px - (var(--outline-width) + var(--resizer-size)) / 2 - var(--outline-around-width));
 }
 .rd .annotationEditorLayer .resizer::after { content: ""; position: absolute; inset: -6px; }
+
+/* A picture or signature resizes by its corners only, which keep its shape:
+   the side handles squashed it, and on a small signature they covered the
+   middle, where a press should move it. */
+.rd .annotationEditorLayer .stampEditor .resizer:is(.topMiddle, .bottomMiddle, .middleLeft, .middleRight) { display: none; }

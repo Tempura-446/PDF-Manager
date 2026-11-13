@@ -77,6 +77,7 @@ def test_fixes242_in_a_browser(app, tmp_path):
         assert len(a["second"]) == 2, a["second"]
         one, two = a["second"]
         assert two["selected"] and not one["selected"], a["second"]
+        assert a["handles"] == ["bottomLeft", "bottomRight", "topLeft", "topRight"], a["handles"]  # 0.24.3
         for step in ("second", "zoom150", "zoom75", "turned"):
             now = a[step][0]
             assert now["rect"] == first["rect"], (step, now, first)
