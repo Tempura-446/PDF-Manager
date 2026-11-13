@@ -90,3 +90,26 @@ def test_tab_state_in_the_reader(app, tmp_path):
     assert steps["closed"] == {"tabs": 1, "title": "Doc B.pdf — ZPDF", "unsaved": False}, steps["closed"]
     # The fields are the tab's own: assigning one from outside fails.
     assert steps["assign"] == {"threw": True, "dirty": False}, steps["assign"]
+
+
+def test_reader_parts_in_their_modules(app, tmp_path):
+    """Measuring, find and the text editor box, from the modules they moved to, as before."""
+    node = shutil.which("node")
+    if not node or subprocess.run([node, "-e", "require('playwright')"], capture_output=True, cwd=tmp_path).returncode:
+        pytest.skip("needs Node.js with Playwright")
+    srv, url = app
+    cfg = {"a": srv.RequestHandlerClass.opened.add(text_pdf(tmp_path / "Doc A.pdf"))}
+    run = subprocess.run([node, str(HERE / "readerparts.js"), url, json.dumps(cfg)], capture_output=True, text=True,
+                         encoding="utf-8", timeout=600)
+    if run.returncode and "Executable doesn't exist" in run.stderr:
+        pytest.skip("Playwright's browser isn't installed")
+    assert run.returncode == 0, run.stderr
+    out = json.loads(run.stdout)
+    assert not out["errors"], out["errors"]
+    assert not out["native"], out["native"]
+    assert out["measured"] == {"bar": True, "mode": "area", "kinds": ["distance", "area"], "drawn": True}, out["measured"]
+    assert out["measureUndone"] == ["distance"] and out["measureRedone"] == ["distance", "area"], out
+    assert out["find"] == {"open": True, "count": "1 of 3", "marked": True} and out["findClosed"], out
+    assert out["editBox"] == {"value": "Quarterly report, page 1"}, out["editBox"]
+    assert out["edited"] == {"dirty": True, "text": "Annual report, page 1", "box": False}, out["edited"]
+    assert out["editUndone"] == {"dirty": False, "text": "Quarterly report, page 1"}, out["editUndone"]
