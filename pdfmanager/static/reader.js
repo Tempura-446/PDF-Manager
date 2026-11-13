@@ -882,6 +882,19 @@ export class Reader {
     // Edit text tool: click a line of text to change it.
     this.container.addEventListener("click", (e) => this.#textClick(e), true);
 
+    // Select (no tool): a click on a signature, drawing, text box or
+    // highlight picks it (pdf.js's own way is a double-click).
+    // (Pressed and let go without moving: no "click" event, which the browser
+    // doesn't always send when pdf.js's text layer moves things under the
+    // pointer meanwhile.)
+    let pressed = null;
+    this.container.addEventListener("pointerdown", (e) => { pressed = e.isPrimary ? [e.clientX, e.clientY, e.timeStamp] : null; }, true);
+    this.container.addEventListener("pointerup", (e) => {
+      const still = pressed && Math.hypot(e.clientX - pressed[0], e.clientY - pressed[1]) < 5 && e.timeStamp - pressed[2] < 800;
+      pressed = null;
+      if (still) this.#pickOnClick(e);
+    });
+
     // Notes and shapes: click or drag on a page; underline and strike out: select words.
     this.container.addEventListener("pointerdown", (e) => this.#markupDown(e), true);
     this.container.addEventListener("pointermove", (e) => this.#markupMove(e));
@@ -2248,6 +2261,48 @@ export class Reader {
     return Object.entries(pdfjs.AnnotationEditorType).find(([, v]) => v === mode)?.[0] || "NONE";
   }
 
+  /** With Select on (the annotate bar open, no tool), a click on an
+   *  annotation this reader can edit picks it, to move, resize or delete:
+   *  one placed here, and one already in the file (also after another tab
+   *  was shown and this one came back, when they are all in the file). pdf.js
+   *  picks those only on a double-click (its "switchannotationeditormode"
+   *  with the annotation's id); a click asks it the same, without starting to
+   *  type in a text box. Links, form fields and selecting text are left as
+   *  they were. */
+  #pickOnClick(e) {
+    if (e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!this.doc || !this.uiManager || this.annotbar.hidden || this.editMode !== "NONE" || this.textEditMode
+      || this.markupMode || this.measureMode || this.container.classList.contains("hand")) return;
+    if (e.target.closest?.("a, input, select, textarea, button, [contenteditable='true'], .linkAnnotation, .widgetAnnotation, .popup")) return;
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) return;  // words were being selected
+    const n = Number(e.target.closest?.(".page")?.dataset.pageNumber);
+    const view = n && this.pdfViewer.getPageView(n - 1);
+    if (!view) return;
+    const under = (box) => {
+      if (!box || box.hidden || box.closest("[hidden]")) return false;
+      const r = box.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    };
+    let hit = null;  // (the last one found is drawn on top)
+    // Editors (placed here, or changed and not saved yet) ...
+    for (const ed of this.uiManager.getEditors(n - 1)) {
+      if (!ed.isEmpty() && under(ed.div)) hit = { mode: ed.mode, editId: ed.annotationElementId || ed.id };
+    }
+    // ... and annotations in the file that pdf.js can edit.
+    if (!hit) {
+      for (const a of view.annotationLayer?.annotationLayer?.getEditableAnnotations() || []) {
+        if (a.annotationEditorType !== undefined && under(a.container)) hit = { mode: a.annotationEditorType, editId: a.data.id };
+      }
+    }
+    if (!hit || this.#modeName(hit.mode) === "NONE") return;
+    e.preventDefault();
+    e.stopPropagation();
+    // (pdf.js turns on the annotation's tool, makes the page's editors and
+    // selects the one with this id.)
+    this.#setEditMode(this.#modeName(hit.mode), false, { editId: hit.editId, mustEnterInEditMode: false, editComment: false });
+  }
+
   /** Switch the pdf.js editing tool: NONE (select), HIGHLIGHT, FREETEXT, INK
    *  or STAMP; or EDITTEXT, this reader's own tool for changing words. */
   #setEditMode(name, create = false, pick = null) {
@@ -2272,6 +2327,12 @@ export class Reader {
     const mode = pdfjs.AnnotationEditorType[name];
     if (mode === undefined) return;
     if (this.annotbar.hidden && (name !== "NONE" || custom)) this.openAnnotate();
+    // Back to no tool with a picked annotation still focused (Esc after
+    // picking one): pdf.js would see it focused again as the page's editors
+    // are put away, pick it again, and turn its tool back on.
+    if (mode === pdfjs.AnnotationEditorType.NONE && document.activeElement?.closest?.(".annotationEditorLayer")) {
+      this.container.focus({ preventScroll: true, focusVisible: false });
+    }
     try {
       if (!(custom && this.pdfViewer.annotationEditorMode === mode)) this.pdfViewer.annotationEditorMode = { mode, ...pick };
     } catch (e) {
