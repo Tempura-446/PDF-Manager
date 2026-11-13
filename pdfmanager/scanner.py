@@ -124,11 +124,12 @@ class Com:
     that to IDispatch for a COM object)."""
 
     def __init__(self):
-        import clr  # noqa: F401  (pythonnet: loads the .NET runtime)
+        import clr  # pythonnet: loads the .NET runtime
         import System
         from System.Reflection import BindingFlags
 
         self.System = System
+        self.object_type = clr.GetClrType(System.Object)  # a System.Type, for Array.CreateInstance
         self.flags = BindingFlags
 
     def create(self, progid):
@@ -143,7 +144,7 @@ class Com:
         numbers as Int32, made inside .NET (Array.Copy from a typed array),
         so they reach IDispatch as VT_I4 whatever pythonnet's conversions."""
         S = self.System
-        out = S.Array.CreateInstance(S.Object, len(values))
+        out = S.Array.CreateInstance(self.object_type, len(values))
         for i, value in enumerate(values):
             if isinstance(value, bool):
                 typed = S.Array[S.Boolean]([value])

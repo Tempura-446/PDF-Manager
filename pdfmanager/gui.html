@@ -2085,7 +2085,6 @@ const SYNONYMS = {
 const KEYS = [
   ["Everywhere", [["Ctrl+K", "Commands and tools"], ["/", "Commands and tools"], ["?", "This list"], ["Esc", "Close a menu or dialog"]]],
   ["Tool pages", [["Ctrl+Enter", "Run the tool"]]],
-  ["Scan", [["Alt+Left / Alt+Right", "Move the page"], ["R / Shift+R", "Turn the page right / left"], ["Delete", "Take the page out"], ["Ctrl+Enter", "Make PDF"]]],
   ["Annotate bar open", [["H", "Highlight"], ["C", "Note"], ["A", "Add text"], ["D", "Draw"], ["S", "Sign"],
     ["Ctrl+Z / Ctrl+Y", "Undo / redo"], ["Delete", "Delete what’s selected"], ["Ctrl+Enter", "Add the note being typed"]]],
   ["Measuring", [["Enter", "Finish an area or a path"], ["Backspace", "Take back a point"], ["Esc", "Stop"]]],
@@ -2888,7 +2887,8 @@ function buildScan() {
   const pagesCard = el("section", { class: "card scan-pages", "aria-labelledby": "scan-pages-title" },
     el("div", { class: "card-head" }, el("h2", { id: "scan-pages-title" }, "Pages"), el("span", { class: "sub", id: "scan-count" })),
     el("div", { class: "message err scan-msg", id: "scan-msg", role: "alert", hidden: true }),
-    el("ol", { class: "scan-strip", id: "scan-strip", "aria-label": "Pages, in order" }),
+    el("ol", { class: "scan-strip", id: "scan-strip", "aria-label": "Pages, in order", "aria-describedby": "scan-keys" }),
+    el("p", { class: "sr-only", id: "scan-keys" }, "On a page: Alt and the arrow keys move it, R turns it right, Shift+R left, Delete takes it out. Ctrl+Enter makes the PDF."),
     el("div", { class: "scan-empty", id: "scan-empty" }, icon("scan"), el("b", {}, "No pages yet"),
       el("p", { id: "scan-empty-text" }, "Scan a page, or add photos of pages. They show up here as they arrive.")),
     el("div", { class: "scan-foot" },
