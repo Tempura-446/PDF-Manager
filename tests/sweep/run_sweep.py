@@ -574,6 +574,8 @@ def main(argv=None):
     if args.rerun:
         with open(args.rerun, encoding="utf-8") as fh:
             previous = list(csv.DictReader(fh))
+        if args.reader:  # the reader is looked at again below
+            previous = [r for r in previous if r["task"] != "reader"]
         again = {(r["file"], r["task"]) for r in previous if r["class"] != "ok"}
         tasks = [t for t in tasks if (Path(t["file"]).name, t["task"]) in again]
     print(f"{len(tasks)} runs", flush=True)
@@ -583,7 +585,8 @@ def main(argv=None):
         kept = [dict(r, file=str(args.corpus / r["file"])) for r in previous if (r["file"], r["task"]) not in rerun]
         results = kept + results
     if args.reader:
-        files = sorted({r["file"] for r in results}) or sorted(map(str, args.corpus.glob("*.pdf")))
+        files = sorted({r["file"] for r in results if Path(r["file"]).is_file()}) or sorted(
+            map(str, args.corpus.glob("*.pdf")))
         if args.reader > 0 and len(files) > args.reader:
             step = len(files) / args.reader
             files = [files[int(i * step)] for i in range(args.reader)]
