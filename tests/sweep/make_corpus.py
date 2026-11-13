@@ -1147,7 +1147,7 @@ def gen_mutations(cp, bases, light=False):
             print(f"  incremental {base}: {exc}", file=sys.stderr)
         # byte damage
         data = path.read_bytes()
-        rnd = random.Random(hash(base) & 0xFFFF)
+        rnd = random.Random(zlib.crc32(base.encode()))  # the same damage every time
         if light:
             cp.write(f"{base}__cut90", data[: int(len(data) * 0.9)], src, f"{base}: last 10% cut off", "hostile")
             continue
