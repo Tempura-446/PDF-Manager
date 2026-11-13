@@ -391,3 +391,24 @@ def test_the_quick_look_names_the_file_not_its_folder(tmp_path):
     bad.write_bytes(b"%PDF-1.7\n1 0 obj << >> endobj\n")
     said = gui.inspect_pdf(bad)["error"]
     assert said.startswith("broken.pdf") and str(tmp_path) not in said
+
+
+def test_the_reader_shows_a_page_tree_without_pages_as_damaged(tmp_path):
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node or subprocess.run([node, "-e", "require('playwright')"], capture_output=True,
+                                  cwd=tmp_path).returncode:
+        pytest.skip("needs Node.js with Playwright")
+    sys.path.insert(0, str(Path(__file__).parent / "sweep"))
+    import run_sweep
+
+    no_pages = tmp_path / "minus.pdf"
+    no_pages.write_bytes(_raw_pdf("/MediaBox [0 0 612 792]").replace(b"/Count 1", b"/Count -1"))
+    good = text_pdf(tmp_path / "good.pdf")
+    seen = run_sweep.run_reader([str(no_pages), str(good)], tmp_path / "reader", per_file=40)
+    if not seen:
+        pytest.skip("Playwright's browser isn't available")
+    assert seen[str(no_pages)]["class"] == "refused" and seen[str(no_pages)]["message"] == "broken"
+    assert seen[str(good)]["class"] == "ok", seen[str(good)]
