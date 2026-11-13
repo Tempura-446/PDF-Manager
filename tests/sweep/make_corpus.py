@@ -765,7 +765,7 @@ def gen_images(cp):
             emit(table[w])
             table[wc] = code
             code += 1
-            if code + 1 >= (1 << bits):
+            if code >= (1 << bits):
                 if bits < 12:
                     bits += 1
                 else:
