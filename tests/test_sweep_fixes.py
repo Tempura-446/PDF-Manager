@@ -505,3 +505,41 @@ def test_page_contents_in_an_unknown_compression_are_refused_plainly(tmp_path):
     with pytest.raises(gui.EXPECTED_ERRORS) as caught:
         run("booklet", [src], {}, tmp_path)
     assert "compressed in a way that can't be read" in str(caught.value)
+
+
+# -- The browser printing a web page: its chatter can't make it stall ------------------------
+
+def test_a_chatty_browser_still_prints(tmp_path):
+    """A browser that writes a lot to its error output (D-Bus and GPU warnings on Linux)
+    used to fill the pipe nobody read until the end, stop there, and time out."""
+    import sys
+    import time
+
+    from pdfmanager import office
+
+    target = tmp_path / "page.pdf"
+    fake = tmp_path / "browser.py"
+    fake.write_text(
+        "import sys\n"
+        "sys.stderr.write('[ERROR:dbus/object_proxy.cc] Failed to call method\\n' * 6000)\n"  # ~300 KB
+        "sys.stderr.flush()\n"
+        f"open({str(target)!r}, 'wb').write(b'%PDF-1.4\\n' + b'0' * 200 + b'\\n%%EOF\\n')\n",
+        encoding="utf-8")
+    started = time.monotonic()
+    office._print_with([sys.executable, str(fake)], target, timeout=30)
+    assert office._whole_pdf(target) and time.monotonic() - started < 15
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Chromium's SingletonLock link is Linux and macOS")
+def test_a_lock_left_by_a_crashed_browser_is_not_waited_for(tmp_path):
+    import os
+
+    from pdfmanager import office
+
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    os.symlink("somehost-999999999", profile / "SingletonLock")  # no such process
+    assert office._profile_in_use(profile) is False
+    (profile / "SingletonLock").unlink()
+    os.symlink(f"somehost-{os.getpid()}", profile / "SingletonLock")  # this process: alive
+    assert office._profile_in_use(profile) is True

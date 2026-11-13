@@ -663,12 +663,30 @@ def _profile_in_use(profile):
     for name in ("lockfile", "SingletonLock"):  # Windows; Linux and macOS
         try:
             os.lstat(profile / name)
+            if name == "SingletonLock" and not _lock_holder_alive(profile / name):
+                continue  # left behind by a browser that crashed
             return True
         except FileNotFoundError:
             continue
         except OSError:  # there, and held too tightly to look at
             return True
     return False
+
+
+def _lock_holder_alive(lock):
+    """Whether the browser named by a Linux/macOS SingletonLock (a link to
+    "host-pid") still runs; True when that can't be told."""
+    try:
+        pid = int(os.readlink(lock).rsplit("-", 1)[1])
+    except (OSError, ValueError, IndexError):
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:  # there, but not ours to signal
+        return True
+    return True
 
 
 def _whole_pdf(target):
@@ -698,10 +716,15 @@ def _print_with(command, target, timeout, profile=None):
     waited for as long as a browser is using ``profile``."""
     import time
 
+    # What the browser says goes to a file, not a pipe: a pipe nobody reads
+    # until the end fills up (64 KB) with its chatter (D-Bus, GPU warnings)
+    # and the browser then stops, waiting to write, until it's timed out.
+    said = tempfile.TemporaryFile()
     try:
-        proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=said,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except OSError as exc:
+        said.close()
         raise core.PdfManagerError(f"the browser could not start: {exc}") from None
     deadline, last, ended = time.monotonic() + timeout, -1, None
     try:
@@ -720,9 +743,16 @@ def _print_with(command, target, timeout, profile=None):
         if proc.poll() is None:
             proc.kill()
         try:
-            err = proc.communicate(timeout=10)[1] or b""
-        except (subprocess.TimeoutExpired, ValueError):
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            said.seek(0, os.SEEK_END)
+            said.seek(max(0, said.tell() - 4096))
+            err = said.read()
+        except OSError:
             err = b""
+        said.close()
     if _whole_pdf(target):
         return
     detail = " ".join(err.decode("utf-8", "replace").split())[-300:]

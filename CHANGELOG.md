@@ -51,6 +51,8 @@ broke was fixed. Kinds of files that work better now:
   giving an empty text file; Remove password says when a file has none.
 - For checking: `tests/sweep` makes the corpus and runs the sweep (see
   Tests in the README).
+- Web page to PDF can no longer stall for two minutes when the browser writes a
+  lot of warnings while it prints, or when it crashed and left its lock behind.
 
 ## 0.26.0
 
