@@ -56,7 +56,9 @@ def open_pdf(path, password=None):
     try:
         reader = PdfReader(str(path))
     except PyPdfError as exc:
-        raise PdfManagerError(f"{path} is not a readable PDF ({exc})") from None
+        reader = _mended(path, password)
+        if reader is None:
+            raise PdfManagerError(f"{path} is not a readable PDF ({exc})") from None
     if reader.is_encrypted:
         # A file with only an owner password (printing or copying restricted)
         # opens with an empty password, also when a password meant for another
@@ -68,6 +70,35 @@ def open_pdf(path, password=None):
             raise PdfManagerError(f"{path} is encrypted; supply a password")
         raise PdfManagerError(f"wrong password for {path}")
     return reader
+
+
+def keep_size(pdf):
+    """Before qpdf (pikepdf) saves a file whose trailer was lost and rebuilt:
+    qpdf only fills in /Size when the trailer has one, and pypdf can't copy
+    a file without it."""
+    if "/Size" not in pdf.trailer:
+        pdf.trailer.Size = 0  # (qpdf writes the right number)
+    return pdf
+
+
+def _mended(path, password):
+    """A reader on a copy of ``path`` mended by qpdf (as Repair does), for a
+    file pypdf can't open: one cut short, or whose cross-reference table is
+    damaged or missing. Viewers open such files, so the tools do too. None
+    when qpdf can't make sense of it either."""
+    import pikepdf
+
+    try:
+        with pikepdf.open(str(path), password=password or "") as pdf:
+            if not len(pdf.pages):
+                return None
+            buf = io.BytesIO()
+            keep_size(pdf).save(buf)  # (decrypted: the tools protect their results again, see gui._protect)
+        reader = PdfReader(buf)
+        len(reader.pages)
+        return reader
+    except Exception:  # noqa: BLE001 (any failure means it can't be mended here)
+        return None
 
 
 def _write(writer, output):
@@ -155,9 +186,50 @@ def clone_document(reader):
     finally:
         for _, stored, annots in detached:
             stored[NameObject("/Annots")] = annots
+    _recount(writer)
+    _own_info(writer)
     for i, _, annots in detached:
         writer.pages[i][NameObject("/Annots")] = annots.clone(writer)
     return writer
+
+
+def _own_info(writer):
+    """Some files' /Info (the title, author...) is another object of the
+    file: the page tree, the catalog or a page. Changing or clearing the
+    document details would then change or remove that object: such a file
+    gets a document-details dictionary of its own (empty: what was there
+    weren't details)."""
+    info = getattr(writer, "_info_obj", None)
+    if info is None:
+        return
+    target = info.get_object()
+    if not isinstance(target, DictionaryObject) or target.get("/Type") in ("/Pages", "/Page", "/Catalog") \
+            or "/Kids" in target or "/Pages" in target or target is writer.root_object:
+        writer._info_obj = writer._add_object(DictionaryObject())
+
+
+def _recount(writer):
+    """Make every /Count in the page tree say how many pages are under it: a
+    wrong one (5 for one page, or -1) makes pdfium and pdf.js look for pages
+    that aren't there. Only the tree pypdf found pages in is kept."""
+    seen = set()
+
+    def walk(node):
+        node = node.get_object()
+        if id(node) in seen or not isinstance(node, DictionaryObject):
+            return 0
+        seen.add(id(node))
+        if node.get("/Type") != "/Pages" and "/Kids" not in node:
+            return 1
+        count = sum(walk(kid) for kid in node.get("/Kids") or [])
+        node[NameObject("/Count")] = NumberObject(count)
+        return count
+
+    try:
+        root = writer.root_object["/Pages"]
+        walk(root)
+    except Exception:  # an odd tree pypdf read pages from all the same: leave it as it is
+        pass
 
 
 def _content_refs(page):
@@ -1008,7 +1080,7 @@ def trim_margins(path, output, padding=10, same=False, pages=None, tolerance=24,
                 progress.report(n, len(targets), "page")
                 page = doc[i]
                 try:
-                    image = page.render(scale=dpi / 72, may_draw_forms=True).to_pil().convert("L")
+                    image = page.render(scale=render_scale(page, dpi / 72), may_draw_forms=True).to_pil().convert("L")
                 finally:
                     page.close()
                 box = image.point(lambda v: 255 if v < white else 0).getbbox()
@@ -1051,9 +1123,15 @@ def _finish_compression(writer):
         page.compress_content_streams()
     imaging.deflate_plain_streams(writer)
     try:
-        writer.compress_identical_objects(remove_duplicates=True, remove_unreferenced=True)
-    except TypeError:  # pypdf < 6
-        writer.compress_identical_objects(remove_identicals=True, remove_orphans=True)
+        try:
+            writer.compress_identical_objects(remove_duplicates=True, remove_unreferenced=True)
+        except TypeError:  # pypdf < 6
+            writer.compress_identical_objects(remove_identicals=True, remove_orphans=True)
+    except NotImplementedError:
+        # A stream in a compression pypdf doesn't know can't be compared with
+        # the others: the file is smaller all the same, only not by sharing
+        # identical parts.
+        pass
 
 
 def compress(path, output, level="medium", image_quality=None, max_dpi=None, password=None,
@@ -1747,6 +1825,34 @@ def ocr(path, output, language="eng", force=False, deskew=False, password=None, 
 # (the GUI server renders thumbnails for several files at once).
 PDFIUM_LOCK = threading.Lock()
 
+# The most pixels one page is drawn with: a poster or a drawing sheet of
+# several metres would otherwise need gigabytes of memory at 150 dpi.
+MAX_RENDER_PIXELS = 60_000_000
+
+
+def render_scale(page, scale, limit=None):
+    """``scale`` for drawing the pdfium ``page``, made smaller if the page
+    would come out with more than MAX_RENDER_PIXELS pixels."""
+    import math
+
+    limit = limit or MAX_RENDER_PIXELS
+    w, h = show_whole_page(page).get_size()
+    area = max(1.0, abs(w * h))
+    if area * scale * scale > limit:
+        scale = math.sqrt(limit / area)
+    return scale
+
+
+def show_whole_page(page):
+    """A pdfium ``page`` whose crop box lies outside its media box has no
+    size at all; such a page is shown whole (as pdf.js and Acrobat do)."""
+    width, height = page.get_size()
+    if width < 1 or height < 1:
+        x0, y0, x1, y1 = page.get_mediabox()
+        if abs(x1 - x0) >= 1 and abs(y1 - y0) >= 1:
+            page.set_cropbox(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+    return page
+
 
 def pdf_to_images(path, outdir, dpi=150, fmt="png", pages=None, password=None):
     """Render pages to image files with pypdfium2."""
@@ -1764,14 +1870,21 @@ def pdf_to_images(path, outdir, dpi=150, fmt="png", pages=None, password=None):
             indices = parse_page_ranges(pages, total) if pages else range(total)
             outdir.mkdir(parents=True, exist_ok=True)
             width = len(str(total))
-            written = []
+            written, notes_said = [], []
             for n, i in enumerate(indices):
                 progress.report(n, len(indices), "page")
-                image = doc[i].render(scale=dpi / 72).to_pil()
+                page = show_whole_page(doc[i])
+                scale = render_scale(page, dpi / 72)
+                image = page.render(scale=scale).to_pil()
+                page.close()
+                if scale < dpi / 72 and not notes_said:
+                    notes_said.append(i)
+                    progress.say(f"page {i + 1} is very large: drawn at {scale * 72:.0f} dpi")
                 if fmt.lower() in ("jpg", "jpeg") and image.mode != "RGB":
                     image = image.convert("RGB")
                 target = outdir / f"{Path(path).stem}_{i + 1:0{width}d}.{fmt}"
-                image.save(target, dpi=(dpi, dpi))  # so the pictures keep their size
+                shown = round(scale * 72, 2)
+                image.save(target, dpi=(shown, shown))  # so the pictures keep their size
                 written.append(target)
             return written
         finally:

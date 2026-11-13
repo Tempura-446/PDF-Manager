@@ -206,7 +206,7 @@ class _View:
         self.box = [float(v) for v in mediabox]
         x0, y0, x1, y1 = self.box
         self.box = [min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)]
-        self.rotation = rotation % 360
+        self.rotation = core.quarter_turn(rotation)
         w, h = self.box[2] - self.box[0], self.box[3] - self.box[1]
         self.size = (h, w) if self.rotation in (90, 270) else (w, h)
 
@@ -2063,7 +2063,7 @@ def _tag_pages(pdf, path, password, alt, result):
                                     stripped)
     finally:
         if plumber is not None:
-            plumber.close()
+            tables.close(plumber)
     _heading_levels([e for e in _walk(elements) if e.S == "P"])
     pages_info = {"infos": infos}
     return elements, pages_info, sample

@@ -328,6 +328,7 @@ def _slide_size(sizes):
     """The size most pages have (the first page of that size, to the point),
     kept within PowerPoint's limits."""
     counts, first = {}, {}
+    sizes = [(w, h) for w, h in sizes if w >= 1 and h >= 1] or [(612.0, 792.0)]
     for w, h in sizes:
         key = (round(w), round(h))
         counts[key] = counts.get(key, 0) + 1

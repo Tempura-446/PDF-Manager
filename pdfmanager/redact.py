@@ -338,6 +338,7 @@ def _render_redacted(path, areas, dpi, password):
                 page = doc[number]
                 page.set_rotation(0)  # draw in the page's own coordinates
                 left, bottom, right, top = _visible_box(page)
+                scale = core.render_scale(page, dpi / 72)
                 image = page.render(scale=scale, may_draw_forms=True).to_pil().convert("RGB")
                 draw = ImageDraw.Draw(image)
                 for x0, y0, x1, y1 in boxes:

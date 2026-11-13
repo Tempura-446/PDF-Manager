@@ -323,7 +323,7 @@ def stamp_annotation(writer, page, page_ref, change, author):
     if x1 - x0 < 8 or y1 - y0 < 8:
         raise core.PdfManagerError("draw the stamp bigger")
     color = _color(change.get("color"), STAMP_COLORS.get(label, "#d52b1e"))
-    turn = int(page.get("/Rotate", 0) or 0) % 360
+    turn = core.quarter_turn(page.get("/Rotate", 0))
     w, h = (y1 - y0, x1 - x0) if turn in (90, 270) else (x1 - x0, y1 - y0)
     # Local drawing space: (0, 0)-(w, h) upright on screen -> the page.
     matrix = {0: (1, 0, 0, 1, x0, y0), 90: (0, 1, -1, 0, x1, y0), 180: (-1, 0, 0, -1, x1, y1),

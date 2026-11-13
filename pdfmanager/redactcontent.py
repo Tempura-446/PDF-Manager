@@ -137,7 +137,7 @@ def _hits(quad, areas):
     whole = _area(quad)
     cx = sum(p[0] for p in quad) / 4
     cy = sum(p[1] for p in quad) / 4
-    for area in areas:
+    for area in areas.spanning(box[1], box[3]) if isinstance(areas, _Areas) else areas:
         if not (box[0] <= area[2] and box[2] >= area[0] and box[1] <= area[3] and box[3] >= area[1]):
             continue
         if area[0] <= cx <= area[2] and area[1] <= cy <= area[3]:
@@ -677,6 +677,7 @@ class Scrubber:
         self.pdf = pdf
         self.alt_text_dropped = False  # pdfium then reads other letters there: see _verify
         self.areas = [tuple(map(float, a)) for a in areas]
+        self.filed = _Areas(self.areas)  # (the same, found quickly by height on the page)
         self.fonts = {}
         self.pictures = _Pictures(pdf)
         self.active = []  # forms being edited, against loops
@@ -968,7 +969,7 @@ class Scrubber:
                     quad = [_apply(m, gx, gy) for gx, gy in
                             ((inset, font.descent), (gw - inset, font.descent),
                              (gw - inset, font.ascent), (inset, font.ascent))]
-                    if _hits(quad, self.areas):
+                    if _hits(quad, self.filed):
                         dropped = True
                         if buf:
                             result.append(buf)
@@ -1146,10 +1147,51 @@ def _chars(textpage):
     return chars
 
 
+_BAND = 16.0  # points: the height of the bands boxes are filed in for looking up
+
+
+class _Areas:
+    """Boxes filed by horizontal bands of the page, so finding the ones
+    around a point looks at a few, not at every box: a page of small print
+    can have thousands of letters to black out and a hundred thousand to
+    check."""
+
+    MANY = 1000  # bands: a box (or a letter) taller than this is looked at every time
+
+    def __init__(self, boxes):
+        self.all, self.bands, self.tall = list(boxes), {}, []
+        for a in self.all:
+            first, last = self._band(a[1]), self._band(a[3])
+            if last - first > self.MANY:
+                self.tall.append(a)
+                continue
+            for band in range(first, last + 1):
+                self.bands.setdefault(band, []).append(a)
+
+    @staticmethod
+    def _band(y):
+        return int(max(-1e9, min(1e9, y)) // _BAND)
+
+    def near(self, y):
+        yield from self.bands.get(self._band(y), ())
+        yield from self.tall
+
+    def spanning(self, y0, y1):
+        """The boxes in the bands from ``y0`` up to ``y1`` (some more than once)."""
+        first, last = self._band(y0), self._band(y1)
+        if last - first > self.MANY:
+            yield from self.all
+            return
+        for band in range(first, last + 1):
+            yield from self.bands.get(band, ())
+        yield from self.tall
+
+
 def _center_in(box, areas, shrink=0.5):
     cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    candidates = areas.near(cy) if isinstance(areas, _Areas) else areas
     return any(a[0] + shrink < cx < a[2] - shrink and a[1] + shrink < cy < a[3] - shrink
-               for a in areas)
+               for a in candidates)
 
 
 def _verify(path, password, data, areas, regexes, loose=()):
@@ -1173,6 +1215,7 @@ def _verify(path, password, data, areas, regexes, loose=()):
                 full = new_text.get_text_range()
                 old_text.close()
                 new_text.close()
+                boxes = _Areas(boxes)
                 gone = [box is not None and _center_in(box, boxes, 0) for _, box in old]
                 removed = "".join(ch if hit else " " for (ch, _), hit in zip(old, gone))
                 old = [c for c, hit in zip(old, gone) if c[1] is not None and not hit]
@@ -1196,14 +1239,15 @@ def _same_places(old, new, removed=0):
     place. pdfium rounds character widths to whole units, so letters after
     removed ones may seem to move by up to a unit per removed letter
     (other programs place them exactly)."""
-    where = {}
+    where = {}  # (letter, band of its bottom edge) -> boxes; a letter may only move 0.75 up or down
     for ch, box in old:
-        where.setdefault(ch, []).append(box)
+        where.setdefault((ch, int(box[1] // 2)), []).append(box)
     for ch, box in new:
         size = min(max(box[3] - box[1], 1.0) / 0.6, 100.0)
         slack_x = 0.75 + removed * size / 1000
+        band = int(box[1] // 2)
         if not any(abs(box[0] - o[0]) <= slack_x and abs(box[2] - o[2]) <= slack_x
                    and abs(box[1] - o[1]) <= 0.75 and abs(box[3] - o[3]) <= 0.75
-                   for o in where.get(ch, ())):
+                   for b in (band - 1, band, band + 1) for o in where.get((ch, b), ())):
             return False
     return True

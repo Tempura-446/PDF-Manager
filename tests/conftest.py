@@ -17,10 +17,14 @@ REAL_DATA_DIR = appdata._data_dir  # before any test points it elsewhere (test_m
 def pytest_addoption(parser):
     parser.addoption("--perf", action="store_true",
                      help="also run the performance limits (test_perf.py); the release check does")
+    parser.addoption("--sweep", metavar="CORPUS", default="",
+                     help="run the maturity sweep on a corpus made by tests/sweep/make_corpus.py")
+    parser.addoption("--sweep-out", metavar="DIR", default="", help="where the sweep writes its report")
 
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "perf: a performance limit, run only with --perf")
+    config.addinivalue_line("markers", "sweep: the maturity sweep, run only with --sweep CORPUS")
 
 
 def pytest_collection_modifyitems(config, items):

@@ -885,6 +885,8 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
     # -- end of file tools --
     elif op == "decrypt":
         if not password:
+            if not core.open_pdf(src).is_encrypted:
+                raise UserError(f"{src.name} has no password or restrictions to remove")
             raise UserError("enter the PDF's current password")
         core.decrypt(src, out, password)
     elif op == "split":
@@ -922,7 +924,12 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                                   _pages(opts), password)
     elif op == "text":
         out = out.with_suffix(".txt")
-        core.extract_text(src, out, None, password)
+        if not core.extract_text(src, out, None, password).strip():
+            # Not an empty text file: said, and (with other files) left out.
+            out.unlink()
+            notes.append(f"{src.name} has no text to copy: its pages are pictures or drawings. "
+                         "If they are scans, Make searchable (OCR) reads the text first")
+            return []
     elif op == "to-word":
         out = out_dir / f"{src.stem}.docx"
         said = len(notes)
@@ -1100,10 +1107,13 @@ def _damaged_errors():
     of: a damaged file is the file's problem, told plainly, not a crash."""
     import pikepdf
     import pypdfium2
+    from pdfminer.psexceptions import PSException
+    from pdfplumber.utils.exceptions import MalformedPDFException, PdfminerException
     from PIL import Image
     from pypdf.errors import PyPdfError
 
-    return (PyPdfError, pikepdf.PdfError, pypdfium2.PdfiumError, Image.DecompressionBombError)
+    return (PyPdfError, pikepdf.PdfError, pypdfium2.PdfiumError, Image.DecompressionBombError,
+            PSException, PdfminerException, MalformedPDFException)
 
 
 def _plainly(exc):
@@ -1126,6 +1136,11 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
             return _run_operation(op, files, opts, password, extra_files, work, notes)
         except _damaged_errors() as exc:
             raise _plainly(exc) from None
+        except NotImplementedError as exc:
+            if "filter" not in str(exc).lower():  # (pypdf: "Unsupported filter /...")
+                raise
+            raise UserError("part of the PDF is compressed in a way that can't be read "
+                            f"({' '.join(str(exc).split())[:80]}); it may be damaged") from None
     except EXPECTED_ERRORS as exc:
         tidy = _tidy(str(exc), work)
         if tidy == str(exc):
@@ -1151,6 +1166,63 @@ def _tidy(message, work):
     return message
 
 
+def _needs_mending(path, password):
+    """Whether ``path`` is damaged in a way qpdf mends and pypdf or pdfium
+    don't: qpdf had to rebuild its cross-reference table (a file cut short,
+    a download that stopped, a wrong index of objects), and pypdf or pdfium
+    can't open it, lose its trailer or count other pages. A file all three
+    read alike is left as it is."""
+    import pikepdf
+
+    try:
+        with pikepdf.open(str(path), password=password or "") as pdf:
+            if not any("reconstruct cross-reference" in str(w) for w in pdf.get_warnings()):
+                return False
+            if "/Perms" in pdf.Root or _file_mentions(path, b"/ByteRange"):
+                return False  # signed: rewriting it would break the signatures
+            pages = len(pdf.pages)
+    except Exception:  # not readable at all, or locked: the tool says so itself
+        return False
+    import pypdfium2 as pdfium
+
+    try:
+        reader = core.open_pdf(path, password)
+        if "/Size" not in reader.trailer or len(reader.pages) != pages:
+            return True
+        with core.PDFIUM_LOCK:
+            doc = pdfium.PdfDocument(str(path), password=password)
+            try:
+                return len(doc) != pages
+            finally:
+                doc.close()
+    except Exception:  # noqa: BLE001 (pypdf or pdfium can't read it)
+        return True
+
+
+def _mend_inputs(op, files, password, work, notes):
+    """``files``, each damaged one replaced by a copy mended as Repair does,
+    with a note saying so (Repair itself mends the file as it is)."""
+    if op == "repair" or not work or OPS[op].get("files") not in ("pdf", "pdf2"):
+        return files
+    import pikepdf
+
+    mended = []
+    for index, path in enumerate(files):
+        path = Path(path)
+        if path.suffix.lower() == ".pdf" and _needs_mending(path, password):
+            target = Path(work) / "mended" / f"{index:03d}" / path.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with pikepdf.open(str(path), password=password or "") as pdf:
+                    core.keep_size(pdf).save(target, encryption=pdf.is_encrypted or None)  # (still locked if it was)
+                notes.append(f"{path.name} was damaged; it was mended first, as Repair does")
+                path = target
+            except Exception:  # noqa: BLE001 (it couldn't be mended: the tool tries the file as it is)
+                pass
+        mended.append(path)
+    return mended
+
+
 def _check_pages(op, files, password):
     """Each PDF has a page to work on (Repair is for files that don't open)."""
     if op == "repair" or OPS[op].get("files") not in ("pdf", "pdf2"):
@@ -1173,6 +1245,22 @@ def _run_operation(op, files, opts, password=None, extra_files=None, work=None, 
                         "type a web address, or add saved web pages")
     if len(files) < spec.get("min", 1):
         raise UserError(f"add at least {spec['min']} files")
+    notes = [] if notes is None else notes
+    mended = _mend_inputs(op, files, password, work, notes)
+    damaged = [Path(a).name for a, b in zip(files, mended) if a != b]
+    if not damaged:
+        return _run_files(op, mended, opts, password, extra_files, work, notes)
+    try:
+        return _run_files(op, mended, opts, password, extra_files, work, notes)
+    except (AttributeError, TypeError, KeyError, IndexError, AssertionError, RecursionError) as exc:
+        # What's left of a damaged file can still hold things no PDF should
+        # (a page box of null, a link without its kind): said, not a crash.
+        raise UserError(f"{', '.join(damaged)} {'is' if len(damaged) == 1 else 'are'} too damaged for this tool, "
+                        f"even mended ({type(exc).__name__}: {' '.join(str(exc).split())[:80]})") from None
+
+
+def _run_files(op, files, opts, password, extra_files, work, notes):
+    """_run_operation, once damaged inputs are mended."""
     _check_pages(op, files, password)
     out_dir = Path(work or (files[0].parent if files else tempfile.mkdtemp(prefix="pdfm-"))) / "out"
     out_dir.mkdir()
@@ -1330,7 +1418,7 @@ def _preview_operation(op, data, filename, opts, password=None, width=960):
         with core.PDFIUM_LOCK:
             doc = pdfium.PdfDocument(result, password=password)
             try:
-                page = doc[0]
+                page = core.show_whole_page(doc[0])
                 image = page.render(scale=width / max(1.0, page.get_width()), draw_annots=True).to_pil()
                 page.close()
             finally:
@@ -1355,7 +1443,8 @@ def _inspect_pdf(path, password=None):
         reader = core.open_pdf(path, password)
     except core.PdfManagerError as exc:
         locked = "encrypted" in str(exc) or "password" in str(exc)
-        return {"pages": None, "locked": locked, "error": None if locked else str(exc)}
+        said = str(exc).replace(str(path), Path(path).name)  # the file's name, not where it's kept
+        return {"pages": None, "locked": locked, "error": None if locked else said}
     info = {"pages": len(reader.pages), "locked": False, "error": None, "thumb": None}
     try:
         import pypdfium2 as pdfium
@@ -1363,7 +1452,7 @@ def _inspect_pdf(path, password=None):
         with core.PDFIUM_LOCK:
             doc = pdfium.PdfDocument(str(path), password=password)
             try:
-                page = doc[0]
+                page = core.show_whole_page(doc[0])
                 scale = THUMB_WIDTH / max(page.get_width(), 1)
                 image = page.render(scale=min(scale, 2.0)).to_pil().convert("RGB")
             finally:

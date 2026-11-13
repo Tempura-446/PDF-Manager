@@ -49,6 +49,15 @@ class Word:
     confidence: float = 1.0
 
 
+def _turn(page):
+    """The page's /Rotate as 0, 90, 180 or 270 (anything else shows as 0)."""
+    try:
+        rotation = int(page.rotation or 0) % 360
+    except (TypeError, ValueError):
+        return 0
+    return rotation if rotation % 90 == 0 else 0
+
+
 def _stream(writer, data, **entries):
     obj = StreamObject()
     obj.set_data(zlib.compress(data))
@@ -125,7 +134,7 @@ def _display_size(page):
     turned by /Rotate."""
     box = page.cropbox
     w, h = float(box.width), float(box.height)
-    return (h, w) if (page.rotation or 0) % 180 == 90 else (w, h)
+    return (h, w) if _turn(page) % 180 == 90 else (w, h)
 
 
 def image_to_page_matrix(page, image_size, dpi):
@@ -135,7 +144,7 @@ def image_to_page_matrix(page, image_size, dpi):
     box = page.cropbox
     x0, y0 = float(box.left), float(box.bottom)
     w, h = float(box.width), float(box.height)
-    rotation = (page.rotation or 0) % 360
+    rotation = _turn(page)
     if rotation == 90:    # displayed turned clockwise: page bottom-left is at the top-left
         return (0, 1, -1, 0, x0 + w, y0)
     if rotation == 180:

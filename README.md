@@ -1167,6 +1167,24 @@ crash or hang. The performance limits (`tests/test_perf.py`) check that
 memory follows a file's size rather than its page count (merge, compress,
 OCR) and that a 200 MB file reaches the reader in pieces.
 
+The maturity sweep goes wider, and only runs when asked: a corpus of a few
+hundred real-world and tricky PDFs, every tool run on each of them in a
+process of its own with a time and memory limit, plus the file facts,
+search indexing and (with `--reader`) opening files in the reader:
+
+```bash
+git clone --depth 1 https://github.com/py-pdf/sample-files /tmp/samples   # optional, read as data only
+python tests/sweep/make_corpus.py /tmp/corpus --samples /tmp/samples      # about 400 files and manifest.csv
+python tests/sweep/run_sweep.py /tmp/corpus /tmp/sweep --reader 80        # an hour or so on 4 cores
+pytest tests/sweep --sweep /tmp/corpus                                    # the same, as a test
+```
+
+Each run is sorted as ok, refused (with a message), crash, hang, oom, died
+or wrong (a result pypdf or pdfium can't read, pages or text lost); the
+report is `results.csv`, `summary.txt` and `tracebacks.txt` in the output
+folder. `--tools` and `--files` narrow a run, `--rerun results.csv` runs
+again only what wasn't ok.
+
 The workflows in `.github/workflows` describe a fuller run (Linux and
 Windows, a job with Tesseract, Ghostscript and LibreOffice, and a Windows
 end-to-end job that installs, uses, updates and uninstalls the app), but
@@ -1200,8 +1218,11 @@ file beside it, which the Update button checks before installing.
 
 ## Licence
 
-ZPDF is shared with friends, not published. It is licensed under the
+ZPDF's source code is public so you can read it, but it is not open
+source. It is licensed under the
 [PolyForm Internal Use License 1.0.0](https://polyformproject.org/licenses/internal-use/1.0.0),
 with an added permission for personal use: you may use it, at home or at
-work, and change it for your own use, but not pass it on to anyone else. It
-comes as is, without warranty. See [LICENSE](LICENSE) for the full terms.
+work, and change it for your own use, but not pass it on to anyone else,
+publish your own version of it or sell it. To use ZPDF, download it from
+[ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
+It comes as is, without warranty. See [LICENSE](LICENSE) for the full terms.

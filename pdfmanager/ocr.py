@@ -703,9 +703,12 @@ def _run_tesseract(source, output, language, force, deskew, rotate=True):
     # install has; without it OCR still runs, the pages just stay as they are.
     rotate = rotate and "osd" in _tesseract_languages()
     try:
+        # A plain PDF out, not PDF/A: OCRmyPDF makes PDF/A with Ghostscript,
+        # which drops form fields and prints a portfolio's attached files in
+        # place of its pages. (PDF/A is a tool of its own.)
         ocrmypdf.ocr(str(source), str(output), language=language.split("+"),
                      skip_text=not force, force_ocr=force, deskew=deskew, rotate_pages=rotate,
-                     progress_bar=False)
+                     progress_bar=False, output_type="pdf")
     except MissingDependencyError as exc:
         raise core.PdfManagerError(f"OCR is missing a program: {exc}") from None
     except ExitCodeException as exc:
@@ -745,6 +748,7 @@ def _run_builtin(source, output, force, deskew, rotate=True, script=None):
     from pdfmanager import progress
 
     writer = PdfWriter(clone_from=str(source))
+    core._recount(writer)
     rasterised = False
     # The pdfium lock is held only to open the file and render a page: the
     # app's thumbnails and previews wait on it too, and recognising a page
@@ -759,7 +763,7 @@ def _run_builtin(source, output, force, deskew, rotate=True, script=None):
             if not force and page_has_text(page):
                 continue
             with core.PDFIUM_LOCK:
-                pdfium_page = doc[i]
+                pdfium_page = core.show_whole_page(doc[i])
                 scale = render_scale(pdfium_page.get_width(), pdfium_page.get_height())
                 image = pdfium_page.render(scale=scale).to_pil()
             try:

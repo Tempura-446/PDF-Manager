@@ -504,12 +504,26 @@ def box_on_page(angle, x0, top, x1, bottom):
     return min(xs), min(ys), max(xs), max(ys)
 
 
+def _shown_box(page):
+    """The part of the pdfium ``page`` that shows: its crop box within its
+    media box, or the media box when the two don't overlap (as pdf.js and
+    Acrobat show such a page)."""
+    x0, y0, x1, y1 = page.get_bbox()
+    if x1 - x0 < 1 or y1 - y0 < 1:
+        x0, y0, x1, y1 = page.get_mediabox()
+        x0, x1 = sorted((x0, x1))
+        y0, y1 = sorted((y0, y1))
+    return x0, y0, x1, y1
+
+
 class Geometry:
     """PDF user space → the page as shown (crop box and rotation applied)."""
 
     def __init__(self, bbox, rotation):
         self.x0, self.y0, self.x1, self.y1 = bbox
-        self.rotation = rotation % 360
+        # A multiple of 90 (anything else shows as 0, see core.quarter_turn)
+        rotation = int(rotation or 0) % 360 if isinstance(rotation, (int, float)) else 0
+        self.rotation = rotation if rotation % 90 == 0 else 0
         w, h = self.x1 - self.x0, self.y1 - self.y0
         self.width, self.height = (h, w) if self.rotation in (90, 270) else (w, h)
 
@@ -668,7 +682,7 @@ class Document:
         """Read page ``index`` (0-based)."""
         page = self.doc[index]
         try:
-            geometry = Geometry(page.get_bbox(), page.get_rotation())
+            geometry = Geometry(_shown_box(page), page.get_rotation())
             textpage = page.get_textpage()
             try:
                 chars = _chars(textpage, geometry)
@@ -704,7 +718,7 @@ class Document:
         if self.has_background(index):
             try:
                 shown = _shown(chars, self.render(index, SEEN_DPI), self.render(index, SEEN_DPI, True),
-                               SEEN_DPI / 72)
+                               self.scale(index, SEEN_DPI))
             except Exception:  # pdfium couldn't draw the page: go by the text's own marks
                 shown = None
         if shown is None:
@@ -722,7 +736,7 @@ class Document:
         """(width, height) of page ``index`` as shown."""
         page = self.doc[index]
         try:
-            geometry = Geometry(page.get_bbox(), page.get_rotation())
+            geometry = Geometry(_shown_box(page), page.get_rotation())
         finally:
             page.close()
         return geometry.width, geometry.height
@@ -731,12 +745,24 @@ class Document:
         """Whether the page can be drawn without its text."""
         return self.bare is not None and index in self.stripped
 
+    def scale(self, index, dpi):
+        """Pixels per point a page is drawn with at ``dpi``: fewer for a page
+        so large it would need more than core.MAX_RENDER_PIXELS."""
+        page = self.doc[index]
+        try:
+            return core.render_scale(page, dpi / 72)
+        finally:
+            page.close()
+
     def render(self, index, dpi, without_text=False):
-        """The page as a PIL image (RGB), with or without its text."""
+        """The page as a PIL image (RGB), with or without its text, drawn at
+        ``dpi`` (or as self.scale says, for a very large page)."""
+        scale = self.scale(index, dpi)
         doc = self.bare if without_text and self.has_background(index) else self.doc
         page = doc[index]
         try:
-            return page.render(scale=dpi / 72, may_draw_forms=True).to_pil().convert("RGB")
+            core.show_whole_page(page)
+            return page.render(scale=scale, may_draw_forms=True).to_pil().convert("RGB")
         finally:
             page.close()
 

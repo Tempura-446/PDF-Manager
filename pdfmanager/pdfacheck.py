@@ -566,6 +566,7 @@ class _Checker:
         return set()
 
     def inline_image(self, image, used, page):
+        image = getattr(image, "obj", image)  # pikepdf's PdfInlineImage: its dictionary, names spelled out
         used |= self.colour_space(image.get("/CS", image.get("/ColorSpace")), self.pk.Dictionary())
         filters = image.get("/F", image.get("/Filter"))
         names = self._names(filters)

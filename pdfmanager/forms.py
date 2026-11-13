@@ -361,7 +361,7 @@ def add_fields(path, output, fields, border=True, font_size=0, password=None):
     calculated = []  # (name, the fields it uses, widget): for the calculation order
     for page_number in sorted(by_page):
         page = writer.pages[page_number - 1]
-        rotation = page.rotation % 360
+        rotation = core.quarter_turn(page.rotation)
         annots = _child(page, "/Annots", ArrayObject)
         if "/Tabs" not in page:
             page[NameObject("/Tabs")] = NameObject("/R")  # Tab moves along rows

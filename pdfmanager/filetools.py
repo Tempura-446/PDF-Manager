@@ -299,7 +299,7 @@ def repair(path, output, linearize=True, password=None):
         tmp = output.with_name(output.name + ".tmp")
         # (Saved unprotected: the app and the command line protect the result
         # again with the password the file had.)
-        pdf.save(tmp, linearize=linearize,
+        core.keep_size(pdf).save(tmp, linearize=linearize,
                  object_stream_mode=pikepdf.ObjectStreamMode.generate if not linearize
                  else pikepdf.ObjectStreamMode.preserve,
                  compress_streams=True, recompress_flate=False)

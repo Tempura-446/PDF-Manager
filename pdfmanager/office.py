@@ -372,7 +372,7 @@ def _image_xml(rid, n, cx, cy):
         '</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>')
 
 
-_XML_BAD = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f￾￿]")
+_XML_BAD = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff￾￿]")  # not allowed in XML
 
 
 def _text_xml(text):
@@ -456,8 +456,9 @@ def _write_docx(pages, output, title=""):
     def link_id(uri):
         if uri not in link_ids:
             link_ids[uri] = f"rIdLink{len(link_ids) + 1}"
+            target = escape(_XML_BAD.sub("", uri), {chr(34): "&quot;"})
             rels.append(f'<Relationship Id="{link_ids[uri]}" Type="http://schemas.openxmlformats.org/'
-                        f'officeDocument/2006/relationships/hyperlink" Target="{escape(uri, {chr(34): "&quot;"})}" '
+                        f'officeDocument/2006/relationships/hyperlink" Target="{target}" '
                         'TargetMode="External"/>')
         return link_ids[uri]
 
@@ -506,7 +507,7 @@ def _write_docx(pages, output, title=""):
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
         'xmlns:dc="http://purl.org/dc/elements/1.1/">'
-        f'<dc:title>{escape(title)}</dc:title><dc:creator>ZPDF</dc:creator></cp:coreProperties>')
+        f'<dc:title>{escape(_XML_BAD.sub("", title))}</dc:title><dc:creator>ZPDF</dc:creator></cp:coreProperties>')
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as z:
@@ -662,12 +663,30 @@ def _profile_in_use(profile):
     for name in ("lockfile", "SingletonLock"):  # Windows; Linux and macOS
         try:
             os.lstat(profile / name)
+            if name == "SingletonLock" and not _lock_holder_alive(profile / name):
+                continue  # left behind by a browser that crashed
             return True
         except FileNotFoundError:
             continue
         except OSError:  # there, and held too tightly to look at
             return True
     return False
+
+
+def _lock_holder_alive(lock):
+    """Whether the browser named by a Linux/macOS SingletonLock (a link to
+    "host-pid") still runs; True when that can't be told."""
+    try:
+        pid = int(os.readlink(lock).rsplit("-", 1)[1])
+    except (OSError, ValueError, IndexError):
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:  # there, but not ours to signal
+        return True
+    return True
 
 
 def _whole_pdf(target):
@@ -697,10 +716,15 @@ def _print_with(command, target, timeout, profile=None):
     waited for as long as a browser is using ``profile``."""
     import time
 
+    # What the browser says goes to a file, not a pipe: a pipe nobody reads
+    # until the end fills up (64 KB) with its chatter (D-Bus, GPU warnings)
+    # and the browser then stops, waiting to write, until it's timed out.
+    said = tempfile.TemporaryFile()
     try:
-        proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=said,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except OSError as exc:
+        said.close()
         raise core.PdfManagerError(f"the browser could not start: {exc}") from None
     deadline, last, ended = time.monotonic() + timeout, -1, None
     try:
@@ -719,9 +743,16 @@ def _print_with(command, target, timeout, profile=None):
         if proc.poll() is None:
             proc.kill()
         try:
-            err = proc.communicate(timeout=10)[1] or b""
-        except (subprocess.TimeoutExpired, ValueError):
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            said.seek(0, os.SEEK_END)
+            said.seek(max(0, said.tell() - 4096))
+            err = said.read()
+        except OSError:
             err = b""
+        said.close()
     if _whole_pdf(target):
         return
     detail = " ".join(err.decode("utf-8", "replace").split())[-300:]

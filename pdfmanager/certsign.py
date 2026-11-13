@@ -207,7 +207,7 @@ def place(path, page, position="bottom-right", size="medium", password=None):
     x0, x1 = sorted((x0, x1))
     y0, y1 = sorted((y0, y1))
     pw, ph = x1 - x0, y1 - y0
-    rotation = pdf_page.rotation % 360
+    rotation = core.quarter_turn(pdf_page.rotation)
     sw, sh = (ph, pw) if rotation in (90, 270) else (pw, ph)  # the page as seen
     width, height = min(width, sw - 2 * MARGIN), min(height, sh - 2 * MARGIN)
     if width < MIN_SIZE or height < MIN_SIZE:
@@ -349,11 +349,24 @@ def _open_for_update(data, password, name, reader=None):
 
     try:
         writer = IncrementalPdfFileWriter(io.BytesIO(data), strict=False)
-    except (PdfError, ValueError, KeyError, TypeError) as exc:
+        if reader is not None and not writer.prev.encrypted:
+            # pyHanko reads lazily: what it can't make sense of in the page
+            # tree or the form would otherwise stop the signing half way.
+            from pyhanko.sign import fields
+
+            list(fields.enumerate_sig_fields(writer.prev, filled_status=None))
+            if len(reader.pages):
+                writer.prev.find_page_for_modification(len(reader.pages) - 1)
+    except (PdfError, ValueError, KeyError, TypeError, IndexError, AttributeError) as exc:
         if reader is None or reader.is_encrypted or _has_signatures(reader):
             raise core.PdfManagerError(f"{name} can't be signed: it's damaged ({exc})") from None
+        from pypdf.generic import NameObject
+
         repaired = io.BytesIO()
-        core.clone_document(reader).write(repaired)
+        clean = core.clone_document(reader)
+        for page in clean.pages:  # (pyHanko finds the pages by their /Type)
+            page[NameObject("/Type")] = NameObject("/Page")
+        clean.write(repaired)
         return _open_for_update(repaired.getvalue(), password, name)
     if writer.prev.encrypted:
         try:
@@ -366,6 +379,26 @@ def _open_for_update(data, password, name, reader=None):
         except PdfError as exc:  # e.g. protected with a certificate, not a password
             raise core.PdfManagerError(f"{name} can't be unlocked for signing ({exc})") from None
     return writer
+
+
+def _recount(writer, pages):
+    """A page tree whose /Count is wrong (5 for one page, -1) is put right
+    in the signed update: viewers would look for pages that aren't there.
+    (Only a flat tree, the common case; a deeper one is left as it is.)"""
+    from pyhanko.pdf_utils import generic
+
+    try:
+        ref = writer.root.raw_get("/Pages")
+        tree = ref.get_object()
+        kids = tree.get("/Kids") or []
+        if int(tree.get("/Count", -1)) == pages or len(kids) != pages:
+            return
+        if any(kid.get_object().get("/Type") == "/Pages" for kid in kids):
+            return
+        tree["/Count"] = generic.NumberObject(pages)
+        writer.mark_update(ref)
+    except Exception:  # noqa: BLE001 (an odd tree: signed as it is)
+        pass
 
 
 def _widget_refs(field_ref):
@@ -429,6 +462,7 @@ def sign(path, output, pfx, pfx_password=None, *, page=None, box=None, field=Non
     if field and (page is not None or box is not None):
         raise core.PdfManagerError("sign an existing field or a new place on a page, not both")
     writer = _open_for_update(Path(path).read_bytes(), password, name, reader)
+    _recount(writer, len(reader.pages))
 
     existing = {}
     for fq_name, value, ref in fields.enumerate_sig_fields(writer.prev, filled_status=None):
@@ -450,7 +484,7 @@ def sign(path, output, pfx, pfx_password=None, *, page=None, box=None, field=Non
         ref = existing[field][1]
         page, box = _widget_page(reader, ref)
         if page is not None:
-            rotation = reader.pages[page - 1].rotation % 360
+            rotation = core.quarter_turn(reader.pages[page - 1].rotation)
         field_name, spec = field, None
     else:
         if box is not None:
@@ -461,7 +495,7 @@ def sign(path, output, pfx, pfx_password=None, *, page=None, box=None, field=Non
             box = [min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)]
             if box[2] - box[0] < MIN_SIZE or box[3] - box[1] < MIN_SIZE:
                 raise core.PdfManagerError("the signature box is too small")
-            rotation = reader.pages[page - 1].rotation % 360
+            rotation = core.quarter_turn(reader.pages[page - 1].rotation)
         elif page is not None:
             raise core.PdfManagerError("give the box for the signature on the page as well")
         n = 1

@@ -245,16 +245,22 @@ class _Tables:
     def __enter__(self):
         from pdfmanager import tables
 
-        self.pdf = tables._open(self.path, self.password)
+        try:
+            self.pdf = tables._open(self.path, self.password)
+        except core.PdfManagerError:
+            self.pdf = None  # pdfplumber can't read it: the text still converts, without tables
         return self
 
     def __exit__(self, *exc):
-        self.pdf.close()
+        if self.pdf is not None:
+            from pdfmanager import tables
+
+            tables.close(self.pdf)
 
     def get(self, index, page=None):
         from pdfmanager import tables
 
-        if index >= len(self.pdf.pages):
+        if self.pdf is None or index >= len(self.pdf.pages):
             return []  # a damaged file pdfplumber reads fewer pages of
         plumber = self.pdf.pages[index]
         try:
@@ -819,7 +825,7 @@ def _page_items(doc, page, page_tables):
         else:
             items.append(_Item("block", _block_box(block), block))
     with_words = None
-    scale = PICTURE_DPI / 72
+    scale = doc.scale(page.number - 1, PICTURE_DPI)
     if drawings:
         with_words = doc.render(page.number - 1, PICTURE_DPI)
         for box, lettering in drawings:

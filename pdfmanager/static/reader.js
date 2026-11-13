@@ -1480,6 +1480,12 @@ export class Reader {
       // (A piece of the file that can't be had, or no answer at all: pdf.js
       // would wait for ever, so the reader stops waiting.)
       const doc = await Promise.race([task.promise, giveUp, ...(pieces ? [pieces.failed] : [])]);
+      // A page tree that counts no pages (or -1), or whose first page isn't
+      // there: shown as a damaged file, which Repair mends, not a viewer
+      // that fails on its own.
+      const unusable = () => Object.assign(new Error("its first page can't be found"), { name: "InvalidPDFException" });
+      if (!(doc.numPages >= 1)) throw unusable();
+      try { await Promise.race([doc.getPage(1), giveUp]); } catch (e) { if (e && e.message === "opening it took too long") throw e; throw unusable(); }
       clearTimeout(timer);
       tab.shown = true;
       this.doc = doc;

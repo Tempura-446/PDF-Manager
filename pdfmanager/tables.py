@@ -73,12 +73,30 @@ def _open(path, password):
     # A file with only an owner password opens with an empty password.
     for candidate in dict.fromkeys([password or "", ""]):
         try:
-            return pdfplumber.open(str(path), password=candidate)
+            plumber = pdfplumber.open(str(path), password=candidate)
         except PDFPasswordIncorrect:
             continue
         except Exception as exc:  # pdfminer's parsing errors
             raise core.PdfManagerError(f"{path} can't be read for tables ({exc})") from None
+        try:
+            plumber.pages  # its pages are read when first asked for: a damaged page tree stops it here
+        except Exception:
+            close(plumber)
+            raise core.PdfManagerError(f"{path} can't be read for tables: part of it is damaged "
+                                       "(Repair may fix it)") from None
+        return plumber
     raise core.PdfManagerError(f"wrong password for {path}")
+
+
+def close(plumber):
+    """Close what tables._open opened; never stops on a page it can't read."""
+    try:
+        plumber.close()
+    except Exception:
+        try:
+            plumber.stream.close()
+        except Exception:
+            pass
 
 
 def _clean(cell):
@@ -567,14 +585,16 @@ def parse_number(text):
     negative = False
     if s.startswith("(") and s.endswith(")"):
         negative, s = True, s[1:-1].strip()
-    if s[:1] in _MINUS or s[:1] == "+":
+    if s[:1] and (s[:1] in _MINUS or s[:1] == "+"):
         negative, s = negative or s[0] in _MINUS, s[1:].strip()
+    if not s:  # a dash or a sign alone
+        return None
     currency = ""
-    if s[-1:] in "$€£" and s[:1] not in "$€£":  # 12 €
+    if s[-1] in "$€£" and s[0] not in "$€£":  # 12 €
         currency, s = s[-1], s[:-1].strip()
-    if s[:1] in "$€£":
+    if s[:1] and s[0] in "$€£":
         currency, s = currency or s[0], s[1:].strip()
-        if s[:1] in _MINUS:  # $-12
+        if s[:1] and s[0] in _MINUS:  # $-12
             negative, s = True, s[1:].strip()
     match = _NUMBER.match(s) or _EURO_STYLE.match(s)
     if not match or not (match["int"] or match["frac"]):

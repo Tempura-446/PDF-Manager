@@ -43,7 +43,7 @@ def ink_coverage(path, password=None, dpi=40, pages=None, dark=DARK):
             for number, index in enumerate(indices):
                 progress.report(number, len(indices), "page")
                 page = doc[index]
-                image = page.render(scale=dpi / 72, may_draw_forms=True).to_pil().convert("L")
+                image = page.render(scale=core.render_scale(page, dpi / 72), may_draw_forms=True).to_pil().convert("L")
                 page.close()
                 w, h = image.size
                 bx, by = int(w * BORDER), int(h * BORDER)
@@ -184,7 +184,7 @@ def detect_rotation(path, password=None, pages=None, dpi=150):
                     target = Path(tmp) / f"{i}.png"
                     # Rendered as the page is shown (with its /Rotate), so the
                     # answer is relative to what the reader sees.
-                    page.render(scale=dpi / 72).to_pil().convert("L").save(target)
+                    page.render(scale=core.render_scale(page, dpi / 72)).to_pil().convert("L").save(target)
                     images.append((i, target))
             finally:
                 doc.close()
