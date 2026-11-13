@@ -99,7 +99,8 @@ const { chromium } = require("playwright");
       const firstId = (await state()).ids[0];
       await page.keyboard.press("Alt+ArrowRight");
       out.keyMoved = (await state()).ids.indexOf(firstId);
-      out.keyFocus = await page.evaluate(() => document.activeElement?.dataset?.id);
+      await page.waitForFunction((id) => document.activeElement?.dataset?.id === id, firstId, { timeout: 5000 }).catch(() => {});
+      out.keyFocus = await page.evaluate(() => document.activeElement?.dataset?.id || null);
       out.keyFocusId = firstId;
       // Drag the last page in front of the first.
       const before = (await state()).ids;
