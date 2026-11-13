@@ -54,7 +54,7 @@ def test_not_windows_says_so(monkeypatch):
     scanner.use(None)
     monkeypatch.setattr(scanner.sys, "platform", "linux")
     state = scanner.status()
-    assert not state["available"] and "Windows" in state["reason"] and "Photos" in state["reason"]
+    assert not state["available"] and "Windows only" in state["reason"]
 
 
 def test_flatbed_page_in_grey_at_300(wia):

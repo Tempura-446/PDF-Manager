@@ -220,7 +220,7 @@ def _layer():
     if _com is not None:
         return _com
     if sys.platform != "win32":
-        raise ScannerError("Scanning from a scanner works on Windows only. Use Photos instead.", "unavailable")
+        raise ScannerError("Scanning from a scanner works on Windows only.", "unavailable")
     try:
         _com = Com()
     except ScannerError:

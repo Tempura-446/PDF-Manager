@@ -329,7 +329,7 @@ def suggestions(found, made_by=None):
     if found.get("scanned") and not found.get("has_text"):
         out.append({"op": "ocr", "title": "Make it searchable",
                     "why": "Read the text so you can search and copy it"})
-    if found.get("size", 0) >= BIG and made_by != "compress" and not small_for_its_pages(found):
+    if found.get("size", 0) >= BIG and made_by not in ("compress", "scan") and not small_for_its_pages(found):
         why = ("Scanned pages shrink a lot, and their text stays sharp" if found.get("scanned")
                else "Reduce its pictures for sending or storing")
         out.append({"op": "compress", "title": "Make it smaller", "why": why})
