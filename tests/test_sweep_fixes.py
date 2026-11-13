@@ -45,3 +45,39 @@ def test_a_rotation_that_isnt_a_quarter_turn_counts_as_none(tmp_path):
                                                  "page": "last", "position": "bottom-right", "size": "medium"},
                             tmp_path, {"pfx": pfx, "pfx[]": [pfx]})
     assert data.startswith(b"%PDF") and any("signed" in n for n in notes)
+
+
+def test_a_table_cell_with_only_a_sign_or_a_currency_is_text():
+    from pdfmanager.tables import parse_number
+
+    for text in ("-", "–", "+", "$", "€", "($)", "(-)", "$ -"):
+        assert parse_number(text) is None, text
+    assert parse_number("$-12")[0] == -12 and parse_number("12 €")[0] == 12
+
+
+def test_a_table_with_dashes_for_empty_cells_goes_to_excel(tmp_path):
+    src = tmp_path / "dashes.pdf"
+    c = canvas.Canvas(str(src))
+    for r in range(6):
+        for col in range(4):
+            c.rect(50 + col * 100, 700 - r * 20, 100, 20)
+            c.drawString(54 + col * 100, 706 - r * 20, ["Item", "-", "$", "12.50"][col] if r else f"Head {col}")
+    c.showPage()
+    c.save()
+    name, data, notes = run("to-excel", [src], {"layout": "sheet-per-table", "format": "xlsx"}, tmp_path)
+    assert name.endswith(".xlsx") and data[:2] == b"PK"
+
+
+def test_inline_images_pass_the_pdfa_check(tmp_path):
+    from pdfmanager import pdfacheck
+
+    src = tmp_path / "inline.pdf"
+    pdf = pikepdf.new()
+    pdf.add_blank_page()
+    pdf.pages[0].obj.Contents = pdf.make_stream(
+        b"q 100 0 0 100 50 600 cm BI /W 2 /H 2 /CS /G /BPC 8 /F /AHx ID 00ff00ff> EI Q")
+    pdf.save(src)
+    result = pdfacheck.check(src, level="2b", engine="builtin")
+    assert isinstance(result["issues"], list)
+    name, data, notes = run("pdfa", [src], {"level": "2"}, tmp_path)
+    assert data.startswith(b"%PDF")

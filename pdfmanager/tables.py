@@ -567,14 +567,16 @@ def parse_number(text):
     negative = False
     if s.startswith("(") and s.endswith(")"):
         negative, s = True, s[1:-1].strip()
-    if s[:1] in _MINUS or s[:1] == "+":
+    if s[:1] and (s[:1] in _MINUS or s[:1] == "+"):
         negative, s = negative or s[0] in _MINUS, s[1:].strip()
+    if not s:  # a dash or a sign alone
+        return None
     currency = ""
-    if s[-1:] in "$€£" and s[:1] not in "$€£":  # 12 €
+    if s[-1] in "$€£" and s[0] not in "$€£":  # 12 €
         currency, s = s[-1], s[:-1].strip()
-    if s[:1] in "$€£":
+    if s[:1] and s[0] in "$€£":
         currency, s = currency or s[0], s[1:].strip()
-        if s[:1] in _MINUS:  # $-12
+        if s[:1] and s[0] in _MINUS:  # $-12
             negative, s = True, s[1:].strip()
     match = _NUMBER.match(s) or _EURO_STYLE.match(s)
     if not match or not (match["int"] or match["frac"]):
