@@ -246,3 +246,20 @@ def test_a_wrong_page_count_in_the_page_tree_is_put_right(tmp_path, op, count):
     assert len(doc) == 1 and doc[0].get_size()[0] > 0
     with pikepdf.open(out) as pdf:
         assert int(pdf.Root.Pages.Count) == 1
+
+
+@pytest.mark.parametrize("op", ["sanitize", "metadata"])
+def test_document_details_that_are_the_page_tree_are_left_alone(tmp_path, op):
+    from pypdf import PdfReader
+
+    src = tmp_path / "info.pdf"
+    src.write_bytes(_raw_pdf("/MediaBox [0 0 612 792]").replace(b"/Root 1 0 R", b"/Root 1 0 R /Info 2 0 R"))
+    name, data, notes = run(op, [src], {"title": "New title"} if op == "metadata" else {}, tmp_path)
+    out = tmp_path / "out.pdf"
+    out.write_bytes(data)
+    reader = PdfReader(out)
+    assert len(reader.pages) == 1 and "Hello odd boxes" in reader.pages[0].extract_text()
+    if op == "metadata":
+        assert reader.metadata["/Title"] == "New title"
+        with pikepdf.open(out) as pdf:
+            assert "/Title" not in pdf.Root.Pages

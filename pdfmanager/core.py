@@ -156,9 +156,25 @@ def clone_document(reader):
         for _, stored, annots in detached:
             stored[NameObject("/Annots")] = annots
     _recount(writer)
+    _own_info(writer)
     for i, _, annots in detached:
         writer.pages[i][NameObject("/Annots")] = annots.clone(writer)
     return writer
+
+
+def _own_info(writer):
+    """Some files' /Info (the title, author...) is another object of the
+    file: the page tree, the catalog or a page. Changing or clearing the
+    document details would then change or remove that object: such a file
+    gets a document-details dictionary of its own (empty: what was there
+    weren't details)."""
+    info = getattr(writer, "_info_obj", None)
+    if info is None:
+        return
+    target = info.get_object()
+    if not isinstance(target, DictionaryObject) or target.get("/Type") in ("/Pages", "/Page", "/Catalog") \
+            or "/Kids" in target or "/Pages" in target or target is writer.root_object:
+        writer._info_obj = writer._add_object(DictionaryObject())
 
 
 def _recount(writer):
