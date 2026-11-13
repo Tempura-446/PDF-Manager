@@ -271,3 +271,46 @@ def test_destructive_tools_name_their_action():
     ops = {op["id"]: op for op in gui.OPERATIONS}
     assert ops["redact"]["action"] == "Black out" and ops["delete"]["action"] == "Delete pages"
     assert ops["sanitize"]["action"] == "Remove hidden data" and ops["flatten"]["action"] == "Flatten"
+
+
+def form_pdf(path, pages=2):
+    c = canvas.Canvas(str(path))
+    for n in range(pages):
+        c.drawString(72, 720, f"Application form, page {n + 1}")
+        c.acroForm.textfield(name=f"name{n}", x=72, y=640, width=220, height=20, tooltip="Name")
+        c.acroForm.checkbox(name=f"agree{n}", x=72, y=600)
+        c.showPage()
+    c.save()
+    return Path(path)
+
+
+def test_no_call_reaches_a_closed_document(app, tmp_path):
+    """Back to the first tab and a page turned: the pdf.js document is swapped
+    while pdf.js's viewer, thumbnails, outline, checks, comments and the file
+    panel may still have work for the old one. A closed document refuses
+    (rejects) instead of throwing "Cannot read properties of null (reading
+    'sendWithPromise')", and nothing calls into a destroyed one."""
+    node = shutil.which("node")
+    if not node or subprocess.run([node, "-e", "require('playwright')"], capture_output=True, cwd=tmp_path).returncode:
+        pytest.skip("needs Node.js with Playwright")
+    srv, url = app
+    # Over 250 pages: pdf.js's viewer hands them to its page views 250 at a time,
+    # waiting in between, so it is still at it when the document is swapped.
+    first = text_pdf(tmp_path / "Long report.pdf", pages=600)
+    second = form_pdf(tmp_path / "Form.pdf")  # fields: the scripting manager has work too
+    opened = srv.RequestHandlerClass.opened
+    cfg = {"firstId": opened.add(first), "secondId": opened.add(second), "rounds": 2}
+    run = subprocess.run([node, str(HERE / "staledoc.js"), url, json.dumps(cfg)], capture_output=True, text=True,
+                         encoding="utf-8", timeout=600)
+    if run.returncode and "Executable doesn't exist" in run.stderr:
+        pytest.skip("Playwright's browser isn't installed")
+    assert run.returncode == 0, run.stderr
+    out = json.loads(run.stdout)
+    assert not out["errors"], out["errors"]
+    assert out["watched"] > 20, "pdf.js's calls to its worker weren't found to watch (a new pdf.js?)"
+    assert not out["stale"], out["stale"]
+    for said in out["closed"]:
+        assert set(said.values()) <= {"refused", "quiet"}, said
+    for n in range(cfg["rounds"]):
+        r = out[f"round{n}"]
+        assert r["tabs"] == 2 and r["dirty"] and r["canvas"], r

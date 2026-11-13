@@ -254,6 +254,27 @@ function bounded(promise, ms, what) {
     .finally(() => clearTimeout(timer));
 }
 
+/** Make a document that's being closed answer every question with a refusal
+ *  (an error with ``closed``). Once pdf.js has torn down a document's link to
+ *  its worker, its methods throw ("Cannot read properties of null (reading
+ *  'sendWithPromise')") instead of rejecting, and a ``.catch()`` doesn't see
+ *  that. pdf.js's own viewer can still be asking the document things (for a
+ *  document over 250 pages it hands the page views their pages a batch at a
+ *  time, waiting in between, without looking again whether the document is
+ *  still shown), and so can work of the reader's still on its way: they all
+ *  get a rejection now, which they handle. (All of these methods return
+ *  promises.) */
+function closeOff(doc) {
+  const closed = () => Promise.reject(Object.assign(new Error("the document was closed"), { closed: true }));
+  for (let proto = Object.getPrototypeOf(doc); proto && proto !== Object.prototype; proto = Object.getPrototypeOf(proto)) {
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      if (/^(get|has|save|extract)[A-Z]/.test(name) && typeof Object.getOwnPropertyDescriptor(proto, name).value === "function") {
+        Object.defineProperty(doc, name, { value: closed, configurable: true, writable: true });
+      }
+    }
+  }
+}
+
 /** Why a piece of a file couldn't be had, from the server's answer; ``gone``
  *  when it won't come back by asking again (the file was moved, deleted or
  *  rewritten). */
@@ -860,6 +881,19 @@ export class Reader {
 
     // Edit text tool: click a line of text to change it.
     this.container.addEventListener("click", (e) => this.#textClick(e), true);
+
+    // Select (no tool): a click on a signature, drawing, text box or
+    // highlight picks it (pdf.js's own way is a double-click).
+    // (Pressed and let go without moving: no "click" event, which the browser
+    // doesn't always send when pdf.js's text layer moves things under the
+    // pointer meanwhile.)
+    let pressed = null;
+    this.container.addEventListener("pointerdown", (e) => { pressed = e.isPrimary ? [e.clientX, e.clientY, e.timeStamp] : null; }, true);
+    this.container.addEventListener("pointerup", (e) => {
+      const still = pressed && Math.hypot(e.clientX - pressed[0], e.clientY - pressed[1]) < 5 && e.timeStamp - pressed[2] < 800;
+      pressed = null;
+      if (still) this.#pickOnClick(e);
+    });
 
     // Notes and shapes: click or drag on a page; underline and strike out: select words.
     this.container.addEventListener("pointerdown", (e) => this.#markupDown(e), true);
@@ -1535,6 +1569,11 @@ export class Reader {
     // functions) run in pdf.js's sandbox, as in Firefox.
     this.scripting = new viewer.PDFScriptingManager({ eventBus, sandboxBundleSrc: BASE + "build/pdf.sandbox.min.mjs",
       wasmUrl: BASE + "wasm/" });
+    // The viewer hands the scripting manager each document itself, without
+    // waiting for the answer: one closed meanwhile (another tab shown, a
+    // change reloading it) would leave a rejection nobody catches.
+    const setScripted = this.scripting.setDocument.bind(this.scripting);
+    this.scripting.setDocument = (doc) => setScripted(doc).catch(() => {});
     this.pdfViewer = new viewer.PDFViewer({
       container: this.container, viewer: this.viewerEl, eventBus,
       linkService: this.linkService, findController: this.findController, scriptingManager: this.scripting,
@@ -1660,6 +1699,7 @@ export class Reader {
     pieces?.giveUp();
     this.#showSaveState();
     if (doc) {
+      closeOff(doc);
       this.pdfViewer.setDocument(null);
       this.linkService.setDocument(null);
       this.findController.setDocument(null);
@@ -2221,6 +2261,48 @@ export class Reader {
     return Object.entries(pdfjs.AnnotationEditorType).find(([, v]) => v === mode)?.[0] || "NONE";
   }
 
+  /** With Select on (the annotate bar open, no tool), a click on an
+   *  annotation this reader can edit picks it, to move, resize or delete:
+   *  one placed here, and one already in the file (also after another tab
+   *  was shown and this one came back, when they are all in the file). pdf.js
+   *  picks those only on a double-click (its "switchannotationeditormode"
+   *  with the annotation's id); a click asks it the same, without starting to
+   *  type in a text box. Links, form fields and selecting text are left as
+   *  they were. */
+  #pickOnClick(e) {
+    if (e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!this.doc || !this.uiManager || this.annotbar.hidden || this.editMode !== "NONE" || this.textEditMode
+      || this.markupMode || this.measureMode || this.container.classList.contains("hand")) return;
+    if (e.target.closest?.("a, input, select, textarea, button, [contenteditable='true'], .linkAnnotation, .widgetAnnotation, .popup")) return;
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) return;  // words were being selected
+    const n = Number(e.target.closest?.(".page")?.dataset.pageNumber);
+    const view = n && this.pdfViewer.getPageView(n - 1);
+    if (!view) return;
+    const under = (box) => {
+      if (!box || box.hidden || box.closest("[hidden]")) return false;
+      const r = box.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    };
+    let hit = null;  // (the last one found is drawn on top)
+    // Editors (placed here, or changed and not saved yet) ...
+    for (const ed of this.uiManager.getEditors(n - 1)) {
+      if (!ed.isEmpty() && under(ed.div)) hit = { mode: ed.mode, editId: ed.annotationElementId || ed.id };
+    }
+    // ... and annotations in the file that pdf.js can edit.
+    if (!hit) {
+      for (const a of view.annotationLayer?.annotationLayer?.getEditableAnnotations() || []) {
+        if (a.annotationEditorType !== undefined && under(a.container)) hit = { mode: a.annotationEditorType, editId: a.data.id };
+      }
+    }
+    if (!hit || this.#modeName(hit.mode) === "NONE") return;
+    e.preventDefault();
+    e.stopPropagation();
+    // (pdf.js turns on the annotation's tool, makes the page's editors and
+    // selects the one with this id.)
+    this.#setEditMode(this.#modeName(hit.mode), false, { editId: hit.editId, mustEnterInEditMode: false, editComment: false });
+  }
+
   /** Switch the pdf.js editing tool: NONE (select), HIGHLIGHT, FREETEXT, INK
    *  or STAMP; or EDITTEXT, this reader's own tool for changing words. */
   #setEditMode(name, create = false, pick = null) {
@@ -2245,6 +2327,12 @@ export class Reader {
     const mode = pdfjs.AnnotationEditorType[name];
     if (mode === undefined) return;
     if (this.annotbar.hidden && (name !== "NONE" || custom)) this.openAnnotate();
+    // Back to no tool with a picked annotation still focused (Esc after
+    // picking one): pdf.js would see it focused again as the page's editors
+    // are put away, pick it again, and turn its tool back on.
+    if (mode === pdfjs.AnnotationEditorType.NONE && document.activeElement?.closest?.(".annotationEditorLayer")) {
+      this.container.focus({ preventScroll: true, focusVisible: false });
+    }
     try {
       if (!(custom && this.pdfViewer.annotationEditorMode === mode)) this.pdfViewer.annotationEditorMode = { mode, ...pick };
     } catch (e) {
@@ -3218,7 +3306,7 @@ export class Reader {
           + (list.every((s) => s.status === "valid") ? "The signer's identity is verified." : "The signer's identity isn't verified (their certificate isn't one this computer trusts).");
       this.sigbar.hidden = false;
     } catch (e) {
-      if (e.name === "AbortError" || doc !== this.doc) return;  // closed meanwhile, or no answer
+      if (e.closed || e.name === "AbortError" || doc !== this.doc) return;  // closed meanwhile, or no answer
       this.sigText.textContent = "This document is signed, but its signatures couldn't be checked: " + (e.message || e);
       this.sigbar.classList.add("bad");
       this.sigbar.hidden = false;
@@ -3375,7 +3463,9 @@ export class Reader {
       const on = new Promise((resolve) => {
         const seen = (e) => { if (e.mode === mode) { this.eventBus.off("annotationeditormodechanged", seen); resolve(); } };
         this.eventBus.on("annotationeditormodechanged", seen);
-        setTimeout(() => { this.eventBus.off("annotationeditormodechanged", seen); resolve(); }, 10000);
+        // (It answers in a moment; when it doesn't, pdf.js's own switch below
+        // does it, rather than the signature taking seconds to appear.)
+        setTimeout(() => { this.eventBus.off("annotationeditormodechanged", seen); resolve(); }, 2000);
       });
       this.#setEditMode("STAMP");
       await on;
@@ -3611,9 +3701,16 @@ export class Reader {
   }
 
   async showProperties() {
-    if (!this.doc) return;
-    const { info, metadata } = await this.doc.getMetadata();
-    const page = await this.doc.getPage(this.pdfViewer.currentPageNumber);
+    const doc = this.doc;
+    if (!doc) return;
+    let info, metadata, page;
+    try {
+      ({ info, metadata } = await doc.getMetadata());
+      page = await doc.getPage(this.pdfViewer.currentPageNumber);
+    } catch (e) {
+      if (e.closed) return;  // another tab shown meanwhile
+      throw e;
+    }
     const [x1, y1, x2, y2] = page.view;
     const w = Math.abs(x2 - x1), h = Math.abs(y2 - y1);
     const date = (raw) => {
@@ -3622,7 +3719,7 @@ export class Reader {
     };
     const size = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
     // -- accessibility -- tagged: says so (MarkInfo) or has a structure tree (pdf.js gives MarkInfo as a Map)
-    const mark = await this.doc.getMarkInfo().catch(() => null);
+    const mark = await doc.getMarkInfo().catch(() => null);
     const tagged = (mark instanceof Map ? mark.get("Marked") : mark?.Marked) || !!(await page.getStructTree().catch(() => null));
     // -- end of accessibility --
     const rows = [
@@ -3630,7 +3727,7 @@ export class Reader {
       ["Title", metadata?.get("dc:title") || info.Title], ["Author", info.Author], ["Subject", info.Subject],
       ["Keywords", info.Keywords], ["Created", date(info.CreationDate)], ["Modified", date(info.ModDate)],
       ["Application", info.Creator], ["PDF producer", info.Producer], ["PDF version", info.PDFFormatVersion],
-      ["Pages", String(this.doc.numPages)],
+      ["Pages", String(doc.numPages)],
       ["Tagged (accessible)", tagged ? "Yes" : "No"], ["Language", info.Language || "Not set"],  // -- accessibility --
       ["Page size", `${(w / 72 * 25.4).toFixed(0)} × ${(h / 72 * 25.4).toFixed(0)} mm (${(w / 72).toFixed(2)} × ${(h / 72).toFixed(2)} in)`],
       ["Fast web view", info.IsLinearized ? "Yes" : "No"],
@@ -3638,9 +3735,9 @@ export class Reader {
       ["Password protected", this.password ? "Yes" : "No"],
     ].filter(([, v]) => v);
     // -- limits and attached files --
-    const perms = await this.doc.getPermissions().catch(() => null);
+    const perms = await doc.getPermissions().catch(() => null);
     if (perms) rows.push(["Limits", permissionText(perms)]);
-    const attached = Object.values((await this.doc.getAttachments().catch(() => null)) || {});
+    const attached = Object.values((await doc.getAttachments().catch(() => null)) || {});
     const dl = el("dl", { class: "rd-props" });
     for (const [k, v] of rows) dl.append(el("dt", {}, k), el("dd", {}, v));
     const parts = [dl];
@@ -4907,7 +5004,12 @@ export class Reader {
     this.#showSaveState();
   }
 
-  async print() {
+  print() {
+    // (Another tab shown while the pages are prepared: nothing is printed.)
+    return this.#print().catch((e) => { if (!e?.closed) throw e; });
+  }
+
+  async #print() {
     if (!this.doc) return;
     const doc = this.doc, total = doc.numPages;
     if (total > 300 && await this.ask(`Print all ${total} pages?`, "Preparing them can take a while.",
