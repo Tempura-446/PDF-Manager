@@ -3436,7 +3436,12 @@ export class Reader {
       last = p;
     });
     pad.addEventListener("pointerup", () => { last = null; });
-    const typed = el("input", { type: "text", class: "rd-sigtext", placeholder: "Or type your name", "aria-label": "Type your name", autocomplete: "name" });
+    // Focus in it as the dialog opens, to type straight away. No form
+    // filling: WebView2's (turned on for passwords, see gui._allow_autofill)
+    // can open its list of saved names over the box as the first letters
+    // are typed, and a signature isn't a form entry.
+    const typed = el("input", { type: "text", class: "rd-sigtext", placeholder: "Or type your name", "aria-label": "Type your name",
+      autocomplete: "off", autofocus: true, spellcheck: "false" });
     const clear = () => { ctx.clearRect(0, 0, W, H); drawn = false; };
     typed.addEventListener("input", () => {
       clear();
