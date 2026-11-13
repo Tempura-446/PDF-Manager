@@ -254,6 +254,27 @@ function bounded(promise, ms, what) {
     .finally(() => clearTimeout(timer));
 }
 
+/** Make a document that's being closed answer every question with a refusal
+ *  (an error with ``closed``). Once pdf.js has torn down a document's link to
+ *  its worker, its methods throw ("Cannot read properties of null (reading
+ *  'sendWithPromise')") instead of rejecting, and a ``.catch()`` doesn't see
+ *  that. pdf.js's own viewer can still be asking the document things (for a
+ *  document over 250 pages it hands the page views their pages a batch at a
+ *  time, waiting in between, without looking again whether the document is
+ *  still shown), and so can work of the reader's still on its way: they all
+ *  get a rejection now, which they handle. (All of these methods return
+ *  promises.) */
+function closeOff(doc) {
+  const closed = () => Promise.reject(Object.assign(new Error("the document was closed"), { closed: true }));
+  for (let proto = Object.getPrototypeOf(doc); proto && proto !== Object.prototype; proto = Object.getPrototypeOf(proto)) {
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      if (/^(get|has|save|extract)[A-Z]/.test(name) && typeof Object.getOwnPropertyDescriptor(proto, name).value === "function") {
+        Object.defineProperty(doc, name, { value: closed, configurable: true, writable: true });
+      }
+    }
+  }
+}
+
 /** Why a piece of a file couldn't be had, from the server's answer; ``gone``
  *  when it won't come back by asking again (the file was moved, deleted or
  *  rewritten). */
@@ -1535,6 +1556,11 @@ export class Reader {
     // functions) run in pdf.js's sandbox, as in Firefox.
     this.scripting = new viewer.PDFScriptingManager({ eventBus, sandboxBundleSrc: BASE + "build/pdf.sandbox.min.mjs",
       wasmUrl: BASE + "wasm/" });
+    // The viewer hands the scripting manager each document itself, without
+    // waiting for the answer: one closed meanwhile (another tab shown, a
+    // change reloading it) would leave a rejection nobody catches.
+    const setScripted = this.scripting.setDocument.bind(this.scripting);
+    this.scripting.setDocument = (doc) => setScripted(doc).catch(() => {});
     this.pdfViewer = new viewer.PDFViewer({
       container: this.container, viewer: this.viewerEl, eventBus,
       linkService: this.linkService, findController: this.findController, scriptingManager: this.scripting,
@@ -1660,6 +1686,7 @@ export class Reader {
     pieces?.giveUp();
     this.#showSaveState();
     if (doc) {
+      closeOff(doc);
       this.pdfViewer.setDocument(null);
       this.linkService.setDocument(null);
       this.findController.setDocument(null);
@@ -3218,7 +3245,7 @@ export class Reader {
           + (list.every((s) => s.status === "valid") ? "The signer's identity is verified." : "The signer's identity isn't verified (their certificate isn't one this computer trusts).");
       this.sigbar.hidden = false;
     } catch (e) {
-      if (e.name === "AbortError" || doc !== this.doc) return;  // closed meanwhile, or no answer
+      if (e.closed || e.name === "AbortError" || doc !== this.doc) return;  // closed meanwhile, or no answer
       this.sigText.textContent = "This document is signed, but its signatures couldn't be checked: " + (e.message || e);
       this.sigbar.classList.add("bad");
       this.sigbar.hidden = false;
@@ -3611,9 +3638,16 @@ export class Reader {
   }
 
   async showProperties() {
-    if (!this.doc) return;
-    const { info, metadata } = await this.doc.getMetadata();
-    const page = await this.doc.getPage(this.pdfViewer.currentPageNumber);
+    const doc = this.doc;
+    if (!doc) return;
+    let info, metadata, page;
+    try {
+      ({ info, metadata } = await doc.getMetadata());
+      page = await doc.getPage(this.pdfViewer.currentPageNumber);
+    } catch (e) {
+      if (e.closed) return;  // another tab shown meanwhile
+      throw e;
+    }
     const [x1, y1, x2, y2] = page.view;
     const w = Math.abs(x2 - x1), h = Math.abs(y2 - y1);
     const date = (raw) => {
@@ -3622,7 +3656,7 @@ export class Reader {
     };
     const size = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
     // -- accessibility -- tagged: says so (MarkInfo) or has a structure tree (pdf.js gives MarkInfo as a Map)
-    const mark = await this.doc.getMarkInfo().catch(() => null);
+    const mark = await doc.getMarkInfo().catch(() => null);
     const tagged = (mark instanceof Map ? mark.get("Marked") : mark?.Marked) || !!(await page.getStructTree().catch(() => null));
     // -- end of accessibility --
     const rows = [
@@ -3630,7 +3664,7 @@ export class Reader {
       ["Title", metadata?.get("dc:title") || info.Title], ["Author", info.Author], ["Subject", info.Subject],
       ["Keywords", info.Keywords], ["Created", date(info.CreationDate)], ["Modified", date(info.ModDate)],
       ["Application", info.Creator], ["PDF producer", info.Producer], ["PDF version", info.PDFFormatVersion],
-      ["Pages", String(this.doc.numPages)],
+      ["Pages", String(doc.numPages)],
       ["Tagged (accessible)", tagged ? "Yes" : "No"], ["Language", info.Language || "Not set"],  // -- accessibility --
       ["Page size", `${(w / 72 * 25.4).toFixed(0)} × ${(h / 72 * 25.4).toFixed(0)} mm (${(w / 72).toFixed(2)} × ${(h / 72).toFixed(2)} in)`],
       ["Fast web view", info.IsLinearized ? "Yes" : "No"],
@@ -3638,9 +3672,9 @@ export class Reader {
       ["Password protected", this.password ? "Yes" : "No"],
     ].filter(([, v]) => v);
     // -- limits and attached files --
-    const perms = await this.doc.getPermissions().catch(() => null);
+    const perms = await doc.getPermissions().catch(() => null);
     if (perms) rows.push(["Limits", permissionText(perms)]);
-    const attached = Object.values((await this.doc.getAttachments().catch(() => null)) || {});
+    const attached = Object.values((await doc.getAttachments().catch(() => null)) || {});
     const dl = el("dl", { class: "rd-props" });
     for (const [k, v] of rows) dl.append(el("dt", {}, k), el("dd", {}, v));
     const parts = [dl];
@@ -4907,7 +4941,12 @@ export class Reader {
     this.#showSaveState();
   }
 
-  async print() {
+  print() {
+    // (Another tab shown while the pages are prepared: nothing is printed.)
+    return this.#print().catch((e) => { if (!e?.closed) throw e; });
+  }
+
+  async #print() {
     if (!this.doc) return;
     const doc = this.doc, total = doc.numPages;
     if (total > 300 && await this.ask(`Print all ${total} pages?`, "Preparing them can take a while.",
