@@ -103,6 +103,22 @@ def app_page(browser, not_token=None):
     return None
 
 
+def connect_app(p, not_token=None, what="the app page"):
+    """(browser, page) for the app's page over the window's debugging port.
+    Playwright attaching while WebView2 is still making the page can end
+    up never seeing it (no pages, though the port lists the page): attach
+    again then, rather than wait on a connection that won't see it.
+    (The connection before is left open: closing it would end the window's
+    web engine.)"""
+    for attempt in range(1, 4):
+        browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{PORT}")
+        try:
+            return browser, wait_for(lambda: app_page(browser, not_token=not_token), 20, what)
+        except AssertionError:
+            log(f"attempt {attempt}: pages:", [pg.url for c in browser.contexts for pg in c.pages], "targets:", targets())
+    raise AssertionError(f"timed out waiting for {what}")
+
+
 def targets():
     """What the window's debugging port lists (for failure messages)."""
     try:
@@ -192,12 +208,7 @@ def run(mode):
         log("windows:", window_handles(), "app processes:", ours())
         raise
     with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{PORT}")
-        try:
-            page = wait_for(lambda: app_page(browser), 30, "the app page")
-        except AssertionError:
-            log("pages:", [pg.url for c in browser.contexts for pg in c.pages], "targets:", targets())
-            raise
+        browser, page = connect_app(p)
         exercise(page, pdf)
 
         # What the page says, for when something doesn't show up.
@@ -279,9 +290,8 @@ def run(mode):
                 log("processes:", ours())
                 raise
             log("restarted:", old_pid, "->", new_pid)
-            browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{PORT}")
             # The new copy's page has a new token.
-            page = wait_for(lambda: app_page(browser, not_token=token), 30, "the restarted app page")
+            browser, page = connect_app(p, not_token=token, what="the restarted app page")
             page.wait_for_selector('.tools button[data-op="rotate"]', state="attached", timeout=30000)
             # Close the window like a person would (the app window's only page).
             page.close()
