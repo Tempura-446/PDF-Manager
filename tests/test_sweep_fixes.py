@@ -424,3 +424,24 @@ def test_removing_a_password_from_a_file_without_one_says_so(tmp_path):
     with pytest.raises(gui.EXPECTED_ERRORS) as caught:
         run("decrypt", [locked], {}, tmp_path)
     assert "current password" in str(caught.value)
+
+
+def test_redacting_thousands_of_words_on_a_page_of_small_print_is_quick(tmp_path):
+    import time
+
+    from pypdf import PdfReader
+
+    src = tmp_path / "small print.pdf"
+    c = canvas.Canvas(str(src))
+    c.setFont("Helvetica", 3)
+    for i in range(220):
+        c.drawString(10, 10 + i * 3.5, "the cat and the dog saw the bird by the tree near the house " * 3)
+    c.showPage()
+    c.save()
+    started = time.monotonic()
+    name, data, notes = run("redact", [src], {"terms": "the", "method": "remove"}, tmp_path)
+    assert time.monotonic() - started < 12  # (it took minutes, checking each letter against each box)
+    out = tmp_path / "out.pdf"
+    out.write_bytes(data)
+    text = PdfReader(out).pages[0].extract_text()
+    assert "dog" in text and "bird" in text and " the " not in f" {text} "
