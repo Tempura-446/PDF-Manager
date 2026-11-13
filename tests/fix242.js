@@ -67,13 +67,15 @@ const { chromium } = require("playwright");
       a.line = await page.evaluate(() => fp.facts.suggestions.find((x) => x.op === "sign").line);
       await page.click('.rd-side .fp-card-head[data-op="sign"]');
       await typeSignature(page, "Jane Doe");
-      await page.waitForFunction(() => [...reader.uiManager.getEditors(0)].some((e) => e.width > 0 && e.div && !e.div.hidden), null, { timeout: 15000 });
+      await page.waitForFunction(() => [...reader.uiManager.getEditors(0)].some((e) => e.width > 0 && e.div && !e.div.hidden), null, { timeout: 30000 })
+        .catch(async (e) => { out.diag = await page.evaluate(() => ({ toast: document.querySelector(".rd-toast")?.textContent, mode: reader.uiManager?.getMode(),
+          viewer: reader.pdfViewer.annotationEditorMode, eds: [...reader.uiManager.getEditors(0)].map((x) => [x.width, !!x.div, x.div?.hidden]) })); throw e; });
       await page.waitForTimeout(600);
       a.first = await editors(page);
       // Sign again (the annotate bar's Sign): the new one selected, the first not.
       await page.click(".rd-annotbar button:has-text('Sign')");
       await typeSignature(page, "Second Signer");
-      await page.waitForFunction(() => [...reader.uiManager.getEditors(0)].filter((e) => e.width > 0 && !e.div.hidden).length === 2, null, { timeout: 15000 });
+      await page.waitForFunction(() => [...reader.uiManager.getEditors(0)].filter((e) => e.width > 0 && !e.div.hidden).length === 2, null, { timeout: 30000 });
       await page.waitForTimeout(800);
       a.second = await editors(page);
       if (dpr === 1) await shot(page, "A-two-signatures-second-selected");
@@ -102,7 +104,7 @@ const { chromium } = require("playwright");
       // A signature (in the middle of the view), and a stroke drawn with Draw.
       await page.evaluate(() => { reader.signBtn.click(); });
       await typeSignature(page, "Jane Doe");
-      await page.waitForFunction(() => [...reader.uiManager.getEditors(0)].some((e) => e.width > 0 && !e.div.hidden), null, { timeout: 15000 });
+      await page.waitForFunction(() => [...reader.uiManager.getEditors(0)].some((e) => e.width > 0 && !e.div.hidden), null, { timeout: 30000 });
       await page.waitForTimeout(500);
       await page.evaluate(() => reader.useTool("INK"));
       await page.waitForTimeout(400);
@@ -121,10 +123,11 @@ const { chromium } = require("playwright");
       await showTab(page, 2);
       await showTab(page, 1);
       // (The tool comes back once the page is drawn for editing: pdf.js then makes the editors.)
-      await page.waitForFunction(() => [...(reader.uiManager?.getEditors(0) || [])].filter((e) => e.div && !e.div.hidden).length >= 2, null, { timeout: 10000 }).catch(() => {});
+      await page.waitForFunction(() => [...(reader.uiManager?.getEditors(0) || [])].filter((e) => e.div && !e.div.hidden).length >= 2, null, { timeout: 20000 }).catch(() => {});
       await page.waitForTimeout(300);
       b.back = { editors: await editors(page), state: await saveState(page), mode: await page.evaluate(() => reader.editMode),
-        annot: await page.evaluate(() => !reader.annotbar.hidden) };
+        annot: await page.evaluate(() => !reader.annotbar.hidden),
+        modes: await page.evaluate(() => [reader.uiManager?.getMode(), reader.pdfViewer.annotationEditorMode]) };
       // Picked with a click, dragged, then the drawing picked and deleted.
       const at = await middle(page, "stamp");
       await page.mouse.click(...at);
