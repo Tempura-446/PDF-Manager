@@ -28,6 +28,8 @@ Small fixes after a check of 0.24.0 on Windows. The look is the same.
   time, it could put the signature in the middle of the view instead).
 - Pressing R straight after clicking another tab turns that tab, not the
   one you left.
+- Picking a font in a text edit takes its normal width: "DejaVu Sans"
+  bold could come out as DejaVu Sans Condensed bold.
 - Turning a page just after switching tabs turns it in the tab you
   switched to, and no longer logs an error. Page changes asked for while
   a tab is still being shown wait for it, instead of being made from the

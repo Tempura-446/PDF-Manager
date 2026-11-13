@@ -311,6 +311,10 @@ def _sfnt_names(f, offset):
             names.get(17) or names.get(2, ""), b"glyf" in tables)
 
 
+# Words in a face's style that make it narrower or wider than the family's own.
+WIDTH_WORDS = ("condensed", "narrow", "compressed", "expanded", "extended", "wide")
+
+
 def _font_index():
     """[(key, full-name key, family key, bold, italic, path, index in a .ttc)]
     for the TrueType fonts installed."""
@@ -343,7 +347,8 @@ def _font_index():
                         low = style.lower()
                         found.append((font_key(postscript), font_key(full), font_key(family),
                                       any(w in low for w in ("bold", "black", "heavy")),
-                                      "italic" in low or "oblique" in low, str(path), number, family))
+                                      "italic" in low or "oblique" in low, str(path), number, family,
+                                      any(w in low for w in WIDTH_WORDS)))
             except (OSError, struct.error, ValueError):
                 continue
     _index = found
@@ -464,7 +469,9 @@ def installed_family(family, bold=False, italic=False, text=""):
     if not key:
         return None
     needed = {ord(ch) for ch in text if not ch.isspace()}
-    for entry in _font_index():
+    # (The normal width first: "DejaVu Sans" also names its condensed faces,
+    # whose style says "Condensed Bold".)
+    for entry in sorted(_font_index(), key=lambda e: e[8] if len(e) > 8 else False):
         if family_key(entry[7]) != key or (entry[3], entry[4]) != (bold, italic):
             continue
         name = _register(entry[5], entry[6])
