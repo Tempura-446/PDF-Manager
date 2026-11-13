@@ -207,3 +207,25 @@ def test_a_stream_in_an_unknown_compression_doesnt_stop_compress(tmp_path, op):
     from pypdf import PdfReader
 
     assert "quick brown fox" in PdfReader(out).pages[0].extract_text()
+
+
+@pytest.mark.parametrize("op", ["to-word", "to-pptx", "to-html"])
+def test_control_characters_in_the_title_or_a_link_dont_spoil_the_document(tmp_path, op):
+    import io
+    import zipfile
+    from xml.dom import minidom
+
+    c = canvas.Canvas(str(tmp_path / "ctl.pdf"))
+    c.setTitle("Report\x00 one\x07")
+    c.drawString(72, 720, "Body text with a link")
+    c.linkURL("https://example.com/a\x01b", (70, 715, 300, 735))
+    c.showPage()
+    c.save()
+    name, data, notes = run(op, [tmp_path / "ctl.pdf"], {"engine": "basic"} if op == "to-word" else {}, tmp_path)
+    if op == "to-html":
+        assert "\x00" not in data.decode("utf-8")
+        return
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for member in z.namelist():
+            if member.endswith((".xml", ".rels")):
+                minidom.parseString(z.read(member))  # well-formed XML, as Word and PowerPoint need

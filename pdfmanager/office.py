@@ -372,7 +372,7 @@ def _image_xml(rid, n, cx, cy):
         '</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>')
 
 
-_XML_BAD = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f￾￿]")
+_XML_BAD = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff￾￿]")  # not allowed in XML
 
 
 def _text_xml(text):
@@ -456,8 +456,9 @@ def _write_docx(pages, output, title=""):
     def link_id(uri):
         if uri not in link_ids:
             link_ids[uri] = f"rIdLink{len(link_ids) + 1}"
+            target = escape(_XML_BAD.sub("", uri), {chr(34): "&quot;"})
             rels.append(f'<Relationship Id="{link_ids[uri]}" Type="http://schemas.openxmlformats.org/'
-                        f'officeDocument/2006/relationships/hyperlink" Target="{escape(uri, {chr(34): "&quot;"})}" '
+                        f'officeDocument/2006/relationships/hyperlink" Target="{target}" '
                         'TargetMode="External"/>')
         return link_ids[uri]
 
@@ -506,7 +507,7 @@ def _write_docx(pages, output, title=""):
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
         'xmlns:dc="http://purl.org/dc/elements/1.1/">'
-        f'<dc:title>{escape(title)}</dc:title><dc:creator>ZPDF</dc:creator></cp:coreProperties>')
+        f'<dc:title>{escape(_XML_BAD.sub("", title))}</dc:title><dc:creator>ZPDF</dc:creator></cp:coreProperties>')
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as z:
