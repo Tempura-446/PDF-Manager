@@ -337,11 +337,12 @@ OPERATIONS = [
              "is taken out of the file for good.",
      "fields": [_f("terms", "Words or phrases", "text", "", placeholder="John Smith, 555-1234",
                    hint="separate several with commas"),
+                # (how the words match beside them; the kinds of numbers on a row of their own)
+                _f("case_sensitive", "Match upper/lower case", "check", False),
+                _f("whole_words", "Whole words only", "check", False),
                 _f("emails", "All email addresses", "check", False),
                 _f("phones", "All phone numbers", "check", False),
                 _f("numbers", "Card, account and ID numbers", "check", False),
-                _f("case_sensitive", "Match upper/lower case", "check", False),
-                _f("whole_words", "Whole words only", "check", False),
                 # -- true redaction --
                 _f("method", "How", "select", "remove",
                    choices=[["remove", "Remove what's under the boxes — the rest stays searchable"],
