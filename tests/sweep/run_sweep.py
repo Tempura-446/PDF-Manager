@@ -192,7 +192,10 @@ def _check_output(name, data, op, before, out_dir):
                 return f"split into {total} pages from {before[0]}"
         return ""
     if suffix == ".docx":
-        import docx
+        try:
+            import docx
+        except ImportError:  # not installed here: the result isn't checked
+            return ""
 
         try:
             d = docx.Document(str(path))
@@ -204,7 +207,10 @@ def _check_output(name, data, op, before, out_dir):
             return f"text lost: {sum(map(len, before[1]))} letters in the PDF, {len(text)} in the document"
         return ""
     if suffix == ".xlsx":
-        import openpyxl
+        try:
+            import openpyxl
+        except ImportError:  # not installed here: the result isn't checked
+            return ""
 
         try:
             openpyxl.load_workbook(str(path))
@@ -212,7 +218,10 @@ def _check_output(name, data, op, before, out_dir):
             return f"the spreadsheet can't be read: {exc}"[:300]
         return ""
     if suffix == ".pptx":
-        import pptx
+        try:
+            import pptx
+        except ImportError:  # not installed here: the result isn't checked
+            return ""
 
         try:
             pptx.Presentation(str(path))

@@ -319,12 +319,12 @@ def find_ghostscript():
         if found:
             return found
     if sys.platform == "win32":
-        from pdfmanager.scan import program_dirs, registry_subkey_values
+        from pdfmanager import winprograms
 
         found = []
-        for base in program_dirs():
+        for base in winprograms.program_dirs():
             found += (base / "gs").glob("gs*/bin/gswin*c.exe")
-        for dll in registry_subkey_values(r"SOFTWARE\GPL Ghostscript", "GS_DLL"):
+        for dll in winprograms.registry_subkey_values(r"SOFTWARE\GPL Ghostscript", "GS_DLL"):
             found += Path(str(dll)).parent.glob("gswin*c.exe")  # next to bin\gsdll64.dll
         found = [exe for exe in found if exe.is_file()]
         if found:
@@ -429,7 +429,9 @@ def _ghostscript_pdfa(path, output, level="2", password=None):
     gs = find_ghostscript()
     if not gs:
         raise core.PdfManagerError(
-            "PDF/A needs Ghostscript (https://ghostscript.com/releases/gsdnld.html)")
+            "PDF/A with Ghostscript needs the Ghostscript program, which isn't installed on this "
+            "computer: install it (free, https://ghostscript.com/releases/gsdnld.html), or let ZPDF "
+            "convert the file itself")
     from PIL import ImageCms
 
     output = Path(output)

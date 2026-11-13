@@ -1185,6 +1185,20 @@ report is `results.csv`, `summary.txt` and `tracebacks.txt` in the output
 folder. `--tools` and `--files` narrow a run, `--rerun results.csv` runs
 again only what wasn't ok.
 
+`make_corpus.py --quick` keeps a small corpus of about 60 files, some of
+every kind, and downloads nothing; `.github/workflows/sweep.yml` runs the
+sweep on it once a week (or by hand), keeps the report for 14 days and
+fails only on crash, hang, oom or died. `pytest tests/sweep --sweep CORPUS
+--sweep-reader 15` also opens 15 of the files in the reader when Playwright
+for Node.js is installed.
+
+`tests/test_imports.py` imports each module of the package in a fresh
+interpreter and fails when two modules start importing each other; the
+pairs that still do are listed there and can only become fewer.
+`tests/test_missing_programs.py` runs the tools that use Word, LibreOffice,
+a browser, Tesseract, Ghostscript, the built-in OCR engine or scanning with
+each of them missing.
+
 The workflows in `.github/workflows` describe a fuller run (Linux and
 Windows, a job with Tesseract, Ghostscript and LibreOffice, and a Windows
 end-to-end job that installs, uses, updates and uninstalls the app), but

@@ -4,6 +4,40 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.28.0
+
+Safety nets, mostly behind the scenes: checks that catch a kind of mistake
+before it reaches a release.
+
+- **When a program ZPDF can use isn't there** (Microsoft Word, LibreOffice,
+  Edge or Chrome, Tesseract, Ghostscript, the built-in OCR engine, Windows
+  Image Acquisition), each tool that uses it now either works another way
+  or says what's missing and what to do, and the tests check every one:
+  - Web page to PDF from a typed web address (no saved page added) stopped
+    with "Something went wrong" before it printed anything. It prints the
+    page now, and without a browser says to install Edge, Chrome or
+    Chromium.
+  - PDF to Word: "Microsoft Word only" without Word, and "Exact layout"
+    without LibreOffice, say which converter to choose instead.
+  - OCR without an engine, or with an engine that isn't installed, says to
+    reinstall ZPDF or install Tesseract, instead of only a pip command; with
+    Tesseract it names just what is missing (OCRmyPDF, the Tesseract
+    program, or Ghostscript when OCRmyPDF wants it).
+  - A program that can't start says so in words, not "[Errno 2] ...".
+  - Office to PDF says which program converted the file (Word, LibreOffice
+    or ZPDF itself), and says what to install when there's none.
+  - Scan: without the piece of ZPDF that reaches Windows Image Acquisition,
+    the Scanner choice says to reinstall ZPDF, and that photos still work.
+- An import check: every part of ZPDF must load on its own, and two parts
+  may not start depending on each other (a mistake that only shows when
+  the app starts). Four such pairs were taken apart; five remain, listed in
+  `tests/test_imports.py`.
+- A weekly sweep on GitHub (`.github/workflows/sweep.yml`): every tool on a
+  small made-up corpus of about 60 valid and damaged PDFs
+  (`make_corpus.py --quick`), with the report kept for two weeks. It fails
+  only on a crash, a hang or running out of memory, and never blocks a
+  pull request.
+
 ## 0.27.0
 
 A maturity pass: every tool was run on about 400 real-world and tricky

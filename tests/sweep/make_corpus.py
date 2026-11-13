@@ -2,10 +2,13 @@
 folder outside the repository, with a manifest (manifest.csv) saying what
 each file tests.
 
-    python3 tests/sweep/make_corpus.py OUT_DIR [--samples DIR]
+    python3 tests/sweep/make_corpus.py OUT_DIR [--samples DIR] [--quick [N]]
 
 --samples: a folder of real-world PDFs to copy in as well (for example a
 clone of pypdf's sample-files repository). They are only read, as data.
+--quick: keep a small corpus of about N files (60 when no number is given),
+some of every source and kind, for the weekly sweep in CI. Nothing is
+downloaded either way.
 
 Sources: badpdfs.py (the robustness test's hostile files), LibreOffice
 (documents written here and converted with soffice, when it is installed),
@@ -1190,10 +1193,37 @@ def gen_samples(cp, folder):
         cp.add(name, "py-pdf/sample-files", f"real-world sample {p.parent.name}/{p.name}", kind)
 
 
+# Left out of a quick corpus: 300 pages make every slow tool (OCR first) take minutes.
+NOT_QUICK = {"bad_many_pages.pdf"}
+
+
+def quick_subset(cp, total):
+    """Keep about ``total`` of the files made: from each source and kind
+    (reportlab/valid, badpdfs/hostile, ...) a share of its size, at least
+    two, picked evenly through it (so the mutations of different files and
+    of different kinds are kept). The rest are deleted."""
+    groups = {}
+    for row in cp.rows:
+        if row["file"] not in NOT_QUICK:
+            groups.setdefault((row["source"], row["kind"]), []).append(row)
+    count = sum(len(g) for g in groups.values()) or 1
+    keep = []
+    for rows in groups.values():
+        k = min(len(rows), max(2, round(total * len(rows) / count)))
+        keep += [rows[int(i * len(rows) / k)] for i in range(k)]
+    kept = {row["file"] for row in keep}
+    for row in cp.rows:
+        if row["file"] not in kept:
+            cp.path(row["file"][:-4]).unlink(missing_ok=True)
+    cp.rows = [row for row in cp.rows if row["file"] in kept]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("out")
     ap.add_argument("--samples", help="folder of real-world sample PDFs to include")
+    ap.add_argument("--quick", type=int, nargs="?", const=60, default=0, metavar="N",
+                    help="keep a small corpus of about N files (default 60), some of every kind")
     args = ap.parse_args(argv)
     cp = Corpus(args.out)
     if args.samples:
@@ -1214,6 +1244,8 @@ def main(argv=None):
     # a sample of the real-world files mutated too
     gen_mutations(cp, [r["file"][:-4] for r in cp.rows if r["source"] == "py-pdf/sample-files"
                        and r["kind"] == "valid"][:4], light=True)
+    if args.quick:
+        quick_subset(cp, args.quick)
     cp.save_manifest()
     print(f"{len(cp.rows)} files in {cp.out}", file=sys.stderr)
 

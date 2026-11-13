@@ -87,7 +87,7 @@ class _FontInfo:
 
     def __init__(self, font):
         from pdfmanager import fonts
-        from pdfmanager.textedit import _widths
+        from pdfmanager.glyphs import _widths
 
         self.sure = True
         font = font.get_object() if font is not None else None
@@ -351,7 +351,7 @@ def _shown_letters(textpage, covers):
     """Every letter that shows: [(index, loose box, origin, size, level)]."""
     import ctypes
 
-    from pdfmanager.textedit import _origin, _raw
+    from pdfmanager.glyphs import _origin, _raw
 
     raw = _raw()
     found = []
@@ -793,7 +793,7 @@ class Flow:
         if self._hidden is None:
             self._hidden = []
             if getattr(self.covers, "boxes", None):
-                from pdfmanager.textedit import _origin
+                from pdfmanager.glyphs import _origin
 
                 for i in range(self.textpage.count_chars()):
                     loose = self.textpage.get_charbox(i, loose=True)

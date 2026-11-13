@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from pdfmanager import archive, scan
+from pdfmanager import archive, scan, winprograms
 
 INSTALL_PS1 = Path(__file__).resolve().parents[1] / "packaging" / "windows" / "install.ps1"
 
@@ -21,8 +21,8 @@ def windows(tmp_path, monkeypatch):
     Program Files and the user's local app data are folders in tmp_path."""
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(shutil, "which", lambda name: None)
-    monkeypatch.setattr(scan, "registry_value", lambda key, name: [])
-    monkeypatch.setattr(scan, "registry_subkey_values", lambda key, name: [])
+    monkeypatch.setattr(winprograms, "registry_value", lambda key, name: [])
+    monkeypatch.setattr(winprograms, "registry_subkey_values", lambda key, name: [])
     for name in ("PROGRAMW6432", "PROGRAMFILES(X86)"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("PROGRAMFILES", str(tmp_path / "Program Files"))
@@ -47,7 +47,7 @@ def test_ghostscript_newest_version_in_program_files(windows):
 
 def test_ghostscript_from_the_registry(windows, monkeypatch):
     elsewhere = touch(windows / "Apps" / "gs10.06.0" / "bin" / "gswin64c.exe")
-    monkeypatch.setattr(scan, "registry_subkey_values",
+    monkeypatch.setattr(winprograms, "registry_subkey_values",
                         lambda key, name: [str(elsewhere.parent / "gsdll64.dll")]
                         if (key, name) == (r"SOFTWARE\GPL Ghostscript", "GS_DLL") else [])
     assert archive.find_ghostscript() == str(elsewhere)
@@ -68,7 +68,7 @@ def test_tesseract_in_program_files_or_for_one_user(windows, monkeypatch):
 def test_tesseract_where_the_registry_says(windows, monkeypatch):
     folder = windows / "D" / "OCR"
     touch(folder / "tesseract.exe")
-    monkeypatch.setattr(scan, "registry_value",
+    monkeypatch.setattr(winprograms, "registry_value",
                         lambda key, name: [str(folder)]
                         if (key, name) == (r"SOFTWARE\Tesseract-OCR", "InstallDir") else [])
     assert scan.find_tesseract() == str(folder / "tesseract.exe")
