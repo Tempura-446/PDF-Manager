@@ -1087,6 +1087,10 @@ export class Reader {
   async #stash() {
     const tab = this.activeTab;
     this.#finishEditing();
+    // The tool in use comes back with the tab (see pagesinit): with one on,
+    // pdf.js makes its annotations, unsaved ones kept in its bytes too,
+    // editors again, to pick, move, resize or delete.
+    if (tab) tab.tool = this.doc && !this.annotbar.hidden ? this.editMode || "NONE" : null;
     if (!tab || !this.doc || !this.#changed()) return;
     try {
       tab.bytes = await this.#savedDocument(tab);
@@ -1561,8 +1565,11 @@ export class Reader {
       });
     }).observe(this.main);
     eventBus.on("annotationeditoruimanager", ({ uiManager }) => { this.uiManager = uiManager; this.#applyAnnotParams(); });
-    // pdf.js asks to switch tools itself, e.g. after a picture is pasted.
-    eventBus.on("switchannotationeditormode", ({ mode }) => this.#setEditMode(this.#modeName(mode)));
+    // pdf.js asks to switch tools itself, e.g. after a picture is pasted, or
+    // for a click (double-click on one in the file) on an annotation with no
+    // tool on: that one is then picked, to move, resize or delete.
+    eventBus.on("switchannotationeditormode", ({ mode, editId = null, mustEnterInEditMode = false, editComment = false }) =>
+      this.#setEditMode(this.#modeName(mode), false, editId ? { editId, mustEnterInEditMode, editComment } : null));
     eventBus.on("annotationeditormodechanged", ({ mode }) => this.#showEditMode(this.#modeName(mode)));
     eventBus.on("editingstateschanged", ({ details }) => {
       this.annotUndo = !!details.hasSomethingToUndo;
@@ -1580,6 +1587,15 @@ export class Reader {
       if (saved?.rotation) this.pdfViewer.pagesRotation = saved.rotation;
       const goto = this.activeTab?.goto;
       if (goto) { this.activeTab.goto = null; this.#goto(goto); }
+      const tab = this.activeTab, tool = tab?.tool;
+      if (tool) {
+        tab.tool = null;
+        setTimeout(() => {
+          if (this.activeTab !== tab || !this.doc || !this.uiManager) return;
+          this.openAnnotate();
+          if (tool in pdfjs.AnnotationEditorType && tool !== "NONE") this.#setEditMode(tool);
+        }, 0);
+      }
       this.#updatePage();
       this.#showThumbs();
       this.container.focus({ preventScroll: true, focusVisible: false });  // (no ring when a file opens)
@@ -2196,7 +2212,7 @@ export class Reader {
 
   /** Switch the pdf.js editing tool: NONE (select), HIGHLIGHT, FREETEXT, INK
    *  or STAMP; or EDITTEXT, this reader's own tool for changing words. */
-  #setEditMode(name, create = false) {
+  #setEditMode(name, create = false, pick = null) {
     if (!this.pdfViewer || !this.doc) return;
     const editText = name === "EDITTEXT";
     this.#endHint();  // the last tool's hint goes with it
@@ -2219,7 +2235,7 @@ export class Reader {
     if (mode === undefined) return;
     if (this.annotbar.hidden && (name !== "NONE" || custom)) this.openAnnotate();
     try {
-      if (!(custom && this.pdfViewer.annotationEditorMode === mode)) this.pdfViewer.annotationEditorMode = { mode };
+      if (!(custom && this.pdfViewer.annotationEditorMode === mode)) this.pdfViewer.annotationEditorMode = { mode, ...pick };
     } catch (e) {
       // (Turning the tools off on a document that has just been replaced, e.g. after signing, isn't news.)
       if (!custom) { if (name !== "NONE") this.toast("Annotating isn't available for this document."); return; }
