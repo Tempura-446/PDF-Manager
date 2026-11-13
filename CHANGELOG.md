@@ -15,6 +15,8 @@ Small fixes. The look is the same.
   selecting text work as before.
 - Switching tabs while a long file is still being laid out can't leave an
   error behind any more.
+- Signing no longer waits several seconds before the signature appears
+  when the reader is slow to switch to the picture tool.
 - The automatic checks run on current versions of GitHub's actions.
 
 ## 0.24.3

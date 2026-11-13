@@ -3463,7 +3463,9 @@ export class Reader {
       const on = new Promise((resolve) => {
         const seen = (e) => { if (e.mode === mode) { this.eventBus.off("annotationeditormodechanged", seen); resolve(); } };
         this.eventBus.on("annotationeditormodechanged", seen);
-        setTimeout(() => { this.eventBus.off("annotationeditormodechanged", seen); resolve(); }, 10000);
+        // (It answers in a moment; when it doesn't, pdf.js's own switch below
+        // does it, rather than the signature taking seconds to appear.)
+        setTimeout(() => { this.eventBus.off("annotationeditormodechanged", seen); resolve(); }, 2000);
       });
       this.#setEditMode("STAMP");
       await on;

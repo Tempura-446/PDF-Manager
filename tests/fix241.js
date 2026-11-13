@@ -15,7 +15,9 @@ const { chromium } = require("playwright");
   const browser = await chromium.launch();
   const watch = (page, into = out.errors) => {
     page.on("pageerror", (e) => into.push(String(e.message || e)));
-    page.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource/.test(m.text())) into.push(m.text()); });
+    // (pdf.js logs, after handling it, that a document closed while its pages were still loading
+    // was "Transport destroyed": a tab switched mid-load. Thrown, it would be a pageerror and count.)
+    page.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource|Transport destroyed/.test(m.text())) into.push(m.text()); });
     page.on("dialog", (d) => { out.native.push(d.type() + ": " + d.message()); d.dismiss().catch(() => {}); });
   };
   const shots = cfg.shots || null;
