@@ -20,6 +20,9 @@ def pytest_addoption(parser):
     parser.addoption("--sweep", metavar="CORPUS", default="",
                      help="run the maturity sweep on a corpus made by tests/sweep/make_corpus.py")
     parser.addoption("--sweep-out", metavar="DIR", default="", help="where the sweep writes its report")
+    parser.addoption("--sweep-reader", metavar="N", type=int, default=0,
+                     help="also open N of the sweep's files in the reader (needs Playwright for Node.js; "
+                          "skipped without it)")
 
 
 def pytest_configure(config):
