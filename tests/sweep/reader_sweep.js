@@ -1,7 +1,9 @@
 // The sweep's reader check (run_sweep.py --reader): each file opened in the
 // reader in a fresh page; it must show its first page, the password box or
 // its "can't be opened" state, without errors on the page, and pages further
-// in must draw too.
+// in must draw too. An error thrown on the page is a crash; what pdf.js only
+// logs about a damaged part of a file it still shows is kept in the message
+// ("pdf.js logged: ...") of a run that is otherwise ok.
 //   node reader_sweep.js <page URL with #token=...> <jobs.json> <ms per file>
 // Prints {file: {class, message, seconds}}.
 const { chromium } = require("playwright");
@@ -15,12 +17,12 @@ const fs = require("fs");
   const browser = await chromium.launch();
   for (const job of jobs) {
     const started = Date.now();
-    const errors = [];
+    const errors = [], logged = [];
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     page.on("pageerror", (e) => errors.push(String(e.message || e)));
     page.on("console", (m) => {
-      if (m.type() === "error" && !/Failed to load resource|status of 4\d\d/.test(m.text())) errors.push(m.text());
+      if (m.type() === "error" && !/Failed to load resource|status of 4\d\d/.test(m.text())) logged.push(m.text().split("\n")[0]);
     });
     let state = "";
     try {
@@ -39,7 +41,7 @@ const fs = require("fs");
         await page.fill(".rd-pwfield input", "user");
         await page.keyboard.press("Enter");
         const h2 = await page.waitForFunction(() => {
-          if (document.querySelector(".rd-pwfield .err")) return "password-refused";
+          if ([...document.querySelectorAll(".err")].some((e) => /password is incorrect/.test(e.textContent))) return "password-refused";
           const c = document.querySelector(".pdfViewer .page canvas");
           return c && reader.doc && reader.loading.hidden ? "shown-after-password" : false;
         }, null, { timeout: limit, polling: 250 });
@@ -57,7 +59,9 @@ const fs = require("fs");
         state += ` (${pages} pages)`;
       }
       const cls = errors.length ? "crash" : (state === "broken" || state === "password-refused" ? "refused" : "ok");
-      out[job.file] = { class: cls, message: (errors.length ? errors.slice(0, 3).join(" | ") + " — " : "") + state,
+      const said = errors.length ? errors.slice(0, 3).join(" | ") + " — " : "";
+      const log = logged.length ? ` (pdf.js logged: ${logged.slice(0, 2).join(" | ").slice(0, 160)})` : "";
+      out[job.file] = { class: cls, message: said + state + log,
         seconds: (Date.now() - started) / 1000 };
     } catch (e) {
       const timedOut = /Timeout/i.test(String(e));
