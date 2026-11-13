@@ -460,7 +460,7 @@ def test_a_plain_page_has_no_signature_line(tmp_path):
 
 
 def test_signature_lines_made_the_kept_facts_look_again():
-    assert filefacts.LOOK == 4  # facts kept by 0.23 (no "sign_line") or 0.24.0 (no "sign_at") are worked out again
+    assert filefacts.LOOK == 5  # facts kept before 0.24.3 (no "signed_on_line") are worked out again
 
 
 # -- 0.24.1: where the line to sign on is ----------------------------------------------------
@@ -514,3 +514,29 @@ def test_compress_isnt_offered_for_a_compressed_or_compact_file():
     assert filefacts.suggestions({**base, "size": 9_000_000}, made_by="compress") == []
     # 1.2 MB over 40 pages is 30 KB a page: already small.
     assert ops({**base, "size": 1_200_000, "pages": 40}) == []
+
+
+# -- 0.24.3: signed by hand already ----------------------------------------------------------
+
+def test_a_line_signed_by_hand_is_not_offered_signing_again(tmp_path):
+    import pikepdf
+
+    path = _drawn_pdf(tmp_path / "invoice.pdf", lambda c, n: c.drawString(72, 160, "Signature: ____________________"))
+    found = filefacts.facts(path)
+    assert [s["op"] for s in filefacts.suggestions(found)] == ["sign"] and found["signed_on_line"] is False
+    x0, y0, x1, y1 = found["sign_at"]["rect"]
+
+    def annotated(name, subtype, rect):
+        out = tmp_path / name
+        with pikepdf.open(path) as pdf:
+            pdf.pages[0].obj.Annots = pdf.make_indirect(pikepdf.Array([pdf.make_indirect(pikepdf.Dictionary(
+                Type=pikepdf.Name.Annot, Subtype=pikepdf.Name(subtype), Rect=pikepdf.Array(rect)))]))
+            pdf.save(out)
+        return out
+
+    # A signature picture standing on the line (as the reader's Sign puts it): no Sign it.
+    signed = filefacts.facts(annotated("signed.pdf", "/Stamp", [x0, y1, x0 + 90, y1 + 19]))
+    assert signed["signed_on_line"] is True and filefacts.suggestions(signed) == []
+    # A drawing elsewhere on the page doesn't count; nor a note on the line.
+    assert filefacts.facts(annotated("ink.pdf", "/Ink", [300, 600, 400, 640]))["signed_on_line"] is False
+    assert filefacts.facts(annotated("note.pdf", "/Text", [x0, y1, x0 + 20, y1 + 20]))["signed_on_line"] is False

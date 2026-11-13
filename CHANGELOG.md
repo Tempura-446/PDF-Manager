@@ -4,6 +4,16 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.24.3
+
+Two small things from a check of 0.24.2 on Windows.
+
+- A file you have already signed with Sign (a signature, drawing or typed
+  name on its signature line) is no longer offered "Sign it" again.
+- A selected picture or signature has handles at its corners only. The
+  side handles squashed it out of shape, and on a small signature they
+  covered the middle, where a press should move it.
+
 ## 0.24.2
 
 Small fixes after a check of 0.24.1 on Windows. The look is the same.

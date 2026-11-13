@@ -78,6 +78,9 @@ const { chromium } = require("playwright");
       await page.waitForFunction(() => [...reader.uiManager.getEditors(0)].filter((e) => e.width > 0 && !e.div.hidden).length === 2, null, { timeout: 30000 });
       await page.waitForTimeout(800);
       a.second = await editors(page);
+      // The selected signature's handles: its four corners only (sides would squash it).
+      a.handles = await page.evaluate(() => [...document.querySelectorAll(".annotationEditorLayer .selectedEditor .resizer")]
+        .filter((h) => h.getBoundingClientRect().width > 0).map((h) => h.className.replace("resizer", "").trim()).sort());
       if (dpr === 1) await shot(page, "A-two-signatures-second-selected");
       // Zoom in and out, and a turn of the view: pdf.js lays the editors out again each time.
       for (const [name, act] of [["zoom150", () => { reader.pdfViewer.currentScaleValue = 1.5; }],
