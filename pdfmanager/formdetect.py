@@ -503,6 +503,9 @@ def _blank_pictures(page, image, to_px):
 def _detect_page(page, textpage, quick=False):
     if quick and max(page.get_size()) > QUICK_MAX_SIDE:
         return []
+    width, height = page.get_size()
+    if abs(width * height) * SCALE * SCALE > core.MAX_RENDER_PIXELS:
+        return []  # a poster or a sheet metres wide: not a form, and too big to trace
     chars = _chars(textpage)
     turn = _reading_turn(page, chars)
     to_px, to_pdf = _transform(page, turn)

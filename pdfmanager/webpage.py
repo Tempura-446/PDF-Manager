@@ -819,7 +819,7 @@ def _page_items(doc, page, page_tables):
         else:
             items.append(_Item("block", _block_box(block), block))
     with_words = None
-    scale = PICTURE_DPI / 72
+    scale = doc.scale(page.number - 1, PICTURE_DPI)
     if drawings:
         with_words = doc.render(page.number - 1, PICTURE_DPI)
         for box, lettering in drawings:

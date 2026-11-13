@@ -81,3 +81,41 @@ def test_inline_images_pass_the_pdfa_check(tmp_path):
     assert isinstance(result["issues"], list)
     name, data, notes = run("pdfa", [src], {"level": "2"}, tmp_path)
     assert data.startswith(b"%PDF")
+
+
+@pytest.mark.parametrize("op", ["to-images", "to-pptx", "to-word", "to-html", "form", "compare", "autocrop"])
+def test_a_huge_page_is_drawn_with_fewer_pixels_not_out_of_memory(tmp_path, monkeypatch, op):
+    import io
+    import zipfile
+
+    from PIL import Image
+
+    from pdfmanager import core
+
+    drawn = []
+    real = core.render_scale
+
+    def watched(page, scale, limit=None):
+        got = real(page, scale, limit)
+        w, h = page.get_size()
+        drawn.append(w * h * got * got)
+        return got
+
+    monkeypatch.setattr(core, "MAX_RENDER_PIXELS", 2_000_000)
+    monkeypatch.setattr(core, "render_scale", watched)
+    src = text_pdf(tmp_path / "poster.pdf", pages=1, size=(14400, 14400))
+    files = [src, text_pdf(tmp_path / "other.pdf", pages=1, size=(14400, 14400))] if op == "compare" else [src]
+    opts = {"to-word": {"engine": "basic"}, "form": {"detect": "true"}}.get(op, {})
+    try:
+        name, data, notes = run(op, files, opts, tmp_path)
+    except gui.EXPECTED_ERRORS as exc:  # (Add form fields finds nothing to fill in on a poster)
+        assert op == "form", exc
+        return
+    assert drawn and max(drawn) <= 2_000_001
+    if op == "to-images":
+        image = Image.open(io.BytesIO(data)) if name.endswith(".png") else None
+        if image is None:
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                image = Image.open(io.BytesIO(z.read(z.namelist()[0])))
+        assert image.width * image.height <= 2_020_000
+        assert round(image.info["dpi"][0]) < 150  # the picture still says how big the page is

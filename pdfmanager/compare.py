@@ -57,7 +57,7 @@ def _load(path, password, dpi):
                 textpage = page.get_textpage()
                 text = textpage.get_text_range() + " " + fields.get(number, "")
                 textpage.close()
-                image = page.render(scale=dpi / 72).to_pil().convert("RGB")
+                image = page.render(scale=core.render_scale(page, dpi / 72)).to_pil().convert("RGB")
                 buf = io.BytesIO()
                 image.save(buf, "PNG", compress_level=1)
                 pages.append((" ".join(text.split()), buf.getvalue()))

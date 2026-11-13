@@ -1008,7 +1008,7 @@ def trim_margins(path, output, padding=10, same=False, pages=None, tolerance=24,
                 progress.report(n, len(targets), "page")
                 page = doc[i]
                 try:
-                    image = page.render(scale=dpi / 72, may_draw_forms=True).to_pil().convert("L")
+                    image = page.render(scale=render_scale(page, dpi / 72), may_draw_forms=True).to_pil().convert("L")
                 finally:
                     page.close()
                 box = image.point(lambda v: 255 if v < white else 0).getbbox()
@@ -1747,6 +1747,23 @@ def ocr(path, output, language="eng", force=False, deskew=False, password=None, 
 # (the GUI server renders thumbnails for several files at once).
 PDFIUM_LOCK = threading.Lock()
 
+# The most pixels one page is drawn with: a poster or a drawing sheet of
+# several metres would otherwise need gigabytes of memory at 150 dpi.
+MAX_RENDER_PIXELS = 60_000_000
+
+
+def render_scale(page, scale, limit=None):
+    """``scale`` for drawing the pdfium ``page``, made smaller if the page
+    would come out with more than MAX_RENDER_PIXELS pixels."""
+    import math
+
+    limit = limit or MAX_RENDER_PIXELS
+    w, h = page.get_size()
+    area = max(1.0, abs(w * h))
+    if area * scale * scale > limit:
+        scale = math.sqrt(limit / area)
+    return scale
+
 
 def pdf_to_images(path, outdir, dpi=150, fmt="png", pages=None, password=None):
     """Render pages to image files with pypdfium2."""
@@ -1764,14 +1781,21 @@ def pdf_to_images(path, outdir, dpi=150, fmt="png", pages=None, password=None):
             indices = parse_page_ranges(pages, total) if pages else range(total)
             outdir.mkdir(parents=True, exist_ok=True)
             width = len(str(total))
-            written = []
+            written, notes_said = [], []
             for n, i in enumerate(indices):
                 progress.report(n, len(indices), "page")
-                image = doc[i].render(scale=dpi / 72).to_pil()
+                page = doc[i]
+                scale = render_scale(page, dpi / 72)
+                image = page.render(scale=scale).to_pil()
+                page.close()
+                if scale < dpi / 72 and not notes_said:
+                    notes_said.append(i)
+                    progress.say(f"page {i + 1} is very large: drawn at {scale * 72:.0f} dpi")
                 if fmt.lower() in ("jpg", "jpeg") and image.mode != "RGB":
                     image = image.convert("RGB")
                 target = outdir / f"{Path(path).stem}_{i + 1:0{width}d}.{fmt}"
-                image.save(target, dpi=(dpi, dpi))  # so the pictures keep their size
+                shown = round(scale * 72, 2)
+                image.save(target, dpi=(shown, shown))  # so the pictures keep their size
                 written.append(target)
             return written
         finally:
