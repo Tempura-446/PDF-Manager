@@ -1589,12 +1589,23 @@ export class Reader {
       if (goto) { this.activeTab.goto = null; this.#goto(goto); }
       const tab = this.activeTab, tool = tab?.tool;
       if (tool) {
+        // (Once a page's editing layer is drawn: before that, pdf.js's viewer
+        // still announces the tool it had, and could leave its own unchanged.)
         tab.tool = null;
-        setTimeout(() => {
-          if (this.activeTab !== tab || !this.doc || !this.uiManager) return;
-          this.openAnnotate();
-          if (tool in pdfjs.AnnotationEditorType && tool !== "NONE") this.#setEditMode(tool);
-        }, 0);
+        let done = false, timer = 0;
+        const restore = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          eventBus.off("annotationeditorlayerrendered", restore);
+          setTimeout(() => {
+            if (this.activeTab !== tab || !this.doc || !this.uiManager) return;
+            this.openAnnotate();
+            if (tool in pdfjs.AnnotationEditorType && tool !== "NONE") this.#setEditMode(tool);
+          }, 0);
+        };
+        eventBus.on("annotationeditorlayerrendered", restore);
+        timer = setTimeout(restore, 5000);
       }
       this.#updatePage();
       this.#showThumbs();
