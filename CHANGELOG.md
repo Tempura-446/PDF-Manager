@@ -4,6 +4,54 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.27.0
+
+A maturity pass: every tool was run on about 400 real-world and tricky
+PDFs (pypdf's collection of sample files, documents made with LibreOffice,
+Word and PowerPoint files, scans, and files damaged on purpose), and what
+broke was fixed. Kinds of files that work better now:
+
+- **Files cut short or with a broken index of objects** (a download that
+  stopped, a file copied with the wrong line endings): each tool mends
+  them first, as Repair does, and says so. Repair's own result now opens in
+  every tool.
+- **Very large pages** (posters, plans a metre or more across): Convert to
+  images, PowerPoint, Word, the web page, Compare, Redact and Add form fields
+  draw them with fewer pixels instead of running out of memory. A picture
+  made this way still says how big the page is.
+- **Pages whose crop box lies outside the page**: shown whole, as other
+  viewers show them, instead of failing in PowerPoint, images, Compare,
+  Trim margins, Clean up and previews.
+- **A page count that is wrong in the file** (5 for one page, 0 or -1): put
+  right in what every tool writes, and when signing; the reader shows such
+  a file as damaged, with Repair, instead of an empty window.
+- **Document details that are really another part of the file**: Sanitize
+  and Document details no longer remove the pages along with the title.
+- OCR with Tesseract keeps form fields, and a portfolio keeps its own
+  pages: OCRmyPDF's PDF/A step (through Ghostscript) dropped the fields and
+  printed the attached files instead. OCR now writes a plain PDF; PDF/A
+  is its own tool.
+- To Excel: a table with a lone dash or currency sign in a cell (common in
+  financial reports) no longer stops it.
+- To Word: control characters in a PDF's title or links no longer make a
+  document Word refuses to open.
+- Word, the web page, Accessibility tags and Excel: a page the table reader
+  can't parse no longer stops them; Word and the web page convert the text
+  without the tables.
+- Sign: a page tree pyHanko trips over is signed on a mended copy (a page
+  without its type), or refused in plain words.
+- The PDF/A check and conversion read pages with small pictures written
+  into the page itself (inline images).
+- Compress and Colour cope with a picture in a compression they don't know.
+- A page turned by an angle that isn't a quarter turn counts as not turned,
+  as viewers show it (Sign stopped on it).
+- Redact: a page of small print with thousands of matches takes seconds,
+  not minutes.
+- Copy text says when a file has no text (and points to OCR) instead of
+  giving an empty text file; Remove password says when a file has none.
+- For checking: `tests/sweep` makes the corpus and runs the sweep (see
+  Tests in the README).
+
 ## 0.26.0
 
 Scan: paper to a searchable PDF, in one place.
