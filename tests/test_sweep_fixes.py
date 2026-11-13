@@ -358,7 +358,7 @@ def test_a_file_cut_short_is_mended_first(tmp_path, op):
         assert len(reader.pages) == 3 and "quick brown fox" in reader.pages[0].extract_text()
 
 
-def test_a_wrong_cross_reference_table_is_mended_and_a_locked_file_stays_locked(tmp_path):
+def test_a_locked_file_with_a_wrong_cross_reference_table_works_and_stays_locked(tmp_path):
     from pypdf import PdfReader
 
     plain = text_pdf(tmp_path / "plain.pdf")
@@ -373,7 +373,6 @@ def test_a_wrong_cross_reference_table_is_mended_and_a_locked_file_stays_locked(
     work.mkdir()
     notes = []
     name, out, ctype = gui.run_operation("rotate", [locked], {"degrees": "90"}, "u", {}, work, notes)
-    assert any("mended first" in n for n in notes)
     result = tmp_path / "result.pdf"
     result.write_bytes(out)
     reader = PdfReader(result)
@@ -445,3 +444,19 @@ def test_redacting_thousands_of_words_on_a_page_of_small_print_is_quick(tmp_path
     out.write_bytes(data)
     text = PdfReader(out).pages[0].extract_text()
     assert "dog" in text and "bird" in text and " the " not in f" {text} "
+
+
+def test_what_is_left_of_a_damaged_file_that_still_trips_a_tool_is_said_plainly(tmp_path, monkeypatch):
+    from pdfmanager import core
+
+    def trips(*args, **kwargs):
+        raise AttributeError("'NullObject' object has no attribute 'get'")
+
+    monkeypatch.setattr(core, "rotate", trips)
+    src = _cut_short(text_pdf(tmp_path / "download.pdf", pages=3))
+    with pytest.raises(gui.EXPECTED_ERRORS) as caught:
+        run("rotate", [src], {"degrees": "90"}, tmp_path)
+    assert str(caught.value).startswith("download.pdf is too damaged for this tool, even mended")
+    # A file that wasn't damaged: a fault of the tool's own stays one (it's logged and reported).
+    with pytest.raises(AttributeError):
+        run("rotate", [text_pdf(tmp_path / "good.pdf")], {"degrees": "90"}, tmp_path)

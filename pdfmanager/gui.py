@@ -1162,19 +1162,36 @@ def _tidy(message, work):
 
 
 def _needs_mending(path, password):
-    """Whether qpdf had to rebuild the cross-reference table of ``path`` to
-    read it: a file cut short (a download that stopped) or whose index of
-    objects is wrong. pypdf and pdfium read such files partly or not at all."""
+    """Whether ``path`` is damaged in a way qpdf mends and pypdf or pdfium
+    don't: qpdf had to rebuild its cross-reference table (a file cut short,
+    a download that stopped, a wrong index of objects), and pypdf or pdfium
+    can't open it, lose its trailer or count other pages. A file all three
+    read alike is left as it is."""
     import pikepdf
 
     try:
         with pikepdf.open(str(path), password=password or "") as pdf:
             if not any("reconstruct cross-reference" in str(w) for w in pdf.get_warnings()):
                 return False
-            # Signed: rewriting it would break the signatures.
-            return "/Perms" not in pdf.Root and not _file_mentions(path, b"/ByteRange")
+            if "/Perms" in pdf.Root or _file_mentions(path, b"/ByteRange"):
+                return False  # signed: rewriting it would break the signatures
+            pages = len(pdf.pages)
     except Exception:  # not readable at all, or locked: the tool says so itself
         return False
+    import pypdfium2 as pdfium
+
+    try:
+        reader = core.open_pdf(path, password)
+        if "/Size" not in reader.trailer or len(reader.pages) != pages:
+            return True
+        with core.PDFIUM_LOCK:
+            doc = pdfium.PdfDocument(str(path), password=password)
+            try:
+                return len(doc) != pages
+            finally:
+                doc.close()
+    except Exception:  # noqa: BLE001 (pypdf or pdfium can't read it)
+        return True
 
 
 def _mend_inputs(op, files, password, work, notes):
@@ -1223,7 +1240,22 @@ def _run_operation(op, files, opts, password=None, extra_files=None, work=None, 
                         "type a web address, or add saved web pages")
     if len(files) < spec.get("min", 1):
         raise UserError(f"add at least {spec['min']} files")
-    files = _mend_inputs(op, files, password, work, notes if notes is not None else [])
+    notes = [] if notes is None else notes
+    mended = _mend_inputs(op, files, password, work, notes)
+    damaged = [Path(a).name for a, b in zip(files, mended) if a != b]
+    if not damaged:
+        return _run_files(op, mended, opts, password, extra_files, work, notes)
+    try:
+        return _run_files(op, mended, opts, password, extra_files, work, notes)
+    except (AttributeError, TypeError, KeyError, IndexError, AssertionError, RecursionError) as exc:
+        # What's left of a damaged file can still hold things no PDF should
+        # (a page box of null, a link without its kind): said, not a crash.
+        raise UserError(f"{', '.join(damaged)} {'is' if len(damaged) == 1 else 'are'} too damaged for this tool, "
+                        f"even mended ({type(exc).__name__}: {' '.join(str(exc).split())[:80]})") from None
+
+
+def _run_files(op, files, opts, password, extra_files, work, notes):
+    """_run_operation, once damaged inputs are mended."""
     _check_pages(op, files, password)
     out_dir = Path(work or (files[0].parent if files else tempfile.mkdtemp(prefix="pdfm-"))) / "out"
     out_dir.mkdir()
