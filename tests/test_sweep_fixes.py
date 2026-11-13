@@ -491,3 +491,15 @@ def test_signing_puts_a_wrong_page_count_right_and_the_signature_holds(tmp_path)
     doc = pdfium.PdfDocument(str(out))
     assert len(doc) == 1 and doc[0].get_size() == (612.0, 792.0)
     assert certsign.verify(out)[0]["intact"]
+
+
+def test_page_contents_in_an_unknown_compression_are_refused_plainly(tmp_path):
+    src = text_pdf(tmp_path / "odd.pdf", pages=1)
+
+    def garble(pdf):
+        contents = pdf.pages[0].obj.Contents
+        contents.Filter = pikepdf.Name("/FlateDeXode")  # a damaged name: no such compression
+    edit(src, garble)
+    with pytest.raises(gui.EXPECTED_ERRORS) as caught:
+        run("booklet", [src], {}, tmp_path)
+    assert "compressed in a way that can't be read" in str(caught.value)

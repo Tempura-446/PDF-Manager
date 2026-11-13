@@ -1136,6 +1136,11 @@ def run_operation(op, files, opts, password=None, extra_files=None, work=None, n
             return _run_operation(op, files, opts, password, extra_files, work, notes)
         except _damaged_errors() as exc:
             raise _plainly(exc) from None
+        except NotImplementedError as exc:
+            if "filter" not in str(exc).lower():  # (pypdf: "Unsupported filter /...")
+                raise
+            raise UserError("part of the PDF is compressed in a way that can't be read "
+                            f"({' '.join(str(exc).split())[:80]}); it may be damaged") from None
     except EXPECTED_ERRORS as exc:
         tidy = _tidy(str(exc), work)
         if tidy == str(exc):
