@@ -1015,6 +1015,77 @@ def cmd_from_images(a):
     print(f"-> {core.images_to_pdf(_expand(a.images), a.output, a.size, margin)}")
 
 
+def _scan_options(a, notes):
+    return dict(straighten=not a.no_straighten, remove_blank=not a.keep_blank, upright=not a.no_upright,
+                recognise=not a.no_ocr, language=a.language, notes=notes)
+
+
+def _made(out, notes):
+    for note in notes:
+        print(f"   {note}")
+    print(f"-> {out}")
+
+
+def cmd_scan(a):
+    """Scan from a scanner (Windows): one page from the glass at a time,
+    or every page in the feeder, then a searchable PDF."""
+    from pdfmanager import scanner, scanpdf
+
+    found = scanner.list_scanners()
+    if a.list:
+        if not found:
+            print(scanner.NONE_FOUND)
+        for s in found:
+            print(f"{s['name']}{' (feeder)' if s['feeder'] else ''}\n   {s['id']}")
+        return 0
+    if not a.output:
+        raise core.PdfManagerError("say where to save the PDF with -o (or use --list to see the scanners)")
+    if not found:
+        raise core.PdfManagerError(scanner.NONE_FOUND)
+    if a.scanner:
+        wanted = a.scanner.lower()
+        picked = [s for s in found if s["id"].lower() == wanted] or \
+            [s for s in found if wanted in s["name"].lower()]
+        if not picked:
+            raise core.PdfManagerError(f"no scanner matches {a.scanner!r}; see pdfm scan --list")
+        device = picked[0]
+    else:
+        device = found[0]
+    source = "feeder" if a.feeder else "flatbed"
+    pages = []
+    print(f"Scanning with {device['name']} ({a.mode}, {a.dpi} dpi, {'document feeder' if a.feeder else 'flatbed'})")
+    while True:
+        got = scanner.scan(device["id"], mode=a.mode, dpi=a.dpi, source=source)
+        pages += [scanpdf.Page(image, dpi) for image, dpi in got]
+        print(f"   {len(pages)} page{'s' if len(pages) != 1 else ''} so far")
+        if a.feeder or not sys.stdin.isatty():
+            break
+        answer = input("Put the next page on the glass and press Enter, or type d and Enter when done: ")
+        if answer.strip().lower().startswith(("d", "q", "n")):
+            break
+    notes = []
+    out = scanpdf.make_pdf(pages, a.output, **_scan_options(a, notes))
+    _made(out, notes)
+    return 0
+
+
+def cmd_photos_to_pdf(a):
+    """Phone photos of pages: each page found, flattened and cleaned up,
+    then a searchable PDF."""
+    from pdfmanager import scanpdf
+
+    pages = []
+    for path in _expand(a.photos):
+        page, found = scanpdf.photo_page(path, straighten=not a.no_straighten)
+        if not found.found:
+            print(f"   {Path(path).name}: no page edges found ({found.why}); kept as photographed")
+        pages.append(page)
+    notes = []
+    out = scanpdf.make_pdf(pages, a.output, look=a.look, paper=a.paper, **_scan_options(a, notes))
+    _made(out, notes)
+    return 0
+
+
 def cmd_organize(a):
     plan = organize.organize(a.directory, a.by, a.dest, a.move, a.recursive, a.dry_run,
                              a.duplicates)
@@ -1587,6 +1658,36 @@ def build_parser():
     sp.add_argument("-o", "--output", required=True)
     sp.add_argument("-s", "--size", help="fit images onto this paper size (default: image size)")
     sp.add_argument("--margin", type=float, default=0, help="margin in mm")
+
+    def scan_cleanup(sp):
+        sp.add_argument("--no-ocr", action="store_true", help="don't make it searchable")
+        sp.add_argument("--language", default="eng", help="OCR language(s), e.g. eng+deu (default eng)")
+        sp.add_argument("--keep-blank", action="store_true", help="keep blank pages")
+        sp.add_argument("--no-straighten", action="store_true", help="don't straighten crooked pages")
+        sp.add_argument("--no-upright", action="store_true", help="don't turn sideways pages upright")
+
+    sp = other("scan", cmd_scan, "scan paper with a scanner into a searchable PDF (Windows)")
+    sp.add_argument("-o", "--output", help="the PDF to make")
+    sp.add_argument("--list", action="store_true", help="list the scanners and stop")
+    sp.add_argument("--scanner", help="which scanner (part of its name, or its id from --list); "
+                                      "default: the first")
+    sp.add_argument("--mode", choices=["grey", "colour", "bw"], default="grey",
+                    help="greyscale (default), colour or black and white")
+    sp.add_argument("--dpi", type=int, default=300, choices=[150, 200, 300], help="resolution (default 300)")
+    sp.add_argument("--feeder", action="store_true",
+                    help="scan every page in the document feeder (default: one page at a time from the glass)")
+    scan_cleanup(sp)
+
+    sp = other("photos-to-pdf", cmd_photos_to_pdf,
+               "make a searchable PDF from phone photos of pages (finds and flattens each page)")
+    sp.add_argument("photos", nargs="+", help="the photos (JPG or PNG), in page order")
+    sp.add_argument("-o", "--output", required=True)
+    sp.add_argument("--look", choices=["document", "colour", "photo"], default="document",
+                    help="document: grey with white paper (default); colour: white paper, colours kept; "
+                         "photo: as taken")
+    sp.add_argument("--paper", choices=["auto", "a4", "letter"], default="auto",
+                    help="page size (default: A4 or Letter, whichever the page's shape is closer to)")
+    scan_cleanup(sp)
 
     sp = per_file("extract-media", run_media,
                   "save the pictures and attached files inside PDFs",
