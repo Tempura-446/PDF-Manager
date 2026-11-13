@@ -922,7 +922,12 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                                   _pages(opts), password)
     elif op == "text":
         out = out.with_suffix(".txt")
-        core.extract_text(src, out, None, password)
+        if not core.extract_text(src, out, None, password).strip():
+            # Not an empty text file: said, and (with other files) left out.
+            out.unlink()
+            notes.append(f"{src.name} has no text to copy: its pages are pictures or drawings. "
+                         "If they are scans, Make searchable (OCR) reads the text first")
+            return []
     elif op == "to-word":
         out = out_dir / f"{src.stem}.docx"
         said = len(notes)

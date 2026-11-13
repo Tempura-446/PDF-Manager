@@ -32,6 +32,10 @@ def edit(path, change):
 
 def run(op, files, opts, tmp_path, extra=None):
     work = tmp_path / f"work-{op}"
+    n = 1
+    while work.exists():
+        n += 1
+        work = tmp_path / f"work-{op}-{n}"
     work.mkdir()
     notes = []
     name, data, ctype = gui.run_operation(op, [Path(f) for f in files], opts, None, extra or {}, work, notes)
@@ -314,3 +318,20 @@ def test_ocr_of_a_portfolio_keeps_its_own_pages(tmp_path):
     out.write_bytes(data)
     reader = PdfReader(out)
     assert len(reader.pages) == 2 and "quick brown fox" in reader.pages[0].extract_text()
+
+
+def _picture_pdf(path):
+    from PIL import Image
+
+    Image.new("L", (200, 300), 230).save(path, "PDF", resolution=50)
+    return path
+
+
+def test_copying_text_from_a_scan_says_there_is_none(tmp_path):
+    scan = _picture_pdf(tmp_path / "scan.pdf")
+    with pytest.raises(gui.EXPECTED_ERRORS) as caught:
+        run("text", [scan], {}, tmp_path)
+    assert "scan.pdf has no text" in str(caught.value) and "OCR" in str(caught.value)
+    # With another file that has text: that one's text, and a note about the scan.
+    name, data, notes = run("text", [text_pdf(tmp_path / "words.pdf"), scan], {}, tmp_path)
+    assert b"quick brown fox" in data and any("scan.pdf has no text" in n for n in notes)
