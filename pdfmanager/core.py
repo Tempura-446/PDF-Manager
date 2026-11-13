@@ -1765,6 +1765,17 @@ def render_scale(page, scale, limit=None):
     return scale
 
 
+def show_whole_page(page):
+    """A pdfium ``page`` whose crop box lies outside its media box has no
+    size at all; such a page is shown whole (as pdf.js and Acrobat do)."""
+    width, height = page.get_size()
+    if width < 1 or height < 1:
+        x0, y0, x1, y1 = page.get_mediabox()
+        if abs(x1 - x0) >= 1 and abs(y1 - y0) >= 1:
+            page.set_cropbox(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+    return page
+
+
 def pdf_to_images(path, outdir, dpi=150, fmt="png", pages=None, password=None):
     """Render pages to image files with pypdfium2."""
     import pypdfium2 as pdfium
@@ -1784,7 +1795,7 @@ def pdf_to_images(path, outdir, dpi=150, fmt="png", pages=None, password=None):
             written, notes_said = [], []
             for n, i in enumerate(indices):
                 progress.report(n, len(indices), "page")
-                page = doc[i]
+                page = show_whole_page(doc[i])
                 scale = render_scale(page, dpi / 72)
                 image = page.render(scale=scale).to_pil()
                 page.close()

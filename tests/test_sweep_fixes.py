@@ -174,3 +174,19 @@ def test_a_page_without_its_type_is_signed(tmp_path):
     out = tmp_path / "signed.pdf"
     out.write_bytes(data)
     assert certsign.verify(out)[0]["intact"]
+
+
+@pytest.mark.parametrize("op", ["to-pptx", "to-images", "to-word"])
+def test_a_crop_box_outside_the_page_shows_the_whole_page(tmp_path, op):
+    src = tmp_path / "outside.pdf"
+    src.write_bytes(_raw_pdf("/MediaBox [0 0 612 792] /CropBox [1000 1000 1200 1200]"))
+    name, data, notes = run(op, [src], {"engine": "basic"} if op == "to-word" else {}, tmp_path)
+    if op == "to-images":
+        import io
+
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(data))
+        assert abs(image.width - 1275) <= 1 and abs(image.height - 1650) <= 1
+        assert image.convert("L").getextrema()[0] < 128  # the text is on it
+

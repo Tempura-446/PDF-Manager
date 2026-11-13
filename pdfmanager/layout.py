@@ -504,6 +504,18 @@ def box_on_page(angle, x0, top, x1, bottom):
     return min(xs), min(ys), max(xs), max(ys)
 
 
+def _shown_box(page):
+    """The part of the pdfium ``page`` that shows: its crop box within its
+    media box, or the media box when the two don't overlap (as pdf.js and
+    Acrobat show such a page)."""
+    x0, y0, x1, y1 = page.get_bbox()
+    if x1 - x0 < 1 or y1 - y0 < 1:
+        x0, y0, x1, y1 = page.get_mediabox()
+        x0, x1 = sorted((x0, x1))
+        y0, y1 = sorted((y0, y1))
+    return x0, y0, x1, y1
+
+
 class Geometry:
     """PDF user space → the page as shown (crop box and rotation applied)."""
 
@@ -670,7 +682,7 @@ class Document:
         """Read page ``index`` (0-based)."""
         page = self.doc[index]
         try:
-            geometry = Geometry(page.get_bbox(), page.get_rotation())
+            geometry = Geometry(_shown_box(page), page.get_rotation())
             textpage = page.get_textpage()
             try:
                 chars = _chars(textpage, geometry)
@@ -724,7 +736,7 @@ class Document:
         """(width, height) of page ``index`` as shown."""
         page = self.doc[index]
         try:
-            geometry = Geometry(page.get_bbox(), page.get_rotation())
+            geometry = Geometry(_shown_box(page), page.get_rotation())
         finally:
             page.close()
         return geometry.width, geometry.height
@@ -749,6 +761,7 @@ class Document:
         doc = self.bare if without_text and self.has_background(index) else self.doc
         page = doc[index]
         try:
+            core.show_whole_page(page)
             return page.render(scale=scale, may_draw_forms=True).to_pil().convert("RGB")
         finally:
             page.close()
