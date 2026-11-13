@@ -4,6 +4,27 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.24.2
+
+Small fixes after a check of 0.24.1 on Windows. The look is the same.
+
+- A signature put on its line stays drawn there when you sign again and
+  the new one is selected, and when you zoom or turn the page. It is now
+  made where it goes and at its size, instead of being made in the middle
+  of the page and moved there.
+- After signing, Select and Esc turn the picture tool off again.
+- Signatures, drawings and other annotations added with the annotate
+  tools and not saved yet can still be picked, moved, resized and deleted after you
+  switch to another tab and back: the tool you were using comes back with
+  the tab. The tab still shows it isn't saved, and Save writes each one
+  once. (Undo can't take back what was done before the switch; delete it
+  instead.)
+- With Select, double-clicking a signature picks it, ready to move or
+  delete.
+- In the Sign dialog the name box has the focus as soon as it opens, and
+  no longer offers saved names to fill in, so typing straight away keeps
+  every letter.
+
 ## 0.24.1
 
 Small fixes after a check of 0.24.0 on Windows. The look is the same.
