@@ -3364,11 +3364,12 @@ export class Reader {
       const on = new Promise((resolve) => {
         const seen = (e) => { if (e.mode === mode) { this.eventBus.off("annotationeditormodechanged", seen); resolve(); } };
         this.eventBus.on("annotationeditormodechanged", seen);
-        setTimeout(() => { this.eventBus.off("annotationeditormodechanged", seen); resolve(); }, 3000);
+        setTimeout(() => { this.eventBus.off("annotationeditormodechanged", seen); resolve(); }, 10000);
       });
       this.#setEditMode("STAMP");
       await on;
-      if (!this.uiManager || this.uiManager.getMode() !== mode || !layer.div) return null;
+      if (!this.uiManager || !layer.div) return null;
+      if (this.uiManager.getMode() !== mode) await this.uiManager.updateMode(mode);  // (the viewer didn't answer: as pdf.js's paste)
     }
     layer.updateToolbar({ mode });
     const { rotation: turn, rawDims: { pageWidth: W, pageHeight: H, pageX: px, pageY: py } } = layer.viewport;
