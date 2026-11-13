@@ -23,6 +23,7 @@ A design pass: the same look, made consistent. The tools work as before.
   own.
 - After Esc closes a group of tools, the rail button under the pointer no
   longer looks like a second current group.
+
 ## 0.24.4
 
 Small fixes. The look is the same.
