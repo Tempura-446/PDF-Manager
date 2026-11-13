@@ -21,6 +21,9 @@ permissions:
 jobs:
   build:
     name: ${{ matrix.label }}
+    # (with PC_RUNNER, see tests.yml, these wait for GitHub's machines;
+    # releases are built on the PC by packaging/release.py anyway)
+    if: vars.PC_RUNNER != 'true' || github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

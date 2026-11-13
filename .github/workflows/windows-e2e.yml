@@ -15,8 +15,12 @@ on:
 permissions:
   contents: read
 
+# Not on the owner's PC (PC_RUNNER, see tests.yml): it installs and then
+# uninstalls ZPDF in the user's own folders and changes a machine-wide
+# setting, which would remove the real copy there.
 jobs:
   e2e:
+    if: vars.PC_RUNNER != 'true'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:

@@ -14,7 +14,7 @@ from pdfmanager import appdata
 SAMPLE = 10            # pages looked at for text and scans
 BIG_PICTURE = 400_000  # pixels from which a picture can be a page's scan
 REMEMBERED = 300       # files whose facts are kept
-LOOK = 3               # raised when facts are worked out differently, so kept ones are looked at again
+LOOK = 4              # raised when facts are worked out differently, so kept ones are looked at again
 TEXT_SHOWING = {"Tj", "TJ", "'", '"'}
 # A printed place to sign: the word near a rule or a run of underscores.
 SIGN_WORDS = re.compile(r"\b(signature|signed|sign here|unterschrift|signé|firma)\b", re.I)
@@ -69,15 +69,31 @@ def _page_look(page, pikepdf):
                 pictures(xobject.get("/Resources"), depth + 1)
 
     pictures(resources)
-    words, rule, start = [], False, None
+    words, rules, start = [], [], None
+    ctm, matrices = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0), []
+
+    def at(x, y):  # a point in the page's own coordinates (through cm)
+        a, b, c, d, e, f = ctm
+        return a * x + c * y + e, b * x + d * y + f
+
+    def flat(p, q, thick=0.0):  # a level stroke long enough to write on
+        if abs(q[1] - p[1]) < 1 and abs(q[0] - p[0]) >= RULE and len(rules) < 200:
+            rules.append((min(p[0], q[0]), (p[1] + q[1]) / 2, max(p[0], q[0]), thick))
+
     try:
         mode, saved = 0, []
         for operands, operator in pikepdf.parse_content_stream(page):
             operator = str(operator)
             if operator == "q":
                 saved.append(mode)
+                matrices.append(ctm)
             elif operator == "Q":
                 mode = saved.pop() if saved else 0
+                ctm = matrices.pop() if matrices else ctm
+            elif operator == "cm" and len(operands) == 6:
+                a, b, c, d, e, f = (float(v) for v in operands)
+                A, B, C, D, E, F = ctm
+                ctm = (a * A + b * C, a * B + b * D, c * A + d * C, c * B + d * D, e * A + f * C + E, e * B + f * D + F)
             elif operator == "Tr" and operands:
                 mode = int(operands[0])
             elif operator in TEXT_SHOWING:
@@ -86,22 +102,88 @@ def _page_look(page, pikepdf):
                     visible = True
                     if len(words) < 400:
                         words.append(_strings(operands))
-            elif rule:
-                continue
             elif operator == "m" and len(operands) == 2:
-                start = (float(operands[0]), float(operands[1]))
+                start = at(float(operands[0]), float(operands[1]))
             elif operator == "l" and len(operands) == 2 and start:
-                x, y = float(operands[0]), float(operands[1])
-                rule = abs(y - start[1]) < 1 and abs(x - start[0]) >= RULE
-                start = (x, y)
+                end = at(float(operands[0]), float(operands[1]))
+                flat(start, end)
+                start = end
             elif operator == "re" and len(operands) == 4:
-                w, h = abs(float(operands[2])), abs(float(operands[3]))
-                rule = w >= RULE and h <= 2
+                x, y, w, h = (float(v) for v in operands)
+                p, q = at(x, y), at(x + w, y + h)
+                if abs(q[1] - p[1]) <= 2:
+                    mid = (p[1] + q[1]) / 2
+                    flat((p[0], mid), (q[0], mid), abs(q[1] - p[1]))
     except Exception:
         pass
     said = " ".join(words)
-    sign = bool(SIGN_WORDS.search(said)) and (rule or bool(UNDERSCORES.search(said)))
-    return text, visible, picture, sign
+    sign = bool(SIGN_WORDS.search(said)) and (bool(rules) or bool(UNDERSCORES.search(said)))
+    return text, visible, picture, sign, rules
+
+
+def _sign_place(path, password, number, rules):
+    """Where the printed line to sign on is on page ``number``: {"page",
+    "rect" (the blank or the rule, in PDF points: x0, y0, x1, y1), "text"
+    (the size of the label's letters, in points)}, or None when it can't be
+    told. The label and the underscores are found with their places in the
+    page's text (pdfium reads it; nothing is drawn); a drawn rule comes from
+    the instructions (``rules``: (x0, y, x1, thickness)). Of the blanks near
+    a label, one on its line and to its right wins; then one just above it
+    (a label printed under the line)."""
+    from pdfmanager import core
+
+    with core.PDFIUM_LOCK:  # (pdfium isn't thread-safe: the server reads several files at once)
+        return _sign_place_locked(path, password, number, rules)
+
+
+def _sign_place_locked(path, password, number, rules):
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as raw
+
+    try:
+        doc = pdfium.PdfDocument(str(path), password=password or None)
+    except Exception:
+        return None
+    try:
+        textpage = doc[number - 1].get_textpage()
+        said = "".join(chr(code) if 0 < code < 0x110000 else " "
+                       for code in (raw.FPDFText_GetUnicode(textpage, i) for i in range(min(textpage.count_chars(), 20000))))
+
+        def box(a, b):
+            parts = [textpage.get_charbox(i) for i in range(a, b) if not said[i].isspace()]
+            if not parts:
+                return None
+            return (min(p[0] for p in parts), min(p[1] for p in parts), max(p[2] for p in parts), max(p[3] for p in parts))
+
+        blanks = [b for b in (box(m.start(), m.end()) for m in UNDERSCORES.finditer(said)) if b and b[2] - b[0] >= 20]
+        blanks += [(x0, y - thick / 2, x1, y + thick / 2) for x0, y, x1, thick in rules]
+        best = None
+        for m in SIGN_WORDS.finditer(said):
+            label = box(m.start(), m.end())
+            if not label:
+                continue
+            size = raw.FPDFText_GetFontSize(textpage, m.start())
+            if not 2 <= size <= 200:
+                size = max(label[3] - label[1], 6)
+            for blank in blanks:
+                top = blank[3]
+                if blank[2] <= label[0] or blank[0] > label[2] + 8 * size:
+                    continue
+                if label[1] - size <= top <= label[1] + 0.6 * size and blank[0] >= label[0] - 2:  # on its line
+                    score = max(0.0, blank[0] - label[2])
+                elif label[3] <= top <= label[3] + 3 * size:  # just above it
+                    score = 1000 + top - label[3]
+                else:
+                    continue
+                if best is None or score < best[0]:
+                    best = (score, blank, size)
+        if not best:
+            return None
+        return {"page": number, "rect": [round(v, 1) for v in best[1]], "text": round(best[2], 1)}
+    except Exception:
+        return None
+    finally:
+        doc.close()
 
 
 def _fields(pdf, pikepdf):
@@ -146,7 +228,8 @@ def facts(path, password=None):
     """{"size", "pages", "protected", "scanned", "has_text", "form_fields",
     "signatures", "to_sign" (signature fields still empty), "tagged",
     "pdfa", "sign_line" (the first page with a printed line to sign on, 0
-    for none)} of the PDF at ``path``. A file that
+    for none), "sign_at" (where on it the line is, see _sign_place; None
+    when it can't be told)} of the PDF at ``path``. A file that
     needs a password it wasn't given has "protected" and no page count; one
     that can't be read has {"size", "pages": None, "error"}."""
     import pikepdf
@@ -166,16 +249,17 @@ def facts(path, password=None):
         with pdf:
             count = len(pdf.pages)
             texts = pictures = sampled = sign_line = 0
+            lines = []
             for page in list(pdf.pages)[:SAMPLE]:
                 sampled += 1
-                text, visible, picture, sign = _page_look(page, pikepdf)
+                text, visible, picture, sign, rules = _page_look(page, pikepdf)
                 if sign and not sign_line:
-                    sign_line = sampled
+                    sign_line, lines = sampled, rules
                 texts += text
                 pictures += picture and not visible  # a page of its own picture, or one with OCR text
             filled, signed, unsigned = _fields(pdf, pikepdf)
             marked = pdf.Root.get("/MarkInfo")
-            return {
+            found = {
                 "size": size, "pages": count, "protected": bool(pdf.is_encrypted),
                 "scanned": bool(sampled) and pictures >= 0.6 * sampled,
                 "has_text": texts > 0, "form_fields": filled, "signatures": signed, "to_sign": unsigned,
@@ -186,6 +270,8 @@ def facts(path, password=None):
             }
     except Exception:  # a file damaged past its first page
         return {"size": size, "pages": None, "error": "can't be read"}
+    found["sign_at"] = _sign_place(path, password, sign_line, lines) if sign_line else None
+    return found
 
 
 BIG = 1_000_000  # bytes from which making a file smaller is worth offering
@@ -204,7 +290,7 @@ def suggestions(found, made_by=None):
     """What to offer for a file with these facts, most useful first:
     [{"op": tool id, "title", "why"}], three at most. "sign" is the drawn
     or typed signature (the reader's Sign), not a tool; its "page" says
-    where. ``made_by``: the tool that made this file, if one did (a file
+    where, and its "line" (facts' "sign_at", when known) where on it. ``made_by``: the tool that made this file, if one did (a file
     just compressed isn't offered Compress again)."""
     if found.get("error"):
         return [{"op": "repair", "title": "Repair it",
@@ -226,7 +312,7 @@ def suggestions(found, made_by=None):
         out.append({"op": "sign", "title": "Sign it",
                     "why": "It has a place for a signature that is still empty"})
     elif found.get("sign_line") and not found.get("signatures"):
-        out.append({"op": "sign", "title": "Sign it", "page": found["sign_line"],
+        out.append({"op": "sign", "title": "Sign it", "page": found["sign_line"], "line": found.get("sign_at"),
                     "why": f"Page {found['sign_line']} has a line for your signature"})
     return out[:3]
 

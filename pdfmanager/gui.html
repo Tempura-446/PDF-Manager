@@ -294,7 +294,8 @@ main:focus { outline: none; }  /* the skip link's target: the page itself needs 
 .keys-cols section { break-inside: avoid; padding-bottom: 6px; }
 .keys-cols h3 { margin: 10px 0 6px; }
 .keys-cols section:first-child h3 { margin-top: 2px; }
-.keys-cols dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 5px 12px; align-items: baseline; font-size: 13px; }
+/* (One key column for every section: openKeys sets --keys-key to the widest keys.) */
+.keys-cols dl { margin: 0; display: grid; grid-template-columns: var(--keys-key, max-content) 1fr; gap: 5px 12px; align-items: baseline; font-size: 13px; }
 .keys-cols dt { white-space: nowrap; }
 .keys-cols dd { margin: 0; color: var(--text-2); }
 .keys-cols kbd { font: 500 11.5px/1 var(--mono); color: var(--text); border: 1px solid var(--border-strong); border-bottom-width: 2px;
@@ -1484,11 +1485,12 @@ async function openInReader(file) {
 const COMMON_TOOLS = [["split", "Split"], ["sign", "Sign"], ["to-word", "To Word"], ["pdfa", "Archive (PDF/A)"],
   ["to-excel", "To Excel"], ["encrypt", "Add a password"]];
 /** Sign the shown document with a drawn, typed or pictured signature (the
- *  reader's Sign dialog), on ``page`` if given (a printed line to sign on). */
-async function fpSignWithPen(page = 0) {
+ *  reader's Sign dialog), on ``page`` if given (a printed line to sign on),
+ *  on the line itself when the facts say where it is (``line``: page, rect, text). */
+async function fpSignWithPen(page = 0, line = null) {
   if (!reader?.doc) return;
   if (page) reader.goToPage(page);
-  await reader.sign();
+  await reader.sign(line && line.page === page && Array.isArray(line.rect) ? { line } : {});
 }
 /** Tools that run in the panel: one PDF in, nothing to draw or arrange on the pages. */
 const runsInPanel = (op) => !!op && op.files === "pdf" && !op.board && !op.panel && !((op.min || 1) >= 2);
@@ -1609,7 +1611,11 @@ function fpSuggest() {
   // The open one stays as it is; one already chosen (from the palette) isn't repeated.
   const cards = wanted.map((s) => {
     if (s.op === "fillable") return list.querySelector('.fp-card[data-op="fillable"]') || fpFillableCard(s);
-    if (s.op === "sign") return list.querySelector('.fp-card[data-op="sign"]') || fpSignCard(s);
+    if (s.op === "sign") {  // (kept as it is, but signing where the facts now say)
+      const card = list.querySelector('.fp-card[data-op="sign"]') || fpSignCard(s);
+      card.sug = s;
+      return card;
+    }
     const had = fp.items.get(s.op);
     if (had && had.home === list) return had.card;
     if (had && had.home === chosen) return null;
@@ -1645,9 +1651,10 @@ function fpFillableCard(s) {
 /** "Sign it": the reader's Sign dialog, then the signature goes on the page. */
 function fpSignCard(s) {
   const head = el("button", { type: "button", class: "fp-card-head", "data-op": "sign", "aria-haspopup": "dialog",
-    title: "Draw or type your signature, or use a picture of it, and place it on the page", onclick: () => fpSignWithPen(s.page || 0) },
+    title: "Draw or type your signature, or use a picture of it, and place it on the page", onclick: () => { const now = card.sug || s; fpSignWithPen(now.page || 0, now.line || null); } },
     el("span", { class: "fp-ico" }, icon("sign")), el("span", {}, el("strong", {}, s.title), el("span", {}, s.why)), icon("right", "i fp-go"));
-  return el("div", { class: "fp-card", "data-op": "sign", "data-open": "false" }, head);
+  const card = el("div", { class: "fp-card", "data-op": "sign", "data-open": "false" }, head);
+  return card;
 }
 
 /** A card: the tool's name and why, opening to its options. */
@@ -1952,7 +1959,7 @@ const KEYS = [
   ["Everywhere", [["Ctrl+K", "Commands and tools"], ["/", "Commands and tools"], ["?", "This list"], ["Esc", "Close a menu or dialog"]]],
   ["Tool pages", [["Ctrl+Enter", "Run the tool"]]],
   ["Annotate bar open", [["H", "Highlight"], ["C", "Note"], ["A", "Add text"], ["D", "Draw"], ["S", "Sign"],
-    ["Ctrl+Z / Ctrl+Y", "Undo / redo"], ["Delete", "Delete the selected annotation"], ["Ctrl+Enter", "Add the note being typed"]]],
+    ["Ctrl+Z / Ctrl+Y", "Undo / redo"], ["Delete", "Delete what’s selected"], ["Ctrl+Enter", "Add the note being typed"]]],
   ["Measuring", [["Enter", "Finish an area or a path"], ["Backspace", "Take back a point"], ["Esc", "Stop"]]],
   ["Reader", [["Ctrl+O", "Open a PDF"], ["Ctrl+F", "Find in the document"], ["Ctrl+S", "Save"], ["Ctrl+Shift+S", "Save as"],
     ["Ctrl+P", "Print"], ["N or J", "Next page"], ["P or K", "Previous page"], ["Home / End", "First / last page"],
@@ -1964,7 +1971,11 @@ function openKeys() {
   const mac = isMac, say = (k) => (mac ? k.replace(/Ctrl\+/g, "⌘") : k);
   $("keys-body").replaceChildren(...KEYS.map(([title, rows]) => el("section", {}, el("h3", {}, title),
     el("dl", {}, ...rows.flatMap(([k, what]) => [el("dt", {}, ...say(k).split(/( or | \/ )/).map((part) => / or | \/ /.test(part) ? part : el("kbd", {}, part))), el("dd", {}, what)])))));
+  $("keys-body").style.removeProperty("--keys-key");
   $("keys-dialog").showModal();
+  // Every section's descriptions start at the same distance from its keys: the widest keys'.
+  const widest = Math.max(0, ...[...$("keys-body").querySelectorAll("dt")].map((dt) => dt.scrollWidth));  // (layout widths: the dialog may be scaling in)
+  if (widest) $("keys-body").style.setProperty("--keys-key", Math.ceil(widest) + "px");
   $("keys-close").focus();
 }
 document.addEventListener("keydown", (e) => {

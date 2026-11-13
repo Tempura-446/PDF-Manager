@@ -1127,8 +1127,9 @@ OCR) and that a 200 MB file reaches the reader in pieces.
 The workflows in `.github/workflows` describe a fuller run (Linux and
 Windows, a job with Tesseract, Ghostscript and LibreOffice, and a Windows
 end-to-end job that installs, uses, updates and uninstalls the app), but
-GitHub Actions doesn't run on this account, so releases are checked
-locally instead (below).
+GitHub's machines don't run jobs on this account. The test suite can run on
+your own Windows PC instead: see [docs/pc-runner.md](docs/pc-runner.md).
+Releases are checked locally in any case (below).
 
 ## Releasing
 

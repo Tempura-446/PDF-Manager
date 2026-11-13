@@ -189,9 +189,10 @@ def test_critique24_in_a_browser(app, tmp_path, monkeypatch):
         assert room["annotating"]["column"] > room["start"]["column"] + 300, room
         assert room["note"] == {"box": True, "add": True}, room["note"]
         assert room["noteSaved"] == {"box": False}, "Ctrl+S adds the note being typed"
-        # One row at a time: find closes the annotate bar; the panel stays aside, then comes back.
+        # One row at a time: find takes the annotate bar's place; the panel stays aside. Closing
+        # find brings the annotate bar back (0.24.1), the panel still aside.
         assert room["finding"]["find"] and not room["finding"]["annot"] and not room["finding"]["side"], room["finding"]
-        assert room["after"]["side"] and room["after"]["button"] == "true" and not room["after"]["find"], room["after"]
+        assert room["after"]["annot"] and not room["after"]["side"] and not room["after"]["find"], room["after"]
         assert room["byHand"]["side"] and room["byHand"]["annot"], "opened by hand while annotating, it stays"
         assert room["hint"].startswith("Click a line to change it"), room["hint"]
         assert not any(t.startswith("Click a line") for t in room["hintAfterFind"]), room["hintAfterFind"]

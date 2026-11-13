@@ -899,7 +899,7 @@ export class Reader {
     if (e.key === "Escape" && this.markupMode === "IMAGES" && this.pickedImage) { this.#pickImage(null); return; }
     if (e.key === "Escape" && this.editMode && this.editMode !== "NONE") { this.#setEditMode("NONE"); return; }
     // With no tool left on, Escape closes the annotate bar (focus back on its button).
-    if (e.key === "Escape" && !this.annotbar.hidden) { this.closeAnnotate(); this.annotateBtn.focus(); return; }
+    if (e.key === "Escape" && !this.annotbar.hidden) { this.closeAnnotate(); if (this.findbar.hidden) this.annotateBtn.focus(); return; }
     const v = this.pdfViewer;
     switch (e.key) {
       case "n": case "j": v.nextPage(); break;
@@ -1097,7 +1097,10 @@ export class Reader {
   }
 
   #switchTo(tab) {
-    return this.#serial(() => this.#switchToNow(tab));
+    // (Until it is shown, the viewer still holds the tab before: a turn of
+    // the view asked for meanwhile waits for it, see rotate.)
+    this.switching = (this.switching || 0) + 1;
+    return this.#serial(() => this.#switchToNow(tab)).finally(() => { this.switching--; });
   }
 
   async #switchToNow(tab) {
@@ -1449,9 +1452,15 @@ export class Reader {
         if (!tab.dirty) { tab.dirty = true; this.#renderTabs(); }
         this.#showSaveState();
       };
+      // (Undo can bring it back to how it was opened or saved: see #checkSaved.)
+      doc.annotationStorage.onResetModified = () => this.#checkSaved(tab);
+      tab.clean = tab.dirty ? null : { doc, print: "" };
       this.pdfViewer.setDocument(doc);
       this.linkService.setDocument(doc, null);
-      this.scripting.setDocument(doc).catch(() => {});  // a form without scripts works as before
+      // (The viewer hands the document to its form scripting itself once the
+      // first page is drawn. Handing it over here too made two at once: the
+      // second could ask a document closed meanwhile for its fields, e.g.
+      // when a page was turned just after switching tabs.)
       // (The viewer hands the document to the find controller itself once the
       // first page is drawn; doing it here too would reset a search started
       // when the pages appear, e.g. from the folder search.)
@@ -1557,6 +1566,7 @@ export class Reader {
     eventBus.on("annotationeditormodechanged", ({ mode }) => this.#showEditMode(this.#modeName(mode)));
     eventBus.on("editingstateschanged", ({ details }) => {
       this.annotUndo = !!details.hasSomethingToUndo;
+      this.#checkSaved();
       this.#showSaveState();
       this.undoBtn.disabled = !details.hasSomethingToUndo;
       this.redoBtn.disabled = !details.hasSomethingToRedo;
@@ -1601,6 +1611,7 @@ export class Reader {
   }
 
   async #closeDocument() {
+    this.gaveWay = null;  // (no bar comes back for a document that is going)
     this.closeFind();
     await this.closeCompare();
     this.closeAnnotate();
@@ -1625,7 +1636,10 @@ export class Reader {
       this.pdfViewer.setDocument(null);
       this.linkService.setDocument(null);
       this.findController.setDocument(null);
-      this.scripting?.setDocument(null).catch(() => {});
+      // (The viewer lets go of the form scripting too; it finishes before the
+      // document goes, so it never asks a destroyed one for anything.)
+      const scripts = this.scripting?.destroyPromise;
+      if (scripts) await Promise.race([scripts, new Promise((r) => setTimeout(r, 1500))]).catch(() => {});
       await destroyTask(doc.loadingTask || task, wait);  // pdf.js frees a document through its task
     } else if (task) {
       await destroyTask(task, wait);  // e.g. cancelled at the password prompt: wait for it to be gone
@@ -1669,7 +1683,15 @@ export class Reader {
     else this.#updatePage();
   }
 
-  rotate(delta) { this.pdfViewer.pagesRotation = (this.pdfViewer.pagesRotation + delta + 360) % 360; this.#rebuildThumbsSoon(); }
+  rotate(delta) {
+    // Just after a tab was picked, the one before is still showing: turn the picked one once it's there.
+    if (this.switching) { this.#serial(() => this.rotate(delta)); return; }
+    if (!this.doc) return;
+    // (Pages not laid out yet: after they are, and after the turn remembered for the file.)
+    if (!this.pdfViewer.pagesCount) { const doc = this.doc; this.eventBus.on("pagesinit", () => { if (this.doc === doc) this.rotate(delta); }, { once: true }); return; }
+    this.pdfViewer.pagesRotation = (this.pdfViewer.pagesRotation + delta + 360) % 360;
+    this.#rebuildThumbsSoon();
+  }
 
   toggleSpread() {
     const { SpreadMode } = viewer;
@@ -2079,10 +2101,18 @@ export class Reader {
 
   // ---- find -----------------------------------------------------------------
   openFind() {
-    // One tool row at a time: the annotate bar closes (what was drawn stays, unsaved changes too).
-    if (!this.annotbar.hidden) this.closeAnnotate();
-    this.#endHint();
+    // One tool row at a time: the annotate bar gives way (what was drawn
+    // stays, unsaved changes too) and comes back when find closes.
+    // (The find bar shows first, so the file panel stays aside meanwhile.)
+    const wasHidden = this.findbar.hidden;
     this.findbar.hidden = false;
+    if (!this.annotbar.hidden) {
+      const mode = this.editMode;
+      this.gaveWay = null;
+      this.closeAnnotate();
+      this.gaveWay = { bar: "annotate", mode };
+    } else if (wasHidden) this.gaveWay = null;
+    this.#endHint();
     this.#stepAside();
     this.findBtn.setAttribute("aria-pressed", "true");
     const selected = String(window.getSelection() || "").trim();
@@ -2093,8 +2123,14 @@ export class Reader {
   }
   closeFind() {
     if (this.findbar.hidden) return;
+    const back = this.gaveWay?.bar === "annotate" && this.doc ? this.gaveWay : null;
+    this.gaveWay = null;
     this.findbar.hidden = true;
     this.findBtn.setAttribute("aria-pressed", "false");
+    if (back) {  // the annotate bar it opened over, with its tool
+      this.openAnnotate();
+      if (back.mode && back.mode !== "NONE") this.#setEditMode(back.mode);
+    }
     this.#stepAside();
     if (this.eventBus) this.eventBus.dispatch("findbarclose", { source: this });
     this.findBtn.focus({ preventScroll: true });  // back where it was opened from
@@ -2122,8 +2158,14 @@ export class Reader {
   // ---- annotating and signing ------------------------------------------------------
   openAnnotate() {
     if (!this.doc) return;
-    if (!this.findbar.hidden) this.closeFind();
+    // Over the find bar: it gives way, and comes back when this bar closes.
+    const wasHidden = this.annotbar.hidden;
     this.annotbar.hidden = false;
+    if (!this.findbar.hidden) {
+      this.gaveWay = null;
+      this.closeFind();
+      this.gaveWay = { bar: "find" };
+    } else if (wasHidden) this.gaveWay = null;
     this.#stepAside();
     this.annotateBtn.setAttribute("aria-pressed", "true");
     this.#showSaveState();
@@ -2137,6 +2179,14 @@ export class Reader {
     this.#showSaveState();
     if (this.editMode && this.editMode !== "NONE") this.#setEditMode("NONE");
     this.#endHint();
+    const back = this.gaveWay?.bar === "find" && this.doc;
+    this.gaveWay = null;
+    if (back) {  // the find bar it opened over
+      this.findbar.hidden = false;
+      this.findBtn.setAttribute("aria-pressed", "true");
+      this.findInput.focus();
+      if (this.findInput.value) this.#find("");
+    }
     this.#stepAside();
   }
 
@@ -3234,17 +3284,100 @@ export class Reader {
     }
   }
 
-  /** Draw, type or pick a signature, then place it on the current page. */
-  async sign() {
+  /** Draw, type or pick a signature, then place it: on ``line`` when given
+   *  (a printed line to sign on, from the file's facts: {page, rect: the
+   *  blank or rule in PDF points, text: the label's size}), else about two
+   *  inches wide in the middle of what's shown. It moves and resizes like
+   *  any picture afterwards. */
+  async sign({ line = null } = {}) {
     if (!this.doc || !this.uiManager) return;
     const image = await this.#signatureDialog();
     if (!image) return;
     const file = new File([image], "signature.png", { type: "image/png" });
-    const layer = this.uiManager.currentLayer;
-    if (!layer) { this.toast("Scroll to the page to sign, then try again."); return; }
+    // Annotating first: until then the line's page may have no layer to put
+    // pictures on yet (just after the file opened), which put the signature
+    // in the middle of the view instead of on its line.
     if (this.annotbar.hidden) this.openAnnotate();
+    // (The layer pdf.js uses for the page shown stands in when the line's page
+    // has none of its own yet, e.g. in a window that was minimized.)
+    const current = this.uiManager?.currentLayer;
+    const onLine = line ? (await this.#editorLayer(line.page - 1)) || (current?.pageIndex === line.page - 1 ? current : null) : null;
+    const layer = onLine || this.uiManager?.currentLayer;
+    if (!layer) { this.toast("Scroll to the page to sign, then try again."); return; }
+    const before = new Set(this.uiManager.getEditors(layer.pageIndex));
     await layer.pasteEditor({ mode: pdfjs.AnnotationEditorType.STAMP }, { bitmapFile: file });
-    this.#hint("Drag the signature into place; use the corners to resize it.", 5000);
+    // (The picture can join the page a moment after the paste is done: wait for it, up to 5 s.)
+    let editor = null;
+    for (let i = 0; i < 250 && !editor; i++) {
+      editor = [...this.uiManager.getEditors(layer.pageIndex)].find((e) => !before.has(e)) || null;
+      if (!editor) await new Promise((r) => setTimeout(r, 20));
+    }
+    const placed = editor ? await this.#fitSignature(editor, onLine ? line : null) : false;
+    this.#hint(placed === "line" ? "Signed on the line. Drag it to move it; use the corners to resize it."
+      : "Drag the signature into place; use the corners to resize it.", 5000);
+  }
+
+  /** The layer pdf.js puts pictures on for page ``index``, once there:
+   *  the page is brought into view to have it drawn when it isn't yet
+   *  (waits up to 3 seconds; null if it never comes). */
+  async #editorLayer(index) {
+    const get = () => this.pdfViewer.getPageView(index)?.annotationEditorLayer?.annotationEditorLayer || null;
+    if (get()) return get();
+    if (index >= 0 && index < (this.pdfViewer.pagesCount || 0)) {
+      const view = this.pdfViewer.getPageView(index), top = view?.div?.getBoundingClientRect(), col = this.#column();
+      if (!top || top.bottom < col.top || top.top > col.bottom) this.pdfViewer.currentPageNumber = index + 1;
+    }
+    for (let i = 0; i < 150 && !get(); i++) await new Promise((r) => setTimeout(r, 20));
+    return get();
+  }
+
+  /** Size and place a signature just added (pdf.js makes a picture up to
+   *  three quarters of the page): on the line, its foot on the rule, at
+   *  the start of it, 1.6 times as tall as the label's letters and no
+   *  longer than the line; else 2 inches wide where it is. Says "line" or
+   *  "default", or false when the picture didn't load. */
+  async #fitSignature(editor, line) {
+    for (let i = 0; i < 250 && !(editor.width > 0); i++) await new Promise((r) => setTimeout(r, 20));
+    if (!(editor.width > 0) || !editor.parent || !editor.div) return false;
+    const [W, H] = editor.pageDimensions, [px, py] = editor.pageTranslation, turn = editor.rotation || 0;
+    const aspect = (editor.height * H) / (editor.width * W);  // the picture's height over its width
+    let rect, how = "line";
+    if (line && turn === 0 && aspect > 0) {
+      const [x0, , x1, top] = line.rect, length = Math.max(x1 - x0, 24);
+      let h = 1.6 * Math.max(line.text || 10, 4), w = h / aspect;
+      if (w > length) { w = length; h = w * aspect; }
+      rect = [x0, top, x0 + w, top + h];
+    } else {
+      how = "default";
+      let w = 144, h = w * aspect;  // 2 inches wide; a tall picture no taller than 1 inch
+      if (h > 72) { h = 72; w = h / aspect; }
+      // The middle of the part of its page that is in sight (else where pdf.js put it).
+      const [a0, b0, a1, b1] = editor.getRect(0, 0);
+      let cx = (a0 + a1) / 2, cy = (b0 + b1) / 2;
+      const view = this.pdfViewer.getPageView(editor.pageIndex), col = this.#column();
+      const page = view?.div.getBoundingClientRect();
+      if (page) {
+        const l = Math.max(page.left, col.left), r = Math.min(page.right, col.right), t = Math.max(page.top, col.top), b = Math.min(page.bottom, col.bottom);
+        if (r > l && b > t) [cx, cy] = view.viewport.convertToPdfPoint((l + r) / 2 - page.left - view.div.clientLeft, (t + b) / 2 - page.top - view.div.clientTop);
+      }
+      const [dx, dy] = turn % 180 ? [h / 2, w / 2] : [w / 2, h / 2];
+      rect = [cx - dx, cy - dy, cx + dx, cy + dy];
+    }
+    // editor.getRect turned back: where the editor's corner is, as fractions of the page.
+    const [r0, r1, r2, r3] = rect, across = r2 - r0, up = r3 - r1;
+    const [left, top, width, height] = {
+      0: [r0 - px, H + py - r3, across, up], 90: [r0 - px, H + py - r1, up, across],
+      180: [r2 - px, H + py - r1, across, up], 270: [r2 - px, H + py - r3, up, across] }[turn] || [r0 - px, H + py - r3, across, up];
+    Object.assign(editor, { x: left / W, y: top / H, width: width / W, height: height / H });
+    editor.setDims();
+    editor.fixAndSetPosition();
+    editor._onResized?.();
+    // In sight: the page column scrolls to it (a line near the foot of the page is often below).
+    await new Promise((r) => requestAnimationFrame(r));
+    const box = editor.div.getBoundingClientRect(), col = this.#column();
+    if (box.top < col.top || box.bottom > col.bottom) this.container.scrollTop += box.top - (col.top + col.bottom) / 2 + box.height / 2;
+    if (box.left < col.left || box.right > col.right) this.container.scrollLeft += box.left - (col.left + col.right) / 2 + box.width / 2;
+    return how;
   }
 
   #signatureDialog() {
@@ -4221,7 +4354,7 @@ export class Reader {
         if (!this.tabs.includes(tab)) return;
         (tab.undo ||= []).push(bytes);
         if (tab.undo.length > 30) tab.undo.shift();
-        Object.assign(tab, { bytes: changed, afterEdit: changed, edited: true, dirty: true,
+        Object.assign(tab, { bytes: changed, afterEdit: changed, edited: true, dirty: true, clean: null,
           version: (tab.version || 0) + 1 });
         if (tab === this.activeTab) { tab.goto = goto ? goto(this.#view()) : this.#view(); await this.#reloadEditing(tab); }
         else this.#renderTabs();
@@ -4271,7 +4404,7 @@ export class Reader {
             [["cancel", "Cancel"], ["undo", "Undo the change", true]]) !== "undo") return;
       const previous = tab.undo.pop();
       const back = previous === tab.original;
-      Object.assign(tab, { bytes: previous, afterEdit: previous, edited: !back, dirty: !back, goto: this.#view(),
+      Object.assign(tab, { bytes: previous, afterEdit: previous, edited: !back, dirty: !back, clean: null, goto: this.#view(),
         version: (tab.version || 0) + 1 });
       await this.#reloadEditing(tab);
       this.toast("Change undone", 1500);
@@ -4377,7 +4510,7 @@ export class Reader {
       const answer = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(answer.error || res.statusText);
       if (this.tabs.includes(tab)) {
-        Object.assign(tab, { stamp: answer.stamp, dirty: true });
+        Object.assign(tab, { stamp: answer.stamp, dirty: true, clean: null });
         this.#renderTabs();
       }
       this.toast(`Undone: ${tab.name} is as it was before. Your changes are still here, not saved.`, 6000);
@@ -4555,19 +4688,32 @@ export class Reader {
   #closeContextMenu() { if (!this.ctxMenu.hidden) this.ctxMenu.hidden = true; }
 
   // ---- pages: turn, delete, copy, move, insert, extract -------------------------------------
-  #pagePlan() { return Array.from({ length: this.doc.numPages }, (_, i) => ({ page: i + 1 })); }
+  #pagePlan(count = this.doc.numPages) { return Array.from({ length: count }, (_, i) => ({ page: i + 1 })); }
   static #pagesText(pages) { return pages.length === 1 ? `Page ${pages[0]}` : `${pages.length} pages`; }
 
+  /** ``plan``: the pages' new order, or a function making it for the
+   *  document shown when the change's turn comes (a change asked for while
+   *  another tab is still being shown waits for it, and is that tab's). A
+   *  plan made before then is for the document shown when it was asked:
+   *  if another one is shown by its turn, nothing is changed. */
   #arrange(plan, { inserts = [], message = "", page = null } = {}) {
-    return this.#changeDocument((bytes, tab) => this.#post("/api/pages/arrange", bytes, tab, { plan: JSON.stringify(plan) }, inserts), {
+    const asked = this.doc;
+    return this.#changeDocument((bytes, tab) => {
+      if (typeof plan !== "function" && this.doc !== asked) throw new Error("the document changed meanwhile, so nothing was changed");
+      const pages = typeof plan === "function" ? plan(this.doc.numPages) : plan;
+      return this.#post("/api/pages/arrange", bytes, tab, { plan: JSON.stringify(pages) }, inserts);
+    }, {
       failure: "Could not change the pages: ",
       goto: (view) => ({ page: page || view.page, scale: view.scale }),
       after: () => { if (message) this.toast(message, 5000, ["Undo", () => this.#undoTextEdit()]); },
     });
   }
   rotatePages(pages, delta) {
-    if (!this.doc || !pages.length) return;
-    const plan = this.#pagePlan().map((e) => (pages.includes(e.page) ? { ...e, rotate: delta } : e));
+    if (!(this.doc || this.tabs.length) || !pages.length) return;  // (just after a tab switch: that tab's pages, once it's shown)
+    const plan = (count) => {
+      if (!pages.some((n) => n <= count)) throw new Error("that page isn't in this document");
+      return this.#pagePlan(count).map((e) => (pages.includes(e.page) ? { ...e, rotate: delta } : e));
+    };
     return this.#arrange(plan, { page: pages[0], message: `${Reader.#pagesText(pages)} turned` });
   }
   deletePages(pages) {
@@ -4668,7 +4814,39 @@ export class Reader {
     if (!tab || !this.tabs.includes(tab) || (tab.version || 0) !== version) return;  // changed since
     tab.dirty = false;
     tab.savedSince = true;  // pdf.js's undo history outlives the save: Save goes quiet until the next change
+    tab.clean = tab === this.activeTab && this.doc ? { doc: this.doc, print: this.#annotPrint() } : null;
     try { if (tab === this.activeTab) this.doc?.annotationStorage.resetModified(); } catch (e) { /* (so the next change is noticed) */ }
+    this.#renderTabs();
+    this.#showSaveState();
+  }
+
+  /** What the annotations and form entries not in the file yet are, as
+   *  text: the same text, the same changes. (Each editor as it would be
+   *  saved, without its picture's pixels.) */
+  #annotPrint(doc = this.doc) {
+    const parts = [];
+    for (const [key, value] of doc?.annotationStorage || []) {
+      let said = value;
+      if (typeof value?.serialize === "function") { try { said = value.serialize(false); } catch (e) { said = "?"; } }
+      if (said) parts.push(key + ":" + JSON.stringify(said));
+    }
+    return parts.join("\n");
+  }
+
+  /** pdf.js's Undo and Redo don't say when the document is back as it was
+   *  opened or last saved. It is when the shown document is the one it was
+   *  then (no page or text change since: those load the document again)
+   *  and its annotations and entries are the same: then it isn't changed
+   *  (no dot, Save quiet). Anything else than that state is a change. */
+  #checkSaved(tab = this.activeTab) {
+    const clean = tab?.clean;
+    if (!clean || tab !== this.activeTab || !this.doc || clean.doc !== this.doc) return;
+    const same = this.#annotPrint() === clean.print;
+    if (same === !tab.dirty) return;
+    tab.dirty = !same;
+    tab.savedSince = same;
+    if (same) { try { this.doc.annotationStorage.resetModified(); } catch (e) { /* (so the next change is noticed) */ } }
+    else tab.version = (tab.version || 0) + 1;
     this.#renderTabs();
     this.#showSaveState();
   }
