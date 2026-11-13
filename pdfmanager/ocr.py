@@ -763,7 +763,7 @@ def _run_builtin(source, output, force, deskew, rotate=True, script=None):
             if not force and page_has_text(page):
                 continue
             with core.PDFIUM_LOCK:
-                pdfium_page = doc[i]
+                pdfium_page = core.show_whole_page(doc[i])
                 scale = render_scale(pdfium_page.get_width(), pdfium_page.get_height())
                 image = pdfium_page.render(scale=scale).to_pil()
             try:

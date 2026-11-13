@@ -1836,7 +1836,7 @@ def render_scale(page, scale, limit=None):
     import math
 
     limit = limit or MAX_RENDER_PIXELS
-    w, h = page.get_size()
+    w, h = show_whole_page(page).get_size()
     area = max(1.0, abs(w * h))
     if area * scale * scale > limit:
         scale = math.sqrt(limit / area)

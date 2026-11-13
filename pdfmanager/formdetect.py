@@ -501,6 +501,7 @@ def _blank_pictures(page, image, to_px):
 
 
 def _detect_page(page, textpage, quick=False):
+    core.show_whole_page(page)
     if quick and max(page.get_size()) > QUICK_MAX_SIDE:
         return []
     width, height = page.get_size()

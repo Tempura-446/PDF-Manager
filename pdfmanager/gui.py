@@ -1413,7 +1413,7 @@ def _preview_operation(op, data, filename, opts, password=None, width=960):
         with core.PDFIUM_LOCK:
             doc = pdfium.PdfDocument(result, password=password)
             try:
-                page = doc[0]
+                page = core.show_whole_page(doc[0])
                 image = page.render(scale=width / max(1.0, page.get_width()), draw_annots=True).to_pil()
                 page.close()
             finally:
@@ -1447,7 +1447,7 @@ def _inspect_pdf(path, password=None):
         with core.PDFIUM_LOCK:
             doc = pdfium.PdfDocument(str(path), password=password)
             try:
-                page = doc[0]
+                page = core.show_whole_page(doc[0])
                 scale = THUMB_WIDTH / max(page.get_width(), 1)
                 image = page.render(scale=min(scale, 2.0)).to_pil().convert("RGB")
             finally:

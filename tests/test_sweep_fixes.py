@@ -180,11 +180,24 @@ def test_a_page_without_its_type_is_signed(tmp_path):
     assert certsign.verify(out)[0]["intact"]
 
 
-@pytest.mark.parametrize("op", ["to-pptx", "to-images", "to-word"])
+@pytest.mark.parametrize("op", ["to-pptx", "to-images", "to-word", "compare", "autocrop", "clean", "ocr",
+                                "preview", "inspect"])
 def test_a_crop_box_outside_the_page_shows_the_whole_page(tmp_path, op):
     src = tmp_path / "outside.pdf"
     src.write_bytes(_raw_pdf("/MediaBox [0 0 612 792] /CropBox [1000 1000 1200 1200]"))
-    name, data, notes = run(op, [src], {"engine": "basic"} if op == "to-word" else {}, tmp_path)
+    if op == "preview":
+        assert gui.preview_operation("watermark", src.read_bytes(), src.name, {"text": "DRAFT"})
+        return
+    if op == "inspect":
+        assert gui.inspect_pdf(src)["thumb"]
+        return
+    if op == "ocr":
+        from pdfmanager import ocr
+
+        if not (ocr.tesseract_available() or ocr.builtin_available()):
+            pytest.skip("needs an OCR engine")
+    files = [src, text_pdf(tmp_path / "other.pdf", pages=1)] if op == "compare" else [src]
+    name, data, notes = run(op, files, {"engine": "basic"} if op == "to-word" else {}, tmp_path)
     if op == "to-images":
         import io
 
