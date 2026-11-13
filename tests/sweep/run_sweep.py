@@ -149,7 +149,7 @@ def _check_pdf(path, op, before):
         return f"{pages_before} pages became {n}"
     if op in SAME_TEXT and op not in ("split",):
         had, has = sum(map(len, texts_before)), sum(map(len, texts[:len(texts_before)]))
-        if op in ("reverse",):
+        if op in ("reverse", "insert-blank"):  # the same pages, moved
             has = sum(map(len, texts))
         if had >= 40 and has < 0.6 * had:
             return f"text lost: {had} letters before, {has} after"
@@ -232,6 +232,9 @@ def _child(task, conn, memory_mb):
     import resource
 
     os.setsid()
+    # Tesseract's own threads, times the jobs running at once, would make
+    # OCR look hung on a busy machine.
+    os.environ["OMP_THREAD_LIMIT"] = "1"
     if memory_mb:
         limit = memory_mb * 1024 * 1024
         resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
@@ -414,7 +417,8 @@ def _run(tasks, out, jobs, timeout, memory_mb, show=True):
             proc = ctx.Process(target=_child, args=(task, there, memory_mb), daemon=True)
             proc.start()
             there.close()
-            limit = timeout + 0.3 * min(task.get("pages", 0), 2000)
+            per_page = 1.0 if task["task"] in ("ocr", "clean", "redact", "pdfa", "compress") else 0.3
+            limit = timeout + per_page * min(task.get("pages", 0), 2000)
             running[proc.sentinel] = (index, proc, here, time.monotonic(), limit)
         ready = wait(list(running) + [r[2] for r in running.values()], timeout=1.0)
         now = time.monotonic()
