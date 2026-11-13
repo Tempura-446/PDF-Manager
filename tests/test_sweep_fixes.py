@@ -335,3 +335,59 @@ def test_copying_text_from_a_scan_says_there_is_none(tmp_path):
     # With another file that has text: that one's text, and a note about the scan.
     name, data, notes = run("text", [text_pdf(tmp_path / "words.pdf"), scan], {}, tmp_path)
     assert b"quick brown fox" in data and any("scan.pdf has no text" in n for n in notes)
+
+
+def _cut_short(path, keep=0.9):
+    data = path.read_bytes()
+    path.write_bytes(data[: int(len(data) * keep)])
+    return path
+
+
+@pytest.mark.parametrize("op", ["rotate", "to-word", "compress", "watermark", "number"])
+def test_a_file_cut_short_is_mended_first(tmp_path, op):
+    from pypdf import PdfReader
+
+    src = _cut_short(text_pdf(tmp_path / "download.pdf", pages=3))
+    opts = {"rotate": {"degrees": "90"}, "to-word": {"engine": "basic"}, "watermark": {"text": "DRAFT"}}.get(op, {})
+    name, data, notes = run(op, [src], opts, tmp_path)
+    assert any("download.pdf was damaged; it was mended first" in n for n in notes)
+    if name.endswith(".pdf"):
+        out = tmp_path / "out.pdf"
+        out.write_bytes(data)
+        reader = PdfReader(out)
+        assert len(reader.pages) == 3 and "quick brown fox" in reader.pages[0].extract_text()
+
+
+def test_a_wrong_cross_reference_table_is_mended_and_a_locked_file_stays_locked(tmp_path):
+    from pypdf import PdfReader
+
+    plain = text_pdf(tmp_path / "plain.pdf")
+    locked = tmp_path / "locked.pdf"
+    with pikepdf.open(plain) as pdf:
+        pdf.save(locked, encryption=pikepdf.Encryption(owner="o", user="u", R=6),
+                 object_stream_mode=pikepdf.ObjectStreamMode.disable)
+    data = locked.read_bytes()
+    at = data.rindex(b"startxref")
+    locked.write_bytes(data[:at] + b"startxref\n17\n%%EOF\n")
+    work = tmp_path / "work"
+    work.mkdir()
+    notes = []
+    name, out, ctype = gui.run_operation("rotate", [locked], {"degrees": "90"}, "u", {}, work, notes)
+    assert any("mended first" in n for n in notes)
+    result = tmp_path / "result.pdf"
+    result.write_bytes(out)
+    reader = PdfReader(result)
+    assert reader.is_encrypted and reader.decrypt("u") and len(reader.pages) == 2
+
+
+def test_a_good_file_is_not_rewritten_before_a_tool(tmp_path):
+    name, data, notes = run("rotate", [text_pdf(tmp_path / "good.pdf")], {"degrees": "90"}, tmp_path)
+    assert not any("mended" in n for n in notes)
+
+
+def test_the_quick_look_names_the_file_not_its_folder(tmp_path):
+    bad = tmp_path / "folder" / "broken.pdf"
+    bad.parent.mkdir()
+    bad.write_bytes(b"%PDF-1.7\n1 0 obj << >> endobj\n")
+    said = gui.inspect_pdf(bad)["error"]
+    assert said.startswith("broken.pdf") and str(tmp_path) not in said

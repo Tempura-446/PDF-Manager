@@ -1159,6 +1159,46 @@ def _tidy(message, work):
     return message
 
 
+def _needs_mending(path, password):
+    """Whether qpdf had to rebuild the cross-reference table of ``path`` to
+    read it: a file cut short (a download that stopped) or whose index of
+    objects is wrong. pypdf and pdfium read such files partly or not at all."""
+    import pikepdf
+
+    try:
+        with pikepdf.open(str(path), password=password or "") as pdf:
+            if not any("reconstruct cross-reference" in str(w) for w in pdf.get_warnings()):
+                return False
+            # Signed: rewriting it would break the signatures.
+            return "/Perms" not in pdf.Root and not _file_mentions(path, b"/ByteRange")
+    except Exception:  # not readable at all, or locked: the tool says so itself
+        return False
+
+
+def _mend_inputs(op, files, password, work, notes):
+    """``files``, each damaged one replaced by a copy mended as Repair does,
+    with a note saying so (Repair itself mends the file as it is)."""
+    if op == "repair" or not work or OPS[op].get("files") not in ("pdf", "pdf2"):
+        return files
+    import pikepdf
+
+    mended = []
+    for index, path in enumerate(files):
+        path = Path(path)
+        if path.suffix.lower() == ".pdf" and _needs_mending(path, password):
+            target = Path(work) / "mended" / f"{index:03d}" / path.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with pikepdf.open(str(path), password=password or "") as pdf:
+                    core.keep_size(pdf).save(target, encryption=pdf.is_encrypted or None)  # (still locked if it was)
+                notes.append(f"{path.name} was damaged; it was mended first, as Repair does")
+                path = target
+            except Exception:  # noqa: BLE001 (it couldn't be mended: the tool tries the file as it is)
+                pass
+        mended.append(path)
+    return mended
+
+
 def _check_pages(op, files, password):
     """Each PDF has a page to work on (Repair is for files that don't open)."""
     if op == "repair" or OPS[op].get("files") not in ("pdf", "pdf2"):
@@ -1181,6 +1221,7 @@ def _run_operation(op, files, opts, password=None, extra_files=None, work=None, 
                         "type a web address, or add saved web pages")
     if len(files) < spec.get("min", 1):
         raise UserError(f"add at least {spec['min']} files")
+    files = _mend_inputs(op, files, password, work, notes if notes is not None else [])
     _check_pages(op, files, password)
     out_dir = Path(work or (files[0].parent if files else tempfile.mkdtemp(prefix="pdfm-"))) / "out"
     out_dir.mkdir()
@@ -1363,7 +1404,8 @@ def _inspect_pdf(path, password=None):
         reader = core.open_pdf(path, password)
     except core.PdfManagerError as exc:
         locked = "encrypted" in str(exc) or "password" in str(exc)
-        return {"pages": None, "locked": locked, "error": None if locked else str(exc)}
+        said = str(exc).replace(str(path), Path(path).name)  # the file's name, not where it's kept
+        return {"pages": None, "locked": locked, "error": None if locked else said}
     info = {"pages": len(reader.pages), "locked": False, "error": None, "thumb": None}
     try:
         import pypdfium2 as pdfium

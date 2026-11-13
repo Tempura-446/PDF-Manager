@@ -56,7 +56,9 @@ def open_pdf(path, password=None):
     try:
         reader = PdfReader(str(path))
     except PyPdfError as exc:
-        raise PdfManagerError(f"{path} is not a readable PDF ({exc})") from None
+        reader = _mended(path, password)
+        if reader is None:
+            raise PdfManagerError(f"{path} is not a readable PDF ({exc})") from None
     if reader.is_encrypted:
         # A file with only an owner password (printing or copying restricted)
         # opens with an empty password, also when a password meant for another
@@ -68,6 +70,35 @@ def open_pdf(path, password=None):
             raise PdfManagerError(f"{path} is encrypted; supply a password")
         raise PdfManagerError(f"wrong password for {path}")
     return reader
+
+
+def keep_size(pdf):
+    """Before qpdf (pikepdf) saves a file whose trailer was lost and rebuilt:
+    qpdf only fills in /Size when the trailer has one, and pypdf can't copy
+    a file without it."""
+    if "/Size" not in pdf.trailer:
+        pdf.trailer.Size = 0  # (qpdf writes the right number)
+    return pdf
+
+
+def _mended(path, password):
+    """A reader on a copy of ``path`` mended by qpdf (as Repair does), for a
+    file pypdf can't open: one cut short, or whose cross-reference table is
+    damaged or missing. Viewers open such files, so the tools do too. None
+    when qpdf can't make sense of it either."""
+    import pikepdf
+
+    try:
+        with pikepdf.open(str(path), password=password or "") as pdf:
+            if not len(pdf.pages):
+                return None
+            buf = io.BytesIO()
+            keep_size(pdf).save(buf)  # (decrypted: the tools protect their results again, see gui._protect)
+        reader = PdfReader(buf)
+        len(reader.pages)
+        return reader
+    except Exception:  # noqa: BLE001 (any failure means it can't be mended here)
+        return None
 
 
 def _write(writer, output):
