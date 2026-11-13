@@ -509,7 +509,9 @@ class Geometry:
 
     def __init__(self, bbox, rotation):
         self.x0, self.y0, self.x1, self.y1 = bbox
-        self.rotation = rotation % 360
+        # A multiple of 90 (anything else shows as 0, see core.quarter_turn)
+        rotation = int(rotation or 0) % 360 if isinstance(rotation, (int, float)) else 0
+        self.rotation = rotation if rotation % 90 == 0 else 0
         w, h = self.x1 - self.x0, self.y1 - self.y0
         self.width, self.height = (h, w) if self.rotation in (90, 270) else (w, h)
 
