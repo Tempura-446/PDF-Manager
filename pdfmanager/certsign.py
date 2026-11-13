@@ -349,11 +349,24 @@ def _open_for_update(data, password, name, reader=None):
 
     try:
         writer = IncrementalPdfFileWriter(io.BytesIO(data), strict=False)
-    except (PdfError, ValueError, KeyError, TypeError) as exc:
+        if reader is not None and not writer.prev.encrypted:
+            # pyHanko reads lazily: what it can't make sense of in the page
+            # tree or the form would otherwise stop the signing half way.
+            from pyhanko.sign import fields
+
+            list(fields.enumerate_sig_fields(writer.prev, filled_status=None))
+            if len(reader.pages):
+                writer.prev.find_page_for_modification(len(reader.pages) - 1)
+    except (PdfError, ValueError, KeyError, TypeError, IndexError, AttributeError) as exc:
         if reader is None or reader.is_encrypted or _has_signatures(reader):
             raise core.PdfManagerError(f"{name} can't be signed: it's damaged ({exc})") from None
+        from pypdf.generic import NameObject
+
         repaired = io.BytesIO()
-        core.clone_document(reader).write(repaired)
+        clean = core.clone_document(reader)
+        for page in clean.pages:  # (pyHanko finds the pages by their /Type)
+            page[NameObject("/Type")] = NameObject("/Page")
+        clean.write(repaired)
         return _open_for_update(repaired.getvalue(), password, name)
     if writer.prev.encrypted:
         try:

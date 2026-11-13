@@ -159,3 +159,18 @@ def test_a_page_box_pdfplumber_cant_read_converts_or_says_so(tmp_path, op, box):
 
         text = " ".join(p.text for p in docx.Document(io.BytesIO(data)).paragraphs)
         assert "Hello odd boxes" in text
+
+
+def test_a_page_without_its_type_is_signed(tmp_path):
+    src = tmp_path / "notype.pdf"
+    src.write_bytes(_raw_pdf("/MediaBox [0 0 612 792]").replace(b"<< /Type /Page /Parent", b"<< /Parent"))
+    pfx = make_id(tmp_path / "id.pfx")[0]
+    name, data, notes = run("sign-cert", [src], {"pfx_password": PFX_PASSWORD, "appearance": "visible",
+                                                 "page": "last", "position": "bottom-right", "size": "medium"},
+                            tmp_path, {"pfx": pfx, "pfx[]": [pfx]})
+    assert any("signed" in n for n in notes)
+    from pdfmanager import certsign
+
+    out = tmp_path / "signed.pdf"
+    out.write_bytes(data)
+    assert certsign.verify(out)[0]["intact"]
