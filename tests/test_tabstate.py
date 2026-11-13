@@ -4,7 +4,9 @@ back to saved, page and text edits and their Undo, switching away and back,
 the saves, a tool's result, redacting, closing) and deriveUi (the dots, the
 Save buttons, the title, the close prompt, what Ctrl+S does), in Node
 (skipped where there is none); tabflow.js goes through the same in the
-reader itself, in a browser through Node's Playwright."""
+reader itself, in a browser through Node's Playwright; readerparts.js checks
+the parts of the reader split into modules of their own (measuring, find,
+the text editor box)."""
 import json
 import shutil
 import subprocess

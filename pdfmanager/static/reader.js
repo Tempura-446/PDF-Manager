@@ -11,17 +11,27 @@
 // (highlight, text, drawing, pictures) and signing, document properties,
 // hand tool, dark pages, full screen, printing, saving a copy and handing the
 // document to one of the app's tools.
+//
+// Reader is one object; its parts are in files of their own, each a class
+// Reader extends (see Measuring in measuring.js): tabs.js (the open documents,
+// switching, closing, the tab bar and the save state shown), annotate.js,
+// sign.js, find.js, textedit-ui.js (the text editor box) and measuring.js.
+// A tab's state is a TabState (tabstate.js); what the modules share is in
+// readerkit.js. Here: building the reader, keys, opening and showing a
+// document, the sidebar, saving, printing, pages, dialogs.
 
-import { BASE, DOC_OPTIONS, destroyTask, loadPdfjs as loadLibrary, openDocument } from "./pdfjs.js";
+import { BASE, DOC_OPTIONS, destroyTask, openDocument } from "./pdfjs.js";
 import * as files from "./files.js";
 import { Overlay } from "./overlay.js";
 import { COLORS, el, fadeOut, heldTimer, ICON, isTyping, MIN_ZOOM, MAX_ZOOM, pdfjs, store, svg, viewer, loadPdfjs } from "./readerkit.js";
+import { Annotating } from "./annotate.js";
+import { Finding } from "./find.js";
 import { Measuring } from "./measuring.js";
 import { Signing } from "./sign.js";
-import { Annotating } from "./annotate.js";
+import { Tabs } from "./tabs.js";
 import { TextEditing } from "./textedit-ui.js";
+import { saveAction } from "./tabstate.js";
 export { heldTimer, loadPdfjs } from "./readerkit.js";
-import { TabState, deriveUi, closePrompt, saveAction } from "./tabstate.js";
 
 
 /** What a protected PDF allows, from pdf.js's list of allowed permissions. */
@@ -127,16 +137,11 @@ async function pieceError(res, tab) {
 }
 const header = (res, name) => { try { return decodeURIComponent(res.headers.get(name) || ""); } catch (e) { return ""; } };
 
-function sameBytes(a, b) {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
 /** Single keys for the annotate bar's labelled tools, while it's open (n, p, r,
  *  t, e and m are the reader's own: next, previous, rotate, panel, edit text, measure). */
 const ANNOT_KEYS = { h: "HIGHLIGHT", c: "NOTE", a: "FREETEXT", d: "INK", s: "SIGN" };
 
-export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) {
+export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measuring(Object)))))) {
   constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onRepair, onForgetRecent, onSaveTab } = {}) {
     super();
     this.host = host;
@@ -222,21 +227,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
       this.undoNowBtn, this.saveNowBtn, this.scaleBtn,
       el("div", { class: "rd-group" }, this.findBtn, this.annotateBtn, this.moreBtn, this.panelBtn));
 
-    // Find bar
-    this.findInput = el("input", { type: "search", placeholder: "Find in document", "aria-label": "Find in document", autocomplete: "off", spellcheck: "false" });
-    this.findPrevBtn = b("up", "Previous match (Shift+Enter)");
-    this.findNextBtn = b("down", "Next match (Enter)");
-    this.findCase = el("input", { type: "checkbox" });
-    this.findWord = el("input", { type: "checkbox" });
-    this.findAll = el("input", { type: "checkbox", checked: true });
-    this.findStatus = el("span", { class: "rd-findstatus", "aria-live": "polite" });
-    this.findCloseBtn = b("x", "Close find bar (Esc)");
-    this.findbar = el("div", { class: "rd-findbar", hidden: true },
-      this.findInput, this.findPrevBtn, this.findNextBtn,
-      el("label", {}, this.findAll, "Highlight all"),
-      el("label", {}, this.findCase, "Match case"),
-      el("label", {}, this.findWord, "Whole words"),
-      this.findStatus, el("span", { style: "flex:1" }), this.findCloseBtn);
+    this._buildFind();  // the find bar (find.js)
 
     // Annotation bar: the tools used most keep their words (and a single key
     // each, see ANNOT_KEYS); the rest are in the labelled More tools menu.
@@ -434,7 +425,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
     const outside = [this.tabbar, toolbar, this.side, this.scalebar, this.menu, this.ctxMenu];
     window.addEventListener("pointerdown", (e) => {
       if (!outside.some((area) => area.contains(e.target))) return;
-      this.#finishEditing();
+      this._finishEditing();
     }, { capture: true });
     this.host.append(this.root);
     this.#wire();
@@ -603,18 +594,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
     this.authorInput.addEventListener("change", () => store.set("pdfm-author", this.authorInput.value.trim()));
     this.shapeSelect.addEventListener("change", () => store.set("pdfm-shape", this.shapeSelect.value));
 
-    // Find
-    this.findInput.addEventListener("input", () => this._find(""));
-    this.findInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); this._find("again", e.shiftKey); }
-      if (e.key === "Escape") { e.preventDefault(); this.closeFind(); }
-    });
-    this.findNextBtn.addEventListener("click", () => this._find("again", false));
-    this.findPrevBtn.addEventListener("click", () => this._find("again", true));
-    this.findCase.addEventListener("change", () => this._find("casesensitivitychange"));
-    this.findWord.addEventListener("change", () => this._find("entirewordchange"));
-    this.findAll.addEventListener("change", () => this._find("highlightallchange"));
-    this.findCloseBtn.addEventListener("click", () => this.closeFind());
+    this._wireFind();
 
     // Annotating
     this.annotateBtn.addEventListener("click", () => (this.annotbar.hidden ? this.openAnnotate() : this.closeAnnotate()));
@@ -847,7 +827,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
       const file = { fileId: id, path: header(res, "X-Pdfm-Path"), stamp: res.headers.get("X-Pdfm-Stamp") || "",
         size: Number((res.headers.get("Content-Range") || "").split("/")[1]) || head.length };
       if (head.length >= file.size) await this.openBytes(head, name, null, goto, file);
-      else await this.#serial(() => this.#openBytesNow(null, name, null, goto, { ...file, url, head, headCopy: head.slice() }));  // the rest in pieces
+      else await this._serial(() => this._openBytesNow(null, name, null, goto, { ...file, url, head, headCopy: head.slice() }));  // the rest in pieces
     } catch (e) {
       this.toast("Could not open the file: " + (e.message || e));
     } finally {
@@ -855,244 +835,6 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
       if (!this.opening && !this.doc && this.active) this.refreshRecent();  // nothing opened after all
       this.#busy(false);
     }
-  }
-
-  /** Run ``fn`` after the document changes started before it. */
-  #serial(fn) {
-    const run = this.chain.then(() => fn());
-    this.chain = run.catch(() => {});
-    return run;
-  }
-
-  async openFile(file, password = null) {
-    await this.openBytes(new Uint8Array(await file.arrayBuffer()), file.name || "document.pdf", password);
-  }
-
-  /** Open a PDF in a new tab, or switch to its tab if it's already open. */
-  openBytes(bytes, name, password = null, goto = null, file = null) {
-    return this.#serial(() => this.#openBytesNow(bytes, name, password, goto, file));
-  }
-
-  /** A tool's result: a new tab right after ``beside`` (the tab it was made
-   *  from, which stays open as it was), shown. Resolves with the new tab, or
-   *  null if it couldn't be opened. */
-  openResult(bytes, name, password, beside) {
-    return this.#serial(async () => {
-      await this.#openBytesNow(bytes, name, password, null, null);
-      const tab = this.activeTab;
-      if (!tab || tab.name !== name) return null;
-      const at = this.tabs.indexOf(beside);
-      if (at >= 0 && this.tabs.indexOf(tab) !== at + 1) {
-        this.tabs.splice(this.tabs.indexOf(tab), 1);
-        this.tabs.splice(at + 1, 0, tab);
-        this._refresh();
-      }
-      const wrap = this.tabEls?.get(tab.id)?.wrap;  // it slides in, once
-      wrap?.classList.add("rd-new");
-      wrap?.addEventListener("animationend", () => wrap.classList.remove("rd-new"), { once: true });
-      return tab;
-    });
-  }
-
-  /** What the shown tab holds now, its unsaved changes included (for a tool
-   *  run on it); the tab itself stays as it is, unsaved changes and all. */
-  async currentBytes() {
-    await this.chain;
-    if (!this.doc) return null;
-    return await this._currentBytes();
-  }
-
-  /** Whether the file on this computer holds what ``tab`` shows (opened from
-   *  there, nothing changed since it was last saved). */
-  isPristine(tab = this.activeTab) { return !!(tab && tab.fileId && !tab.dirty); }
-
-  /** Draw the tab bar again (e.g. after the app marked a tab unsaved). */
-  refreshTabs() { this._refresh(); }
-
-  /** Switch to an open tab (e.g. back to the one a result was made from). */
-  showTab(tab) { return this.#switchTo(tab); }
-
-  /** ``file``: where a document opened from this computer lives (fileId,
-   *  path, stamp, size; url when it's read in pieces, bytes then null). */
-  async #openBytesNow(bytes, name, password, goto, file = null) {
-    const same = this.tabs.find((t) => (file?.path && t.path === file.path)
-      || (bytes && t.original && t.name === name && sameBytes(t.original, bytes))
-      || (bytes && !t.original && t.headCopy && t.name === name && t.size === bytes.length  // (read in pieces, not all here yet)
-        && sameBytes(t.headCopy, bytes.subarray(0, t.headCopy.length)))
-      // Opened by id and read in pieces (only its first piece here) while the same file is open
-      // from its bytes (e.g. a tool's file card, then Recent): the same name, size and first piece.
-      || (!bytes && file?.head && t.original && t.name === name && t.original.length === file.size
-        && sameBytes(t.original.subarray(0, file.head.length), file.head)));
-    if (same) {
-      if (same === this.activeTab) { if (goto) this.#goto(goto); }
-      else { if (goto) same.aim(goto); await this.#switchToNow(same); }  // applied once its pages are there
-      return;
-    }
-    const previous = this.activeTab;
-    await this.#stash();
-    const tab = new TabState({ bytes, name, password, goto, file }, (t, what) => this.#tabChanged(t, what));
-    this.tabs.push(tab);
-    if (!(await this.#load(tab))) {
-      this.tabs.splice(this.tabs.indexOf(tab), 1);
-      tab.closed();
-      if (!(previous && this.tabs.includes(previous) && await this.#load(previous))) {
-        await this.#closeDocument();
-        this.#showEmpty();
-      }
-    }
-    this._refresh();
-  }
-
-  /** Keep the open tab's unsaved annotations and form entries in its bytes
-   *  before another document takes its place in the viewer. */
-  async #stash() {
-    const tab = this.activeTab;
-    this.#finishEditing();
-    if (!tab) return;
-    // The tool in use comes back with the tab (see pagesinit): with one on,
-    // pdf.js makes its annotations, unsaved ones kept in its bytes too,
-    // editors again, to pick, move, resize or delete.
-    const tool = this.doc && !this.annotbar.hidden ? this.editMode || "NONE" : null;
-    tab.stashed({ tool });
-    if (!this.doc || !this._changed()) return;
-    try {
-      tab.stashed({ tool, bytes: await this.#savedDocument(tab) });
-    } catch (e) {
-      this.toast(`Your unsaved changes to “${tab.name}” couldn't be kept: ${e.message || e}`, 9000);
-    }
-  }
-
-  #switchTo(tab) {
-    // (Until it is shown, the viewer still holds the tab before: a turn of
-    // the view asked for meanwhile waits for it, see rotate.)
-    this.switching = (this.switching || 0) + 1;
-    return this.#serial(() => this.#switchToNow(tab)).finally(() => { this.switching--; });
-  }
-
-  async #switchToNow(tab) {
-    if (tab === this.activeTab || !this.tabs.includes(tab)) return;
-    const previous = this.activeTab;
-    await this.#stash();
-    // (A tab that can't be shown: the one shown before comes back.)
-    if (!(await this.#load(tab)) && !(previous && this.tabs.includes(previous) && await this.#load(previous))) {
-      await this.#closeDocument();
-      this.#showEmpty();
-    }
-    this._refresh();
-  }
-
-  async closeTab(tab = this.activeTab) {
-    const answer = await this.#serial(() => this.#closeTabNow(tab));
-    if (answer !== "save") return;
-    // Save first (as Ctrl+S would; Save as for a tool's result not saved anywhere yet), then close.
-    if (tab !== this.activeTab) await this.#switchTo(tab);
-    if (tab.unsaved || !tab.fileId) await this.saveTab(tab, tab.madeBy?.from?.fileId || null);
-    else await this.save();
-    if (this.tabs.includes(tab) && !tab.needsSaving) await this.#serial(() => this.#closeTabNow(tab, true));
-  }
-
-  /** Close ``tab``; one with changes not saved (or a tool's result not saved
-   *  anywhere) asks first. Resolves "save" when Save was chosen: closeTab
-   *  saves it, then closes it. */
-  async #closeTabNow(tab, saved = false) {
-    if (!tab || !this.tabs.includes(tab)) return;
-    const prompt = closePrompt(tab);
-    if (prompt && !saved) {
-      const answer = await this.ask(prompt.title, prompt.text, [["cancel", "Cancel"], ["close", "Close without saving"], ["save", prompt.save, "seal"]]);
-      if (answer === "save") return "save";
-      if (answer !== "close") return;
-    }
-    const i = this.tabs.indexOf(tab);
-    this.tabs.splice(i, 1);
-    tab.closed();
-    if (tab === this.activeTab) {
-      this.activeTab = null;
-      const next = this.tabs[i] || this.tabs[i - 1];
-      if (!next || !(await this.#load(next))) { await this.#closeDocument(); this.#showEmpty(); }
-    }
-    this._refresh();
-  }
-
-  /** Any tab that would be lost on closing ZPDF: changes not saved to a
-   *  file, or a tool's result not saved anywhere (the tabs with a dot, whose
-   *  own close asks too; see deriveUi). */
-  hasUnsavedChanges() {
-    return deriveUi(null, this.tabs).anyUnsaved;
-  }
-
-  /** A tab's state changed (one of its transitions): show what follows.
-   *  (The app hears of it too, except for one more change to a tab already
-   *  unsaved: nothing it shows changes then.) */
-  #tabChanged(tab, what) {
-    if (this.tabs.includes(tab)) this._refresh({ notify: what !== "annotation" && what !== "loaded" });
-  }
-
-  /** Show what follows from the open tabs' state, all of it in one place:
-   *  the tab bar and its dots, the title (and its dot), the Save and Undo
-   *  buttons, the window's title (see deriveUi). ``notify``: tell the app
-   *  (its file panel follows the shown document). */
-  _refresh({ notify = true } = {}) {
-    if (!this.saveNowBtn) return;
-    this.#drawTabBar();
-    const tab = this.activeTab;
-    const ui = this.ui = deriveUi(tab, this.tabs, {
-      shown: !!this.doc, annotating: !this.annotbar.hidden, annotUndo: !!this.annotUndo, changed: this._changed(),
-      // (While areas are marked for Redact, Black out is the main action: Save waits, quiet.)
-      marked: this.markupMode === "REDACT" && !!tab && this._redactCount(tab) > 0, active: this.active,
-    });
-    // A dot (and the word, for screen readers): changes not saved, or a tool's result not saved anywhere yet.
-    for (const [id, parts] of this.tabEls) parts.dot.hidden = parts.unsaved.hidden = !ui.dots.get(id);
-    // With one document (no tab bar) the title says it too.
-    this.titleDot.hidden = this.titleSr.hidden = !ui.titleDot;
-    this.titleText.textContent = ui.heading;
-    this.titleEl.title = ui.heading;
-    if (ui.title) document.title = ui.title;
-    // Save and Undo in the toolbar while there are changes to keep or take
-    // back (the annotation bar has its own while it's open); the annotation
-    // bar's Save is the screen's main action only once there is something to
-    // save (it still works).
-    this.saveNowBtn.hidden = !ui.saveNow;
-    this.undoNowBtn.hidden = !ui.undoNow;
-    this.annotSaveBtn.classList.toggle("seal", ui.annotSave.main);
-    this.annotSaveBtn.classList.toggle("primary", ui.annotSave.main);
-    this.annotSaveBtn.title = ui.annotSave.title;
-    if (notify) this.onChange?.();
-  }
-
-  /** The tab bar. Tabs keep their elements (a click mustn't land on an
-   *  element that was replaced halfway through it). */
-  #drawTabBar() {
-    this.tabbar.hidden = this.tabs.length < 2;
-    this.tabEls ||= new Map();
-    for (const [id, parts] of this.tabEls) if (!this.tabs.some((t) => t.id === id)) { parts.wrap.remove(); this.tabEls.delete(id); }
-    if (!this.addTabBtn) {
-      this.addTabBtn = el("button", { type: "button", class: "rd-btn rd-doctab-add", title: "Open another PDF", "aria-label": "Open another PDF", html: svg("plus") });
-      this.addTabBtn.addEventListener("click", () => this.chooseFile());
-    }
-    const order = this.tabs.map((tab) => {
-      let parts = this.tabEls.get(tab.id);
-      if (!parts) {
-        const dot = el("span", { class: "rd-dot", title: "Not saved" });
-        const label = el("span", { class: "rd-doctab-label" }, tab.name);
-        const unsaved = el("span", { class: "rd-sr" }, ", unsaved");
-        const btn = el("button", { type: "button", class: "rd-doctab-name", role: "tab", title: tab.name }, dot, label, unsaved);
-        btn.addEventListener("click", () => this.#switchTo(tab));
-        const close = el("button", { type: "button", class: "rd-doctab-x", title: "Close", "aria-label": `Close ${tab.name}`, html: svg("x") });
-        close.addEventListener("click", () => this.closeTab(tab));
-        const wrap = el("div", { class: "rd-doctab" }, btn, close);
-        wrap.addEventListener("auxclick", (e) => { if (e.button === 1) { e.preventDefault(); this.closeTab(tab); } });
-        parts = { wrap, btn, dot, unsaved };
-        this.tabEls.set(tab.id, parts);
-      }
-      const active = tab === this.activeTab;
-      parts.wrap.classList.toggle("active", active);
-      parts.btn.setAttribute("aria-selected", String(active));
-      return parts.wrap;
-    });
-    // Re-append only if the order changed, so elements stay where they are.
-    const current = [...this.tabbar.children].filter((n) => n !== this.addTabBtn);
-    if (current.length !== order.length || current.some((n, i) => n !== order[i])) this.tabbar.replaceChildren(...order, this.addTabBtn);
-    else if (!this.addTabBtn.isConnected) this.tabbar.append(this.addTabBtn);
   }
 
   /** ``tab`` holds a file that can't be shown: say so where its pages would
@@ -1147,7 +889,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
     this.brokenClose.focus();
   }
 
-  #showEmpty() {
+  _showEmpty() {
     this.activeTab = null;
     this.#busy(false);
     this.broken.hidden = true;
@@ -1280,7 +1022,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
   }
 
   /** The shown document with its unsaved annotations and form entries. */
-  async #savedDocument(tab) {
+  async _savedDocument(tab) {
     if (this.pieces?.poisoned) throw new Error(`part of the file couldn't be read (${this.pieces.failure || "it stopped answering"}); close it and open it again`);
     if (tab?.url && !tab.bytes) await this.#readAll(tab);  // (pdf.js needs every piece to write it out)
     return await bounded(this.doc.saveDocument(), WHOLE_MS, "writing the document took too long");
@@ -1288,9 +1030,9 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
 
   /** Show ``tab``'s document in the viewer. Returns false if it couldn't be
    *  opened (not a PDF, or the password prompt was cancelled). */
-  async #load(tab) {
+  async _load(tab) {
     if (tab.broken) {  // (known not to open: its state again, not another try)
-      await this.#closeDocument();
+      await this._closeDocument();
       this.#showBroken(tab);
       return true;
     }
@@ -1302,7 +1044,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
     try {
       await loadPdfjs();
       this.#ensureViewer();
-      await this.#closeDocument();
+      await this._closeDocument();
       if (!tab.bytes && !tab.head) await this.#firstPiece(tab);
       this.bytes = tab.bytes;
       this.name = tab.name;
@@ -1385,7 +1127,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
       return true;
     } catch (e) {
       clearTimeout(timer);
-      await this.#closeDocument();
+      await this._closeDocument();
       const why = pieces?.failure || (e && e.message) || String(e);
       if (tab.gone && tab.shown && this.tabs.includes(tab)) {
         // A tab left in the background whose file went away or changed: say so; it can be closed.
@@ -1478,7 +1220,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
       if (saved?.page > 1 && saved.page <= this.doc.numPages) this.pdfViewer.currentPageNumber = saved.page;
       if (saved?.rotation) this.pdfViewer.pagesRotation = saved.rotation;
       const goto = this.activeTab?.arrived();
-      if (goto) this.#goto(goto);
+      if (goto) this._goto(goto);
       const tab = this.activeTab, tool = tab?.restored();
       if (tool) {
         // (Once a page's editing layer is drawn: before that, pdf.js's viewer
@@ -1524,11 +1266,11 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
       requestAnimationFrame(() => this._drawAllMeasures());
     });
     eventBus.on("rotationchanging", () => { this.#remember(); requestAnimationFrame(() => this._drawAllMeasures()); });
-    eventBus.on("updatefindmatchescount", ({ matchesCount }) => this.#findResult(null, matchesCount));
-    eventBus.on("updatefindcontrolstate", ({ state, matchesCount }) => this.#findResult(state, matchesCount));
+    eventBus.on("updatefindmatchescount", ({ matchesCount }) => this._findResult(null, matchesCount));
+    eventBus.on("updatefindcontrolstate", ({ state, matchesCount }) => this._findResult(state, matchesCount));
   }
 
-  async #closeDocument() {
+  async _closeDocument() {
     this.gaveWay = null;  // (no bar comes back for a document that is going)
     this.closeFind();
     await this.closeCompare();
@@ -1604,7 +1346,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
 
   rotate(delta) {
     // Just after a tab was picked, the one before is still showing: turn the picked one once it's there.
-    if (this.switching) { this.#serial(() => this.rotate(delta)); return; }
+    if (this.switching) { this._serial(() => this.rotate(delta)); return; }
     if (!this.doc) return;
     // (Pages not laid out yet: after they are, and after the turn remembered for the file.)
     if (!this.pdfViewer.pagesCount) { const doc = this.doc; this.eventBus.on("pagesinit", () => { if (this.doc === doc) this.rotate(delta); }, { once: true }); return; }
@@ -2007,7 +1749,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
 
   /** Show page ``page`` and search for ``find`` from there; ``scale`` and
    *  ``top``/``left`` (scroll position) bring back an earlier view. */
-  #goto({ page, find, scale, top, left } = {}) {
+  _goto({ page, find, scale, top, left } = {}) {
     if (scale) this.pdfViewer.currentScaleValue = scale;
     if (page && page <= this.pdfViewer.pagesCount) this.pdfViewer.currentPageNumber = page;
     if (top != null) { this.container.scrollTop = top; this.container.scrollLeft = left || 0; }
@@ -2016,62 +1758,6 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
       this.findInput.value = find;
       this._find("");
     }
-  }
-
-  // ---- find -----------------------------------------------------------------
-  openFind() {
-    // One tool row at a time: the annotate bar gives way (what was drawn
-    // stays, unsaved changes too) and comes back when find closes.
-    // (The find bar shows first, so the file panel stays aside meanwhile.)
-    const wasHidden = this.findbar.hidden;
-    this.findbar.hidden = false;
-    if (!this.annotbar.hidden) {
-      const mode = this.editMode;
-      this.gaveWay = null;
-      this.closeAnnotate();
-      this.gaveWay = { bar: "annotate", mode };
-    } else if (wasHidden) this.gaveWay = null;
-    this._endHint();
-    this._stepAside();
-    this.findBtn.setAttribute("aria-pressed", "true");
-    const selected = String(window.getSelection() || "").trim();
-    if (selected && selected.length < 100 && !selected.includes("\n")) this.findInput.value = selected;
-    this.findInput.focus();
-    this.findInput.select();
-    if (this.findInput.value) this._find("");
-  }
-  closeFind() {
-    if (this.findbar.hidden) return;
-    const back = this.gaveWay?.bar === "annotate" && this.doc ? this.gaveWay : null;
-    this.gaveWay = null;
-    this.findbar.hidden = true;
-    this.findBtn.setAttribute("aria-pressed", "false");
-    if (back) {  // the annotate bar it opened over, with its tool
-      this.openAnnotate();
-      if (back.mode && back.mode !== "NONE") this._setEditMode(back.mode);
-    }
-    this._stepAside();
-    if (this.eventBus) this.eventBus.dispatch("findbarclose", { source: this });
-    this.findBtn.focus({ preventScroll: true });  // back where it was opened from
-  }
-  _find(type, previous = false) {
-    if (!this.eventBus) return;
-    this.eventBus.dispatch("find", {
-      source: this, type, query: this.findInput.value,
-      caseSensitive: this.findCase.checked, entireWord: this.findWord.checked,
-      highlightAll: this.findAll.checked, findPrevious: previous, matchDiacritics: false,
-    });
-  }
-  #findResult(state, matchesCount) {
-    const { FindState } = viewer;
-    const query = this.findInput.value;
-    this.findInput.classList.toggle("notfound", state === FindState.NOT_FOUND && !!query);
-    if (!query) { this.findStatus.textContent = ""; return; }
-    if (state === FindState.NOT_FOUND) { this.findStatus.textContent = "No matches"; return; }
-    if (state === FindState.PENDING) { this.findStatus.textContent = "Searching…"; return; }
-    const { current = 0, total = 0 } = matchesCount || {};
-    if (total) this.findStatus.textContent = `${current || "–"} of ${total}${total >= 1000 ? "+" : ""}`;
-    if (state === FindState.WRAPPED) this.toast("Reached the end — continued from the other end", 1500);
   }
 
   // ---- digital ID signatures (certsign.py) --------------------------------------------
@@ -2563,7 +2249,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
    *  the server, keeping the old bytes for Undo. In the queue: a save or a tab
    *  switch asked for meanwhile waits for it. */
   _changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false, kind = "page" } = {}) {
-    return this.#serial(async () => {
+    return this._serial(async () => {
       const tab = this.activeTab;
       if (!tab || !this.doc) return;
       // Changes are made by rewriting the file, which a signature can't survive.
@@ -2620,7 +2306,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
   }
 
   _undoTextEdit() {
-    return this.#serial(async () => {
+    return this._serial(async () => {
       const tab = this.activeTab;
       if (!tab?.undoDepth) return;
       // Undoing goes back to the bytes before the change; anything added
@@ -2637,7 +2323,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
   /** Show the tab's changed bytes, staying in the Edit text tool if it was on. */
   async #reloadEditing(tab) {
     const editing = this.textEditMode ? "EDITTEXT" : this.markupMode, picked = this.pickedImage;
-    await this.#load(tab);
+    await this._load(tab);
     this._refresh();
     if (tab !== this.activeTab) return;
     if (editing) {
@@ -2654,9 +2340,9 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
   #edited() { return this._changed() || !!this.activeTab?.edited; }
 
   async _currentBytes() {
-    this.#finishEditing();
+    this._finishEditing();
     if (!this._changed()) return await this._fullBytes();
-    return await this.#savedDocument(this.activeTab);
+    return await this._savedDocument(this.activeTab);
   }
 
   /** The shown document's bytes; a file read in pieces is read in full now
@@ -2681,7 +2367,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
   async save({ replace = false } = {}) {
     this.noteCommit?.();  // a note typed but not added yet goes in first
     await this.chain;  // a text change still on its way is included
-    this.#finishEditing();  // a stroke or note still being made counts (Ctrl+S straight after drawing)
+    this._finishEditing();  // a stroke or note still being made counts (Ctrl+S straight after drawing)
     const tab = this.activeTab;
     if (!this.doc || !tab) return;
     // What Save does follows from the tab's state (see saveAction): a tab with
@@ -2775,7 +2461,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
   async saveRedacted() {
     this.noteCommit?.();
     await this.chain;
-    this.#finishEditing();
+    this._finishEditing();
     if (!this.doc) return;
     const tab = this.activeTab, version = tab.version;
     let bytes;
@@ -2810,7 +2496,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
   /** Save as a new file, starting in the document's own folder (Ctrl+Shift+S). */
   async saveCopy() {
     await this.chain;  // a text change still on its way is included
-    this.#finishEditing();
+    this._finishEditing();
     if (!this.doc) return;
     const tab = this.activeTab, version = tab.version;
     let bytes;
@@ -2999,7 +2685,7 @@ export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) 
   }
 
   /** Commit the annotation being drawn or typed. */
-  #finishEditing() {
+  _finishEditing() {
     try { this.uiManager?.endCurrentEditing?.(); } catch (e) { /* nothing being edited */ }
   }
 

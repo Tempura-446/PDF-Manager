@@ -132,7 +132,7 @@ def self_test(result_file):
         for asset in ("static/reader.js", "static/pdfjs.js", "static/pages.js", "static/regions.js",
                       "static/bookmarks.js", "static/recipes.js", "static/files.js", "static/measure.js", "static/snap.js",
                       "static/overlay.js", "static/tabstate.js", "static/readerkit.js", "static/measuring.js", "static/textedit-ui.js",
-                      "static/annotate.js", "static/sign.js",
+                      "static/annotate.js", "static/sign.js", "static/find.js", "static/tabs.js",
                       "static/pdfjs/build/pdf.min.mjs",
                       "static/pdfjs/build/pdf.sandbox.min.mjs", "static/pdfjs/wasm/quickjs-eval.wasm",
                       "static/pdfjs/build/pdf.worker.min.mjs", "static/pdfjs/web/pdf_viewer.mjs"):
