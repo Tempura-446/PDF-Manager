@@ -412,3 +412,15 @@ def test_the_reader_shows_a_page_tree_without_pages_as_damaged(tmp_path):
         pytest.skip("Playwright's browser isn't available")
     assert seen[str(no_pages)]["class"] == "refused" and seen[str(no_pages)]["message"] == "broken"
     assert seen[str(good)]["class"] == "ok", seen[str(good)]
+
+
+def test_removing_a_password_from_a_file_without_one_says_so(tmp_path):
+    with pytest.raises(gui.EXPECTED_ERRORS) as caught:
+        run("decrypt", [text_pdf(tmp_path / "open.pdf")], {}, tmp_path)
+    assert "open.pdf has no password" in str(caught.value)
+    locked = tmp_path / "locked.pdf"
+    with pikepdf.open(text_pdf(tmp_path / "plain.pdf")) as pdf:
+        pdf.save(locked, encryption=pikepdf.Encryption(owner="o", user="", R=6))
+    with pytest.raises(gui.EXPECTED_ERRORS) as caught:
+        run("decrypt", [locked], {}, tmp_path)
+    assert "current password" in str(caught.value)

@@ -885,6 +885,8 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
     # -- end of file tools --
     elif op == "decrypt":
         if not password:
+            if not core.open_pdf(src).is_encrypted:
+                raise UserError(f"{src.name} has no password or restrictions to remove")
             raise UserError("enter the PDF's current password")
         core.decrypt(src, out, password)
     elif op == "split":
