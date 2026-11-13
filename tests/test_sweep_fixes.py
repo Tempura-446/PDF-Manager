@@ -190,3 +190,20 @@ def test_a_crop_box_outside_the_page_shows_the_whole_page(tmp_path, op):
         assert abs(image.width - 1275) <= 1 and abs(image.height - 1650) <= 1
         assert image.convert("L").getextrema()[0] < 128  # the text is on it
 
+
+@pytest.mark.parametrize("op", ["compress", "color"])
+def test_a_stream_in_an_unknown_compression_doesnt_stop_compress(tmp_path, op):
+    src = text_pdf(tmp_path / "odd.pdf", pages=1)
+
+    def add(pdf):
+        image = pikepdf.Stream(pdf, b"\x00" * 300, Type=pikepdf.Name.XObject, Subtype=pikepdf.Name.Image,
+                               Width=10, Height=10, ColorSpace=pikepdf.Name.DeviceRGB, BitsPerComponent=8,
+                               Filter=pikepdf.Name("/MadeUpDecode"))
+        pdf.pages[0].obj.Resources.XObject = pikepdf.Dictionary(Im9=image)
+    edit(src, add)
+    name, data, notes = run(op, [src], {}, tmp_path)
+    out = tmp_path / "out.pdf"
+    out.write_bytes(data)
+    from pypdf import PdfReader
+
+    assert "quick brown fox" in PdfReader(out).pages[0].extract_text()

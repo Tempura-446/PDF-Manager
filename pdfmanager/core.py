@@ -1051,9 +1051,15 @@ def _finish_compression(writer):
         page.compress_content_streams()
     imaging.deflate_plain_streams(writer)
     try:
-        writer.compress_identical_objects(remove_duplicates=True, remove_unreferenced=True)
-    except TypeError:  # pypdf < 6
-        writer.compress_identical_objects(remove_identicals=True, remove_orphans=True)
+        try:
+            writer.compress_identical_objects(remove_duplicates=True, remove_unreferenced=True)
+        except TypeError:  # pypdf < 6
+            writer.compress_identical_objects(remove_identicals=True, remove_orphans=True)
+    except NotImplementedError:
+        # A stream in a compression pypdf doesn't know can't be compared with
+        # the others: the file is smaller all the same, only not by sharing
+        # identical parts.
+        pass
 
 
 def compress(path, output, level="medium", image_quality=None, max_dpi=None, password=None,
