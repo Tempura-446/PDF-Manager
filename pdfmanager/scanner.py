@@ -228,8 +228,10 @@ def _layer():
         raise
     except Exception as exc:  # pythonnet missing, or the .NET runtime blocked
         _com_error = str(exc) or type(exc).__name__
-        raise ScannerError("ZPDF can't use Windows Image Acquisition here (it needs pythonnet, which "
-                           "comes with the desktop window: pip install pywebview).", "unavailable") from None
+        raise ScannerError("ZPDF can't reach Windows Image Acquisition, the part of Windows that talks "
+                           "to scanners: a piece of ZPDF it needs (pythonnet) is missing. Reinstall ZPDF "
+                           "(from Python: pip install pywebview). Photos of the pages still work.",
+                           "unavailable") from None
     return _com
 
 

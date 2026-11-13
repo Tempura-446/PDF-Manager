@@ -172,8 +172,17 @@ def _run(command, env=None, what="the conversion", timeout=None):
     except subprocess.TimeoutExpired:
         raise TookTooLong(f"{what} took too long and was stopped") from None
     except OSError as exc:
-        raise core.PdfManagerError(f"{what} could not start: {exc}") from None
+        raise core.PdfManagerError(f"{what} could not start: {_start_failure(command, exc)}") from None
     return result
+
+
+def _start_failure(command, exc):
+    """Why a program didn't start, in words (not "[Errno 2] ...")."""
+    if isinstance(exc, FileNotFoundError):
+        return f"{Path(command[0]).name} wasn't found on this computer"
+    if isinstance(exc, PermissionError):
+        return f"this computer didn't allow {Path(command[0]).name} to run"
+    return " ".join(str(exc.strerror or exc).split()) or type(exc).__name__
 
 
 def _system_exe(name):
@@ -284,7 +293,9 @@ def pdf_to_word(path, output, engine="auto", password=None, notes=None):
             core.decrypt(path, src, password or "")
         if engine == "word":
             if not has_word():
-                raise core.PdfManagerError("Microsoft Word isn't installed on this computer")
+                raise core.PdfManagerError(
+                    "Microsoft Word isn't installed on this computer: choose the Built-in converter "
+                    "(or Best available) instead, or install Word and try again")
             return _powershell(PS_PDF_TO_WORD, src, output, "Microsoft Word"), "word"
         if engine == "auto" and has_word() and not _word_stalled:
             try:
@@ -303,6 +314,10 @@ def pdf_to_word(path, output, engine="auto", password=None, notes=None):
             notes.append("Microsoft Word didn't finish a conversion earlier, so the built-in "
                          "converter was used. Choose \"Microsoft Word only\" to try Word again.")
         if engine == "layout":
+            if not find_libreoffice():
+                raise core.PdfManagerError(
+                    "Exact layout needs LibreOffice, which isn't installed on this computer: install it "
+                    "(free, https://www.libreoffice.org) and try again, or choose the Built-in converter")
             return _libreoffice(src, output, "docx:MS Word 2007 XML", "writer_pdf_import"), "layout"
         return basic_docx(src, output), "basic"
 
@@ -605,8 +620,8 @@ def office_to_pdf(path, output):
     if suffix == ".txt":
         return text_to_pdf(path, output), "ZPDF"
     raise core.PdfManagerError(
-        f"converting {suffix} files needs Microsoft Office or LibreOffice "
-        "(free: https://www.libreoffice.org)")
+        f"converting {suffix} files needs Microsoft Office or LibreOffice, and neither is installed "
+        "on this computer: install LibreOffice (free, https://www.libreoffice.org) and try again")
 
 
 # --------------------------------------------------------------------------
@@ -725,7 +740,8 @@ def _print_with(command, target, timeout, profile=None):
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except OSError as exc:
         said.close()
-        raise core.PdfManagerError(f"the browser could not start: {exc}") from None
+        raise core.PdfManagerError(f"the browser could not start: {_start_failure(command, exc)}. "
+                                   "Reinstall Microsoft Edge or Google Chrome and try again") from None
     deadline, last, ended = time.monotonic() + timeout, -1, None
     try:
         while time.monotonic() < deadline:
@@ -868,5 +884,10 @@ def html_to_pdf(source, output, timeout=120):
     if address.startswith("file:") and find_libreoffice():
         _libreoffice(Path(source), output, "pdf:writer_web_pdf_Export")
         return output, "LibreOffice"
-    raise core.PdfManagerError("printing web pages needs Microsoft Edge, Google Chrome or "
-                               "Chromium (saved .html files: or LibreOffice)")
+    if address.startswith("file:"):
+        raise core.PdfManagerError(
+            "printing web pages needs Microsoft Edge, Google Chrome or Chromium, and none was found on "
+            "this computer: install one of them (or LibreOffice, for a simpler layout) and try again")
+    raise core.PdfManagerError(
+        "printing a web address needs Microsoft Edge, Google Chrome or Chromium, and none was found "
+        "on this computer: install one of them and try again")

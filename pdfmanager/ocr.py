@@ -149,15 +149,32 @@ def choose_engine(engine, language="eng"):
         if tesseract_available():
             return "tesseract"
         raise core.PdfManagerError(
-            "OCR needs an engine: pip install pdf-manager[ocr] for the built-in one, "
-            f"or OCRmyPDF and Tesseract ({TESSERACT_LINK})")
+            "OCR needs a reading engine, and neither is installed: reinstall ZPDF to get its built-in "
+            f"one back ({PIP_OCR}), or install the Tesseract program ({TESSERACT_LINK}) and OCRmyPDF "
+            f"({PIP_TESSERACT})")
     if engine == "builtin" and not builtin_available():
-        raise core.PdfManagerError("OCR's built-in engine isn't installed: pip install pdf-manager[ocr]")
-    if engine == "tesseract" and not tesseract_available():
         raise core.PdfManagerError(
-            "OCR with Tesseract needs OCRmyPDF and the Tesseract program: pip install "
-            f"pdf-manager[tesseract], then install Tesseract ({TESSERACT_LINK})")
+            f"OCR's built-in engine isn't installed with this copy of ZPDF: reinstall ZPDF ({PIP_OCR})"
+            + (", or choose the Tesseract engine" if tesseract_available() else ""))
+    if engine == "tesseract" and not tesseract_available():
+        raise core.PdfManagerError(_tesseract_missing())
     return engine
+
+
+PIP_OCR = "from Python: pip install pdf-manager[ocr]"
+PIP_TESSERACT = "from Python: pip install pdf-manager[tesseract]"
+
+
+def _tesseract_missing(no_ocrmypdf=False):
+    """What OCR with Tesseract lacks here, and what to do (``no_ocrmypdf``:
+    it didn't import)."""
+    instead = ", or choose the Built-in engine" if builtin_available() else ""
+    if no_ocrmypdf or not importlib.util.find_spec("ocrmypdf"):
+        also = "" if scan.find_tesseract() else f", and the Tesseract program ({TESSERACT_LINK})"
+        return ("OCR with Tesseract needs OCRmyPDF, which isn't installed with this copy of ZPDF "
+                f"({PIP_TESSERACT}){also}{instead}")
+    return ("OCR with Tesseract needs the Tesseract program, which isn't installed on this computer: "
+            f"install it ({TESSERACT_LINK}) and try again{instead}")
 
 
 # -- the built-in engine -------------------------------------------------------
@@ -260,8 +277,8 @@ def _engine(script=None):
                 _engines[script] = RapidOCR(params=params)
             except Exception as exc:  # a broken install, or model files missing from a build
                 raise core.PdfManagerError(
-                    "OCR's built-in engine could not start; reinstall it (pip install "
-                    f"pdf-manager[ocr]) or choose the Tesseract engine ({exc})") from None
+                    f"OCR's built-in engine could not start; reinstall ZPDF ({PIP_OCR}) or choose the "
+                    f"Tesseract engine ({exc})") from None
             # It announces every model it loads; only trouble is worth hearing.
             logging.getLogger("RapidOCR").setLevel(logging.WARNING)
         return _engines[script]
@@ -695,9 +712,7 @@ def _run_tesseract(source, output, language, force, deskew, rotate=True):
         import ocrmypdf
         from ocrmypdf.exceptions import ExitCodeException, MissingDependencyError
     except ImportError:
-        raise core.PdfManagerError(
-            "OCR with Tesseract needs OCRmyPDF and the Tesseract program: pip install "
-            f"pdf-manager[tesseract], then install Tesseract ({TESSERACT_LINK})") from None
+        raise core.PdfManagerError(_tesseract_missing(no_ocrmypdf=True)) from None
     scan.add_programs_to_path()  # Tesseract and Ghostscript where installers put them
     # Turning pages needs Tesseract's orientation data, which not every
     # install has; without it OCR still runs, the pages just stay as they are.
@@ -710,7 +725,15 @@ def _run_tesseract(source, output, language, force, deskew, rotate=True):
                      skip_text=not force, force_ocr=force, deskew=deskew, rotate_pages=rotate,
                      progress_bar=False, output_type="pdf")
     except MissingDependencyError as exc:
-        raise core.PdfManagerError(f"OCR is missing a program: {exc}") from None
+        said = " ".join(str(exc).split())
+        if re.search(r"(?i)\bgs\b|ghostscript", said):
+            said = ("Ghostscript, which isn't installed on this computer: install it (free, "
+                    "https://ghostscript.com/releases/gsdnld.html)")
+        elif re.search(r"(?i)tesseract", said):
+            said = f"the Tesseract program, which wasn't found: install it ({TESSERACT_LINK})"
+        raise core.PdfManagerError(
+            f"OCR with Tesseract needs {said or 'a program that is missing'}"
+            + (", or choose the Built-in engine" if builtin_available() else "")) from None
     except ExitCodeException as exc:
         said = " ".join(str(exc).split()) or (
             f"OCRmyPDF couldn't process the file (exit code {getattr(exc, 'exit_code', '?')}); "

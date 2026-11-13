@@ -960,7 +960,8 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
     # -- end of pptx and html --
     elif op == "from-office":
         out = out_dir / f"{src.stem}.pdf"
-        office.office_to_pdf(src, out)
+        _, program = office.office_to_pdf(src, out)
+        notes.append(f"{src.name}: converted with {program}")
     elif op == "web":
         out = out_dir / f"{src.stem}.pdf"
         _, program = office.html_to_pdf(src, out)
@@ -1240,10 +1241,11 @@ def _run_operation(op, files, opts, password=None, extra_files=None, work=None, 
         if field.get("required") and not str(opts.get(field["key"]) or "").strip():
             raise UserError(f"please fill in “{field['label']}”")
     url_field = spec.get("url_field")
-    if not files and not (url_field and str(opts.get(url_field) or "").strip()):
+    typed = bool(url_field and str(opts.get(url_field) or "").strip())
+    if not files and not typed:
         raise UserError("add at least one file" if not url_field else
                         "type a web address, or add saved web pages")
-    if len(files) < spec.get("min", 1):
+    if files and len(files) < spec.get("min", 1):  # (a typed address needs no file)
         raise UserError(f"add at least {spec['min']} files")
     notes = [] if notes is None else notes
     mended = _mend_inputs(op, files, password, work, notes)
