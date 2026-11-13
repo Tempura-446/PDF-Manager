@@ -1218,8 +1218,11 @@ file beside it, which the Update button checks before installing.
 
 ## Licence
 
-ZPDF is shared with friends, not published. It is licensed under the
+ZPDF's source code is public so you can read it, but it is not open
+source. It is licensed under the
 [PolyForm Internal Use License 1.0.0](https://polyformproject.org/licenses/internal-use/1.0.0),
 with an added permission for personal use: you may use it, at home or at
-work, and change it for your own use, but not pass it on to anyone else. It
-comes as is, without warranty. See [LICENSE](LICENSE) for the full terms.
+work, and change it for your own use, but not pass it on to anyone else,
+publish your own version of it or sell it. To use ZPDF, download it from
+[ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
+It comes as is, without warranty. See [LICENSE](LICENSE) for the full terms.
