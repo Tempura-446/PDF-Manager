@@ -229,3 +229,20 @@ def test_control_characters_in_the_title_or_a_link_dont_spoil_the_document(tmp_p
         for member in z.namelist():
             if member.endswith((".xml", ".rels")):
                 minidom.parseString(z.read(member))  # well-formed XML, as Word and PowerPoint need
+
+
+@pytest.mark.parametrize("count", ["5", "-1", "0"])
+@pytest.mark.parametrize("op", ["rotate", "metadata", "watermark"])
+def test_a_wrong_page_count_in_the_page_tree_is_put_right(tmp_path, op, count):
+    import pypdfium2 as pdfium
+
+    src = tmp_path / "count.pdf"
+    src.write_bytes(_raw_pdf("/MediaBox [0 0 612 792]").replace(b"/Count 1", f"/Count {count}".encode()))
+    opts = {"rotate": {"degrees": "90"}, "metadata": {"title": "T"}, "watermark": {"text": "DRAFT"}}[op]
+    name, data, notes = run(op, [src], opts, tmp_path)
+    out = tmp_path / "out.pdf"
+    out.write_bytes(data)
+    doc = pdfium.PdfDocument(str(out))
+    assert len(doc) == 1 and doc[0].get_size()[0] > 0
+    with pikepdf.open(out) as pdf:
+        assert int(pdf.Root.Pages.Count) == 1

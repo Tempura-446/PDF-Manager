@@ -155,9 +155,34 @@ def clone_document(reader):
     finally:
         for _, stored, annots in detached:
             stored[NameObject("/Annots")] = annots
+    _recount(writer)
     for i, _, annots in detached:
         writer.pages[i][NameObject("/Annots")] = annots.clone(writer)
     return writer
+
+
+def _recount(writer):
+    """Make every /Count in the page tree say how many pages are under it: a
+    wrong one (5 for one page, or -1) makes pdfium and pdf.js look for pages
+    that aren't there. Only the tree pypdf found pages in is kept."""
+    seen = set()
+
+    def walk(node):
+        node = node.get_object()
+        if id(node) in seen or not isinstance(node, DictionaryObject):
+            return 0
+        seen.add(id(node))
+        if node.get("/Type") != "/Pages" and "/Kids" not in node:
+            return 1
+        count = sum(walk(kid) for kid in node.get("/Kids") or [])
+        node[NameObject("/Count")] = NumberObject(count)
+        return count
+
+    try:
+        root = writer.root_object["/Pages"]
+        walk(root)
+    except Exception:  # an odd tree pypdf read pages from all the same: leave it as it is
+        pass
 
 
 def _content_refs(page):

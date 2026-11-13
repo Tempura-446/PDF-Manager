@@ -745,6 +745,7 @@ def _run_builtin(source, output, force, deskew, rotate=True, script=None):
     from pdfmanager import progress
 
     writer = PdfWriter(clone_from=str(source))
+    core._recount(writer)
     rasterised = False
     # The pdfium lock is held only to open the file and render a page: the
     # app's thumbnails and previews wait on it too, and recognising a page
