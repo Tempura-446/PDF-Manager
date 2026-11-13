@@ -15,8 +15,10 @@
 import { BASE, DOC_OPTIONS, destroyTask, loadPdfjs as loadLibrary, openDocument } from "./pdfjs.js";
 import * as files from "./files.js";
 import { Overlay } from "./overlay.js";
-import { el, fadeOut, heldTimer, ICON, isTyping, MIN_ZOOM, MAX_ZOOM, pdfjs, store, svg, viewer, loadPdfjs } from "./readerkit.js";
+import { COLORS, el, fadeOut, heldTimer, ICON, isTyping, MIN_ZOOM, MAX_ZOOM, pdfjs, store, svg, viewer, loadPdfjs } from "./readerkit.js";
 import { Measuring } from "./measuring.js";
+import { Signing } from "./sign.js";
+import { Annotating } from "./annotate.js";
 import { TextEditing } from "./textedit-ui.js";
 export { heldTimer, loadPdfjs } from "./readerkit.js";
 import { TabState, deriveUi, closePrompt, saveAction } from "./tabstate.js";
@@ -37,19 +39,10 @@ function fieldEntries(fields) {
 }
 
 
-// Annotation colours (highlights use the pale versions, as on paper).
-const COLORS = [["Black", "#000000", "#bdbdbd"], ["Blue", "#1f4fd8", "#80ebff"], ["Red", "#d52b1e", "#ff4f5f"],
-  ["Green", "#1f8a3b", "#53ffbc"], ["Yellow", "#b8860b", "#ffff98"]];
-// Notes, underline, strikeout and shapes: the reader's own tools, written into
-// the file by the server (markup.py) as standard annotations.
-const MARKUP = new Set(["NOTE", "UNDERLINE", "STRIKEOUT", "SHAPE", "IMAGES", "LINKS", "CERTSIGN", "STAMPS", "REDACT"]);
 // Rubber stamps: their words (markup.py draws them in their colours).
 const STAMPS = ["APPROVED", "NOT APPROVED", "REVIEWED", "RECEIVED", "DRAFT", "FINAL", "CONFIDENTIAL",
   "FOR COMMENT", "VOID"];
 const SHAPES = [["rect", "Rectangle"], ["ellipse", "Ellipse"], ["cloud", "Cloud"], ["arrow", "Arrow"], ["line", "Line"]];
-const KIND_NAMES = { Text: "Note", FreeText: "Text", Highlight: "Highlight", Underline: "Underline", StrikeOut: "Strikeout",
-  Squiggly: "Squiggly", Square: "Rectangle", Circle: "Ellipse", Line: "Line", Polygon: "Shape", PolyLine: "Lines",
-  Ink: "Drawing", Stamp: "Stamp", Caret: "Insert", FileAttachment: "Attachment", Sound: "Sound" };
 const HIGHLIGHT_COLORS = "yellow=#FFFF98,green=#53FFBC,blue=#80EBFF,pink=#FFCBE6,red=#FF4F5F";
 
 
@@ -134,12 +127,6 @@ async function pieceError(res, tab) {
 }
 const header = (res, name) => { try { return decodeURIComponent(res.headers.get(name) || ""); } catch (e) { return ""; } };
 
-/** A box on the page (PDF coordinates) as [x0, y0, x1, y1] on screen, within the page. */
-function viewRect(viewport, [x0, y0, x1, y1]) {
-  const [a, b] = viewport.convertToViewportPoint(x0, y0), [c, d] = viewport.convertToViewportPoint(x1, y1);
-  return [a, b, c, d];
-}
-
 function sameBytes(a, b) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
@@ -149,7 +136,7 @@ function sameBytes(a, b) {
  *  t, e and m are the reader's own: next, previous, rotate, panel, edit text, measure). */
 const ANNOT_KEYS = { h: "HIGHLIGHT", c: "NOTE", a: "FREETEXT", d: "INK", s: "SIGN" };
 
-export class Reader extends TextEditing(Measuring(Object)) {
+export class Reader extends Signing(Annotating(TextEditing(Measuring(Object)))) {
   constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onRepair, onForgetRecent, onSaveTab } = {}) {
     super();
     this.host = host;
@@ -289,7 +276,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
     this.certSignBtn = el("button", { class: "rd-btn rd-tool compact", type: "button", "data-mode": "CERTSIGN", "aria-pressed": "false",
       title: "Digital ID: sign with a certificate (.pfx or .p12); drag a box where the signature goes", html: svg("badge") + "<span>Digital ID</span>" });
     this.annotTools.push(this.certSignBtn);
-    this.#buildRedact();  // reader redaction
+    this._buildRedact();  // reader redaction
     this.swatches = COLORS.map(([name, ink, mark], i) => el("button", { class: "rd-swatch", type: "button", title: name, "aria-label": name, "aria-pressed": String(i === 1),
       style: `--ink:${ink};--mark:${mark}`, "data-index": i }));
     this.sizeSelect = el("select", { class: "rd-zoom", "aria-label": "Line thickness or text size" });
@@ -336,12 +323,12 @@ export class Reader extends TextEditing(Measuring(Object)) {
     // (The file box isn't put on the page: the reader has one file box of its own.)
     const pickXfdf = () => {
       const input = el("input", { type: "file", accept: ".xfdf,.xml" });
-      input.addEventListener("change", () => { if (input.files[0]) this.#importComments(input.files[0]); });
+      input.addEventListener("change", () => { if (input.files[0]) this._importComments(input.files[0]); });
       input.click();
     };
     const commentActions = el("div", { class: "rd-commentactions" },
-      commentBtn("Summary", "A PDF listing every comment, page by page", () => this.#commentSummary()),
-      commentBtn("Export", "Save the comments as an XFDF file, to send or to add to another copy", () => this.#exportComments()),
+      commentBtn("Summary", "A PDF listing every comment, page by page", () => this._commentSummary()),
+      commentBtn("Export", "Save the comments as an XFDF file, to send or to add to another copy", () => this._exportComments()),
       commentBtn("Import…", "Add comments from an XFDF file (from Acrobat or another copy)", pickXfdf));
     // -- end of comment summary and XFDF --
     this.commentsPanel = el("div", { class: "rd-panel rd-commentspanel", role: "tabpanel", hidden: true },
@@ -617,29 +604,29 @@ export class Reader extends TextEditing(Measuring(Object)) {
     this.shapeSelect.addEventListener("change", () => store.set("pdfm-shape", this.shapeSelect.value));
 
     // Find
-    this.findInput.addEventListener("input", () => this.#find(""));
+    this.findInput.addEventListener("input", () => this._find(""));
     this.findInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); this.#find("again", e.shiftKey); }
+      if (e.key === "Enter") { e.preventDefault(); this._find("again", e.shiftKey); }
       if (e.key === "Escape") { e.preventDefault(); this.closeFind(); }
     });
-    this.findNextBtn.addEventListener("click", () => this.#find("again", false));
-    this.findPrevBtn.addEventListener("click", () => this.#find("again", true));
-    this.findCase.addEventListener("change", () => this.#find("casesensitivitychange"));
-    this.findWord.addEventListener("change", () => this.#find("entirewordchange"));
-    this.findAll.addEventListener("change", () => this.#find("highlightallchange"));
+    this.findNextBtn.addEventListener("click", () => this._find("again", false));
+    this.findPrevBtn.addEventListener("click", () => this._find("again", true));
+    this.findCase.addEventListener("change", () => this._find("casesensitivitychange"));
+    this.findWord.addEventListener("change", () => this._find("entirewordchange"));
+    this.findAll.addEventListener("change", () => this._find("highlightallchange"));
     this.findCloseBtn.addEventListener("click", () => this.closeFind());
 
     // Annotating
     this.annotateBtn.addEventListener("click", () => (this.annotbar.hidden ? this.openAnnotate() : this.closeAnnotate()));
     for (const btn of this.annotTools) btn.addEventListener("click", () => {
       const fromMenu = !this.moreToolsMenu.hidden && this.moreToolsMenu.contains(btn);
-      if (fromMenu) this.#closeToolsMenu(true);
+      if (fromMenu) this._closeToolsMenu(true);
       this._setEditMode(btn.dataset.mode, btn.dataset.mode === "STAMP");
     });
     this.signBtn.addEventListener("click", () => this.sign());
-    this.moreToolsBtn.addEventListener("click", () => this.#toggleToolsMenu());
+    this.moreToolsBtn.addEventListener("click", () => this._toggleToolsMenu());
     this.moreToolsBtn.addEventListener("keydown", (e) => {
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); if (this.moreToolsMenu.hidden) this.#toggleToolsMenu(e.key === "ArrowUp" ? "last" : "checked"); }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); if (this.moreToolsMenu.hidden) this._toggleToolsMenu(e.key === "ArrowUp" ? "last" : "checked"); }
     });
     // In the menu: arrows, Home and End move; Escape (or Tab) closes it, focus back on its button.
     this.moreToolsMenu.addEventListener("keydown", (e) => {
@@ -649,14 +636,14 @@ export class Reader extends TextEditing(Measuring(Object)) {
       else if (e.key === "ArrowUp") go(at < 0 ? items.length - 1 : at - 1);
       else if (e.key === "Home") go(0);
       else if (e.key === "End") go(items.length - 1);
-      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); this.#closeToolsMenu(true); }
-      else if (e.key === "Tab") this.#closeToolsMenu();
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); this._closeToolsMenu(true); }
+      else if (e.key === "Tab") this._closeToolsMenu();
     });
     document.addEventListener("pointerdown", (e) => {
-      if (!this.moreToolsMenu.hidden && !this.moreToolsMenu.contains(e.target) && !this.moreToolsBtn.contains(e.target)) this.#closeToolsMenu();
+      if (!this.moreToolsMenu.hidden && !this.moreToolsMenu.contains(e.target) && !this.moreToolsBtn.contains(e.target)) this._closeToolsMenu();
     });
-    for (const sw of this.swatches) sw.addEventListener("click", () => this.#setColor(+sw.dataset.index));
-    this.sizeSelect.addEventListener("change", () => this.#setSize(+this.sizeSelect.value));
+    for (const sw of this.swatches) sw.addEventListener("click", () => this._setColor(+sw.dataset.index));
+    this.sizeSelect.addEventListener("change", () => this._setSize(+this.sizeSelect.value));
     this.undoBtn.addEventListener("click", () => (this.textEditMode || this.markupMode ? this._undoTextEdit() : this.uiManager?.undo()));
     this.redoBtn.addEventListener("click", () => this.uiManager?.redo());
     this.deleteBtn.addEventListener("click", () => this.uiManager?.delete());
@@ -733,13 +720,13 @@ export class Reader extends TextEditing(Measuring(Object)) {
     this.container.addEventListener("pointerup", (e) => {
       const still = pressed && Math.hypot(e.clientX - pressed[0], e.clientY - pressed[1]) < 5 && e.timeStamp - pressed[2] < 800;
       pressed = null;
-      if (still) this.#pickOnClick(e);
+      if (still) this._pickOnClick(e);
     });
 
     // Notes and shapes: click or drag on a page; underline and strike out: select words.
-    this.container.addEventListener("pointerdown", (e) => this.#markupDown(e), true);
-    this.container.addEventListener("pointermove", (e) => this.#markupMove(e));
-    window.addEventListener("pointerup", (e) => this.#markupUp(e));
+    this.container.addEventListener("pointerdown", (e) => this._markupDown(e), true);
+    this.container.addEventListener("pointermove", (e) => this._markupMove(e));
+    window.addEventListener("pointerup", (e) => this._markupUp(e));
 
     document.addEventListener("keydown", (e) => this.#onKey(e));
   }
@@ -754,7 +741,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
     if (e.key === "Escape" && this.panelOpen && !this.#panelDocked()) { e.preventDefault(); this.setPanel(false, { focus: true }); return; }
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
     if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); this.print(); return; }
-    if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); this.#saveKey(e); return; }
+    if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); this._saveKey(e); return; }
     if (mod && !isTyping(e) && !this.scalebar.hidden && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")
         && this._measureUndo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); return; }
     if (mod && e.key.toLowerCase() === "z" && !e.shiftKey && !isTyping(e) && this.activeTab?.undoDepth
@@ -768,10 +755,10 @@ export class Reader extends TextEditing(Measuring(Object)) {
     if (e.key === "Escape" && !this.findbar.hidden) { this.closeFind(); return; }
     if (this.markupMode === "IMAGES" && this.pickedImage && !isTyping(e) && (e.key === "Delete" || e.key === "Backspace")) {
       e.preventDefault();
-      this.#editImage("delete");
+      this._editImage("delete");
       return;
     }
-    if (e.key === "Escape" && this.markupMode === "IMAGES" && this.pickedImage) { this.#pickImage(null); return; }
+    if (e.key === "Escape" && this.markupMode === "IMAGES" && this.pickedImage) { this._pickImage(null); return; }
     if (e.key === "Escape" && this.editMode && this.editMode !== "NONE") { this._setEditMode("NONE"); return; }
     // With no tool left on, Escape closes the annotate bar (focus back on its button).
     if (e.key === "Escape" && !this.annotbar.hidden) { this.closeAnnotate(); if (this.findbar.hidden) this.annotateBtn.focus(); return; }
@@ -898,7 +885,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
       if (at >= 0 && this.tabs.indexOf(tab) !== at + 1) {
         this.tabs.splice(this.tabs.indexOf(tab), 1);
         this.tabs.splice(at + 1, 0, tab);
-        this.#refresh();
+        this._refresh();
       }
       const wrap = this.tabEls?.get(tab.id)?.wrap;  // it slides in, once
       wrap?.classList.add("rd-new");
@@ -920,7 +907,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
   isPristine(tab = this.activeTab) { return !!(tab && tab.fileId && !tab.dirty); }
 
   /** Draw the tab bar again (e.g. after the app marked a tab unsaved). */
-  refreshTabs() { this.#refresh(); }
+  refreshTabs() { this._refresh(); }
 
   /** Switch to an open tab (e.g. back to the one a result was made from). */
   showTab(tab) { return this.#switchTo(tab); }
@@ -953,7 +940,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
         this.#showEmpty();
       }
     }
-    this.#refresh();
+    this._refresh();
   }
 
   /** Keep the open tab's unsaved annotations and form entries in its bytes
@@ -967,7 +954,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
     // editors again, to pick, move, resize or delete.
     const tool = this.doc && !this.annotbar.hidden ? this.editMode || "NONE" : null;
     tab.stashed({ tool });
-    if (!this.doc || !this.#changed()) return;
+    if (!this.doc || !this._changed()) return;
     try {
       tab.stashed({ tool, bytes: await this.#savedDocument(tab) });
     } catch (e) {
@@ -991,7 +978,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
       await this.#closeDocument();
       this.#showEmpty();
     }
-    this.#refresh();
+    this._refresh();
   }
 
   async closeTab(tab = this.activeTab) {
@@ -1023,7 +1010,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
       const next = this.tabs[i] || this.tabs[i - 1];
       if (!next || !(await this.#load(next))) { await this.#closeDocument(); this.#showEmpty(); }
     }
-    this.#refresh();
+    this._refresh();
   }
 
   /** Any tab that would be lost on closing ZPDF: changes not saved to a
@@ -1037,21 +1024,21 @@ export class Reader extends TextEditing(Measuring(Object)) {
    *  (The app hears of it too, except for one more change to a tab already
    *  unsaved: nothing it shows changes then.) */
   #tabChanged(tab, what) {
-    if (this.tabs.includes(tab)) this.#refresh({ notify: what !== "annotation" && what !== "loaded" });
+    if (this.tabs.includes(tab)) this._refresh({ notify: what !== "annotation" && what !== "loaded" });
   }
 
   /** Show what follows from the open tabs' state, all of it in one place:
    *  the tab bar and its dots, the title (and its dot), the Save and Undo
    *  buttons, the window's title (see deriveUi). ``notify``: tell the app
    *  (its file panel follows the shown document). */
-  #refresh({ notify = true } = {}) {
+  _refresh({ notify = true } = {}) {
     if (!this.saveNowBtn) return;
     this.#drawTabBar();
     const tab = this.activeTab;
     const ui = this.ui = deriveUi(tab, this.tabs, {
-      shown: !!this.doc, annotating: !this.annotbar.hidden, annotUndo: !!this.annotUndo, changed: this.#changed(),
+      shown: !!this.doc, annotating: !this.annotbar.hidden, annotUndo: !!this.annotUndo, changed: this._changed(),
       // (While areas are marked for Redact, Black out is the main action: Save waits, quiet.)
-      marked: this.markupMode === "REDACT" && !!tab && this.#redactCount(tab) > 0, active: this.active,
+      marked: this.markupMode === "REDACT" && !!tab && this._redactCount(tab) > 0, active: this.active,
     });
     // A dot (and the word, for screen readers): changes not saved, or a tool's result not saved anywhere yet.
     for (const [id, parts] of this.tabEls) parts.dot.hidden = parts.unsaved.hidden = !ui.dots.get(id);
@@ -1128,7 +1115,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
     this.zoomInput.value = "";
     this.sidebar.hidden = true;
     this.root.classList.remove("reading");
-    this.#refresh();
+    this._refresh();
   }
 
   async #repairBroken() {
@@ -1173,7 +1160,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
     this.sidebar.hidden = true;
     this.root.classList.remove("reading");
     setTimeout(() => { if (!this.doc && !this.opening) this.refreshRecent(); }, 0);  // (see show())
-    this.#refresh();
+    this._refresh();
   }
 
   /** The first piece of a file that is read in pieces (``tab.url``), asked
@@ -1382,7 +1369,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
       this.pickedPages = new Set();
       this.#renderPageBar();
       this.#buildOutline();
-      this.#listComments();
+      this._listComments();
       this._loadMeasures();
       this.sigbar.hidden = true;
       this.formbar.hidden = true;
@@ -1469,17 +1456,17 @@ export class Reader extends TextEditing(Measuring(Object)) {
         if (this.doc && ["auto", "page-width", "page-fit", "page-height"].includes(value)) this.pdfViewer.currentScaleValue = value;
       });
     }).observe(this.main);
-    eventBus.on("annotationeditoruimanager", ({ uiManager }) => { this.uiManager = uiManager; this.#applyAnnotParams(); });
+    eventBus.on("annotationeditoruimanager", ({ uiManager }) => { this.uiManager = uiManager; this._applyAnnotParams(); });
     // pdf.js asks to switch tools itself, e.g. after a picture is pasted, or
     // for a click (double-click on one in the file) on an annotation with no
     // tool on: that one is then picked, to move, resize or delete.
     eventBus.on("switchannotationeditormode", ({ mode, editId = null, mustEnterInEditMode = false, editComment = false }) =>
-      this._setEditMode(this.#modeName(mode), false, editId ? { editId, mustEnterInEditMode, editComment } : null));
-    eventBus.on("annotationeditormodechanged", ({ mode }) => this.#showEditMode(this.#modeName(mode)));
+      this._setEditMode(this._modeName(mode), false, editId ? { editId, mustEnterInEditMode, editComment } : null));
+    eventBus.on("annotationeditormodechanged", ({ mode }) => this._showEditMode(this._modeName(mode)));
     eventBus.on("editingstateschanged", ({ details }) => {
       this.annotUndo = !!details.hasSomethingToUndo;
       this.#compareAnnotations();
-      this.#refresh({ notify: false });
+      this._refresh({ notify: false });
       this.undoBtn.disabled = !details.hasSomethingToUndo;
       this.redoBtn.disabled = !details.hasSomethingToRedo;
       this.deleteBtn.disabled = !details.hasSelectedEditor;
@@ -1522,8 +1509,8 @@ export class Reader extends TextEditing(Measuring(Object)) {
     eventBus.on("annotationlayerrendered", ({ source }) => this.#nameFields(source?.div?.querySelector(".annotationLayer")));
     eventBus.on("pagerendered", ({ pageNumber }) => {
       this._drawMeasures(pageNumber);
-      if (this.markupMode === "IMAGES" || this.markupMode === "LINKS") this.#drawObjectBoxes(pageNumber);
-      this.#drawRedactions(pageNumber);
+      if (this.markupMode === "IMAGES" || this.markupMode === "LINKS") this._drawObjectBoxes(pageNumber);
+      this._drawRedactions(pageNumber);
       if (this.overlay) this.overlay.draw(this.pdfViewer.getPageView(pageNumber - 1), pageNumber).catch(() => {});
     });
     eventBus.on("scalechanging", ({ scale, presetValue }) => {
@@ -1562,7 +1549,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
     // pdf.js won't let go of the document soon, the reader doesn't wait.
     const wait = pieces && (pieces.poisoned || pieces.waiting()) ? 2000 : 10000;
     pieces?.giveUp();
-    this.#refresh({ notify: false });
+    this._refresh({ notify: false });
     if (doc) {
       closeOff(doc);
       this.pdfViewer.setDocument(null);
@@ -1650,7 +1637,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
    *  aside (to its button), so the page has the room; it comes back when
    *  they close. Its open/closed choice isn't changed. Opened again by hand
    *  meanwhile, it stays. */
-  #stepAside() {
+  _stepAside() {
     const busy = !this.annotbar.hidden || !this.findbar.hidden;
     if (!busy) this.panelKept = false;
     const aside = busy && !this.panelKept;
@@ -1695,7 +1682,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
       tab.setAttribute("aria-selected", String(name === which));
       panel.hidden = name !== which;
     }
-    if (which === "comments") this.#listComments();
+    if (which === "comments") this._listComments();
     if (which === "thumbs") this.#showThumbs();
   }
 
@@ -2027,7 +2014,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
     if (find) {
       this.openFind();
       this.findInput.value = find;
-      this.#find("");
+      this._find("");
     }
   }
 
@@ -2044,14 +2031,14 @@ export class Reader extends TextEditing(Measuring(Object)) {
       this.closeAnnotate();
       this.gaveWay = { bar: "annotate", mode };
     } else if (wasHidden) this.gaveWay = null;
-    this.#endHint();
-    this.#stepAside();
+    this._endHint();
+    this._stepAside();
     this.findBtn.setAttribute("aria-pressed", "true");
     const selected = String(window.getSelection() || "").trim();
     if (selected && selected.length < 100 && !selected.includes("\n")) this.findInput.value = selected;
     this.findInput.focus();
     this.findInput.select();
-    if (this.findInput.value) this.#find("");
+    if (this.findInput.value) this._find("");
   }
   closeFind() {
     if (this.findbar.hidden) return;
@@ -2063,11 +2050,11 @@ export class Reader extends TextEditing(Measuring(Object)) {
       this.openAnnotate();
       if (back.mode && back.mode !== "NONE") this._setEditMode(back.mode);
     }
-    this.#stepAside();
+    this._stepAside();
     if (this.eventBus) this.eventBus.dispatch("findbarclose", { source: this });
     this.findBtn.focus({ preventScroll: true });  // back where it was opened from
   }
-  #find(type, previous = false) {
+  _find(type, previous = false) {
     if (!this.eventBus) return;
     this.eventBus.dispatch("find", {
       source: this, type, query: this.findInput.value,
@@ -2087,892 +2074,9 @@ export class Reader extends TextEditing(Measuring(Object)) {
     if (state === FindState.WRAPPED) this.toast("Reached the end — continued from the other end", 1500);
   }
 
-  // ---- annotating and signing ------------------------------------------------------
-  openAnnotate() {
-    if (!this.doc) return;
-    // Over the find bar: it gives way, and comes back when this bar closes.
-    const wasHidden = this.annotbar.hidden;
-    this.annotbar.hidden = false;
-    if (!this.findbar.hidden) {
-      this.gaveWay = null;
-      this.closeFind();
-      this.gaveWay = { bar: "find" };
-    } else if (wasHidden) this.gaveWay = null;
-    this.#stepAside();
-    this.annotateBtn.setAttribute("aria-pressed", "true");
-    this.#refresh({ notify: false });
-    this.#showEditMode(this.editMode || "NONE");
-  }
-  closeAnnotate() {
-    if (this.annotbar.hidden) return;
-    this.#closeToolsMenu();
-    this.annotbar.hidden = true;
-    this.annotateBtn.setAttribute("aria-pressed", "false");
-    this.#refresh({ notify: false });
-    if (this.editMode && this.editMode !== "NONE") this._setEditMode("NONE");
-    this.#endHint();
-    const back = this.gaveWay?.bar === "find" && this.doc;
-    this.gaveWay = null;
-    if (back) {  // the find bar it opened over
-      this.findbar.hidden = false;
-      this.findBtn.setAttribute("aria-pressed", "true");
-      this.findInput.focus();
-      if (this.findInput.value) this.#find("");
-    }
-    this.#stepAside();
-  }
-
-  #modeName(mode) {
-    return Object.entries(pdfjs.AnnotationEditorType).find(([, v]) => v === mode)?.[0] || "NONE";
-  }
-
-  /** With Select on (the annotate bar open, no tool), a click on an
-   *  annotation this reader can edit picks it, to move, resize or delete:
-   *  one placed here, and one already in the file (also after another tab
-   *  was shown and this one came back, when they are all in the file). pdf.js
-   *  picks those only on a double-click (its "switchannotationeditormode"
-   *  with the annotation's id); a click asks it the same, without starting to
-   *  type in a text box. Links, form fields and selecting text are left as
-   *  they were. */
-  #pickOnClick(e) {
-    if (e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
-    if (!this.doc || !this.uiManager || this.annotbar.hidden || this.editMode !== "NONE" || this.textEditMode
-      || this.markupMode || this.measureMode || this.container.classList.contains("hand")) return;
-    if (e.target.closest?.("a, input, select, textarea, button, [contenteditable='true'], .linkAnnotation, .widgetAnnotation, .popup")) return;
-    const sel = window.getSelection();
-    if (sel && !sel.isCollapsed) return;  // words were being selected
-    const n = Number(e.target.closest?.(".page")?.dataset.pageNumber);
-    const view = n && this.pdfViewer.getPageView(n - 1);
-    if (!view) return;
-    const under = (box) => {
-      if (!box || box.hidden || box.closest("[hidden]")) return false;
-      const r = box.getBoundingClientRect();
-      return r.width > 0 && r.height > 0 && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
-    };
-    let hit = null;  // (the last one found is drawn on top)
-    // Editors (placed here, or changed and not saved yet) ...
-    for (const ed of this.uiManager.getEditors(n - 1)) {
-      if (!ed.isEmpty() && under(ed.div)) hit = { mode: ed.mode, editId: ed.annotationElementId || ed.id };
-    }
-    // ... and annotations in the file that pdf.js can edit.
-    if (!hit) {
-      for (const a of view.annotationLayer?.annotationLayer?.getEditableAnnotations() || []) {
-        if (a.annotationEditorType !== undefined && under(a.container)) hit = { mode: a.annotationEditorType, editId: a.data.id };
-      }
-    }
-    if (!hit || this.#modeName(hit.mode) === "NONE") return;
-    e.preventDefault();
-    e.stopPropagation();
-    // (pdf.js turns on the annotation's tool, makes the page's editors and
-    // selects the one with this id.)
-    this._setEditMode(this.#modeName(hit.mode), false, { editId: hit.editId, mustEnterInEditMode: false, editComment: false });
-  }
-
-  /** Switch the pdf.js editing tool: NONE (select), HIGHLIGHT, FREETEXT, INK
-   *  or STAMP; or EDITTEXT, this reader's own tool for changing words. */
-  _setEditMode(name, create = false, pick = null) {
-    if (!this.pdfViewer || !this.doc) return;
-    const editText = name === "EDITTEXT";
-    this.#endHint();  // the last tool's hint goes with it
-    if (editText && !this.textEditHinted) {
-      this.textEditHinted = true;
-      this.#hint("Click a line to change it, Shift+click for its whole paragraph, or click an empty spot to add words. Old words can stay in the file underneath — to remove text for good, use Redact.", 8000);
-    }
-    const markup = MARKUP.has(name), custom = editText || markup;
-    if (name !== "NONE" || custom) this.measureTool(null);
-    this.textEditMode = editText;
-    this.markupMode = markup ? name : null;
-    this.#cancelMarkup();
-    this.root.classList.toggle("rd-edittext", editText);
-    this.root.classList.toggle("rd-markup", markup);
-    this.root.dataset.markup = markup ? name.toLowerCase() : "";
-    this.pickedImage = null;
-    this.#objectBoxes();
-    if (custom) name = "NONE";
-    const mode = pdfjs.AnnotationEditorType[name];
-    if (mode === undefined) return;
-    if (this.annotbar.hidden && (name !== "NONE" || custom)) this.openAnnotate();
-    // Back to no tool with a picked annotation still focused (Esc after
-    // picking one): pdf.js would see it focused again as the page's editors
-    // are put away, pick it again, and turn its tool back on.
-    if (mode === pdfjs.AnnotationEditorType.NONE && document.activeElement?.closest?.(".annotationEditorLayer")) {
-      this.container.focus({ preventScroll: true, focusVisible: false });
-    }
-    try {
-      if (!(custom && this.pdfViewer.annotationEditorMode === mode)) this.pdfViewer.annotationEditorMode = { mode, ...pick };
-    } catch (e) {
-      // (Turning the tools off on a document that has just been replaced, e.g. after signing, isn't news.)
-      if (!custom) { if (name !== "NONE") this.toast("Annotating isn't available for this document."); return; }
-    }
-    this.#showEditMode(name);
-    // Words selected before choosing Underline or Strike out get it straight away.
-    if (this.markupMode === "UNDERLINE" || this.markupMode === "STRIKEOUT") this.#markSelection();
-    if (this.markupMode === "REDACT") this.#redactSelection();
-    // "Picture" asks for an image file straight away.
-    if (create && this.uiManager) setTimeout(() => this.uiManager.updateParams(pdfjs.AnnotationEditorParamsType.CREATE, null), 50);
-  }
-
-  #showEditMode(name) {
-    if (name === "NONE" && this.textEditMode) name = "EDITTEXT";
-    if (name === "NONE" && this.markupMode) name = this.markupMode;
-    this.editMode = name;
-    if (name === "EDITTEXT" || MARKUP.has(name)) this.undoBtn.disabled = !this.activeTab?.undoDepth;
-    for (const btn of this.annotTools) btn.setAttribute(this.moreTools.includes(btn) ? "aria-checked" : "aria-pressed", String(btn.dataset.mode === name));
-    this.#showMoreTools(name);
-    const sizes = name === "FREETEXT" ? [[10, "10 pt"], [12, "12 pt"], [14, "14 pt"], [18, "18 pt"], [24, "24 pt"], [36, "36 pt"]]
-      : name === "INK" ? [[1, "Thin"], [2, "Fine"], [4, "Medium"], [8, "Thick"], [14, "Marker"]]
-      : name === "HIGHLIGHT" ? [[8, "Thin"], [12, "Normal"], [20, "Wide"]]
-      : name === "SHAPE" ? [[1, "Thin"], [2, "Medium"], [4, "Thick"], [8, "Heavy"]] : [];
-    const key = { FREETEXT: "text", INK: "ink", HIGHLIGHT: "mark", SHAPE: "shape", NOTE: "note", UNDERLINE: "line", STRIKEOUT: "line" }[name];
-    this.shapeSelect.hidden = name !== "SHAPE";
-    this.stampSelect.hidden = this.stampDatedLabel.hidden = name !== "STAMPS";
-    const chosen = this.annotParams?.size?.[key] ?? (key === "shape" ? 2 : undefined);
-    this.sizeSelect.replaceChildren(...sizes.map(([v, label]) => el("option", { value: v, selected: v === chosen }, label)));
-    this.sizeSelect.hidden = !sizes.length;
-    this.root.querySelector(".rd-swatches").hidden = !key;
-    this.#showRedactBar(name);
-  }
-
-  /** The More tools button: "More tools", or the tool from its menu that's in use. */
-  #showMoreTools(name = this.editMode) {
-    const on = this.moreTools.find((t) => t.dataset.mode === name);
-    const label = on ? on.querySelector("span").textContent : "More tools";
-    this.moreToolsBtn.innerHTML = (on ? on.querySelector("svg").outerHTML : svg("more")) + `<span>${label}</span>` + svg("down");
-    this.moreToolsBtn.classList.toggle("on", !!on);
-    this.moreToolsBtn.setAttribute("aria-label", on ? `More tools (in use: ${label})` : "More tools");
-  }
-
-  #toggleToolsMenu(focus = "checked") {
-    if (!this.moreToolsMenu.hidden) { this.#closeToolsMenu(); return; }
-    const at = this.moreToolsBtn.getBoundingClientRect(), box = this.root.getBoundingClientRect();
-    this.moreToolsMenu.style.top = `${at.bottom - box.top + 6}px`;
-    this.moreToolsMenu.style.left = `${Math.max(8, Math.min(at.left - box.left, box.width - 268))}px`;
-    this.moreToolsMenu.style.right = "auto";
-    this.moreToolsMenu.hidden = false;
-    this.moreToolsBtn.setAttribute("aria-expanded", "true");
-    const items = this.moreTools;
-    (focus === "last" ? items.at(-1) : items.find((t) => t.getAttribute("aria-checked") === "true") || items[0]).focus();
-  }
-  #closeToolsMenu(refocus = false) {
-    if (this.moreToolsMenu.hidden) return;
-    this.moreToolsMenu.hidden = true;
-    this.moreToolsBtn.setAttribute("aria-expanded", "false");
-    if (refocus) this.moreToolsBtn.focus();
-  }
-
-  #applyAnnotParams() {
-    this.annotParams ||= store.get("pdfm-annot", { color: 1, size: { text: 12, ink: 2, mark: 12 } });
-    this.#setColor(this.annotParams.color, false);
-    for (const [key, value] of Object.entries(this.annotParams.size)) this.#setSize(value, key, false);
-  }
-
-  #setColor(index, remember = true) {
-    const [, ink, mark] = COLORS[index] || COLORS[1];
-    for (const sw of this.swatches) sw.setAttribute("aria-pressed", String(+sw.dataset.index === index));
-    const P = pdfjs.AnnotationEditorParamsType;
-    if (this.uiManager) {
-      // Applies to the selected annotations, or else to new ones.
-      this.uiManager.updateParams(P.FREETEXT_COLOR, ink);
-      this.uiManager.updateParams(P.INK_COLOR, ink);
-      this.uiManager.updateParams(P.HIGHLIGHT_COLOR, mark);
-    }
-    if (remember) { this.annotParams.color = index; store.set("pdfm-annot", this.annotParams); }
-  }
-
-  #setSize(value, key = { FREETEXT: "text", INK: "ink", HIGHLIGHT: "mark", SHAPE: "shape" }[this.editMode], remember = true) {
-    if (!key || !value) return;
-    const P = pdfjs.AnnotationEditorParamsType;
-    const type = { text: P.FREETEXT_SIZE, ink: P.INK_THICKNESS, mark: P.HIGHLIGHT_THICKNESS }[key];
-    if (this.uiManager && type !== undefined) this.uiManager.updateParams(type, value);
-    if (remember) { this.annotParams.size[key] = value; store.set("pdfm-annot", this.annotParams); }
-  }
-
-  // ---- notes, underline, strikeout, shapes and comments (markup.py) ---------------
-  /** The colour picked in the annotation bar, as #rrggbb. */
-  #markupColor() {
-    const [, ink] = COLORS[this.annotParams?.color ?? 1] || COLORS[1];
-    return ink;
-  }
-
-  /** Where a pointer event is on a page: { n, pt (PDF), view, box } or null. */
-  #pointOnPage(e) {
-    const pageEl = e.target.closest?.(".page") || document.elementFromPoint(e.clientX, e.clientY)?.closest?.(".page");
-    const n = Number(pageEl?.dataset.pageNumber);
-    const view = n ? this.pdfViewer.getPageView(n - 1) : null;
-    if (!view?.div || !view.viewport) return null;
-    const box = view.div.getBoundingClientRect();
-    const x = e.clientX - box.left - view.div.clientLeft, y = e.clientY - box.top - view.div.clientTop;
-    const pt = view.viewport.convertToPdfPoint(x, y);
-    return Number.isFinite(pt[0]) && Number.isFinite(pt[1]) ? { n, pt, view, x, y } : null;
-  }
-
-  /** Send ``changes`` (see markup.py) to be written into the document. */
-  _applyMarkup(changes, failure = "Could not add that: ") {
-    return this.#changeDocument((bytes, tab) => this._post("/api/markup", bytes, tab, {
-      changes: JSON.stringify(changes), author: this.authorInput.value.trim() }), { failure });
-  }
-
-  #cancelMarkup() {
-    this.shapeDraft?.el.remove();
-    this.shapeDraft = null;
-    this.noteBox?.remove();
-    this.noteBox = null;
-  }
-
-  #markupDown(e) {
-    const mode = this.markupMode;
-    if (!mode || e.button !== 0 || mode === "UNDERLINE" || mode === "STRIKEOUT" || (mode === "REDACT" && this.#redactByText())) return;
-    if (e.target.closest?.(".rd-notebox, .rd-objbox, .rd-objtools, a, input, textarea, select, button")) return;
-    const at = this.#pointOnPage(e);
-    if (mode === "IMAGES") { if (at) this.#pickImage(null); return; }  // a click beside the pictures lets go
-    if (!at) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (mode === "NOTE") { this.#openNoteBox(at); return; }
-    if (mode === "LINKS") { this.#drawLinkBox(e, at); return; }
-    if (mode === "CERTSIGN") { this.#dragBox(at, "Drag a box where the signature goes.", (rect) => this.#signWithId(at.n, rect)); return; }
-    if (mode === "STAMPS") { this.#placeStamp(at); return; }
-    if (mode === "REDACT") { this.#dragBox(at, "Drag a box over what should be blacked out.", (rect) => this.#addRedactions(at.n, [rect])); return; }
-    // SHAPE: drag out the shape; it's drawn on screen until the file has it.
-    this.#cancelMarkup();
-    const svgEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svgEl.setAttribute("class", "rd-shapedraft");
-    at.view.div.append(svgEl);
-    this.shapeDraft = { el: svgEl, start: at, end: at, kind: this.shapeSelect.value, pointer: e.pointerId };
-    this.container.setPointerCapture?.(e.pointerId);
-  }
-
-  #markupMove(e) {
-    const d = this.shapeDraft;
-    if (!d || e.pointerId !== d.pointer) return;
-    const view = d.start.view, box = view.div.getBoundingClientRect();
-    let x = e.clientX - box.left - view.div.clientLeft, y = e.clientY - box.top - view.div.clientTop;
-    const line = d.kind === "arrow" || d.kind === "line";
-    if (e.shiftKey) {  // a square or circle; a line at 45° steps
-      const dx = x - d.start.x, dy = y - d.start.y;
-      if (line) {
-        const a = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4), len = Math.hypot(dx, dy);
-        x = d.start.x + len * Math.cos(a); y = d.start.y + len * Math.sin(a);
-      } else {
-        const side = Math.max(Math.abs(dx), Math.abs(dy));
-        x = d.start.x + Math.sign(dx || 1) * side; y = d.start.y + Math.sign(dy || 1) * side;
-      }
-    }
-    d.end = { x, y, pt: view.viewport.convertToPdfPoint(x, y) };
-    const color = this.#markupColor(), width = Math.max(1, (this.annotParams?.size?.shape || 2) * view.viewport.scale);
-    const [x0, y0, x1, y1] = [Math.min(d.start.x, x), Math.min(d.start.y, y), Math.max(d.start.x, x), Math.max(d.start.y, y)];
-    const shape = d.kind === "ellipse" ? `<ellipse cx="${(x0 + x1) / 2}" cy="${(y0 + y1) / 2}" rx="${(x1 - x0) / 2}" ry="${(y1 - y0) / 2}"/>`
-      : line ? `<line x1="${d.start.x}" y1="${d.start.y}" x2="${x}" y2="${y}"${d.kind === "arrow" ? ' marker-end="url(#rd-arrowhead)"' : ""}/>`
-      : `<rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}"${d.kind === "cloud" ? ' stroke-dasharray="2 3" rx="6"' : ""}/>`;
-    d.el.innerHTML = `<defs><marker id="rd-arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">`
-      + `<path d="M0 0 10 5 0 10z" fill="${color}"/></marker></defs><g fill="none" stroke="${color}" stroke-width="${width}">${shape}</g>`;
-  }
-
-  #markupUp(e) {
-    const mode = this.markupMode;
-    if (!mode) return;
-    if (mode === "UNDERLINE" || mode === "STRIKEOUT") {
-      if (e.target.closest?.(".rd-container")) setTimeout(() => this.#markSelection(), 0);
-      return;
-    }
-    if (mode === "REDACT") {
-      if (this.#redactByText() && e.target.closest?.(".rd-container")) setTimeout(() => this.#redactSelection(), 0);
-      return;
-    }
-    const d = this.shapeDraft;
-    if (!d || e.pointerId !== d.pointer) return;
-    this.#markupMove(e);
-    this.shapeDraft = null;
-    const { start, end, kind } = d;
-    if (Math.hypot(end.x - start.x, end.y - start.y) < 4) { d.el.remove(); return; }  // a click, not a drag
-    const page = start.n, color = this.#markupColor(), width = this.annotParams?.size?.shape || 2;
-    const change = kind === "arrow" || kind === "line"
-      ? { op: "add", page, kind, points: [start.pt, end.pt], color, width }
-      : { op: "add", page, kind, rect: [start.pt[0], start.pt[1], end.pt[0], end.pt[1]], color, width };
-    this._applyMarkup([change]).finally(() => d.el.remove());
-  }
-
-  // -- stamps --
-  /** A stamp where the page was clicked (the usual size), or in the box
-   *  dragged out. */
-  #placeStamp(at) {
-    const view = at.view, draft = el("div", { class: "rd-linkdraft rd-stampdraft", style: `left:${at.x}px;top:${at.y}px;width:0;height:0` });
-    view.div.append(draft);
-    const box = view.div.getBoundingClientRect(), ox = box.left + view.div.clientLeft, oy = box.top + view.div.clientTop;
-    let end = [at.x, at.y];
-    const move = (ev) => {
-      end = [ev.clientX - ox, ev.clientY - oy];
-      Object.assign(draft.style, { left: Math.min(at.x, end[0]) + "px", top: Math.min(at.y, end[1]) + "px",
-        width: Math.abs(end[0] - at.x) + "px", height: Math.abs(end[1] - at.y) + "px" });
-    };
-    const up = async () => {
-      window.removeEventListener("pointermove", move);
-      draft.remove();
-      const dated = this.stampDated.checked, s = view.viewport.scale;
-      let a = [at.x, at.y], b = end;
-      if (Math.abs(end[0] - at.x) < 12 || Math.abs(end[1] - at.y) < 8) {  // a click: the usual size, centred there
-        const w = 160 * s, h = (dated ? 50 : 42) * s;
-        a = [at.x - w / 2, at.y - h / 2]; b = [at.x + w / 2, at.y + h / 2];
-      }
-      let label = this.stampSelect.value;
-      if (!label) {
-        const words = el("input", { type: "text", value: store.get("pdfm-stamp-own", ""), placeholder: "e.g. PAID", "aria-label": "Stamp words", maxlength: "60" });
-        setTimeout(() => words.focus(), 0);
-        if (await this._dialog("Your own stamp", [el("label", { class: "rd-field" }, "Words on the stamp", words)],
-          [["cancel", "Cancel"], ["ok", "Stamp", true]]) !== "ok" || !words.value.trim()) return;
-        label = words.value.trim();
-        store.set("pdfm-stamp-own", label);
-      }
-      store.set("pdfm-stamp", this.stampSelect.value);
-      store.set("pdfm-stamp-dated", dated);
-      const p = view.viewport.convertToPdfPoint(...a), q = view.viewport.convertToPdfPoint(...b);
-      const rect = [Math.min(p[0], q[0]), Math.min(p[1], q[1]), Math.max(p[0], q[0]), Math.max(p[1], q[1])];
-      this._applyMarkup([{ op: "add", page: at.n, kind: "stamp", rect, label, dated }], "Could not stamp the page: ");
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up, { once: true });
-  }
-  // -- end of stamps --
-
-  /** Underline or strike out the selected words. */
-  #markSelection() {
-    const kind = { UNDERLINE: "underline", STRIKEOUT: "strikeout" }[this.markupMode];
-    const sel = window.getSelection();
-    if (!kind || !sel || sel.isCollapsed || !sel.rangeCount) return;
-    const pages = new Map();
-    for (const r of sel.getRangeAt(0).getClientRects()) {
-      if (r.width < 1 || r.height < 1) continue;
-      const at = this.#pointOnPage({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, target: document.body });
-      if (!at || !this.container.contains(at.view.div)) continue;
-      const box = at.view.div.getBoundingClientRect(), dx = box.left + at.view.div.clientLeft, dy = box.top + at.view.div.clientTop;
-      const a = at.view.viewport.convertToPdfPoint(r.left - dx, r.top - dy), b = at.view.viewport.convertToPdfPoint(r.right - dx, r.bottom - dy);
-      const rect = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
-      if (!pages.has(at.n)) pages.set(at.n, []);
-      pages.get(at.n).push(rect);
-    }
-    if (!pages.size) return;
-    sel.removeAllRanges();
-    const color = this.#markupColor();
-    this._applyMarkup([...pages].map(([page, rects]) => ({ op: "add", page, kind, rects, color })));
-  }
-
-  /** A box to type a note into, where the page was clicked. */
-  #openNoteBox(at) {
-    this.#cancelMarkup();
-    const text = el("textarea", { rows: 4, placeholder: "Your comment", "aria-label": "Note" });
-    const add = el("button", { type: "button", class: "rd-btn primary" }, "Add note");
-    const cancel = el("button", { type: "button", class: "rd-btn" }, "Cancel");
-    const box = el("div", { class: "rd-notebox", style: `left:${at.x}px;top:${at.y}px` }, text, el("div", { class: "rd-notebtns" }, cancel, add));
-    at.view.div.append(box);
-    this.#keepInColumn(box, at);
-    this.noteBox = box;
-    const done = () => {
-      const words = text.value.trim();
-      this.#cancelMarkup();
-      if (words) this._applyMarkup([{ op: "add", page: at.n, kind: "note", at: at.pt, text: words, color: "#f5c400" }]);
-    };
-    add.addEventListener("click", done);
-    cancel.addEventListener("click", () => this.#cancelMarkup());
-    this.noteCommit = () => { if (box.isConnected) done(); this.noteCommit = null; };
-    text.addEventListener("keydown", (e) => {
-      e.stopPropagation();
-      if (e.key === "Escape") this.#cancelMarkup();
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) done();
-      // Ctrl+S here: the note goes in, then the document is saved (as anywhere else in the reader).
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && !e.altKey) { e.preventDefault(); this.#saveKey(e); }
-    });
-    setTimeout(() => text.focus(), 0);
-  }
-
-  // ---- the Comments tab --------------------------------------------------------------
-  /** Every annotation with what's written on it, by page, replies under what they answer. */
-  async #listComments() {
-    const doc = this.doc, list = this.commentsList;
-    if (!doc || this.commentsPanel.hidden) return;
-    const seq = (this.commentsSeq = (this.commentsSeq || 0) + 1);
-    list.replaceChildren(el("p", { class: "rd-muted" }, "Reading comments…"));
-    const items = [];
-    for (let n = 1; n <= doc.numPages; n++) {
-      let annots = [];
-      try { annots = await (await doc.getPage(n)).getAnnotations({ intent: "display" }); } catch (e) { /* skip the page */ }
-      if (seq !== this.commentsSeq || doc !== this.doc) return;
-      for (const a of annots) {
-        if (!KIND_NAMES[a.subtype] || a.replyType === "Group") continue;
-        items.push({ page: n, id: a.id, kind: a.subtype === "Line" && a.lineEndings?.[1] && a.lineEndings[1] !== "None" ? "Arrow" : KIND_NAMES[a.subtype],
-          text: a.contentsObj?.str || "", author: a.titleObj?.str || "", date: a.modificationDate || a.creationDate,
-          reply: a.inReplyTo || null, rect: a.rect, color: a.color });
-      }
-    }
-    const byId = new Map(items.map((it) => [it.id, it]));
-    const top = items.filter((it) => !it.reply || !byId.has(it.reply));
-    for (const it of items) if (it.reply && byId.has(it.reply)) (byId.get(it.reply).replies ||= []).push(it);
-    const fresh = this.#changed() ? [el("p", { class: "rd-muted" }, "Highlights and drawings not saved yet show here once you save or add a note.")] : [];
-    if (!top.length) {
-      list.replaceChildren(...fresh, el("p", { class: "rd-muted" }, "No comments or markup yet. Use Note, Underline, Strike out or Shapes in Annotate & sign."));
-      return;
-    }
-    list.replaceChildren(...fresh, ...top.map((it) => this.#commentCard(it)));
-  }
-
-  // -- comment summary and XFDF --
-  async #commentRequest(what, extra = null) {
-    await this.chain;
-    const tab = this.activeTab;
-    const body = new FormData();
-    body.append("file", new Blob([await this._currentBytes()], { type: "application/pdf" }), "file.pdf");
-    body.append("password", tab?.password || "");
-    body.append("name", this.name || "document.pdf");
-    if (extra) body.append("xfdf", extra, extra.name);
-    const res = await fetch(`/api/comments/${what}`, { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-    return res;
-  }
-
-  /** A PDF listing the comments, opened in a new tab. */
-  async #commentSummary() {
-    if (!this.doc) return;
-    try {
-      const res = await this.#commentRequest("summary");
-      const stem = (this.name || "document").replace(/\.pdf$/i, "");
-      await this.openBytes(new Uint8Array(await res.arrayBuffer()), `${stem} — comments.pdf`);
-    } catch (e) { this.toast("Couldn't make the summary: " + (e.message || e)); }
-  }
-
-  async #exportComments() {
-    if (!this.doc) return;
-    try {
-      const res = await this.#commentRequest("export");
-      const n = Number(res.headers.get("X-Pdfm-Count")) || 0;
-      if (!n) { this.toast("This document has no comments to export."); return; }
-      const stem = (this.name || "document").replace(/\.pdf$/i, "");
-      await this._saveBytes(new Uint8Array(await res.arrayBuffer()), `${stem}.xfdf`, () => {}, this.activeTab?.fileId);
-    } catch (e) { this.toast("Couldn't export the comments: " + (e.message || e)); }
-  }
-
-  #importComments(file) {
-    return this.#changeDocument(async (bytes, tab) => {
-      const body = new FormData();
-      body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
-      body.append("password", tab.password || "");
-      body.append("xfdf", file, file.name);
-      return fetch("/api/comments/import", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
-    }, {
-      failure: "Couldn't add the comments: ",
-      after: (res) => {
-        const n = Number(res.headers.get("X-Pdfm-Added")) || 0, skipped = res.headers.get("X-Pdfm-Skipped");
-        this.toast(n ? `Added ${n} comment${n === 1 ? "" : "s"}${skipped ? ` (some kinds couldn't be added: ${skipped})` : ""}.`
-          : "Nothing to add: these comments are already here.");
-        this.#listComments();
-      },
-    });
-  }
-  // -- end of comment summary and XFDF --
-
-  #commentCard(it, isReply = false) {
-    const date = (raw) => {
-      const d = raw && pdfjs.PDFDateString.toDateObject(raw);
-      return d ? d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
-    };
-    const swatch = it.color ? `rgb(${[...it.color].join(",")})` : "transparent";
-    const head = el("div", { class: "rd-commenthead" },
-      el("i", { class: "rd-commentdot", style: `background:${swatch}` }),
-      el("b", {}, isReply ? "Reply" : it.kind), el("span", {}, it.author ? " · " + it.author : ""),
-      el("span", { class: "rd-muted" }, ` · p. ${this.labels?.[it.page - 1] || it.page}`));
-    const body = el("p", { class: "rd-commenttext" + (it.text ? "" : " rd-muted") }, it.text || "No comment");
-    const when = el("div", { class: "rd-muted rd-commentdate" }, date(it.date));
-    const btn = (label, fn) => { const b = el("button", { type: "button", class: "rd-linkbtn" }, label); b.addEventListener("click", (e) => { e.stopPropagation(); fn(); }); return b; };
-    const card = el("article", { class: "rd-comment" + (isReply ? " reply" : ""), tabindex: "0" }, head, body, when);
-    const ask = (label, value, apply) => {
-      card.querySelector(".rd-commentedit")?.remove();
-      const area = el("textarea", { rows: 3, "aria-label": label }, value);
-      const ok = el("button", { type: "button", class: "rd-btn primary" }, label);
-      const box = el("div", { class: "rd-commentedit" }, area, el("div", { class: "rd-notebtns" }, btn("Cancel", () => box.remove()), ok));
-      ok.addEventListener("click", (e) => { e.stopPropagation(); apply(area.value.trim()); });
-      area.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) ok.click(); if (e.key === "Escape") box.remove(); });
-      card.append(box);
-      area.focus();
-    };
-    card.append(el("div", { class: "rd-commentbtns" },
-      isReply ? null : btn("Reply", () => ask("Reply", "", (text) => text && this._applyMarkup([{ op: "reply", page: it.page, id: it.id, text }], "Could not reply: "))),
-      btn(it.text ? "Edit" : "Add comment", () => ask("Save", it.text, (text) => this._applyMarkup([{ op: "text", page: it.page, id: it.id, text }], "Could not change the comment: "))),
-      btn("Delete", async () => {
-        const what = isReply ? "this reply" : `this ${it.kind.toLowerCase()}${it.replies?.length ? " and its replies" : ""}`;
-        if (await this.ask(`Delete ${what}?`, "Undo (Ctrl+Z) brings it back until you save.",
-          [["cancel", "Cancel"], ["delete", "Delete", true]]) === "delete") {
-          this._applyMarkup([{ op: "delete", page: it.page, id: it.id }], "Could not delete it: ");
-        }
-      })));
-    card.addEventListener("click", () => this.#showComment(it));
-    card.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === card) this.#showComment(it); });
-    for (const r of it.replies || []) card.append(this.#commentCard(r, true));
-    return card;
-  }
-
-  /** Scroll to an annotation and flash it. */
-  #showComment(it) {
-    const [x0, y0, x1, y1] = it.rect || [0, 0, 0, 0];
-    this.pdfViewer.scrollPageIntoView({ pageNumber: it.page, destArray: [null, { name: "XYZ" }, x0 - 40, y1 + 60, null] });
-    setTimeout(() => {
-      const view = this.pdfViewer.getPageView(it.page - 1);
-      if (!view?.div || !view.viewport) return;
-      const [a, b, c, d] = viewRect(view.viewport, [x0, y0, x1, y1]);
-      const flash = el("div", { class: "rd-flash", style: `left:${Math.min(a, c) - 4}px;top:${Math.min(b, d) - 4}px;width:${Math.abs(c - a) + 8}px;height:${Math.abs(d - b) + 8}px` });
-      view.div.append(flash);
-      setTimeout(() => flash.remove(), 1600);
-    }, 150);
-  }
-
-  // ---- pictures and links on the page (pageimages.py, markup.py) -------------------
-  /** Pictures or Links mode: outlines over the pages' pictures or links. */
-  #objectBoxes() {
-    this.viewerEl?.querySelectorAll(".rd-objbox, .rd-objtools, .rd-linkdraft").forEach((n) => n.remove());
-    if (this.markupMode === "CERTSIGN") this.#hint("Drag a box where your signature should appear, then choose your Digital ID.", 5000);
-    if ((this.markupMode !== "IMAGES" && this.markupMode !== "LINKS") || !this.doc) return;
-    for (let i = 0; i < this.pdfViewer.pagesCount; i++) {
-      if (this.pdfViewer.getPageView(i)?.canvas?.width) this.#drawObjectBoxes(i + 1);
-    }
-    if (this.markupMode === "IMAGES" && !this.imagesHinted) {
-      this.imagesHinted = true;
-      this.#hint("Click a picture to pick it: drag it to move it, drag a corner to resize it (Shift: freely), or replace or delete it.", 6000);
-    }
-  }
-
-  /** The pictures of the shown document, by page (asked once per change of it). */
-  #imagesOf(tab) {
-    if (tab.imagesFor !== (tab.version || 0) || !tab.images) {
-      tab.imagesFor = tab.version || 0;
-      tab.images = (async () => {
-        const body = new FormData();
-        body.append("file", new Blob([await this._fullBytes()], { type: "application/pdf" }), "file.pdf");
-        body.append("password", tab.password || "");
-        const res = await fetch("/api/images/list", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
-        return res.ok ? (await res.json()).pages || {} : {};
-      })().catch(() => ({}));
-    }
-    return tab.images;
-  }
-
-  /** Where a link goes: { url } or { page }. */
-  async #linkTarget(a) {
-    if (a.url || a.unsafeUrl) return { url: a.url || a.unsafeUrl };
-    try {
-      let dest = a.dest;
-      if (typeof dest === "string") dest = await this.doc.getDestination(dest);
-      if (Array.isArray(dest) && dest[0]) {
-        const index = typeof dest[0] === "object" ? await this.doc.getPageIndex(dest[0]) : dest[0];
-        return { page: index + 1 };
-      }
-    } catch (e) { /* somewhere this reader can't name */ }
-    return {};
-  }
-
-  async #drawObjectBoxes(n) {
-    const view = this.pdfViewer.getPageView(n - 1), tab = this.activeTab, mode = this.markupMode, doc = this.doc;
-    if (!view?.div || !view.viewport || !tab) return;
-    let items = [];
-    if (mode === "IMAGES") items = (await this.#imagesOf(tab))[n] || [];
-    else if (mode === "LINKS") {
-      try { items = (await (await doc.getPage(n)).getAnnotations({ intent: "display" })).filter((a) => a.subtype === "Link"); } catch (e) { items = []; }
-    }
-    if (mode !== this.markupMode || doc !== this.doc) return;
-    view.div.querySelectorAll(".rd-objbox, .rd-objtools").forEach((x) => x.remove());
-    const vp = view.viewport;
-    for (const item of items) {
-      const [a, b, c, d] = viewRect(vp, item.box || item.rect);
-      const box = el("div", { class: "rd-objbox" + (mode === "LINKS" ? " link" : "") + (item.editable === false ? " locked" : ""),
-        style: `left:${Math.min(a, c)}px;top:${Math.min(b, d)}px;width:${Math.abs(c - a)}px;height:${Math.abs(d - b)}px` });
-      if (mode === "IMAGES") {
-        box.title = item.editable === false ? "This picture is drawn as part of a group, so it can't be edited here" : "Drag to move; click to pick it";
-        if (item.editable !== false) for (const h of ["nw", "ne", "sw", "se"]) box.append(el("i", { class: "rd-handle " + h, "data-handle": h }));
-        box.addEventListener("pointerdown", (e) => this.#grabImage(e, n, item, box));
-      } else {
-        const target = await this.#linkTarget(item);
-        box.title = target.url ? `Goes to ${target.url}` : target.page ? `Goes to page ${target.page}` : "A link";
-        box.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); });
-        box.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); this.#editLink(n, item, null, target); });
-      }
-      view.div.append(box);
-      if (mode === "IMAGES" && this.pickedImage?.page === n && this.pickedImage.index === item.index) this.#pickImage({ page: n, item, box }, false);
-    }
-  }
-
-  /** Pick a picture (null: none): its handles and Replace / Delete. */
-  #pickImage(picked, redraw = true) {
-    this.viewerEl.querySelectorAll(".rd-objbox.picked").forEach((b) => b.classList.remove("picked"));
-    this.viewerEl.querySelectorAll(".rd-objtools").forEach((t) => t.remove());
-    this.pickedImage = picked ? { page: picked.page, index: picked.item.index } : null;
-    if (!picked) return;
-    picked.box.classList.add("picked");
-    const btn = (icon, label, fn) => {
-      const b = el("button", { type: "button", class: "rd-btn", html: svg(icon) + `<span>${label}</span>` });
-      b.addEventListener("pointerdown", (e) => e.stopPropagation());
-      b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
-      return b;
-    };
-    const tools = el("div", { class: "rd-objtools", style: `left:${picked.box.offsetLeft}px;top:${Math.max(0, picked.box.offsetTop - 42)}px` },
-      btn("image", "Replace…", () => this.#editImage("replace")), btn("trash", "Delete", () => this.#editImage("delete")));
-    picked.box.parentElement.append(tools);
-    if (redraw) picked.box.focus?.();
-  }
-
-  /** Drag a picture (or one of its corners) to move (or resize) it. */
-  #grabImage(e, page, item, box) {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (item.editable === false) { this.toast("That picture is drawn as part of a group, so it can't be edited here.", 4000); return; }
-    this.#pickImage({ page, item, box }, false);
-    const handle = e.target.dataset?.handle || null;
-    const start = { x: e.clientX, y: e.clientY, left: box.offsetLeft, top: box.offsetTop, width: box.offsetWidth, height: box.offsetHeight };
-    const ratio = start.width / Math.max(1, start.height);
-    let moved = false;
-    const move = (ev) => {
-      const dx = ev.clientX - start.x, dy = ev.clientY - start.y;
-      if (!moved && Math.hypot(dx, dy) < 3) return;
-      moved = true;
-      let { left, top, width, height } = start;
-      if (!handle) { left += dx; top += dy; }
-      else {
-        if (handle.includes("e")) width = start.width + dx;
-        if (handle.includes("w")) width = start.width - dx;
-        if (handle.includes("s")) height = start.height + dy;
-        if (handle.includes("n")) height = start.height - dy;
-        width = Math.max(8, width); height = Math.max(8, height);
-        if (!ev.shiftKey) {  // the picture keeps its proportions
-          if (Math.abs(dx) * start.height >= Math.abs(dy) * start.width) height = width / ratio; else width = height * ratio;
-        }
-        if (handle.includes("w")) left = start.left + start.width - width;
-        if (handle.includes("n")) top = start.top + start.height - height;
-      }
-      Object.assign(box.style, { left: left + "px", top: top + "px", width: width + "px", height: height + "px" });
-      this.viewerEl.querySelectorAll(".rd-objtools").forEach((t) => { t.style.left = left + "px"; t.style.top = Math.max(0, top - 42) + "px"; });
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      if (!moved) return;
-      const view = this.pdfViewer.getPageView(page - 1), vp = view.viewport;
-      const [x0, y0] = vp.convertToPdfPoint(box.offsetLeft, box.offsetTop);
-      const [x1, y1] = vp.convertToPdfPoint(box.offsetLeft + box.offsetWidth, box.offsetTop + box.offsetHeight);
-      this.#changeImages([{ op: "move", page, index: item.index, box: [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)] }]);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up, { once: true });
-  }
-
-  async #editImage(op) {
-    const picked = this.pickedImage;
-    if (!picked) return;
-    if (op === "delete") { this.pickedImage = null; await this.#changeImages([{ op: "delete", page: picked.page, index: picked.index }]); return; }
-    const file = await new Promise((resolve) => {
-      const input = el("input", { type: "file", accept: "image/png,image/jpeg,image/gif,image/webp,image/bmp,image/tiff", hidden: true });
-      input.addEventListener("change", () => { resolve(input.files[0] || null); input.remove(); });
-      input.addEventListener("cancel", () => { resolve(null); input.remove(); });
-      this.root.append(input);
-      input.click();
-    });
-    if (file) await this.#changeImages([{ op: "replace", page: picked.page, index: picked.index, picture: "picture0" }], [file]);
-  }
-
-  #changeImages(changes, files = []) {
-    return this.#changeDocument((bytes, tab) => {
-      const body = new FormData();
-      body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
-      body.append("password", tab.password || "");
-      body.append("changes", JSON.stringify(changes));
-      files.forEach((f, i) => body.append("picture" + i, f, f.name || "picture"));
-      return fetch("/api/images/edit", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
-    }, { failure: "Could not change the picture: " });
-  }
-
-  /** Links mode: drag a box on the page for a new link. */
-  #drawLinkBox(e, at) {
-    this.#dragBox(at, "Drag a box over what should be clickable to add a link.", (rect) => this.#editLink(at.n, null, rect));
-  }
-
-  /** Drag out a box on the page from ``at``; ``done(rect)`` gets it in PDF coordinates. */
-  #dragBox(at, tooSmall, done) {
-    const view = at.view, draft = el("div", { class: "rd-linkdraft", style: `left:${at.x}px;top:${at.y}px;width:0;height:0` });
-    view.div.append(draft);
-    const box = view.div.getBoundingClientRect(), ox = box.left + view.div.clientLeft, oy = box.top + view.div.clientTop;
-    let end = [at.x, at.y];
-    const move = (ev) => {
-      end = [ev.clientX - ox, ev.clientY - oy];
-      Object.assign(draft.style, { left: Math.min(at.x, end[0]) + "px", top: Math.min(at.y, end[1]) + "px",
-        width: Math.abs(end[0] - at.x) + "px", height: Math.abs(end[1] - at.y) + "px" });
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      draft.remove();
-      if (Math.abs(end[0] - at.x) < 6 || Math.abs(end[1] - at.y) < 6) { this.toast(tooSmall, 3000); return; }
-      const a = view.viewport.convertToPdfPoint(at.x, at.y), b = view.viewport.convertToPdfPoint(...end);
-      done([Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])]);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up, { once: true });
-  }
-
-  /** Change where a link goes, or delete it; or say where a new one goes. */
-  async #editLink(n, link, rect, target = {}) {
-    const toWeb = el("input", { type: "radio", name: "rd-linkto", value: "web" });
-    const toPage = el("input", { type: "radio", name: "rd-linkto", value: "page" });
-    const url = el("input", { type: "text", value: target.url || "", placeholder: "https://example.com or name@example.com", "aria-label": "Web or email address" });
-    const page = el("input", { type: "number", min: "1", max: String(this.doc.numPages), value: target.page ? String(target.page) : "", "aria-label": "Page" });
-    (target.page && !target.url ? toPage : toWeb).checked = true;
-    url.addEventListener("input", () => { toWeb.checked = true; });
-    page.addEventListener("input", () => { toPage.checked = true; });
-    setTimeout(() => (toPage.checked ? page : url).focus(), 0);
-    const answer = await this._dialog(link ? "Link" : "New link", [
-      el("label", { class: "rd-field" }, el("span", {}, toWeb, " Goes to a web or email address"), url),
-      el("label", { class: "rd-field" }, el("span", {}, toPage, ` Goes to a page of this document (1–${this.doc.numPages})`), page)],
-      link ? [["delete", "Delete the link"], ["cancel", "Cancel"], ["ok", "Save", true]] : [["cancel", "Cancel"], ["ok", "Add the link", true]]);
-    if (answer === "delete") { await this._applyMarkup([{ op: "delete", page: n, id: link.id }], "Could not delete the link: "); return; }
-    if (answer !== "ok") return;
-    const where = toPage.checked ? { to_page: Number(page.value) } : { url: url.value.trim() };
-    if (!where.url && !where.to_page) { this.toast("Say where the link goes."); return; }
-    if (link) await this._applyMarkup([{ op: "link", page: n, id: link.id, ...where }], "Could not change the link: ");
-    else await this._applyMarkup([{ op: "add", page: n, kind: "link", rect, ...where }], "Could not add the link: ");
-  }
-
-  // -- reader redaction --------------------------------------------------------------------
-  // Mark areas to black out (drag boxes, or select words), then Apply sends
-  // them to /api/redact/apply (redact.py, method "remove"): what's under them
-  // is taken out of the file and black boxes are drawn. The marks belong to
-  // the tab and to the version of the document they were made on.
-
-  #buildRedact() {
-    this.redactBtn = el("button", { class: "rd-btn rd-tool", type: "button", "data-mode": "REDACT", "aria-pressed": "false",
-      title: "Redact: mark what should be blacked out for good, then Apply", html: svg("redact") + "<span>Redact</span>" });
-    this.annotTools.push(this.redactBtn);
-    this.redactHow = el("select", { class: "rd-zoom", "aria-label": "How to mark", hidden: true },
-      el("option", { value: "box" }, "Draw boxes"), el("option", { value: "text" }, "Select words"));
-    this.redactHow.value = store.get("pdfm-redact-how", "box");
-    this.redactHow.addEventListener("change", () => {
-      store.set("pdfm-redact-how", this.redactHow.value);
-      this.root.dataset.redact = this.redactHow.value;
-    });
-    // The verb, in the Redact page's style: "Black out 3 areas", seal red.
-    this.redactApplyBtn = el("button", { class: "rd-btn primary seal rd-redact-apply", type: "button", hidden: true, disabled: true,
-      title: "Black out the marked areas for good", html: svg("redact") + "<span>Black out</span>" });
-    this.redactApplyBtn.addEventListener("click", () => this.#applyRedactions());
-  }
-
-  #redactByText() { return this.redactHow?.value === "text"; }
-
-  /** The tab's marks, {page: [[x0, y0, x1, y1]]} in PDF points; marks made on
-   *  an earlier version of the document are dropped (its pages may have moved). */
-  #redactMarks(tab = this.activeTab) {
-    if (!tab) return {};
-    const version = tab.version || 0;
-    if (tab.redactMarks?.version !== version) tab.redactMarks = { version, pages: {} };
-    return tab.redactMarks.pages;
-  }
-
-  #redactCount(tab = this.activeTab) {
-    return Object.values(this.#redactMarks(tab)).reduce((n, list) => n + list.length, 0);
-  }
-
-  #showRedactBar(name) {
-    const on = name === "REDACT";
-    if (!this.redactHow) return;
-    this.redactHow.hidden = this.redactApplyBtn.hidden = !on;
-    this.root.dataset.redact = on ? this.redactHow.value : "";
-    if (on) this.#showRedactCount(); else this.#refresh({ notify: false });
-    if (on && !this.redactHinted) {
-      this.redactHinted = true;
-      this.#hint("Drag boxes over what should go (or choose Select words), then Black out. Click × on a mark to remove it.", 7000);
-    }
-  }
-
-  #showRedactCount() {
-    const n = this.#redactCount();
-    this.redactApplyBtn.disabled = !n;
-    this.redactApplyBtn.querySelector("span").textContent = n ? `Black out ${n} ${n === 1 ? "area" : "areas"}` : "Black out";
-    this.redactApplyBtn.title = n ? `Black out the ${n === 1 ? "marked area" : n + " marked areas"} for good` : "Mark something to black out first";
-    this.#refresh({ notify: false });
-  }
-
-  #addRedactions(n, rects) {
-    const list = (this.#redactMarks()[n] ||= []);
-    for (const r of rects) list.push(r.map((v) => Math.round(v * 100) / 100));
-    this.#drawRedactions(n);
-    this.#showRedactCount();
-  }
-
-  /** Red outlines (with a remove button) over the marks on page ``n``. */
-  #drawRedactions(n) {
-    const view = this.pdfViewer?.getPageView(n - 1);
-    if (!view?.div || !view.viewport) return;
-    view.div.querySelectorAll(".rd-redactmark").forEach((x) => x.remove());
-    const list = this.#redactMarks()[n] || [];
-    list.forEach((rect, i) => {
-      const [a, b, c, d] = viewRect(view.viewport, rect);
-      const remove = el("button", { type: "button", class: "rd-redactx", title: "Remove this mark", "aria-label": "Remove this mark", html: svg("x") });
-      remove.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); });
-      remove.addEventListener("click", (e) => {
-        e.stopPropagation();
-        list.splice(i, 1);
-        this.#drawRedactions(n);
-        this.#showRedactCount();
-      });
-      view.div.append(el("div", { class: "rd-redactmark", title: "Marked for redaction",
-        style: `left:${Math.min(a, c)}px;top:${Math.min(b, d)}px;width:${Math.abs(c - a)}px;height:${Math.abs(d - b)}px` }, remove));
-    });
-  }
-
-  /** Mark the selected words (one box per line piece, a little padded). */
-  #redactSelection() {
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || !sel.rangeCount) return;
-    const pages = new Map();
-    for (const r of sel.getRangeAt(0).getClientRects()) {
-      if (r.width < 1 || r.height < 1) continue;
-      const at = this.#pointOnPage({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, target: document.body });
-      if (!at || !this.container.contains(at.view.div)) continue;
-      const box = at.view.div.getBoundingClientRect(), dx = box.left + at.view.div.clientLeft, dy = box.top + at.view.div.clientTop;
-      const a = at.view.viewport.convertToPdfPoint(r.left - dx, r.top - dy), b = at.view.viewport.convertToPdfPoint(r.right - dx, r.bottom - dy);
-      const pad = 0.75;
-      const rect = [Math.min(a[0], b[0]) - pad, Math.min(a[1], b[1]) - pad, Math.max(a[0], b[0]) + pad, Math.max(a[1], b[1]) + pad];
-      if (!pages.has(at.n)) pages.set(at.n, []);
-      pages.get(at.n).push(rect);
-    }
-    if (!pages.size) return;
-    sel.removeAllRanges();
-    for (const [n, rects] of pages) this.#addRedactions(n, rects);
-  }
-
-  async #applyRedactions() {
-    const tab = this.activeTab, marks = this.#redactMarks(tab), count = this.#redactCount(tab);
-    if (!tab || !count) { this.toast("Mark something first: drag a box over it, or choose Select words."); return; }
-    const answer = await this._dialog(`Black out ${count === 1 ? "this area" : count + " areas"}?`, [
-      el("p", {}, `This removes what's under the ${count === 1 ? "marked area" : count + " marked areas"} for good once you save: `
-        + "the words, the covered parts of pictures, and comments or form fields there. The rest of the page stays as it is."),
-      el("p", {}, "Until then, Undo (Ctrl+Z) brings it back. Saving makes a redacted copy beside the original, unless you choose to replace it.")],
-      [["cancel", "Cancel"], ["ok", count === 1 ? "Black out 1 area" : `Black out ${count} areas`, true]]);
-    if (answer !== "ok") return;
-    const boxes = Object.fromEntries(Object.entries(marks).filter(([, list]) => list.length));
-    await this.#changeDocument((bytes, t) => this._post("/api/redact/apply", bytes, t, { boxes: JSON.stringify(boxes) }), {
-      failure: "Could not redact: ",
-      kind: "redact",  // Save makes a redacted copy from now on; replacing the original is asked
-      after: (res) => {
-        let done = {};
-        try { done = JSON.parse(res.headers.get("X-Pdfm-Redacted") || "{}"); } catch (e) { /* the default words do */ }
-        const pictures = Object.entries(done.pictures || {});
-        let message = `Blacked out ${done.areas || count} area${(done.areas || count) === 1 ? "" : "s"}.`;
-        if (pictures.length) {
-          message += ` Page${pictures.length === 1 ? "" : "s"} ${pictures.map(([p]) => p).join(", ")} became `
-            + `${pictures.length === 1 ? "a picture" : "pictures"} (${[...new Set(pictures.map(([, why]) => why))].join("; ")}).`;
-        }
-        this.toast(message + " Save a redacted copy to keep it.", 12000, [["Save redacted copy…", () => this.saveRedacted()],
-          ...(tab.fileId ? [["Replace original", () => this.replaceWithRedacted()]] : [])]);
-      },
-    });
-    if (this.markupMode === "REDACT") this.#showRedactCount();
-  }
-  // -- end of reader redaction --
-
   // ---- digital ID signatures (certsign.py) --------------------------------------------
   /** Sign the document with a digital ID, its signature shown in ``rect`` on page ``n``. */
-  async #signWithId(n, rect) {
+  async _signWithId(n, rect) {
     const pfx = el("input", { type: "file", accept: ".pfx,.p12,application/x-pkcs12", "aria-label": "Digital ID file" });
     const password = el("input", { type: "password", autocomplete: "off", "aria-label": "Digital ID password" });
     const reason = el("input", { type: "text", placeholder: "e.g. I approve this document", "aria-label": "Reason" });
@@ -2991,7 +2095,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
     if (!file) { this.toast("Choose your Digital ID file (.pfx or .p12)."); return; }
     store.set("pdfm-timestamp-url", stamp.value.trim());
     const tab = this.activeTab, version = tab?.version || 0;
-    await this.#changeDocument((bytes, t) => {
+    await this._changeDocument((bytes, t) => {
       const body = new FormData();
       body.append("file", new Blob([bytes], { type: "application/pdf" }), "file.pdf");
       body.append("pfx", file, file.name);
@@ -3137,7 +2241,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
   makeFillable() {
     if (!this.doc) return;
     this.formbar.hidden = true;
-    return this.#changeDocument((bytes, tab) => this._post("/api/form/fillable", bytes, tab), {
+    return this._changeDocument((bytes, tab) => this._post("/api/form/fillable", bytes, tab), {
       failure: "Couldn't make it fillable: ",
       after: (res) => {
         const n = Number(res.headers.get("X-Pdfm-Fields")) || 0;
@@ -3262,246 +2366,6 @@ export class Reader extends TextEditing(Measuring(Object)) {
       if (view?.canvas?.width) await overlay.draw(view, i + 1).catch(() => {});
       if (this.overlay !== overlay) return;
     }
-  }
-
-  /** Draw, type or pick a signature, then place it: on ``line`` when given
-   *  (a printed line to sign on, from the file's facts: {page, rect: the
-   *  blank or rule in PDF points, text: the label's size}), else about two
-   *  inches wide in the middle of what's shown. It moves and resizes like
-   *  any picture afterwards. */
-  async sign({ line = null } = {}) {
-    if (!this.doc || !this.uiManager) return;
-    const image = await this.#signatureDialog();
-    if (!image) return;
-    const file = new File([image], "signature.png", { type: "image/png" });
-    // Annotating first: until then the line's page may have no layer to put
-    // pictures on yet (just after the file opened), which put the signature
-    // in the middle of the view instead of on its line.
-    if (this.annotbar.hidden) this.openAnnotate();
-    // (The layer pdf.js uses for the page shown stands in when the line's page
-    // has none of its own yet, e.g. in a window that was minimized.)
-    const current = this.uiManager?.currentLayer;
-    const onLine = line ? (await this.#editorLayer(line.page - 1)) || (current?.pageIndex === line.page - 1 ? current : null) : null;
-    const layer = onLine || this.uiManager?.currentLayer;
-    if (!layer) { this.toast("Scroll to the page to sign, then try again."); return; }
-    // The picture's size first: pdf.js then makes the editor at its final
-    // place and size and lays it out itself once the picture is in (see #placeSignature).
-    const bitmap = await createImageBitmap(file).catch(() => null);
-    const aspect = bitmap && bitmap.width > 0 ? bitmap.height / bitmap.width : 0;
-    bitmap?.close();
-    const editor = aspect > 0 ? await this.#placeSignature(layer, file, aspect, onLine ? line : null) : null;
-    if (!editor || !(await this.#shownSignature(editor))) { this.toast("The signature couldn't be placed."); return; }
-    this.#hint(editor.signedOn === "line" ? "Signed on the line. Drag it to move it; use the corners to resize it."
-      : "Drag the signature into place; use the corners to resize it.", 5000);
-  }
-
-  /** The layer pdf.js puts pictures on for page ``index``, once there:
-   *  the page is brought into view to have it drawn when it isn't yet
-   *  (waits up to 3 seconds; null if it never comes). */
-  async #editorLayer(index) {
-    const get = () => this.pdfViewer.getPageView(index)?.annotationEditorLayer?.annotationEditorLayer || null;
-    if (get()) return get();
-    if (index >= 0 && index < (this.pdfViewer.pagesCount || 0)) {
-      const view = this.pdfViewer.getPageView(index), top = view?.div?.getBoundingClientRect(), col = this.#column();
-      if (!top || top.bottom < col.top || top.top > col.bottom) this.pdfViewer.currentPageNumber = index + 1;
-    }
-    for (let i = 0; i < 150 && !get(); i++) await new Promise((r) => setTimeout(r, 20));
-    return get();
-  }
-
-  /** Add a signature picture (``aspect``: its height over its width) to
-   *  ``layer``: on the line, its foot on the rule, at the start of it, 1.6
-   *  times as tall as the label's letters and no longer than the line; else
-   *  2 inches wide in the middle of what's shown of the page. The editor is
-   *  made where it goes, at its size, before its picture is read, the way
-   *  pdf.js makes a picture that isn't centred: its own layout (when the
-   *  picture comes in, and on every zoom, turn or selection after) starts
-   *  from there. (Pasted in the middle at the picture's own size and then
-   *  moved, as before, pdf.js's state still held the first place.) Returns
-   *  the editor, or null. */
-  async #placeSignature(layer, file, aspect, line) {
-    const mode = pdfjs.AnnotationEditorType.STAMP;
-    // The picture tool on, through the viewer (pdf.js's paste switches only
-    // its editors, and the viewer then still thinks no tool is on: Select or
-    // Esc did nothing, and the pages weren't drawn for editing).
-    if (this.uiManager.getMode() !== mode) {
-      const on = new Promise((resolve) => {
-        const seen = (e) => { if (e.mode === mode) { this.eventBus.off("annotationeditormodechanged", seen); resolve(); } };
-        this.eventBus.on("annotationeditormodechanged", seen);
-        // (It answers in a moment; when it doesn't, pdf.js's own switch below
-        // does it, rather than the signature taking seconds to appear.)
-        setTimeout(() => { this.eventBus.off("annotationeditormodechanged", seen); resolve(); }, 2000);
-      });
-      this._setEditMode("STAMP");
-      await on;
-      if (!this.uiManager || !layer.div) return null;
-      if (this.uiManager.getMode() !== mode) await this.uiManager.updateMode(mode);  // (the viewer didn't answer: as pdf.js's paste)
-    }
-    layer.updateToolbar({ mode });
-    const { rotation: turn, rawDims: { pageWidth: W, pageHeight: H, pageX: px, pageY: py } } = layer.viewport;
-    let rect;
-    if (line && turn === 0) {
-      const [x0, , x1, top] = line.rect, length = Math.max(x1 - x0, 24);
-      let h = 1.6 * Math.max(line.text || 10, 4), w = h / aspect;
-      if (w > length) { w = length; h = w * aspect; }
-      rect = [x0, top, x0 + w, top + h];
-    } else {
-      line = null;
-      let w = 144, h = w * aspect;  // 2 inches wide; a tall picture no taller than 1 inch
-      if (h > 72) { h = 72; w = h / aspect; }
-      // The middle of the part of its page that is in sight (else of the page).
-      let cx = px + W / 2, cy = py + H / 2;
-      const view = this.pdfViewer.getPageView(layer.pageIndex), col = this.#column();
-      const page = view?.div.getBoundingClientRect();
-      if (page) {
-        const l = Math.max(page.left, col.left), r = Math.min(page.right, col.right), t = Math.max(page.top, col.top), b = Math.min(page.bottom, col.bottom);
-        if (r > l && b > t) [cx, cy] = view.viewport.convertToPdfPoint((l + r) / 2 - page.left - view.div.clientLeft, (t + b) / 2 - page.top - view.div.clientTop);
-      }
-      const [dx, dy] = turn % 180 ? [h / 2, w / 2] : [w / 2, h / 2];
-      rect = [cx - dx, cy - dy, cx + dx, cy + dy];
-    }
-    // editor.getRect turned back: where the editor's corner is, as fractions of the page.
-    const [r0, r1, r2, r3] = rect, across = r2 - r0, up = r3 - r1;
-    const [left, top, width, height] = {
-      0: [r0 - px, H + py - r3, across, up], 90: [r0 - px, H + py - r1, up, across],
-      180: [r2 - px, H + py - r1, across, up], 270: [r2 - px, H + py - r3, up, across] }[turn] || [r0 - px, H + py - r3, across, up];
-    const editor = layer.createAndAddNewEditor({ offsetX: 0, offsetY: 0 }, false, { bitmapFile: file });
-    if (!editor) return null;
-    // (Its picture is still being read: pdf.js takes this place and size when it's in.)
-    Object.assign(editor, { x: left / W, y: top / H, width: width / W, height: height / H, signedOn: line ? "line" : "default" });
-    return editor;
-  }
-
-  /** Wait (up to 5 s) for a signature's picture to be in and drawn, then
-   *  scroll the page column to it (a line near the foot of the page is
-   *  often below). False if it never came. */
-  async #shownSignature(editor) {
-    const drawn = () => editor.div && !editor.div.hidden && editor.div.querySelector("canvas");
-    for (let i = 0; i < 250 && !drawn(); i++) await new Promise((r) => setTimeout(r, 20));
-    if (!drawn() || !editor.parent) return false;
-    await new Promise((r) => requestAnimationFrame(r));
-    const box = editor.div.getBoundingClientRect(), col = this.#column();
-    if (box.top < col.top || box.bottom > col.bottom) this.container.scrollTop += box.top - (col.top + col.bottom) / 2 + box.height / 2;
-    if (box.left < col.left || box.right > col.right) this.container.scrollLeft += box.left - (col.left + col.right) / 2 + box.width / 2;
-    return true;
-  }
-
-  #signatureDialog() {
-    const saved = store.get("pdfm-signature", null);
-    const W = 520, H = 180, ratio = Math.min(window.devicePixelRatio || 1, 2);
-    const pad = el("canvas", { class: "rd-sigpad", width: W * ratio, height: H * ratio, "aria-label": "Draw your signature here" });
-    const ctx = pad.getContext("2d");
-    ctx.scale(ratio, ratio);
-    ctx.lineCap = ctx.lineJoin = "round"; ctx.lineWidth = 2.6; ctx.strokeStyle = "#111";
-    let drawn = false, last = null;
-    const point = (e) => { const r = pad.getBoundingClientRect(); return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height]; };
-    pad.addEventListener("pointerdown", (e) => { pad.setPointerCapture(e.pointerId); last = point(e); drawn = true; ctx.beginPath(); ctx.arc(last[0], last[1], 1.2, 0, 7); ctx.fillStyle = "#111"; ctx.fill(); });
-    pad.addEventListener("pointermove", (e) => {
-      if (!last) return;
-      const p = point(e);
-      ctx.beginPath(); ctx.moveTo(...last); ctx.lineTo(...p); ctx.stroke();
-      last = p;
-    });
-    pad.addEventListener("pointerup", () => { last = null; });
-    // Focus in it as the dialog opens, to type straight away. No form
-    // filling: WebView2's (turned on for passwords, see gui._allow_autofill)
-    // can open its list of saved names over the box as the first letters
-    // are typed, and a signature isn't a form entry.
-    const typed = el("input", { type: "text", class: "rd-sigtext", placeholder: "Or type your name", "aria-label": "Type your name",
-      autocomplete: "off", autofocus: true, spellcheck: "false" });
-    const clear = () => { ctx.clearRect(0, 0, W, H); drawn = false; };
-    typed.addEventListener("input", () => {
-      clear();
-      if (!typed.value.trim()) return;
-      ctx.fillStyle = "#111";
-      let size = 64;
-      do { ctx.font = `italic ${size}px "Segoe Script", "Brush Script MT", "Lucida Handwriting", "Apple Chancery", cursive`; size -= 4; }
-      while (ctx.measureText(typed.value).width > W - 40 && size > 16);
-      ctx.textBaseline = "middle"; ctx.textAlign = "center";
-      ctx.fillText(typed.value, W / 2, H / 2);
-      drawn = true;
-    });
-    const pick = el("input", { type: "file", accept: "image/*", hidden: true });
-    let picked = null;
-    pick.addEventListener("change", async () => {
-      const f = pick.files[0];
-      if (!f) return;
-      const img = new Image();
-      img.src = URL.createObjectURL(f);
-      await img.decode().catch(() => {});
-      clear();
-      const s = Math.min((W - 20) / img.width, (H - 20) / img.height, 1);
-      ctx.drawImage(img, (W - img.width * s) / 2, (H - img.height * s) / 2, img.width * s, img.height * s);
-      URL.revokeObjectURL(img.src);
-      drawn = true; picked = f;
-    });
-    const remember = el("input", { type: "checkbox", checked: true });
-    const body = [
-      el("p", {}, "Draw your signature with the mouse, pen or finger, type your name, or use a picture of your signature."),
-      pad,
-      el("div", { class: "rd-sigrow" }, typed,
-        el("button", { type: "button", class: "rd-btn", onclick: () => pick.click() }, "Picture…"),
-        el("button", { type: "button", class: "rd-btn", onclick: () => { typed.value = ""; clear(); } }, "Clear"), pick),
-      el("label", { class: "rd-sigremember" }, remember, "Remember this signature on this computer"),
-    ];
-    const buttons = [["cancel", "Cancel"], ["ok", "Place signature", true]];
-    if (saved) buttons.splice(1, 0, ["saved", "Use saved signature"]);
-    return this._dialog("Sign", body, buttons).then(async (answer) => {
-      if (answer === "ok" && !drawn && saved) answer = "saved";  // (Enter with nothing drawn: the saved one)
-      if (answer === "saved") return (await fetch(saved)).blob();
-      if (answer !== "ok") return null;
-      if (!drawn) { this.toast("Draw or type a signature first."); return null; }
-      const blob = picked && !typed.value ? picked : await this.#trim(pad);
-      if (remember.checked) {
-        const reader = new FileReader();
-        reader.onload = () => store.set("pdfm-signature", reader.result);
-        reader.readAsDataURL(blob);
-      }
-      return blob;
-    });
-  }
-
-  /** The part of the pages the reader can see now: the page column, under
-   *  the bars and left of a docked file panel (and its scrollbar). */
-  #column() {
-    const c = this.container.getBoundingClientRect();
-    return { left: c.left + 8, top: c.top + 8, right: c.left + this.container.clientWidth - 8, bottom: c.top + this.container.clientHeight - 8 };
-  }
-  /** A box put on a page at ``at`` (x, y in the page's own pixels): moved
-   *  left or up (opening above the point) when it would cross the edge of
-   *  what can be seen, so its buttons are never under the panel or a bar. */
-  #keepInColumn(box, at) {
-    const col = this.#column(), r = box.getBoundingClientRect();
-    let x = at.x, y = at.y;
-    if (r.right > col.right) x -= Math.min(r.right - col.right, r.left - col.left);
-    if (r.left < col.left) x += col.left - r.left;
-    if (r.bottom > col.bottom) y = r.top - r.height - 12 >= col.top ? at.y - r.height - 12 : at.y - (r.bottom - col.bottom);
-    box.style.left = `${x}px`;
-    box.style.top = `${y}px`;
-  }
-  /** The text-look bar over a box being edited: below it when there's no
-   *  room above, shifted left when it would run under the panel. */
-  _keepBarInColumn(bar) {
-    if (!bar.isConnected) return;
-    const col = this.#column();
-    let r = bar.getBoundingClientRect();
-    if (r.top < col.top) { bar.classList.add("below"); r = bar.getBoundingClientRect(); }
-    if (r.right > col.right) bar.style.left = `${-Math.min(r.right - col.right, r.left - col.left)}px`;
-  }
-
-  /** The drawn part of a canvas as a PNG with a transparent background. */
-  async #trim(canvas) {
-    const { width, height } = canvas;
-    const data = canvas.getContext("2d").getImageData(0, 0, width, height).data;
-    let x0 = width, y0 = height, x1 = -1, y1 = -1;
-    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-      if (data[(y * width + x) * 4 + 3] > 8) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
-    }
-    const m = 6, out = document.createElement("canvas");
-    x0 = Math.max(0, x0 - m); y0 = Math.max(0, y0 - m); x1 = Math.min(width - 1, x1 + m); y1 = Math.min(height - 1, y1 + m);
-    out.width = Math.max(1, x1 - x0 + 1); out.height = Math.max(1, y1 - y0 + 1);
-    out.getContext("2d").drawImage(canvas, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
-    return new Promise((resolve) => out.toBlob(resolve, "image/png"));
   }
 
   // ---- dialogs ----------------------------------------------------------------
@@ -3650,11 +2514,11 @@ export class Reader extends TextEditing(Measuring(Object)) {
 
   /** A toast that explains the tool just chosen: it goes when that tool or
    *  its bar does, or when another bar opens (see #endHint). */
-  #hint(message, ms) {
+  _hint(message, ms) {
     this.toast(message, ms);
     this.hintEl = this.toastEl;
   }
-  #endHint() {
+  _endHint() {
     if (this.hintEl && this.hintEl === this.toastEl) { clearTimeout(this.toastTimer); this.toastEl.remove(); this.toastEl = null; }
     this.hintEl = null;
   }
@@ -3698,7 +2562,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
   /** Replace the open document with what ``make(bytes, tab)`` gets back from
    *  the server, keeping the old bytes for Undo. In the queue: a save or a tab
    *  switch asked for meanwhile waits for it. */
-  #changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false, kind = "page" } = {}) {
+  _changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false, kind = "page" } = {}) {
     return this.#serial(async () => {
       const tab = this.activeTab;
       if (!tab || !this.doc) return;
@@ -3729,7 +2593,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
   }
 
   _applyTextEdit(edit) {
-    return this.#changeDocument((bytes, tab) => this._post("/api/text/edit", bytes, tab, { edits: JSON.stringify([edit]) }), {
+    return this._changeDocument((bytes, tab) => this._post("/api/text/edit", bytes, tab, { edits: JSON.stringify([edit]) }), {
       failure: "Could not change the text: ",
       kind: "text",
       after: (res) => {
@@ -3761,7 +2625,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
       if (!tab?.undoDepth) return;
       // Undoing goes back to the bytes before the change; anything added
       // since (drawings, form entries) would go with it.
-      if ((this.#changed() || tab.bytes !== tab.afterEdit)
+      if ((this._changed() || tab.bytes !== tab.afterEdit)
           && await this.ask("Undo the change?", "Undoing it also takes away the annotations and form entries made since it.",
             [["cancel", "Cancel"], ["undo", "Undo the change", true]]) !== "undo") return;
       tab.editUndone(this.#view());
@@ -3774,7 +2638,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
   async #reloadEditing(tab) {
     const editing = this.textEditMode ? "EDITTEXT" : this.markupMode, picked = this.pickedImage;
     await this.#load(tab);
-    this.#refresh();
+    this._refresh();
     if (tab !== this.activeTab) return;
     if (editing) {
       this.openAnnotate();
@@ -3786,12 +2650,12 @@ export class Reader extends TextEditing(Measuring(Object)) {
 
   // ---- saving, printing, editing ------------------------------------------------
   /** Filled-in form fields or annotations that aren't in the file yet. */
-  #changed() { return !!(this.doc && this.doc.annotationStorage.size > 0); }
-  #edited() { return this.#changed() || !!this.activeTab?.edited; }
+  _changed() { return !!(this.doc && this.doc.annotationStorage.size > 0); }
+  #edited() { return this._changed() || !!this.activeTab?.edited; }
 
   async _currentBytes() {
     this.#finishEditing();
-    if (!this.#changed()) return await this._fullBytes();
+    if (!this._changed()) return await this._fullBytes();
     return await this.#savedDocument(this.activeTab);
   }
 
@@ -3823,7 +2687,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
     // What Save does follows from the tab's state (see saveAction): a tab with
     // blacked-out parts saves a redacted copy, not over the original (and
     // not again when one is saved and nothing changed since).
-    const action = saveAction(tab, { changed: this.#changed(), replace });
+    const action = saveAction(tab, { changed: this._changed(), replace });
     if (action === "already redacted") { this.toast("Already saved as a redacted copy", 2000); return; }
     if (action === "redacted copy") { await this.saveRedacted(); return; }
     if (action === "as") { await this.saveCopy(); return; }
@@ -3895,7 +2759,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
    *  path when it's known (the desktop window), true when saved elsewhere, null if not saved. */
   /** Ctrl+S, or Shift for Save as. A tab with blacked-out parts saves a
    *  redacted copy (see saveRedacted), never over its original unasked. */
-  #saveKey(e) {
+  _saveKey(e) {
     if (e.shiftKey) this.saveCopy();
     else this.save();
   }
@@ -4052,7 +2916,7 @@ export class Reader extends TextEditing(Measuring(Object)) {
    *  if another one is shown by its turn, nothing is changed. */
   #arrange(plan, { inserts = [], message = "", page = null } = {}) {
     const asked = this.doc;
-    return this.#changeDocument((bytes, tab) => {
+    return this._changeDocument((bytes, tab) => {
       if (typeof plan !== "function" && this.doc !== asked) throw new Error("the document changed meanwhile, so nothing was changed");
       const pages = typeof plan === "function" ? plan(this.doc.numPages) : plan;
       return this._post("/api/pages/arrange", bytes, tab, { plan: JSON.stringify(pages) }, inserts);
