@@ -25,7 +25,10 @@ Small fixes after a check of 0.24.0 on Windows. The look is the same.
 - The corner handles of a selected picture, signature or note are larger
   and easier to catch with the mouse.
 - "Sign it" straight after opening a file also finds the line (the first
-  time, it could put the signature in the middle of the view instead).
+  time, or in a window that had been minimized, it could put the
+  signature in the middle of the view instead).
+- "Use saved signature" places it at the same moderate size as a new one,
+  not about 5 inches wide.
 - Pressing R straight after clicking another tab turns that tab, not the
   one you left.
 - Picking a font in a text edit takes its normal width: "DejaVu Sans"

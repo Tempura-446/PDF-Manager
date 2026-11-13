@@ -102,6 +102,17 @@ const { chromium } = require("playwright");
       await page.evaluate(() => reader.signBtn.click());
       await typeSignature(page);
       out.signPlain = await placed(page);
+      // Sign again with "Use saved signature" (remembered just now): the same moderate size.
+      await page.waitForFunction(() => !!localStorage.getItem("pdfm-signature") || Object.keys(localStorage).some((k) => k.includes("signature")), null, { timeout: 5000 }).catch(() => {});
+      const count = await page.evaluate(() => [...reader.uiManager.getEditors(reader.uiManager.currentLayer.pageIndex)].length);
+      await page.evaluate(() => reader.signBtn.click());
+      await page.waitForSelector("dialog.rd-dialog[open] button:has-text('Use saved signature')", { timeout: 10000 });
+      out.typedFirst = await page.evaluate(() => document.activeElement?.className || document.activeElement?.tagName);
+      await page.click("dialog.rd-dialog[open] button:has-text('Use saved signature')");
+      await page.waitForFunction((n) => [...reader.uiManager.getEditors(reader.uiManager.currentLayer.pageIndex)].filter((e) => e.width > 0).length > n, count, { timeout: 15000 });
+      await page.waitForTimeout(600);
+      out.signSaved = await page.evaluate(() => { const eds = [...reader.uiManager.getEditors(reader.uiManager.currentLayer.pageIndex)];
+        return { rect: eds[eds.length - 1].getRect(0, 0), hint: document.querySelector(".rd-hint, .rd-toast")?.textContent || "" }; });
       await ctx.close();
     }
 

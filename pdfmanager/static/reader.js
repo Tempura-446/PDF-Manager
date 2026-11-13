@@ -3298,12 +3298,20 @@ export class Reader {
     // pictures on yet (just after the file opened), which put the signature
     // in the middle of the view instead of on its line.
     if (this.annotbar.hidden) this.openAnnotate();
-    const onLine = line ? await this.#editorLayer(line.page - 1) : null;
+    // (The layer pdf.js uses for the page shown stands in when the line's page
+    // has none of its own yet, e.g. in a window that was minimized.)
+    const current = this.uiManager?.currentLayer;
+    const onLine = line ? (await this.#editorLayer(line.page - 1)) || (current?.pageIndex === line.page - 1 ? current : null) : null;
     const layer = onLine || this.uiManager?.currentLayer;
     if (!layer) { this.toast("Scroll to the page to sign, then try again."); return; }
     const before = new Set(this.uiManager.getEditors(layer.pageIndex));
     await layer.pasteEditor({ mode: pdfjs.AnnotationEditorType.STAMP }, { bitmapFile: file });
-    const editor = [...this.uiManager.getEditors(layer.pageIndex)].find((e) => !before.has(e));
+    // (The picture can join the page a moment after the paste is done: wait for it, up to 5 s.)
+    let editor = null;
+    for (let i = 0; i < 250 && !editor; i++) {
+      editor = [...this.uiManager.getEditors(layer.pageIndex)].find((e) => !before.has(e)) || null;
+      if (!editor) await new Promise((r) => setTimeout(r, 20));
+    }
     const placed = editor ? await this.#fitSignature(editor, onLine ? line : null) : false;
     this.#hint(placed === "line" ? "Signed on the line. Drag it to move it; use the corners to resize it."
       : "Drag the signature into place; use the corners to resize it.", 5000);
@@ -3329,7 +3337,7 @@ export class Reader {
    *  longer than the line; else 2 inches wide where it is. Says "line" or
    *  "default", or false when the picture didn't load. */
   async #fitSignature(editor, line) {
-    for (let i = 0; i < 150 && !(editor.width > 0); i++) await new Promise((r) => setTimeout(r, 20));
+    for (let i = 0; i < 250 && !(editor.width > 0); i++) await new Promise((r) => setTimeout(r, 20));
     if (!(editor.width > 0) || !editor.parent || !editor.div) return false;
     const [W, H] = editor.pageDimensions, [px, py] = editor.pageTranslation, turn = editor.rotation || 0;
     const aspect = (editor.height * H) / (editor.width * W);  // the picture's height over its width

@@ -114,6 +114,9 @@ def test_fixes241_in_a_browser(app, tmp_path):
     p = out["signPlain"]
     assert abs((p["rect"][2] - p["rect"][0]) - 144) < 2 and p["rect"][3] - p["rect"][1] < 73 and p["inView"], p
     assert abs((p["rect"][0] + p["rect"][2]) / 2 - 306) < 30, p  # in the middle of what's shown of the page
+    # "Use saved signature": the same moderate size, not pdf.js's own (about 5 inches).
+    q = out["signSaved"]
+    assert abs((q["rect"][2] - q["rect"][0]) - 144) < 2, q
 
     # 2. Undo of the only change: not changed (no dot, Save quiet); Redo: changed again.
     s = out["sign-light"]

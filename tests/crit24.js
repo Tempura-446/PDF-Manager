@@ -140,12 +140,16 @@ const fs = require("fs");
       });
       await shot(page, `light-${w}-note-editor`);
       await page.keyboard.type("Check this");
+      // (Whether "Saved over" was shown at all, not only still showing: it can be gone or replaced by the time it's checked.)
+      await page.evaluate(() => { window.__savedOver = false;
+        new MutationObserver(() => { if ([...document.querySelectorAll(".rd-toast")].some((t) => /Saved over/.test(t.textContent))) window.__savedOver = true; })
+          .observe(document.body, { subtree: true, childList: true, characterData: true }); });
       // A note being typed goes in with Ctrl+S (before the save).
       await page.keyboard.press("Control+s");
       await page.waitForTimeout(1500);
       // (The note and the save done, so the find bar below meets a settled document: on a busy machine they take longer.)
       await page.waitForFunction(() => reader.doc && reader.loading.hidden && !reader.activeTab.dirty && !document.querySelector(".rd-annotbar").hidden
-        && [...document.querySelectorAll(".rd-toast")].some((t) => /Saved over/.test(t.textContent)), null, { timeout: 30000 });
+        && window.__savedOver, null, { timeout: 30000 });
       r.noteSaved = await page.evaluate(() => ({ box: !!document.querySelector(".rd-notebox") }));
       // The find bar: one row at a time, and the panel still aside.
       await page.keyboard.press("Control+f");
