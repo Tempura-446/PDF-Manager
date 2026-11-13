@@ -554,6 +554,8 @@ textarea.rd-textedit.rd-textedit-fit { white-space: pre-wrap; overflow: auto; }
 /* The less used measuring tools show only their icons (and tooltips) unless there's room. */
 @container (max-width: 1720px) { .rd-scalebar .rd-tool[data-measure] span, .rd-scalebar .rd-tool[title^="Straight only"] span { display: none; } }
 @container (max-width: 980px) { .rd-scalebar .rd-btn span { display: none; } }
+/* (Its word, "Scale", goes with the other labels; a scale once set stays in sight a little longer.) */
+@container (max-width: 980px) { .rd-scale-btn:not(.set) span { display: none; } }
 @container (max-width: 640px) { .rd-scale-btn span { display: none; } }
 
 .rd-measuring .textLayer, .rd-measuring .annotationLayer, .rd-measuring .annotationEditorLayer { pointer-events: none !important; }

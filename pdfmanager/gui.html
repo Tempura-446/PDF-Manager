@@ -198,7 +198,9 @@ main:focus { outline: none; }  /* the skip link's target: the page itself needs 
   transition: background var(--t) var(--ease), color var(--t) var(--ease), box-shadow var(--t) var(--ease);
 }
 .rail-btn svg.i { width: 19px; height: 19px; stroke-width: 1.6; }
-.rail-btn:hover { background: var(--surface); color: var(--text); }
+/* Hover is a lighter wash than the current group (solid, with a shadow): after Escape, the button still under the pointer
+   no longer looks like a second current one. */
+.rail-btn:hover { background: color-mix(in srgb, var(--surface) 55%, transparent); color: var(--text); }
 .rail-btn[aria-current="true"], .rail-btn[aria-expanded="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
 .rail-btn[aria-current="true"] svg.i { color: var(--accent); }
 .update-btn { color: var(--accent); }
@@ -331,7 +333,8 @@ main > .action-bar { max-width: none; width: auto; }
 }
 .tool-icon svg { width: 23px; height: 23px; stroke-width: 1.6; }
 .page-head h1 { font-size: var(--fs-xl); font-weight: 600; line-height: 1.2; letter-spacing: -0.02em; margin: 3px 0 4px; }
-.page-head p { color: var(--muted); margin: 0; max-width: 64ch; font-size: var(--fs-base); }
+/* About 70 letters a line (a ch is a zero, wider than the average letter). */
+.page-head p { color: var(--muted); margin: 0; max-width: 52ch; font-size: var(--fs-base); }
 /* The help folds to its first sentence; the rest stays in the page for screen readers. */
 .help-rest:not(.open) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .help-rest.open { animation: fade-in calc(var(--t) * 1.6) var(--ease); }
@@ -648,6 +651,8 @@ select.re-name { width: auto; }
 .field.check input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .field.check .hint { flex-basis: 100%; margin-left: 25px; }  /* under its label, which keeps the width beside the box */
 .field.wide { grid-column: 1 / -1; }
+/* Redact: the words and how they match on one row, the kinds of numbers on the next. */
+.fields > .field[data-key="emails"] { grid-column-start: 1; }
 .empty-note { color: var(--muted); margin: 0; font-size: var(--fs-base); }
 details.pw { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
 details.pw summary { cursor: pointer; color: var(--muted); font-size: var(--fs-base); display: flex; align-items: center; gap: 6px; list-style: none; }
@@ -759,6 +764,10 @@ body:has(.btn.busy) .btn:disabled { cursor: progress; }  /* waiting for a job, n
 .result .thumb { width: 96px; flex: none; border: 0; border-radius: var(--radius-2xs); box-shadow: var(--shadow-page); }
 .result-body { flex: 1; min-width: 0; }
 .result-title { display: flex; align-items: center; gap: 8px; color: var(--ok); font-weight: 600; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .08em; }
+/* An answer (what a search found) or a preview: the plain card; green is for a job done. */
+.result.info { border-color: color-mix(in srgb, var(--border) 70%, transparent); background: var(--surface); }
+.result.info .result-title { color: var(--text-2); }
+.result.info .result-title svg { color: var(--accent); }
 .result-title svg { width: 16px; height: 16px; }
 .result-name { font: 500 var(--fs-lg)/1.25 var(--display); margin: 4px 0 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: -0.01em; }
 .result-sub { color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
@@ -3280,6 +3289,7 @@ async function showResult(name, blob, resultId, note = "", skipped = []) {
     actions.append(el("button", { class: "btn secondary", type: "button", onclick: () => openInReader(new File([blob], name, { type: "application/pdf" })) }, icon("reader"), "Open in reader"));
   }
   actions.append(el("button", { class: "btn ghost", type: "button", title: "Clear the files to start again with this tool", onclick: startOver }, "Start over"));
+  $("result").classList.remove("info");
   $("result").replaceChildren(thumb,
     el("div", { class: "result-body" },
       el("div", { class: "result-title" }, icon("check"), "Done"),
@@ -3359,6 +3369,7 @@ async function runFolder(apply) {
     const n = data.rows.length;
     const msg = n === 0 ? "Nothing to do — everything is already in order."
       : apply ? `${plural(n, "file")} handled.` : `${plural(n, "file")} would change. Nothing has changed yet — click Apply to do it.`;
+    $("result").classList.toggle("info", !apply);  // a preview has changed nothing yet: not the green banner
     $("result").replaceChildren(el("div", { class: "result-body" }, el("div", { class: "result-title" }, icon(apply ? "check" : "alert"), apply ? "Done" : "Preview"), el("div", { class: "result-sub" }, msg)));
     $("result").hidden = false;
     if (n) {
@@ -3384,8 +3395,10 @@ function showSearchResults(data, query) {
   const said = el("div", { class: "result-sub", id: "search-summary", tabindex: "-1" }, msg + extra);
   // Results come up under the title: the form folds into one line (with Edit) once there's something to show.
   foldForm(pages ? `“${query}” in ${$("f-directory")?.value || "the folder"}` : null);
+  // What was found is an answer, not a job done: the plain banner, not the green one.
+  $("result").classList.add("info");
   $("result").replaceChildren(el("div", { class: "result-body" },
-    el("div", { class: "result-title" }, icon(pages ? "check" : "alert"), "Search"), said));
+    el("div", { class: "result-title" }, icon("search"), "Search"), said));
   $("result").hidden = false;
   // Focus on what was found (it's read out), in sight above the action bar.
   requestAnimationFrame(() => { said.focus({ preventScroll: true }); said.scrollIntoView({ block: "nearest", behavior: smoothScroll() }); });
