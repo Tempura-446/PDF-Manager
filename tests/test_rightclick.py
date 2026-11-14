@@ -174,7 +174,9 @@ def test_files_arriving_together_make_one_batch_in_name_order(quick, tmp_path):
 
 def test_a_batch_waits_while_files_keep_coming(quick):
     batch = quickactions.Batch("combine")
-    now = time.monotonic()
+    # (Fixed times: with the clock's own large numbers, now + 30 - now can come out
+    # a hair under 30 in floating point, and "never forever" failed on a long run.)
+    now = 1000.0
     batch.created = batch.last = now
     assert not batch.due(now + 0.2)
     assert batch.due(now + 0.5)

@@ -211,7 +211,9 @@ def test_watch_undoes_the_output_when_the_original_cannot_be_retired(tmp_path, m
         state, logs = watch._State(), []
         watch.poll(settings, state, log=logs.append)
         watch.poll(settings, state, log=logs.append)
-        assert logs == ["failed: scan.pdf: locked"]
+        # Can't be moved away (open in another program): not a failure, it waits;
+        # the result made meanwhile is taken back so nothing is duplicated.
+        assert logs == [] and not state.failed and (inbox / "scan.pdf") in state.busy
     assert list(dest.iterdir()) == [] and (inbox / "scan.pdf").exists()
     monkeypatch.undo()
     state = watch._State()
