@@ -29,9 +29,43 @@
 
 ## Measuring it (first, before any change)
 
-- [ ] Build an OCR holdout under `tests/ocrholdout/` (generated, so it can be committed): pages rendered from known text, then degraded the ways real scans are. Categories: clean 300 dpi; 150 dpi; faint; skewed 3°; noisy photocopy; phone photo (perspective and shadow); small print; two and three columns; a table of numbers; a form; mixed text and picture; CJK; a page with a garbage text layer.
-- [ ] A scorer (`pytest tests/ocrholdout --ocr-score`, opt-in like `--sweep`): character error rate and word error rate per category, reading-order errors (Kendall tau of line order), numbers read exactly, seconds per page. Writes a table; the weekly sweep workflow runs it and keeps the report.
-- [ ] Record the 0.33 baseline in this file.
+- [x] Build an OCR holdout (`tests/ocrscore.py` makes it; nothing but code is committed): pages rendered from known text, then degraded the ways real scans are. Categories: clean 300 dpi; 150 dpi; faint; skewed 3°; noisy photocopy; phone photo (perspective and shadow); small print; two and three columns; a table of numbers; a form; mixed text and picture; CJK; a page with a garbage text layer.
+- [x] A scorer (`python tests/ocrscore.py`; still to do: run it in the weekly sweep workflow and keep the report): character error rate and word error rate per category, reading-order errors (Kendall tau of line order), numbers read exactly, seconds per page. Writes a table; the weekly sweep workflow runs it and keeps the report.
+- [x] Record the 0.33 baseline in this file.
+
+**Baseline (0.33.0, 2026-11-14, `python tests/ocrscore.py`, built-in engine, a Linux machine):**
+
+| Page | Characters wrong | Words wrong | Numbers exact | Seconds |
+|---|---|---|---|---|
+| Clean, 300 dpi | 0.0% | 0.0% | 100% | 1.4 |
+| 150 dpi | 0.0% | 0.0% | 100% | 1.2 |
+| Faint print | 0.0% | 0.0% | 100% | 1.3 |
+| Skewed 3 degrees | 0.0% | 0.0% | 100% | 1.3 |
+| Noisy photocopy | 0.2% | 2.4% | 0% | 1.2 |
+| Phone photo | 0.2% | 2.4% | 100% | 1.3 |
+| Very faint, speckled | 0.0% | 0.0% | 100% | 1.3 |
+| Fax (100 dpi, black and white) | 0.2% | 1.2% | 100% | 0.7 |
+| Blurred phone photo | 0.2% | 1.2% | 100% | 1.3 |
+| Grey paper with a stamp across | 1.7% | 1.2% | 100% | 1.4 |
+| Small print (7 pt) | 0.0% | 0.0% | 100% | 1.7 |
+| Small print at 150 dpi | 0.0% | 0.0% | 100% | 1.4 |
+| Two columns | 0.2% | 2.2% | 100% | 1.3 |
+| Three columns | 0.0% | 0.0% | 100% | 1.6 |
+| Table of numbers | 0.0% | 0.0% | 100% | 1.2 |
+| Form | 0.0% | 0.0% | 100% | 1.2 |
+| Chinese | 1.6% | 20.0% | 100% | 1.0 |
+
+| Through the tool | Its words found afterwards | Note |
+|---|---|---|
+| Scan with a rubbish text layer | 0% |  |
+| Real text with a scanned figure | 17% |  |
+
+**Reading the baseline:**
+- On made pages the engine already reads nearly everything, also when they are faint, speckled, low-resolution, blurred or photographed at a slant. Made pages can't stand in for real bad scans: **Phase 2 (cleaning the picture) waits for a handful of real scans that read badly**, added to the set as private files (`--extra FOLDER` of picture + true text), so each cleaning step is judged on something it can improve.
+- The clear failures are in the tool, not in the reading: a scan with a rubbish text layer stays unreadable (0 % of its words), and a scanned figure on a page of real text is never read (17 %). **Phase 1.2 is the first thing to build.**
+- The noisy photocopy's numbers (0 % exact) and the two-column page's small errors are worth a look in Phase 1.
+- The Chinese page's word figure counts unspaced lines as words; its character figure (1.6 %) is the one to follow.
+- About 1.3 seconds a page on the processor: Phase 5's target (twice as fast on long files) stands.
 
 | Score | Target |
 |---|---|
