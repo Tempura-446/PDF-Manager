@@ -82,10 +82,10 @@
 
 **Task 1.1: holdout and scorer** (above).
 
-**Task 1.2: bad and partial text layers**
-- [ ] Judge an existing text layer before skipping the page: the share of its characters that are letters, digits or common punctuation; whether its words are in the picture's area; whether the text covers the inked area (render at low resolution and compare where there is ink with where the layer has words).
-- [ ] A garbage layer: the page is read again and the old layer is replaced (it says so). A page with real text and a picture of text: only the picture's area is read, and the new words are added beside the real text, never over it.
-- [ ] Test: the holdout's garbage-layer page comes out searchable for its real words; a page with real text and a scanned figure gains the figure's words and keeps its own text once.
+**Task 1.2: bad and partial text layers** (done in 0.36.0. On the scoring set: the scan with a rubbish layer 0 % to 100 % of its words, the scanned figure among real text 17 % to 94 %. A layer is judged by its characters only: one of real letters in wrong words, or sitting in the wrong place, is still kept; comparing the layer with the ink is left for a later release.)
+- [x] (by its characters) Judge an existing text layer before skipping the page: the share of its characters that are letters, digits or common punctuation; whether its words are in the picture's area; whether the text covers the inked area (render at low resolution and compare where there is ink with where the layer has words).
+- [x] A garbage layer: the page is read again and the old layer is replaced (it says so). A page with real text and a picture of text: only the picture's area is read, and the new words are added beside the real text, never over it.
+- [x] Test: the holdout's garbage-layer page comes out searchable for its real words; a page with real text and a scanned figure gains the figure's words and keeps its own text once.
 
 ### Phase 2 (release B): hard pages
 

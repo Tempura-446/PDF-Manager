@@ -14,6 +14,7 @@ ZPDF's own (textlayer.py).
 Tesseract, through OCRmyPDF, stays as the second engine: for the scripts
 the built-in engine has no model for, and for PDF/A output straight from OCR.
 """
+import ctypes
 import importlib.util
 import logging
 import math
@@ -681,6 +682,122 @@ def page_has_text(page):
         return False
 
 
+def layer_is_rubbish(text):
+    """Whether a page's text is one nobody could have meant: signs, broken
+    letters and control codes, as an old program's failed reading leaves
+    behind a scan. Real text in any script, figures and codes are not; a
+    few characters are too little to judge."""
+    import unicodedata
+
+    chars = [c for c in text if not c.isspace()]
+    if len(chars) < 20:
+        return False
+    broken = sum(1 for c in chars if c == "\ufffd" or unicodedata.category(c) in ("Co", "Cc", "Cn", "Cs"))
+    letters = sum(1 for c in chars if c.isalnum())
+    if broken / len(chars) > 0.15 or letters / len(chars) < 0.5:
+        return True
+    # Letters, but not words: mostly single characters and signs strung together.
+    tokens = text.split()
+    wordlike = sum(1 for t in tokens if sum(c.isalnum() for c in t) >= max(2, len(t) * 0.6)
+                   or any("\u2e80" <= c for c in t))  # (a CJK character is a word)
+    return wordlike / max(len(tokens), 1) < 0.3
+
+
+PICTURE_SHARE = 0.03      # of the page: a smaller picture (a logo, an icon) isn't looked into
+PICTURE_PIXELS = (120, 40)  # ... nor one smaller than this when drawn for reading
+PICTURES_PER_PAGE = 8
+
+
+def _char_kinds(textpage):
+    """(letters a reader sees, letters set invisibly as OCR sets them) on a page."""
+    import pypdfium2.raw as raw
+
+    seen = hidden = 0
+    modes = {}
+    for i in range(textpage.count_chars()):
+        if raw.FPDFText_GetUnicode(textpage.raw, i) in (32, 13, 10, 9) or raw.FPDFText_IsGenerated(textpage.raw, i) == 1:
+            continue
+        obj = raw.FPDFText_GetTextObject(textpage.raw, i)
+        key = ctypes.cast(obj, ctypes.c_void_p).value if obj else None
+        if key not in modes:
+            modes[key] = raw.FPDFTextObj_GetTextRenderMode(obj) if obj else 0
+        if modes[key] == 3:
+            hidden += 1
+        else:
+            seen += 1
+    return seen, hidden
+
+
+def _picture_boxes(pdfium_page, textpage, image_size):
+    """The page's pictures worth reading, as boxes in the pixels of its
+    render (``image_size``): [(left, top, right, bottom)], largest first.
+    Small ones are passed over, and those with invisible text over them
+    (read already)."""
+    import pypdfium2.raw as raw
+
+    width, height = image_size
+    page_area = max(pdfium_page.get_width() * pdfium_page.get_height(), 1.0)
+    found = []
+    for obj in pdfium_page.get_objects(filter=[raw.FPDF_PAGEOBJ_IMAGE], max_depth=4):
+        try:
+            left, bottom, right, top = obj.get_bounds()
+        except Exception:  # noqa: BLE001 - a picture pdfium can't place
+            continue
+        if (right - left) * (top - bottom) < page_area * PICTURE_SHARE:
+            continue
+        xs, ys = [], []
+        for x, y in ((left, bottom), (right, bottom), (right, top), (left, top)):
+            dx, dy = ctypes.c_int(), ctypes.c_int()
+            raw.FPDF_PageToDevice(pdfium_page.raw, 0, 0, width, height, 0, x, y, ctypes.byref(dx), ctypes.byref(dy))
+            xs.append(dx.value)
+            ys.append(dy.value)
+        box = (max(min(xs), 0), max(min(ys), 0), min(max(xs), width), min(max(ys), height))
+        if box[2] - box[0] < PICTURE_PIXELS[0] or box[3] - box[1] < PICTURE_PIXELS[1]:
+            continue
+        if _hidden_text_in(textpage, left, bottom, right, top):
+            continue
+        found.append(box)
+    found.sort(key=lambda b: -(b[2] - b[0]) * (b[3] - b[1]))
+    kept = []
+    for box in found:  # (a picture drawn twice, or one inside another, is read once)
+        if not any(k[0] <= box[0] and k[1] <= box[1] and k[2] >= box[2] and k[3] >= box[3] for k in kept):
+            kept.append(box)
+    return kept[:PICTURES_PER_PAGE]
+
+
+def _hidden_text_in(textpage, left, bottom, right, top):
+    """Whether invisible text (an OCR layer) lies in the box (page coordinates)."""
+    import pypdfium2.raw as raw
+
+    hits = 0
+    for i in range(textpage.count_chars()):
+        if raw.FPDFText_GetUnicode(textpage.raw, i) in (32, 13, 10, 9) or raw.FPDFText_IsGenerated(textpage.raw, i) == 1:
+            continue
+        obj = raw.FPDFText_GetTextObject(textpage.raw, i)
+        if not obj or raw.FPDFTextObj_GetTextRenderMode(obj) != 3:
+            continue
+        l, b, r, t = textpage.get_charbox(i)
+        if left <= (l + r) / 2 <= right and bottom <= (b + t) / 2 <= top:
+            hits += 1
+            if hits > 3:
+                return True
+    return False
+
+
+def _strip_layers(source, pages, target):
+    """A copy of ``source`` whose ``pages`` (indices) have their text taken
+    out, pictures and drawing left exactly as they are."""
+    import pikepdf
+
+    from pdfmanager import layout
+
+    with pikepdf.open(str(source)) as pdf:
+        for i in pages:
+            layout._strip_text(pdf, pdf.pages[i])
+        pdf.save(str(target))
+    return target
+
+
 def run(path, output, language="eng", force=False, deskew=False, password=None, engine="auto",
         rotate=True):
     """Add a searchable text layer to the scanned pages of ``path``; see
@@ -777,8 +894,64 @@ def render_scale(width_pt, height_pt):
     return min(RENDER_DPI / 72, MAX_RENDER_SIDE / longest)
 
 
-def _run_builtin(source, output, force, deskew, rotate=True, script=None):
+def _run_builtin(source, output, force, deskew, rotate=True, script=None, notes=None):
+    """``notes`` (a list) is given what was done beyond reading plain scans:
+    a rubbish layer replaced, pictures read on a page of real text."""
     import pypdfium2 as pdfium
+    from pypdf import PdfReader
+
+    from pdfmanager import progress
+
+    def note(text):
+        if notes is not None:
+            notes.append(text)
+        progress.say(text)
+
+    # Pages whose text is a layer nobody can read (invisible, and rubbish):
+    # the layer is taken out first, and the page is then read as the scan it is.
+    stripped = None
+    if not force:
+        stale = []
+        reader = PdfReader(str(source))
+        with core.PDFIUM_LOCK:
+            look = pdfium.PdfDocument(str(source))
+            try:
+                for i, page in enumerate(reader.pages):
+                    if not page_has_text(page):
+                        continue
+                    try:
+                        text = page.extract_text()
+                    except Exception:  # noqa: BLE001 - counted as having text; left alone
+                        continue
+                    if not layer_is_rubbish(text):
+                        continue
+                    pdfium_page = look[i]
+                    textpage = pdfium_page.get_textpage()
+                    try:
+                        seen, hidden = _char_kinds(textpage)
+                    finally:
+                        textpage.close()
+                        pdfium_page.close()
+                    if hidden and not seen:
+                        stale.append(i)
+            finally:
+                look.close()
+        if stale:
+            stripped = Path(str(output) + ".layers.tmp.pdf")
+            _strip_layers(source, stale, stripped)
+            source = stripped
+            for i in stale:
+                note(f"page {i + 1}: its text layer was unreadable and has been replaced")
+    try:
+        _read_pages(source, output, force, deskew, rotate, script, note)
+    finally:
+        if stripped is not None and stripped.exists():
+            stripped.unlink()
+
+
+def _read_pages(source, output, force, deskew, rotate, script, note):
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as pdfium_raw
     from PIL import Image
     from pypdf import PdfWriter, Transformation
 
@@ -798,6 +971,54 @@ def _run_builtin(source, output, force, deskew, rotate=True, script=None):
             progress.report(i, total, "page")
             page = writer.pages[i]
             if not force and page_has_text(page):
+                # A page with text of its own: its pictures may still hold
+                # words (a scanned figure, a scan with a stamp typed on it).
+                with core.PDFIUM_LOCK:
+                    pdfium_page = core.show_whole_page(doc[i])
+                    textpage = pdfium_page.get_textpage()
+                    try:
+                        scale = render_scale(pdfium_page.get_width(), pdfium_page.get_height())
+                        size = (max(1, math.ceil(pdfium_page.get_width() * scale)),
+                                max(1, math.ceil(pdfium_page.get_height() * scale)))
+                        boxes = _picture_boxes(pdfium_page, textpage, size)
+                        image = pdfium_page.render(scale=scale).to_pil() if boxes else None
+                    finally:
+                        textpage.close()
+                if not boxes:
+                    continue
+                words = []
+                for box in boxes:
+                    progress.report(i, total, "page")  # (Cancel is heard between pictures)
+                    try:
+                        lines = recognise(image.crop(box), script)
+                    except progress.Cancelled:
+                        raise
+                    except Exception as exc:  # engine trouble: say which page
+                        raise core.PdfManagerError(f"OCR failed on page {i + 1}: {exc}") from None
+                    for line in lines:
+                        for w in line.words:
+                            words.append(Word(w.text, [(x + box[0], y + box[1]) for x, y in w.quad], w.confidence))
+                if words:
+                    # Not the words the page has already (a stamp typed over a scan).
+                    with core.PDFIUM_LOCK:
+                        pdfium_page = doc[i]
+                        textpage = pdfium_page.get_textpage()
+                        try:
+                            fresh = []
+                            for w in words:
+                                cx = sum(p[0] for p in w.quad) / 4
+                                cy = sum(p[1] for p in w.quad) / 4
+                                px, py = ctypes.c_double(), ctypes.c_double()
+                                pdfium_raw.FPDF_DeviceToPage(pdfium_page.raw, 0, 0, image.width, image.height, 0,
+                                                             int(cx), int(cy), ctypes.byref(px), ctypes.byref(py))
+                                if not textpage.get_text_bounded(px.value - 2, py.value - 2, px.value + 2, py.value + 2).strip():
+                                    fresh.append(w)
+                        finally:
+                            textpage.close()
+                    if fresh:
+                        textlayer.add_text_layer(writer, page, fresh, image.size, scale * 72)
+                        read = len(boxes)
+                        note(f"page {i + 1}: read the text in {read} picture{'s' if read != 1 else ''}")
                 continue
             with core.PDFIUM_LOCK:
                 pdfium_page = core.show_whole_page(doc[i])

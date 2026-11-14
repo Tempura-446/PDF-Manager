@@ -4,6 +4,27 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.36.0
+
+Make searchable (OCR) reads pages it used to pass over.
+
+- **A scan with an unreadable text layer is read again.** Some scans come
+  with a text layer of signs and broken letters, left by an older program.
+  ZPDF took such a page for one that already had its text and skipped it.
+  It now takes the rubbish layer out and reads the page, without touching
+  the page's picture. A layer that reads well is left alone, as before.
+- **Scanned pictures on pages of real text are read too:** a figure, a
+  pasted screenshot, or a scan with a stamp or page number typed over it.
+  The words found are added over the picture; the page's own words are
+  kept once. Small pictures (logos, icons) are passed over, and a photo
+  simply has no words to add.
+- It says what it did for each such page ("page 3: its text layer was
+  unreadable and has been replaced", "page 5: read the text in 2
+  pictures").
+- Files with many large pictures take longer than before, since each is
+  now looked into. This is the built-in engine; the Tesseract engine works
+  as it did.
+
 ## 0.35.0
 
 A setup window in place of the console.
