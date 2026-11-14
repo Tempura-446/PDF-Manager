@@ -21,6 +21,34 @@ English stays built in.
 - A pack can also be installed from a file, for offline PCs.
 - Packs live in the app's data folder and survive updates. A pack made for an older app version still works: missing strings fall back to English.
 
+## Decisions (owner, 2026-11-14)
+
+- **First languages:** Simplified Chinese (zh-Hans), Spanish (es), French (fr), German (de).
+- **No native-speaker review is available.** Quality comes from the process below instead, and the packs are labelled as automatic translations.
+- **Downloads:** ZPDF may download a pack from ZPDF-releases when the user asks for it in Settings (the only time it goes online for this, with checksum verification). Installing from a file stays available for offline PCs.
+
+## Established sources to build on (licences to confirm before use)
+
+- **UI terms:**
+  - pdf.js's own translations (Firefox's Pontoon, MPL-2.0) for viewer words such as Open, Save, Zoom, Find, Highlight, Draw and Print;
+  - the Microsoft Terminology Collection, so words match Windows and Office in each language.
+- **Dates, numbers, plurals:** `Intl` in the browser engine (Unicode CLDR). Nothing to ship.
+- **Translation models:** Firefox Translations / Bergamot models (MPL-2.0, about 15–40 MB per direction, can run as WebAssembly in the window), or OPUS-MT (CC-BY 4.0) through Argos Translate or CTranslate2 (MIT). Both cover en↔zh, en↔es, en↔fr and en↔de. Choose by measured quality, size and speed on the holdout documents.
+- **OCR:** PaddleOCR models (Apache-2.0). Chinese is already built in; the Latin model covers accented letters in fr, es and de.
+- **Search by meaning:** a multilingual static embedding table, such as sentence-transformers' multilingual static model (Apache-2.0) or Model2Vec's multilingual tables (MIT), built into the `words.npz` format.
+
+## Translating the interface without a native reviewer
+
+1. **Glossary first:** each key term takes its established translation from pdf.js or Microsoft terminology. Terms specific to ZPDF (Black out, Bates numbering, Flatten, Archive PDF/A) get one fixed translation, used everywhere.
+2. **Drafts with context:** each string is translated with where it appears, what it does and its maximum width. It is never translated as a bare word.
+3. **Automatic checks**, each failing the build:
+   - placeholders and numbers intact;
+   - no English left (allow-list for product names);
+   - back-translation to English close to the original meaning;
+   - every screen screenshotted in each language at 1180×820 with no clipped or overflowing text (German runs about 30 % longer).
+4. **Extra care for Simplified Chinese:** consistent terminology across the whole interface, full-width punctuation, and no machine-literal phrasing in the main flows (open, save, tools, errors).
+5. **Labelling:** Settings shows "Automatic translation" next to the language, with a one-click switch back to English and a "Report a wrong translation" link (a GitHub issue template or email; the owner decides). A native speaker can polish a pack later by editing its `ui.json`, with no code changes.
+
 ## Global constraints
 
 - **Offline once installed:** translation, OCR and search never send text anywhere.
@@ -53,8 +81,7 @@ English stays built in.
 ### Phase 2 (release B): the first interface packs
 
 - [ ] A pack's format: `manifest.json` (code, name in its own language, app versions it fits, contents, checksums) plus `ui.json` (strings).
-- [ ] Translations are made with care, not raw machine output: first a draft, then a review pass by a native speaker if one is available. Key terms (Redact, Flatten, OCR, PDF/A, Bates numbering) get a glossary per language so they stay consistent.
-- [ ] First languages: decide with the owner, based on who uses ZPDF. Suggested start: Simplified Chinese, Spanish, French, German.
+- [ ] Translations follow "Translating the interface without a native reviewer" above. Languages: zh-Hans, es, fr, de.
 - [ ] Download and install from Settings, with checksum verification and an "install from file" option. Removing a pack deletes its folder.
 - [ ] Test: install a pack from a file, switch language, update the app version (the pack still loads, missing keys show in English), remove the pack.
 

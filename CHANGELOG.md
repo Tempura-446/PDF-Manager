@@ -4,6 +4,41 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.30.0
+
+Two ways to get work done without opening the tools first.
+
+- **Right-click actions in File Explorer.** Right-click PDFs for a
+  **ZPDF** submenu: **Combine in ZPDF**, **Make searchable (OCR)**, **Make
+  smaller** and **Open in ZPDF**; right-click pictures (JPG, PNG, TIFF) for
+  **Make a PDF with ZPDF**. Select several files and choose the action
+  once: they all go to the one ZPDF window, as one job. The result opens as
+  a new tab that isn't saved yet, and Save asks where, starting in the
+  files' folder. Combine puts the files in name order ("Scan 2" before
+  "Scan 10"). On Windows 11 the actions are under *Show more options*.
+  The installer adds them for you only (`-NoContextMenu` leaves them out),
+  uninstalling takes them away, and **Settings → Show ZPDF in the
+  right-click menu** turns them off and on.
+- **Watch folders in the app.** **Settings → Watch folders**: add a
+  folder, choose what to do with the PDFs put in it (Make searchable, Make
+  smaller, Archive as PDF/A, or a saved recipe), where the results go (a
+  Done folder inside it, or next to the original with " (searchable)" and
+  the like on the name) and whether the originals stay or move to an
+  Originals folder. It runs while ZPDF is open, with the same engine as
+  `pdfm watch`: each file is done once, also after a restart, a file still
+  downloading or being copied is left until it's complete, and a note says
+  when a file is done or why it couldn't be. Pause, resume or remove a
+  folder from its line in Settings.
+- `pdfm watch` leaves alone files still being downloaded (`.crdownload`,
+  `.part` and the like beside them), Office lock files and hidden files.
+
+Still to come: starting ZPDF with Windows, minimised, so watch folders run
+without opening it.
+- A file in a watch folder that is still open in another program waits and is done
+  once it is closed; after a minute ZPDF says so once, instead of failing for good.
+- The card for a right-click action stays 20 seconds after it finishes, and while
+  you point at it.
+
 ## 0.29.0
 
 Mostly behind the scenes: the reader now keeps each open document's state
