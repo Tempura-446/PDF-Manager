@@ -39,7 +39,6 @@ LOG_LINES = 400
 # The steps install.ps1 marks, in order: (key, what the window calls it).
 STEPS = (("python", "Python"), ("app", "ZPDF and its packages"), ("shortcuts", "Shortcuts and menus"),
          ("extras", "Tesseract and Ghostscript"))
-FONTS = re.compile(r"[a-z0-9-]+\.woff2\Z")
 
 
 def find_edge():
@@ -216,7 +215,13 @@ def make_server(setup):
     """(server, the address the window opens, the token)"""
     token = secrets.token_urlsafe(24)
     page = (HERE / "setup.html").read_text(encoding="utf-8")
-    fonts = Path(setup.source) / "pdfmanager" / "static" / "fonts"
+    # The app's fonts, read once: a request picks one by its name from this
+    # list, and no path is ever made from what a request says.
+    folder = Path(setup.source) / "pdfmanager" / "static" / "fonts"
+    try:
+        fonts = {font.name: font.read_bytes() for font in sorted(folder.glob("*.woff2"))}
+    except OSError:
+        fonts = {}
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ZPDFSetup"
@@ -259,8 +264,8 @@ def make_server(setup):
                 config = json.dumps(setup.config(token)).replace("</", "<\\/")
                 body = re.sub(r"/\*CONFIG\*/.*?/\*END\*/", lambda m: config, page, count=1, flags=re.S)
                 return self._send(HTTPStatus.OK, body.encode("utf-8"), "text/html; charset=utf-8")
-            if path.startswith("/fonts/") and FONTS.match(path[7:]) and (fonts / path[7:]).is_file():
-                return self._send(HTTPStatus.OK, (fonts / path[7:]).read_bytes(), "font/woff2")
+            if path.startswith("/fonts/") and path[7:] in fonts:
+                return self._send(HTTPStatus.OK, fonts[path[7:]], "font/woff2")
             if path == "/api/state":
                 if not self._allowed():
                     return self._send(HTTPStatus.FORBIDDEN, {"error": "missing or wrong token"})
