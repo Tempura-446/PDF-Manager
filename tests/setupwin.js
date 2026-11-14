@@ -129,6 +129,13 @@ function luminance([r, g, b]) {
     out.small = { fits: await fits(page), targets: await page.evaluate(() => [...document.querySelectorAll(".choice, footer button:not([hidden])")].map((n) => Math.round(n.getBoundingClientRect().height))) };
     await shot(page, "small-welcome");
     await page.context().close();
+    // What Edge leaves of the window it is asked for (780 x 720), and of the 760 x 640 the Windows check saw scroll.
+    for (const [name, viewport] of [["asked", { width: 764, height: 681 }], ["old", { width: 744, height: 601 }]]) {
+      page = await open(cfg.fresh, { viewport });
+      out[name] = { fits: await fits(page) };
+      await shot(page, `${name}-welcome`);
+      await page.context().close();
+    }
   } catch (e) {
     out.errors.push(String(e.stack || e));
   } finally {

@@ -47,6 +47,15 @@ $PythonVersion = "3.13.1"
 $TesseractId = "UB-Mannheim.TesseractOCR"
 $GhostscriptId = "ArtifexSoftware.GhostScript"
 
+# pip says what it is doing for the setup window to show; in the console it stays quiet.
+$PipSays = "--quiet"
+if ($Engine) { $PipSays = "--progress-bar=off" }
+# Run by the setup window, a stop is told on one line it can show (not as
+# PowerShell's own report, which wraps and points into this script).
+trap {
+    if ($Engine) { Write-Host "@@error $_"; exit 1 }
+    break
+}
 $StepNumber = 0
 $StepCount = 3
 function Say($text) { if ($Engine) { Write-Host "$text" } else { Write-Host "      $text" } }
@@ -60,7 +69,11 @@ function Step($key, $text) {
 
 $source = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 if (-not (Test-Path (Join-Path $source "pyproject.toml"))) {
-    throw "Run this from the unzipped ZPDF folder (pyproject.toml not found in $source)."
+    Write-Host ""
+    Write-Host "  This isn't the whole ZPDF folder: pyproject.toml is missing in" -ForegroundColor Yellow
+    Write-Host "  $source"
+    Write-Host "  Unzip the download again (right-click, Extract All) and run Install ZPDF.cmd from there."
+    exit 1
 }
 $appDir = Join-Path $env:LOCALAPPDATA "PDF Manager\app"
 $venv = Join-Path $appDir "venv"
@@ -170,7 +183,7 @@ function Install-Extras($status) {
         Say "Adding OCRmyPDF to ZPDF..."
         # Just OCRmyPDF (the version pyproject.toml's "tesseract" extra asks for):
         # ZPDF itself is installed already and needn't be built again.
-        & $venvPython -m pip install --disable-pip-version-check --quiet "ocrmypdf>=15"
+        & $venvPython -m pip install --disable-pip-version-check $PipSays "ocrmypdf>=15"
         if ($LASTEXITCODE -ne 0) { Say "Installing OCRmyPDF didn't work (see above)." }
     }
     if ($status.Tesseract -and $status.Ghostscript) { return }
@@ -232,21 +245,21 @@ if (Test-Path -LiteralPath $lock) {
 $venvVersion = & $venvPython -c "import sys; print('%d.%d' % sys.version_info[:2])"
 if ($lockPython -and ($venvVersion -eq $lockPython)) {
     Say "Installing the pinned packages, each checked against its hash"
-    & $venvPython -m pip install --disable-pip-version-check --quiet --no-deps --require-hashes -r $lock
+    & $venvPython -m pip install --disable-pip-version-check $PipSays --no-deps --require-hashes -r $lock
     if ($LASTEXITCODE -ne 0) {
         throw "A package didn't install or didn't match its pinned hash (see above). Nothing unchecked was installed instead."
     }
     # ZPDF itself, from this folder, with the pinned setuptools and nothing fetched.
-    & $venvPython -m pip install --disable-pip-version-check --quiet --no-deps --no-build-isolation --no-index --force-reinstall "$source"
+    & $venvPython -m pip install --disable-pip-version-check $PipSays --no-deps --no-build-isolation --no-index --force-reinstall "$source"
 } else {
     if ($lockPython) { Say "The pinned packages are for Python $lockPython; installing the newest versions for Python $venvVersion" }
-    & $venvPython -m pip install --disable-pip-version-check --quiet --upgrade pip
-    & $venvPython -m pip install --disable-pip-version-check --quiet --upgrade "$source[app,ocr]"
+    & $venvPython -m pip install --disable-pip-version-check $PipSays --upgrade pip
+    & $venvPython -m pip install --disable-pip-version-check $PipSays --upgrade "$source[app,ocr]"
     if ($LASTEXITCODE -ne 0) {
         # Most likely the OCR engine has no build for this Python: better ZPDF
         # without it (OCR then uses Tesseract, if installed) than no ZPDF.
         Say "Installing with the built-in OCR engine didn't work (see above); installing ZPDF without it..."
-        & $venvPython -m pip install --disable-pip-version-check --quiet --upgrade "$source[app]"
+        & $venvPython -m pip install --disable-pip-version-check $PipSays --upgrade "$source[app]"
     }
 }
 if ($LASTEXITCODE -ne 0) { throw "Installing ZPDF's packages failed (see above)." }
@@ -279,7 +292,13 @@ try {
     }
     if ($complete) {
         if ($Engine) {
-            if ($WithExtras) { Write-Host "@@step extras|Tesseract and Ghostscript"; Write-Host "@@note extras|Already installed" }
+            if ($WithExtras) {
+                Write-Host "@@step extras|Tesseract and Ghostscript"
+                Write-Host "@@note extras|Already installed"
+                Write-Host "@@extra OCRmyPDF|1"
+                Write-Host "@@extra Tesseract (second OCR engine)|1"
+                Write-Host "@@extra Ghostscript (PDF/A)|1"
+            }
         } else { Say "Tesseract and Ghostscript are already installed" }
     } elseif ($wanted) {
         $StepCount = 4

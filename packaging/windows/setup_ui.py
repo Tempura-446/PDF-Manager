@@ -86,6 +86,7 @@ class Setup:
         self.phase = "welcome"   # welcome, installing, done, failed
         self.options = dict(options)
         self.steps, self.detail, self.error, self.log, self.extras = [], "", "", [], []
+        self.stopped = ""  # what the installer said stopped it
         self.process = None
         self.finished = threading.Event()  # the window is no longer needed
         self.launch = False
@@ -112,6 +113,7 @@ class Setup:
                 return
             self.options = {key: bool(options.get(key, self.defaults[key])) for key in self.defaults}
             self.phase, self.detail, self.error, self.log, self.extras = "installing", "", "", [], []
+            self.stopped = ""
             self.steps = [{"key": key, "title": title, "state": "pending", "note": ""}
                           for key, title in STEPS if key != "extras" or self.options["extras"]]
         threading.Thread(target=self._run, daemon=True).start()
@@ -150,6 +152,8 @@ class Setup:
             elif line.startswith("@@note "):
                 key, _, note = line[7:].partition("|")
                 self._mark(key.strip(), next((s["state"] for s in self.steps if s["key"] == key.strip()), "pending"), note.strip())
+            elif line.startswith("@@error "):
+                self.stopped = line[8:].strip()
             elif line.startswith("@@extra "):
                 name, _, ready = line[8:].partition("|")
                 self.extras.append({"name": name.strip(), "ready": ready.strip() == "1"})
@@ -182,7 +186,7 @@ class Setup:
                 for step in self.steps:
                     if step["state"] == "now":
                         step["state"] = "failed"
-                self.error = problem or _reason(self.log)
+                self.error = problem or _reason(self.log, self.stopped)
                 self.phase = "failed"
             self.detail = ""
 
@@ -199,22 +203,32 @@ class Setup:
         return {"done": OK, "failed": FAILED, "welcome": CANCELLED}.get(self.phase, FAILED)
 
 
-def _reason(log):
-    """The line of the installer's output that says what went wrong: the
-    message PowerShell prints for a stopped script, else the last line."""
-    for line in reversed(log):
-        text = line.strip()
-        if text and not text.startswith(("At ", "+", "~", "CategoryInfo", "FullyQualifiedErrorId")) \
-                and "CategoryInfo" not in text and "FullyQualifiedErrorId" not in text:
-            text = re.sub(r"^.*?install\.ps1\s*:\s*", "", text)
-            return re.sub(r"\s*\(see above\)", "", text)[:400]  # ("above" is the console's; here it's in the details)
-    return "The installer stopped without saying why."
+_NOISE = re.compile(r"^\s*(At |[+~]|CategoryInfo|FullyQualifiedErrorId)|char:\d+\s*$|CategoryInfo|FullyQualifiedErrorId")
+_CAUSE = re.compile(r"^\s*(?:[\w.]+(?:Error|Exception)|ERROR): \S")
+
+
+def _reason(log, stopped=""):
+    """What went wrong, in a sentence: what the installer said stopped it
+    (else the last line of its output that isn't PowerShell's own report of
+    where: "At ...install.ps1:252 char:28", which also wraps), with the
+    error a program gave just before, if one did."""
+    def tidy(text):
+        text = re.sub(r"^.*?install\.ps1\s*:\s*", "", text.strip())
+        return re.sub(r"\s*\(see above\)", "", text)  # ("above" is the console's; here it's in the details)
+
+    said = tidy(stopped) if stopped else next((tidy(line) for line in reversed(log)
+                                              if line.strip() and not _NOISE.search(line)), "")
+    cause = next((line.strip() for line in reversed(log) if _CAUSE.match(line) and line.strip() != said), "")
+    if said and cause and cause not in said:
+        return f"{said} ({cause})"[:500]
+    return (said or cause or "The installer stopped without saying why.")[:500]
 
 
 def make_server(setup):
     """(server, the address the window opens, the token)"""
     token = secrets.token_urlsafe(24)
     page = (HERE / "setup.html").read_text(encoding="utf-8")
+    mark = brand_mark(setup.source).replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ', 1)  # the window's icon
     # The app's fonts, read once: a request picks one by its name from this
     # list, and no path is ever made from what a request says.
     folder = Path(setup.source) / "pdfmanager" / "static" / "fonts"
@@ -264,6 +278,8 @@ def make_server(setup):
                 config = json.dumps(setup.config(token)).replace("</", "<\\/")
                 body = re.sub(r"/\*CONFIG\*/.*?/\*END\*/", lambda m: config, page, count=1, flags=re.S)
                 return self._send(HTTPStatus.OK, body.encode("utf-8"), "text/html; charset=utf-8")
+            if path == "/icon.svg" and mark:
+                return self._send(HTTPStatus.OK, mark.encode("utf-8"), "image/svg+xml")
             if path.startswith("/fonts/") and path[7:] in fonts:
                 return self._send(HTTPStatus.OK, fonts[path[7:]], "font/woff2")
             if path == "/api/state":
@@ -324,7 +340,7 @@ def main(argv=None):
         try:
             # A profile of its own: the window is then this process's, and
             # its closing is seen; nothing of the user's Edge is touched.
-            window = subprocess.Popen([edge, f"--app={url}", f"--user-data-dir={profile}", "--window-size=760,640",
+            window = subprocess.Popen([edge, f"--app={url}", f"--user-data-dir={profile}", "--window-size=780,720",
                                        "--no-first-run", "--no-default-browser-check", "--disable-extensions",
                                        "--disable-sync", "--disable-features=Translate"])
         except OSError:

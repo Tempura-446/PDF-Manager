@@ -23,6 +23,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS = ROOT / "packaging" / "windows"
 INSTALL_PS1 = WINDOWS / "install.ps1"
+REAL_LOCALAPPDATA = os.environ.get("LOCALAPPDATA")
 
 
 def load():
@@ -122,6 +123,8 @@ def test_the_page_and_its_calls_need_the_token_and_this_pc(served):
     status, state = call(base + "/api/state", token)
     assert status == 200 and state["phase"] == "welcome"
     assert call(base + "/fonts/instrument-sans-latin-400-normal.woff2")[0] == 200
+    status, icon = call(base + "/icon.svg")  # the window's own icon (else Edge shows a globe)
+    assert status == 200 and icon.startswith(b"<svg xmlns=") and 'rel="icon" href="/icon.svg"' in page
     for path in ("/fonts/../gui.html", "/fonts/..%2f..%2fgui.html", "/setup_ui.py", "/fonts/OFL-instrument-sans.txt"):
         assert call(base + path)[0] == 404, path
 
@@ -187,6 +190,39 @@ def test_a_failure_says_why_and_can_be_tried_again(served):
     assert until(setup, ("done", "failed"))["phase"] == "done"
 
 
+def test_the_reason_is_what_stopped_it_not_where_powershell_says_it_was():
+    """From the Windows check: the window gave "252 char:28" as the reason
+    (PowerShell's report of the place, wrapped over two lines)."""
+    log = ["Installing ZPDF in C:\\Users\\me\\AppData\\Local\\PDF Manager\\app",
+           "  File \"tomllib\\_parser.py\", line 102, in loads",
+           "tomllib.TOMLDecodeError: Expected ']' at the end of a table declaration (at line 1, column 9)",
+           "Installing ZPDF's packages failed (see above).",
+           "At C:\\Users\\me\\Downloads\\PDF-M",
+           "anager-copy\\packaging\\windows\\install.ps1:252 char:28",
+           "+ if ($LASTEXITCODE -ne 0) { throw \"Installing ZPDF's packages failed (see  ...",
+           "+                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+           "    + CategoryInfo          : OperationStopped: (Installing ZPDF...ed (see above).:String) [], RuntimeException",
+           "    + FullyQualifiedErrorId : Installing ZPDF's packages failed (see above)."]
+    wanted = ("Installing ZPDF's packages failed. (tomllib.TOMLDecodeError: Expected ']' at the end of a table "
+              "declaration (at line 1, column 9))")
+    assert setup_ui._reason(log) == wanted
+    # Told by the installer itself on its "@@error" line: that, with the cause.
+    assert setup_ui._reason(log[:3], "Installing ZPDF's packages failed (see above).") == wanted
+    assert setup_ui._reason(["Looking for Python"], "Python was installed but can't be found.") == "Python was installed but can't be found."
+    assert setup_ui._reason(["ERROR: Could not find a version that satisfies the requirement pikepdf"], "Installing ZPDF's packages failed.") \
+        == "Installing ZPDF's packages failed. (ERROR: Could not find a version that satisfies the requirement pikepdf)"
+    assert setup_ui._reason([]) == "The installer stopped without saying why."
+
+
+def test_the_installers_own_word_on_what_stopped_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    script = "print('@@step app|x'); print('pip said something'); print('@@error The disk is full.'); raise SystemExit(1)"
+    setup = setup_ui.Setup(ROOT, INSTALL_PS1, DEFAULTS, engine=lambda options: [sys.executable, "-c", script])
+    setup.start({})
+    state = until(setup, ("done", "failed"))
+    assert state["phase"] == "failed" and state["error"] == "The disk is full." and "@@error" not in "\n".join(state["log"])
+
+
 def test_closed_before_installing_and_while_installing(served):
     setup, url, token = served()
     base = url.split("/?")[0]
@@ -231,6 +267,15 @@ def test_the_installer_script_hands_over_to_the_window_and_runs_for_it():
     for key, _ in setup_ui.STEPS:
         assert f'Step "{key}"' in text or f"@@step {key}|" in text, key
     assert 'Write-Host "@@step $key|$text"' in text and 'Write-Host "@@done"' in text and "@@extra" in text
+    # A stop is told on one line; pip's lines are shown by the window, kept quiet in the console.
+    assert 'trap {' in text and 'Write-Host "@@error $_"; exit 1' in text
+    assert '$PipSays = "--quiet"' in text and 'if ($Engine) { $PipSays = "--progress-bar=off" }' in text
+    assert "--disable-pip-version-check --quiet" not in text and text.count("--disable-pip-version-check $PipSays") == 6
+    # Already installed, the two programs are still listed at the end.
+    already = text.split('Write-Host "@@note extras|Already installed"', 1)[1].split("}", 1)[0]
+    assert already.count("@@extra ") == 3 and already.count("|1") == 3
+    # Not the whole folder: said plainly, not as an exception.
+    assert "throw \"Run this from" not in text and "pyproject.toml is missing" in text
     assert text.count("Read-Host") == 1
     asking = text.split("Read-Host", 1)[0].rsplit("if ($complete -or $NoExtras)", 1)[1]
     assert "elseif ($Engine -or $automated)" in asking
@@ -261,8 +306,10 @@ def test_the_setup_window_in_a_browser(served, tmp_path):
     bad, bad_url, _ = served(fail=True)
     fresh, fresh_url, _ = served()  # (never started: for the first screen in dark and small)
     cfg = {"ok": ok_url, "extras": extras_url, "bad": bad_url, "fresh": fresh_url, "shots": os.environ.get("SETUP_SHOTS")}
+    # (Playwright looks for its browsers under the real LOCALAPPDATA, which the fixture stands in for.)
+    env = {**os.environ, **({"LOCALAPPDATA": REAL_LOCALAPPDATA} if REAL_LOCALAPPDATA else {})}
     run = subprocess.run([node, str(Path(__file__).with_name("setupwin.js")), json.dumps(cfg)], capture_output=True,
-                         text=True, encoding="utf-8", timeout=300)
+                         text=True, encoding="utf-8", timeout=300, env=env)
     if run.returncode and "Executable doesn't exist" in run.stderr:
         pytest.skip("Playwright's browser isn't installed")
     assert run.returncode == 0, run.stderr
@@ -304,3 +351,6 @@ def test_the_setup_window_in_a_browser(served, tmp_path):
     assert out["dark"]["contrast"] >= 4.5 and out["dark"]["mutedContrast"] >= 4.5 and out["dark"]["fits"], out["dark"]
     # A small window (125 % scaling on a small laptop): still all there.
     assert out["small"]["fits"] and min(out["small"]["targets"]) >= 40, out["small"]
+    # The window as Edge really gives it at 100 % (its title bar and edges taken off): nothing scrolls.
+    for name in ("asked", "old"):
+        assert out[name]["fits"], (name, out[name])
