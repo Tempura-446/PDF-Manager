@@ -689,6 +689,10 @@ def _options(edit):
         if "".join(r["text"] for r in runs) != (text if isinstance(text, str) else ""):
             raise core.PdfManagerError("the words' styles don't match the words; make the change again")
         opts["runs"] = [(bool(r.get("bold")), bool(r.get("italic"))) for r in runs for _ in r["text"]]
+    if edit.get("breaks") not in (None, ""):
+        if edit["breaks"] != "simple":
+            raise core.PdfManagerError('breaks can only be "simple"')
+        opts["breaks"] = "simple"
     if edit.get("fit") not in (None, ""):
         if edit["fit"] != "shrink":
             raise core.PdfManagerError('fit can only be "shrink"')
@@ -758,18 +762,69 @@ def _place(text, start, width, tc, gap):
     return placed, pen
 
 
-def _wrap(text, room, measure):
-    """Lines of one paragraph (no line breaks in it) no wider than ``room``."""
-    lines, line = [], ""
-    for word in text.split(" "):
-        trial = word if not line else line + " " + word
-        if line and measure(trial) > room:
-            lines.append(line)
-            line = word
-        else:
-            line = trial
-    lines.append(line)
-    return lines
+FIT_LIMIT = 2000  # words: a longer paragraph is broken line by line
+
+
+def _fit(widths, gap, room, justify=False):
+    """Where to break a paragraph's words into lines no wider than ``room``,
+    looking at the whole paragraph (as a typesetter's "total fit" does):
+    [(first word, one past the last)] per line. Never more lines than
+    breaking line by line gives; among those, the most even: in justified
+    text the word gaps stretch as little and as alike as they can, in
+    ragged text the line ends are close to each other, and the last line
+    isn't left with a lone or very short word when the lines above can
+    spare one. A word wider than the room gets a line to itself."""
+    n = len(widths)
+    if n == 0:
+        return [(0, 0)]
+    best = [(0, 0.0, -1)] + [None] * n  # for the first j words: (lines, demerits, where the last line starts)
+    for j in range(1, n + 1):
+        natural = -gap
+        for i in range(j - 1, -1, -1):
+            natural += widths[i] + gap
+            if natural > room + 1e-9 and i < j - 1:
+                break
+            if best[i] is None:
+                continue
+            count, slack, last = j - i, max(room - natural, 0.0), j == n
+            if last:
+                cost = 0.0
+                if n > 1 and (count == 1 or natural < room * 0.12):
+                    cost = 2.0  # a lone or very short word left over
+            elif justify:
+                cost = (slack / (count - 1) / gap) ** 2 if count > 1 and gap > 0 else 10.0 + (slack / room) ** 2
+            else:
+                cost = (slack / room) ** 2
+            trial = (best[i][0] + 1, best[i][1] + cost, i)
+            if best[j] is None or trial[:2] < best[j][:2]:
+                best[j] = trial
+    lines, j = [], n
+    while j > 0:
+        i = best[j][2]
+        lines.append((i, j))
+        j = i
+    return lines[::-1]
+
+
+def _wrap(text, room, measure, justify=False, greedy=False):
+    """Lines of one paragraph (no line breaks in it) no wider than ``room``:
+    broken looking at the whole paragraph (see :func:`_fit`), or line by
+    line with ``greedy`` (and for a very long paragraph)."""
+    words = text.split(" ")
+    if greedy or len(words) > FIT_LIMIT or len(words) < 2:
+        lines, line = [], ""
+        for word in words:
+            trial = word if not line else line + " " + word
+            if line and measure(trial) > room:
+                lines.append(line)
+                line = word
+            else:
+                line = trial
+        lines.append(line)
+        return lines
+    widths = [measure(word) for word in words]
+    gap = measure(words[0] + " " + words[1]) - widths[0] - widths[1]
+    return [" ".join(words[i:j]) for i, j in _fit(widths, gap, room, justify)]
 
 
 def _look(style):
@@ -877,18 +932,31 @@ def _split_seq(seq, sep):
     return parts
 
 
-def _wrap_seq(seq, room, measure):
+def _wrap_seq(seq, room, measure, justify=False, greedy=False):
     """:func:`_wrap` for a list of (character, style)."""
-    lines, line = [], []
-    for word in _split_seq(seq, " "):
-        trial = word if not line else line + [(" ", word[0][1] if word else line[-1][1])] + word
-        if line and measure(trial) > room:
-            lines.append(line)
-            line = word
-        else:
-            line = trial
-    lines.append(line)
-    return lines
+    words = _split_seq(seq, " ")
+
+    def joined(some):
+        line = []
+        for word in some:
+            line += ([(" ", word[0][1] if word else line[-1][1])] if line else []) + word
+        return line
+
+    if greedy or len(words) > FIT_LIMIT or len(words) < 2 or not (words[0] or words[1]):
+        lines, line = [], []
+        for word in words:
+            trial = word if not line else line + [(" ", word[0][1] if word else line[-1][1])] + word
+            if line and measure(trial) > room:
+                lines.append(line)
+                line = word
+            else:
+                line = trial
+        lines.append(line)
+        return lines
+    widths = [measure(word) if word else 0.0 for word in words]
+    pair = [w for w in words if w][:2]
+    gap = measure(joined(pair)) - measure(pair[0]) - measure(pair[1]) if len(pair) == 2 else 0.0
+    return [joined(words[i:j]) for i, j in _fit(widths, gap, room, justify)]
 
 
 def _strip_seq(seq):
@@ -1569,6 +1637,8 @@ class _Page:
         old_span = ((rows[-1][0]["origin"][0] - first["origin"][0]) * down[0]
                     + (rows[-1][0]["origin"][1] - first["origin"][1]) * down[1])
 
+        simple = opts.get("breaks") == "simple"  # line by line, as before 0.34
+
         def scaled(key, k):
             """The style of the words that look like ``key``, at ``k`` times their size."""
             if (key, k) not in scaled_by:
@@ -1594,7 +1664,7 @@ class _Page:
 
             lines = []
             for part in text.split("\n"):
-                wrapped = _wrap(part, room, measure)
+                wrapped = _wrap(part, room, measure, justify=align == "justify", greedy=simple)
                 for j, line in enumerate(wrapped):
                     line, g, off = line.strip(), gap, 0.0
                     spaces = line.count(" ")
@@ -1625,7 +1695,7 @@ class _Page:
 
             lines = []
             for part in _split_seq(seq, "\n"):
-                wrapped = _wrap_seq(part, room, measure)
+                wrapped = _wrap_seq(part, room, measure, justify=align == "justify", greedy=simple)
                 for j, line in enumerate(wrapped):
                     line, g, off = _strip_seq(line), gap, 0.0
                     spaces = sum(1 for ch, _ in line if ch == " ")
