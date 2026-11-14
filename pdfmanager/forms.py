@@ -11,8 +11,8 @@ and readers draw the text in as it's typed.
 import json
 import re
 
-from pypdf.generic import (ArrayObject, DecodedStreamObject, DictionaryObject, FloatObject,
-                           NameObject, NumberObject, TextStringObject)
+from pypdf.generic import (ArrayObject, BooleanObject, DecodedStreamObject, DictionaryObject,
+                           FloatObject, NameObject, NumberObject, TextStringObject)
 
 from pdfmanager import core
 
@@ -85,24 +85,126 @@ def _kind(field):
     return "other"
 
 
-def existing_fields(path, password=None):
-    """The form fields already in a PDF: {1-based page: [{"rect", "name",
-    "type"}]}, with rectangles in PDF points (origin bottom left)."""
-    reader = core.open_pdf(path, password)
-    found = {}
-    for number, page in enumerate(reader.pages, 1):
+def _widgets(pages):
+    """(1-based page, place among the page's fields, widget, its field) for
+    every form field shown on ``pages``."""
+    for number, page in enumerate(pages, 1):
+        index = 0
         for ref in page.get("/Annots") or []:
             annot = ref.get_object()
             if not isinstance(annot, DictionaryObject):
                 continue  # a null or missing annotation: viewers skip it too
             if annot.get("/Subtype") != "/Widget" or "/Rect" not in annot:
                 continue
-            x0, y0, x1, y1 = (float(v) for v in annot["/Rect"])
-            field = _field_of(annot)
-            found.setdefault(number, []).append({
-                "rect": [round(min(x0, x1), 1), round(min(y0, y1), 1),
-                         round(max(x0, x1), 1), round(max(y0, y1), 1)],
-                "name": _qualified_name(field), "type": _kind(field)})
+            yield number, index, annot, _field_of(annot)
+            index += 1
+
+
+def _rect_of(annot):
+    x0, y0, x1, y1 = (float(v) for v in annot["/Rect"])
+    return [round(min(x0, x1), 1), round(min(y0, y1), 1),
+            round(max(x0, x1), 1), round(max(y0, y1), 1)]
+
+
+def existing_fields(path, password=None):
+    """The form fields already in a PDF: {1-based page: [{"rect", "name",
+    "type"}]}, with rectangles in PDF points (origin bottom left)."""
+    reader = core.open_pdf(path, password)
+    found = {}
+    for number, _, annot, field in _widgets(reader.pages):
+        found.setdefault(number, []).append({
+            "rect": _rect_of(annot), "name": _qualified_name(field), "type": _kind(field)})
+    return found
+
+
+_SIMPLE_CALC = re.compile(r"\s*AFSimple_Calculate\(\s*(\"[^\"]*\")\s*,\s*new Array\s*\((.*)\)\s*\)\s*;?\s*", re.S)
+
+
+def _calc_of(field):
+    """(operation, [names]) of a field worked out with AFSimple_Calculate
+    (the way this app and Acrobat's "value is the sum of" write it), else
+    None."""
+    try:
+        script = field["/AA"]["/C"]["/JS"]
+    except (KeyError, TypeError):
+        return None
+    match = _SIMPLE_CALC.fullmatch(str(script)) if isinstance(script, str) else None
+    if not match:
+        return None
+    try:
+        names = json.loads("[" + match.group(2) + "]")
+    except ValueError:
+        return None
+    if not all(isinstance(n, str) for n in names):
+        return None
+    return json.loads(match.group(1)), names
+
+
+def _set_calc(field, op, names):
+    field["/AA"]["/C"][NameObject("/JS")] = TextStringObject(
+        f"AFSimple_Calculate({_js_string(op)}, new Array("
+        + ", ".join(_js_string(n) for n in names) + "));")
+
+
+def _value_of(field, kind):
+    value = _inherited(field, "/V")
+    value = value.get_object() if value is not None else None
+    if value is None or kind == "signature":
+        return ""
+    if isinstance(value, NameObject):
+        return "" if value == "/Off" else str(value)[1:]
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(v) for v in value)
+    return str(value) if isinstance(value, str) else ""
+
+
+def _choices_of(field):
+    out = []
+    for option in _inherited(field, "/Opt") or []:
+        option = option.get_object()
+        if isinstance(option, (list, tuple)) and option:
+            option = option[-1].get_object()  # [what's saved, what's shown]
+        out.append(str(option))
+    return out
+
+
+def _key(obj):
+    return id(obj)
+
+
+def field_details(path, password=None):
+    """Like ``existing_fields``, with what the form tool needs to change a
+    field: its "index" (its place among the page's fields, which
+    ``edit_fields`` takes), "tooltip", "required", "readonly", "value",
+    "options" (a dropdown's or list's), "widgets" (how many places the field
+    is shown: a radio group's buttons, or one box repeated), "calculated",
+    "used_by" (the fields worked out from it) and "signed"."""
+    reader = core.open_pdf(path, password)
+    rows = list(_widgets(reader.pages))
+    shown, users = {}, {}
+    seen = set()
+    for _, _, _, field in rows:
+        shown[_key(field)] = shown.get(_key(field), 0) + 1
+        if _key(field) in seen:
+            continue
+        seen.add(_key(field))
+        calc = _calc_of(field)
+        for used in calc[1] if calc else ():
+            users.setdefault(used, []).append(_qualified_name(field))
+    found = {}
+    for number, index, annot, field in rows:
+        kind, name = _kind(field), _qualified_name(field)
+        flags = int(_inherited(field, "/Ff", 0))
+        tooltip = _inherited(field, "/TU")
+        found.setdefault(number, []).append({
+            "index": index, "rect": _rect_of(annot), "name": name, "type": kind,
+            "tooltip": str(tooltip) if tooltip is not None else "",
+            "required": bool(flags & REQUIRED), "readonly": bool(flags & READ_ONLY),
+            "value": _value_of(field, kind), "options": _choices_of(field),
+            "widgets": shown[_key(field)],
+            "calculated": "/C" in (field.get("/AA") or {}),
+            "used_by": users.get(name, []),
+            "signed": kind == "signature" and _inherited(field, "/V") is not None})
     return found
 
 
@@ -272,6 +374,37 @@ def _border(width, height, border):
         return ""
     r, g, b = BORDER
     return f"q {r} {g} {b} RG 1 w 0.5 0.5 {width - 1:.2f} {height - 1:.2f} re S Q\n"
+
+
+def _paint(colour, stroke):
+    """The operator setting a /MK colour (grey, RGB or CMYK), or ""."""
+    try:
+        parts = [float(v) for v in colour or []]
+    except (TypeError, ValueError):
+        return ""
+    op = {1: "g", 3: "rg", 4: "k"}.get(len(parts))
+    if not op:
+        return ""
+    return " ".join(f"{v:g}" for v in parts) + " " + (op.upper() if stroke else op)
+
+
+def _frame_of(annot, width, height):
+    """A widget's own background and border, drawn at a new size."""
+    mk = annot.get("/MK") or {}
+    out = ""
+    fill = _paint(mk.get("/BG"), False)
+    if fill:
+        out += f"q {fill} 0 0 {width:.2f} {height:.2f} re f Q\n"
+    line = _paint(mk.get("/BC"), True)
+    if line:
+        try:
+            thick = float((annot.get("/BS") or {}).get("/W", 1))
+        except (TypeError, ValueError):
+            thick = 1.0
+        if thick > 0:
+            out += (f"q {line} {thick:g} w {thick / 2:g} {thick / 2:g} "
+                    f"{width - thick:.2f} {height - thick:.2f} re S Q\n")
+    return out
 
 
 def _circle(cx, cy, r, op):
@@ -520,3 +653,257 @@ def _calculation_order(acroform, calculated, writer):
     co = _child(acroform, "/CO", ArrayObject)
     for _, _, widget in order:
         co.append(widget.indirect_reference if widget.indirect_reference else widget)
+
+
+# -- changing the fields a form already has -----------------------------------------------------
+
+def _drop(array, obj):
+    """Take every reference to ``obj`` out of ``array``."""
+    for i in range(len(array) - 1, -1, -1):
+        if array[i].get_object() is obj:
+            del array[i]
+
+
+def _remake(writer, acroform, annot, field, kind, width, height):
+    """Draw a resized widget's appearance again at its new size, with its
+    own border and background. Returns True if readers should redraw the
+    value (text was showing). Kinds this app doesn't draw (push buttons, a
+    signed signature) keep their look, which readers stretch to fit."""
+    rotation = core.quarter_turn(int((annot.get("/MK") or {}).get("/R", 0) or 0))
+    if rotation in (90, 270):
+        width, height = height, width
+    frame = _frame_of(annot, width, height)
+
+    def look(content, resources=None):
+        return _stream(writer, width, height, content, rotation, resources)
+
+    if kind in ("text", "multiline", "dropdown", "list"):
+        annot[NameObject("/AP")] = DictionaryObject({NameObject("/N"): look(frame + "/Tx BMC EMC\n")})
+        return _inherited(field, "/V") is not None
+    if kind == "signature":
+        if _inherited(field, "/V") is None:
+            annot[NameObject("/AP")] = DictionaryObject({NameObject("/N"): look(frame)})
+        return False
+    if kind not in ("checkbox", "radio"):
+        return False
+    try:
+        states = [k for k in annot["/AP"]["/N"].keys() if k != "/Off"]
+    except (KeyError, AttributeError, TypeError):
+        states = []
+    states = states or ["/Yes"]
+    glyph = str((annot.get("/MK") or {}).get("/CA", DOT if kind == "radio" else TICK))[:1] or TICK
+    resources = None
+    if kind == "radio" and glyph == DOT:
+        edged = bool(_paint((annot.get("/MK") or {}).get("/BC"), True))
+        off, on = _radio_look(width, height, False)
+        ring = ""
+        if edged:
+            cx, cy, r = width / 2, height / 2, max(1.0, min(width, height) / 2 - 0.75)
+            ring = (f"q {_paint(annot['/MK']['/BC'], True)} 1 w " + _circle(cx, cy, r, "S") + "Q\n")
+        off, on = ring + off, ring + on
+    else:
+        fonts = _fonts(writer, acroform)
+        resources = DictionaryObject({NameObject("/Font"): DictionaryObject(
+            {NameObject("/ZaDb"): fonts["/ZaDb"]})})
+        size = min(width, height) * 0.8
+        tx, ty = (width - 0.846 * size) / 2, (height - 0.7 * size) / 2
+        mark = glyph.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        off = frame
+        on = frame + f"q BT 0 g /ZaDb {size:.2f} Tf {tx:.2f} {ty:.2f} Td ({mark}) Tj ET Q\n"
+    normal = DictionaryObject({NameObject("/Off"): look(off)})
+    for state in states:
+        normal[NameObject(state)] = look(on, resources)
+    annot[NameObject("/AP")] = DictionaryObject({NameObject("/N"): normal})
+    return False
+
+
+def edit_fields(path, output, changes, password=None):
+    """Change form fields a PDF already has. Each change names a field by
+    its "page" (1-based) and "index" (its place among that page's fields, as
+    ``field_details`` lists them) and carries any of: "rect" [x0, y0, x1,
+    y1] in PDF points (move or resize), "name", "tooltip", "required",
+    "readonly", "type" ("text" or "multiline", for a text box), "options"
+    (a dropdown's or list's choices) and "delete".
+
+    A name is kept unique, and the calculations that used the old name use
+    the new one. A deleted field is taken out of the calculations that used
+    it. Returns {"changed", "deleted", "names": {old: new}, "notes"}."""
+    reader = core.open_pdf(path, password)
+    root = reader.trailer["/Root"]
+    if "/AcroForm" in root and "/XFA" in root["/AcroForm"].get_object():
+        raise core.PdfManagerError(
+            "this PDF is an XFA form (made with Adobe LiveCycle); its fields can't be changed")
+    changes = [c for c in changes or [] if isinstance(c, dict)]
+    if not changes:
+        raise core.PdfManagerError("nothing to change: move, rename or delete a field first")
+
+    writer = core.clone_document(reader)
+    acroform = _child(writer._root_object, "/AcroForm", DictionaryObject)
+    field_list = _child(acroform, "/Fields", ArrayObject)
+    rows = list(_widgets(writer.pages))
+    where = {(number, index): (annot, field) for number, index, annot, field in rows}
+    fields = {}  # every field shown on a page, once
+    for _, _, _, field in rows:
+        fields.setdefault(_key(field), field)
+    first_names = {key: _qualified_name(field) for key, field in fields.items()}
+    taken = set(first_names.values())
+    notes, redraw = [], False
+    if any(_kind(f) == "signature" and _inherited(f, "/V") is not None for f in fields.values()):
+        notes.append("This file is signed: changing its fields makes the signature show as "
+                     "no longer valid.")
+
+    targets = []
+    for change in changes:
+        try:
+            spot = (int(change.get("page", 1)), int(change.get("index", -1)))
+        except (TypeError, ValueError):
+            spot = None
+        if spot not in where:
+            raise core.PdfManagerError(
+                f"page {change.get('page', 1)} has no field number {change.get('index')}")
+        targets.append((spot[0], *where[spot], change))
+
+    deleted, changed = [], 0
+    for number, annot, field, change in targets:
+        if change.get("delete"):
+            deleted.append((number, annot, field))
+            continue
+        kind, touched = _kind(field), False
+
+        if change.get("rect") is not None:
+            try:
+                x0, y0, x1, y1 = (float(v) for v in change["rect"])
+            except (TypeError, ValueError):
+                raise core.PdfManagerError(f"a field on page {number} has no usable place") from None
+            rect = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+            width, height = rect[2] - rect[0], rect[3] - rect[1]
+            if width < MIN_SIZE or height < MIN_SIZE:
+                raise core.PdfManagerError(f"a field on page {number} is too small")
+            old = _rect_of(annot)
+            resized = (abs((old[2] - old[0]) - width) > 0.05 or abs((old[3] - old[1]) - height) > 0.05)
+            annot[NameObject("/Rect")] = ArrayObject(_num(v) for v in rect)
+            if resized:
+                redraw = _remake(writer, acroform, annot, field, kind, width, height) or redraw
+            touched = True
+
+        if change.get("name") is not None:
+            current = _qualified_name(field)
+            prefix = current[:-len(str(field.get("/T", "")))] if "/T" in field else ""
+            asked = " ".join(str(change["name"]).replace(".", " ").split())
+            if asked and prefix + asked != current:
+                taken.discard(current)
+                candidate, n = asked, 2
+                while prefix + candidate in taken:
+                    candidate, n = f"{asked} {n}", n + 1
+                taken.add(prefix + candidate)
+                short = str(field.get("/T", ""))
+                field[NameObject("/T")] = TextStringObject(candidate)
+                if str(field.get("/TU", "")) in (short, current) and "/TU" in field:
+                    field[NameObject("/TU")] = TextStringObject(candidate)
+                for other in fields.values():  # the sums that added it up
+                    calc = _calc_of(other)
+                    if calc and current in calc[1]:
+                        _set_calc(other, calc[0], [prefix + candidate if n == current else n
+                                                   for n in calc[1]])
+                touched = True
+
+        if change.get("tooltip") is not None:
+            tip = " ".join(str(change["tooltip"]).split())
+            if tip:
+                field[NameObject("/TU")] = TextStringObject(tip)
+            elif "/TU" in field:
+                del field["/TU"]
+            touched = True
+
+        flags = before = int(_inherited(field, "/Ff", 0))
+        for key, bit in (("required", REQUIRED), ("readonly", READ_ONLY)):
+            if change.get(key) is not None:
+                flags = flags | bit if change[key] else flags & ~bit
+
+        wanted = change.get("type")
+        if wanted is not None and str(wanted).lower() != kind:
+            wanted = str(wanted).lower()
+            if kind not in ("text", "multiline") or wanted not in ("text", "multiline"):
+                raise core.PdfManagerError(
+                    f"a {kind} field can't be turned into a {wanted} field: delete it and draw "
+                    "a new one")
+            flags = flags | MULTILINE if wanted == "multiline" else flags & ~MULTILINE
+            if wanted == "multiline":
+                # Text fitted to the box (size 0) would shrink as lines are added.
+                holder = annot if "/DA" in annot else field
+                style = str(_inherited(holder, "/DA", acroform.get("/DA", "/Helv 0 Tf 0 g")))
+                holder[NameObject("/DA")] = TextStringObject(
+                    re.sub(r"(\s)0(\.0+)?(\s+Tf)", r"\g<1>10\3", style))
+            redraw = redraw or _inherited(field, "/V") is not None
+        if flags != before:
+            field[NameObject("/Ff")] = NumberObject(flags)
+            touched = True
+
+        if change.get("options") is not None and kind in ("dropdown", "list"):
+            options = _options(change)
+            if not options and not flags & EDIT:
+                raise core.PdfManagerError(
+                    f"{_qualified_name(field)} on page {number} has no choices: add them, "
+                    "separated by commas")
+            field[NameObject("/Opt")] = ArrayObject(TextStringObject(o) for o in options)
+            value = _inherited(field, "/V")
+            if value is not None and str(value) not in options and not flags & EDIT:
+                for key in ("/V", "/DV", "/I"):
+                    if key in field:
+                        del field[key]
+                notes.append(f"{_qualified_name(field)} was set to \"{value}\", which is no "
+                             "longer a choice: it's now empty.")
+                redraw = True
+            touched = True
+        changed += touched
+
+    gone = []  # names of fields deleted altogether
+    order = acroform["/CO"] if "/CO" in acroform else None
+    for number, annot, field in deleted:
+        if not any(ref.get_object() is annot for ref in writer.pages[number - 1].get("/Annots") or []):
+            continue  # asked for twice
+        _drop(writer.pages[number - 1]["/Annots"], annot)
+        if _kind(field) == "radio" and field is not annot and annot.get("/AS", "/Off") != "/Off":
+            field[NameObject("/V")] = NameObject("/Off")
+        node = annot
+        for _ in range(64):  # up the tree, taking the branches left empty
+            if order is not None:
+                _drop(order, node)
+            if node is field:
+                gone.append(_qualified_name(field))
+                fields.pop(_key(field), None)
+            parent = node["/Parent"].get_object() if "/Parent" in node else None
+            if parent is None:
+                _drop(field_list, node)
+                break
+            if "/Kids" in parent:
+                _drop(parent["/Kids"], node)
+            if "/Kids" in parent and len(parent["/Kids"]):
+                break
+            node = parent
+    for name in gone:
+        for other in fields.values():
+            calc = _calc_of(other)
+            if not calc or name not in calc[1]:
+                continue
+            left = [n for n in calc[1] if n != name]
+            notes.append(f"{_qualified_name(other)} was worked out from {name}, which is "
+                         "deleted" + ("." if left else ": it's now an ordinary box to type in."))
+            if left:
+                _set_calc(other, calc[0], left)
+                continue
+            del other["/AA"]["/C"]
+            if not len(other["/AA"]):
+                del other["/AA"]
+            other[NameObject("/Ff")] = NumberObject(int(_inherited(other, "/Ff", 0)) & ~READ_ONLY)
+            if order is not None:
+                _drop(order, other)
+
+    if redraw:
+        acroform[NameObject("/NeedAppearances")] = BooleanObject(True)
+    names = {}
+    for key, field in fields.items():
+        if _qualified_name(field) != first_names[key]:
+            names[first_names[key]] = _qualified_name(field)
+    core._write(writer, output)
+    return {"changed": changed, "deleted": len(deleted), "names": names, "notes": notes}

@@ -510,6 +510,17 @@ def run_bookmarks(a, src, out, pw):
 
 
 def run_form(a, src, out, pw):
+    if a.edit:
+        if a.field or a.fields or a.detect:
+            raise core.PdfManagerError("--edit changes the fields a form has; add fields in "
+                                       "another run")
+        changes = json.loads(Path(a.edit).read_text(encoding="utf-8-sig"))
+        if not isinstance(changes, list):
+            raise core.PdfManagerError(f"{a.edit} must hold a list of changes")
+        done = forms.edit_fields(src, out, changes, password=pw)
+        for note in done["notes"]:
+            print(f"  note: {note}")
+        return f"{out}  (changed {done['changed']}, deleted {done['deleted']})"
     fields = [forms.parse_field(spec) for spec in a.field or []]
     if a.fields:
         data = json.loads(Path(a.fields).read_text(encoding="utf-8-sig"))
@@ -1542,6 +1553,11 @@ def build_parser():
     sp.add_argument("--fields", metavar="FILE",
                     help='fields from a JSON file: [{"type", "page", "rect": [x0, y0, x1, y1], '
                          '"name"}]')
+    sp.add_argument("--edit", metavar="FILE",
+                    help='change the fields the form has, from a JSON file: [{"page", "index" '
+                         '(the field\'s place on its page, from 0, in the order listed without '
+                         '--field), and any of "rect", "name", "tooltip", "required", '
+                         '"readonly", "type" (text or multiline), "options", "delete"}]')
     sp.add_argument("--font-size", type=float, default=0,
                     help="text size in the fields (default: fit single-line fields to the box)")
     sp.add_argument("--no-border", action="store_true", help="don't draw a border around fields")
