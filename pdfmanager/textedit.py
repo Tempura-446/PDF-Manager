@@ -2606,8 +2606,13 @@ def _intact(path, expect):
                             return False
                         for which, text in want["texts"]:
                             there = collections.Counter(L[0] for L in new if which is None or on(want["bands"][which], L))
+                            # (pdfium reads a hyphen that ends a line as U+FFFE or U+0002, and a soft
+                            # hyphen may come back as U+00AD: a word's own hyphen there is still its hyphen.)
+                            read = unicodedata.normalize("NFKC", "".join(there.elements()))
+                            for marker in ("\ufffe", "\u0002", "\u00ad"):
+                                read = read.replace(marker, "-")
                             asked = collections.Counter(unicodedata.normalize("NFKC", "".join(text.split())))
-                            if asked - collections.Counter(unicodedata.normalize("NFKC", "".join(there.elements()))):
+                            if asked - collections.Counter(read):
                                 return False
                     finally:
                         textpage.close()
