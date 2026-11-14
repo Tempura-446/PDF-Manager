@@ -83,7 +83,10 @@ class FileInUse(core.PdfManagerError):
 def _in_use(exc):
     """Whether ``exc`` means the file is open in another program (or can't
     be read just now) rather than that it is bad."""
-    return isinstance(exc, PermissionError) and getattr(exc, "winerror", 32) in (5, 32, 33)
+    if not isinstance(exc, PermissionError):
+        return False
+    code = getattr(exc, "winerror", None)  # (None on Windows too when no Windows error came with it)
+    return code is None or code in (5, 32, 33)
 
 
 # Beside a download that isn't finished yet (Chrome, Edge, Firefox, Safari, others).

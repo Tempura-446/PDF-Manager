@@ -351,3 +351,16 @@ def test_in_use_news_is_not_counted_as_a_failure(tmp_path):
     assert w.status.get("x", {}).get("failed", 0) == 0
     news, _ = w.news_after(0)
     assert news and news[-1]["waiting"] and "open in another program" in news[-1]["message"]
+
+
+def test_in_use_covers_errors_with_and_without_a_windows_code():
+    from pdfmanager import watch
+
+    plain = PermissionError("locked")
+    plain.winerror = None  # as on Windows, for one raised without a Windows error
+    sharing = PermissionError(13, "in use")
+    sharing.winerror = 32
+    other = PermissionError(13, "odd")
+    other.winerror = 1314  # a privilege error: not "in use"
+    assert watch._in_use(plain) and watch._in_use(sharing) and watch._in_use(PermissionError("x"))
+    assert not watch._in_use(other) and not watch._in_use(OSError("nope"))
