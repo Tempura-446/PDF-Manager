@@ -21,6 +21,15 @@ Rewriting a paragraph keeps each word's own style.
 - **Links follow their words.** A link over words of a rewritten paragraph
   moves with them; when its words now run over two lines the link covers
   both, and a link whose words were all deleted is removed.
+- **Paragraphs set without a gap between them** (as Word does by default
+  in some styles) are told apart: Shift+click takes the one you clicked,
+  not both as one.
+- **Shift+click opens the paragraph** also when there's a caret or a
+  selection on the page; before, it could select text instead.
+- **No boxes where the spaces were.** In files whose fonts hold only the
+  letters used (Word's), a rewritten line or paragraph could show a small
+  box for every space. Words are now set apart without drawing a space
+  the font doesn't have.
 - A paragraph in one style is written exactly as in 0.32.
 
 ## 0.32.0

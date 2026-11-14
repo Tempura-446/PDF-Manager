@@ -24,6 +24,14 @@ LINES = [
 RECT = [70, 700 - 24 - 4, 330, 712]
 
 
+# Two paragraphs set without a gap; the first ends short of the right edge.
+TWO = [[("Our workshop finished the cabinet order this week, and", PLAIN, None)],
+       [("the doors were given two coats of hard wax oil for anyone", PLAIN, None)],
+       [("who wants them.", PLAIN, None)],
+       [("Note:", BOLD, None), (" please keep the doors away from direct heat for", PLAIN, None)],
+       [("two weeks while the oil cures.", PLAIN, None)]]
+
+
 def styled(path, lines=LINES):
     c = canvas.Canvas(str(path), pagesize=letter)
     y = 700
@@ -334,7 +342,8 @@ def test_the_paragraph_editor_in_a_browser(tmp_path):
     srv, url = gui.make_server()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
-        cfg = {"a": srv.RequestHandlerClass.opened.add(styled(tmp_path / "Styled.pdf")),
+        opened = srv.RequestHandlerClass.opened
+        cfg = {"a": opened.add(styled(tmp_path / "Styled.pdf")), "b": opened.add(styled(tmp_path / "Two.pdf", TWO)),
                "shots": os.environ.get("FIX33_SHOTS")}
         run = subprocess.run([node, str(Path(__file__).with_name("fix33.js")), url, json.dumps(cfg)],
                              capture_output=True, text=True, encoding="utf-8", timeout=600)
@@ -366,3 +375,54 @@ def test_the_paragraph_editor_in_a_browser(tmp_path):
     for plain in ("quarterly", "office", "returning"):
         assert look_of(found, plain)[1:3] == (False, False), (plain, found)
     assert out["undone"]
+    # Two paragraphs with no gap between them: each opens by itself, also with a caret on the page.
+    assert out["caret"] == "Caret"
+    assert out["second"] == "Note: please keep the doors away from direct heat for two weeks while the oil cures.", out["second"]
+    assert out["first"] == ("Our workshop finished the cabinet order this week, and the doors were given two "
+                            "coats of hard wax oil for anyone who wants them."), out["first"]
+
+
+def embedded(path):
+    """A paragraph in a font that is in the file (cut down to its letters), one word bold."""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    pdfmetrics.registerFont(TTFont("Vera", "Vera.ttf"))
+    pdfmetrics.registerFont(TTFont("VeraBd", "VeraBd.ttf"))
+    c = canvas.Canvas(str(path), pagesize=letter)
+    y = 700
+    for pieces in [[("The cabinet doors were cut from ", "Vera"), ("solid", "VeraBd"), (" oak and", "Vera")],
+                   [("given two coats of hard wax oil this week.", "Vera")]]:
+        x = 72
+        for text, font in pieces:
+            c.setFont(font, 10)
+            c.drawString(x, y, text)
+            x += c.stringWidth(text, font, 10)
+        y -= 12
+    c.save()
+    return path
+
+
+def test_no_space_is_drawn_in_a_font_without_one(tmp_path, monkeypatch):
+    """A font cut down to a document's letters can have a box where its
+    space would be (Word's files: words set apart by moving the pen). The
+    new words are then set apart the same way, never with that glyph."""
+    src, out = embedded(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    text = "The cabinet fronts were cut from solid oak and given two coats of hard wax oil this week."
+    rect = [70, 700 - 12 - 4, 400, 712]
+
+    def drawn_spaces(path):
+        doc = pdfium.PdfDocument(str(path))
+        try:
+            tp = doc[0].get_textpage()
+            return sum(1 for i in range(tp.count_chars())
+                       if tp.get_text_range(i, 1) == " " and not pdfium_raw.FPDFText_IsGenerated(tp.raw, i))
+        finally:
+            doc.close()
+
+    assert drawn_spaces(src) > 5  # (reportlab draws them)
+    monkeypatch.setattr(textedit, "_draws_space", lambda font: False)
+    textedit.edit_text(src, out, [{"page": 1, "rect": rect, "paragraph": True, "text": text}])
+    found = words(out)
+    assert [w[0] for w in found] == text.split(), found
+    assert look_of(found, "solid")[1] and not look_of(found, "fronts")[1]
+    assert drawn_spaces(out) == 0

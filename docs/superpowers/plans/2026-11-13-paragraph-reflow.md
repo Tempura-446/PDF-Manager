@@ -186,3 +186,7 @@ Release A shipped: per-word styles are kept, the editor shows them, links follow
 
 **Checks that need real documents (Windows run for 0.33)**
 - A Word-made report with bold and italic words and a link; an invoice with a bold total; a brochure paragraph with a coloured phrase; a paragraph whose first word is bold (a run-in heading).
+
+**From the Windows check of 0.33 (a Word-made file)**
+- [ ] (B) **Tagged files (Word's) fall back to covering.** When a paragraph's words are in more than one tag (a link, or a run-in heading, has its own), the old words are covered, not taken out: they stay in the file's text underneath, and Find and Copy give both. Take the words out tag by tag and write each run back into its own tag.
+- [ ] (B) The editor's box wraps a little differently from the page at some zooms (at 125 % one word sat a line early). Wrap the box with the same breaks the server will make.

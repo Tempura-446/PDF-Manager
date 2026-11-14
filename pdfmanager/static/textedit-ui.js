@@ -140,6 +140,16 @@ function richToggle(field, what) {
 export const TextEditing = (Base) => class extends Base {
   // ---- changing words on the page ----------------------------------------------------
   /** Edit text tool: a click on a line of text opens a box to retype it. */
+  /** Shift+click is for a paragraph here, not for stretching a selection:
+   *  with a caret or a selection on the page the browser would select up
+   *  to the click, and no editor would open. */
+  _textPress(e) {
+    if (!this.textEditMode || e.button !== 0 || !e.shiftKey) return;
+    if (e.target.closest?.(".rd-textedit-box") || !e.target.closest?.(".page")) return;
+    e.preventDefault();
+    window.getSelection()?.removeAllRanges();
+  }
+
   _textClick(e) {
     if (!this.textEditMode || e.button !== 0) return;
     if (e.target.closest?.(".rd-textedit-box")) return;  // inside the open editor
@@ -239,7 +249,23 @@ export const TextEditing = (Base) => class extends Base {
     const below = (i) => { for (let j = i + 1; j < lines.length; j++) if (column(lines[j])) return j; return -1; };
     for (let j = above(first); j >= 0 && close(lines[j], lines[first]); j = above(first)) first = j;
     for (let j = below(last); j >= 0 && close(lines[last], lines[j]); j = below(last)) last = j;
-    const chosen = lines.slice(first, last + 1).filter((l, i, all) => i === 0 || i === all.length - 1 || column(l));
+    // Paragraphs set without a gap between them: a line that stops short
+    // though the next line's first word would have fitted after it is the
+    // end of its paragraph.
+    let run = lines.slice(first, last + 1).filter((l, i, all) => i === 0 || i === all.length - 1 || column(l));
+    const edge = Math.max(...run.map((l) => l.right));
+    const firstWord = (l) => {
+      const it = l.spans[0], text = it.s.textContent.trimStart();
+      const word = text.split(/\s/)[0] || text;
+      return text.length ? (it.r.right - it.r.left) * Math.min(1, (word.length + 1) / text.length) : 0;
+    };
+    const across = edge - Math.min(...run.map((l) => l.left));
+    // (Well short, too: ragged lines set by a careful typesetter can leave room for a small word.)
+    const ends = (a, b) => edge - a.right > Math.max(firstWord(b) + a.h * 0.3, across * 0.12);
+    let from = run.indexOf(lines[at]), to = from;
+    while (from > 0 && !ends(run[from - 1], run[from])) from--;
+    while (to < run.length - 1 && !ends(run[to], run[to + 1])) to++;
+    const chosen = run.slice(from, to + 1);
     let text = "";
     for (const line of chosen) {
       const words = lineText(line);

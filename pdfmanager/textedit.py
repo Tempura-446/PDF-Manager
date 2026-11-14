@@ -132,6 +132,22 @@ def _has_letter(font, letter):
         return False
 
 
+def _draws_space(font):
+    """Whether the font's space is safe to write: an empty glyph with a
+    width. A font cut down to the letters a document uses can have a
+    placeholder there instead (a box), when its words were set apart by
+    moving the pen and no space was ever drawn."""
+    raw = _raw()
+    try:
+        width = ctypes.c_float()
+        if not raw.FPDFFont_GetGlyphWidth(font, ord(" "), 10.0, ctypes.byref(width)) or width.value <= 0:
+            return False
+        path = raw.FPDFFont_GetGlyphPath(font, ord(" "), 10.0)
+        return not path or raw.FPDFGlyphPath_CountGlyphSegments(path) <= 0
+    except (AttributeError, ValueError, OverflowError):
+        return False
+
+
 def _font_data(font):
     """The font program (to tell apart cut-down copies of one font), or None."""
     raw = _raw()
@@ -514,6 +530,9 @@ def _own_font(page, style, text):
         # cut down to the letters used, so each is checked for a shape.
         whole = fonts.font_program(font) is None and not _is_embedded(style["handle"])
         if whole or all(_has_letter(style["handle"], ch) for ch in set(text) if ch != " "):
+            if not whole and own.space is None and not _draws_space(style["handle"]):
+                # No space to draw in this font: the words are set apart by moving the pen.
+                own.space = own.width_of(own.codes[" "]) or 250
             return own
     return None
 

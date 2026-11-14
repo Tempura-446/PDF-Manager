@@ -90,7 +90,7 @@ const { chromium } = require("playwright");
     await applied();
     out.bolded = await bytes();
 
-    // 3. Undo twice: the page as it was.
+    // 4 (below) needs this tab left as it is; 3. Undo twice: the page as it was.
     await page.evaluate(() => reader.useTool("EDITTEXT"));
     await page.focus(".rd-container");
     await page.keyboard.press("Control+z");
@@ -98,6 +98,44 @@ const { chromium } = require("playwright");
     await page.keyboard.press("Control+z");
     await page.waitForFunction(() => !reader.activeTab.dirty, null, { timeout: 15000 });
     out.undone = true;
+
+    // 4. Two paragraphs set without a gap: Shift+click takes the one clicked.
+    //    And with a caret already on the page, Shift+click still opens the editor.
+    await page.goto("about:blank");  // (only the part after # differs: a fresh load)
+    await page.goto(url + "&open=" + cfg.b);
+    await page.waitForSelector(".page canvas", { timeout: 60000 });
+    await settled();
+    await page.waitForTimeout(800);
+    await page.evaluate(() => reader.useTool("EDITTEXT"));
+    await page.waitForFunction(() => [...document.querySelectorAll(".page[data-page-number='1'] .textLayer span")].some((x) => x.textContent.includes("please")), null, { timeout: 15000 });
+    await page.waitForTimeout(400);
+    const lineAt = (word) => page.evaluate((word) => {
+      const s = [...document.querySelectorAll(".page[data-page-number='1'] .textLayer span")].find((x) => x.textContent.includes(word));
+      const r = s.getBoundingClientRect();
+      return [r.left + 12, r.top + r.height / 2];
+    }, word);
+    const shiftClick = async (word) => {
+      const at = await lineAt(word);
+      await page.keyboard.down("Shift");
+      await page.mouse.click(at[0], at[1]);
+      await page.keyboard.up("Shift");
+      await page.waitForSelector(".rd-textedit-box .rd-textedit-rich", { timeout: 10000 });
+      await page.waitForTimeout(300);
+      return page.evaluate(() => document.querySelector(".rd-textedit-rich").value);
+    };
+    // A caret on the page first (as a click or an earlier change leaves one).
+    out.caret = await page.evaluate(() => {
+      const s = [...document.querySelectorAll(".page[data-page-number='1'] .textLayer span")].find((x) => x.textContent.includes("Elsewhere"));
+      const r = document.createRange();
+      r.setStart(s.firstChild, 2); r.collapse(true);
+      getSelection().removeAllRanges(); getSelection().addRange(r);
+      return getSelection().type;
+    });
+    out.second = await shiftClick("please");
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+    out.first = await shiftClick("workshop");
+    await page.keyboard.press("Escape");
   } catch (e) {
     out.errors.push(String(e.stack || e));
   } finally {

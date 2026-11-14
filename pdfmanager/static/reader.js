@@ -693,6 +693,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
 
     // Edit text tool: click a line of text to change it.
     this.container.addEventListener("click", (e) => this._textClick(e), true);
+    this.container.addEventListener("mousedown", (e) => this._textPress(e), true);
 
     // Select (no tool): a click on a signature, drawing, text box or
     // highlight picks it (pdf.js's own way is a double-click).
