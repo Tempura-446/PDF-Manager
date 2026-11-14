@@ -275,7 +275,9 @@ export const TextEditing = (Base) => class extends Base {
     return {
       text, left: Math.min(...chosen.map((l) => l.left)), right: Math.max(...chosen.map((l) => l.right)),
       top: chosen[0].top, bottom: chosen.at(-1).bottom, h: lines[at].h, lines: chosen.length,
-      first: chosen[0].spans[0].s,  // its first words, for the look
+      first: chosen[0].spans[0].s,  // its first words, for where the box goes
+      // Its longest run of words, for the look (the first can be a bold "Note:").
+      main: chosen.flatMap((l) => l.spans).reduce((a, b) => (b.s.textContent.length > a.s.textContent.length ? b : a)).s,
       lead: chosen.length > 1 ? (chosen.at(-1).top - chosen[0].top) / (chosen.length - 1) : lines[at].h * 1.2,
     };
   }
@@ -488,6 +490,10 @@ export const TextEditing = (Base) => class extends Base {
     const first = paragraph ? paragraph.first
       : (!sideways && this.#lineOf(span, pageEl, ...middle(span))?.spans[0].s) || span;
     const look = await this.#textLook(first, pageNumber);
+    if (look && paragraph && paragraph.main !== first) {
+      const main = await this.#textLook(paragraph.main, pageNumber);
+      if (main) Object.assign(look, { family: main.family, fontName: main.fontName, weight: main.weight, style: main.style, color: main.color });
+    }
     if (ticket !== this.editTicket || !span.isConnected || !this.textEditMode) return;  // clicked elsewhere meanwhile
     const layer = pageEl.querySelector(".textLayer").getBoundingClientRect();
     const r = span.getBoundingClientRect();

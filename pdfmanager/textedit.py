@@ -1527,7 +1527,7 @@ class _Page:
         # Words in other styles than the first (bold, italic, a colour) keep theirs.
         links = self._links_over(everything)
         looks = (_char_styles(rows, text, (lambda L: _link_at(links, L)) if links else None)
-                 if opts.get("styles", True) and not self.legacy
+                 if opts.get("styles", True) and not (_rtl(text) or any(_rtl(L["char"]) for L in everything))
                  and not any(key in opts for key in ("font", "bold", "italic", "color")) else None)
         marks = opts.get("runs") if not any(key in opts for key in ("font", "bold", "italic", "color")) else None
         if marks and len(marks) == len(text):  # the editor's bold and italic, letter by letter
@@ -2437,9 +2437,9 @@ def paragraph_runs(path, page, rect, text, password=None):
             pdf_page = doc[int(page) - 1]
             textpage = pdf_page.get_textpage()
             try:
-                cache = {}
+                cache, hidden = {}, _Covers(pdf_page)  # (old words under an earlier change don't count)
                 chars = _chars(textpage, rect, across=3.0)
-                rows = [r for r in (_letters(textpage, row, cache) for row in _rows(textpage, chars)) if r]
+                rows = [r for r in (_letters(textpage, row, cache, hidden) for row in _rows(textpage, chars)) if r]
                 if not rows:
                     return [{"text": text, "bold": False, "italic": False, "color": [0, 0, 0]}] if text else []
                 looks = _char_styles(rows, text) or [(rows[0][0]["style"], None)] * len(text)

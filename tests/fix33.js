@@ -132,6 +132,12 @@ const { chromium } = require("playwright");
       return getSelection().type;
     });
     out.second = await shiftClick("please");
+    // The box takes the look of the paragraph's main words, not of its bold first word.
+    out.noteLook = await page.evaluate(() => {
+      const f = document.querySelector(".rd-textedit-rich");
+      return { weight: parseInt(getComputedStyle(f).fontWeight, 10), pressed: document.querySelector(".rd-tf-bold").getAttribute("aria-pressed"),
+        first: parseInt(getComputedStyle(f.querySelector("span")).fontWeight, 10) };
+    });
     await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
     out.first = await shiftClick("workshop");

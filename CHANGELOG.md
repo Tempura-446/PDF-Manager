@@ -32,6 +32,9 @@ Rewriting a paragraph keeps each word's own style.
   as a space beside the real one, and ZPDF wrote the box. It now writes
   the real space, and only in a font the page already draws spaces with;
   otherwise the words are set apart as the page's own are.
+- A paragraph that starts with a bold word ("Note: ...") opens in the
+  editor in the look of its main words, and a paragraph rewritten once
+  shows its styles again when it's edited a second time.
 - A paragraph in one style is written exactly as in 0.32.
 
 ## 0.32.0

@@ -377,6 +377,7 @@ def test_the_paragraph_editor_in_a_browser(tmp_path):
     assert out["undone"]
     # Two paragraphs with no gap between them: each opens by itself, also with a caret on the page.
     assert out["caret"] == "Caret"
+    assert out["noteLook"] == {"weight": 400, "pressed": "false", "first": 700}, out["noteLook"]
     assert out["second"] == "Note: please keep the doors away from direct heat for two weeks while the oil cures.", out["second"]
     assert out["first"] == ("Our workshop finished the cabinet order this week, and the doors were given two "
                             "coats of hard wax oil for anyone who wants them."), out["first"]
@@ -473,3 +474,23 @@ def test_code_zero_is_never_a_letter():
     # A range that starts at code 0 names no letter for it either.
     ranged = _type0(b"1 beginbfrange\n<0000> <0004> <0020>\nendbfrange")
     assert b"\x00\x00" not in zfonts.pdf_font_codes(ranged).values()
+
+
+def test_a_paragraph_rewritten_by_covering_shows_its_styles_again(tmp_path):
+    """Where the old words can only be covered (tagged files), they stay
+    underneath: the editor's styles, and a second change, are about the
+    words that show."""
+    src, once, twice = styled(tmp_path / "in.pdf"), tmp_path / "once.pdf", tmp_path / "twice.pdf"
+    first = TEXT.replace("new", "returning")
+    textedit._edit(src, once, [{"page": 1, "rect": RECT, "paragraph": True, "text": first}], None, None, True)
+    runs = textedit.paragraph_runs(once, 1, RECT, first)
+    assert "".join(r["text"] for r in runs) == first
+    looks = {r["text"].strip(): (r["bold"], r["italic"], tuple(round(v, 1) for v in r["color"])) for r in runs}
+    assert looks["strong"] == (True, False, (0, 0, 0)) and looks["northern"][:2] == (False, True), runs
+    assert looks["record"] == (False, False, (0.8, 0.1, 0.1)), runs
+    second = first.replace("office", "branch")
+    textedit.edit_text(once, twice, [{"page": 1, "rect": RECT, "paragraph": True, "text": second}])
+    found = [w for w in words(twice)]
+    shown = [w for w in found if w[0].strip(".,") in ("strong", "northern", "record", "branch")]
+    assert any(w[0] == "strong" and w[2] for w in shown) and any(w[0] == "northern" and w[3] for w in shown), shown
+    assert any(w[0] == "record" and w[4] == (0.8, 0.1, 0.1) for w in shown), shown
