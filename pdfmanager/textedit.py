@@ -649,6 +649,14 @@ def _options(edit):
         if edit["align"] not in ALIGNS:
             raise core.PdfManagerError("the alignment should be left, center, right or justify")
         opts["align"] = edit["align"]
+    if edit.get("runs") is not None:
+        runs, text = edit["runs"], edit.get("text")
+        if not isinstance(runs, list) or len(runs) > 5000 or not all(
+                isinstance(r, dict) and isinstance(r.get("text"), str) for r in runs):
+            raise core.PdfManagerError("the words' styles are damaged; make the change again")
+        if "".join(r["text"] for r in runs) != (text if isinstance(text, str) else ""):
+            raise core.PdfManagerError("the words' styles don't match the words; make the change again")
+        opts["runs"] = [(bool(r.get("bold")), bool(r.get("italic"))) for r in runs for _ in r["text"]]
     if edit.get("fit") not in (None, ""):
         if edit["fit"] != "shrink":
             raise core.PdfManagerError('fit can only be "shrink"')
@@ -1489,13 +1497,34 @@ class _Page:
         looks = (_char_styles(rows, text, (lambda L: _link_at(links, L)) if links else None)
                  if opts.get("styles", True) and not self.legacy
                  and not any(key in opts for key in ("font", "bold", "italic", "color")) else None)
+        marks = opts.get("runs") if not any(key in opts for key in ("font", "bold", "italic", "color")) else None
+        if marks and len(marks) == len(text):  # the editor's bold and italic, letter by letter
+            looks = looks or [(base, None)] * len(text)
+            made, was = {}, {}
+            for n, ((st, lk), (bold, italic)) in enumerate(zip(looks, marks)):
+                if (bold, italic) != (st["bold"], st["italic"]):
+                    key = (id(st), bold, italic)
+                    if key not in made:
+                        made[key] = _restyle(st, {"bold": bold, "italic": italic})
+                        was[id(made[key])] = st
+                    looks[n] = (made[key], lk)
+        else:
+            was = {}
         reps, fonts_by, scaled_by, linked = {}, {}, {}, {}
         if looks:
             keys = [_attr_look(a) for a in looks]
             for (st, _), key in zip(looks, keys):
                 reps.setdefault(key, st)
             for key, rep in reps.items():
-                fonts_by[key] = self._choose(rep, "".join(ch for ch, k_ in zip(text, keys) if k_ == key))
+                letters_of = "".join(ch for ch, k_ in zip(text, keys) if k_ == key)
+                if id(rep) in was:  # made bold or italic in the editor: that face of the words' own font
+                    said = {k_: self.notes[k_] for k_ in ("asked", "matched") if k_ in self.notes}
+                    fonts_by[key] = self._font(rep, was[id(rep)], letters_of, {"bold": rep["bold"], "italic": rep["italic"]})
+                    for k_ in ("asked", "matched"):
+                        self.notes.pop(k_, None)
+                    self.notes.update(said)
+                else:
+                    fonts_by[key] = self._choose(rep, letters_of)
         left_out = self.notes.get("missing", "")
         content = [(ch, key) for ch, key in zip(text, keys) if ch not in left_out] if looks else None
         text = self._shown(text)
@@ -2354,6 +2383,54 @@ def _edit(path, output, edits, password, report, old_way):
             doc.close()
     core._write(writer, output)
     return sum(len(p) for p in by_page.values()), expect
+
+
+def paragraph_runs(path, page, rect, text, password=None):
+    """How the words of ``text`` (a paragraph's words as the reader shows
+    them) look on page ``page`` in ``rect``, for the reader's paragraph
+    editor: [{"text", "bold", "italic", "color": [r, g, b]}], in order,
+    their texts making up ``text``."""
+    import pypdfium2 as pdfium
+
+    reader = core.open_pdf(path, password)
+    if not 1 <= int(page) <= len(reader.pages):
+        raise core.PdfManagerError(f"page {page} doesn't exist")
+    x0, y0, x1, y1 = (float(v) for v in rect)
+    if not all(math.isfinite(v) for v in (x0, y0, x1, y1)):
+        raise core.PdfManagerError("the box around the words isn't on the page")
+    rect = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+    with core.PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(str(path), password=password)
+        try:
+            pdf_page = doc[int(page) - 1]
+            textpage = pdf_page.get_textpage()
+            try:
+                cache = {}
+                chars = _chars(textpage, rect, across=3.0)
+                rows = [r for r in (_letters(textpage, row, cache) for row in _rows(textpage, chars)) if r]
+                if not rows:
+                    return [{"text": text, "bold": False, "italic": False, "color": [0, 0, 0]}] if text else []
+                looks = _char_styles(rows, text) or [(rows[0][0]["style"], None)] * len(text)
+            finally:
+                textpage.close()
+                pdf_page.close()
+        finally:
+            doc.close()
+    import collections
+
+    runs, styles = [], [st for st, _ in looks]
+    common = collections.Counter(_look(st) for st, ch in zip(styles, text) if not ch.isspace()).most_common(1)
+    common = common[0][0] if common else None
+    for n, ch in enumerate(text):  # a space between words in two styles goes with the usual style
+        if ch.isspace() and n + 1 < len(text) and _look(styles[n + 1]) == common:
+            styles[n] = styles[n + 1]
+    for ch, st in zip(text, styles):
+        look = (st["bold"], st["italic"], [round(v, 4) for v in st["color"]])
+        if runs and (runs[-1]["bold"], runs[-1]["italic"], runs[-1]["color"]) == look:
+            runs[-1]["text"] += ch
+        else:
+            runs.append({"text": ch, "bold": look[0], "italic": look[1], "color": look[2]})
+    return runs
 
 
 def font_choices(path, password=None):

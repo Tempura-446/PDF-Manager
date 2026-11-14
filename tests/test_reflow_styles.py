@@ -220,3 +220,96 @@ def test_a_link_whose_words_are_gone_goes(tmp_path):
     text = "The quarterly report shows strong growth in every region, and a record year for new customers."
     textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": text}])
     assert link_rects(out) == []
+
+
+TEXT = ("The quarterly report shows strong growth in every region, and the northern office led the way "
+        "with a record year for new customers.")
+
+
+def test_the_runs_the_editor_shows(tmp_path):
+    src = styled(tmp_path / "in.pdf")
+    runs = textedit.paragraph_runs(src, 1, RECT, TEXT)
+    assert "".join(r["text"] for r in runs) == TEXT
+    styled_runs = [(r["text"], r["bold"], r["italic"], tuple(round(v, 1) for v in r["color"])) for r in runs]
+    assert ("strong", True, False, (0, 0, 0)) in styled_runs, styled_runs
+    assert ("northern", False, True, (0, 0, 0)) in styled_runs, styled_runs
+    assert ("record", False, False, (0.8, 0.1, 0.1)) in styled_runs, styled_runs
+    assert len(runs) == 7, styled_runs  # plain, strong, plain, northern, plain, record, plain
+
+
+def test_runs_of_a_paragraph_in_one_style(tmp_path):
+    one = [[(t, PLAIN, None) for t, _, _ in line] for line in LINES]
+    src = styled(tmp_path / "in.pdf", one)
+    runs = textedit.paragraph_runs(src, 1, RECT, TEXT)
+    assert len(runs) == 1 and runs[0]["text"] == TEXT and not runs[0]["bold"]
+
+
+def test_words_made_bold_and_italic_in_the_editor(tmp_path):
+    """The editor says which letters are bold and italic; the colour stays the page's."""
+    src, out = styled(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    marks = {"strong": (False, False), "growth": (True, True), "northern": (False, True)}  # bold off; made bold italic
+    runs, at = [], 0
+    for word, (bold, italic) in marks.items():
+        k = TEXT.index(word)
+        runs += [{"text": TEXT[at:k], "bold": False, "italic": False}, {"text": word, "bold": bold, "italic": italic}]
+        at = k + len(word)
+    runs.append({"text": TEXT[at:], "bold": False, "italic": False})
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": TEXT, "runs": runs}])
+    found = words(out)
+    assert look_of(found, "strong")[1:3] == (False, False), found
+    assert look_of(found, "growth")[1:3] == (True, True), found
+    assert look_of(found, "northern")[1:3] == (False, True), found
+    assert look_of(found, "record")[1:] == (False, False, (0.8, 0.1, 0.1)), found
+    assert look_of(found, "office")[1:3] == (False, False), found
+
+
+def test_runs_that_dont_match_the_text_are_refused(tmp_path):
+    import pytest
+    from pdfmanager import core
+    src, out = styled(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    with pytest.raises(core.PdfManagerError):
+        textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": TEXT,
+                                       "runs": [{"text": "Other words", "bold": True}]}])
+
+
+def test_the_runs_endpoint(tmp_path, monkeypatch):
+    import json
+    import threading
+    import urllib.error
+    import urllib.request
+
+    from pdfmanager import appdata, gui, recipes
+
+    for mod in (appdata, gui, recipes):
+        monkeypatch.setattr(mod, "data_dir", lambda: tmp_path / "appdata")
+    src = styled(tmp_path / "in.pdf")
+    srv, url = gui.make_server()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base, token = url.split("/#token=")
+
+    def post(fields):
+        boundary = "zpdfrunstest"
+        parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+                 for k, v in fields.items()]
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="f.pdf"\r\n'
+                     f'Content-Type: application/pdf\r\n\r\n'.encode() + src.read_bytes() + b"\r\n")
+        req = urllib.request.Request(base + "/api/text/runs", data=b"".join(parts) + f"--{boundary}--\r\n".encode(),
+                                     headers={"X-Pdfm-Token": token,
+                                              "Content-Type": f"multipart/form-data; boundary={boundary}"})
+        try:
+            with urllib.request.urlopen(req) as res:
+                return res.status, json.loads(res.read())
+        except urllib.error.HTTPError as err:
+            return err.code, json.loads(err.read())
+
+    try:
+        status, data = post({"page": "1", "rect": json.dumps(RECT), "text": TEXT})
+        assert status == 200 and "".join(r["text"] for r in data["runs"]) == TEXT
+        assert any(r["text"] == "strong" and r["bold"] for r in data["runs"]), data
+        status, data = post({"page": "1", "rect": "[1, 2]", "text": TEXT})
+        assert status == 400 and "box" in data["error"]
+        status, data = post({"page": "9", "rect": json.dumps(RECT), "text": TEXT})
+        assert status == 400 and "doesn't exist" in data["error"]
+    finally:
+        srv.shutdown()
+        srv.server_close()

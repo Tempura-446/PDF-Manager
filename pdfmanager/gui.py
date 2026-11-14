@@ -2429,6 +2429,8 @@ class Handler(BaseHTTPRequestHandler):
             # -- text reflow --
             if path == "/api/text/fonts":
                 return self._text_fonts(body)
+            if path == "/api/text/runs":
+                return self._text_runs(body)
             # -- end of text reflow --
             if path == "/api/pages/arrange":
                 return self._arrange(body)
@@ -3095,6 +3097,26 @@ class Handler(BaseHTTPRequestHandler):
             src.write_bytes(uploads[0][2])
             choices = textedit.font_choices(src, fields.get("password") or None)
         return self._send(HTTPStatus.OK, choices)
+
+    def _text_runs(self, body):
+        """How a paragraph's words look (bold, italic, colour), for the
+        reader's paragraph editor (see textedit.paragraph_runs)."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        try:
+            page, rect, text = int(fields.get("page", "")), json.loads(fields.get("rect") or "null"), fields.get("text", "")
+            if not isinstance(rect, list) or len(rect) != 4:
+                raise ValueError
+        except ValueError:
+            raise UserError("a paragraph needs a page and the box around its words") from None
+        if len(text) > 20000:
+            raise UserError("that paragraph is too long to edit at once")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            src.write_bytes(uploads[0][2])
+            runs = textedit.paragraph_runs(src, page, rect, text, fields.get("password") or None)
+        return self._send(HTTPStatus.OK, {"runs": runs})
     # -- end of text reflow --
 
     def _images_list(self, body):
