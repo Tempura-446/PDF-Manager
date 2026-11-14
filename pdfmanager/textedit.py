@@ -46,6 +46,7 @@ it in its column (see textflow.py): text flows, as in a word processor.
 """
 
 import ctypes
+import difflib
 import math
 import os
 import statistics
@@ -633,7 +634,7 @@ def _options(edit):
             if not low <= value <= high:
                 raise core.PdfManagerError(f"the {key} should be between {low:g} and {high:g}")
             opts[key] = value
-    for key in ("bold", "italic", "flow"):
+    for key in ("bold", "italic", "flow", "styles"):
         if edit.get(key) is not None:
             opts[key] = bool(edit[key])
     if edit.get("color") is not None:
@@ -729,6 +730,117 @@ def _wrap(text, room, measure):
             line = trial
     lines.append(line)
     return lines
+
+
+def _look(style):
+    """What a reader sees of a style: two letters with the same look are
+    written the same way."""
+    return (style["font"].split("+")[-1], round(style["size"], 2), tuple(round(v, 3) for v in style["color"]),
+            style["bold"], style["italic"])
+
+
+def _old_words(rows):
+    """The old paragraph's words, each a list of (letter, style), in order."""
+    words = []
+    for row in rows:
+        word = []
+        for a, b in zip([None] + row[:-1], row):
+            if a is not None and (b.get("explicit_space") or b["s"] - (a["s"] + a["adv"]) > 0.2 * b["style"]["size"]):
+                words.append(word)
+                word = []
+            word += [(ch, b["style"]) for ch in b["char"]]
+        if word:
+            words.append(word)
+    return words
+
+
+def _char_styles(rows, text):
+    """The style of each character of ``text``, the paragraph's new words,
+    taken from the old words as a word processor would keep them: words
+    that are still there keep their own style, a changed word keeps the
+    style of the letters it replaced, and new words take the style of the
+    word before them. None when every letter would look the same (one
+    style throughout)."""
+    old = _old_words(rows)
+    if len({_look(st) for word in old for _, st in word}) < 2:
+        return None
+    spans, i = [], 0  # the new words: (start, end) in text
+    while i < len(text):
+        if text[i].isspace():
+            i += 1
+            continue
+        j = i
+        while j < len(text) and not text[j].isspace():
+            j += 1
+        spans.append((i, j))
+        i = j
+    new = [text[a:b] for a, b in spans]
+    out = [None] * len(text)
+    matcher = difflib.SequenceMatcher(None, ["".join(ch for ch, _ in w) for w in old], new, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for w, (a, _) in zip(old[i1:i2], spans[j1:j2]):
+                for n, (_, st) in enumerate(w):
+                    out[a + n] = st
+        elif tag == "replace":
+            was = [pair for w in old[i1:i2] for pair in w]
+            chars = [(k, text[k]) for a, b in spans[j1:j2] for k in range(a, b)]
+            inner = difflib.SequenceMatcher(None, "".join(ch for ch, _ in was), "".join(ch for _, ch in chars),
+                                            autojunk=False)
+            for t, a1, a2, b1, b2 in inner.get_opcodes():
+                for n in range(b2 - b1):
+                    if t == "equal":
+                        st = was[a1 + n][1]
+                    elif a2 > a1:  # in place of other letters: theirs, in proportion
+                        st = was[min(a2 - 1, a1 + n * (a2 - a1) // (b2 - b1))][1]
+                    else:  # typed in: the letter before's
+                        st = None
+                    out[chars[b1 + n][0]] = st
+    first = old[0][0][1] if old and old[0] else None
+    last = None
+    for k, st in enumerate(out):  # new words, spaces and line breaks: the style of what's before them
+        if st is None:
+            out[k] = last or first
+        last = out[k] if not text[k].isspace() or last is None else last
+    if len({_look(st) for st, ch in zip(out, text) if not ch.isspace()}) < 2:
+        return None
+    return out
+
+
+def _split_seq(seq, sep):
+    """A list of (character, style) split at ``sep`` characters."""
+    parts, part = [], []
+    for item in seq:
+        if item[0] == sep:
+            parts.append(part)
+            part = []
+        else:
+            part.append(item)
+    parts.append(part)
+    return parts
+
+
+def _wrap_seq(seq, room, measure):
+    """:func:`_wrap` for a list of (character, style)."""
+    lines, line = [], []
+    for word in _split_seq(seq, " "):
+        trial = word if not line else line + [(" ", word[0][1] if word else line[-1][1])] + word
+        if line and measure(trial) > room:
+            lines.append(line)
+            line = word
+        else:
+            line = trial
+    lines.append(line)
+    return lines
+
+
+def _strip_seq(seq):
+    a, b = 0, len(seq)
+    while a < b and seq[a][0].isspace():
+        a += 1
+    while b > a and seq[b - 1][0].isspace():
+        b -= 1
+    return seq[a:b]
 
 
 def _box(letters, line=None, before=None, after=None):
@@ -1355,6 +1467,18 @@ class _Page:
         flow = flow and (taken or True)
         style = _restyle(base, opts)
         font = self._font(style, base, text, opts)
+        # Words in other styles than the first (bold, italic, a colour) keep theirs.
+        looks = (_char_styles(rows, text) if opts.get("styles", True) and not self.legacy
+                 and not any(key in opts for key in ("font", "bold", "italic", "color")) else None)
+        reps, fonts_by, scaled_by = {}, {}, {}
+        if looks:
+            keys = [_look(st) for st in looks]
+            for st, key in zip(looks, keys):
+                reps.setdefault(key, st)
+            for key, rep in reps.items():
+                fonts_by[key] = self._choose(rep, "".join(ch for ch, k_ in zip(text, keys) if k_ == key))
+        left_out = self.notes.get("missing", "")
+        content = [(ch, key) for ch, key in zip(text, keys) if ch not in left_out] if looks else None
         text = self._shown(text)
         plain = not any(key in opts for key in ("font", "bold", "italic"))  # the old words' font
         was = font if plain else _choose(self.page, base, text)
@@ -1365,9 +1489,20 @@ class _Page:
         old_span = ((rows[-1][0]["origin"][0] - first["origin"][0]) * down[0]
                     + (rows[-1][0]["origin"][1] - first["origin"][1]) * down[1])
 
-        def layout(style, text=text, room=room, tight=1.0):
+        def scaled(key, k):
+            """The style of the words that look like ``key``, at ``k`` times their size."""
+            if (key, k) not in scaled_by:
+                rep = reps[key]
+                st = _restyle(rep, {"size": rep["size"] * k} if k != 1 else {})
+                scaled_by[key, k] = (st, _metrics(fonts_by[key][0], fonts_by[key][1], st)[0])
+            return scaled_by[key, k]
+
+        def layout(style, text=content or text, room=room, tight=1.0):
             """The new lines: ([(text, word gap, offset, ends a part)], letter width,
-            letter spacing, line spacing, drop, growth)."""
+            letter spacing, line spacing, drop, growth). With words in several
+            styles, ``text`` and each line's text are lists of (letter, look)."""
+            if isinstance(text, list):
+                return layout_runs(style, text, room, tight)
             k = style["size"] / base["size"]
             tight = min(1.0, max(tight, style["size"] * 1.02 / (lead * k)))  # lines never closer than their size
             width, space = _metrics(font[0], font[1], style)
@@ -1394,6 +1529,68 @@ class _Page:
             drop = (k - 1) * ascent  # a bigger size grows down from the old top
             grow = drop + (len(lines) - 1) * lead * k * tight - old_span + 0.22 * (style["size"] - base["size"])
             return lines, width, tck, lead * k * tight, drop, grow
+
+        def layout_runs(style, seq, room, tight):
+            k = style["size"] / base["size"]
+            tight = min(1.0, max(tight, style["size"] * 1.02 / (lead * k)))
+            width, space = _metrics(font[0], font[1], style)
+            tck = tc * k
+            gap = space + 2 * tck if align == "justify" or word is None else word * k
+
+            def measure(line):
+                pen = 0.0
+                for ch, key in line:
+                    pen += gap - tck if ch.isspace() else scaled(key, k)[1](ch) + tck
+                return pen - tck
+
+            lines = []
+            for part in _split_seq(seq, "\n"):
+                wrapped = _wrap_seq(part, room, measure)
+                for j, line in enumerate(wrapped):
+                    line, g, off = _strip_seq(line), gap, 0.0
+                    spaces = sum(1 for ch, _ in line if ch == " ")
+                    if align == "justify" and j < len(wrapped) - 1 and spaces:
+                        extra = (room - measure(line)) / spaces
+                        if 0 <= extra <= style["size"] * 2:
+                            g = gap + extra
+                    elif align in ("center", "right"):
+                        free = room - measure(line)
+                        off = free / 2 if align == "center" else free
+                    lines.append((line, g, off, j == len(wrapped) - 1))
+            drop = (k - 1) * ascent
+            grow = drop + (len(lines) - 1) * lead * k * tight - old_span + 0.22 * (style["size"] - base["size"])
+            return lines, width, tck, lead * k * tight, drop, grow
+
+        def rejoin(part):
+            """Lines joined into one text again (for running on into the next column)."""
+            if not content:
+                return "".join(ln[0] + ("\n" if ln[3] else " ") for ln in part).rstrip()
+            out = []
+            for ln in part:
+                out += ln[0] + [("\n" if ln[3] else " ", ln[0][-1][1] if ln[0] else content[0][1])]
+            return _strip_seq(out)
+
+        def emit(line, start, width, tck, g, at):
+            """Write one line from ``start`` along it; ``at(s)`` is the page point s along."""
+            if not content:
+                placed, _ = _place(line, start, width, tck, g)
+                self.run(style, font, [(ch, *at(s)) for ch, s in placed])
+                return
+            k = style["size"] / base["size"]
+            pen, group, current = start, [], None
+            for ch, key in line:
+                if ch.isspace():
+                    group.append((" ", *at(pen)))
+                    pen += g - tck
+                    continue
+                if key != current and current is not None:
+                    self.run(scaled(current, k)[0], fonts_by[current], group)
+                    group = []
+                current = key
+                group.append((ch, *at(pen)))
+                pen += scaled(key, k)[1](ch) + tck
+            if current is not None:
+                self.run(scaled(current, k)[0], fonts_by[current], group)
 
         def squeeze(found, style, current):
             """Nothing below can move, so the paragraph has to end above
@@ -1427,7 +1624,7 @@ class _Page:
                     here = drop + (keep - 1) * lead_k - old_span + 0.22 * (style["size"] - base["size"])
                     if found["low"] - here < found["limit"] - 0.01:
                         continue
-                    words = "".join(ln[0] + ("\n" if ln[3] else " ") for ln in lines[keep:]).rstrip()
+                    words = rejoin(lines[keep:])
                     more = layout(style, words, max(nxt["x1"] - nxt["x0"], base["size"] * 4))[0]
                     push = (len(more) + 0.5) * lead_k
                     if nxt["low"] - push >= nxt["limit"] - 0.01 and self.flow.move(nxt, -push):
@@ -1471,14 +1668,12 @@ class _Page:
             self.notes["taller"] = True
             del fitted  # said either way: it takes more lines than it did
         for n, (line, g, off, _) in enumerate(lines):
-            placed, _ = _place(line, left + off, width, tck, g)
             d = drop + n * lead_k
             point = (first["origin"][0] + u[0] * (-first["s"]) + down[0] * d,
                      first["origin"][1] + u[1] * (-first["s"]) + down[1] * d)
-            self.run(style, font, [(ch, point[0] + u[0] * s, point[1] + u[1] * s) for ch, s in placed])
+            emit(line, left + off, width, tck, g, lambda s, p=point: (p[0] + u[0] * s, p[1] + u[1] * s))
         for n, (line, g, off, _) in enumerate(more):  # level text only: the paragraph is level
-            placed, _ = _place(line, off, width, tck, g)
-            self.run(style, font, [(ch, nxt["x0"] + s, nxt["baseline"] - n * lead_k) for ch, s in placed])
+            emit(line, off, width, tck, g, lambda s, n=n: (nxt["x0"] + s, nxt["baseline"] - n * lead_k))
         return font
 
     # -- helpers ------------------------------------------------------------------------
