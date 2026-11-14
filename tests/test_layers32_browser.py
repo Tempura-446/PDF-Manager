@@ -53,6 +53,10 @@ def test_the_layers_tab_in_a_browser(app, tmp_path):
         Path(os.environ["FIX32_DUMP"]).write_text(json.dumps(out, indent=1), encoding="utf-8")
     assert not out["errors"], out["errors"]
     assert not out["native"], out["native"]
+    assert not out["ocwarn"], out["ocwarn"]
+    # Hiding a layer clears a selection on the page (it could cover hidden words).
+    assert "DIMENSION" in out["selectedBefore"], out["selectedBefore"]
+    assert out["selectedAfter"] == "", out["selectedAfter"]
 
     # No layers, no tab.
     assert out["plain"] == {"tab": False, "layers": None}, out["plain"]
@@ -60,6 +64,8 @@ def test_the_layers_tab_in_a_browser(app, tmp_path):
     # The file's nested order: Dimensions under Walls, the Options heading over its radio group.
     assert out["tree"] == [{"name": "Walls", "items": [{"name": "Dimensions", "items": []}]},
                            {"head": "Options", "items": [{"name": "Scheme A", "items": []}, {"name": "Scheme B", "items": []}]}], out["tree"]
+    # A labelled group's layers are indented under its heading, like nested layers.
+    assert out["indent"]["child"] >= out["indent"]["top"] + 10, out["indent"]
     b = out["before"]
     assert b["tab"] and b["boxes"] == {
         "Walls": {"type": "checkbox", "checked": True, "disabled": True},

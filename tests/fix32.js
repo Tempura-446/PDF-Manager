@@ -13,12 +13,13 @@ const { chromium } = require("playwright");
 (async () => {
   const [url, extraJson] = process.argv.slice(2);
   const cfg = JSON.parse(extraJson);
-  const out = { errors: [], native: [] };
+  const out = { errors: [], native: [], ocwarn: [] };
   const browser = await chromium.launch();
   try {
     const watch = (page) => {
       page.on("pageerror", (e) => out.errors.push(String(e.stack || e)));
       page.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource/.test(m.text())) out.errors.push(m.text()); });
+      page.on("console", (m) => { if (/Unknown group type|Optional content group not/.test(m.text())) out.ocwarn.push(m.text()); });
       page.on("dialog", (d) => { out.native.push(d.type() + ": " + d.message()); d.dismiss().catch(() => {}); });
     };
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 } });
@@ -84,13 +85,27 @@ const { chromium } = require("playwright");
       return walk(document.querySelector(".rd-layers"));
     });
     out.before = await state();
+    out.indent = await page.evaluate(() => {
+      const head = document.querySelector(".rd-layerhead .rd-layerlabel"), walls = [...document.querySelectorAll(".rd-layers > li > .rd-layer")][0];
+      const a = [...document.querySelectorAll(".rd-layerhead .rd-layer input")][0];
+      return { head: head.getBoundingClientRect().left, top: walls.querySelector("input").getBoundingClientRect().left, child: a.getBoundingClientRect().left };
+    });
     if (cfg.shots) {
       await page.screenshot({ path: cfg.shots + "/light-layers-tab.png" });
       await page.locator(".rd-sidebar").screenshot({ path: cfg.shots + "/light-layers-panel.png" });
     }
 
-    // Hide Dimensions.
-    await page.click(".rd-layers label:has-text('Dimensions') input");
+    // Select the Dimensions words, then hide Dimensions: the selection goes.
+    out.selectedBefore = await page.evaluate(() => {
+      const span = [...document.querySelectorAll(".page[data-page-number='1'] .textLayer span")].find((s) => s.textContent.includes("DIMENSION"));
+      if (!span) return "";
+      const r = document.createRange(); r.selectNodeContents(span);
+      document.getSelection().removeAllRanges(); document.getSelection().addRange(r);
+      return document.getSelection().toString();
+    });
+    // Hide Dimensions (from the keyboard, which leaves a selection alone).
+    await page.evaluate(() => [...document.querySelectorAll(".rd-layers input")].find((x) => x.closest("label").textContent.includes("Dimensions")).focus({ preventScroll: true }));
+    await page.keyboard.press("Space");
     await settle(() => {
       const pv = reader.pdfViewer.getPageView(0), c = document.querySelector(".page[data-page-number='1'] canvas");
       const k = c.width / pv.viewport.width, [x, y] = pv.viewport.convertToViewportPoint(300, 600);
@@ -98,6 +113,7 @@ const { chromium } = require("playwright");
         && c.getContext("2d").getImageData(Math.round(x * k), Math.round(y * k), 1, 1).data[0] > 200;
     });
     out.hidden = await state();
+    out.selectedAfter = await page.evaluate(() => { const sel = document.getSelection(); return sel.rangeCount && !sel.getRangeAt(0).collapsed ? "range still open: " + sel.toString() : ""; });
 
     // A locked layer can't be switched; a radio group keeps one on.
     out.lockedClick = await page.evaluate(() => { const i = [...document.querySelectorAll(".rd-layers input")].find((x) => x.closest("label").textContent.includes("Walls")); i.click(); return i.checked; });

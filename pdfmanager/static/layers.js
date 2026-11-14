@@ -183,6 +183,9 @@ export const Layering = (Base) => class extends Base {
     const visible = this._layerVisibility();
     for (const g of l.tab.geometry?.values() || []) g?.setVisibility?.(visible);
     for (const n of this.#textLayerPages()) this.#hideText(n);
+    // A selection on the page may now cover words that are hidden.
+    const sel = document.getSelection();
+    if (sel?.rangeCount && this.viewerEl.contains(sel.anchorNode)) sel.removeAllRanges();
     this.#renderLayers();
   }
 
