@@ -258,7 +258,8 @@ if ($lockPython -and ($venvVersion -eq $lockPython)) {
     if ($LASTEXITCODE -ne 0) {
         # Most likely the OCR engine has no build for this Python: better ZPDF
         # without it (OCR then uses Tesseract, if installed) than no ZPDF.
-        Say "Installing with the built-in OCR engine didn't work (see above); installing ZPDF without it..."
+        # (Said as a second try, not as the OCR engine's fault: the cause may be anything.)
+        Say "That didn't work; trying once more without the built-in OCR engine, in case it was the cause..."
         & $venvPython -m pip install --disable-pip-version-check $PipSays --upgrade "$source[app]"
     }
 }
