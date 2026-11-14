@@ -334,6 +334,9 @@ export const TextEditing = (Base) => class extends Base {
       }
       const pageEl = span.closest(".page");
       for (const c of candidates) {
+        // (A font cut down to a document's letters may draw a box for a space
+        // it doesn't have, as Word's do: not a font to type in.)
+        if (!this.#spaceIsBlank({ ...look, ...c })) continue;
         if (this.#inkMatches(pageEl, { ...look, ...c }, span.textContent, r)) return { ...look, ...c };
       }
       return { ...look, family: generic };
@@ -381,6 +384,26 @@ export const TextEditing = (Base) => class extends Base {
 
   /** Whether ``text`` drawn in the look's font lands on the page's own ink
    *  in the box ``r`` (same letters, same shapes). */
+  /** Whether a space typed in this look draws nothing. */
+  #spaceIsBlank(look) {
+    try {
+      const size = Math.max(12, Math.min(48, Math.round(look.size)));
+      const canvas = document.createElement("canvas");
+      canvas.width = size * 3; canvas.height = size * 2;
+      const c = canvas.getContext("2d", { willReadFrequently: true });
+      c.fillStyle = "#fff";
+      c.fillRect(0, 0, canvas.width, canvas.height);
+      c.fillStyle = "#000";
+      c.font = `${look.style || ""} ${look.weight || ""} ${size}px ${look.family}`;
+      c.fillText("   ", size * 0.5, size * 1.4);
+      const data = c.getImageData(0, 0, canvas.width, canvas.height).data;
+      for (let i = 0; i < data.length; i += 4) if (data[i] < 200) return false;
+      return true;
+    } catch (e) {
+      return true;  // can't be checked: as before
+    }
+  }
+
   #inkMatches(pageEl, look, text, r) {
     try {
       const canvas = pageEl?.querySelector("canvas");
@@ -533,11 +556,16 @@ export const TextEditing = (Base) => class extends Base {
     if (paragraph) {
       this.#paragraphRuns(pageNumber, rect, original).then((runs) => {
         if (!runs || runs.length < 2 || !field.isConnected || field.readOnly || field.value !== original) return;
+        // The paragraph's main colour is the field's own (so a colour picked for
+        // the whole paragraph shows at once); only words in another keep theirs.
+        const tally = new Map();
+        for (const r of runs) tally.set(String(r.color), (tally.get(String(r.color)) || 0) + r.text.trim().length);
+        const usual = [...tally].sort((a, b) => b[1] - a[1])[0][0];
         field.replaceChildren(...runs.map((r) => {
           const span = el("span", {}, r.text);
           span.style.fontWeight = r.bold ? "bold" : "normal";
           span.style.fontStyle = r.italic ? "italic" : "normal";
-          span.style.color = `rgb(${r.color.map((v) => Math.round(v * 255)).join(", ")})`;
+          if (String(r.color) !== usual) span.style.color = `rgb(${r.color.map((v) => Math.round(v * 255)).join(", ")})`;
           return span;
         }));
         field.dataset.styled = "1";

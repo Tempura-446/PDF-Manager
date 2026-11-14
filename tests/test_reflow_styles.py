@@ -361,6 +361,7 @@ def test_the_paragraph_editor_in_a_browser(tmp_path):
     shown = {text.strip(): (bold, italic, colour) for text, bold, italic, colour in out["shown"]}
     assert shown["strong"][:2] == (True, False) and shown["northern"][:2] == (False, True), out["shown"]
     assert shown["record"] == (False, False, "rgb(204, 26, 26)"), out["shown"]
+    assert out["picked"] == {"plain": "rgb(0, 0, 255)", "red": "rgb(204, 26, 26)"}, out["picked"]
     # A plain word typed over: the styled words stay as they were.
     (tmp_path / "typed.pdf").write_bytes(base64.b64decode(out["typed"]))
     found = words(tmp_path / "typed.pdf")
@@ -494,3 +495,262 @@ def test_a_paragraph_rewritten_by_covering_shows_its_styles_again(tmp_path):
     shown = [w for w in found if w[0].strip(".,") in ("strong", "northern", "record", "branch")]
     assert any(w[0] == "strong" and w[2] for w in shown) and any(w[0] == "northern" and w[3] for w in shown), shown
     assert any(w[0] == "record" and w[4] == (0.8, 0.1, 0.1) for w in shown), shown
+
+
+def word_like(path):
+    """A paragraph tagged as Word tags one with a link in it: the words
+    before the link, the link's words and the words after are each in a
+    marked-content sequence of their own, over two lines."""
+    import pikepdf
+    from pikepdf import Array, Dictionary, Name
+    pdf = pikepdf.new()
+    font = pdf.make_indirect(Dictionary(Type=Name.Font, Subtype=Name.Type1, BaseFont=Name.Helvetica))
+    content = b"\n".join([
+        b"/P <</MCID 0>> BDC BT /F1 10 Tf 72 700 Td (For care instructions see ) Tj ET EMC",
+        b"/Link <</MCID 1>> BDC BT /F1 10 Tf 0 0 0.8 rg 190.4 700 Td (our website) Tj ET EMC",
+        b"/P <</MCID 2>> BDC BT /F1 10 Tf 0 g 244.9 700 Td ( or ask in the) Tj ET EMC",
+        b"/P <</MCID 3>> BDC BT /F1 10 Tf 72 688 Td (shop, where we keep printed copies.) Tj ET EMC",
+    ])
+    page = pikepdf.Page(Dictionary(Type=Name.Page, MediaBox=[0, 0, 612, 792],
+                                   Resources=Dictionary(Font=Dictionary(F1=font)), Contents=pdf.make_stream(content)))
+    pdf.pages.append(page)
+    pdf.Root.MarkInfo = Dictionary(Marked=True)
+    pdf.save(str(path))
+    return path
+
+
+WORD_RECT = [70, 684, 330, 712]
+
+
+def page_text(path):
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        return " ".join(doc[0].get_textpage().get_text_range().split())
+    finally:
+        doc.close()
+
+
+def test_a_paragraph_in_several_tags_leaves_no_old_words_underneath(tmp_path):
+    """Word's files: a rewritten paragraph was covered, so Copy and Find
+    gave the old words as well as the new."""
+    src, out = word_like(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    assert page_text(src) == "For care instructions see our website or ask in the shop, where we keep printed copies."
+    text = "For full care instructions see our website or ask in the shop, where we keep spare printed copies."
+    report = []
+    textedit.edit_text(src, out, [{"page": 1, "rect": WORD_RECT, "paragraph": True, "text": text}], report=report)
+    assert not report[0].get("covered"), report
+    assert page_text(out) == text
+    assert look_of(words(out), "website")[3] == (0.0, 0.0, 0.8)  # the link's colour stays on its words
+
+
+def test_one_line_in_several_tags_leaves_no_old_words_underneath(tmp_path):
+    src, out = word_like(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    old, new = "For care instructions see our website or ask in the", "For care advice see our website or ask in the"
+    textedit.edit_text(src, out, [{"page": 1, "rect": [70, 697, 330, 711], "old": old, "text": new}])
+    assert page_text(out) == new + " shop, where we keep printed copies."
+
+
+def test_a_colour_for_the_whole_paragraph_leaves_coloured_words_their_own(tmp_path):
+    src, out = styled(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": TEXT, "color": [0, 0, 1]}])
+    found = words(out)
+    assert look_of(found, "quarterly")[3] == (0.0, 0.0, 1.0) and look_of(found, "office")[3] == (0.0, 0.0, 1.0)
+    assert look_of(found, "record")[3] == (0.8, 0.1, 0.1)                       # its own colour stays
+    assert look_of(found, "strong")[1:] == (True, False, (0.0, 0.0, 1.0))      # bold stays, in the new colour
+    assert look_of(found, "northern")[2]
+
+
+def test_a_font_for_the_whole_paragraph_keeps_bold_and_italic_words(tmp_path):
+    src, out = styled(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": TEXT, "font": "Times"}])
+    found = words(out)
+    assert look_of(found, "quarterly")[:3] == ("Times-Roman", False, False), found
+    assert look_of(found, "strong")[0] == "Times-Bold" and look_of(found, "northern")[0] == "Times-Italic", found
+    assert look_of(found, "record")[3] == (0.8, 0.1, 0.1)
+
+
+def test_bold_for_the_whole_paragraph_adds_to_the_words_own_styles(tmp_path):
+    src, out = styled(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": TEXT, "bold": True}])
+    found = words(out)
+    assert all(w[2] for w in found if w[0] not in ("Elsewhere", "on", "the", "page")), found
+    assert look_of(found, "northern")[1:3] == (True, True) and look_of(found, "record")[3] == (0.8, 0.1, 0.1)
+
+
+def test_a_size_for_the_whole_paragraph_scales_every_word(tmp_path):
+    import pypdfium2.raw as raw
+    src, out = styled(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": TEXT, "size": 13}])
+    doc = pdfium.PdfDocument(str(out))
+    try:
+        tp = doc[0].get_textpage()
+        full = tp.get_text_range()
+        sizes = {round(raw.FPDFText_GetFontSize(tp.raw, i), 1) for i in range(full.index("The"), full.index("customers") + 9)
+                 if full[i].strip()}
+    finally:
+        doc.close()
+    assert sizes == {13.0}, sizes
+    assert look_of(words(out), "strong")[1]
+
+
+def highlighted(path, subtype="/Highlight"):
+    """The styled paragraph with a highlight (or other text markup) over "northern office"."""
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import ArrayObject, DictionaryObject, FloatObject, NameObject
+    styled(path)
+    x0 = 72 + pdfium_width("region, and the ")
+    x1 = x0 + pdfium_width("northern", ITALIC) + pdfium_width(" office")
+    w = PdfWriter(clone_from=PdfReader(str(path)))
+    quad = [x0, 697, x1, 697, x0, 686, x1, 686]
+    annot = DictionaryObject({
+        NameObject("/Type"): NameObject("/Annot"), NameObject("/Subtype"): NameObject(subtype),
+        NameObject("/Rect"): ArrayObject([FloatObject(v) for v in (x0, 686, x1, 697)]),
+        NameObject("/QuadPoints"): ArrayObject([FloatObject(v) for v in quad]),
+        NameObject("/C"): ArrayObject([FloatObject(v) for v in (1, 1, 0)]),
+        NameObject("/AP"): DictionaryObject()})  # (an old picture of it: must not outlive the move)
+    w.pages[0][NameObject("/Annots")] = ArrayObject([w._add_object(annot)])
+    w.write(str(path))
+    return path
+
+
+def markups(path):
+    from pypdf import PdfReader
+    out = []
+    for ref in PdfReader(str(path)).pages[0].get("/Annots") or []:
+        a = ref.get_object()
+        out.append((str(a["/Subtype"]), [float(v) for v in a["/Rect"]], [float(v) for v in a.get("/QuadPoints", [])], "/AP" in a))
+    return out
+
+
+def test_a_highlight_follows_its_words(tmp_path):
+    for subtype in ("/Highlight", "/Underline", "/StrikeOut"):
+        src, out = highlighted(tmp_path / "in.pdf", subtype), tmp_path / "out.pdf"
+        text = TEXT.replace("shows strong", "shows quite remarkably strong")
+        textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": text}])
+        (kind, rect, quads, has_ap), = markups(out)
+        assert kind == subtype and not has_ap and len(quads) % 8 == 0 and quads
+        lines = [(min(q[0::2]), min(q[1::2]), max(q[0::2]), max(q[1::2])) for q in (quads[i:i + 8] for i in range(0, len(quads), 8))]
+        for word in ("northern", "office"):
+            assert all(any(inside(b, line) for line in lines) for b in boxes_of(out, word)), (subtype, word, lines)
+            assert all(inside(b, rect) for b in boxes_of(out, word))
+        for word in ("region", "led"):  # its neighbours aren't under it
+            assert not any(inside(b, line) for line in lines for b in boxes_of(out, word)), (subtype, word, lines)
+
+
+def test_a_highlight_over_wrapped_words_has_a_box_per_line_and_goes_with_its_words(tmp_path):
+    src, out = highlighted(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    text = TEXT.replace("region, and the", "region and area, and also the")
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": text}])
+    (_, rect, quads, _), = markups(out)
+    north, office = boxes_of(out, "northern"), boxes_of(out, "office")
+    if abs(north[0][1] - office[0][1]) > 5:  # now on two lines
+        assert len(quads) == 16
+    assert all(inside(b, rect) for b in north + office)
+    # Its words deleted: the highlight goes.
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": TEXT.replace(" northern office", "")}])
+    assert markups(out) == []
+
+
+def test_a_link_and_a_highlight_on_the_same_words_both_follow(tmp_path):
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.annotations import Link
+    src, out = highlighted(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    x = 72 + pdfium_width("region, and the ")
+    w = PdfWriter(clone_from=PdfReader(str(src)))
+    w.add_annotation(0, Link(rect=(x, 686, x + pdfium_width("northern", ITALIC), 697), url="https://example.com/n"))
+    w.write(str(src))
+    text = TEXT.replace("shows strong", "shows quite remarkably strong")
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": text}])
+    found = {kind: rect for kind, rect, _, _ in markups(out)}
+    assert set(found) == {"/Highlight", "/Link"}
+    north = boxes_of(out, "northern")
+    assert all(inside(b, found["/Link"]) for b in north) and all(inside(b, found["/Highlight"]) for b in north)
+    assert not all(inside(b, found["/Link"]) for b in boxes_of(out, "office"))
+
+
+def raised(path):
+    """A paragraph with a footnote mark above the line (a small "2") and a subscript below it."""
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont(PLAIN, 10)
+    c.drawString(72, 700, "The pressure in the boiler")
+    x = 72 + c.stringWidth("The pressure in the boiler", PLAIN, 10)
+    c.setFont(PLAIN, 6.5)
+    c.drawString(x, 703.5, "2")
+    x += c.stringWidth("2", PLAIN, 6.5)
+    c.setFont(PLAIN, 10)
+    c.drawString(x, 700, " rose while H")
+    x += c.stringWidth(" rose while H", PLAIN, 10)
+    c.setFont(PLAIN, 6.5)
+    c.drawString(x, 698, "2")
+    x += c.stringWidth("2", PLAIN, 6.5)
+    c.setFont(PLAIN, 10)
+    c.drawString(x, 700, "O was")
+    c.drawString(72, 688, "drained from the east wing overnight.")
+    c.save()
+    return path
+
+
+def small_marks(path):
+    """[(letter, size, height above its line's baseline)] of the letters set smaller than the text."""
+    import pypdfium2.raw as raw
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        tp = doc[0].get_textpage()
+        letters_, out = [], []
+        for i in range(tp.count_chars()):
+            ch = tp.get_text_range(i, 1)
+            if ch.strip():
+                x, y = ctypes.c_double(), ctypes.c_double()
+                raw.FPDFText_GetCharOrigin(tp.raw, i, ctypes.byref(x), ctypes.byref(y))
+                letters_.append((ch, round(raw.FPDFText_GetFontSize(tp.raw, i), 1), x.value, y.value))
+        for ch, size, x, y in letters_:
+            if size < 9:
+                base = min((b for b in letters_ if b[1] >= 9), key=lambda b: abs(b[3] - y) * 50 + abs(b[2] - x))
+                out.append((ch, size, round(y - base[3], 1)))
+        return out
+    finally:
+        doc.close()
+
+
+def test_marks_above_and_below_the_line_stay_there(tmp_path):
+    src, out = raised(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    assert small_marks(src) == [("2", 6.5, 3.5), ("2", 6.5, -2.0)]
+    text = "The steam pressure in the boiler2 rose sharply while H2O was drained from the east wing overnight."
+    textedit.edit_text(src, out, [{"page": 1, "rect": [70, 684, 330, 712], "paragraph": True, "text": text}])
+    assert small_marks(out) == [("2", 6.5, 3.5), ("2", 6.5, -2.0)]
+    assert page_text(out).replace(" ", "") == text.replace(" ", "")
+
+
+def test_a_big_first_word_doesnt_set_the_paragraphs_size_or_spacing(tmp_path):
+    """A paragraph that opens with a larger word (a run-in heading): the
+    rest keeps its own size, and the lines stay as far apart as they were."""
+    import pypdfium2.raw as raw
+    path, out = tmp_path / "in.pdf", tmp_path / "out.pdf"
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont(BOLD, 14)
+    c.drawString(72, 700, "Warning")
+    c.setFont(PLAIN, 10)
+    c.drawString(72 + c.stringWidth("Warning ", BOLD, 14), 700, "keep the doors away from direct heat")
+    c.drawString(72, 688, "for the first two weeks while the oil cures, and")
+    c.drawString(72, 676, "do not stack anything on the shelves.")
+    c.save()
+    text = ("Warning keep the cabinet doors away from direct heat for the first two weeks while the oil cures, "
+            "and do not stack anything on the shelves.")
+    textedit.edit_text(path, out, [{"page": 1, "rect": [70, 672, 330, 714], "paragraph": True, "text": text}])
+    doc = pdfium.PdfDocument(str(out))
+    try:
+        tp = doc[0].get_textpage()
+        full = tp.get_text_range()
+        sizes = {full[i]: round(raw.FPDFText_GetFontSize(tp.raw, i), 1) for i in (full.index("Warning"), full.index("cabinet"), full.index("shelves"))}
+        ys = set()
+        for i in range(tp.count_chars()):
+            if full[i].strip():
+                x, y = ctypes.c_double(), ctypes.c_double()
+                raw.FPDFText_GetCharOrigin(tp.raw, i, ctypes.byref(x), ctypes.byref(y))
+                ys.add(round(y.value, 1))
+        ys = sorted(ys, reverse=True)
+    finally:
+        doc.close()
+    assert sizes == {"W": 14.0, "c": 10.0, "s": 10.0}, sizes
+    assert ys == [700.0, 688.0, 676.0], ys
+    assert look_of(words(out), "Warning")[1] and not look_of(words(out), "cabinet")[1]

@@ -80,21 +80,21 @@ Visual check: before/after renders of the untouched regions must be pixel-identi
 - [x] Links: the link annotation's `/Rect` follows its words to their new place, or splits into several rects if the words now wrap across lines.
 - [x] Test: a rewritten paragraph keeps per-word fonts and colours. The link rect covers the linked words after the rewrap.
 
-### Phase 2 (release B): lines break well
+### Phase 2 (release B, done in 0.34.0): lines break well
 
-**Task 2.1: optimal line breaking**
-- [ ] Replace `_wrap` with a Knuth–Plass style total-fit breaker: boxes (words measured with the run's font), glue (the space width with stretch and shrink limits from the paragraph's current spacing) and penalties (hyphens).
-- [ ] Left-aligned text uses the same breaker with ragged-right demerits, so it avoids a very short last line and one-word lines.
-- [ ] Keep greedy as the fallback for very long paragraphs (over about 2,000 words) or when the breaker can't find a feasible solution.
+**Task 2.1: optimal line breaking** (done: `textedit._fit`; `"breaks": "simple"` in an edit gives the old line-by-line breaking. On random justified paragraphs the gaps are more even in about two thirds, the same in most of the rest, since it never uses more lines than line by line would; the 90 % target was for hyphenation too.)
+- [x] Replace `_wrap` with a Knuth–Plass style total-fit breaker: boxes (words measured with the run's font), glue (the space width with stretch and shrink limits from the paragraph's current spacing) and penalties (hyphens).
+- [x] Left-aligned text uses the same breaker with ragged-right demerits, so it avoids a very short last line and one-word lines.
+- [x] Keep greedy as the fallback for very long paragraphs (over about 2,000 words) or when the breaker can't find a feasible solution.
 - [ ] Test: on the holdout, the word-gap spread is lower than greedy, every line fits, and the number of lines is the same or fewer.
 
-**Task 2.2: hyphenation**
-- [ ] Liang's algorithm with `hyph-en-us` patterns, used only for justified paragraphs, or when a word is longer than the column. Language comes from the PDF's `/Lang`, else English. No other language is hyphenated until its patterns are added.
-- [ ] Words that were hyphenated across a line end in the original are joined back first (as PDF to Word already does). A real hyphen (as in "well-known") is a break point without adding a hyphen.
-- [ ] Rules: at least 2 letters before and 3 after a break; no more than 2 hyphenated lines in a row; never hyphenate the last word of a paragraph.
-- [ ] Test: a narrow justified column breaks "extraordinarily" at a pattern point; "well-known" breaks after the hyphen.
+**Task 2.2: hyphenation** (done: `hyphen.py`, `textedit._divisions`; `"hyphens": false` in an edit turns it off. Words divided in the original are joined back by the reader before editing, as before. Two divided lines running are avoided, not forbidden: fewer lines comes first.)
+- [x] Liang's algorithm with `hyph-en-us` patterns, used only for justified paragraphs, or when a word is longer than the column. Language comes from the PDF's `/Lang`, else English. No other language is hyphenated until its patterns are added.
+- [x] Words that were hyphenated across a line end in the original are joined back first (as PDF to Word already does). A real hyphen (as in "well-known") is a break point without adding a hyphen.
+- [x] Rules: at least 2 letters before and 3 after a break; no more than 2 hyphenated lines in a row; never hyphenate the last word of a paragraph.
+- [x] Test: a narrow justified column breaks "extraordinarily" at a pattern point; "well-known" breaks after the hyphen.
 
-**Task 2.3: author's line breaks**
+**Task 2.3: author's line breaks** (covered another way in 0.33: a line that stops short though the next word would have fitted ends its paragraph in the reader, so an address block's lines are each edited by themselves and keep their ends; Enter in the paragraph editor makes a forced break.)
 - [ ] A line break inside the paragraph that wasn't caused by the width (the line ends well short of the right edge, and the next line doesn't start lower case) is kept as a forced break.
 - [ ] In the editor, Shift+Enter makes one.
 - [ ] Test: an address block or a short-line poem keeps its line ends after a word is changed.
@@ -163,30 +163,35 @@ Each release needs a Windows check of real documents (Word-made PDFs, invoices, 
 Release A shipped: per-word styles are kept, the editor shows them, links follow their words. Reviewing it against the goal found these gaps. Each is a task; the ones marked (B) join release B, the rest release C.
 
 **Not yet measured**
-- [ ] (B) The holdout and scores in "Measuring it" were never built: release A is covered by tests of made-up paragraphs only. Build the multi-line holdout first (Word-made, LaTeX-made, InDesign-made and browser-printed PDFs, each rendered to known positions) and record 0.33's scores here, so B's line breaker is judged against numbers.
+- [ ] (moved to C) The holdout and scores in "Measuring it" were never built: release A is covered by tests of made-up paragraphs only. Build the multi-line holdout first (Word-made, LaTeX-made, InDesign-made and browser-printed PDFs, each rendered to known positions) and record 0.33's scores here, so B's line breaker is judged against numbers.
 
 **Styles that are still lost or wrong**
-- [ ] (B) **Sizes inside a paragraph.** A word in a bigger or smaller size keeps its size, but the line spacing and the wrap width are worked out from the first word's size only. Use each line's tallest run.
-- [ ] (B) **Superscripts and subscripts** (footnote marks, H₂O): the rise isn't read, so they come back on the baseline. Read each letter's offset from its line's baseline and keep it.
-- [ ] (B) **Underline and strikethrough** are drawn lines, not part of the font: they stay where they were while the words move. Find rules that sit under or through words, and move or redraw them with their words.
-- [ ] (B) **Highlights and other text markups** over a rewritten paragraph are left where they were. Move them as links are moved now.
-- [ ] (B) **When a style choice is made for the whole paragraph** (font, bold, italic or colour from the bar), every per-word style is dropped. Apply the choice on top of the per-word styles instead (a new colour only replaces the main colour; a new font keeps bold and italic words bold and italic).
-- [ ] (B) In the editor, a colour picked for the whole paragraph doesn't show on words that had their own colour until the change is applied.
+- [x] (B, done: already right; a test now holds it) **Sizes inside a paragraph.** A word in a bigger or smaller size keeps its size, but the line spacing and the wrap width are worked out from the first word's size only. Use each line's tallest run.
+- [x] (B, done) **Superscripts and subscripts** (footnote marks, H₂O): the rise isn't read, so they come back on the baseline. Read each letter's offset from its line's baseline and keep it.
+- [ ] (moved to C; markup annotations are done, drawn rules are not) **Underline and strikethrough** are drawn lines, not part of the font: they stay where they were while the words move. Find rules that sit under or through words, and move or redraw them with their words.
+- [x] (B, done) **Highlights and other text markups** over a rewritten paragraph are left where they were. Move them as links are moved now.
+- [x] (B, done) **When a style choice is made for the whole paragraph** (font, bold, italic or colour from the bar), every per-word style is dropped. Apply the choice on top of the per-word styles instead (a new colour only replaces the main colour; a new font keeps bold and italic words bold and italic).
+- [x] (B, done) In the editor, a colour picked for the whole paragraph doesn't show on words that had their own colour until the change is applied.
 - [ ] **Right-to-left paragraphs** fall back to one style (the older path). Belongs with Phase 5.
 
 **Fidelity of the re-set**
-- [ ] (B) A paragraph in several styles is always taken out and written again whole; a paragraph in one style can change only the letters that changed. Give styled paragraphs the same in-place path, so a one-word change moves nothing else (this is Task 3.3 brought forward for the common case).
-- [ ] (B) Word spacing and letter spacing are measured once for the paragraph and applied to every run. A bold run with different spacing in the original gets the paragraph's. Measure per run.
+- [ ] (moved to C, with Task 3.3) A paragraph in several styles is always taken out and written again whole; a paragraph in one style can change only the letters that changed. Give styled paragraphs the same in-place path, so a one-word change moves nothing else (this is Task 3.3 brought forward for the common case).
+- [ ] (moved to C) Word spacing and letter spacing are measured once for the paragraph and applied to every run. A bold run with different spacing in the original gets the paragraph's. Measure per run.
 - [ ] Justified lines stretch only the spaces; the original may also have stretched letter spacing. Match what the original did.
 
 **The editor**
-- [ ] (B) Typing at the edge of a styled word: the server decides the new letters' style from the old text, and the editor decides it from where the caret is. They agree in the tests, but the editor's choice should always win; send the editor's runs for every paragraph edit, not only after Ctrl+B or Ctrl+I.
-- [ ] (B) One-line edits (click, not Shift+click) still use a plain box; a bold word in the line shows plain while editing. Use the rich field for a line too.
+- [ ] (moved to C) Typing at the edge of a styled word: the server decides the new letters' style from the old text, and the editor decides it from where the caret is. They agree in the tests, but the editor's choice should always win; send the editor's runs for every paragraph edit, not only after Ctrl+B or Ctrl+I.
+- [ ] (moved to C) One-line edits (click, not Shift+click) still use a plain box; a bold word in the line shows plain while editing. Use the rich field for a line too.
 - [ ] Undo inside the field after Ctrl+B relies on the browser's own undo. Check it on WebView2 in the Windows run.
 
 **Checks that need real documents (Windows run for 0.33)**
 - A Word-made report with bold and italic words and a link; an invoice with a bold total; a brochure paragraph with a coloured phrase; a paragraph whose first word is bold (a run-in heading).
 
 **From the Windows check of 0.33 (a Word-made file)**
-- [ ] (B) **Tagged files (Word's) fall back to covering.** When a paragraph's words are in more than one tag (a link, or a run-in heading, has its own), the old words are covered, not taken out: they stay in the file's text underneath, and Find and Copy give both. Take the words out tag by tag and write each run back into its own tag.
-- [ ] (B) The editor's box wraps a little differently from the page at some zooms (at 125 % one word sat a line early). Wrap the box with the same breaks the server will make.
+- [x] (B, done) **Tagged files (Word's) fall back to covering.** When a paragraph's words are in more than one tag (a link, or a run-in heading, has its own), the old words are covered, not taken out: they stay in the file's text underneath, and Find and Copy give both. Take the words out tag by tag and write each run back into its own tag.
+- [ ] (moved to C; more visible now that the page hyphenates and the box doesn't) The editor's box wraps a little differently from the page at some zooms (at 125 % one word sat a line early). Wrap the box with the same breaks the server will make.
+
+**From the Windows check of 0.34 (Word-made files), for release C**
+- [ ] **Words drawn in a font from the computer can't be taken out again.** When the document's font lacks a letter and an installed font is used, those words are drawn on top of the page, not in its text; the next edit of that paragraph covers them and both versions stay in the file (Find gives two). Write such words into the page's own content, as words in the document's fonts are.
+- [ ] **Word's end-of-paragraph space** (a one-letter space font) stays at the old place after a rewrite, so one extractor reads "websi te". Take out spaces that belong to the paragraph's lines though they are in another font.
+- [ ] **The editor's box:** a justified paragraph shows ragged; superscripts and subscripts show at full size on the line; after a size change the box keeps its old height and scrolls.

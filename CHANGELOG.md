@@ -4,6 +4,39 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.34.0
+
+Rewritten paragraphs are set better, and keep more of what they had.
+
+- **Lines are broken looking at the whole paragraph**, not one line at a
+  time: never more lines than before, no lone short word left on the last
+  line when the lines above can spare one, and in justified text the gaps
+  between words stretch less and more evenly.
+- **Justified paragraphs divide long words at line ends** (English, by
+  the standard hyphenation patterns), which evens the gaps further and
+  can save a line (a word's first part is never left alone on a line to
+  do it). A word with a hyphen of its own breaks after it; the
+  paragraph's last word is never divided; a file marked as another
+  language is left whole. Left-aligned text is only divided where a word
+  is wider than its column.
+- **No old words left underneath in Word's files.** A paragraph whose
+  words are in several tags (a link, a run-in heading or each line has
+  its own, as Word makes them) was covered and drawn on top, so Copy and
+  Find gave the old words as well as the new. The old words are now taken
+  out, and each new line is written into the tag of the line it replaces.
+  The same for one changed line.
+- **A font, size, bold, italic or colour chosen for the whole paragraph
+  goes on top of the words' own styles** instead of replacing them: a new
+  font keeps bold words bold and italic words italic, and a new colour
+  changes the paragraph's main colour only (a red word stays red). The
+  editor shows a picked colour on the plain words at once.
+- **Highlights, underlines and strike-outs follow their words**, as links
+  do: across two lines when the words now wrap, and gone when their words
+  are deleted.
+- **Footnote marks and subscripts stay above and below the line** (the
+  small 2 of a footnote, the 2 of H2O); before, they came back on the
+  baseline, and a raised mark could split its paragraph in two.
+
 ## 0.33.0
 
 Rewriting a paragraph keeps each word's own style.

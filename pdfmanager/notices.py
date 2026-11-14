@@ -141,6 +141,20 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE."""
 
 
+HYPHEN_EN_US = """Copyright (C) 1990, 2004, 2005 Gerard D.C. Kuiken
+
+Copying and distribution of this file, with or without modification,
+are permitted in any medium without royalty provided the copyright
+notice and this notice are preserved.
+
+The file includes the patterns and exceptions of Donald E. Knuth's
+hyphen.tex (the Plain TeX hyphenation tables), whose own notice reads:
+"Unlimited copying and redistribution of this file are permitted as long
+as this file is not modified. Modifications are permitted, but only if
+the resulting file is not named hyphen.tex." ZPDF carries the file
+hyph-en-us.tex unchanged."""
+
+
 def _vendored():
     fonts = HERE / "static" / "fonts"
     pdfjs = HERE / "static" / "pdfjs"
@@ -151,6 +165,8 @@ def _vendored():
          "Licensed under the Apache License, Version 2.0, as is pdf.js above."),
         ("WordLlama word vectors (static/meaning/words.npz, for search by meaning)", "0.4.0, l2_supercat",
          "MIT (Lee Miller)", WORDLLAMA),
+        ("TeX hyphenation patterns for American English (static/hyphen/hyph-en-us.tex)", "2005-05-30",
+         "Permissive (Gerard D.C. Kuiken; Donald E. Knuth's hyphen.tex)", HYPHEN_EN_US),
         *((f"{name} font (static/fonts)", "5.3.0 (Fontsource)", "OFL-1.1 (SIL Open Font License 1.1)",
            _read(fonts / f"OFL-{key}.txt")) for name, key in FONTS),
     ]
