@@ -493,7 +493,7 @@ class _OwnFont:
             codes = {letter: code for letter, code in codes.items() if first <= code[0] < first + count}
         self.font, self.codes, self.width_of = font, codes, _widths(font)
         space = codes.get(" ")
-        if space is not None and self.width_of(space) > 0:
+        if space is not None and any(space) and self.width_of(space) > 0:
             self.space = None  # the font has a space
         else:
             mono = fonts.strip_subset(font.get_object().get("/BaseFont", "")).lower()

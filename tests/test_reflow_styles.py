@@ -442,3 +442,34 @@ def test_no_space_is_drawn_in_a_font_the_page_draws_none_with(tmp_path):
     textedit.edit_text(src, out, [{"page": 1, "rect": [70, 684, 400, 698], "old": "given two coats of hard wax oil this week.",
                                    "text": "given three coats of hard wax oil this week."}])
     assert "three" in [w[0] for w in words(out)] and drawn_spaces(out) == 0
+
+
+def _type0(to_unicode):
+    from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject, NumberObject
+    cmap = DecodedStreamObject()
+    cmap.set_data(to_unicode)
+    cid = DictionaryObject({NameObject("/Subtype"): NameObject("/CIDFontType2"), NameObject("/DW"): NumberObject(500),
+                            NameObject("/W"): ArrayObject([NumberObject(4), ArrayObject([NumberObject(226)])])})
+    return DictionaryObject({NameObject("/Subtype"): NameObject("/Type0"), NameObject("/BaseFont"): NameObject("/BCDEEE+Calibri"),
+                             NameObject("/Encoding"): NameObject("/Identity-H"),
+                             NameObject("/DescendantFonts"): ArrayObject([cid]), NameObject("/ToUnicode"): cmap})
+
+
+def test_code_zero_is_never_a_letter():
+    """Code 0 is a font's "no such letter" box. Word's maps can call it a
+    space beside the real one (0004 here): the real one is the space, and
+    a font whose only "space" is code 0 has none to write."""
+    from pdfmanager import fonts as zfonts
+    both = _type0(b"2 beginbfchar\n<0000> <0020>\n<0004> <0020>\nendbfchar\n1 beginbfrange\n<0024> <0025> <0041>\nendbfrange")
+    codes = zfonts.pdf_font_codes(both)
+    assert codes[" "] == b"\x00\x04" and codes["A"] == b"\x00\x24"
+    own = textedit._OwnFont(both, codes)
+    assert own.space is None and own.operands("A A") == "[<002400040024>]"
+    only_zero = _type0(b"1 beginbfchar\n<0000> <0020>\nendbfchar\n1 beginbfrange\n<0024> <0025> <0041>\nendbfrange")
+    codes = zfonts.pdf_font_codes(only_zero)
+    assert " " not in codes
+    own = textedit._OwnFont(only_zero, codes)
+    assert own.space == 250 and own.operands("A A") == "[<0024> -250 <0024>]"
+    # A range that starts at code 0 names no letter for it either.
+    ranged = _type0(b"1 beginbfrange\n<0000> <0004> <0020>\nendbfrange")
+    assert b"\x00\x00" not in zfonts.pdf_font_codes(ranged).values()
