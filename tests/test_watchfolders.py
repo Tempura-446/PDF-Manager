@@ -297,3 +297,57 @@ def test_settings_watch_folders_in_a_browser(app, tmp_path, fake_ocr):
     assert out["paused"] == {"button": "Resume", "status": "Paused"}, out["paused"]
     assert out["removed"] == 0
     assert (inbox / "Done" / "drop.pdf").exists() and (inbox / "drop.pdf").exists()
+
+
+# -- A file open in another program waits; it isn't a failure ------------------------------
+
+def test_a_file_open_in_another_program_waits_and_is_done_once_closed(tmp_path, monkeypatch):
+    """On Windows a file held open with no sharing raises PermissionError (WinError 32)
+    when copied: it used to fail for good with "Something went wrong"."""
+    import shutil as _shutil
+
+    from pdfmanager import watch
+
+    inbox = tmp_path / "in"
+    inbox.mkdir()
+    pdf = inbox / "Locked.pdf"
+    from reportlab.pdfgen import canvas
+    c = canvas.Canvas(str(pdf)); c.drawString(72, 720, "locked"); c.save()
+    settings = watch.WatchSettings(inbox=inbox, dest=inbox / "Done", compress="low")
+    state, reports = watch._State(), []
+    locked = {"on": True}
+    real_copy = _shutil.copy2
+
+    def copy2(src, dst, *a, **k):
+        if locked["on"] and Path(src) == pdf:
+            err = PermissionError(13, "The process cannot access the file because it is being used by another process")
+            err.winerror = 32
+            raise err
+        return real_copy(src, dst, *a, **k)
+
+    monkeypatch.setattr(watch.shutil, "copy2", copy2)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(watch.time, "monotonic", lambda: clock["t"])
+    report = lambda path, result, error: reports.append((path.name, result, error))
+    watch.poll(settings, state, log=lambda m: None, report=report)  # first look: size noted
+    watch.poll(settings, state, log=lambda m: None, report=report)  # locked: waits, no report yet
+    assert reports == [] and pdf in state.busy and not state.failed
+    clock["t"] += watch.IN_USE_NOTE + 1
+    watch.poll(settings, state, log=lambda m: None, report=report)  # still locked after a minute: said once
+    watch.poll(settings, state, log=lambda m: None, report=report)
+    assert len(reports) == 1 and isinstance(reports[0][2], watch.FileInUse)
+    assert "open in another program" in str(reports[0][2])
+    locked["on"] = False
+    done = watch.poll(settings, state, log=lambda m: None, report=report)  # closed: done
+    assert done and done[0][1].exists() and reports[-1][2] is None and not state.busy
+
+
+def test_in_use_news_is_not_counted_as_a_failure(tmp_path):
+    from pdfmanager import watch, watchfolders
+
+    w = watchfolders.WatchFolders(thread=False)
+    entry = {"id": "x", "folder": str(tmp_path)}
+    w._report(entry, tmp_path / "a.pdf", None, watch.FileInUse("a.pdf is open in another program; ZPDF will do it once it's closed"))
+    assert w.status.get("x", {}).get("failed", 0) == 0
+    news, _ = w.news_after(0)
+    assert news and news[-1]["waiting"] and "open in another program" in news[-1]["message"]

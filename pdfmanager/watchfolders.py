@@ -333,6 +333,15 @@ class WatchFolders:
             self.status.setdefault(folder_id, {}).update(changes)
 
     def _report(self, entry, path, result, error):
+        if isinstance(error, watch.FileInUse):
+            # Not a failure (it is tried again once closed): just news.
+            with self.lock:
+                n = next(self._seq)
+                self.news.append({"n": n, "folder": entry["folder"], "folder_id": entry["id"], "name": path.name,
+                                  "ok": False, "waiting": True, "message": str(error), "result": None})
+                self.news = self.news[-NEWS_KEPT:]
+                self.last = n
+            return
         ok = error is None
         if ok:
             message = (f"{path.name}: skipped, the same as one done before" if result is None else

@@ -34,6 +34,10 @@ Two ways to get work done without opening the tools first.
 
 Still to come: starting ZPDF with Windows, minimised, so watch folders run
 without opening it.
+- A file in a watch folder that is still open in another program waits and is done
+  once it is closed; after a minute ZPDF says so once, instead of failing for good.
+- The card for a right-click action stays 20 seconds after it finishes, and while
+  you point at it.
 
 ## 0.29.0
 

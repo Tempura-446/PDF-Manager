@@ -68,6 +68,22 @@ class WatchSettings:
 class _State:
     sizes: dict = field(default_factory=dict)   # path -> (size, mtime) at last poll
     failed: set = field(default_factory=set)    # (path, size, mtime) of files that failed
+    busy: dict = field(default_factory=dict)    # path -> when it was first found open in another program
+    told: set = field(default_factory=set)      # paths already reported as open in another program
+
+
+IN_USE_NOTE = 60  # seconds a file may stay open in another program before that is said
+
+
+class FileInUse(core.PdfManagerError):
+    """A file another program holds open (Windows: a sharing violation), so
+    it can't be read or moved yet. Not a failure: it is tried again."""
+
+
+def _in_use(exc):
+    """Whether ``exc`` means the file is open in another program (or can't
+    be read just now) rather than that it is bad."""
+    return isinstance(exc, PermissionError) and getattr(exc, "winerror", 32) in (5, 32, 33)
 
 
 # Beside a download that isn't finished yet (Chrome, Edge, Firefox, Safari, others).
@@ -223,6 +239,19 @@ def poll(settings, state, known_hashes=None, log=print, memory=None, report=None
             continue
         try:
             result = process_file(path, settings, known_hashes)
+        except PermissionError as exc:
+            if not _in_use(exc):
+                raise
+            # Open in another program: like a download still under way, it
+            # waits and is tried again, and after a minute that is said once.
+            since = state.busy.setdefault(path, time.monotonic())
+            if time.monotonic() - since >= IN_USE_NOTE and path not in state.told:
+                state.told.add(path)
+                log(f"in use: {path.name}")
+                if report:
+                    report(path, None, FileInUse(f"{path.name} is open in another program; "
+                                                 "ZPDF will do it once it's closed"))
+            continue
         except Exception as exc:  # keep watching even if one file is bad
             state.failed.add((path, *state.sizes[path]))
             log(f"failed: {path.name}: {exc}")
@@ -232,6 +261,8 @@ def poll(settings, state, known_hashes=None, log=print, memory=None, report=None
                 report(path, None, exc)
             continue
         state.sizes.pop(path, None)
+        state.busy.pop(path, None)
+        state.told.discard(path)
         log(f"skipped duplicate: {path.name}" if result is None else f"{path.name} -> {result}")
         if memory is not None:
             if path.exists():  # (kept where it was)

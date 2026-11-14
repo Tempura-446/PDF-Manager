@@ -4171,7 +4171,11 @@ async function runAction(batchId) {
     bar.hidden = true;
     cancel.textContent = "Close"; cancel.disabled = false;
     cancel.onclick = () => fadeAway(card);
-    if (!error) setTimeout(() => card.isConnected && fadeAway(card), 8000);
+    // (Long enough to notice, and never while it's pointed at or focused.)
+    if (!error) {
+      const later = () => { if (!card.isConnected) return; if (card.matches(":hover, :focus-within")) setTimeout(later, 2000); else fadeAway(card); };
+      setTimeout(later, 20000);
+    }
   };
   cancel.onclick = async () => {
     stopped = true;
@@ -4326,10 +4330,11 @@ async function watchNews() {
     if (watchLast === null) await loadWatch();
     const { news, last } = await jsonApi(`/api/watch/news?after=${watchLast}`);
     watchLast = last;
-    const failed = news.filter((n) => !n.ok), done = news.filter((n) => n.ok);
+    const failed = news.filter((n) => !n.ok && !n.waiting), done = news.filter((n) => n.ok), waiting = news.filter((n) => n.waiting);
     if (news.length === 1) appToast(news[0].message, news[0].ok ? 6000 : 12000, news[0].id ? ["Open", () => openInReaderById([news[0].id])] : null);
     else if (news.length) appToast([done.length ? `${plural(done.length, "file")} done in watch folders` : "",
-      failed.length ? `${failed.length} couldn’t be done (${failed.map((n) => n.message).join("; ")})` : ""].filter(Boolean).join("; "), failed.length ? 12000 : 6000);
+      failed.length ? `${failed.length} couldn’t be done (${failed.map((n) => n.message).join("; ")})` : "",
+      waiting.map((n) => n.message).join("; ")].filter(Boolean).join("; "), failed.length || waiting.length ? 12000 : 6000);
     if ($("settings-dialog").open) await loadWatch();
   } catch (e) { /* the app is closing, or busy: try again */ }
   const open = $("settings-dialog").open;
