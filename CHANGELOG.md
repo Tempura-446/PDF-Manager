@@ -14,7 +14,8 @@ Rewritten paragraphs are set better, and keep more of what they had.
   between words stretch less and more evenly.
 - **Justified paragraphs divide long words at line ends** (English, by
   the standard hyphenation patterns), which evens the gaps further and
-  can save a line. A word with a hyphen of its own breaks after it; the
+  can save a line (a word's first part is never left alone on a line to
+  do it). A word with a hyphen of its own breaks after it; the
   paragraph's last word is never divided; a file marked as another
   language is left whole. Left-aligned text is only divided where a word
   is wider than its column.

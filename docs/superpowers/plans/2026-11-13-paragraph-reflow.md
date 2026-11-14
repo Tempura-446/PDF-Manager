@@ -190,3 +190,8 @@ Release A shipped: per-word styles are kept, the editor shows them, links follow
 **From the Windows check of 0.33 (a Word-made file)**
 - [x] (B, done) **Tagged files (Word's) fall back to covering.** When a paragraph's words are in more than one tag (a link, or a run-in heading, has its own), the old words are covered, not taken out: they stay in the file's text underneath, and Find and Copy give both. Take the words out tag by tag and write each run back into its own tag.
 - [ ] (moved to C; more visible now that the page hyphenates and the box doesn't) The editor's box wraps a little differently from the page at some zooms (at 125 % one word sat a line early). Wrap the box with the same breaks the server will make.
+
+**From the Windows check of 0.34 (Word-made files), for release C**
+- [ ] **Words drawn in a font from the computer can't be taken out again.** When the document's font lacks a letter and an installed font is used, those words are drawn on top of the page, not in its text; the next edit of that paragraph covers them and both versions stay in the file (Find gives two). Write such words into the page's own content, as words in the document's fonts are.
+- [ ] **Word's end-of-paragraph space** (a one-letter space font) stays at the old place after a rewrite, so one extractor reads "websi te". Take out spaces that belong to the paragraph's lines though they are in another font.
+- [ ] **The editor's box:** a justified paragraph shows ragged; superscripts and subscripts show at full size on the line; after a size change the box keeps its old height and scrolls.

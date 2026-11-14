@@ -836,8 +836,12 @@ def _fit(widths, gap, room, justify=False, joins=None):
                 cost = 0.0
                 if n > 1 and (j - i == 1 or natural < room * 0.12):
                     cost = 2.0  # a lone or very short word left over
+            elif not spaces:
+                # One word (or part of one) alone on a line that isn't the last:
+                # right when it nearly fills the line, never to tidy the others.
+                cost = 10.0 + 1e4 * (slack / room)
             elif justify:
-                cost = (slack / spaces / gap) ** 2 if spaces and gap > 0 else 10.0 + (slack / room) ** 2
+                cost = (slack / spaces / gap) ** 2 if gap > 0 else 10.0 + (slack / room) ** 2
             else:
                 cost = (slack / room) ** 2
             if end:

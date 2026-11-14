@@ -259,3 +259,21 @@ def test_a_divided_bold_word_stays_bold_on_both_lines(tmp_path):
         doc.close()
     assert bold.replace("-", "") == "extraordinarilycommittee", bold
     assert " ".join(t for t, _ in rows_of(out)).replace("- ", "") == text
+
+
+def test_no_line_holds_just_the_start_of_a_divided_word():
+    """From the Windows check of 0.34: "Fund-" alone on the first line of a
+    justified narrow column, the rest of the line empty."""
+    prose = ("Funding will come from the town council and from the sale of the old hall, and the treasurer "
+             "reports that donations have risen extraordinarily since the spring appeal was sent to every house.")
+    for room in range(18, 40):
+        divided = textedit._wrap_marked(prose, room, letters, justify=True, divide=textedit._divisions)
+        for line, end in divided[:-1]:
+            assert " " in line or len(line) > room * 0.7, (room, [l for l, _ in divided])
+        assert len(divided) <= len(textedit._wrap(prose, room, letters, greedy=True))
+
+
+def test_a_lone_word_line_in_justified_text_only_when_nothing_else_fits():
+    widths = [30, 30, 30, 95, 30, 30, 30, 30]  # the fourth word nearly fills a line by itself
+    best = lines_of(widths, 100, justify=True)
+    assert [3] in best and all(len(line) > 1 for line in best[:-1] if line != [3]), best
