@@ -305,6 +305,20 @@ def run_flatten(a, src, out, pw):
                            password=pw)
 
 
+def run_flatten_layers(a, src, out, pw):
+    from pdfmanager import layers
+
+    if a.list:
+        found = layers.info(src, pw)
+        off = set(found["off"])
+        for item in found["layers"]:
+            print(f"{'hidden' if item['id'] in off else 'shown '}  {item['name']}")
+        return None
+    hidden = layers.hidden_names(src, a.hide, a.show, pw)
+    result = layers.flatten_layers(src, out, hidden=hidden, password=pw)
+    return f"{out}  (removed: {', '.join(result['removed']) or 'nothing, every layer shows'})"
+
+
 def run_sanitize(a, src, out, pw):
     counts = archive.sanitize(src, out, metadata=not a.keep_metadata,
                               javascript=not a.keep_javascript,
@@ -761,6 +775,7 @@ OUTPUTS["sign-cert"] = ("signed", "pdf")  # digital ID signatures
 OUTPUTS.update({"attach": ("attached", "pdf"), "labels": ("labelled", "pdf"),
                 "repair": ("repaired", "pdf")})  # file tools
 OUTPUTS["comments"] = ("comments", "pdf")
+OUTPUTS["flatten-layers"] = ("flat", "pdf")
 # -- pptx and html --
 OUTPUTS.update({"to-pptx": (None, "pptx"), "to-html": (None, "html")})
 # -- end of pptx and html --
@@ -1440,6 +1455,15 @@ def build_parser():
                   "make form fields and comments part of the page (links keep working)")
     sp.add_argument("--forms-only", action="store_true", help="leave comments as they are")
     sp.add_argument("--comments-only", action="store_true", help="leave form fields as they are")
+
+    sp = per_file("flatten-layers", run_flatten_layers,
+                  "for drawings with layers: keep the layers that show as part of the page, "
+                  "remove the hidden layers' content, and remove the layers")
+    sp.add_argument("--hide", action="append", default=[], metavar="NAME",
+                    help="hide this layer too (repeat for more, or separate names with commas)")
+    sp.add_argument("--show", action="append", default=[], metavar="NAME",
+                    help="show this layer too, though the file opens with it hidden")
+    sp.add_argument("--list", action="store_true", help="only list the layers and whether they show")
 
     sp = per_file("sanitize", run_sanitize,
                   "remove hidden data: document details, scripts, attached files")

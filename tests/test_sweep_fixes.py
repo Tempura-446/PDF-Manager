@@ -544,3 +544,33 @@ def test_a_lock_left_by_a_crashed_browser_is_not_waited_for(tmp_path):
     (profile / "SingletonLock").unlink()
     os.symlink(f"somehost-{os.getpid()}", profile / "SingletonLock")  # this process: alive
     assert office._profile_in_use(profile) is True
+
+
+def test_a_browser_that_stalls_once_is_tried_again(tmp_path, monkeypatch):
+    """A headless browser now and then stalls at start-up: the first try is cut short and
+    a fresh one (new profile) prints the page."""
+    import sys
+
+    from pdfmanager import office
+
+    page = tmp_path / "page.html"
+    page.write_text("<p>Hello</p>", encoding="utf-8")
+    marker = tmp_path / "tried"
+    fake = tmp_path / "browser.py"
+    fake.write_text(
+        "import sys, time, pathlib\n"
+        f"marker = pathlib.Path({str(marker)!r})\n"
+        "target = [a.split('=', 1)[1] for a in sys.argv if a.startswith('--print-to-pdf=')][0]\n"
+        "if not marker.exists():\n"
+        "    marker.write_text('1'); time.sleep(60)\n"  # the first start stalls
+        "open(target, 'wb').write(b'%PDF-1.4\\n' + b'0' * 200 + b'\\n%%EOF\\n')\n", encoding="utf-8")
+    launcher = tmp_path / ("browser.cmd" if sys.platform == "win32" else "browser")
+    if sys.platform == "win32":
+        launcher.write_text(f'@"{sys.executable}" "{fake}" %*\n', encoding="utf-8")
+    else:
+        launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{fake}" "$@"\n', encoding="utf-8")
+        launcher.chmod(0o755)
+    monkeypatch.setattr(office, "find_browser", lambda: str(launcher))
+    monkeypatch.setattr(office, "FIRST_TRY", 2)
+    out, program = office.html_to_pdf(page, tmp_path / "out.pdf", timeout=8)
+    assert office._whole_pdf(out) and marker.exists()
