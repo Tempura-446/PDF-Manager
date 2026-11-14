@@ -88,11 +88,11 @@ Visual check: before/after renders of the untouched regions must be pixel-identi
 - [x] Keep greedy as the fallback for very long paragraphs (over about 2,000 words) or when the breaker can't find a feasible solution.
 - [ ] Test: on the holdout, the word-gap spread is lower than greedy, every line fits, and the number of lines is the same or fewer.
 
-**Task 2.2: hyphenation**
-- [ ] Liang's algorithm with `hyph-en-us` patterns, used only for justified paragraphs, or when a word is longer than the column. Language comes from the PDF's `/Lang`, else English. No other language is hyphenated until its patterns are added.
-- [ ] Words that were hyphenated across a line end in the original are joined back first (as PDF to Word already does). A real hyphen (as in "well-known") is a break point without adding a hyphen.
-- [ ] Rules: at least 2 letters before and 3 after a break; no more than 2 hyphenated lines in a row; never hyphenate the last word of a paragraph.
-- [ ] Test: a narrow justified column breaks "extraordinarily" at a pattern point; "well-known" breaks after the hyphen.
+**Task 2.2: hyphenation** (done: `hyphen.py`, `textedit._divisions`; `"hyphens": false` in an edit turns it off. Words divided in the original are joined back by the reader before editing, as before. Two divided lines running are avoided, not forbidden: fewer lines comes first.)
+- [x] Liang's algorithm with `hyph-en-us` patterns, used only for justified paragraphs, or when a word is longer than the column. Language comes from the PDF's `/Lang`, else English. No other language is hyphenated until its patterns are added.
+- [x] Words that were hyphenated across a line end in the original are joined back first (as PDF to Word already does). A real hyphen (as in "well-known") is a break point without adding a hyphen.
+- [x] Rules: at least 2 letters before and 3 after a break; no more than 2 hyphenated lines in a row; never hyphenate the last word of a paragraph.
+- [x] Test: a narrow justified column breaks "extraordinarily" at a pattern point; "well-known" breaks after the hyphen.
 
 **Task 2.3: author's line breaks**
 - [ ] A line break inside the paragraph that wasn't caused by the width (the line ends well short of the right edge, and the next line doesn't start lower case) is kept as a forced break.

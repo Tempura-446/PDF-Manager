@@ -49,6 +49,7 @@ import ctypes
 import difflib
 import math
 import os
+import re
 import statistics
 import tempfile
 import unicodedata
@@ -666,7 +667,7 @@ def _options(edit):
             if not low <= value <= high:
                 raise core.PdfManagerError(f"the {key} should be between {low:g} and {high:g}")
             opts[key] = value
-    for key in ("bold", "italic", "flow", "styles"):
+    for key in ("bold", "italic", "flow", "styles", "hyphens"):
         if edit.get(key) is not None:
             opts[key] = bool(edit[key])
     if edit.get("color") is not None:
@@ -765,36 +766,50 @@ def _place(text, start, width, tc, gap):
 FIT_LIMIT = 2000  # words: a longer paragraph is broken line by line
 
 
-def _fit(widths, gap, room, justify=False):
-    """Where to break a paragraph's words into lines no wider than ``room``,
+def _fit(widths, gap, room, justify=False, joins=None):
+    """Where to break a paragraph's pieces into lines no wider than ``room``,
     looking at the whole paragraph (as a typesetter's "total fit" does):
-    [(first word, one past the last)] per line. Never more lines than
-    breaking line by line gives; among those, the most even: in justified
-    text the word gaps stretch as little and as alike as they can, in
-    ragged text the line ends are close to each other, and the last line
-    isn't left with a lone or very short word when the lines above can
-    spare one. A word wider than the room gets a line to itself."""
+    [(first piece, one past the last)] per line. A piece is a word, or part
+    of one: ``joins[i]`` says what follows piece i, None for a space, or
+    ("soft", the width of the hyphen a break there adds) inside a word that
+    may be divided, or ("hard", 0) after a hyphen the word has itself.
+    Never more lines than breaking line by line gives; among those, the
+    most even: in justified text the word gaps stretch as little and as
+    alike as they can, in ragged text the line ends are close to each
+    other, the last line isn't left with a lone or very short word when
+    the lines above can spare one, and words are divided sparingly (never
+    on two lines running when it can be helped). A piece wider than the
+    room gets a line to itself."""
     n = len(widths)
     if n == 0:
         return [(0, 0)]
-    best = [(0, 0.0, -1)] + [None] * n  # for the first j words: (lines, demerits, where the last line starts)
+    joins = joins or [None] * n
+    best = [(0, 0.0, -1)] + [None] * n  # for the first j pieces: (lines, demerits, where the last line starts)
     for j in range(1, n + 1):
-        natural = -gap
+        end = joins[j - 1] if j < n else None  # how this line would end
+        natural, spaces = (end[1] if end else 0.0), 0
         for i in range(j - 1, -1, -1):
-            natural += widths[i] + gap
+            natural += widths[i]
+            if i < j - 1 and joins[i] is None:
+                natural += gap
+                spaces += 1
             if natural > room + 1e-9 and i < j - 1:
                 break
             if best[i] is None:
                 continue
-            count, slack, last = j - i, max(room - natural, 0.0), j == n
+            slack, last = max(room - natural, 0.0), j == n
             if last:
                 cost = 0.0
-                if n > 1 and (count == 1 or natural < room * 0.12):
+                if n > 1 and (j - i == 1 or natural < room * 0.12):
                     cost = 2.0  # a lone or very short word left over
             elif justify:
-                cost = (slack / (count - 1) / gap) ** 2 if count > 1 and gap > 0 else 10.0 + (slack / room) ** 2
+                cost = (slack / spaces / gap) ** 2 if spaces and gap > 0 else 10.0 + (slack / room) ** 2
             else:
                 cost = (slack / room) ** 2
+            if end:
+                cost += 0.6 if end[0] == "soft" else 0.2
+                if i > 0 and joins[i - 1] and end[0] == "soft" and joins[i - 1][0] == "soft":
+                    cost += 3.0  # the line above ends in a divided word too
             trial = (best[i][0] + 1, best[i][1] + cost, i)
             if best[j] is None or trial[:2] < best[j][:2]:
                 best[j] = trial
@@ -806,10 +821,55 @@ def _fit(widths, gap, room, justify=False):
     return lines[::-1]
 
 
-def _wrap(text, room, measure, justify=False, greedy=False):
+_CORE = re.compile(r"(\W*)(.*?)(\W*)\Z", re.S)
+
+
+def _divisions(word, language=None):
+    """Where a word may be broken at a line end: [(letters before the
+    break, "soft" or "hard")]. A word with hyphens of its own breaks after
+    them ("well-|known") and nowhere else; other English words where the
+    hyphenation patterns say."""
+    from pdfmanager import hyphen
+
+    lead, core, _ = _CORE.match(word).groups()
+    if "-" in core:
+        out, at = [], len(lead)
+        parts = core.split("-")
+        for k, part in enumerate(parts[:-1]):
+            at += len(part) + 1
+            if len(part) >= 2 and len(parts[k + 1]) >= 2 and part.isalpha() and parts[k + 1].isalpha():
+                out.append((at, "hard"))
+        return out
+    return [(len(lead) + p, "soft") for p in hyphen.points(core, language)]
+
+
+def _pieces_of(words, divide, justify, room, measure):
+    """The words cut at their divisions: (pieces, what follows each: see :func:`_fit`,
+    the hyphen's width left 0 for the caller). Words are divided in
+    justified text, and where one is wider than the room; never the
+    paragraph's last word. ``words`` are strings or lists of (letter, style)."""
+    pieces, joins = [], []
+    for k, word in enumerate(words):
+        cuts = []
+        if divide and word and k < len(words) - 1 and (justify or measure(word) > room):
+            cuts = divide(word if isinstance(word, str) else "".join(ch for ch, _ in word))
+        start = 0
+        for at, kind in cuts:
+            pieces.append(word[start:at])
+            joins.append((kind, 0.0))
+            start = at
+        pieces.append(word[start:])
+        joins.append(None)
+    return pieces, joins
+
+
+def _wrap_marked(text, room, measure, justify=False, greedy=False, divide=None):
     """Lines of one paragraph (no line breaks in it) no wider than ``room``:
-    broken looking at the whole paragraph (see :func:`_fit`), or line by
-    line with ``greedy`` (and for a very long paragraph)."""
+    [(line, how it ends)], the end None (a space was there), "soft" (a word
+    divided: the line has the hyphen) or "hard" (broken after a word's own
+    hyphen). Broken looking at the whole paragraph (see :func:`_fit`), or
+    line by line with ``greedy`` (and for a very long paragraph).
+    ``divide(word)`` gives a word's divisions (see :func:`_divisions`)."""
     words = text.split(" ")
     if greedy or len(words) > FIT_LIMIT or len(words) < 2:
         lines, line = [], ""
@@ -821,10 +881,22 @@ def _wrap(text, room, measure, justify=False, greedy=False):
             else:
                 line = trial
         lines.append(line)
-        return lines
-    widths = [measure(word) for word in words]
-    gap = measure(words[0] + " " + words[1]) - widths[0] - widths[1]
-    return [" ".join(words[i:j]) for i, j in _fit(widths, gap, room, justify)]
+        return [(line, None) for line in lines]
+    gap = measure(words[0] + " " + words[1]) - measure(words[0]) - measure(words[1])
+    pieces, joins = _pieces_of(words, divide, justify, room, measure)
+    hyphen_width = measure("-") if divide else 0.0
+    joins = [(j[0], hyphen_width) if j and j[0] == "soft" else j for j in joins]
+    out = []
+    for i, j in _fit([measure(piece) for piece in pieces], gap, room, justify, joins):
+        line = "".join(pieces[k] + (" " if joins[k] is None and k < j - 1 else "") for k in range(i, j))
+        end = joins[j - 1][0] if j < len(pieces) and joins[j - 1] else None
+        out.append((line + ("-" if end == "soft" else ""), end))
+    return out
+
+
+def _wrap(text, room, measure, justify=False, greedy=False, divide=None):
+    """The lines of :func:`_wrap_marked`, as text."""
+    return [line for line, _ in _wrap_marked(text, room, measure, justify, greedy, divide)]
 
 
 def _look(style):
@@ -932,14 +1004,14 @@ def _split_seq(seq, sep):
     return parts
 
 
-def _wrap_seq(seq, room, measure, justify=False, greedy=False):
-    """:func:`_wrap` for a list of (character, style)."""
+def _wrap_seq_marked(seq, room, measure, justify=False, greedy=False, divide=None):
+    """:func:`_wrap_marked` for a list of (character, style)."""
     words = _split_seq(seq, " ")
 
-    def joined(some):
+    def joined(some, spaced):
         line = []
-        for word in some:
-            line += ([(" ", word[0][1] if word else line[-1][1])] if line else []) + word
+        for word, space in zip(some, [False] + spaced):
+            line += ([(" ", word[0][1] if word else line[-1][1])] if space and line else []) + word
         return line
 
     if greedy or len(words) > FIT_LIMIT or len(words) < 2 or not (words[0] or words[1]):
@@ -952,11 +1024,21 @@ def _wrap_seq(seq, room, measure, justify=False, greedy=False):
             else:
                 line = trial
         lines.append(line)
-        return lines
-    widths = [measure(word) if word else 0.0 for word in words]
+        return [(line, None) for line in lines]
     pair = [w for w in words if w][:2]
-    gap = measure(joined(pair)) - measure(pair[0]) - measure(pair[1]) if len(pair) == 2 else 0.0
-    return [joined(words[i:j]) for i, j in _fit(widths, gap, room, justify)]
+    gap = measure(joined(pair, [True])) - measure(pair[0]) - measure(pair[1]) if len(pair) == 2 else 0.0
+    pieces, joins = _pieces_of(words, divide, justify, room, measure)
+    joins = [(j[0], measure([("-", pieces[k][-1][1])])) if j and j[0] == "soft" else j for k, j in enumerate(joins)]
+    out = []
+    for i, j in _fit([measure(piece) if piece else 0.0 for piece in pieces], gap, room, justify, joins):
+        line = joined(pieces[i:j], [joins[k] is None for k in range(i, j - 1)])
+        end = joins[j - 1][0] if j < len(pieces) and joins[j - 1] else None
+        out.append((line + ([("-", line[-1][1])] if end == "soft" else []), end))
+    return out
+
+
+def _wrap_seq(seq, room, measure, justify=False, greedy=False, divide=None):
+    return [line for line, _ in _wrap_seq_marked(seq, room, measure, justify, greedy, divide)]
 
 
 def _strip_seq(seq):
@@ -1638,6 +1720,17 @@ class _Page:
                     + (rows[-1][0]["origin"][1] - first["origin"][1]) * down[1])
 
         simple = opts.get("breaks") == "simple"  # line by line, as before 0.34
+        # Words are divided at line ends (English only) when every font here can draw the hyphen.
+        language = None
+        try:
+            language = self.writer._root_object.get("/Lang") if self.writer is not None else None
+        except Exception:  # noqa: BLE001 - a catalogue that can't be read: taken as English
+            language = None
+        divide = None
+        if not simple and opts.get("hyphens", True) and "-" not in self.notes.get("missing", "") \
+                and all(_can_draw(f, "-") for f in (fonts_by.values() if content else [font])):
+            def divide(word, language=language):
+                return _divisions(word, str(language) if language is not None else None)
 
         def scaled(key, k):
             """The style of the words that look like ``key``, at ``k`` times their size."""
@@ -1664,8 +1757,8 @@ class _Page:
 
             lines = []
             for part in text.split("\n"):
-                wrapped = _wrap(part, room, measure, justify=align == "justify", greedy=simple)
-                for j, line in enumerate(wrapped):
+                wrapped = _wrap_marked(part, room, measure, justify=align == "justify", greedy=simple, divide=divide)
+                for j, (line, end) in enumerate(wrapped):
                     line, g, off = line.strip(), gap, 0.0
                     spaces = line.count(" ")
                     if align == "justify" and j < len(wrapped) - 1 and spaces:
@@ -1675,7 +1768,7 @@ class _Page:
                     elif align in ("center", "right"):
                         free = room - measure(line)
                         off = free / 2 if align == "center" else free
-                    lines.append((line, g, off, j == len(wrapped) - 1))
+                    lines.append((line, g, off, True if j == len(wrapped) - 1 else end or False))
             drop = (k - 1) * ascent  # a bigger size grows down from the old top
             grow = drop + (len(lines) - 1) * lead * k * tight - old_span + 0.22 * (style["size"] - base["size"])
             return lines, width, tck, lead * k * tight, drop, grow
@@ -1695,8 +1788,8 @@ class _Page:
 
             lines = []
             for part in _split_seq(seq, "\n"):
-                wrapped = _wrap_seq(part, room, measure, justify=align == "justify", greedy=simple)
-                for j, line in enumerate(wrapped):
+                wrapped = _wrap_seq_marked(part, room, measure, justify=align == "justify", greedy=simple, divide=divide)
+                for j, (line, end) in enumerate(wrapped):
                     line, g, off = _strip_seq(line), gap, 0.0
                     spaces = sum(1 for ch, _ in line if ch == " ")
                     if align == "justify" and j < len(wrapped) - 1 and spaces:
@@ -1706,18 +1799,23 @@ class _Page:
                     elif align in ("center", "right"):
                         free = room - measure(line)
                         off = free / 2 if align == "center" else free
-                    lines.append((line, g, off, j == len(wrapped) - 1))
+                    lines.append((line, g, off, True if j == len(wrapped) - 1 else end or False))
             drop = (k - 1) * ascent
             grow = drop + (len(lines) - 1) * lead * k * tight - old_span + 0.22 * (style["size"] - base["size"])
             return lines, width, tck, lead * k * tight, drop, grow
 
         def rejoin(part):
             """Lines joined into one text again (for running on into the next column)."""
+            # (A line's fourth part: True at the end of a part, "soft" where a
+            # word was divided there, "hard" after a word's own hyphen.)
             if not content:
-                return "".join(ln[0] + ("\n" if ln[3] else " ") for ln in part).rstrip()
+                return "".join((ln[0][:-1] if ln[3] == "soft" else ln[0])
+                               + ("\n" if ln[3] is True else "" if ln[3] else " ") for ln in part).rstrip()
             out = []
             for ln in part:
-                out += ln[0] + [("\n" if ln[3] else " ", ln[0][-1][1] if ln[0] else content[0][1])]
+                out += ln[0][:-1] if ln[3] == "soft" else ln[0]
+                if not ln[3] or ln[3] is True:
+                    out.append(("\n" if ln[3] else " ", ln[0][-1][1] if ln[0] else content[0][1]))
             return _strip_seq(out)
 
         def emit(line, start, width, tck, g, at):
