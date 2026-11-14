@@ -722,6 +722,9 @@ def _whole_pdf(target):
 # take to appear: Edge can hand the work to a browser of its own and leave.
 HANDED_OVER = 10
 
+# Seconds the first try at printing a web page gets at least, before a fresh try.
+FIRST_TRY = 30
+
 
 def _print_with(command, target, timeout, profile=None):
     """Run the browser until ``target`` is a whole PDF. A browser can stay
@@ -875,7 +878,20 @@ def html_to_pdf(source, output, timeout=120):
             if sys.platform.startswith("linux") and hasattr(os, "geteuid") and os.geteuid() == 0:
                 command.append("--no-sandbox")  # Chromium refuses to run as root otherwise
             command.append(address)
-            _print_with(command, target, timeout, profile)
+            # A headless browser now and then stalls at start-up (seen on Linux CI, and it
+            # can happen on a busy PC): cut the first try short and try once more with a
+            # fresh profile before giving up.
+            first = min(timeout, max(FIRST_TRY, timeout // 2))
+            try:
+                _print_with(command, target, first, profile)
+            except core.PdfManagerError as exc:
+                if "took too long" not in str(exc) or timeout - first < FIRST_TRY // 2:
+                    raise
+                _stop_browsers_using(profile)
+                target.unlink(missing_ok=True)
+                profile2 = tmp / "profile2"
+                command = [f"--user-data-dir={profile2}" if a.startswith("--user-data-dir=") else a for a in command]
+                _print_with(command, target, timeout - first, profile2)
             shutil.move(str(target), str(output))
         finally:
             _remove_browser_folder(tmp)

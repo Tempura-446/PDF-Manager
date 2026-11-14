@@ -216,7 +216,7 @@ def test_critique_fixes_in_a_browser(app, tmp_path, monkeypatch):
     rail = out["rail"]
     assert rail["groups"] == ["Read", "Pages", "Improve", "Convert", "Protect", "All"], rail["groups"]
     improve, convert, every = rail["flyouts"]["improve"], rail["flyouts"]["convert"], rail["flyouts"]["all"]
-    assert set(improve["tools"]) == {"repair", "compress", "color", "ocr", "clean", "flatten", "tag", "access-check"}, improve
+    assert set(improve["tools"]) == {"repair", "compress", "color", "ocr", "clean", "flatten", "flatten-layers", "tag", "access-check"}, improve
     assert "Optimize" in improve["heads"] and "Convert" not in improve["heads"], improve["heads"]
     for folder_tool in ("search", "organize", "rename", "duplicates", "recipe", "compress"):
         assert folder_tool not in convert["tools"], folder_tool

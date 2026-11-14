@@ -29,13 +29,29 @@ function apply(m, x, y) { return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * 
 /** The straight segments a drawing's paths make, as a flat array
  *  [x1, y1, x2, y2, ...], from a pdf.js operator list. Clipping paths and
  *  text are left out; filled shapes count, since walls are often drawn as
- *  filled strips. */
+ *  filled strips.
+ *
+ *  Layers: a path drawn inside optional content (pdf.js gives a
+ *  ``/OC ... BDC``, and an XObject with /OC, as beginMarkedContentProps
+ *  "OC" with the group, up to its endMarkedContent) belongs to it. Then
+ *  ``out.contexts`` lists the layer chains the paths are in (each an array
+ *  of pdf.js optional-content objects, outermost first; [] for no layer)
+ *  and ``out.layerOf[i]`` is segment i's index in it (see
+ *  Geometry.setVisibility). Both are null for a page without layers. */
 export function segmentsFromOperatorList({ fnArray, argsArray }, OPS) {
   const out = [];
   out.truncated = false;
+  out.contexts = null;
+  out.layerOf = null;
   if (!fnArray || !argsArray || typeof OPS?.constructPath !== "number") return out;  // not the pdf.js we know
   let ctm = [1, 0, 0, 1, 0, 0];
   const stack = [];
+  // Marked content: the layer chain open at each level (an index into contexts).
+  let ctx = 0;
+  const marks = [];
+  const contexts = [[]];
+  let layerOf = null;
+  const ocBegin = OPS.beginMarkedContentProps, mcBegin = OPS.beginMarkedContent, mcEnd = OPS.endMarkedContent;
   const paint = new Set([OPS.stroke, OPS.closeStroke, OPS.fill, OPS.eoFill, OPS.fillStroke, OPS.eoFillStroke,
     OPS.closeFillStroke, OPS.closeEOFillStroke]);
   for (let i = 0; i < fnArray.length; i++) {
@@ -46,16 +62,30 @@ export function segmentsFromOperatorList({ fnArray, argsArray }, OPS) {
       case OPS.transform: ctm = compose(ctm, args); break;
       case OPS.paintFormXObjectBegin: stack.push(ctm); if (args?.[0]) ctm = compose(ctm, args[0]); break;
       case OPS.paintFormXObjectEnd: if (stack.length) ctm = stack.pop(); break;
+      case ocBegin:
+        marks.push(ctx);
+        if (args?.[0] === "OC") {
+          contexts.push([...contexts[ctx], args[1]]);
+          ctx = contexts.length - 1;
+          if (!layerOf) layerOf = new Array(out.length / 4).fill(0);
+        }
+        break;
+      case mcBegin: marks.push(ctx); break;
+      case mcEnd: if (marks.length) ctx = marks.pop(); break;
       case OPS.constructPath: {
         if (!paint.has(args?.[0])) break;  // a clip, or a path thrown away
         const path = args[1]?.[0];
+        const before = out.length;
         if (path?.length) addPath(out, path, ctm);
-        if (out.length >= MAX_SEGMENTS * 4) { out.truncated = true; return out; }
+        if (layerOf) for (let k = before; k < out.length; k += 4) layerOf.push(ctx);
+        if (out.length >= MAX_SEGMENTS * 4) { out.truncated = true; break; }
         break;
       }
       default: break;
     }
+    if (out.truncated) break;
   }
+  if (layerOf) { out.contexts = contexts; out.layerOf = layerOf; }
   return out;
 }
 
@@ -118,9 +148,23 @@ export class Geometry {
     this.cells = new Map();    // "cx|cy" -> segment indices crossing that cell
     this.count = segments.length / 4;
     this.truncated = !!segments.truncated;
+    this.contexts = segments.contexts || null;  // layers (see segmentsFromOperatorList)
+    this.layerOf = segments.layerOf || null;
+    this.shown = null;  // per layer chain: shown (null: every line counts)
     this.indexed = 0;
     if (index) this.indexTo(this.count);
   }
+
+  /** Which layers show: ``isVisible(oc)`` says whether content marked with a
+   *  pdf.js optional-content object shows (pdf.js's
+   *  OptionalContentConfig.isVisible). Lines of hidden layers are then not
+   *  snapped to; null: every line counts again. */
+  setVisibility(isVisible) {
+    this.shown = this.contexts && isVisible ? this.contexts.map((chain) => chain.every((oc) => isVisible(oc))) : null;
+  }
+
+  /** Whether segment ``i`` is on a layer that shows. */
+  visible(i) { return !this.shown || this.shown[this.layerOf[i]] !== false; }
 
   /** Index segments up to ``end``; returns true once all are indexed. */
   indexTo(end) {
@@ -185,7 +229,9 @@ export class Geometry {
   candidates([px, py], tol, { from = null, ortho = null } = {}) {
     if (this.indexed < this.count || !Number.isFinite(px) || !Number.isFinite(py) || !(tol > 0)) return [];
     const s = this.segments;
-    const ids = [...this.near(px, py, tol)];
+    let ids = [...this.near(px, py, tol)];
+    if (this.shown) ids = ids.filter((i) => this.visible(i));
+
     if (!ids.length) return [];
     const d = (x, y) => Math.hypot(x - px, y - py);
     const found = [];
@@ -240,6 +286,29 @@ export class Geometry {
 
   /** Segment ``i`` as [x1, y1, x2, y2]. */
   segment(i) { const s = this.segments; return [s[i * 4], s[i * 4 + 1], s[i * 4 + 2], s[i * 4 + 3]]; }
+}
+
+/** The marked-content sequences of a page's operator list, in order: for
+ *  each, the chain of pdf.js optional-content objects it's inside. With
+ *  ``skipXObjects``, the /OC of an XObject (pdf.js opens one just before
+ *  drawing it) isn't a sequence of its own: the text layer, which has a
+ *  span for every /BMC and /BDC of the content, has none for those. */
+export function markedContent({ fnArray, argsArray }, OPS, skipXObjects) {
+  const drawsXObject = new Set([OPS.paintFormXObjectBegin, OPS.beginGroup, OPS.paintImageXObject, OPS.paintInlineImageXObject,
+    OPS.paintImageMaskXObject, OPS.paintImageXObjectRepeat, OPS.paintImageMaskXObjectRepeat, OPS.paintSolidColorImageMask,
+    OPS.paintInlineImageXObjectGroup, OPS.paintImageMaskXObjectGroup].filter((n) => typeof n === "number"));
+  const seq = [], stack = [];
+  let chain = [];
+  for (let i = 0; i < (fnArray?.length || 0); i++) {
+    const fn = fnArray[i];
+    if (fn === OPS.beginMarkedContentProps || fn === OPS.beginMarkedContent) {
+      stack.push(chain);
+      const oc = fn === OPS.beginMarkedContentProps && argsArray[i]?.[0] === "OC";
+      if (oc) chain = [...chain, argsArray[i][1]];
+      if (!(skipXObjects && oc && drawsXObject.has(fnArray[i + 1]))) seq.push(chain);
+    } else if (fn === OPS.endMarkedContent) chain = stack.pop() || [];
+  }
+  return seq;
 }
 
 export function fromOperatorList(opList, OPS) {
