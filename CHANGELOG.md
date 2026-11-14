@@ -17,7 +17,8 @@ Make searchable (OCR) reads pages it used to pass over.
   pasted screenshot, or a scan with a stamp or page number typed over it.
   The words found are added over the picture; the page's own words are
   kept once. Small pictures (logos, icons) are passed over, and a photo
-  simply has no words to add.
+  adds nothing: a stray mark read in it (a horizon taken for a dash) isn't
+  counted as words.
 - It says what it did for each such page ("page 3: its text layer was
   unreadable and has been replaced", "page 5: read the text in 2
   pictures").

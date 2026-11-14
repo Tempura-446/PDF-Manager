@@ -227,3 +227,47 @@ def test_the_two_holdout_files_come_out_searchable(tmp_path):
     out = tmp_path / "m.pdf"
     ocr.run(src, out, engine="builtin")
     assert ocrscore.found_words(truth, text_of(out)) > 0.9
+
+
+def photo_page(path):
+    """A page of real text with one large photo (no words in it)."""
+    from PIL import Image
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+    c = canvas.Canvas(str(path), pagesize=(595.2, 841.92))
+    c.setFont("Helvetica", 11)
+    for k in range(12):
+        c.drawString(60, 780 - 15 * k, "A report with a photograph of the lake below this paragraph.")
+    c.drawImage(ImageReader(Image.effect_noise((300, 200), 40).convert("RGB")), 60, 300, 400, 260)
+    c.save()
+    return path
+
+
+@pytest.mark.parametrize("found", [
+    [("一", 0.92)],                       # a horizon read as the Chinese "one" (from the Windows check)
+    [("l", 0.8)], [("-", 0.9), ("|", 0.7)],   # strokes and edges
+    [("A1", 0.95)],                           # too little to be a caption
+    [("Lakeside", 0.31), ("view", 0.4)],      # words the engine wasn't sure of
+])
+def test_scraps_read_in_a_photo_are_not_added(tmp_path, monkeypatch, found):
+    def recognise(image, script=None):
+        w, h = image.size
+        words = [Word(text, [(w * 0.1, h * 0.4), (w * 0.3, h * 0.4), (w * 0.3, h * 0.5), (w * 0.1, h * 0.5)], conf)
+                 for text, conf in found]
+        return [ocr.Line(" ".join(t for t, _ in found), words[0].quad, 0.9, words)]
+    monkeypatch.setattr(ocr, "recognise", recognise)
+    src, out = photo_page(tmp_path / "photo.pdf"), tmp_path / "out.pdf"
+    assert run(src, out) == []
+    assert text_of(out) == text_of(src)
+
+
+def test_a_caption_in_a_picture_is_still_added(tmp_path, monkeypatch):
+    def recognise(image, script=None):
+        w, h = image.size
+        words = [Word(text, [(w * x, h * 0.9), (w * (x + 0.2), h * 0.9), (w * (x + 0.2), h * 0.95), (w * x, h * 0.95)], 0.9)
+                 for text, x in (("Lake", 0.1), ("Windermere", 0.35), ("一", 0.7))]
+        return [ocr.Line("Lake Windermere", words[0].quad, 0.9, words)]
+    monkeypatch.setattr(ocr, "recognise", recognise)
+    src, out = photo_page(tmp_path / "photo.pdf"), tmp_path / "out.pdf"
+    assert run(src, out) == ["page 1: read the text in 1 picture"]
+    assert "Lake Windermere" in text_of(out)

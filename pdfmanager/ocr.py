@@ -706,6 +706,8 @@ def layer_is_rubbish(text):
 PICTURE_SHARE = 0.03      # of the page: a smaller picture (a logo, an icon) isn't looked into
 PICTURE_PIXELS = (120, 40)  # ... nor one smaller than this when drawn for reading
 PICTURES_PER_PAGE = 8
+PICTURE_CONFIDENCE = 0.6  # a word read in a picture counts when the engine is this sure of it
+PICTURE_LETTERS = 4       # ... and a picture's words are added when they have this many letters and digits
 
 
 def _char_kinds(textpage):
@@ -995,9 +997,14 @@ def _read_pages(source, output, force, deskew, rotate, script, note):
                         raise
                     except Exception as exc:  # engine trouble: say which page
                         raise core.PdfManagerError(f"OCR failed on page {i + 1}: {exc}") from None
-                    for line in lines:
-                        for w in line.words:
-                            words.append(Word(w.text, [(x + box[0], y + box[1]) for x, y in w.quad], w.confidence))
+                    # A photo gives scraps (a horizon read as a dash, an edge as
+                    # a letter): only words the engine is fairly sure of count,
+                    # and a picture with next to nothing in it adds nothing.
+                    sure = [w for line in lines for w in line.words if w.confidence >= PICTURE_CONFIDENCE]
+                    if sum(1 for w in sure for c in w.text if c.isalnum()) < PICTURE_LETTERS:
+                        continue
+                    for w in sure:
+                        words.append(Word(w.text, [(x + box[0], y + box[1]) for x, y in w.quad], w.confidence))
                 if words:
                     # Not the words the page has already (a stamp typed over a scan).
                     with core.PDFIUM_LOCK:
