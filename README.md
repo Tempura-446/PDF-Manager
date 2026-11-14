@@ -32,8 +32,10 @@ It installs Python from python.org if you don't have it (with winget or the
 official, signed installer), installs ZPDF in its own folder
 (`%LOCALAPPDATA%\PDF Manager\app`), and adds **Start menu and desktop
 shortcuts**, **ZPDF in "Open with"** (and in *Settings → Default
-apps*) for PDFs, and an entry in **Settings → Apps** to uninstall it. No
-administrator rights are needed, and you can delete the unzipped folder
+apps*) for PDFs, **ZPDF in File Explorer's right-click menu** (see
+[Right-click actions](#right-click-actions-in-file-explorer);
+`Install ZPDF.cmd -NoContextMenu` leaves it out), and an entry in
+**Settings → Apps** to uninstall it. No administrator rights are needed, and you can delete the unzipped folder
 afterwards. Running it again updates the installed copy (or use the
 **Update** button, below).
 
@@ -252,6 +254,68 @@ Everything runs on your own computer. The app's built-in server only
 listens on `127.0.0.1` and requires a random token that only the app
 window (or the link `pdfm gui` prints) knows, so other websites and other
 computers can't use it.
+
+## Right-click actions in File Explorer
+
+On Windows, the installer adds ZPDF to File Explorer's right-click menu, for
+you only (no administrator rights). Right-click one or more PDFs and choose
+**ZPDF**, then:
+
+- **Combine in ZPDF**: all the selected PDFs in one, in name order (numbers
+  counted as numbers, so "Scan 2" comes before "Scan 10", as Explorer lists
+  them). Explorer doesn't tell programs the order you clicked them in.
+- **Make searchable (OCR)** and **Make smaller**: each selected PDF on its own.
+- **Open in ZPDF**: the same as *Open with → ZPDF*.
+
+Right-click pictures (JPG, PNG or TIFF) for **Make a PDF with ZPDF**: all
+the selected pictures in one PDF, a page each. HEIC photos from a phone
+can't be read yet: save them as JPG first.
+
+The action runs in the app: it opens (or comes to the front if it's
+already open), a card at the foot of the window shows how it's going (with
+Cancel), and the result opens as a new tab that **isn't saved yet**: Save
+asks where, starting in the folder the files came from. The tools use
+their usual settings (OCR: the built-in engine, English, pages turned
+upright; Make smaller: Medium). The files you chose aren't changed.
+
+On **Windows 11** the actions are under **Show more options** (or
+Shift+right-click): the short menu only lists programs that install a
+system component, which ZPDF doesn't. Explorer starts ZPDF once per
+selected file; the files that arrive within a couple of seconds of each
+other go into one job, so select them all and choose the action once.
+
+To take ZPDF out of the menu (or put it back), use **Settings → Show ZPDF
+in the right-click menu**. Uninstalling takes it away too.
+
+## Watch folders
+
+**Settings → Watch folders** processes PDFs put in a folder while ZPDF is
+open: a scanner's folder, Downloads, a shared folder. For each folder,
+choose:
+
+- **What to do**: Make searchable (OCR), Make smaller, Archive (PDF/A),
+  each with its usual settings, or one of your saved
+  [recipes](#recipes).
+- **Where results go**: into a **Done** folder inside it, or next to the
+  original with the name ending in " (searchable)", " (smaller)",
+  " (PDF-A)" or " (done)".
+- **What happens to the originals**: they stay where they are, or move to
+  an **Originals** folder inside it.
+
+Each file is done once: ZPDF remembers which files it did (in its data
+folder), also after a restart, and a file that's replaced or changed gets
+another go. A file is only taken once it has stopped changing, and a
+download still under way (Chrome's `.crdownload`, Firefox's `.part` and
+the like) is left until it's complete. A note shows when a file is done
+(with **Open**) or couldn't be (with the reason); the folder's line in
+Settings shows what it's doing, how many were done and the last one.
+**Pause**, **Resume** and **Remove** are on that line; removing a folder
+leaves its files as they are. A folder that goes away (a USB stick) is
+waited for. If two copies of ZPDF are open, only one watches.
+
+Watching happens only while ZPDF is open; to process a folder without the
+app, use [`pdfm watch`](#watching-a-folder) (for example from a scheduled
+task).
 
 ## Scan: paper to a searchable PDF
 
@@ -1043,6 +1107,7 @@ changing, so large copies aren't grabbed half-written. Originals are moved
 to `inbox/originals` (or deleted with `--delete-originals`). A file that
 can't be processed is reported and skipped; watching continues. Use
 `--once` to process what's there and exit, e.g. from a scheduled task.
+The app's [watch folders](#watch-folders) use the same engine.
 
 ### Headers, footers and Bates numbers
 
