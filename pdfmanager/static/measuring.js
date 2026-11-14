@@ -458,7 +458,9 @@ export const Measuring = (Base) => class extends Base {
     tab.geometry.set(n, false);  // being read
     const done = (geometry, why) => {
       if (doc !== this.doc) return;
+      geometry?.setVisibility?.(this._layerVisibility());  // only the layers shown (layers.js)
       tab.geometry.set(n, geometry);
+
       // Lines of pages long left are let go of; the ones being read stay.
       for (const [page, g] of tab.geometry) {
         if (tab.geometry.size <= GEOMETRY_PAGES) break;

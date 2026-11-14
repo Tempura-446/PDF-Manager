@@ -792,3 +792,29 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
    the side handles squashed it, and on a small signature they covered the
    middle, where a press should move it. */
 .rd .annotationEditorLayer .stampEditor .resizer:is(.topMiddle, .bottomMiddle, .middleLeft, .middleRight) { display: none; }
+
+/* The Layers tab (layers.js): the drawing's layers in their nested order. */
+/* Four tabs (Layers too): the sidebar a little wider, so each name fits. */
+.rd-sidebar:has(.rd-layerstab:not([hidden])) { width: 300px; }
+.rd-sidebar:has(.rd-layerstab:not([hidden])) .rd-tab { flex: 1 1 auto; padding: 0 6px; }
+.rd-layers, .rd-layers ul { list-style: none; margin: 0; padding: 0; }
+
+.rd-layers { padding: 2px 8px 12px; font-size: var(--fs-sm); }
+.rd-layers ul { padding-left: 22px; }
+.rd-layer { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 2px 6px; border-radius: var(--radius-xs); cursor: pointer; color: var(--text); }
+.rd-layer:hover { background: var(--surface-3); }
+.rd-layer input { width: 16px; height: 16px; margin: 0; flex: none; accent-color: var(--accent); cursor: inherit; }
+.rd-layer span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.rd-layer.locked { cursor: default; color: var(--muted); }
+.rd-layer.locked:hover { background: none; }
+.rd-layerlock svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; display: block; }
+.rd-layerlabel { display: block; padding: 8px 6px 2px; font-size: var(--fs-xs); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.rd-layerhead > ul { padding-left: 0; }
+.rd-layeractions { display: flex; flex-direction: column; gap: 6px; padding: 12px 6px 16px; border-top: 1px solid var(--border); margin: 0 8px; }
+.rd-layeractions .rd-btn { justify-content: center; width: 100%; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font-weight: 600; }
+.rd-layeractions .rd-btn:hover { background: var(--surface-2); }
+.rd-layerspanel .rd-commentactions { padding: 6px 14px 4px; }
+
+/* A hidden layer's words: not selected or found by pointing (the canvas doesn't draw them either). */
+.rd .textLayer .rd-oc-hidden { display: none; }
+

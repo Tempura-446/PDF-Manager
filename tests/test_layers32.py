@@ -196,3 +196,63 @@ def test_a_protected_file_stays_protected(app, tmp_path):  # noqa: F811
         pikepdf.open(io.BytesIO(res))
     with pikepdf.open(io.BytesIO(res), password="pw") as pdf:
         assert "/OCProperties" not in pdf.Root
+
+
+def test_snapping_leaves_out_hidden_layers_js():
+    """static/snap.js: the lines of a hidden layer (marked
+    content /OC, also nested and around an XObject) aren't snapped to, and
+    the text layer's marked-content spans are matched to their layers."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("needs Node.js")
+    static = Path(__file__).resolve().parents[1] / "pdfmanager" / "static"
+    script = """
+const S = await import(process.argv[1]);
+const L = await import(process.argv[2]);
+const OPS = { save: 10, restore: 11, transform: 12, stroke: 20, paintFormXObjectBegin: 74, paintFormXObjectEnd: 75,
+  beginMarkedContent: 69, beginMarkedContentProps: 70, endMarkedContent: 71, constructPath: 91, paintImageXObject: 85 };
+const path = (...a) => [new Float32Array(a)];
+const walls = { type: "OCG", id: "1R" }, dims = { type: "OCG", id: "2R" };
+const ol = { fnArray: [91, 70, 91, 69, 91, 71, 71, 70, 91, 71, 70, 74, 91, 75, 71, 70, 85, 71], argsArray: [
+  [20, path(0, 0, 0, 1, 100, 0), null],               // no layer
+  ["OC", walls], [20, path(0, 0, 100, 1, 100, 100), null],
+  ["Span", null], [20, path(0, 0, 200, 1, 100, 200), null], [],  // nested marked content: still Walls
+  [],
+  ["OC", dims], [20, path(0, 0, 300, 1, 100, 300), null], [],
+  ["OC", dims], [[1, 0, 0, 1, 0, 0], null], [20, path(0, 0, 400, 1, 100, 400), null], null, [],  // a form XObject with /OC
+  ["OC", walls], [], [],                               // an image with /OC
+]};
+const seg = S.segmentsFromOperatorList(ol, OPS);
+const g = new S.Geometry(seg);
+const ys = () => [0, 100, 200, 300, 400].map((y) => !!g.snap([50, y + 1], 4));
+const out = { count: g.count, contexts: seg.contexts.length, layerOf: seg.layerOf, all: ys() };
+const hidden = new Set(["2R"]);
+g.setVisibility((oc) => !hidden.has(oc.id));
+out.noDims = ys();
+hidden.add("1R");
+g.setVisibility((oc) => !hidden.has(oc.id));
+out.none = ys();
+g.setVisibility(null);
+out.again = ys();
+out.plain = S.segmentsFromOperatorList({ fnArray: [91], argsArray: [[20, path(0, 0, 0, 1, 1, 1), null]] }, OPS).contexts;
+const mc = (skip) => L.markedContent(ol, OPS, skip).map((chain) => chain.map((oc) => oc.id).join(">") || "-");
+out.textSpans = mc(true);
+out.allSeq = mc(false);
+console.log(JSON.stringify(out));
+"""
+    run = subprocess.run([node, "--input-type=module", "-e", script, (static / "snap.js").as_uri(), (static / "snap.js").as_uri()],
+                         capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert run.returncode == 0, run.stderr
+    got = json.loads(run.stdout)
+    assert got["count"] == 5 and got["layerOf"] == [0, 1, 1, 2, 3]
+    assert got["all"] == [True] * 5 and got["again"] == [True] * 5
+    assert got["noDims"] == [True, True, True, False, False]
+    assert got["none"] == [True, False, False, False, False]
+    assert got["plain"] is None
+    # The text layer has a span for each /BMC and /BDC, none for an XObject's /OC.
+    assert got["textSpans"] == ["1R", "1R", "2R"]
+    assert got["allSeq"] == ["1R", "1R", "2R", "2R", "1R"]

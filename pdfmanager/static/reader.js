@@ -26,6 +26,7 @@ import { Overlay } from "./overlay.js";
 import { COLORS, el, fadeOut, heldTimer, ICON, isTyping, MIN_ZOOM, MAX_ZOOM, pdfjs, store, svg, viewer, loadPdfjs } from "./readerkit.js";
 import { Annotating } from "./annotate.js";
 import { Finding } from "./find.js";
+import { Layering } from "./layers.js";
 import { Measuring } from "./measuring.js";
 import { Signing } from "./sign.js";
 import { Tabs } from "./tabs.js";
@@ -141,7 +142,7 @@ const header = (res, name) => { try { return decodeURIComponent(res.headers.get(
  *  t, e and m are the reader's own: next, previous, rotate, panel, edit text, measure). */
 const ANNOT_KEYS = { h: "HIGHLIGHT", c: "NOTE", a: "FREETEXT", d: "INK", s: "SIGN" };
 
-export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measuring(Object)))))) {
+export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measuring(Layering(Object))))))) {
   constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onRepair, onForgetRecent, onSaveTab, onUnsaved } = {}) {
     super();
     this.host = host;
@@ -331,9 +332,10 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     this.pageBar = el("div", { class: "rd-pagebar" });
     this.thumbsPanel = el("div", { class: "rd-panel", role: "tabpanel" }, this.pageBar, this.thumbsList);
     this.outlinePanel = el("div", { class: "rd-panel", role: "tabpanel", hidden: true }, this.outlineList);
-    this.sidebar = el("aside", { class: "rd-sidebar", hidden: true, "aria-label": "Pages, bookmarks and comments" },
-      el("div", { class: "rd-tabs", role: "tablist" }, this.thumbsTab, this.outlineTab, this.commentsTab),
-      this.thumbsPanel, this.outlinePanel, this.commentsPanel);
+    this._buildLayers();  // (the Layers tab: shown for a document with layers, see layers.js)
+    this.sidebar = el("aside", { class: "rd-sidebar", hidden: true, "aria-label": "Pages, bookmarks, comments and layers" },
+      el("div", { class: "rd-tabs", role: "tablist" }, this.thumbsTab, this.outlineTab, this.commentsTab, this.layersTab),
+      this.thumbsPanel, this.outlinePanel, this.commentsPanel, this.layersPanel);
 
     // Viewer
     this.viewerEl = el("div", { class: "pdfViewer" });
@@ -1117,6 +1119,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
       this.#buildOutline();
       this._listComments();
       this._loadMeasures();
+      this._loadLayers();
       this.sigbar.hidden = true;
       this.formbar.hidden = true;
       this.#whenShown(() => { this.#checkSignatures(); this.#checkForm(); });
@@ -1276,6 +1279,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
   async _closeDocument() {
     this.gaveWay = null;  // (no bar comes back for a document that is going)
     this._putAwayMeasures();  // (its list of measurements goes with it)
+    this._closeLayers();
     this.closeFind();
     await this.closeCompare();
     this.closeAnnotate();
@@ -1424,7 +1428,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
   }
   #showTab(which) {
     for (const [name, tab, panel] of [["thumbs", this.thumbsTab, this.thumbsPanel], ["outline", this.outlineTab, this.outlinePanel],
-      ["comments", this.commentsTab, this.commentsPanel]]) {
+      ["comments", this.commentsTab, this.commentsPanel], ["layers", this.layersTab, this.layersPanel]]) {
       tab.setAttribute("aria-selected", String(name === which));
       panel.hidden = name !== which;
     }
@@ -1671,7 +1675,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
         const scale = (128 * (window.devicePixelRatio || 1)) / vp.width;
         const viewport = page.getViewport({ scale, rotation });
         const canvas = el("canvas", { width: Math.ceil(viewport.width), height: Math.ceil(viewport.height) });
-        await page.render({ canvas, viewport, annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS }).promise;
+        await page.render({ canvas, viewport, annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS,
+          optionalContentConfigPromise: this._layerConfigPromise() }).promise;  // (the layers shown)
         if (t !== this.thumbs || doc !== this.doc) break;
         // Drawn thumbnails are kept for when their row comes back; not all of a long document's.
         t.canvases.set(n, canvas);
@@ -1693,6 +1698,18 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     }
     t.busy = false;
   }
+
+  /** Draw the thumbnails again where they are (the layers shown changed). */
+  _redrawThumbs() {
+    const t = this.thumbs;
+    if (!t || t.doc !== this.doc) return;
+    t.canvases.clear();
+    for (const n of t.rows.keys()) if (!t.queue.includes(n)) t.queue.push(n);
+    if (!t.busy) this.#drainThumbs();
+  }
+
+  /** Show the sidebar's tab ``which`` ("thumbs", "outline", "comments", "layers"). */
+  _showSidebarTab(which) { this.#showTab(which); }
 
   #rebuildThumbsSoon() {
     clearTimeout(this.thumbTimer);
@@ -2791,6 +2808,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     const orientation = el("style", { id: "rd-print-page" }, `@media print { @page { size: ${first.width > first.height ? "landscape" : "portrait"}; margin: 0; } }`);
     document.getElementById("rd-print-page")?.remove();
     document.head.append(orientation);
+    const layers = this._printLayers();  // the layers shown (undefined: the document has none)
     try {
       for (let n = 1; n <= total; n++) {
         this.toast(`Preparing page ${n} of ${total} for printing…`, 60000);
@@ -2798,7 +2816,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
         const viewport = page.getViewport({ scale: 150 / 72 });  // 150 dpi
         const canvas = el("canvas", { width: Math.ceil(viewport.width), height: Math.ceil(viewport.height) });
         await page.render({ canvas, viewport, intent: "print", annotationMode: pdfjs.AnnotationMode.ENABLE_STORAGE,
-          printAnnotationStorage: doc.annotationStorage.print }).promise;
+          printAnnotationStorage: doc.annotationStorage.print, optionalContentConfigPromise: layers }).promise;
+
         const blob = await new Promise((r) => canvas.toBlob(r, "image/png"));
         box.append(el("div", { class: "rd-print-page" }, el("img", { src: URL.createObjectURL(blob), alt: "" })));
         if (doc !== this.doc) return;
