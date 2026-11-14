@@ -56,6 +56,19 @@ jobs:
           $cmd = (Get-ItemProperty "HKCU:\Software\Classes\PDFManager.Document\shell\open\command")."(default)"
           "Open with: $cmd"
           if ($cmd -notlike '*-m pdfmanager gui "%1"') { throw "Open with command: $cmd" }
+          # The right-click menu: a ZPDF submenu on PDFs, Make a PDF on pictures.
+          $menu = "HKCU:\Software\Classes\SystemFileAssociations\.pdf\shell\ZPDF"
+          $top = Get-ItemProperty $menu
+          if ($top.MUIVerb -ne "ZPDF" -or $top.MultiSelectModel -ne "Player") { throw "right-click submenu: $($top | Out-String)" }
+          foreach ($verb in @(@("2combine", "combine"), @("3ocr", "ocr"), @("4compress", "compress"))) {
+            $cmd = (Get-ItemProperty "$menu\shell\$($verb[0])\command")."(default)"
+            "Right-click $($verb[0]): $cmd"
+            if ($cmd -notlike "*\venv\Scripts\pythonw.exe`" -I -m pdfmanager gui --action $($verb[1]) `"%1`"") { throw "right-click command: $cmd" }
+          }
+          foreach ($ext in @(".jpg", ".jpeg", ".png", ".tif", ".tiff")) {
+            $cmd = (Get-ItemProperty "HKCU:\Software\Classes\SystemFileAssociations\$ext\shell\ZPDF.MakePdf\command")."(default)"
+            if ($cmd -notlike '*-m pdfmanager gui --action images "%1"') { throw "Make a PDF on ${ext}: $cmd" }
+          }
           $entry = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFManager"
           "Settings > Apps: $($entry.DisplayName) $($entry.DisplayVersion) -> $($entry.UninstallString)"
           if (-not (Test-Path "$app\uninstall.ps1")) { throw "uninstall.ps1 missing" }
@@ -87,7 +100,11 @@ jobs:
                     (Join-Path ([Environment]::GetFolderPath("Programs")) "ZPDF.lnk"),
                     (Join-Path ([Environment]::GetFolderPath("Desktop")) "ZPDF.lnk"),
                     "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFManager",
-                    "HKCU:\Software\Classes\PDFManager.Document") | Where-Object { Test-Path $_ }
+                    "HKCU:\Software\Classes\PDFManager.Document",
+                    "HKCU:\Software\Classes\SystemFileAssociations\.pdf\shell\ZPDF",
+                    "HKCU:\Software\Classes\SystemFileAssociations\.jpg\shell\ZPDF.MakePdf",
+                    "HKCU:\Software\Classes\SystemFileAssociations\.png\shell\ZPDF.MakePdf",
+                    "HKCU:\Software\Classes\SystemFileAssociations\.tiff\shell\ZPDF.MakePdf") | Where-Object { Test-Path $_ }
           if ($left) { $left; throw "left behind after uninstalling" }
           "All removed"
 

@@ -1090,6 +1090,27 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
   .start { gap: 22px; }
   .recent-open { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
+/* Explorer's right-click actions: how one is getting on, at the foot of the window */
+.action-cards { position: fixed; right: 20px; bottom: 20px; z-index: 70; display: flex; flex-direction: column; gap: 10px; width: min(360px, calc(100vw - 40px)); }
+.action-card { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); box-shadow: var(--float); animation: pop-in calc(var(--t) * 1.4) var(--ease); }
+.action-card .ac-title { font-weight: 600; }
+.action-card .ac-msg { margin: 0; font-size: var(--fs-sm); color: var(--text-2); overflow-wrap: anywhere; }
+.action-card .ac-msg.err { color: var(--err); }
+.action-card .ac-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+.action-card .job-progress { width: 100%; }
+/* Settings > Watch folders */
+.watch-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.watch-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.watch-item .wi-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-sm); }
+.watch-item .wi-folder { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.watch-item .wi-what { color: var(--muted); }
+.watch-item .wi-state { color: var(--text-2); overflow-wrap: anywhere; }
+.watch-item .wi-state.err { color: var(--err); }
+.watch-item .wi-buttons { display: flex; gap: 6px; flex-shrink: 0; }
+.watch-add { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); }
+.watch-add .watch-row { display: flex; gap: 8px; }
+.watch-add label[for] span { font-weight: 600; color: var(--text-2); }
+.watch-add .watch-row input { flex: 1; min-width: 0; height: 38px; padding: 0 11px; border: 1px solid var(--input-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; }
 </style>
 </head>
 <body>
@@ -1230,6 +1251,8 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
   </div>
   <ul class="palette-list" id="palette-list" role="listbox"></ul>
 </dialog>
+<div class="action-cards" id="action-cards"></div>
+
 <dialog class="app-dialog" id="settings-dialog" aria-labelledby="settings-title">
   <form method="dialog" id="settings-form" tabindex="-1">
     <h2 id="settings-title">Settings</h2>
@@ -1237,6 +1260,32 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
     <h3>Appearance</h3>
     <label class="dlg-field inline"><span>Theme</span>
       <select id="theme" autofocus><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+    <div id="shell-menu" hidden>
+      <h3>Right-click menu</h3>
+      <label class="dlg-check"><input type="checkbox" id="set-shell-menu"> Show ZPDF in the right-click menu</label>
+      <p class="dlg-hint">Right-click PDFs in File Explorer for ZPDF › Combine, Make searchable (OCR), Make smaller
+        or Open, and pictures for Make a PDF with ZPDF. On Windows 11 they're under <em>Show more options</em>.
+        This changes at once; it's for you only.</p>
+    </div>
+    <h3>Watch folders</h3>
+    <p class="dlg-hint">PDFs put in a watched folder are done one by one while ZPDF is open, each once. A note
+      shows when a file is done or couldn't be. Files still downloading or being copied are left until they're complete.</p>
+    <ul class="watch-list" id="watch-list" aria-label="Watched folders"></ul>
+    <div class="watch-add" id="watch-add" role="group" aria-labelledby="watch-add-title">
+      <b id="watch-add-title">Watch a folder</b>
+      <div class="dlg-field"><label for="watch-folder"><span>Folder</span></label>
+        <div class="watch-row"><input type="text" id="watch-folder" spellcheck="false" autocomplete="off" placeholder="C:\Users\you\Scans">
+          <button type="button" class="btn secondary pb-small" id="watch-browse" hidden>Browse…</button></div></div>
+      <label class="dlg-field"><span>What to do</span><select id="watch-do"></select></label>
+      <label class="dlg-field"><span>Results go</span><select id="watch-results">
+        <option value="done">Into a “Done” folder inside it</option>
+        <option value="beside">Next to the original, the name ending “(searchable)”, “(smaller)”…</option></select></label>
+      <label class="dlg-field"><span>The originals</span><select id="watch-originals">
+        <option value="keep">Stay where they are</option>
+        <option value="move">Move to an “Originals” folder inside it</option></select></label>
+      <div><button type="button" class="btn secondary" id="watch-add-btn">Watch this folder</button></div>
+      <p class="dlg-status" id="watch-status" aria-live="polite"></p>
+    </div>
     <h3>Updates</h3>
     <label class="dlg-check"><input type="checkbox" id="set-check"> Check for new versions when ZPDF starts</label>
     <label class="dlg-field"><span>GitHub repository</span><input type="text" id="set-repo" spellcheck="false" autocomplete="off" placeholder="owner/name"></label>
@@ -1487,7 +1536,14 @@ async function load() {
   renderTools();
   listen();
   setTimeout(checkForUpdates, 4000);
+  scheduleWatchNews(1000);
   const openIds = (new URLSearchParams(location.hash.slice(1)).get("open") || "").split(",").filter(Boolean);
+  const actionId = new URLSearchParams(location.hash.slice(1)).get("action");
+  if (actionId) {  // started from Explorer's right-click menu
+    select("home");
+    runAction(actionId);
+    return;
+  }
   if (openIds.length) {
     await openInReaderById(openIds);
     return;
@@ -1995,7 +2051,8 @@ function fpShowNote(tab) {
     finish = el("div", { class: "fp-save" }, el("div", { class: "fp-saved", tabindex: "-1" }, el("span", { class: "saving" }, "Saved"),
       m.savedTo ? ` to ${m.savedTo}` : ""), reveal);
   }
-  const made = back ? [`: ${m.sizes}. Made from `, back, ", still open in its own tab."] : [`: ${m.sizes}, cleaned up and made into this PDF.`];
+  const made = back ? [`: ${m.sizes}. Made from `, back, reader.tabs.includes(m.from) ? ", still open in its own tab." : "."]
+    : [`: ${m.sizes}, cleaned up and made into this PDF.`];
   fp.note.replaceChildren(el("div", { class: "fp-done" }, icon("check"), el("div", {},
     el("b", {}, m.label), ...made,
     ...m.notes.map((line) => el("div", { class: "fp-line" }, line)), finish)));
@@ -4073,19 +4130,96 @@ const pageJob = {
 };
 async function runJob(path, options, ui = pageJob) {
   const start = await (await api(path, { ...options, headers: { ...(options.headers || {}), "X-Pdfm-Async": "1" } })).json();
-  ui.start(start.job);
+  return followJob(start.job, ui);
+}
+/** Follow the job ``id`` (already started) on ``ui`` until it ends: its
+ *  result's response, or null if it was cancelled. */
+async function followJob(id, ui = pageJob) {
+  ui.start(id);
   const shown = Date.now();
   try {
     for (let wait = 150; ; wait = Math.min(wait * 1.5, 600)) {
       await new Promise((r) => setTimeout(r, wait));
-      const s = await (await api(`/api/job/${start.job}`)).json();
+      const s = await (await api(`/api/job/${id}`)).json();
       if (s.message) ui.message(s.message);
       if (Date.now() - shown > 400) ui.progress(s.fraction);  // quick jobs don't need a bar
       if (s.state === "cancelled") { ui.cancelled(); return null; }
       if (s.state === "done" || s.state === "failed") break;
     }
-    return await api(`/api/job/${start.job}/result`);
+    return await api(`/api/job/${id}/result`);
   } finally { ui.end(); }
+}
+
+// ---- Explorer's right-click actions (quickactions.py) ------------------------------
+// Files chosen together in Explorer arrive one by one; the app gathers them
+// into a batch, runs it as a job and the results open as new, unsaved tabs
+// (Save asks where, starting in the files' folder). A card at the foot of
+// the window shows how it's going, with Cancel.
+const actionsRunning = new Set();
+async function runAction(batchId) {
+  if (!batchId || actionsRunning.has(batchId)) return;
+  actionsRunning.add(batchId);
+  const msg = el("p", { class: "ac-msg", "aria-live": "polite" }, "Gathering the files…");
+  const bar = el("span", { class: "job-progress", role: "progressbar", "aria-label": "Progress", "aria-valuemin": "0", "aria-valuemax": "100", hidden: true }, el("span"));
+  const cancel = el("button", { type: "button", class: "btn secondary pb-small" }, "Cancel");
+  const title = el("b", { class: "ac-title" }, "ZPDF");
+  const card = el("div", { class: "action-card", "data-batch": batchId, role: "group", "aria-label": "Right-click action" }, title, msg, bar, el("div", { class: "ac-buttons" }, cancel));
+  $("action-cards").append(card);
+  let jobNow = null, stopped = false;
+  const finish = (text, error = false) => {
+    msg.textContent = text; msg.classList.toggle("err", error);
+    bar.hidden = true;
+    cancel.textContent = "Close"; cancel.disabled = false;
+    cancel.onclick = () => fadeAway(card);
+    if (!error) setTimeout(() => card.isConnected && fadeAway(card), 8000);
+  };
+  cancel.onclick = async () => {
+    stopped = true;
+    cancel.disabled = true; cancel.textContent = "Cancelling…";
+    if (jobNow) { try { await api(`/api/job/${jobNow}/cancel`, { method: "POST" }); } catch (e) { /* it may just have finished */ } }
+  };
+  try {
+    let info;
+    for (;;) {  // the batch closes a moment after its last file
+      info = await (await api(`/api/action/${batchId}`)).json();
+      title.textContent = `${info.label}: ${plural(info.files.length, "file")}`;
+      if (info.job) break;
+      if (info.state !== "collecting") throw new Error("the action didn't start");
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    msg.textContent = "Working…";
+    jobNow = info.job;
+    const res = await followJob(info.job, {
+      start() {}, message(text) { msg.textContent = text; },
+      progress(fraction) { const pct = Math.round(fraction * 100); bar.hidden = false; bar.firstChild.style.width = `${pct}%`; bar.setAttribute("aria-valuenow", String(pct)); },
+      cancelled() { stopped = true; }, end() { jobNow = null; },
+    });
+    if (!res) { finish("Cancelled: nothing was made."); return; }
+    const out = await res.json();
+    await select("reader");
+    const opened = [];
+    for (const r of out.results) {
+      const file = await api(`/api/action/${batchId}/file/${r.n}`);
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const tab = await reader.openResult(bytes, r.name, null, null);
+      if (!tab) continue;
+      const sizes = `${humanSize(r.before).replace(" ", " ")} → ${humanSize(r.size).replace(" ", " ")}`;
+      const pct = r.before ? Math.round((1 - r.size / r.before) * 100) : 0;
+      tab.made({ op: out.op, label: out.label, from: { name: r.from, fileId: r.from_id },
+        sizes: out.action === "compress" && pct >= 5 ? `${sizes}, ${pct}% smaller` : out.action === "combine" || out.action === "images"
+          ? `${plural(r.count, "file")}, ${humanSize(r.size).replace(" ", " ")}` : sizes, notes: r.notes || [] });
+      if (fp.tab === tab) fpShowNote(tab);
+      opened.push(r.name);
+    }
+    const failed = out.failed.map((f) => `${f.name}: ${f.error}`);
+    if (!opened.length) { finish(capital(failed.join("; ") || "nothing could be shown"), true); return; }
+    const said = opened.length === 1 ? `Opened ${opened[0]} in a new tab. It isn’t saved yet: Save asks where.`
+      : `Opened ${opened.length} results in new tabs. They aren’t saved yet: Save asks where.`;
+    if (failed.length) finish(`${said} Not done: ${failed.join("; ")}`, true);
+    else { finish(said); reader.toast(said, 6000); }
+  } catch (e) {
+    finish(stopped ? "Cancelled: nothing was made." : capital(e.message || e), !stopped);
+  } finally { actionsRunning.delete(batchId); }
 }
 $("cancel").addEventListener("click", async () => {
   if (!jobId) return;
@@ -4121,8 +4255,95 @@ async function openSettings() {
   $("set-token-state").textContent = s.token_set ? "· saved" : "";
   $("set-token-clear").hidden = !s.token_set;
   updateStatus("set-status", "");
+  try { await loadWatch(); } catch (e) { updateStatus("watch-status", e.message, true); }
+  updateStatus("watch-status", "");
+  try {
+    const menu = await jsonApi("/api/shellmenu");
+    $("shell-menu").hidden = !menu.available;
+    $("set-shell-menu").checked = !!menu.on;
+  } catch (e) { $("shell-menu").hidden = true; }
   $("settings-dialog").showModal();
 }
+// ---- Settings > Watch folders (watchfolders.py) ------------------------------------
+let watchInfo = { folders: [], tools: [], recipes: [] }, watchLast = null;
+async function loadWatch() {
+  watchInfo = await jsonApi("/api/watch");
+  if (watchLast === null) watchLast = watchInfo.last;  // (news from before this page isn't shown)
+  renderWatch();
+  return watchInfo;
+}
+function watchState(f) {
+  const s = f.status, counts = [s.done ? `${s.done} done` : "", s.failed ? `${s.failed} couldn’t be done` : ""].filter(Boolean).join(", ");
+  const head = { paused: "Paused", watching: "Watching", starting: "Starting…" }[s.state] || s.detail || s.state;
+  return [head, counts, s.last ? `Last: ${s.last.message}` : ""].filter(Boolean).join(" · ");
+}
+function renderWatch() {
+  const list = $("watch-list");
+  list.replaceChildren(...watchInfo.folders.map((f) => {
+    const bad = ["missing", "error", "elsewhere"].includes(f.status.state) || (f.status.last && !f.status.last.ok);
+    const pause = el("button", { type: "button", class: "btn secondary pb-small", "aria-label": `${f.paused ? "Resume" : "Pause"} watching ${f.folder}`,
+      onclick: () => watchCall("/api/watch/pause", { id: f.id, paused: !f.paused }) }, f.paused ? "Resume" : "Pause");
+    const remove = el("button", { type: "button", class: "btn ghost pb-small", "aria-label": `Stop watching ${f.folder}`,
+      onclick: () => watchCall("/api/watch/remove", { id: f.id }, `${f.folder} isn’t watched any more. Its files are left as they are.`) }, "Remove");
+    return el("li", { class: "watch-item", "data-id": f.id },
+      el("div", { class: "wi-text" }, el("span", { class: "wi-folder" }, f.folder), el("span", { class: "wi-what" }, f.describe),
+        el("span", { class: "wi-state" + (bad ? " err" : ""), "aria-live": "polite" }, watchState(f))),
+      el("div", { class: "wi-buttons" }, pause, remove));
+  }));
+  list.hidden = !watchInfo.folders.length;
+  const pick = $("watch-do"), was = pick.value;
+  pick.replaceChildren(
+    el("optgroup", { label: "A tool, with its usual settings" }, ...watchInfo.tools.map((t) => el("option", { value: "tool:" + t.id }, t.label))),
+    ...(watchInfo.recipes.length ? [el("optgroup", { label: "A saved recipe" }, ...watchInfo.recipes.map((r) => el("option", { value: "recipe:" + r }, r)))] : []));
+  if ([...pick.options].some((o) => o.value === was)) pick.value = was;
+  $("watch-browse").hidden = !(isDesktop() && window.pywebview.api.pick_folder);
+}
+async function watchCall(path, data, said = "") {
+  try {
+    watchInfo = await jsonApi(path, data);
+    renderWatch();
+    updateStatus("watch-status", said);
+    return true;
+  } catch (e) { updateStatus("watch-status", capital(e.message), true); return false; }
+}
+async function addWatch() {
+  const [kind, ...rest] = $("watch-do").value.split(":");
+  const folder = $("watch-folder").value.trim();
+  const ok = await watchCall("/api/watch/add", { folder, [kind]: rest.join(":"), results: $("watch-results").value, originals: $("watch-originals").value },
+    `Watching ${folder}. PDFs put there from now on, and those there already, are done one by one.`);
+  if (ok) { $("watch-folder").value = ""; scheduleWatchNews(1500); }
+}
+$("watch-add-btn").addEventListener("click", addWatch);
+$("watch-folder").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addWatch(); } });  // (not Save)
+$("watch-browse").addEventListener("click", async () => {
+  try { const chosen = await window.pywebview.api.pick_folder(); if (chosen) $("watch-folder").value = chosen; } catch (e) { /* closed */ }
+});
+// A note when a watched file is done or couldn't be (with the plain reason).
+let watchNewsTimer = 0;
+function scheduleWatchNews(ms) { clearTimeout(watchNewsTimer); watchNewsTimer = setTimeout(watchNews, ms); }
+async function watchNews() {
+  try {
+    if (watchLast === null) await loadWatch();
+    const { news, last } = await jsonApi(`/api/watch/news?after=${watchLast}`);
+    watchLast = last;
+    const failed = news.filter((n) => !n.ok), done = news.filter((n) => n.ok);
+    if (news.length === 1) appToast(news[0].message, news[0].ok ? 6000 : 12000, news[0].id ? ["Open", () => openInReaderById([news[0].id])] : null);
+    else if (news.length) appToast([done.length ? `${plural(done.length, "file")} done in watch folders` : "",
+      failed.length ? `${failed.length} couldn’t be done (${failed.map((n) => n.message).join("; ")})` : ""].filter(Boolean).join("; "), failed.length ? 12000 : 6000);
+    if ($("settings-dialog").open) await loadWatch();
+  } catch (e) { /* the app is closing, or busy: try again */ }
+  const open = $("settings-dialog").open;
+  scheduleWatchNews(open ? 2000 : watchInfo.folders.some((f) => !f.paused) ? 4000 : 20000);
+}
+
+$("set-shell-menu").addEventListener("change", async (e) => {
+  const want = e.target.checked;
+  try {
+    const menu = await jsonApi("/api/shellmenu", { on: want });
+    e.target.checked = !!menu.on;
+    updateStatus("set-status", menu.on ? "ZPDF is in the right-click menu." : "ZPDF was taken out of the right-click menu.");
+  } catch (err) { e.target.checked = !want; updateStatus("set-status", err.message, true); }
+});
 async function saveSettings() {
   const data = { check: $("set-check").checked, repo: $("set-repo").value.trim() };
   if ($("set-token").value.trim()) data.token = $("set-token").value.trim();
@@ -4260,7 +4481,10 @@ async function listen() {
       if (data.none) return;  // not the app's own window: nothing will come
       after = data.last;
       try { sessionStorage.setItem(seen, String(after)); } catch (e) { /* not kept */ }
-      for (const event of data.events) if (event.open && event.open.length) await openInReaderById(event.open);
+      for (const event of data.events) {
+        if (event.open && event.open.length) await openInReaderById(event.open);
+        if (event.action) runAction(event.action);  // (not awaited: its files are still arriving)
+      }
     } catch (e) { await new Promise((r) => setTimeout(r, 3000)); }
   }
 }

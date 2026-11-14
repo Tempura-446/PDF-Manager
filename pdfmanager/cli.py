@@ -1161,9 +1161,10 @@ def cmd_setup_windows(a):
 
     if a.remove:
         winsetup.remove()
-        print("Removed the shortcuts and the Open with and Settings > Apps entries.")
+        print("Removed the shortcuts, the right-click actions and the Open with and Settings > Apps entries.")
         return 0
-    for line in winsetup.install(a.app_dir, desktop=not a.no_desktop, open_with=not a.no_open_with):
+    for line in winsetup.install(a.app_dir, desktop=not a.no_desktop, open_with=not a.no_open_with,
+                                 context_menu=not a.no_context_menu):
         print(f"added {line}")
     return 0
 
@@ -1175,10 +1176,12 @@ def cmd_gui(a):
     for path in paths:
         if not Path(path).is_file():
             raise core.PdfManagerError(f"no such file: {path}")
+    action = getattr(a, "action", None)
     if a.browser or a.no_browser:
-        gui.serve(port=a.port, open_browser=not a.no_browser, open_paths=paths)
+        gui.serve(port=a.port, open_browser=not a.no_browser, open_paths=paths,
+                  action=(action, paths) if action else None)
     else:
-        gui.launch(paths, port=a.port)
+        gui.launch(paths, port=a.port, action=action)
 
 
 # --------------------------------------------------------------------------
@@ -1771,6 +1774,8 @@ def build_parser():
     sp.add_argument("--remove", action="store_true", help="take them away again")
     sp.add_argument("--no-desktop", action="store_true", help="no desktop shortcut")
     sp.add_argument("--no-open-with", action="store_true", help='don\'t add to "Open with"')
+    sp.add_argument("--no-context-menu", action="store_true",
+                    help="don't add ZPDF's actions to Explorer's right-click menu")
     sp.add_argument("--app-dir", help="the installed app's folder (default: found from Python)")
 
     for name, help_ in (("gui", "open the graphical app in its own window (or your browser "
@@ -1784,6 +1789,12 @@ def build_parser():
         sp.add_argument("--port", type=int, default=0, help="port (default: any free port)")
         sp.add_argument("--no-browser", action="store_true",
                         help="just start the server and print its link")
+        if name == "gui":
+            from pdfmanager.quickactions import ACTIONS
+
+            sp.add_argument("--action", choices=sorted(ACTIONS),
+                            help="run a right-click action on the files in the app (Explorer's "
+                                 "menu uses it; files given together go into one job)")
 
     return p
 
