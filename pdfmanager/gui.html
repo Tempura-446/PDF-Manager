@@ -1396,6 +1396,7 @@ const ICONS = {
   clean: '<path d="m5 19 9-9"/><path d="M14 10 19 5"/><path d="M15 3v2M19 7h2M16.5 3.5l1 1M3 21l2-2"/><path d="M9 4H5a2 2 0 0 0-2 2v4M21 14v4a2 2 0 0 1-2 2h-4"/>',
   bookmarks: '<path d="M6 3h12v18l-6-4-6 4z"/>',
   flatten: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h6"/><path d="M15 17l2 2 3-4"/>',
+  "flatten-layers": '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/>',
   form: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h4M7 14h4"/><rect x="13" y="7.5" width="5" height="3" rx=".5"/><rect x="13" y="12.5" width="3" height="3" rx=".5"/>',
   sanitize: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/>',
   sign: '<path d="M3 17c2-1 3-5 5-5s0 5 2 5 3-6 5-6 1 6 3 6 2-2 3-2"/><path d="M3 21h18"/>',
@@ -2134,6 +2135,7 @@ const SYNONYMS = {
   redact: "hide censor black out", ocr: "recognise recognize scan text searchable", "to-word": "docx word edit",
   search: "find look for folder", rotate: "turn", delete: "remove pages", repair: "fix mend broken damaged",
   scan: "scanner paper camera photo phone digitise digitize feeder flatbed wia",
+  "flatten-layers": "layers optional content ocg cad drawing dwg plan blueprint hide",
 };
 
 // ---- keyboard shortcuts (?, or "shortcuts" in the palette) ------------------------
@@ -2258,10 +2260,10 @@ const RAIL_GROUPS = { read: "Read", pages: "Pages", improve: "Improve", convert:
 const RAIL_OF_GROUP = { Read: "read", Combine: "pages", Pages: "pages", Layout: "pages", Stamp: "pages",
   Optimize: "improve", Convert: "convert", Security: "protect", Automate: null, Folders: null };
 // Archiving sits with protecting; making accessible and flattening improve a file.
-const RAIL_OF_TOOL = { pdfa: "protect", "pdfa-check": "protect", tag: "improve", "access-check": "improve", flatten: "improve" };
+const RAIL_OF_TOOL = { pdfa: "protect", "pdfa-check": "protect", tag: "improve", "access-check": "improve", flatten: "improve", "flatten-layers": "improve" };
 const railGroup = (op) => (op.id in RAIL_OF_TOOL ? RAIL_OF_TOOL[op.id] : op.group in RAIL_OF_GROUP ? RAIL_OF_GROUP[op.group] : "convert");
 // The headings inside a flyout, where a tool's server group would read wrong there.
-const SUB_OF_TOOL = { ocr: "Scans", clean: "Scans", tag: "Accessibility", "access-check": "Accessibility", flatten: "Optimize",
+const SUB_OF_TOOL = { ocr: "Scans", clean: "Scans", tag: "Accessibility", "access-check": "Accessibility", flatten: "Optimize", "flatten-layers": "Drawings",
   pdfa: "Archive", "pdfa-check": "Archive", merge: "Several PDFs", interleave: "Several PDFs", compare: "Several PDFs",
   scan: "Create", "from-images": "Create", "from-office": "Create", web: "Create" };
 const SEVERAL_TOOLS = ["merge", "interleave", "compare", "recipe", "organize", "rename", "duplicates", "search"];
@@ -2760,7 +2762,7 @@ const TAGLINES = {
   resize: "Change the paper size or scale pages", crop: "Trim the margins", nup: "Several pages on one sheet",
   compress: "Make files smaller", color: "Grayscale, RGB or CMYK", ocr: "Make scans searchable",
   clean: "Drop blank pages and straighten scans", watermark: "Stamp text or a logo on every page", number: "Add page numbers",
-  flatten: "Bake forms and comments into the page", headers: "Titles, dates and Bates numbers", form: "Create fillable forms",
+  flatten: "Bake forms and comments into the page", "flatten-layers": "Keep a drawing's shown layers, drop the hidden ones", headers: "Titles, dates and Bates numbers", form: "Create fillable forms",
   metadata: "Set the title, author and keywords", encrypt: "Protect with a password", decrypt: "Remove a password",
   redact: "Black out text for good", sanitize: "Remove hidden data and scripts", pdfa: "Convert for long-term archiving", "pdfa-check": "See if a file meets PDF/A, and why not",
   comments: "List comments, or send them as XFDF", web: "Save a web page as a PDF", attach: "Attach files to a PDF, or remove them", labels: "Number pages i, ii, iii then 1, 2, 3", repair: "Mend damaged files; open fast online",

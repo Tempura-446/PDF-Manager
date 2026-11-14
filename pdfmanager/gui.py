@@ -50,6 +50,7 @@ from pdfmanager import ocr  # which OCR engines are installed
 from pdfmanager import scanner, scanpdf  # Scan: paper to a searchable PDF
 from pdfmanager import quickactions  # Explorer's right-click actions
 from pdfmanager import watchfolders  # Settings > Watch folders
+from pdfmanager import layers  # layers (optional content) of drawings
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
@@ -266,6 +267,14 @@ OPERATIONS = [
              "everywhere and can't be changed. Links keep working.",
      "fields": [_f("forms", "Form fields", "check", True),
                 _f("comments", "Comments, highlights, drawings and signatures", "check", True)]},
+    {"id": "flatten-layers", "group": "Stamp", "label": "Flatten layers", "files": "pdf",
+     "action": "Flatten layers",
+     "help": "For drawings exported from CAD with layers: keep the layers that show when the "
+             "file opens as part of the page, take the hidden layers' lines and text out for good, "
+             "and remove the layers, so everyone sees the same clean set.",
+     "fields": [_f("hide", "Also hide these layers", "text", "", placeholder="Dimensions, Notes",
+                   hint="Layer names, separated by commas. Leave empty to keep the layers as the file opens."),
+                _f("show", "Also show these layers", "text", "", placeholder="Walls")]},
     {"id": "form", "group": "Stamp", "label": "Add form fields", "files": "pdf", "panel": "form",
      "help": "Make a PDF fillable: Find fields picks out the lines, boxes and tick boxes of a "
              "printed form, and you can draw more where people should type, tick, choose or "
@@ -557,6 +566,7 @@ SUFFIX.update({"sign-cert": "signed", "verify-sig": "signatures"})  # digital ID
 SUFFIX["pdfa-check"] = "pdfa-check"
 SUFFIX.update({"attach": "attached", "labels": "labelled", "repair": "repaired"})  # file tools
 SUFFIX["comments"] = "comments"
+SUFFIX["flatten-layers"] = "flat"
 SUFFIX["to-excel"] = "tables"
 SUFFIX.update({"tag": "tagged", "access-check": "accessibility"})  # -- accessibility --
 
@@ -751,6 +761,12 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         if not with_fields and not with_comments:
             raise UserError("choose form fields, comments or both")
         archive.flatten(src, out, forms=with_fields, comments=with_comments, password=password)
+    elif op == "flatten-layers":
+        hidden = layers.hidden_names(src, opts.get("hide"), opts.get("show"), password)
+        result = layers.flatten_layers(src, out, hidden=hidden, password=password)
+        if notes is not None and result["removed"]:
+            notes.append(f"{src.name}: removed the hidden layer{'s' if len(result['removed']) > 1 else ''} "
+                         + ", ".join(result["removed"]) + ".")
     elif op == "sanitize":
         counts = archive.sanitize(
             src, out, **{k: _bool(opts.get(k, d)) for k, d in
@@ -2209,6 +2225,46 @@ class Handler(BaseHTTPRequestHandler):
             at += len(chunk)
             left -= len(chunk)
 
+    def _layers(self, body):
+        """The layers of a PDF, for the reader's Layers tab (see layers.info):
+        of a file opened from this computer (field "id") or of an uploaded copy."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        password = fields.get("password") or None
+        if fields.get("id"):
+            return self._send(HTTPStatus.OK, layers.info(self._opened_path(fields["id"]), password))
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            return self._send(HTTPStatus.OK, layers.info(path, password))
+
+    def _layers_change(self, how, body):
+        """The reader's choice of layers ("hidden": a JSON list of pdf.js
+        ids), saved as the way the file opens ("save") or made part of the
+        page ("flatten"); sends back the changed PDF."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        try:
+            hidden = json.loads(fields.get("hidden") or "[]")
+        except ValueError:
+            hidden = None
+        if not isinstance(hidden, list) or not all(isinstance(h, str) for h in hidden):
+            raise UserError("hidden must be a list of layers")
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "layers.pdf"
+            src.write_bytes(uploads[0][2])
+            if how == "save":
+                layers.save_visibility(src, out, hidden, password)
+            else:
+                layers.flatten_layers(src, out, hidden=hidden, password=password)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)  # stays protected
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf")
+
     def _scales(self, body):
         """The drawing scales stored in a PDF (see viewports.py): of a file
         opened from this computer (field "id") or of an uploaded copy."""
@@ -2341,6 +2397,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._images_edit(body)
             if path == "/api/scales":
                 return self._scales(body)
+            if path == "/api/layers":
+                return self._layers(body)
+            if path in ("/api/layers/save", "/api/layers/flatten"):
+                return self._layers_change(path.rsplit("/", 1)[1], body)
             if path.startswith("/api/save/"):
                 return self._save_in_place(path[len("/api/save/"):], body)
             if path == "/api/unsave":  # Undo after Save wrote over a file
