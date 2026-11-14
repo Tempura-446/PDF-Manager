@@ -277,3 +277,34 @@ def test_a_lone_word_line_in_justified_text_only_when_nothing_else_fits():
     widths = [30, 30, 30, 95, 30, 30, 30, 30]  # the fourth word nearly fills a line by itself
     best = lines_of(widths, 100, justify=True)
     assert [3] in best and all(len(line) > 1 for line in best[:-1] if line != [3]), best
+
+
+def test_a_words_own_hyphen_at_a_line_end_doesnt_send_the_edit_back_to_covering(tmp_path):
+    """pdfium reads a hyphen that ends a line as U+FFFE; the check of the
+    new words took "well-" at a line end for a missing "-", and the whole
+    change was then made the old way (covered, the old words left in the
+    file). From the Windows check of 0.34."""
+    import pypdfium2 as pdfium
+    src, out = narrow(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    for lead in ("The", "Then the", "And so the", "Yesterday the", "On Monday the", "Once more the"):
+        text = f"{lead} committee met a well-known architect early on a cold morning to review the budget."
+        report = []
+        textedit.edit_text(src, out, [{"page": 1, "rect": NARROW_RECT, "paragraph": True, "text": text, "align": "justify"}],
+                           report=report)
+        doc = pdfium.PdfDocument(str(out))
+        try:
+            read = doc[0].get_textpage().get_text_range()
+        finally:
+            doc.close()
+        assert not report[0].get("covered"), (lead, report)
+        assert read.count("committee") == 1, (lead, read)
+    # ... and at least one of those put "well-" at a line end (else this tests nothing).
+    assert any("well-" == row.split(" ")[-1] for lead in ("The", "Then the", "And so the", "Yesterday the", "On Monday the", "Once more the")
+               for row, _ in _rows_for(tmp_path, lead)), "no case with well- at a line end"
+
+
+def _rows_for(tmp_path, lead):
+    src, out = narrow(tmp_path / "in2.pdf"), tmp_path / "out2.pdf"
+    text = f"{lead} committee met a well-known architect early on a cold morning to review the budget."
+    textedit.edit_text(src, out, [{"page": 1, "rect": NARROW_RECT, "paragraph": True, "text": text, "align": "justify"}])
+    return rows_of(out)

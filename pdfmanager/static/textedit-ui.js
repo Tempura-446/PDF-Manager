@@ -832,6 +832,7 @@ export const TextEditing = (Base) => class extends Base {
           ? `This is a PDF/A file, which needs every font inside it; ${u.asked} isn't, so ${u.font} was used.`
           : `${u.asked} can't show those letters in that style here, so ${u.font} was used.`);
       }
+      if (u.covered) notes.push("The old words couldn't be taken out of this page, so they are covered: they stay in the file underneath, where Find and Copy can still reach them. To remove text for good, use Redact.");
       if (u.size) notes.push(`The text was made a little smaller (${u.size} pt) to fit.`);
       if (u.linked) notes.push("What didn't fit in its column runs on at the top of the next one.");
     }

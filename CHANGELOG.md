@@ -4,6 +4,18 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.34.1
+
+- **A word's own hyphen at a line end no longer leaves the old words in
+  the file.** When a rewritten paragraph put "well-" at the end of a
+  line, ZPDF's check of its own result misread that hyphen, took the
+  change for a failed one and made it again the old way: the old words
+  covered, and still found by Find and Copy. The check now reads a
+  line-end hyphen as the hyphen it is.
+- When old words do have to be covered (they stay in the file
+  underneath), the reader now says so after the change, and points to
+  Redact for removing text for good.
+
 ## 0.34.0
 
 Rewritten paragraphs are set better, and keep more of what they had.
