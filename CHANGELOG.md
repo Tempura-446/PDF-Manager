@@ -28,6 +28,8 @@ flatten them.
   and the layers go, for sending a clean set.
 - The page previews of a tool no longer stumble when the file is taken
   away while they load.
+- Web page to PDF tries once more with a fresh browser when the browser stalls
+  while starting, instead of failing after two minutes.
 
 ## 0.31.0
 
