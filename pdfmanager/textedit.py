@@ -981,14 +981,17 @@ def _char_styles(rows, text, link_of=None):
     return out
 
 
+MARKUPS = ("/Link", "/Highlight", "/Underline", "/StrikeOut", "/Squiggly")  # annotations that go with words
+
+
 def _link_at(links, letter):
-    """Which of ``links`` (the index) a letter's middle is in, or None."""
+    """Which of ``links`` ([(annotation, its boxes)]: links and text
+    markups) a letter's middle is in: their indices as a tuple, or None."""
     l, b, r, t = letter["tight"]
     x, y = (l + r) / 2, (b + t) / 2
-    for n, (_, (x0, y0, x1, y1)) in enumerate(links):
-        if x0 - 0.5 <= x <= x1 + 0.5 and y0 - 0.5 <= y <= y1 + 0.5:
-            return n
-    return None
+    found = tuple(n for n, (_, boxes) in enumerate(links)
+                  if any(x0 - 0.5 <= x <= x1 + 0.5 and y0 - 0.5 <= y <= y1 + 0.5 for x0, y0, x1, y1 in boxes))
+    return found or None
 
 
 def _split_seq(seq, sep):
@@ -1867,9 +1870,10 @@ class _Page:
                 current = key
                 group.append((ch, *at(pen)))
                 st, w = scaled(key, k)
-                if key[-1] is not None:  # in a link: where its words are now
+                if key[-1] is not None:  # in links or markups: where their words are now
                     (x0, y0), (x1, _) = at(pen), at(pen + w(ch))
-                    linked.setdefault(key[-1], []).append((x0, y0, x1, st["size"]))
+                    for index in key[-1]:
+                        linked.setdefault(index, []).append((x0, y0, x1, st["size"]))
                 pen += w(ch) + tck
             if current is not None:
                 self.run(scaled(current, k)[0], fonts_by[current], group)
@@ -1964,22 +1968,27 @@ class _Page:
         return font
 
     def _links_over(self, letters):
-        """The page's links over any of ``letters``: [(annotation, rect)]."""
+        """The page's links and text markups (highlight, underline, strike
+        out) over any of ``letters``: [(annotation, its boxes: one per line
+        from /QuadPoints, else its /Rect)]."""
         annots = self.page.get("/Annots") if self.page is not None else None
         if not annots:
             return []
         found = []
         for ref in annots.get_object():
             annot = ref.get_object()
-            if annot.get("/Subtype") != "/Link":
+            if annot.get("/Subtype") not in MARKUPS:
                 continue
             try:
                 r = [float(v) for v in annot["/Rect"]]
+                q = [float(v) for v in annot.get("/QuadPoints", [])]
             except (KeyError, TypeError, ValueError):
                 continue
-            rect = (min(r[0], r[2]), min(r[1], r[3]), max(r[0], r[2]), max(r[1], r[3]))
-            if any(_link_at([(annot, rect)], L) is not None for L in letters):
-                found.append((annot, rect))
+            boxes = [(min(q[i:i + 8:2]), min(q[i + 1:i + 8:2]), max(q[i:i + 8:2]), max(q[i + 1:i + 8:2]))
+                     for i in range(0, len(q) - 7, 8)]
+            boxes = boxes or [(min(r[0], r[2]), min(r[1], r[3]), max(r[0], r[2]), max(r[1], r[3]))]
+            if any(_link_at([(annot, boxes)], L) is not None for L in letters):
+                found.append((annot, boxes))
         return found
 
     def _move_links(self, links, linked):
@@ -2008,8 +2017,11 @@ class _Page:
             union = (min(r[0] for r in rects), min(r[1] for r in rects),
                      max(r[2] for r in rects), max(r[3] for r in rects))
             annot[NameObject("/Rect")] = ArrayObject([FloatObject(round(v, 3)) for v in union])
-            if len(rects) > 1 or "/QuadPoints" in annot:
+            markup = annot.get("/Subtype") != "/Link"
+            if len(rects) > 1 or "/QuadPoints" in annot or markup:
                 annot[NameObject("/QuadPoints")] = ArrayObject([FloatObject(round(v, 3)) for v in quads])
+            if markup and "/AP" in annot:
+                del annot["/AP"]  # its picture was of the old place: readers draw it from the boxes
 
     # -- helpers ------------------------------------------------------------------------
     def _set(self, lines, origin, style, font, tc, word, lead, align=None, room=None, ends=None):

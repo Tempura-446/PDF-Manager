@@ -591,3 +591,78 @@ def test_a_size_for_the_whole_paragraph_scales_every_word(tmp_path):
         doc.close()
     assert sizes == {13.0}, sizes
     assert look_of(words(out), "strong")[1]
+
+
+def highlighted(path, subtype="/Highlight"):
+    """The styled paragraph with a highlight (or other text markup) over "northern office"."""
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import ArrayObject, DictionaryObject, FloatObject, NameObject
+    styled(path)
+    x0 = 72 + pdfium_width("region, and the ")
+    x1 = x0 + pdfium_width("northern", ITALIC) + pdfium_width(" office")
+    w = PdfWriter(clone_from=PdfReader(str(path)))
+    quad = [x0, 697, x1, 697, x0, 686, x1, 686]
+    annot = DictionaryObject({
+        NameObject("/Type"): NameObject("/Annot"), NameObject("/Subtype"): NameObject(subtype),
+        NameObject("/Rect"): ArrayObject([FloatObject(v) for v in (x0, 686, x1, 697)]),
+        NameObject("/QuadPoints"): ArrayObject([FloatObject(v) for v in quad]),
+        NameObject("/C"): ArrayObject([FloatObject(v) for v in (1, 1, 0)]),
+        NameObject("/AP"): DictionaryObject()})  # (an old picture of it: must not outlive the move)
+    w.pages[0][NameObject("/Annots")] = ArrayObject([w._add_object(annot)])
+    w.write(str(path))
+    return path
+
+
+def markups(path):
+    from pypdf import PdfReader
+    out = []
+    for ref in PdfReader(str(path)).pages[0].get("/Annots") or []:
+        a = ref.get_object()
+        out.append((str(a["/Subtype"]), [float(v) for v in a["/Rect"]], [float(v) for v in a.get("/QuadPoints", [])], "/AP" in a))
+    return out
+
+
+def test_a_highlight_follows_its_words(tmp_path):
+    for subtype in ("/Highlight", "/Underline", "/StrikeOut"):
+        src, out = highlighted(tmp_path / "in.pdf", subtype), tmp_path / "out.pdf"
+        text = TEXT.replace("shows strong", "shows quite remarkably strong")
+        textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": text}])
+        (kind, rect, quads, has_ap), = markups(out)
+        assert kind == subtype and not has_ap and len(quads) % 8 == 0 and quads
+        lines = [(min(q[0::2]), min(q[1::2]), max(q[0::2]), max(q[1::2])) for q in (quads[i:i + 8] for i in range(0, len(quads), 8))]
+        for word in ("northern", "office"):
+            assert all(any(inside(b, line) for line in lines) for b in boxes_of(out, word)), (subtype, word, lines)
+            assert all(inside(b, rect) for b in boxes_of(out, word))
+        for word in ("region", "led"):  # its neighbours aren't under it
+            assert not any(inside(b, line) for line in lines for b in boxes_of(out, word)), (subtype, word, lines)
+
+
+def test_a_highlight_over_wrapped_words_has_a_box_per_line_and_goes_with_its_words(tmp_path):
+    src, out = highlighted(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    text = TEXT.replace("region, and the", "region and area, and also the")
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": text}])
+    (_, rect, quads, _), = markups(out)
+    north, office = boxes_of(out, "northern"), boxes_of(out, "office")
+    if abs(north[0][1] - office[0][1]) > 5:  # now on two lines
+        assert len(quads) == 16
+    assert all(inside(b, rect) for b in north + office)
+    # Its words deleted: the highlight goes.
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": TEXT.replace(" northern office", "")}])
+    assert markups(out) == []
+
+
+def test_a_link_and_a_highlight_on_the_same_words_both_follow(tmp_path):
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.annotations import Link
+    src, out = highlighted(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    x = 72 + pdfium_width("region, and the ")
+    w = PdfWriter(clone_from=PdfReader(str(src)))
+    w.add_annotation(0, Link(rect=(x, 686, x + pdfium_width("northern", ITALIC), 697), url="https://example.com/n"))
+    w.write(str(src))
+    text = TEXT.replace("shows strong", "shows quite remarkably strong")
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": text}])
+    found = {kind: rect for kind, rect, _, _ in markups(out)}
+    assert set(found) == {"/Highlight", "/Link"}
+    north = boxes_of(out, "northern")
+    assert all(inside(b, found["/Link"]) for b in north) and all(inside(b, found["/Highlight"]) for b in north)
+    assert not all(inside(b, found["/Link"]) for b in boxes_of(out, "office"))
