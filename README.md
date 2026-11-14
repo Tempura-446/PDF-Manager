@@ -96,7 +96,11 @@ setting; for Russian, Ukrainian, Korean, Arabic, Persian, Hindi, Thai, Greek,
 Tamil or Telugu, give its code (`rus`, `kor`, `ara`, …) and that script's
 reading model is fetched once (about 10 MB, checked against its published
 checksum). It turns sideways and upside-down pages upright, reads
-multi-column pages column by column and keeps table rows together.
+multi-column pages column by column and keeps table rows together. A page
+that already has text is left as it is, with two exceptions: a scan whose
+text layer is unreadable (signs and broken letters from an older program)
+is read again, and scanned pictures on a page of real text (a figure, a
+scan with a stamp typed over it) are read and their words added.
 [Tesseract](https://tesseract-ocr.github.io/tessdoc/Installation.html) stays
 as a second OCR engine, for the scripts the built-in one has no model for
 and for PDF/A output straight from OCR: `pip install -e ".[tesseract]"` adds
