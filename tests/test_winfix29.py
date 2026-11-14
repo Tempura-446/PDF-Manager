@@ -1,0 +1,62 @@
+"""0.29.0, from the Windows check (static/reader.js, tabs.js, tabstate.js):
+Redo of a note Undo took back. In a browser through Node's Playwright
+(skipped where there is none); winfix29.js runs one scenario at a time."""
+import json
+import os
+import shutil
+import subprocess
+import threading
+from pathlib import Path
+
+import pytest
+
+from pdfmanager import gui
+from test_fixes241 import text_pdf
+from test_fixes242 import annotations
+
+HERE = Path(__file__).resolve().parent
+
+
+@pytest.fixture
+def app():
+    srv, url = gui.make_server()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield srv, url
+    srv.shutdown()
+    srv.server_close()
+
+
+def run(app, tmp_path, scenario, **ids):
+    node = shutil.which("node")
+    if not node or subprocess.run([node, "-e", "require('playwright')"], capture_output=True, cwd=tmp_path).returncode:
+        pytest.skip("needs Node.js with Playwright")
+    srv, url = app
+    cfg = {"scenario": scenario, **ids}
+    done = subprocess.run([node, str(HERE / "winfix29.js"), url, json.dumps(cfg)], capture_output=True, text=True,
+                          encoding="utf-8", timeout=600)
+    if done.returncode and "Executable doesn't exist" in done.stderr:
+        pytest.skip("Playwright's browser isn't installed")
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)
+    if os.environ.get("WINFIX29_DUMP"):
+        Path(os.environ["WINFIX29_DUMP"]).write_text(json.dumps(out, indent=1), encoding="utf-8")
+    assert not out["errors"], out["errors"]
+    assert not out["native"], out["native"]
+    return out
+
+
+def test_redo_brings_back_a_note_that_undo_took_away(app, tmp_path):
+    srv, _ = app
+    src = text_pdf(tmp_path / "Report.pdf", pages=1)
+    out = run(app, tmp_path, "note", file=srv.RequestHandlerClass.opened.add(src))
+    added, undone, redone, saved = out["added"], out["undone"], out["redone"], out["saved"]
+    assert added["notes"] == 1 and added["dirty"] and added["titleDot"] and added["undo"] and not added["redo"], added
+    # Ctrl+Z: gone, no dot; Redo on.
+    assert undone["notes"] == 0 and not undone["dirty"] and not undone["titleDot"], undone
+    assert undone["redo"] and not undone["undo"], undone
+    # Ctrl+Y: back, the dot, Redo off again (and Undo on).
+    assert redone["notes"] == 1 and redone["dirty"] and redone["titleDot"], redone
+    assert not redone["redo"] and redone["undo"], redone
+    # Ctrl+S: in the file.
+    assert not saved["dirty"] and not saved["titleDot"], saved
+    assert [kind for _, kind, _ in annotations(src) if kind != "/Popup"] == ["/Text"], annotations(src)

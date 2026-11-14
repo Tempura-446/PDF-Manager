@@ -218,6 +218,7 @@ export const Tabs = (Base) => class extends Base {
     // save (it still works).
     this.saveNowBtn.hidden = !ui.saveNow;
     this.undoNowBtn.hidden = !ui.undoNow;
+    this._undoButtons();
     this.annotSaveBtn.classList.toggle("seal", ui.annotSave.main);
     this.annotSaveBtn.classList.toggle("primary", ui.annotSave.main);
     this.annotSaveBtn.title = ui.annotSave.title;

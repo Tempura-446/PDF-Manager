@@ -154,7 +154,7 @@ export const Annotating = (Base) => class extends Base {
     if (name === "NONE" && this.textEditMode) name = "EDITTEXT";
     if (name === "NONE" && this.markupMode) name = this.markupMode;
     this.editMode = name;
-    if (name === "EDITTEXT" || MARKUP.has(name)) this.undoBtn.disabled = !this.activeTab?.undoDepth;
+    this._undoButtons();
     for (const btn of this.annotTools) btn.setAttribute(this.moreTools.includes(btn) ? "aria-checked" : "aria-pressed", String(btn.dataset.mode === name));
     this.#showMoreTools(name);
     const sizes = name === "FREETEXT" ? [[10, "10 pt"], [12, "12 pt"], [14, "14 pt"], [18, "18 pt"], [24, "24 pt"], [36, "36 pt"]]

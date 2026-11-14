@@ -31,6 +31,10 @@ that were wrong and are now right:
   missing**, asked only for OCRmyPDF; it now names both, with where to get
   each. (The OCR tests also no longer depend on whether OCRmyPDF is
   installed on the computer running them.)
+- **Redo after undoing a note** (or a shape, a stamp, a link, a text or
+  page change): Ctrl+Z took it away, but Redo stayed off and Ctrl+Y did
+  nothing. Redo now puts it back (with the dot), and Undo and Redo pick
+  the same change whether from the buttons or the keys.
 
 ## 0.28.0
 

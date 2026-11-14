@@ -34,6 +34,7 @@ export class TabState {
   #version = 0;       // counts every change, so a save knows what it included
   #clean = null;      // { doc, print }: the document and its annotations as last opened or saved (see annotationsAre)
   #undo = [];         // page and text changes to take back: [{ bytes, redacted, saved }] (saved: unchanged then, as opened or last saved)
+  #redo = [];         // ... and the ones taken back, for Redo: [{ bytes, redacted, saved }] (a new change forgets them)
   #afterEdit = null;  // the bytes the last page or text change made
   #redacted = false;  // parts are blacked out: Save makes a redacted copy, never over the original unasked
   #redactedSaved = false;  // ... and such a copy was saved
@@ -95,6 +96,7 @@ export class TabState {
   get clean() { return this.#clean; }
   get afterEdit() { return this.#afterEdit; }
   get undoDepth() { return this.#undo.length; }
+  get redoDepth() { return this.#redo.length; }
   get redacted() { return this.#redacted; }
   get redactedSaved() { return this.#redactedSaved; }
   get unsaved() { return this.#unsaved; }
@@ -185,6 +187,7 @@ export class TabState {
   /** annotationChanged: an annotation or form entry was added or changed (pdf.js's storage). */
   annotationChanged() {
     const was = this.#dirty;
+    this.#redo = [];  // (Redo of a page change would take this away)
     this.#version++;
     this.#savedSince = false;  // changed again after a save
     this.#dirty = true;
@@ -220,6 +223,7 @@ export class TabState {
   /** pageEdited: the server rewrote it (pages arranged, a picture or link
    *  changed, signed with an ID, ...). ``before``: the bytes before, for Undo. */
   pageEdited(before, after, { redacted = false } = {}) {
+    this.#redo = [];
     this.#undo.push({ bytes: before, redacted: this.#redacted, saved: !this.#dirty });
     if (this.#undo.length > UNDO_KEPT) this.#undo.shift();
     this.#bytes = this.#afterEdit = after;
@@ -241,6 +245,7 @@ export class TabState {
   editUndone(goto = null) {
     const last = this.#undo.pop();
     if (!last) return null;
+    this.#redo.push({ bytes: this.#bytes, redacted: this.#redacted, saved: !this.#dirty });
     this.#bytes = this.#afterEdit = last.bytes;
     this.#edited = last.bytes !== this.#original;
     // Back to how it was when it was unchanged (as opened or last saved: the
@@ -254,6 +259,25 @@ export class TabState {
     this.#version++;
     this.#emit("undone");
     return last.bytes;
+  }
+
+  /** editRedone: the last page or text change Undo took back is made again
+   *  (``goto`` as for editUndone). Returns the bytes it is back to (null: none). */
+  editRedone(goto = null) {
+    const next = this.#redo.pop();
+    if (!next) return null;
+    this.#undo.push({ bytes: this.#bytes, redacted: this.#redacted, saved: !this.#dirty });
+    this.#bytes = this.#afterEdit = next.bytes;
+    this.#edited = next.bytes !== this.#original;
+    this.#dirty = !next.saved;
+    this.#savedSince = next.saved;
+    this.#clean = null;
+    this.#redacted = next.redacted;
+    if (!this.#redacted) this.#redactedSaved = false;
+    this.#goto = goto;
+    this.#version++;
+    this.#emit("redone");
+    return next.bytes;
   }
 
   /** made: a tool's result, only in the app until saved (``madeBy``: what made it). */
@@ -283,7 +307,7 @@ export class TabState {
     } else if (how === "redacted") this.#redactedSaved = true;
     if (made) this.#unsaved = false;
     const current = this.#version === version;
-    for (const step of this.#undo) step.saved = false;  // (what Undo goes back to isn't what was saved now)
+    for (const step of [...this.#undo, ...this.#redo]) step.saved = false;  // (what Undo or Redo goes back to isn't what was saved now)
     if (current) {
       this.#dirty = false;
       this.#savedSince = true;
@@ -303,7 +327,7 @@ export class TabState {
     this.#dirty = true;
     this.#savedSince = false;
     this.#clean = null;
-    for (const step of this.#undo) step.saved = false;
+    for (const step of [...this.#undo, ...this.#redo]) step.saved = false;
     this.#emit("unsaved");
   }
 

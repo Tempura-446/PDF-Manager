@@ -585,7 +585,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     this.wideQuery = matchMedia("(min-width: 1100px)");
     this.wideQuery.addEventListener("change", () => this.#applyPanel());
     this.saveNowBtn.addEventListener("click", () => this.save());
-    this.undoNowBtn.addEventListener("click", () => this.#undoLast());
+    this.undoNowBtn.addEventListener("click", () => this._undo());
     this.homeBtn?.addEventListener("click", () => this.onHome());
     document.addEventListener("pointerdown", (e) => { if (!this.menu.hidden && !this.menu.contains(e.target) && e.target !== this.moreBtn && !this.moreBtn.contains(e.target)) this.#closeMenu(); });
     this.thumbsTab.addEventListener("click", () => this.#showTab("thumbs"));
@@ -624,8 +624,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     });
     for (const sw of this.swatches) sw.addEventListener("click", () => this._setColor(+sw.dataset.index));
     this.sizeSelect.addEventListener("change", () => this._setSize(+this.sizeSelect.value));
-    this.undoBtn.addEventListener("click", () => (this.textEditMode || this.markupMode ? this._undoTextEdit() : this.uiManager?.undo()));
-    this.redoBtn.addEventListener("click", () => this.uiManager?.redo());
+    this.undoBtn.addEventListener("click", () => this._undo());
+    this.redoBtn.addEventListener("click", () => this._undo(true));
     this.deleteBtn.addEventListener("click", () => this.uiManager?.delete());
     this.annotSaveBtn.addEventListener("click", () => this.save());
     this.annotCloseBtn.addEventListener("click", () => this.closeAnnotate());
@@ -724,8 +724,10 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); this._saveKey(e); return; }
     if (mod && !isTyping(e) && !this.scalebar.hidden && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")
         && this._measureUndo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); return; }
-    if (mod && e.key.toLowerCase() === "z" && !e.shiftKey && !isTyping(e) && this.activeTab?.undoDepth
-        && (this.textEditMode || this.markupMode || this.annotbar.hidden)) { e.preventDefault(); this._undoTextEdit(); return; }
+    // Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z): what the Undo and Redo buttons do.
+    if (mod && !e.altKey && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y") && !isTyping(e)
+        && (this.textEditMode || this.markupMode || this.annotbar.hidden)
+        && this._undo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); e.stopPropagation(); return; }
     if (e.key === "Escape" && !this.ctxMenu.hidden) { this.#closeContextMenu(); return; }
     if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); this.pdfViewer.increaseScale(); return; }
     if (mod && e.key === "-") { e.preventDefault(); this.pdfViewer.decreaseScale(); return; }
@@ -1207,10 +1209,9 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     eventBus.on("annotationeditormodechanged", ({ mode }) => this._showEditMode(this._modeName(mode)));
     eventBus.on("editingstateschanged", ({ details }) => {
       this.annotUndo = !!details.hasSomethingToUndo;
+      this.annotRedo = !!details.hasSomethingToRedo;
       this.#compareAnnotations();
       this._refresh({ notify: false });
-      this.undoBtn.disabled = !details.hasSomethingToUndo;
-      this.redoBtn.disabled = !details.hasSomethingToRedo;
       this.deleteBtn.disabled = !details.hasSelectedEditor;
     });
 
@@ -1277,7 +1278,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     this.closeAnnotate();
     this.measureTool(null);
     this.uiManager = null;
-    this.annotUndo = false;
+    this.annotUndo = this.annotRedo = false;
     this.labels = null;
     for (const stop of this.asking || []) { stop.closed = true; stop.abort(); }
     this.thumbs = null;
@@ -2320,6 +2321,47 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     });
   }
 
+  /** Redo of the last page or text change Undo took back (a note, too). */
+  _redoTextEdit() {
+    return this._serial(async () => {
+      const tab = this.activeTab;
+      if (!tab?.redoDepth) return;
+      if (this._changed()
+          && await this.ask("Redo the change?", "Redoing it takes away the annotations and form entries made since it was undone.",
+            [["cancel", "Cancel"], ["redo", "Redo the change", true]]) !== "redo") return;
+      tab.editRedone(this.#view());
+      await this.#reloadEditing(tab);
+      this.toast("Change redone", 1500);
+    });
+  }
+
+  /** Which Undo (``redo``: Redo) applies now, the same for the buttons and
+   *  the keys: "annot" (pdf.js's history of annotations), "page" (the
+   *  reader's own page and text changes, notes and shapes included) or null.
+   *  In Edit text and the reader's own markup tools its changes come first,
+   *  else pdf.js's. */
+  _undoKind(redo = false) {
+    const page = !!(redo ? this.activeTab?.redoDepth : this.activeTab?.undoDepth);
+    const annot = !!this.uiManager && !!(redo ? this.annotRedo : this.annotUndo);
+    if (this.textEditMode || this.markupMode) return page ? "page" : annot ? "annot" : null;
+    return annot ? "annot" : page ? "page" : null;
+  }
+
+  /** Undo (``redo``: Redo) whichever applies; false if there was nothing. */
+  _undo(redo = false) {
+    const kind = this._undoKind(redo);
+    if (kind === "annot") { if (redo) this.uiManager.redo(); else this.uiManager.undo(); }
+    else if (kind === "page") { if (redo) this._redoTextEdit(); else this._undoTextEdit(); }
+    return !!kind;
+  }
+
+  /** The annotate bar's Undo and Redo: on while there's something for them. */
+  _undoButtons() {
+    if (!this.undoBtn) return;
+    this.undoBtn.disabled = !this._undoKind();
+    this.redoBtn.disabled = !this._undoKind(true);
+  }
+
   /** Show the tab's changed bytes, staying in the Edit text tool if it was on. */
   async #reloadEditing(tab) {
     const editing = this.textEditMode ? "EDITTEXT" : this.markupMode, picked = this.pickedImage;
@@ -2331,7 +2373,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
       this._setEditMode(editing);
       if (editing === "IMAGES" && picked) this.pickedImage = picked;  // the picture just moved stays picked
     }
-    this.undoBtn.disabled = !tab.undoDepth;
+    this._undoButtons();
   }
 
   // ---- saving, printing, editing ------------------------------------------------
@@ -2687,12 +2729,6 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
   /** Commit the annotation being drawn or typed. */
   _finishEditing() {
     try { this.uiManager?.endCurrentEditing?.(); } catch (e) { /* nothing being edited */ }
-  }
-
-  /** Take back the last change: an annotation if one was just made, else a page or text change. */
-  #undoLast() {
-    if (this.annotUndo && this.uiManager) this.uiManager.undo();
-    else if (this.activeTab?.undoDepth) this._undoTextEdit();
   }
 
   /** ``tab``'s changes up to ``version`` are in a file now (see TabState.saved;

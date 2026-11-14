@@ -99,6 +99,44 @@ test("page edit and undo", () => {
   eq(t.arrived(), null, "goto given once");
 });
 
+test("page edit, undo, redo (a note added, taken back, put back)", () => {
+  const t = fresh();
+  t.loaded(DOC);
+  const b0 = t.bytes, b1 = bytes(2);
+  t.pageEdited(b0, b1);
+  eq([t.undoDepth, t.redoDepth], [1, 0], "after the edit");
+  t.editUndone();
+  eq([t.dirty, t.undoDepth, t.redoDepth], [false, 0, 1], "after undo: no dot, one to redo");
+  eq(t.editRedone({ page: 1 }) === b1, true, "redo gives the changed bytes back");
+  eq([t.dirty, t.edited, t.bytes === b1, t.afterEdit === b1, t.undoDepth, t.redoDepth, t.arrived()],
+     [true, true, true, true, 1, 0, { page: 1 }], "after redo: the dot, undo again");
+  eq(t.editRedone(), null, "nothing more to redo");
+  // Undo again, then a new change: nothing to redo any more.
+  t.editUndone();
+  t.annotationChanged();
+  eq(t.redoDepth, 0, "an annotation forgets the redo");
+  t.pageEdited(t.bytes, bytes(5));
+  t.editUndone();
+  t.pageEdited(t.bytes, bytes(6));
+  eq(t.redoDepth, 0, "a page change forgets the redo");
+});
+
+test("redo back to the saved state, and after a save", () => {
+  const t = fresh();
+  t.loaded(DOC);
+  const b1 = bytes(2);
+  t.pageEdited(t.bytes, b1);
+  t.saved("in place", { version: t.version, bytes: b1, stamp: "s2" });
+  t.editUndone();
+  eq(t.dirty, true, "undo past the save: unsaved");
+  t.editRedone();
+  eq([t.dirty, t.savedSince], [false, true], "redo back to what was saved: no dot");
+  t.editUndone();
+  t.saved("as", { version: t.version });
+  t.editRedone();
+  eq(t.dirty, true, "redo after another save: a change");
+});
+
 test("undo of a page edit made after saving annotations: unchanged", () => {
   const t = fresh();
   t.loaded(DOC);
