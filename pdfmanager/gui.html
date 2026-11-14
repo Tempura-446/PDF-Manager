@@ -3469,6 +3469,7 @@ async function syncBoard() {
     board.configure({ mode: spec.mode, effect: spec.effect || null });
   }
   const it = items[0];
+  if (!it) return;  // (the file was taken away while pages.js loaded)
   const result = await board.load(it.file, $("pw").value || null);
   if (result === "password" || result === "wrong-password") $("pw-box").open = true;
   if (result !== "ok" || board.file !== it.file || current.board !== spec) return;
