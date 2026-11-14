@@ -1127,6 +1127,8 @@ class _Page:
         self._flow, self._faces = None, {}
         self._segs = None
         self.spot = None    # where the change being made writes its new words in the drawing
+        self.spots = None   # ... line by line, for a paragraph: [(place, the old line's first letter)]
+        self.line_no = None  # the line of the paragraph being written
         self.legacy = False  # the change being made is done the old way (covered and drawn on top)
 
     @property
@@ -1148,6 +1150,7 @@ class _Page:
     def start(self):
         """Before each change."""
         self.notes, self.spot, self.legacy = {}, None, self.old_way
+        self.spots, self.line_no = None, None
         self._first_run = len(self.runs)
 
     def touch(self, letters):
@@ -1200,7 +1203,12 @@ class _Page:
         # so the old words must all be in one tag (else the others' tags
         # would be left empty), and a tag's replacement text must be theirs.
         one_line = text if text is not None and len(rows) == 1 and "\n" not in text else None
-        retag = flow.tags(everything, one_line, one=True) if spot is not None else None
+        # The words may be in several tags (a link, a line or a run with its
+        # own): each new line is then written at the old line it replaces, so
+        # the words stay spread over the tags in reading order, and none of
+        # the old words is left in the file underneath.
+        retag = flow.tags(everything, one_line, one=False) if spot is not None else None
+        spots = [(flow.glyph(row[0]), row[0]) for row in rows] if paragraph and retag is not None else None
         if retag is None:
             done = False
         elif paragraph:
@@ -1213,6 +1221,7 @@ class _Page:
         flow.retag.update(retag)
         if spot is not None:
             self.spot = (spot, everything[0])
+            self.spots = spots if spots and all(sp is not None for sp, _ in spots) else None
         return True
 
     def take_replaced(self, letters, text):
@@ -1235,9 +1244,11 @@ class _Page:
         page."""
         if self.spot is None:
             return
-        spot, first = self.spot
         left = []
         for run in self.runs[self._first_run:]:
+            spot, first = self.spot
+            if self.spots and run.get("line") is not None:
+                spot, first = self.spots[min(run["line"], len(self.spots) - 1)]
             colour = None if _same_colour(run["style"]["color"], first["style"]["color"]) else run["style"]["color"]
             if not self.flow.insert(spot, True, {**run, "same": False, "color": colour}):
                 left.append(run)
@@ -1272,7 +1283,7 @@ class _Page:
                 and abs(_across(style, last["entries"][0], entries[0])) < 0.01:  # on the same line
             last["entries"] += entries  # one piece of text: copied, found and edited again as one
         else:
-            self.runs.append({"style": style, "own": own, "name": name, "entries": entries})
+            self.runs.append({"style": style, "own": own, "name": name, "entries": entries, "line": self.line_no})
 
     def close(self):
         self.textpage.close()
@@ -1923,9 +1934,12 @@ class _Page:
             d = drop + n * lead_k
             point = (first["origin"][0] + u[0] * (-first["s"]) + down[0] * d,
                      first["origin"][1] + u[1] * (-first["s"]) + down[1] * d)
+            self.line_no = n
             emit(line, left + off, width, tck, g, lambda s, p=point: (p[0] + u[0] * s, p[1] + u[1] * s))
         for n, (line, g, off, _) in enumerate(more):  # level text only: the paragraph is level
+            self.line_no = len(lines) + n
             emit(line, off, width, tck, g, lambda s, n=n: (nxt["x0"] + s, nxt["baseline"] - n * lead_k))
+        self.line_no = None
         if looks and links:
             self._move_links(links, linked)
         return font

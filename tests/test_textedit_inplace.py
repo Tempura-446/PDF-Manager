@@ -434,15 +434,31 @@ def test_a_tag_whose_replacement_text_is_only_part_of_the_line_is_left_alone(tmp
     assert found(out, STAYS) == 1 and found(out, "Pack my box with five dozen liquor jugs.") == 1
 
 
-def test_a_paragraph_whose_lines_have_tags_of_their_own_isnt_emptied_into_one(tmp_path):
+def test_a_paragraph_whose_lines_have_tags_of_their_own_keeps_its_words_spread_over_them(tmp_path):
+    """Each new line is written into the tag of the old line it replaces
+    (the last tag takes what's left), and none of the old words stays in
+    the file underneath. (Until 0.34 such a paragraph was covered.)"""
     src = tagged_lines(tmp_path / "t.pdf", f"({FOX}) Tj")
     out = tmp_path / "out.pdf"
     report = []
-    textedit.edit_text(src, out, [{"page": 1, "rect": [70, 660, 340, 712], "paragraph": True,
-                                   "text": "One paragraph written in place of the three lines."}], report=report)
-    assert report[0].get("covered") is True
+    text = ("One paragraph written in place of the three lines, long enough now that it takes a second line "
+            "and then a third one as well, right to the end.")
+    textedit.edit_text(src, out, [{"page": 1, "rect": [70, 660, 340, 712], "paragraph": True, "text": text}],
+                       report=report)
+    assert not report[0].get("covered")
+    doc = pdfium.PdfDocument(str(out))
+    try:
+        read = doc[0].get_textpage().get_text_range()
+    finally:
+        doc.close()
+    assert " ".join(read.split()) == text
+    for old in ("quick brown", "neighbouring", "Pack my box"):
+        assert old not in read
     parts = sequences(out)
-    assert "quick brown" in parts[0] and "neighbouring" in parts[1] and "Pack my box" in parts[2]
+    assert len(parts) == 3 and all("TJ" in part for part in parts)  # no tag left empty
+    # A paragraph that got shorter leaves the later tags empty, not the words in one heap elsewhere.
+    textedit.edit_text(src, out, [{"page": 1, "rect": [70, 660, 340, 712], "paragraph": True, "text": "Short now."}])
+    assert found(out, "Short now.") == 1 and found(out, "neighbouring") == 0
 
 
 def test_only_the_letters_the_font_lacks_get_another_font(tmp_path):

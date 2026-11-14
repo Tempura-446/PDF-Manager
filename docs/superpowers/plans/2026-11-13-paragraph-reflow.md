@@ -94,7 +94,7 @@ Visual check: before/after renders of the untouched regions must be pixel-identi
 - [x] Rules: at least 2 letters before and 3 after a break; no more than 2 hyphenated lines in a row; never hyphenate the last word of a paragraph.
 - [x] Test: a narrow justified column breaks "extraordinarily" at a pattern point; "well-known" breaks after the hyphen.
 
-**Task 2.3: author's line breaks**
+**Task 2.3: author's line breaks** (covered another way in 0.33: a line that stops short though the next word would have fitted ends its paragraph in the reader, so an address block's lines are each edited by themselves and keep their ends; Enter in the paragraph editor makes a forced break.)
 - [ ] A line break inside the paragraph that wasn't caused by the width (the line ends well short of the right edge, and the next line doesn't start lower case) is kept as a forced break.
 - [ ] In the editor, Shift+Enter makes one.
 - [ ] Test: an address block or a short-line poem keeps its line ends after a word is changed.
@@ -188,5 +188,5 @@ Release A shipped: per-word styles are kept, the editor shows them, links follow
 - A Word-made report with bold and italic words and a link; an invoice with a bold total; a brochure paragraph with a coloured phrase; a paragraph whose first word is bold (a run-in heading).
 
 **From the Windows check of 0.33 (a Word-made file)**
-- [ ] (B) **Tagged files (Word's) fall back to covering.** When a paragraph's words are in more than one tag (a link, or a run-in heading, has its own), the old words are covered, not taken out: they stay in the file's text underneath, and Find and Copy give both. Take the words out tag by tag and write each run back into its own tag.
+- [x] (B, done) **Tagged files (Word's) fall back to covering.** When a paragraph's words are in more than one tag (a link, or a run-in heading, has its own), the old words are covered, not taken out: they stay in the file's text underneath, and Find and Copy give both. Take the words out tag by tag and write each run back into its own tag.
 - [ ] (B) The editor's box wraps a little differently from the page at some zooms (at 125 % one word sat a line early). Wrap the box with the same breaks the server will make.

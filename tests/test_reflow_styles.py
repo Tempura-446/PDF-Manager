@@ -494,3 +494,56 @@ def test_a_paragraph_rewritten_by_covering_shows_its_styles_again(tmp_path):
     shown = [w for w in found if w[0].strip(".,") in ("strong", "northern", "record", "branch")]
     assert any(w[0] == "strong" and w[2] for w in shown) and any(w[0] == "northern" and w[3] for w in shown), shown
     assert any(w[0] == "record" and w[4] == (0.8, 0.1, 0.1) for w in shown), shown
+
+
+def word_like(path):
+    """A paragraph tagged as Word tags one with a link in it: the words
+    before the link, the link's words and the words after are each in a
+    marked-content sequence of their own, over two lines."""
+    import pikepdf
+    from pikepdf import Array, Dictionary, Name
+    pdf = pikepdf.new()
+    font = pdf.make_indirect(Dictionary(Type=Name.Font, Subtype=Name.Type1, BaseFont=Name.Helvetica))
+    content = b"\n".join([
+        b"/P <</MCID 0>> BDC BT /F1 10 Tf 72 700 Td (For care instructions see ) Tj ET EMC",
+        b"/Link <</MCID 1>> BDC BT /F1 10 Tf 0 0 0.8 rg 190.4 700 Td (our website) Tj ET EMC",
+        b"/P <</MCID 2>> BDC BT /F1 10 Tf 0 g 244.9 700 Td ( or ask in the) Tj ET EMC",
+        b"/P <</MCID 3>> BDC BT /F1 10 Tf 72 688 Td (shop, where we keep printed copies.) Tj ET EMC",
+    ])
+    page = pikepdf.Page(Dictionary(Type=Name.Page, MediaBox=[0, 0, 612, 792],
+                                   Resources=Dictionary(Font=Dictionary(F1=font)), Contents=pdf.make_stream(content)))
+    pdf.pages.append(page)
+    pdf.Root.MarkInfo = Dictionary(Marked=True)
+    pdf.save(str(path))
+    return path
+
+
+WORD_RECT = [70, 684, 330, 712]
+
+
+def page_text(path):
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        return " ".join(doc[0].get_textpage().get_text_range().split())
+    finally:
+        doc.close()
+
+
+def test_a_paragraph_in_several_tags_leaves_no_old_words_underneath(tmp_path):
+    """Word's files: a rewritten paragraph was covered, so Copy and Find
+    gave the old words as well as the new."""
+    src, out = word_like(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    assert page_text(src) == "For care instructions see our website or ask in the shop, where we keep printed copies."
+    text = "For full care instructions see our website or ask in the shop, where we keep spare printed copies."
+    report = []
+    textedit.edit_text(src, out, [{"page": 1, "rect": WORD_RECT, "paragraph": True, "text": text}], report=report)
+    assert not report[0].get("covered"), report
+    assert page_text(out) == text
+    assert look_of(words(out), "website")[3] == (0.0, 0.0, 0.8)  # the link's colour stays on its words
+
+
+def test_one_line_in_several_tags_leaves_no_old_words_underneath(tmp_path):
+    src, out = word_like(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    old, new = "For care instructions see our website or ask in the", "For care advice see our website or ask in the"
+    textedit.edit_text(src, out, [{"page": 1, "rect": [70, 697, 330, 711], "old": old, "text": new}])
+    assert page_text(out) == new + " shop, where we keep printed copies."
