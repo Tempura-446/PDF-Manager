@@ -45,6 +45,9 @@ that were wrong and are now right:
 - **The unsaved dot while drawing** came only once the drawing was put
   down (Select or Esc), although Save turned red as soon as the stroke was
   drawn. The dot now shows with it.
+- **The Measurements list** stayed open over the next tab after switching
+  away from the measured one. It now goes with its document, and is there
+  again on coming back.
 
 ## 0.28.0
 

@@ -1,6 +1,7 @@
 """0.29.0, from the Windows check (static/reader.js, tabs.js, tabstate.js):
 Redo of a note Undo took back (and the server kept told what's unsaved,
-for closing the desktop window: test_close_guard.py); Ctrl+Z and Ctrl+Y with Select on. In a browser through Node's Playwright
+for closing the desktop window: test_close_guard.py); Ctrl+Z and Ctrl+Y with Select on;
+the unsaved dot while drawing; the Measurements list on a tab switch. In a browser through Node's Playwright
 (skipped where there is none); winfix29.js runs one scenario at a time."""
 import json
 import os
@@ -97,3 +98,17 @@ def test_the_unsaved_dot_shows_as_soon_as_save_turns_red(app, tmp_path):
     assert not undone["tabDot"] and not undone["annotSaveMain"] and undone["editors"] == 0, undone
     # The server heard of it as soon as the dot showed.
     assert ["Second.pdf"] in out["unsavedPosts"], out["unsavedPosts"]
+
+
+def test_the_measurements_list_stays_with_its_tab(app, tmp_path):
+    srv, _ = app
+    opened = srv.RequestHandlerClass.opened
+    out = run(app, tmp_path, "measures", first=opened.add(text_pdf(tmp_path / "Plan.pdf", pages=1)),
+              second=opened.add(text_pdf(tmp_path / "Other.pdf", pages=1)))
+    assert out["measured"] == {"open": True, "tab": 0, "rows": 1}, out["measured"]
+    # Another tab: the list isn't over it.
+    assert out["other"]["tab"] == 1 and not out["other"]["open"], out["other"]
+    # Back: it's there again.
+    assert out["back"] == {"open": True, "tab": 0, "rows": 1}, out["back"]
+    # Closed by hand there: it stays closed coming back.
+    assert out["closedBack"]["tab"] == 0 and not out["closedBack"]["open"], out["closedBack"]

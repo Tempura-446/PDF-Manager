@@ -1275,6 +1275,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
 
   async _closeDocument() {
     this.gaveWay = null;  // (no bar comes back for a document that is going)
+    this._putAwayMeasures();  // (its list of measurements goes with it)
     this.closeFind();
     await this.closeCompare();
     this.closeAnnotate();

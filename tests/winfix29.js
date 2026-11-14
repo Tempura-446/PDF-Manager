@@ -4,6 +4,8 @@
 //   select  with Select on (Esc after Draw): Ctrl+Z / Ctrl+Y undo and redo a
 //           drawing, and a note (the reader's own page changes), as the
 //           buttons do; not while typing in a box.
+//   dot     a stroke drawn in a new tab: the unsaved dot shows with Save.
+//   measures the Measurements list goes with its tab and comes back with it.
 // Run by test_winfix29.py:
 //   node winfix29.js <page URL with #token=...> <JSON: { scenario, ids... }>
 // Prints one JSON object with what it found.
@@ -107,6 +109,42 @@ const { chromium } = require("playwright");
       await page.evaluate(() => reader.undoBtn.click());
       await page.waitForTimeout(800);
       out.undone = await state();
+    }
+
+    if (cfg.scenario === "measures") {
+      const list = () => page.evaluate(() => ({ open: !reader.measPanel.hidden, tab: reader.tabs.indexOf(reader.activeTab),
+        rows: reader.measPanel.querySelectorAll(".rd-mrow").length }));
+      const showTab = async (n) => {
+        await page.click(`.rd-doctab:nth-child(${n}) .rd-doctab-name`);
+        await page.waitForFunction((i) => reader.doc && reader.activeTab === reader.tabs[i] && reader.loading.hidden && document.querySelector(".page canvas"), n - 1, { timeout: 30000 });
+        await page.waitForTimeout(800);
+      };
+      await open(cfg.first);
+      await page.evaluate((id) => reader.openById(id), cfg.second);
+      await page.waitForFunction(() => reader.tabs.length === 2 && reader.activeTab === reader.tabs[1] && document.querySelector(".page canvas"), null, { timeout: 30000 });
+      await settled();
+      await showTab(1);
+      // A length measured in the first tab: its list opens.
+      await page.evaluate(() => reader.measureTool("distance"));
+      await page.waitForTimeout(400);
+      const [x, y] = await pageBox();
+      await page.mouse.click(x + 100, y + 400);
+      await page.waitForTimeout(150);
+      await page.mouse.click(x + 400, y + 400);
+      await page.waitForTimeout(400);
+      await page.evaluate(() => reader.measureTool(null));
+      await page.evaluate(() => { if (reader.measPanel.hidden) reader._toggleMeasPanel(true, false); });
+      await page.waitForTimeout(300);
+      out.measured = await list();
+      await showTab(2);
+      out.other = await list();
+      await showTab(1);
+      out.back = await list();
+      // Closed by hand there: it stays closed coming back.
+      await page.evaluate(() => reader._toggleMeasPanel(false));
+      await showTab(2);
+      await showTab(1);
+      out.closedBack = await list();
     }
 
     if (cfg.scenario === "select") {

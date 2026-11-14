@@ -1347,8 +1347,19 @@ export const Measuring = (Base) => class extends Base {
   }
 
   /** Bring back the measurements made on this document before. */
+  /** Another document takes the viewer's place (another tab, or this one
+   *  shown again after a change): the list of measurements goes, and comes
+   *  back with its own document (see _loadMeasures). */
+  _putAwayMeasures() {
+    const tab = this.activeTab;
+    if (!this.measPanel || !tab) return;
+    tab.measListOpen = !this.measPanel.hidden;
+    if (tab.measListOpen) this._toggleMeasPanel(false, false);
+  }
+
   _loadMeasures() {
     const tab = this.activeTab, key = this.#measuresStore(tab);
+    if (tab?.measListOpen) { tab.measListOpen = false; this._toggleMeasPanel(true, false); }
     if (!tab || tab.measuresLoaded || !key) return;
     tab.measuresLoaded = true;
     const data = store.get(key, null);
