@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Tests for the page tools added in 0.9: blank pages, splitting at
 bookmarks and by size, booklets and trimming white margins."""
 

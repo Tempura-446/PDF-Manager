@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // The app page in a browser: the rail, the flyout, the palette, the start
 // screen and the layout at two widths. Run by test_startscreen.py:
 //   node startscreen.js <page URL with #token=...>

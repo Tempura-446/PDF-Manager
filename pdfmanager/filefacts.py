@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """What a PDF is, at a glance: the facts the start screen shows beside a
 recent file, and the suggestions for an open one start from.
 

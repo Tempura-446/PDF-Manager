@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Accessibility and usability fixes, in a browser (Node's Playwright, skipped
 where there is none): focus never hides under the sticky action bar, focus
 rings and field borders that can be seen, the annotate bar and Settings fit,

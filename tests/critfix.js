@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // Fixes from the 0.23 interface critique, in a browser: saving and finishing
 // (Save… and Show in folder after a panel run, the unsaved dot, Undo after
 // Save wrote over a file, the app's own dialogs instead of confirm()), the
@@ -171,6 +172,9 @@ const fs = require("fs");
       await page.waitForFunction(() => !document.querySelector("#run").disabled, null, { timeout: 30000 });
       await page.click("#run");
       await page.waitForSelector("#result:not([hidden]) .btn.seal", { timeout: 60000 });
+      // (Run steps back with a colour fade: measured once it's over, not mid-way,
+      // when on a busy machine it still has the seal's colour.)
+      await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running"), null, { timeout: 10000 });
       out.resultCard = await page.evaluate(() => {
         const save = document.querySelector("#result .btn.seal"), run = document.querySelector("#run");
         return { save: save.textContent.trim(), saveBg: getComputedStyle(save).backgroundColor, runBg: getComputedStyle(run).backgroundColor,

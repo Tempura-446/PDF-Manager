@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // 0.30.0 in a browser: a right-click action started from Explorer. The page
 // opens with #action=<batch>, follows the batch's job on a card at the foot
 // of the window, and shows the result as a new, unsaved tab whose note says

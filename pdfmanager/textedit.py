@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Change words already on a page, rewrite a paragraph, or add words.
 
 Text in a PDF isn't stored as editable paragraphs: it's drawn letter by

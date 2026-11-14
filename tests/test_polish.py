@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Stage 3, the polish pass, in a browser (Node's Playwright, skipped where
 there is none): one Recent list on the start screen and under the reader's
 "Open a PDF", the drop-first pages of the tools that start from several

@@ -4,6 +4,32 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.31.0
+
+Mostly behind the scenes: groundwork for keeping ZPDF and what it installs
+safe. The app works as before.
+
+- **Packages checked against their hashes.** When a release carries a
+  list of ZPDF's packages pinned with their hashes, the installer installs
+  exactly those, and stops if a file doesn't match its hash, so a package
+  replaced on PyPI can't slip in. Without the list, or on a Python other
+  than the one it was made for, it installs as before. The list is made on
+  Windows by `packaging/lock.py`, or by a workflow on GitHub.
+- **Reporting a security problem.** `SECURITY.md` says how to report one
+  privately, through GitHub, what counts, and that fixes go into the latest
+  release.
+- **The name and the licence.** Every source file now starts with a
+  copyright line, and a test makes sure new ones do too. `TRADEMARKS.md`
+  says the ZPDF name and icon are for this software only, not for other
+  software or changed copies, and the README says how copies that break
+  the licence are reported to GitHub.
+- **Checks that run by themselves on GitHub:** Dependabot proposes
+  updates to ZPDF's packages and to the workflows' actions each week;
+  CodeQL scans ZPDF's Python and JavaScript for security mistakes; and
+  `pip-audit` checks ZPDF's packages for known vulnerabilities each week.
+- Switching tools quickly while a page preview was loading for the first time
+  could leave an error behind; it no longer does.
+
 ## 0.30.0
 
 Two ways to get work done without opening the tools first.

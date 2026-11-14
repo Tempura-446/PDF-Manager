@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Where pdfium puts a letter, and how wide a font's letters are: the
 small pieces textedit.py and textflow.py both read text with (kept here so
 the two don't have to import each other)."""

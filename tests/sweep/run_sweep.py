@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """The maturity sweep: every tool on every file of a corpus (see
 make_corpus.py), each run in a child process of its own with a time limit
 and a memory limit, and the result sorted into

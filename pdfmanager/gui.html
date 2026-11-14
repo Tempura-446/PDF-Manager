@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -3461,6 +3462,8 @@ async function syncBoard() {
   $("pages-sub").textContent = sub;
   $("pages-hint").textContent = hint;
   if (!boardLib) boardLib = await import("/static/pages.js");
+  // (Loading it the first time takes a moment: the tool or its files may have changed meanwhile.)
+  if (current?.board !== spec || items.length !== 1) return;
   if (!board) board = new boardLib.PageBoard($("page-board"), { onChange: boardChanged });
   if (board.mode !== spec.mode || board.effect !== (spec.effect || null) || board.tool !== current.id) {
     board.tool = current.id;

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """PDF operations. Every function reads from paths and writes to paths so it
 can be used from the CLI or imported as a library."""
 

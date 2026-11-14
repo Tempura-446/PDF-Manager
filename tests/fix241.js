@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // The owner's Windows check of 0.24.0, in a browser: Sign it puts the
 // signature on the printed line (and Sign without one, a moderate size in
 // view); Undo back to the saved state clears the unsaved dot; the annotate

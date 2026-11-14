@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // 0.29.0 in a browser: the parts of the reader that now live in modules of
 // their own still work as before: measuring (measuring.js: the scale bar, a
 // length, an area, the list, Undo), find (find.js), the text editor box

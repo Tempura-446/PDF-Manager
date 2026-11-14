@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // TabState's transitions and deriveUi (static/tabstate.js), without a browser:
 // it needs nothing of the page. Run by test_tabstate.py:
 //   node tabstate.mjs <path to tabstate.js>

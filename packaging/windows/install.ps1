@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 # Installs ZPDF for the current Windows user (no administrator rights
 # needed). Start it with "Install ZPDF.cmd" in the ZPDF folder.
 #
@@ -48,6 +49,10 @@ if (-not (Test-Path (Join-Path $source "pyproject.toml"))) {
 }
 $appDir = Join-Path $env:LOCALAPPDATA "PDF Manager\app"
 $venv = Join-Path $appDir "venv"
+# ZPDF's packages pinned with their hashes (made by packaging/lock.py), if
+# this copy of ZPDF has them: then exactly those files are installed, and a
+# package that doesn't match its hash is refused.
+$lock = Join-Path $PSScriptRoot "requirements-lock.txt"
 
 # A 64-bit Python 3.10 to 3.14: ONNX Runtime (the built-in OCR engine) has
 # Windows builds for those. A newer Python, like 3.15 when it came out, is
@@ -179,13 +184,33 @@ if (-not (Test-Python $venvPython)) {
     & $python -m venv $venv
     if ($LASTEXITCODE -ne 0) { throw "Could not create the app's Python environment." }
 }
-& $venvPython -m pip install --disable-pip-version-check --quiet --upgrade pip
-& $venvPython -m pip install --disable-pip-version-check --quiet --upgrade "$source[app,ocr]"
-if ($LASTEXITCODE -ne 0) {
-    # Most likely the OCR engine has no build for this Python: better ZPDF
-    # without it (OCR then uses Tesseract, if installed) than no ZPDF.
-    Say "Installing with the built-in OCR engine didn't work (see above); installing ZPDF without it..."
-    & $venvPython -m pip install --disable-pip-version-check --quiet --upgrade "$source[app]"
+# The pinned packages are for one Python version (the "# python:" line of
+# requirements-lock.txt), since their files differ between versions.
+$lockPython = $null
+if (Test-Path -LiteralPath $lock) {
+    foreach ($line in (Get-Content -LiteralPath $lock -TotalCount 10)) {
+        if ($line -match '^# python: (\d+\.\d+)') { $lockPython = $Matches[1] }
+    }
+}
+$venvVersion = & $venvPython -c "import sys; print('%d.%d' % sys.version_info[:2])"
+if ($lockPython -and ($venvVersion -eq $lockPython)) {
+    Say "Installing the pinned packages, each checked against its hash"
+    & $venvPython -m pip install --disable-pip-version-check --quiet --no-deps --require-hashes -r $lock
+    if ($LASTEXITCODE -ne 0) {
+        throw "A package didn't install or didn't match its pinned hash (see above). Nothing unchecked was installed instead."
+    }
+    # ZPDF itself, from this folder, with the pinned setuptools and nothing fetched.
+    & $venvPython -m pip install --disable-pip-version-check --quiet --no-deps --no-build-isolation --no-index --force-reinstall "$source"
+} else {
+    if ($lockPython) { Say "The pinned packages are for Python $lockPython; installing the newest versions for Python $venvVersion" }
+    & $venvPython -m pip install --disable-pip-version-check --quiet --upgrade pip
+    & $venvPython -m pip install --disable-pip-version-check --quiet --upgrade "$source[app,ocr]"
+    if ($LASTEXITCODE -ne 0) {
+        # Most likely the OCR engine has no build for this Python: better ZPDF
+        # without it (OCR then uses Tesseract, if installed) than no ZPDF.
+        Say "Installing with the built-in OCR engine didn't work (see above); installing ZPDF without it..."
+        & $venvPython -m pip install --disable-pip-version-check --quiet --upgrade "$source[app]"
+    }
 }
 if ($LASTEXITCODE -ne 0) { throw "Installing ZPDF's packages failed (see above)." }
 Say "Done"

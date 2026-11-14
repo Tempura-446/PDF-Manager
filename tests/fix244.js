@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // 0.24.4 in a browser: with Select (no tool) on, a single click picks a
 // signature or a drawing, both one placed in this session and one already in
 // the file, as after switching tabs and back; it can then be dragged and

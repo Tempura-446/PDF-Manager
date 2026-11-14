@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Made-up phone photos of a page, for the tests of pagephoto.py and Scan:
 a printed page (a heading bar, a black square at its top left, lines of
 "words"), turned, seen at an angle, on a grainy wooden desk, lit unevenly

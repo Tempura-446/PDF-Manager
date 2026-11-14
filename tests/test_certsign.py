@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Signing with a digital ID (a .pfx file) and checking signatures:
 certsign.py, its CLI commands, the GUI tools and the reader's endpoints."""
 

@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // Opening files in the reader, in a browser: a file of a few megabytes comes
 // in pieces and still gets its signature and form bars; thumbnails are made
 // when their panel is shown, and only near what it shows; Enter submits the

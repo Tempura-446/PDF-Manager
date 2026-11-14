@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // The reader's drawing scale and measuring: for to-scale drawings such as
 // house plans, each sheet's scale (read from the sheet, or set by hand), zoom
 // to true paper size or to a drawing scale on a calibrated screen, a tool to

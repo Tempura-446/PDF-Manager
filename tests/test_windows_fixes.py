@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Fixes from the Windows check of 0.22.1, in a browser (Node's Playwright,
 skipped where there is none): the file chooser from the keyboard, Undo
 toasts that wait, Windows high contrast (forced colours), Settings' buttons

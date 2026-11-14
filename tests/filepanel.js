@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // The reader's file panel in a browser: facts and suggestions for the shown
 // file, a tool opened and run in the panel (by the file's id, or with its
 // bytes), a failure, a result that isn't a PDF, the T key, a narrow window.

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """fonts.installed_family: a family's normal-width face comes before its
 condensed one when both carry the family's name (DejaVu Sans Condensed Bold
 is "DejaVu Sans" with the style "Condensed Bold")."""

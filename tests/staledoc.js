@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // A document closed while work for it is still on the way. Open one PDF, open
 // a second in another tab, go back to the first and turn a page: each step
 // swaps the pdf.js document while pdf.js's viewer (handing pages to the page

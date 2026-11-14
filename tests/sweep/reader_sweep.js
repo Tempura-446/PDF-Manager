@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // The sweep's reader check (run_sweep.py --reader): each file opened in the
 // reader in a fresh page; it must show its first page, the password box or
 // its "can't be opened" state, without errors on the page, and pages further

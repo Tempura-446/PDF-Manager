@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Photos of paper pages, made into clean pages: find the page's four edges
 in a phone photo, flatten it (undo the perspective), crop it, straighten it,
 and give it a "document" look (even lighting, white paper, dark ink), with

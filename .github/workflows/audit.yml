@@ -1,0 +1,65 @@
+name: Dependency audit
+
+# pip-audit: checks the packages ZPDF installs (pyproject.toml with all its
+# extras, so the OCR engine and the app window too) against the known
+# vulnerabilities in the Python Packaging Advisory Database and OSV, and
+# fails if one has any. It runs weekly and by hand (Actions > Dependency
+# audit > Run workflow), and on pull requests only when they change the
+# dependencies, so a new advisory elsewhere can't block an unrelated merge.
+# On Windows too: the app window brings Windows-only packages (pythonnet).
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 5 * * 1"  # Mondays, 05:41 UTC
+  pull_request:
+    paths:
+      - pyproject.toml
+      - requirements.txt
+      - packaging/windows/requirements-lock.txt
+      - .github/workflows/audit.yml
+  push:
+    branches: [main]
+    paths:
+      - pyproject.toml
+      - requirements.txt
+      - packaging/windows/requirements-lock.txt
+      - .github/workflows/audit.yml
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: pip-audit (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      # A fresh environment, so only ZPDF's packages (and pip-audit's) are
+      # audited, not what the runner's Python came with (ZPDF itself is
+      # installed editable, so --skip-editable leaves it out). pip-audit is
+      # installed here only, never in ZPDF itself.
+      - name: Install ZPDF's packages and pip-audit
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/audit"
+          if [ -x "$RUNNER_TEMP/audit/Scripts/python" ]; then PY="$RUNNER_TEMP/audit/Scripts/python"; else PY="$RUNNER_TEMP/audit/bin/python"; fi
+          echo "PY=$PY" >> "$GITHUB_ENV"
+          "$PY" -m pip install --disable-pip-version-check -q --upgrade pip
+          "$PY" -m pip install --disable-pip-version-check -q -e ".[all]" pip-audit
+      - name: Audit
+        shell: bash
+        run: |
+          "$PY" -m pip_audit --progress-spinner off --desc on --skip-editable
+      - name: Audit the installer's pinned packages
+        if: hashFiles('packaging/windows/requirements-lock.txt') != '' && runner.os == 'Windows'
+        shell: bash
+        run: |
+          "$PY" -m pip_audit --progress-spinner off --desc on --no-deps --disable-pip \
+            -r packaging/windows/requirements-lock.txt

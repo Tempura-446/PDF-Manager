@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Settings shared by every test: nothing reaches the user's own ZPDF folder
 (settings, recent files, recipes, the search index, the log, the update
 cache, OCR models), and nothing checks GitHub for updates. Also the

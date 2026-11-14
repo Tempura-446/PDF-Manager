@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // The reader's find bar: words in the document (pdf.js's find controller
 // highlights them), the count, case and whole words; one tool row at a time
 // with the annotate bar. A part of Reader (see Finding below).

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """True redaction (redact.py method "remove", redactcontent.py): what lies
 under the boxes is taken out of the page, the rest stays real text, in the
 same place."""

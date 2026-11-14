@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """One workload of the performance checks (test_perf.py), run in its own
 Python so its peak memory is its own: ``python perfwork.py WORK SRC OUT
 DATA`` prints "seconds peak_mb". The peak counts everything the process

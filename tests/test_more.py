@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Tests for progress and cancelling, recent files, single instance, headers
 and footers, extracting pictures and attachments, folder search, form
 fields, text edits, Windows set-up and updates."""

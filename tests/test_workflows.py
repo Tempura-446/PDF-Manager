@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """The weekly sweep's workflow (.github/workflows/sweep.yml): it parses,
 runs only on its schedule or by hand (never on pull requests, so it can't
 become a required check), stays short, keeps its report, and uses the same

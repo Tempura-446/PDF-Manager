@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Certificate signatures: sign a PDF with a digital ID (a .pfx or .p12
 file, like Acrobat's "Sign with a digital ID") and check the signatures in
 a PDF.

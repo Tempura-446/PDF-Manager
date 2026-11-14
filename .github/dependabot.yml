@@ -1,0 +1,29 @@
+# Dependabot: weekly pull requests that update ZPDF's Python packages
+# (pyproject.toml, requirements.txt) and the GitHub Actions the workflows
+# use. Updates come grouped, a few small pull requests a week rather than
+# one per package, and each one runs the tests like any other.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # Minor versions and fixes together; a new major version gets a pull
+      # request of its own, since that's the one that can break something.
+      python-minor-and-patch:
+        update-types: [minor, patch]
+    labels: [dependencies]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ["*"]
+    labels: [dependencies]

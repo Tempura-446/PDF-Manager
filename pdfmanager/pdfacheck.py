@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Check whether a PDF meets PDF/A, the ISO standard for archiving.
 
 Two ways to check:

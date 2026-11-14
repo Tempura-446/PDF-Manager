@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Small tools for the file itself: what a password allows, attached files,
 page labels, repairing a damaged file and making it quick to open online.
 

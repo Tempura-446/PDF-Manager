@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Show why PDF → Word reads a page the way it does: for each page where a
 phrase is found, how often each reader sees it (pdfium, used for the text;
 pdfplumber, used to find tables), what was left out as a copy, the tables

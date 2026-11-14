@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Watch an inbox folder and process PDFs as they arrive.
 
 ``watch()`` polls until stopped; ``once()`` makes a single pass (for a

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Set up ZPDF on Windows once it's installed with Python: Start menu
 and desktop shortcuts, ZPDF in "Open with" and Default apps for
 PDFs, its actions in Explorer's right-click menu (see

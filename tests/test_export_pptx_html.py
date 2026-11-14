@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """PDF → PowerPoint (slides.py) and PDF → HTML (webpage.py), and what they
 share (layout.py)."""
 

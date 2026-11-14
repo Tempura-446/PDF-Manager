@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """packaging/release.py: the release zip, its notes, and publishing."""
 import hashlib
 import importlib.util

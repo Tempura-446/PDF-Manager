@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """0.29.0, from the Windows check (gui.py): closing the desktop window with its
 X asks first when anything is unsaved. WebView2 fires no beforeunload then,
 so the page keeps the server told what's unsaved (/api/unsaved) and

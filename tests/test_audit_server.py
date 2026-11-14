@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Tests for the server findings of the audit: names outside latin-1 in
 response headers, results kept until sent, time asleep not counting as
 idle, passwords protecting only what was protected, work folders of jobs

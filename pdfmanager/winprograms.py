@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 r"""Where Windows programs are installed: the Program Files folders and the
 registry. Shared by the finders of Tesseract (scan.py), Ghostscript
 (archive.py) and veraPDF (pdfacheck.py); it imports no other part of ZPDF.
