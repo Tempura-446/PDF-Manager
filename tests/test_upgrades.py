@@ -356,6 +356,9 @@ def test_ocr_missing_dependency_message(tmp_path, monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
+    from pdfmanager import scan  # the Tesseract program is here; only OCRmyPDF is missing
+
+    monkeypatch.setattr(scan, "find_tesseract", lambda: "C:/Tesseract-OCR/tesseract.exe")
     with pytest.raises(core.PdfManagerError, match=r"pip install pdf-manager\[tesseract\]"):
         core.ocr(make_pdf(tmp_path / "a.pdf"), tmp_path / "b.pdf", engine="tesseract")
 

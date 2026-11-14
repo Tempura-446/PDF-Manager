@@ -27,6 +27,10 @@ that were wrong and are now right:
 - **Closing ZPDF or updating it** now warns about a tool's result that was
   never saved anywhere (its tab has the dot, and closing the tab already
   asked).
+- **OCR with Tesseract, with both OCRmyPDF and the Tesseract program
+  missing**, asked only for OCRmyPDF; it now names both, with where to get
+  each. (The OCR tests also no longer depend on whether OCRmyPDF is
+  installed on the computer running them.)
 
 ## 0.28.0
 

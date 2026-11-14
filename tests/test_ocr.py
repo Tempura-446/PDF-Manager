@@ -30,13 +30,59 @@ def test_auto_prefers_builtin_then_tesseract(monkeypatch):
     assert "pip install pdf-manager[ocr]" in str(e.value) and "Tesseract" in str(e.value)
 
 
+def _installed(monkeypatch, ocrmypdf, program):
+    """Pretend OCRmyPDF and the Tesseract program are (or aren't) here,
+    whatever this computer really has."""
+    monkeypatch.setattr(ocr, "ocrmypdf_installed", lambda: ocrmypdf)
+    monkeypatch.setattr(ocr.scan, "find_tesseract", lambda: "C:/Tesseract-OCR/tesseract.exe" if program else None)
+
+
 def test_named_engine_that_is_missing_says_what_to_install(monkeypatch):
     monkeypatch.setattr(ocr, "builtin_available", lambda: False)
     with pytest.raises(core.PdfManagerError, match=r"pip install pdf-manager\[ocr\]"):
         ocr.choose_engine("builtin")
-    monkeypatch.setattr(ocr, "tesseract_available", lambda: False)
-    with pytest.raises(core.PdfManagerError, match="tesseract-ocr.github.io"):
+    _installed(monkeypatch, ocrmypdf=True, program=False)
+    with pytest.raises(core.PdfManagerError, match="tesseract-ocr.github.io") as e:
         ocr.choose_engine("tesseract")
+    assert "needs the Tesseract program" in str(e.value) and "OCRmyPDF" not in str(e.value)
+
+
+def test_tesseract_engine_with_both_parts_missing_names_both(monkeypatch):
+    monkeypatch.setattr(ocr, "builtin_available", lambda: True)
+    _installed(monkeypatch, ocrmypdf=False, program=False)
+    with pytest.raises(core.PdfManagerError) as e:
+        ocr.choose_engine("tesseract")
+    message = str(e.value)
+    assert "OCRmyPDF and the Tesseract program" in message
+    assert ocr.PIP_TESSERACT in message and ocr.TESSERACT_LINK in message
+    assert message.endswith("or choose the Built-in engine")
+    # The same when OCRmyPDF was found but wouldn't import.
+    _installed(monkeypatch, ocrmypdf=True, program=False)
+    assert ocr.TESSERACT_LINK in ocr._tesseract_missing(no_ocrmypdf=True)
+    assert ocr.PIP_TESSERACT in ocr._tesseract_missing(no_ocrmypdf=True)
+
+
+def test_tesseract_engine_with_only_ocrmypdf_missing_asks_for_it_alone(monkeypatch):
+    monkeypatch.setattr(ocr, "builtin_available", lambda: False)
+    _installed(monkeypatch, ocrmypdf=False, program=True)
+    with pytest.raises(core.PdfManagerError) as e:
+        ocr.choose_engine("tesseract")
+    message = str(e.value)
+    assert "needs OCRmyPDF, which isn't installed" in message and ocr.PIP_TESSERACT in message
+    assert ocr.TESSERACT_LINK not in message and "Built-in" not in message
+
+
+def test_ocrmypdf_counts_as_installed_only_when_it_can_be_found(monkeypatch):
+    import importlib.machinery
+    import sys
+    import types
+
+    monkeypatch.setitem(sys.modules, "ocrmypdf", None)   # blocked, as on a copy without it
+    assert ocr.ocrmypdf_installed() is False
+    fake = types.ModuleType("ocrmypdf")
+    fake.__spec__ = importlib.machinery.ModuleSpec("ocrmypdf", None)
+    monkeypatch.setitem(sys.modules, "ocrmypdf", fake)
+    assert ocr.ocrmypdf_installed() is True
 
 
 # -- recognising an image -----------------------------------------------------
