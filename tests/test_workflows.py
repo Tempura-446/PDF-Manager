@@ -37,7 +37,8 @@ def test_the_sweep_uses_the_same_actions_as_the_tests():
     tests, sweep = _actions(_load("tests.yml")), _actions(_load("sweep.yml"))
     for name in ("actions/checkout", "actions/setup-python"):
         assert sweep[name] == tests[name]
-    assert sweep["actions/upload-artifact"] == "v6"
+    # (Dependabot moves them together; the build's upload is the one to match.)
+    assert sweep["actions/upload-artifact"] == _actions(_load("build-app.yml"))["actions/upload-artifact"]
 
 
 def test_the_sweep_makes_a_quick_corpus_and_keeps_the_report():
