@@ -26,7 +26,10 @@ organize, rename, de-duplicate, **search** and watch whole folders of PDFs.
    (no GitHub account needed), and unzip it (right-click → *Extract All*).
 2. In the unzipped folder, double-click **Install ZPDF.cmd**. If
    Windows asks, choose *More info → Run anyway* (it's a plain text script:
-   you can read what it does in `packaging/windows/install.ps1`).
+   you can read what it does in `packaging/windows/install.ps1`). A
+   **ZPDF Setup** window opens: tick what you want (desktop shortcut,
+   "Open with", the right-click menu, Tesseract and Ghostscript), press
+   **Install**, and it shows each step as it goes, then **Open ZPDF**.
 
 It installs Python from python.org if you don't have it (with winget or the
 official, signed installer), installs ZPDF in its own folder
@@ -39,9 +42,14 @@ apps*) for PDFs, **ZPDF in File Explorer's right-click menu** (see
 afterwards. Running it again updates the installed copy (or use the
 **Update** button, below).
 
-OCR is built in, so scanned PDFs can be made searchable right away. At
-the end the installer asks whether to add **Tesseract and Ghostscript** too
-(about 150 MB): they add a second OCR engine and, for the few files ZPDF
+The setup window is drawn by Microsoft Edge (every Windows 10 and 11 has
+it) and talks only to the installer on your own PC. `Install ZPDF.cmd
+-Console` does the same in the console window instead, as do automated
+runs and PCs where no window can be shown.
+
+OCR is built in, so scanned PDFs can be made searchable right away. The
+setup window offers to add **Tesseract and Ghostscript** too (about 150 MB;
+not ticked to begin with, and the console asks at the end): they add a second OCR engine and, for the few files ZPDF
 can't make PDF/A itself, a second PDF/A converter. OCRmyPDF goes into ZPDF's folder and the two programs are
 installed with winget (`UB-Mannheim.TesseractOCR`,
 `ArtifexSoftware.GhostScript`; Windows may ask for permission, as they

@@ -4,6 +4,32 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.35.0
+
+A setup window in place of the console.
+
+- **Install ZPDF.cmd now opens a ZPDF Setup window**, in the app's own
+  look (light and dark). It says what will be installed and where, with a
+  tick box for each choice: the desktop shortcut, "Open with" for PDFs, the
+  right-click menu in File Explorer, and Tesseract with Ghostscript.
+- **Each step shows as it runs** (Python, ZPDF and its packages, shortcuts
+  and menus, the two programs if asked for) with a progress bar, what it is
+  doing now, and the full details on request. You can keep using the PC,
+  and closing the window doesn't stop the installation.
+- **A clear end:** "ZPDF is installed", where to find it, what became of
+  Tesseract and Ghostscript, and an **Open ZPDF** button. When something
+  goes wrong it says what, at which step, with **Try again** and **Copy
+  details**.
+- Updating an installed copy says so ("Update ZPDF") and keeps your
+  settings.
+- Tesseract and Ghostscript are now a box to tick (not ticked to begin
+  with); the console asked at the end, with yes as the answer to Enter.
+- Everything works from the keyboard, and is read out by a screen reader
+  as it progresses.
+- The console still does it all with `Install ZPDF.cmd -Console`, in
+  automated runs, and where Microsoft Edge isn't there to draw the window;
+  its steps are now numbered.
+
 ## 0.34.1
 
 - **A word's own hyphen at a line end no longer leaves the old words in
