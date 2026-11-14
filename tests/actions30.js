@@ -18,6 +18,7 @@ const { chromium } = require("playwright");
     page.on("dialog", (d) => { out.native.push(d.type() + ": " + d.message()); d.dismiss().catch(() => {}); });
     await page.goto(url);
     await page.waitForSelector(".action-card", { timeout: 30000 });
+    await page.waitForFunction(() => document.querySelector(".action-card .ac-title").textContent !== "ZPDF", null, { timeout: 10000 });
     out.cardTitle = await page.textContent(".action-card .ac-title");
     await page.waitForFunction(() => typeof reader !== "undefined" && reader && reader.tabs.length === 1 && reader.doc && document.querySelector(".page canvas"), null, { timeout: 60000 });
     await page.waitForFunction(() => /Opened/.test(document.querySelector(".action-card .ac-msg")?.textContent || ""), null, { timeout: 30000 });

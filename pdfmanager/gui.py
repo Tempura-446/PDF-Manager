@@ -49,6 +49,7 @@ from pdfmanager import applog
 from pdfmanager import ocr  # which OCR engines are installed
 from pdfmanager import scanner, scanpdf  # Scan: paper to a searchable PDF
 from pdfmanager import quickactions  # Explorer's right-click actions
+from pdfmanager import watchfolders  # Settings > Watch folders
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
@@ -2107,6 +2108,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._events()
         if path.startswith("/api/action/"):
             return self._action(path[len("/api/action/"):])
+        if path == "/api/watch":
+            return self._watch_list()
+        if path == "/api/watch/news":
+            query = urllib.parse.parse_qs(self.path.partition("?")[2])
+            try:
+                after = int(query.get("after", ["0"])[0])
+            except ValueError:
+                after = 0
+            news, last = self.watcher.news_after(after)
+            # A result can be opened in the reader from its toast.
+            news = [{**item, "id": self.opened.add(item["result"])
+                     if item["result"] and Path(item["result"]).is_file() else None} for item in news]
+            return self._send(HTTPStatus.OK, {"news": news, "last": last})
         if path == "/api/shellmenu":
             from pdfmanager import winsetup
 
@@ -2364,6 +2378,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._access_check(body)
             if path == "/api/settings":
                 return self._save_settings(body)
+            if path in ("/api/watch/add", "/api/watch/pause", "/api/watch/remove"):
+                data = json.loads(body or b"{}")
+                if path == "/api/watch/add":
+                    do = {"recipe": data["recipe"]} if data.get("recipe") else {"tool": data.get("tool")}
+                    self.watcher.add(data.get("folder"), do, data.get("results") or "done",
+                                     data.get("originals") or "keep")
+                elif path == "/api/watch/pause":
+                    self.watcher.set_paused(str(data.get("id")), data.get("paused"))
+                else:
+                    self.watcher.remove(str(data.get("id")))
+                return self._watch_list()
             if path == "/api/shellmenu":
                 from pdfmanager import winsetup
 
@@ -2746,6 +2771,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(HTTPStatus.OK, {"handled": True, "proof": proof})
         url = f"http://127.0.0.1:{self.server.server_address[1]}/#token={self.token}&action={batch.id}"
         return self._send(HTTPStatus.OK, {"url": url, "mode": self.instance_mode, "proof": proof})
+
+    def _watch_list(self):
+        """Settings > Watch folders: the folders, what each is doing, and the choices."""
+        _, last = self.watcher.news_after(10**9)
+        return self._send(HTTPStatus.OK, {
+            "folders": self.watcher.list(), "last": last,
+            "tools": [{"id": k, "label": v} for k, v in watchfolders.TOOLS.items()],
+            "recipes": list(recipes.load_all())})
 
     def _action(self, rest):
         """GET /api/action/<id>: how a right-click batch is getting on;
@@ -3240,6 +3273,9 @@ class _Server(ThreadingHTTPServer):
         actions = getattr(handler, "actions", None)
         if actions is not None:
             actions.close()
+        watcher = getattr(handler, "watcher", None)
+        if watcher is not None:
+            watcher.stop()
 
 
 def make_server(port=0, desktop=False, open_paths=(), prefer=None, action=None):
@@ -3262,6 +3298,8 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None, action=None):
                                                "saved_over": SavedOver(), "unsaved": UnsavedWork(),
                                                "work": WorkFolders(), "scans": scanpdf.ScanBoxes()})
     handler.actions = quickactions.Batches(lambda batch: _start_action(handler, batch))
+    handler.watcher = watchfolders.WatchFolders(log=_log)
+    handler.watcher.start()  # (only once there's a folder to watch)
     server = None
     if not port and prefer:
         try:

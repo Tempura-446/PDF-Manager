@@ -1098,6 +1098,19 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
 .action-card .ac-msg.err { color: var(--err); }
 .action-card .ac-buttons { display: flex; justify-content: flex-end; gap: 8px; }
 .action-card .job-progress { width: 100%; }
+/* Settings > Watch folders */
+.watch-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.watch-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.watch-item .wi-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-sm); }
+.watch-item .wi-folder { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.watch-item .wi-what { color: var(--muted); }
+.watch-item .wi-state { color: var(--text-2); overflow-wrap: anywhere; }
+.watch-item .wi-state.err { color: var(--err); }
+.watch-item .wi-buttons { display: flex; gap: 6px; flex-shrink: 0; }
+.watch-add { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); }
+.watch-add .watch-row { display: flex; gap: 8px; }
+.watch-add label[for] span { font-weight: 600; color: var(--text-2); }
+.watch-add .watch-row input { flex: 1; min-width: 0; height: 38px; padding: 0 11px; border: 1px solid var(--input-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; }
 </style>
 </head>
 <body>
@@ -1253,6 +1266,25 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
       <p class="dlg-hint">Right-click PDFs in File Explorer for ZPDF › Combine, Make searchable (OCR), Make smaller
         or Open, and pictures for Make a PDF with ZPDF. On Windows 11 they're under <em>Show more options</em>.
         This changes at once; it's for you only.</p>
+    </div>
+    <h3>Watch folders</h3>
+    <p class="dlg-hint">PDFs put in a watched folder are done one by one while ZPDF is open, each once. A note
+      shows when a file is done or couldn't be. Files still downloading or being copied are left until they're complete.</p>
+    <ul class="watch-list" id="watch-list" aria-label="Watched folders"></ul>
+    <div class="watch-add" id="watch-add" role="group" aria-labelledby="watch-add-title">
+      <b id="watch-add-title">Watch a folder</b>
+      <div class="dlg-field"><label for="watch-folder"><span>Folder</span></label>
+        <div class="watch-row"><input type="text" id="watch-folder" spellcheck="false" autocomplete="off" placeholder="C:\Users\you\Scans">
+          <button type="button" class="btn secondary pb-small" id="watch-browse" hidden>Browse…</button></div></div>
+      <label class="dlg-field"><span>What to do</span><select id="watch-do"></select></label>
+      <label class="dlg-field"><span>Results go</span><select id="watch-results">
+        <option value="done">Into a “Done” folder inside it</option>
+        <option value="beside">Next to the original, the name ending “(searchable)”, “(smaller)”…</option></select></label>
+      <label class="dlg-field"><span>The originals</span><select id="watch-originals">
+        <option value="keep">Stay where they are</option>
+        <option value="move">Move to an “Originals” folder inside it</option></select></label>
+      <div><button type="button" class="btn secondary" id="watch-add-btn">Watch this folder</button></div>
+      <p class="dlg-status" id="watch-status" aria-live="polite"></p>
     </div>
     <h3>Updates</h3>
     <label class="dlg-check"><input type="checkbox" id="set-check"> Check for new versions when ZPDF starts</label>
@@ -1504,6 +1536,7 @@ async function load() {
   renderTools();
   listen();
   setTimeout(checkForUpdates, 4000);
+  scheduleWatchNews(1000);
   const openIds = (new URLSearchParams(location.hash.slice(1)).get("open") || "").split(",").filter(Boolean);
   const actionId = new URLSearchParams(location.hash.slice(1)).get("action");
   if (actionId) {  // started from Explorer's right-click menu
@@ -4222,6 +4255,8 @@ async function openSettings() {
   $("set-token-state").textContent = s.token_set ? "· saved" : "";
   $("set-token-clear").hidden = !s.token_set;
   updateStatus("set-status", "");
+  try { await loadWatch(); } catch (e) { updateStatus("watch-status", e.message, true); }
+  updateStatus("watch-status", "");
   try {
     const menu = await jsonApi("/api/shellmenu");
     $("shell-menu").hidden = !menu.available;
@@ -4229,6 +4264,78 @@ async function openSettings() {
   } catch (e) { $("shell-menu").hidden = true; }
   $("settings-dialog").showModal();
 }
+// ---- Settings > Watch folders (watchfolders.py) ------------------------------------
+let watchInfo = { folders: [], tools: [], recipes: [] }, watchLast = null;
+async function loadWatch() {
+  watchInfo = await jsonApi("/api/watch");
+  if (watchLast === null) watchLast = watchInfo.last;  // (news from before this page isn't shown)
+  renderWatch();
+  return watchInfo;
+}
+function watchState(f) {
+  const s = f.status, counts = [s.done ? `${s.done} done` : "", s.failed ? `${s.failed} couldn’t be done` : ""].filter(Boolean).join(", ");
+  const head = { paused: "Paused", watching: "Watching", starting: "Starting…" }[s.state] || s.detail || s.state;
+  return [head, counts, s.last ? `Last: ${s.last.message}` : ""].filter(Boolean).join(" · ");
+}
+function renderWatch() {
+  const list = $("watch-list");
+  list.replaceChildren(...watchInfo.folders.map((f) => {
+    const bad = ["missing", "error", "elsewhere"].includes(f.status.state) || (f.status.last && !f.status.last.ok);
+    const pause = el("button", { type: "button", class: "btn secondary pb-small", "aria-label": `${f.paused ? "Resume" : "Pause"} watching ${f.folder}`,
+      onclick: () => watchCall("/api/watch/pause", { id: f.id, paused: !f.paused }) }, f.paused ? "Resume" : "Pause");
+    const remove = el("button", { type: "button", class: "btn ghost pb-small", "aria-label": `Stop watching ${f.folder}`,
+      onclick: () => watchCall("/api/watch/remove", { id: f.id }, `${f.folder} isn’t watched any more. Its files are left as they are.`) }, "Remove");
+    return el("li", { class: "watch-item", "data-id": f.id },
+      el("div", { class: "wi-text" }, el("span", { class: "wi-folder" }, f.folder), el("span", { class: "wi-what" }, f.describe),
+        el("span", { class: "wi-state" + (bad ? " err" : ""), "aria-live": "polite" }, watchState(f))),
+      el("div", { class: "wi-buttons" }, pause, remove));
+  }));
+  list.hidden = !watchInfo.folders.length;
+  const pick = $("watch-do"), was = pick.value;
+  pick.replaceChildren(
+    el("optgroup", { label: "A tool, with its usual settings" }, ...watchInfo.tools.map((t) => el("option", { value: "tool:" + t.id }, t.label))),
+    ...(watchInfo.recipes.length ? [el("optgroup", { label: "A saved recipe" }, ...watchInfo.recipes.map((r) => el("option", { value: "recipe:" + r }, r)))] : []));
+  if ([...pick.options].some((o) => o.value === was)) pick.value = was;
+  $("watch-browse").hidden = !(isDesktop() && window.pywebview.api.pick_folder);
+}
+async function watchCall(path, data, said = "") {
+  try {
+    watchInfo = await jsonApi(path, data);
+    renderWatch();
+    updateStatus("watch-status", said);
+    return true;
+  } catch (e) { updateStatus("watch-status", capital(e.message), true); return false; }
+}
+async function addWatch() {
+  const [kind, ...rest] = $("watch-do").value.split(":");
+  const folder = $("watch-folder").value.trim();
+  const ok = await watchCall("/api/watch/add", { folder, [kind]: rest.join(":"), results: $("watch-results").value, originals: $("watch-originals").value },
+    `Watching ${folder}. PDFs put there from now on, and those there already, are done one by one.`);
+  if (ok) { $("watch-folder").value = ""; scheduleWatchNews(1500); }
+}
+$("watch-add-btn").addEventListener("click", addWatch);
+$("watch-folder").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addWatch(); } });  // (not Save)
+$("watch-browse").addEventListener("click", async () => {
+  try { const chosen = await window.pywebview.api.pick_folder(); if (chosen) $("watch-folder").value = chosen; } catch (e) { /* closed */ }
+});
+// A note when a watched file is done or couldn't be (with the plain reason).
+let watchNewsTimer = 0;
+function scheduleWatchNews(ms) { clearTimeout(watchNewsTimer); watchNewsTimer = setTimeout(watchNews, ms); }
+async function watchNews() {
+  try {
+    if (watchLast === null) await loadWatch();
+    const { news, last } = await jsonApi(`/api/watch/news?after=${watchLast}`);
+    watchLast = last;
+    const failed = news.filter((n) => !n.ok), done = news.filter((n) => n.ok);
+    if (news.length === 1) appToast(news[0].message, news[0].ok ? 6000 : 12000, news[0].id ? ["Open", () => openInReaderById([news[0].id])] : null);
+    else if (news.length) appToast([done.length ? `${plural(done.length, "file")} done in watch folders` : "",
+      failed.length ? `${failed.length} couldn’t be done (${failed.map((n) => n.message).join("; ")})` : ""].filter(Boolean).join("; "), failed.length ? 12000 : 6000);
+    if ($("settings-dialog").open) await loadWatch();
+  } catch (e) { /* the app is closing, or busy: try again */ }
+  const open = $("settings-dialog").open;
+  scheduleWatchNews(open ? 2000 : watchInfo.folders.some((f) => !f.paused) ? 4000 : 20000);
+}
+
 $("set-shell-menu").addEventListener("change", async (e) => {
   const want = e.target.checked;
   try {
