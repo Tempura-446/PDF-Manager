@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Find where a flat form should get fillable fields.
 
 A form meant for a pen shows where to write: a line to write on

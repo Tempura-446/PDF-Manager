@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """A small local web app: ``pdfm gui`` serves a page on 127.0.0.1 and shows
 it in its own window (pywebview, or else Edge/Chrome in app mode) or in the
 browser. Uses only the standard library.

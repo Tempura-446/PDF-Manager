@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Search by meaning: the model (meaning.py) and the "best" way to search a
 folder (search.py)."""
 

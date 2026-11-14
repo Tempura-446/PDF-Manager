@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """ZPDF's log, error ids, and the diagnostics a friend can send.
 
 The app keeps a small log in its data folder (logs/zpdf.log, 1 MB, with

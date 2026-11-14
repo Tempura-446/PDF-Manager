@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // The reader's tabs: the open documents (each a TabState, tabstate.js), the
 // queue that shows one at a time, switching, closing, and what the screen
 // shows from their state (the tab bar, the dots, the Save buttons, the

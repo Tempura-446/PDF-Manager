@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Where ZPDF keeps its own files: saved recipes, the browser profile
 of the app window and a note about why the native window didn't open."""
 

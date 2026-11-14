@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """The built-in PDF/A engine: makes a PDF conform to PDF/A-1b, -2b or -3b
 without Ghostscript, by putting right what the standard asks for and
 leaving the pages as they are:

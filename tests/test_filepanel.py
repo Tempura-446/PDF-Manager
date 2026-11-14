@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """The reader's file panel (gui.html, static/reader.js): the shown file's
 name, facts and suggestions; a tool opened and run right there, on the open
 file by its id or with its bytes; failures and results that aren't PDFs; the

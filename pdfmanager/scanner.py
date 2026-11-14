@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Scanning paper with a scanner on Windows, through Windows Image
 Acquisition (WIA): the "WIA.DeviceManager" automation object that comes
 with Windows (wiaaut.dll), driven late-bound (IDispatch) through pythonnet,

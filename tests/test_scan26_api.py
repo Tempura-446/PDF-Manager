@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """0.26.0: Scan in the app's server (/api/scan/...) and on the command line
 (pdfm scan, pdfm photos-to-pdf), over a fake WIA (fakewia.py)."""
 import io

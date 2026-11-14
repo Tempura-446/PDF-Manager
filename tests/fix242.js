@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // The owner's Windows check of 0.24.1, in a browser: a signature put on its
 // line stays drawn there while another is selected and after a zoom or a
 // turn; a signature and a drawing not saved yet can still be picked, moved

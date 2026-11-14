@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // Comparing drawing revisions: another version of the document drawn over
 // the shown one, page by page. What both have comes out black (or faded,
 // "changes only"); what only the other version has, red; what only this

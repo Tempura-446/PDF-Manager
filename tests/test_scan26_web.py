@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """0.26.0: the Scan page in a browser (scan26.js), through Node's Playwright
 (skipped where there is none): with a fake WIA behind the server, and
 without WIA (as on Linux), where Photos still works. With SCAN26_SHOTS set

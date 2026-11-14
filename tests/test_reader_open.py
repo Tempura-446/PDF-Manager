@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Opening a file in the reader without waiting for what isn't needed to
 show it: the server looks at a file that is already open by its id (form
 detection, signatures) instead of being sent it back, the quick looks are

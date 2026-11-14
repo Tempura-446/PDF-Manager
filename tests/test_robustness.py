@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Robustness sweep: every tool in the app, and the reader's opening and
 previews, run on every hostile file in badpdfs.py. Each run must either
 work or stop with a message for the user (the app's expected errors),

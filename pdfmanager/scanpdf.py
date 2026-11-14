@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Paper to a searchable PDF, in one go: the pages from a scanner
 (scanner.py) or from phone photos (pagephoto.py) become a PDF.
 

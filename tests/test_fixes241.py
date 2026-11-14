@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Fixes from the owner's Windows check of 0.24.0 (filefacts.py, gui.html,
 static/reader.js): the signature line's place on the page, and Sign it
 putting the signature on it; Sign without a line at a moderate size in

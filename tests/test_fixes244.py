@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """0.24.4 (static/reader.js): with Select (no tool) on, a single click picks a
 signature or a drawing, also after switching tabs and back (when both are
 annotations in the tab's bytes, which pdf.js otherwise picks only on a

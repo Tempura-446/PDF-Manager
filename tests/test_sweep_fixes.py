@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Fixes from the 0.27.0 maturity sweep (tests/sweep): each test makes a
 small file with the trait that broke a tool, and checks the tool now works
 or stops with a plain message."""

@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // Fixes from the second interface critique and the Windows check of 0.23,
 // in a browser: Sign is the drawn signature, the certificate tool is Digital
 // ID; a damaged file gets a lasting state with Try to repair it; the file

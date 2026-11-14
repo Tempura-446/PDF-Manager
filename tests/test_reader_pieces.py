@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """A file read in pieces (over 4 MB, opened from this computer) when its
 pieces can't be had: the server fails or stops answering, the file is
 deleted or replaced by another program, or the same file is opened twice.

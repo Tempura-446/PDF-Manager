@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // Page board: a preview of every page of one PDF, used by the page tools.
 // What the user does with the pages is shown to them (and sent to the
 // server) as a page range such as "3,1-2,4-10". Modes:

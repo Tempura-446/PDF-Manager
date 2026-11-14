@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Hostile and broken PDFs for the robustness sweep (test_robustness.py).
 
 Each is written byte by byte, so the defect is exactly the one named: a

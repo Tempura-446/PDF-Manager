@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Turn text into a short list of numbers that says what it is about.
 
 Two texts about the same thing get similar numbers even when they share

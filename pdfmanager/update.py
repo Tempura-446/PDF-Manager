@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Updates: see whether a newer ZPDF is on GitHub and install it.
 
 Friends' copies follow the releases published on the public releases

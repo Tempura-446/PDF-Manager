@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // The reader's text editor box (Edit text): finding the line or paragraph
 // clicked, its font, size and colour, the box to retype it in, the font
 // picker, and what the server says about the font it used. A part of Reader

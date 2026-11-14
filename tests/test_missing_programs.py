@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """The programs ZPDF can use but doesn't bring: Microsoft Word (through
 PowerShell), LibreOffice, a Chromium browser, Tesseract with OCRmyPDF,
 Ghostscript, the built-in OCR engine and Windows Image Acquisition.

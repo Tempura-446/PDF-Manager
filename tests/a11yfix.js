@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // Accessibility and usability fixes in a browser: focus clears the sticky
 // action bar, focus rings, field borders, the annotate bar and Settings fit,
 // focus after a search, unreadable files, skip links, Escape, Undo for

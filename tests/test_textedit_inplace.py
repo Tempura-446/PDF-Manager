@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Changing words in the page's own drawing: the old letters really go (no
 box over them), the new ones are written where they were (same text object,
 same tag, same colour and outline), and what's around them stays put."""

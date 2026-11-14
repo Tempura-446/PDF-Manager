@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // Saving and opening files with the computer's own Save and Open dialogs in
 // a browser window (Edge, Chrome): the File System Access API. The desktop
 // window (pywebview) has its own dialogs; other browsers fall back to

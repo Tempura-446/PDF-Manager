@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """0.26.0: Scan. scanner.py over a made-up WIA (fakewia.py): listing
 scanners, colour / resolution / feeder settings, an empty feeder, a busy
 or offline scanner, cancelling; pagephoto.py on made-up phone photos

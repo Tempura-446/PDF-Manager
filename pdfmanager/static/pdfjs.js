@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // Loads pdf.js (bundled in /static/pdfjs, see packaging/update_pdfjs.py) once
 // for the whole app. The reader, the page previews and the page editors all
 // share one background worker: pdf.js would otherwise start a new worker, and

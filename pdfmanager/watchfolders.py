@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Watch folders in the app (Settings > Watch folders): PDFs put in a folder
 are processed while ZPDF is open, with a saved recipe or one tool with its
 default options, using the same engine as ``pdfm watch`` (watch.py).

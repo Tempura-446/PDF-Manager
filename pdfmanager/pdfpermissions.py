@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """What a password allows a protected PDF's reader to do, in plain words
 and as pypdf's flags. Used by core.encrypt and by filetools (which makes
 the permissions and re-exports these); it imports neither, so the two

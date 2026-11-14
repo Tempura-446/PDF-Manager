@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """End-to-end test of the installed app on Windows.
 
 Run by .github/workflows/windows-e2e.yml after "Install ZPDF.cmd".

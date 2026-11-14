@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // Stage 3 in a browser: one Recent list (start screen and the reader's empty
 // state), the drop-first pages of the tools that start from several files,
 // the panel's "Make it fillable" and "Sign it" suggestions, motion off when the

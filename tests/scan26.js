@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // 0.26.0 in a browser: the Scan page. From the start screen's "Scan paper":
 // scanners listed (a fake WIA behind the server), every page from the
 // feeder arriving one by one, flatbed pages one per press with "Scan

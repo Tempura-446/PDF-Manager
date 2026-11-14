@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """What is on a page and where, for the PowerPoint and HTML exports.
 
   * The text with its look: each character's font (mapped to a common font:

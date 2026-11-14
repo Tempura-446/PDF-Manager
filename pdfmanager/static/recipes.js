@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // Recipe builder for the "Recipes" tool: pick a saved recipe or build one
 // step by step (each step is a tool with its options), save it by name.
 //

@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
 // The reader's Sign: draw, type or pick a signature (kept for next time),
 // trimmed to its ink, and placed as a pdf.js picture on the line it signs or
 // in the middle of what's shown; and keeping a box or a bar in sight beside
