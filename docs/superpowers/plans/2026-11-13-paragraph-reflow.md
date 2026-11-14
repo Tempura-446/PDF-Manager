@@ -155,3 +155,34 @@ Visual check: before/after renders of the untouched regions must be pixel-identi
 Each release needs a Windows check of real documents (Word-made PDFs, invoices, a brochure) in the reader, besides the holdout scores. A, B and the "re-set from the first change" task (3.3) give most of the visible improvement. D and E can wait until A–C have been used for a while.
 
 **Place in the roadmap:** after 0.30 (File Explorer actions and the watch folder). It comes after the reader state refactor (0.29), because the rich editor in Task 1.2 builds on the cleaner per-tab state.
+
+---
+
+## Review after release A (0.33.0), and what it adds to the plan
+
+Release A shipped: per-word styles are kept, the editor shows them, links follow their words. Reviewing it against the goal found these gaps. Each is a task; the ones marked (B) join release B, the rest release C.
+
+**Not yet measured**
+- [ ] (B) The holdout and scores in "Measuring it" were never built: release A is covered by tests of made-up paragraphs only. Build the multi-line holdout first (Word-made, LaTeX-made, InDesign-made and browser-printed PDFs, each rendered to known positions) and record 0.33's scores here, so B's line breaker is judged against numbers.
+
+**Styles that are still lost or wrong**
+- [ ] (B) **Sizes inside a paragraph.** A word in a bigger or smaller size keeps its size, but the line spacing and the wrap width are worked out from the first word's size only. Use each line's tallest run.
+- [ ] (B) **Superscripts and subscripts** (footnote marks, H₂O): the rise isn't read, so they come back on the baseline. Read each letter's offset from its line's baseline and keep it.
+- [ ] (B) **Underline and strikethrough** are drawn lines, not part of the font: they stay where they were while the words move. Find rules that sit under or through words, and move or redraw them with their words.
+- [ ] (B) **Highlights and other text markups** over a rewritten paragraph are left where they were. Move them as links are moved now.
+- [ ] (B) **When a style choice is made for the whole paragraph** (font, bold, italic or colour from the bar), every per-word style is dropped. Apply the choice on top of the per-word styles instead (a new colour only replaces the main colour; a new font keeps bold and italic words bold and italic).
+- [ ] (B) In the editor, a colour picked for the whole paragraph doesn't show on words that had their own colour until the change is applied.
+- [ ] **Right-to-left paragraphs** fall back to one style (the older path). Belongs with Phase 5.
+
+**Fidelity of the re-set**
+- [ ] (B) A paragraph in several styles is always taken out and written again whole; a paragraph in one style can change only the letters that changed. Give styled paragraphs the same in-place path, so a one-word change moves nothing else (this is Task 3.3 brought forward for the common case).
+- [ ] (B) Word spacing and letter spacing are measured once for the paragraph and applied to every run. A bold run with different spacing in the original gets the paragraph's. Measure per run.
+- [ ] Justified lines stretch only the spaces; the original may also have stretched letter spacing. Match what the original did.
+
+**The editor**
+- [ ] (B) Typing at the edge of a styled word: the server decides the new letters' style from the old text, and the editor decides it from where the caret is. They agree in the tests, but the editor's choice should always win; send the editor's runs for every paragraph edit, not only after Ctrl+B or Ctrl+I.
+- [ ] (B) One-line edits (click, not Shift+click) still use a plain box; a bold word in the line shows plain while editing. Use the rich field for a line too.
+- [ ] Undo inside the field after Ctrl+B relies on the browser's own undo. Check it on WebView2 in the Windows run.
+
+**Checks that need real documents (Windows run for 0.33)**
+- A Word-made report with bold and italic words and a link; an invoice with a bold total; a brochure paragraph with a coloured phrase; a paragraph whose first word is bold (a run-in heading).
