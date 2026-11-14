@@ -137,3 +137,86 @@ def test_a_bold_first_word_doesnt_make_the_paragraph_bold(tmp_path):
     assert look_of(found, "Note:")[1], found
     for plain in ("the", "good", "growth", "office"):
         assert not look_of(found, plain)[1], (plain, found)
+
+
+def linked(path, words_rect_of="northern"):
+    """The styled paragraph with a link over the word ``northern``."""
+    styled(path)
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.annotations import Link
+    x = 72 + pdfium_width("region, and the ")
+    w = PdfWriter(clone_from=PdfReader(str(path)))
+    w.add_annotation(0, Link(rect=(x, 686, x + pdfium_width("northern", ITALIC), 697), url="https://example.com/n"))
+    w.write(str(path))
+    return path
+
+
+def pdfium_width(text, font=PLAIN):
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    return stringWidth(text, font, 10)
+
+
+def boxes_of(path, word):
+    """The tight boxes of the letters of ``word`` (first time it appears)."""
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        tp = doc[0].get_textpage()
+        text = tp.get_text_range()
+        at = text.index(word)
+        return [tp.get_charbox(i) for i in range(at, at + len(word))]
+    finally:
+        doc.close()
+
+
+def link_rects(path):
+    from pypdf import PdfReader
+    page = PdfReader(str(path)).pages[0]
+    out = []
+    for ref in page.get("/Annots") or []:
+        a = ref.get_object()
+        if a.get("/Subtype") == "/Link":
+            out.append(([float(v) for v in a["/Rect"]], [float(v) for v in a.get("/QuadPoints", [])]))
+    return out
+
+
+def inside(box, rect, slack=1.0):
+    l, b, r, t = box
+    return rect[0] - slack <= l and r <= rect[2] + slack and rect[1] - slack <= b and t <= rect[3] + slack
+
+
+def test_a_link_follows_its_words(tmp_path):
+    src, out = linked(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    text = ("The quarterly report shows strong growth across absolutely every region, and the northern office "
+            "led the way with a record year for new customers.")
+    before = boxes_of(src, "northern")
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": text}])
+    after = boxes_of(out, "northern")
+    assert abs(after[0][0] - before[0][0]) > 20 or abs(after[0][1] - before[0][1]) > 5  # it moved
+    (rect, _), = link_rects(out)
+    assert all(inside(b, rect) for b in after), (rect, after)
+    assert look_of(words(out), "northern")[2]  # still italic
+
+
+def test_a_link_whose_words_wrap_gets_a_box_per_line(tmp_path):
+    src, out = linked(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    # Words typed right after the linked word join its link (as in a word processor),
+    # and here they run over a line end.
+    text = ("The quarterly report shows strong growth in every region, and the very much enlarged northern "
+            "and eastern office led the way with a record year for new customers.")
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": text}])
+    (rect, quads), = link_rects(out)
+    first, last = boxes_of(out, "northern"), boxes_of(out, "eastern")
+    assert abs(first[0][1] - last[0][1]) > 5, "the linked words should be on two lines"
+    assert len(quads) == 16, quads
+    boxes = [quads[i:i + 8] for i in (0, 8)]
+    as_rect = [(q[0], q[5], q[2], q[1]) for q in boxes]
+    assert all(inside(b, as_rect[0]) for b in first), (as_rect, first)
+    assert all(inside(b, as_rect[1]) for b in last), (as_rect, last)
+    assert all(inside(b, rect) for b in first + last)
+
+
+def test_a_link_whose_words_are_gone_goes(tmp_path):
+    src, out = linked(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    text = "The quarterly report shows strong growth in every region, and a record year for new customers."
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": text}])
+    assert link_rects(out) == []

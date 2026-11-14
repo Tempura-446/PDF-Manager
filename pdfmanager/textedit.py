@@ -55,7 +55,7 @@ import unicodedata
 from pathlib import Path
 
 from pypdf import Transformation
-from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject
+from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, FloatObject, NameObject
 
 from pdfmanager import core, fonts
 from pdfmanager.glyphs import _origin, _raw, _widths  # noqa: F401 - textedit._origin etc.
@@ -739,8 +739,9 @@ def _look(style):
             style["bold"], style["italic"])
 
 
-def _old_words(rows):
-    """The old paragraph's words, each a list of (letter, style), in order."""
+def _old_words(rows, link_of=None):
+    """The old paragraph's words, each a list of (letter, (style, link)), in
+    order; ``link_of(letter)`` is the link a letter is in (None: none)."""
     words = []
     for row in rows:
         word = []
@@ -748,21 +749,26 @@ def _old_words(rows):
             if a is not None and (b.get("explicit_space") or b["s"] - (a["s"] + a["adv"]) > 0.2 * b["style"]["size"]):
                 words.append(word)
                 word = []
-            word += [(ch, b["style"]) for ch in b["char"]]
+            attr = (b["style"], link_of(b) if link_of else None)
+            word += [(ch, attr) for ch in b["char"]]
         if word:
             words.append(word)
     return words
 
 
-def _char_styles(rows, text):
-    """The style of each character of ``text``, the paragraph's new words,
-    taken from the old words as a word processor would keep them: words
-    that are still there keep their own style, a changed word keeps the
-    style of the letters it replaced, and new words take the style of the
-    word before them. None when every letter would look the same (one
-    style throughout)."""
-    old = _old_words(rows)
-    if len({_look(st) for word in old for _, st in word}) < 2:
+def _attr_look(attr):
+    return _look(attr[0]) + (attr[1],)
+
+
+def _char_styles(rows, text, link_of=None):
+    """The (style, link) of each character of ``text``, the paragraph's new
+    words, taken from the old words as a word processor would keep them:
+    words that are still there keep their own style (and link), a changed
+    word keeps the style of the letters it replaced, and new words take
+    the style of the word before them. None when every letter would look
+    the same (one style throughout, and no links)."""
+    old = _old_words(rows, link_of)
+    if len({_attr_look(st) for word in old for _, st in word}) < 2:
         return None
     spans, i = [], 0  # the new words: (start, end) in text
     while i < len(text):
@@ -802,9 +808,20 @@ def _char_styles(rows, text):
         if st is None:
             out[k] = last or first
         last = out[k] if not text[k].isspace() or last is None else last
-    if len({_look(st) for st, ch in zip(out, text) if not ch.isspace()}) < 2:
+    if len({_attr_look(st) for st, ch in zip(out, text) if not ch.isspace()}) < 2 and not any(
+            a[1] is not None for word in old for _, a in word):
         return None
     return out
+
+
+def _link_at(links, letter):
+    """Which of ``links`` (the index) a letter's middle is in, or None."""
+    l, b, r, t = letter["tight"]
+    x, y = (l + r) / 2, (b + t) / 2
+    for n, (_, (x0, y0, x1, y1)) in enumerate(links):
+        if x0 - 0.5 <= x <= x1 + 0.5 and y0 - 0.5 <= y <= y1 + 0.5:
+            return n
+    return None
 
 
 def _split_seq(seq, sep):
@@ -1468,12 +1485,14 @@ class _Page:
         style = _restyle(base, opts)
         font = self._font(style, base, text, opts)
         # Words in other styles than the first (bold, italic, a colour) keep theirs.
-        looks = (_char_styles(rows, text) if opts.get("styles", True) and not self.legacy
+        links = self._links_over(everything)
+        looks = (_char_styles(rows, text, (lambda L: _link_at(links, L)) if links else None)
+                 if opts.get("styles", True) and not self.legacy
                  and not any(key in opts for key in ("font", "bold", "italic", "color")) else None)
-        reps, fonts_by, scaled_by = {}, {}, {}
+        reps, fonts_by, scaled_by, linked = {}, {}, {}, {}
         if looks:
-            keys = [_look(st) for st in looks]
-            for st, key in zip(looks, keys):
+            keys = [_attr_look(a) for a in looks]
+            for (st, _), key in zip(looks, keys):
                 reps.setdefault(key, st)
             for key, rep in reps.items():
                 fonts_by[key] = self._choose(rep, "".join(ch for ch, k_ in zip(text, keys) if k_ == key))
@@ -1588,7 +1607,11 @@ class _Page:
                     group = []
                 current = key
                 group.append((ch, *at(pen)))
-                pen += scaled(key, k)[1](ch) + tck
+                st, w = scaled(key, k)
+                if key[-1] is not None:  # in a link: where its words are now
+                    (x0, y0), (x1, _) = at(pen), at(pen + w(ch))
+                    linked.setdefault(key[-1], []).append((x0, y0, x1, st["size"]))
+                pen += w(ch) + tck
             if current is not None:
                 self.run(scaled(current, k)[0], fonts_by[current], group)
 
@@ -1674,7 +1697,57 @@ class _Page:
             emit(line, left + off, width, tck, g, lambda s, p=point: (p[0] + u[0] * s, p[1] + u[1] * s))
         for n, (line, g, off, _) in enumerate(more):  # level text only: the paragraph is level
             emit(line, off, width, tck, g, lambda s, n=n: (nxt["x0"] + s, nxt["baseline"] - n * lead_k))
+        if looks and links:
+            self._move_links(links, linked)
         return font
+
+    def _links_over(self, letters):
+        """The page's links over any of ``letters``: [(annotation, rect)]."""
+        annots = self.page.get("/Annots") if self.page is not None else None
+        if not annots:
+            return []
+        found = []
+        for ref in annots.get_object():
+            annot = ref.get_object()
+            if annot.get("/Subtype") != "/Link":
+                continue
+            try:
+                r = [float(v) for v in annot["/Rect"]]
+            except (KeyError, TypeError, ValueError):
+                continue
+            rect = (min(r[0], r[2]), min(r[1], r[3]), max(r[0], r[2]), max(r[1], r[3]))
+            if any(_link_at([(annot, rect)], L) is not None for L in letters):
+                found.append((annot, rect))
+        return found
+
+    def _move_links(self, links, linked):
+        """Each link around its words' new places: one box per line (as
+        /QuadPoints when the words now wrap), or the link goes when its
+        words are gone."""
+        for n, (annot, _) in enumerate(links):
+            boxes = linked.get(n)
+            if not boxes:
+                annots = self.page["/Annots"].get_object()
+                for i in range(len(annots) - 1, -1, -1):
+                    if annots[i].get_object() is annot:
+                        del annots[i]
+                continue
+            lines = {}
+            for x0, y, x1, size in boxes:
+                key = next((k for k in lines if abs(k - y) < size * 0.5), y)
+                lines.setdefault(key, []).append((x0, x1, size))
+            quads, rects = [], []
+            for y, row in sorted(lines.items(), key=lambda kv: -kv[0]):
+                size = max(r[2] for r in row)
+                a, b = min(r[0] for r in row), max(r[1] for r in row)
+                lo, hi = y - 0.25 * size, y + 0.9 * size
+                rects.append((a, lo, b, hi))
+                quads += [a, hi, b, hi, a, lo, b, lo]
+            union = (min(r[0] for r in rects), min(r[1] for r in rects),
+                     max(r[2] for r in rects), max(r[3] for r in rects))
+            annot[NameObject("/Rect")] = ArrayObject([FloatObject(round(v, 3)) for v in union])
+            if len(rects) > 1 or "/QuadPoints" in annot:
+                annot[NameObject("/QuadPoints")] = ArrayObject([FloatObject(round(v, 3)) for v in quads])
 
     # -- helpers ------------------------------------------------------------------------
     def _set(self, lines, origin, style, font, tc, word, lead, align=None, room=None, ends=None):
