@@ -1295,6 +1295,19 @@ release is `ZPDF-<version>-windows.zip` (the installer, the source it
 installs from, the licence and the third-party notices) with a SHA-256
 file beside it, which the Update button checks before installing.
 
+**Pinned packages for the installer.** With
+`packaging/windows/requirements-lock.txt` in the release, the installer
+installs exactly the package versions it lists, each checked against its
+SHA-256 hash (`pip install --require-hashes`), so a hijacked or replaced
+package on PyPI is refused. Make the file before a release with
+`python packaging/lock.py` on Windows with Python 3.13 (the Python the
+installer puts in), or on GitHub: **Actions › Lock the installer's
+packages › Run workflow**, then download the `requirements-lock` artifact
+into `packaging/windows/`, and check it in. On a computer whose Python is
+another version, or without the file, the installer installs the newest
+versions as before. The weekly **Dependency audit** workflow checks the
+packages, and the file, for known vulnerabilities.
+
 ## Licence
 
 ZPDF's source code is public so you can read it, but it is not open
