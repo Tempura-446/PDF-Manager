@@ -75,6 +75,15 @@ const { chromium } = require("playwright");
     out.shown = await pieces();
     if (cfg.shots) await page.screenshot({ path: cfg.shots + "/paragraph-editor.png" });
     out.value = await page.evaluate(() => document.querySelector(".rd-textedit-rich").value);
+    // A colour picked for the whole paragraph shows on its plain words at once; "record" keeps its red.
+    out.picked = await page.evaluate(() => {
+      const c = document.querySelector(".rd-tf-color");
+      c.value = "#0000ff"; c.dispatchEvent(new Event("input", { bubbles: true }));
+      const col = (word) => getComputedStyle([...document.querySelectorAll(".rd-textedit-rich span")].find((s) => s.textContent.includes(word))).color;
+      const got = { plain: col("quarterly"), red: col("record") };
+      c.value = "#000000"; c.dispatchEvent(new Event("input", { bubbles: true }));
+      return got;
+    });
     out.chose = await choose("new");
     await page.keyboard.type("returning");
     await page.keyboard.press("Control+Enter");

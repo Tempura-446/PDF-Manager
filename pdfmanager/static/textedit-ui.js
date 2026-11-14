@@ -533,11 +533,16 @@ export const TextEditing = (Base) => class extends Base {
     if (paragraph) {
       this.#paragraphRuns(pageNumber, rect, original).then((runs) => {
         if (!runs || runs.length < 2 || !field.isConnected || field.readOnly || field.value !== original) return;
+        // The paragraph's main colour is the field's own (so a colour picked for
+        // the whole paragraph shows at once); only words in another keep theirs.
+        const tally = new Map();
+        for (const r of runs) tally.set(String(r.color), (tally.get(String(r.color)) || 0) + r.text.trim().length);
+        const usual = [...tally].sort((a, b) => b[1] - a[1])[0][0];
         field.replaceChildren(...runs.map((r) => {
           const span = el("span", {}, r.text);
           span.style.fontWeight = r.bold ? "bold" : "normal";
           span.style.fontStyle = r.italic ? "italic" : "normal";
-          span.style.color = `rgb(${r.color.map((v) => Math.round(v * 255)).join(", ")})`;
+          if (String(r.color) !== usual) span.style.color = `rgb(${r.color.map((v) => Math.round(v * 255)).join(", ")})`;
           return span;
         }));
         field.dataset.styled = "1";

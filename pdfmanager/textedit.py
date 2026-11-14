@@ -1689,8 +1689,8 @@ class _Page:
         links = self._links_over(everything)
         looks = (_char_styles(rows, text, (lambda L: _link_at(links, L)) if links else None)
                  if opts.get("styles", True) and not (_rtl(text) or any(_rtl(L["char"]) for L in everything))
-                 and not any(key in opts for key in ("font", "bold", "italic", "color")) else None)
-        marks = opts.get("runs") if not any(key in opts for key in ("font", "bold", "italic", "color")) else None
+                 else None)
+        marks = opts.get("runs")
         if marks and len(marks) == len(text):  # the editor's bold and italic, letter by letter
             looks = looks or [(base, None)] * len(text)
             made, was = {}, {}
@@ -1708,14 +1708,33 @@ class _Page:
             keys = [_attr_look(a) for a in looks]
             for (st, _), key in zip(looks, keys):
                 reps.setdefault(key, st)
-            for key, rep in reps.items():
+            # A look chosen for the whole paragraph goes on top of the words'
+            # own: a font keeps bold words bold, bold keeps italic words
+            # italic, and a colour replaces the paragraph's main colour only.
+            whole = {k_: opts[k_] for k_ in ("font", "bold", "italic") if k_ in opts}
+            usual = None
+            if "color" in opts:
+                import collections
+                usual = collections.Counter(tuple(round(v, 3) for v in a[0]["color"])
+                                            for a, ch in zip(looks, text) if not ch.isspace()).most_common(1)[0][0]
+            for key, rep in list(reps.items()):
                 letters_of = "".join(ch for ch, k_ in zip(text, keys) if k_ == key)
-                if id(rep) in was:  # made bold or italic in the editor: that face of the words' own font
+                before = was.get(id(rep), rep)
+                change = {k_: v for k_, v in whole.items() if k_ != "font"}
+                if usual is not None and tuple(round(v, 3) for v in rep["color"]) == usual:
+                    change["color"] = opts["color"]
+                if change:
+                    rep = reps[key] = _restyle(rep, change)
+                if whole or before is not rep and (before["bold"], before["italic"]) != (rep["bold"], rep["italic"]):
+                    # Another face than the words had (asked for here, or made in the editor).
                     said = {k_: self.notes[k_] for k_ in ("asked", "matched") if k_ in self.notes}
-                    fonts_by[key] = self._font(rep, was[id(rep)], letters_of, {"bold": rep["bold"], "italic": rep["italic"]})
-                    for k_ in ("asked", "matched"):
-                        self.notes.pop(k_, None)
-                    self.notes.update(said)
+                    fonts_by[key] = self._font(rep, before, letters_of,
+                                               {"bold": rep["bold"], "italic": rep["italic"],
+                                                **({"font": whole["font"]} if "font" in whole else {})})
+                    if "font" not in whole:
+                        for k_ in ("asked", "matched"):
+                            self.notes.pop(k_, None)
+                        self.notes.update(said)
                 else:
                     fonts_by[key] = self._choose(rep, letters_of)
         left_out = self.notes.get("missing", "")

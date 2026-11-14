@@ -361,6 +361,7 @@ def test_the_paragraph_editor_in_a_browser(tmp_path):
     shown = {text.strip(): (bold, italic, colour) for text, bold, italic, colour in out["shown"]}
     assert shown["strong"][:2] == (True, False) and shown["northern"][:2] == (False, True), out["shown"]
     assert shown["record"] == (False, False, "rgb(204, 26, 26)"), out["shown"]
+    assert out["picked"] == {"plain": "rgb(0, 0, 255)", "red": "rgb(204, 26, 26)"}, out["picked"]
     # A plain word typed over: the styled words stay as they were.
     (tmp_path / "typed.pdf").write_bytes(base64.b64decode(out["typed"]))
     found = words(tmp_path / "typed.pdf")
@@ -547,3 +548,46 @@ def test_one_line_in_several_tags_leaves_no_old_words_underneath(tmp_path):
     old, new = "For care instructions see our website or ask in the", "For care advice see our website or ask in the"
     textedit.edit_text(src, out, [{"page": 1, "rect": [70, 697, 330, 711], "old": old, "text": new}])
     assert page_text(out) == new + " shop, where we keep printed copies."
+
+
+def test_a_colour_for_the_whole_paragraph_leaves_coloured_words_their_own(tmp_path):
+    src, out = styled(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": TEXT, "color": [0, 0, 1]}])
+    found = words(out)
+    assert look_of(found, "quarterly")[3] == (0.0, 0.0, 1.0) and look_of(found, "office")[3] == (0.0, 0.0, 1.0)
+    assert look_of(found, "record")[3] == (0.8, 0.1, 0.1)                       # its own colour stays
+    assert look_of(found, "strong")[1:] == (True, False, (0.0, 0.0, 1.0))      # bold stays, in the new colour
+    assert look_of(found, "northern")[2]
+
+
+def test_a_font_for_the_whole_paragraph_keeps_bold_and_italic_words(tmp_path):
+    src, out = styled(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": TEXT, "font": "Times"}])
+    found = words(out)
+    assert look_of(found, "quarterly")[:3] == ("Times-Roman", False, False), found
+    assert look_of(found, "strong")[0] == "Times-Bold" and look_of(found, "northern")[0] == "Times-Italic", found
+    assert look_of(found, "record")[3] == (0.8, 0.1, 0.1)
+
+
+def test_bold_for_the_whole_paragraph_adds_to_the_words_own_styles(tmp_path):
+    src, out = styled(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": TEXT, "bold": True}])
+    found = words(out)
+    assert all(w[2] for w in found if w[0] not in ("Elsewhere", "on", "the", "page")), found
+    assert look_of(found, "northern")[1:3] == (True, True) and look_of(found, "record")[3] == (0.8, 0.1, 0.1)
+
+
+def test_a_size_for_the_whole_paragraph_scales_every_word(tmp_path):
+    import pypdfium2.raw as raw
+    src, out = styled(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    textedit.edit_text(src, out, [{"page": 1, "rect": RECT, "paragraph": True, "text": TEXT, "size": 13}])
+    doc = pdfium.PdfDocument(str(out))
+    try:
+        tp = doc[0].get_textpage()
+        full = tp.get_text_range()
+        sizes = {round(raw.FPDFText_GetFontSize(tp.raw, i), 1) for i in range(full.index("The"), full.index("customers") + 9)
+                 if full[i].strip()}
+    finally:
+        doc.close()
+    assert sizes == {13.0}, sizes
+    assert look_of(words(out), "strong")[1]
