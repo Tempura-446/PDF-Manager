@@ -4,6 +4,25 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.33.0
+
+Rewriting a paragraph keeps each word's own style.
+
+- **Bold, italic and coloured words stay as they are.** When you rewrite a
+  paragraph in the reader (Edit text, Shift+click a line), words that were
+  bold, italic or in a colour keep that look when the paragraph is set
+  again; before, the whole paragraph took the look of its first word. A
+  changed word keeps the style of the word it replaced, and new words take
+  the style of the word before them, as in a word processor.
+- **The paragraph editor shows the styles**, and **Ctrl+B** and **Ctrl+I**
+  (or the B and I buttons) make just the chosen words bold or italic, in
+  that face of their own font. With no words chosen in a paragraph of one
+  style, they change the whole paragraph, as before. Pasting is plain text.
+- **Links follow their words.** A link over words of a rewritten paragraph
+  moves with them; when its words now run over two lines the link covers
+  both, and a link whose words were all deleted is removed.
+- A paragraph in one style is written exactly as in 0.32.
+
 ## 0.32.0
 
 Drawings with layers. CAD programs export each drawing layer as a PDF

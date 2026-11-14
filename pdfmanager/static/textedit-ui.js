@@ -61,6 +61,77 @@ function rgb01(hex) {
   return [1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) / 255 * 1000) / 1000);
 }
 
+/** The words of a rich paragraph field as (text, bold, italic) pieces, in
+ *  order: line breaks as "\n", the look of each piece as the field shows it. */
+function richPieces(root) {
+  const out = [];
+  const add = (text, node) => {
+    const st = getComputedStyle(node);
+    const bold = (parseInt(st.fontWeight, 10) || 400) >= 600, italic = /italic|oblique/.test(st.fontStyle);
+    const last = out.at(-1);
+    if (last && last[1] === bold && last[2] === italic) last[0] += text;
+    else out.push([text, bold, italic]);
+  };
+  const walk = (node) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) { if (child.data) add(child.data.replace(/\u00a0/g, " "), node); }
+      else if (child.nodeName === "BR") add("\n", node);
+      else if (child.nodeType === Node.ELEMENT_NODE) {
+        const block = /^(DIV|P)$/.test(child.nodeName);
+        if (block && out.length && !out.at(-1)[0].endsWith("\n")) add("\n", node);
+        walk(child);
+      }
+    }
+  };
+  walk(root);
+  const last = out.at(-1);  // the line break the browser keeps at the very end
+  if (last && last[0].endsWith("\n")) { last[0] = last[0].slice(0, -1); if (!last[0]) out.pop(); }
+  return out;
+}
+
+/** A field for rewriting a paragraph whose words can be bold or italic one
+ *  by one: a box to type in that behaves like a textarea (value, select(),
+ *  readOnly), Enter makes a new line and pasting is plain text. */
+function richField(label) {
+  const field = el("div", { class: "rd-textedit rd-textedit-rich", contenteditable: "true", role: "textbox",
+    "aria-multiline": "true", spellcheck: "true", "aria-label": label });
+  Object.defineProperty(field, "value", {
+    get: () => richPieces(field).map((p) => p[0]).join(""),
+    set: (v) => { field.textContent = v; },
+  });
+  Object.defineProperty(field, "readOnly", {
+    get: () => field.contentEditable !== "true",
+    set: (v) => { field.contentEditable = v ? "false" : "true"; },
+  });
+  field.select = () => {
+    const range = document.createRange();
+    range.selectNodeContents(field);
+    const sel = getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  };
+  field.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); document.execCommand("insertLineBreak"); }
+  });
+  field.addEventListener("paste", (e) => {
+    e.preventDefault();
+    document.execCommand("insertText", false, (e.clipboardData?.getData("text/plain") || "").replace(/\r\n?/g, "\n"));
+  });
+  return field;
+}
+
+/** Make the words chosen in a rich field (all of them when none are) bold
+ *  or italic, or not, as a word processor does. */
+function richToggle(field, what) {
+  const sel = getSelection();
+  const inside = sel.rangeCount && field.contains(sel.getRangeAt(0).commonAncestorContainer) && !sel.isCollapsed;
+  if (!inside) field.select();
+  document.execCommand("styleWithCSS", false, true);
+  document.execCommand(what === "bold" ? "bold" : "italic");
+  field.dataset.styled = "1";
+  field.dispatchEvent(new Event("input"));
+}
+
 /** Reader's text editor box, as a class it extends (see Measuring in
  *  measuring.js): with Edit text on, a click on a line opens a box to retype
  *  it (Shift+click: the paragraph), in the document's own font and colour
@@ -339,15 +410,16 @@ export const TextEditing = (Base) => class extends Base {
   /** A box on the page for typing: [wrapper, input or textarea]. With a
    *  ``look``, the words in it sit exactly on the page's own: same font,
    *  size, spacing, colour and baseline, so nothing moves as you type. */
-  #editorBox(pageEl, { left, top, width, height, fontSize, fontFamily, multiline, value, label, hint, look, lineHeight }) {
+  #editorBox(pageEl, { left, top, width, height, fontSize, fontFamily, multiline, value, label, hint, look, lineHeight, rich = false }) {
     const page = pageEl.getBoundingClientRect();
-    const field = multiline
+    const field = rich ? richField(label) : multiline
       ? el("textarea", { class: "rd-textedit", spellcheck: "true", "aria-label": label })
       : el("input", { type: "text", class: "rd-textedit", spellcheck: "true", "aria-label": label });
     field.value = value;
     // Double-clicking a word selects the space after it too (Chromium on
     // Windows), so typing a replacement swallowed the space: select the word.
     field.addEventListener("dblclick", () => {
+      if (rich) return;
       let { selectionStart: start, selectionEnd: end } = field;
       while (end > start && /\s/.test(field.value[end - 1])) end--;
       if (end !== field.selectionEnd) field.setSelectionRange(start, end);
@@ -407,7 +479,7 @@ export const TextEditing = (Base) => class extends Base {
     toggle.disabled = sideways;
     const lead = paragraph ? paragraph.lead : null;
     const [box, field] = this.#editorBox(pageEl, {
-      left: area.left, top: area.top, multiline: !!paragraph, value: original, look, lineHeight: lead,
+      left: area.left, top: area.top, multiline: !!paragraph, rich: !!paragraph, value: original, look, lineHeight: lead,
       width: look ? (paragraph ? lineW + look.size * 0.6 : Math.max(lineW + look.size, 80)) : Math.max(lineW + (paragraph ? 16 : 40), 80),
       height: paragraph ? (look ? lead * (paragraph.lines + 1) : area.bottom - area.top + lineH * 1.5) : lineH + 4,
       fontSize: Math.max(8, lineH * 0.8), fontFamily: getComputedStyle(span).fontFamily,
@@ -425,9 +497,39 @@ export const TextEditing = (Base) => class extends Base {
     });
     // The words as shown go along, so only what was changed is drawn again.
     const picked = this.#fontPicker(box, field, look, viewport, { paragraph: !!paragraph, size: lineH });
+    // Words in other fonts than the first (bold, italic): shown as they are, for changing one by one.
+    if (paragraph) {
+      this.#paragraphRuns(pageNumber, rect, original).then((runs) => {
+        if (!runs || runs.length < 2 || !field.isConnected || field.readOnly || field.value !== original) return;
+        field.replaceChildren(...runs.map((r) => {
+          const span = el("span", {}, r.text);
+          span.style.fontWeight = r.bold ? "bold" : "normal";
+          span.style.fontStyle = r.italic ? "italic" : "normal";
+          span.style.color = `rgb(${r.color.map((v) => Math.round(v * 255)).join(", ")})`;
+          return span;
+        }));
+        field.dataset.styled = "1";
+        field.select();
+      });
+    }
+    const styles = () => (paragraph && field.dataset.styled
+      ? { runs: richPieces(field).map(([text, bold, italic]) => ({ text, bold, italic })) } : {});
     this.#startEditing(box, field, pageEl, original, (text) =>
       this._applyTextEdit({ page: pageNumber, rect, text, ...(paragraph ? { paragraph: true } : { old: original }),
-        ...picked.choices() }), picked.changed);
+        ...picked.choices(), ...styles() }), () => picked.changed() || field.dataset.restyled === "1");
+  }
+
+  /** How the words of a paragraph look (see /api/text/runs): [{text, bold, italic, color}], or null. */
+  async #paragraphRuns(pageNumber, rect, text) {
+    const tab = this.activeTab;
+    if (!tab) return null;
+    try {
+      const bytes = tab.bytes || await this._currentBytes();
+      const res = await this._post("/api/text/runs", bytes, tab, { page: String(pageNumber), rect: JSON.stringify(rect), text });
+      return res.ok ? (await res.json()).runs : null;
+    } catch (e) {
+      return null;  // the paragraph is edited in one style; the page's styles are still kept
+    }
   }
 
   /** New words where the page was clicked; they take the look of the nearest text. */
@@ -484,7 +586,7 @@ export const TextEditing = (Base) => class extends Base {
     };
     field.addEventListener("keydown", (e) => {
       e.stopPropagation();
-      const multiline = field.tagName === "TEXTAREA";
+      const multiline = field.tagName === "TEXTAREA" || field.classList.contains("rd-textedit-rich");
       if (e.key === "Enter" && (!multiline || e.ctrlKey || e.metaKey || (field.dataset.enter === "apply" && !e.shiftKey))) { e.preventDefault(); finish(true); }
       if (e.key === "Escape") { e.preventDefault(); finish(false); }
     });
@@ -573,8 +675,22 @@ export const TextEditing = (Base) => class extends Base {
       show();
     };
     for (const b of [boldBtn, italicBtn, ...aligns]) b.addEventListener("pointerdown", (e) => e.preventDefault());  // the field keeps the focus
-    boldBtn.addEventListener("click", () => { now.bold = !now.bold; press(); });
-    italicBtn.addEventListener("click", () => { now.italic = !now.italic; press(); });
+    // In a paragraph whose words are styled one by one (or with words chosen),
+    // bold and italic go to the words chosen, as in a word processor.
+    const wordwise = () => {
+      if (!field.classList.contains("rd-textedit-rich")) return false;
+      const sel = getSelection();
+      const chosen = sel.rangeCount && !sel.isCollapsed && field.contains(sel.getRangeAt(0).commonAncestorContainer)
+        && field.value.length !== sel.toString().replace(/\r/g, "").length;
+      return !!(field.dataset.styled || chosen);
+    };
+    const flip = (key) => {
+      if (wordwise()) { richToggle(field, key); field.dataset.restyled = "1"; return; }
+      now[key] = !now[key];
+      press();
+    };
+    boldBtn.addEventListener("click", () => flip("bold"));
+    italicBtn.addEventListener("click", () => flip("italic"));
     for (const b of aligns) b.addEventListener("click", () => { now.align = now.align === b.dataset.align ? "" : b.dataset.align; press(); });
     fontSel.addEventListener("change", () => { now.font = fontSel.value; show(); });
     sizeIn.addEventListener("input", () => {
@@ -587,8 +703,7 @@ export const TextEditing = (Base) => class extends Base {
       const key = e.key.toLowerCase();
       if (key === "b" || key === "i") {
         e.preventDefault();
-        now[key === "b" ? "bold" : "italic"] = !now[key === "b" ? "bold" : "italic"];
-        press();
+        flip(key === "b" ? "bold" : "italic");
       }
     });
     // The bar's own keys: Enter applies, Esc cancels; nothing reaches the reader's shortcuts.

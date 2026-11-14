@@ -62,23 +62,23 @@ Visual check: before/after renders of the untouched regions must be pixel-identi
 
 ---
 
-### Phase 1 (release A): words keep their styles
+### Phase 1 (release A, done in 0.33.0): words keep their styles
 
 **Task 1.1: style runs from the page**
-- [ ] For the paragraph's letters (already read with pdfium in `_letters`), group runs of the same font, size, colour, rise and link annotation. Map each run to its words.
-- [ ] Return the runs alongside the text through the edit API, as `"runs": [{"text", "font", "bold", "italic", "color", "link"}]`.
-- [ ] Unit test: a paragraph with one bold word, one italic word and one link gives four runs with the right words.
+- [x] For the paragraph's letters (already read with pdfium in `_letters`), group runs of the same font, size, colour, rise and link annotation. Map each run to its words.
+- [x] Return the runs alongside the text through the edit API, as `"runs": [{"text", "font", "bold", "italic", "color", "link"}]`.
+- [x] Unit test: a paragraph with one bold word, one italic word and one link gives four runs with the right words.
 
 **Task 1.2: a rich paragraph editor in the reader**
-- [ ] Replace the plain-text paragraph box with a small contenteditable that shows the runs: bold and italic as they are, and colour.
-- [ ] Ctrl+B and Ctrl+I toggle bold and italic. Typing inherits the style of the run it's typed into, like a word processor. Pasting is plain text.
-- [ ] Send the runs, not just the text.
-- [ ] Browser test: change one word next to a bold word; the bold word stays bold after saving.
+- [x] Replace the plain-text paragraph box with a small contenteditable that shows the runs: bold and italic as they are, and colour.
+- [x] Ctrl+B and Ctrl+I toggle bold and italic. Typing inherits the style of the run it's typed into, like a word processor. Pasting is plain text.
+- [x] Send the runs, not just the text.
+- [x] Browser test: change one word next to a bold word; the bold word stays bold after saving.
 
 **Task 1.3: setting runs**
-- [ ] `_Page.paragraph` measures and writes each run in its own font. Each run uses the document font if it has the letters, else installed, else standard, as today. Mixed runs on one line share the baseline.
-- [ ] Links: the link annotation's `/Rect` follows its words to their new place, or splits into several rects if the words now wrap across lines.
-- [ ] Test: a rewritten paragraph keeps per-word fonts and colours. The link rect covers the linked words after the rewrap.
+- [x] `_Page.paragraph` measures and writes each run in its own font. Each run uses the document font if it has the letters, else installed, else standard, as today. Mixed runs on one line share the baseline.
+- [x] Links: the link annotation's `/Rect` follows its words to their new place, or splits into several rects if the words now wrap across lines.
+- [x] Test: a rewritten paragraph keeps per-word fonts and colours. The link rect covers the linked words after the rewrap.
 
 ### Phase 2 (release B): lines break well
 

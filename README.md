@@ -484,7 +484,10 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   standard PDF fonts (Helvetica, Times, Courier). A font from your
   computer is embedded (only the letters used); in a PDF/A file a standard
   font is swapped for an embedded one, and the reader says which font was
-  used. **Text flows:** when a rewritten paragraph gets longer or shorter,
+  used. **Words keep their styles:** in a rewritten paragraph, bold,
+  italic and coloured words stay so (the editor shows them), **Ctrl+B**
+  and **Ctrl+I** change just the words you chose, and links move with
+  their words. **Text flows:** when a rewritten paragraph gets longer or shorter,
   the paragraphs below it in the same column move down or up to match,
   with the rules (lines) between them; other columns, pictures and boxes
   stay where they are, and the column ends at a big gap or at anything

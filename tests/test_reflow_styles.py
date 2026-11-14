@@ -4,6 +4,7 @@ Bold, italic and coloured words stay bold, italic and coloured when other
 words of the paragraph change, and new words take the style of the word
 they're typed after, as in a word processor."""
 import ctypes
+import os
 
 import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_raw
@@ -313,3 +314,55 @@ def test_the_runs_endpoint(tmp_path, monkeypatch):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_the_paragraph_editor_in_a_browser(tmp_path):
+    import base64
+    import json
+    import shutil
+    import subprocess
+    import threading
+    from pathlib import Path
+
+    import pytest
+
+    from pdfmanager import gui
+
+    node = shutil.which("node")
+    if not node or subprocess.run([node, "-e", "require('playwright')"], capture_output=True, cwd=tmp_path).returncode:
+        pytest.skip("needs Node.js with Playwright")
+    srv, url = gui.make_server()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        cfg = {"a": srv.RequestHandlerClass.opened.add(styled(tmp_path / "Styled.pdf")),
+               "shots": os.environ.get("FIX33_SHOTS")}
+        run = subprocess.run([node, str(Path(__file__).with_name("fix33.js")), url, json.dumps(cfg)],
+                             capture_output=True, text=True, encoding="utf-8", timeout=600)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    if run.returncode and "Executable doesn't exist" in run.stderr:
+        pytest.skip("Playwright's browser isn't installed")
+    assert run.returncode == 0, run.stderr
+    out = json.loads(run.stdout)
+    assert not out["errors"], out["errors"]
+    assert not out["native"], out["native"]
+    # The editor shows the paragraph's words as they are.
+    assert out["value"] == TEXT
+    shown = {text.strip(): (bold, italic, colour) for text, bold, italic, colour in out["shown"]}
+    assert shown["strong"][:2] == (True, False) and shown["northern"][:2] == (False, True), out["shown"]
+    assert shown["record"] == (False, False, "rgb(204, 26, 26)"), out["shown"]
+    # A plain word typed over: the styled words stay as they were.
+    (tmp_path / "typed.pdf").write_bytes(base64.b64decode(out["typed"]))
+    found = words(tmp_path / "typed.pdf")
+    assert "returning" in [w[0] for w in found] and "new" not in [w[0] for w in found]
+    assert look_of(found, "strong")[1] and look_of(found, "northern")[2]
+    assert look_of(found, "record")[3] == (0.8, 0.1, 0.1) and not look_of(found, "returning")[1]
+    # Ctrl+B on one chosen word: that word only.
+    (tmp_path / "bolded.pdf").write_bytes(base64.b64decode(out["bolded"]))
+    found = words(tmp_path / "bolded.pdf")
+    assert look_of(found, "growth")[1:3] == (True, False), found
+    assert look_of(found, "strong")[1] and look_of(found, "northern")[1:3] == (False, True), found
+    for plain in ("quarterly", "office", "returning"):
+        assert look_of(found, plain)[1:3] == (False, False), (plain, found)
+    assert out["undone"]
