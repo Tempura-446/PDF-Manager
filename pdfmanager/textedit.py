@@ -132,20 +132,32 @@ def _has_letter(font, letter):
         return False
 
 
-def _draws_space(font):
-    """Whether the font's space is safe to write: an empty glyph with a
-    width. A font cut down to the letters a document uses can have a
-    placeholder there instead (a box), when its words were set apart by
-    moving the pen and no space was ever drawn."""
+def _space_fonts(textpage):
+    """The fonts the page draws a space with (pdfium's handles, as
+    addresses). A font cut down to a document's letters may name a space
+    and have a placeholder (a box) for it: Word draws every space in a
+    one-letter font of its own, and sets the main font's words apart
+    without one. Only a font seen drawing a space is trusted to."""
     raw = _raw()
+    found = set()
     try:
-        width = ctypes.c_float()
-        if not raw.FPDFFont_GetGlyphWidth(font, ord(" "), 10.0, ctypes.byref(width)) or width.value <= 0:
-            return False
-        path = raw.FPDFFont_GetGlyphPath(font, ord(" "), 10.0)
-        return not path or raw.FPDFGlyphPath_CountGlyphSegments(path) <= 0
-    except (AttributeError, ValueError, OverflowError):
-        return False
+        for i in range(textpage.count_chars()):
+            if raw.FPDFText_GetUnicode(textpage.raw, i) != 32 or raw.FPDFText_IsGenerated(textpage.raw, i) == 1:
+                continue
+            handle = _font_handle(textpage, i)
+            if handle:
+                found.add(ctypes.cast(handle, ctypes.c_void_p).value)
+    except AttributeError:  # an older pdfium
+        return None
+    return found
+
+
+def _draws_space(style):
+    """Whether the page draws spaces in the font of ``style`` (see _space_fonts)."""
+    fonts_seen = style.get("spaces")
+    if fonts_seen is None or not style.get("handle"):
+        return True
+    return ctypes.cast(style["handle"], ctypes.c_void_p).value in fonts_seen
 
 
 def _font_data(font):
@@ -209,6 +221,7 @@ def _style(textpage, index, cache):
         "raw_size": raw_size, "matrix": matrix,
         "size": raw_size * (math.hypot(m.a, m.b) or 1.0),
         "color": color, "angle": math.degrees(math.atan2(matrix[1], matrix[0])),
+        "spaces": cache["spaces"] if "spaces" in cache else cache.setdefault("spaces", _space_fonts(textpage)),
     }
     return style
 
@@ -530,7 +543,7 @@ def _own_font(page, style, text):
         # cut down to the letters used, so each is checked for a shape.
         whole = fonts.font_program(font) is None and not _is_embedded(style["handle"])
         if whole or all(_has_letter(style["handle"], ch) for ch in set(text) if ch != " "):
-            if not whole and own.space is None and not _draws_space(style["handle"]):
+            if not whole and own.space is None and not _draws_space(style):
                 # No space to draw in this font: the words are set apart by moving the pen.
                 own.space = own.width_of(own.codes[" "]) or 250
             return own

@@ -28,8 +28,10 @@ Rewriting a paragraph keeps each word's own style.
   selection on the page; before, it could select text instead.
 - **No boxes where the spaces were.** In files whose fonts hold only the
   letters used (Word's), a rewritten line or paragraph could show a small
-  box for every space. Words are now set apart without drawing a space
-  the font doesn't have.
+  box for every space: Word draws spaces in a small font of their own,
+  and the main font has a placeholder there. A space is now only written
+  in a font the page already draws spaces with; otherwise the words are
+  set apart as the page's own are.
 - A paragraph in one style is written exactly as in 0.32.
 
 ## 0.32.0

@@ -383,7 +383,10 @@ def test_the_paragraph_editor_in_a_browser(tmp_path):
 
 
 def embedded(path):
-    """A paragraph in a font that is in the file (cut down to its letters), one word bold."""
+    """A paragraph in a font that is in the file (cut down to its letters),
+    one word bold, set as Word sets it: each word drawn by itself, no space
+    drawn in the words' font on this page (page 2 draws one, so the font
+    does name a space)."""
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
     pdfmetrics.registerFont(TTFont("Vera", "Vera.ttf"))
@@ -395,20 +398,30 @@ def embedded(path):
         x = 72
         for text, font in pieces:
             c.setFont(font, 10)
-            c.drawString(x, y, text)
-            x += c.stringWidth(text, font, 10)
+            for word in text.split(" "):
+                c.drawString(x, y, word)
+                x += c.stringWidth(word + " ", font, 10)
+            x -= c.stringWidth(" ", font, 10)
         y -= 12
+    c.showPage()
+    c.setFont("Vera", 10)
+    c.drawString(72, 700, "Page two")
     c.save()
     return path
 
 
-def test_no_space_is_drawn_in_a_font_without_one(tmp_path, monkeypatch):
-    """A font cut down to a document's letters can have a box where its
-    space would be (Word's files: words set apart by moving the pen). The
-    new words are then set apart the same way, never with that glyph."""
+def test_no_space_is_drawn_in_a_font_the_page_draws_none_with(tmp_path):
+    """Word draws every space in a one-letter font of its own; the main
+    font names a space but has a box there. New words are set apart as the
+    page's are, by moving the pen, never with that glyph."""
+    from pypdf import PdfReader
+
+    from pdfmanager import fonts as zfonts
     src, out = embedded(tmp_path / "in.pdf"), tmp_path / "out.pdf"
     text = "The cabinet fronts were cut from solid oak and given two coats of hard wax oil this week."
     rect = [70, 700 - 12 - 4, 400, 712]
+    page_fonts = PdfReader(str(src)).pages[0]["/Resources"]["/Font"]
+    assert any(" " in zfonts.pdf_font_codes(f) for f in page_fonts.values())  # the font names a space
 
     def drawn_spaces(path):
         doc = pdfium.PdfDocument(str(path))
@@ -419,10 +432,13 @@ def test_no_space_is_drawn_in_a_font_without_one(tmp_path, monkeypatch):
         finally:
             doc.close()
 
-    assert drawn_spaces(src) > 5  # (reportlab draws them)
-    monkeypatch.setattr(textedit, "_draws_space", lambda font: False)
+    assert drawn_spaces(src) == 0
     textedit.edit_text(src, out, [{"page": 1, "rect": rect, "paragraph": True, "text": text}])
     found = words(out)
     assert [w[0] for w in found] == text.split(), found
     assert look_of(found, "solid")[1] and not look_of(found, "fronts")[1]
     assert drawn_spaces(out) == 0
+    # One line changed, too.
+    textedit.edit_text(src, out, [{"page": 1, "rect": [70, 684, 400, 698], "old": "given two coats of hard wax oil this week.",
+                                   "text": "given three coats of hard wax oil this week."}])
+    assert "three" in [w[0] for w in words(out)] and drawn_spaces(out) == 0
