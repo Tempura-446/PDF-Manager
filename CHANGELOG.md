@@ -27,6 +27,8 @@ safe. The app works as before.
   updates to ZPDF's packages and to the workflows' actions each week;
   CodeQL scans ZPDF's Python and JavaScript for security mistakes; and
   `pip-audit` checks ZPDF's packages for known vulnerabilities each week.
+- Switching tools quickly while a page preview was loading for the first time
+  could leave an error behind; it no longer does.
 
 ## 0.30.0
 
