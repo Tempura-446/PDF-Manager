@@ -2883,6 +2883,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
       { icon: "open", label: "Insert a PDF after this page", words: "add merge combine pages", run: () => this.insertPdf(v.currentPageNumber) },
       { icon: "sidebar", label: this.sidebar.hidden ? "Show thumbnails" : "Hide thumbnails", words: "sidebar pages", run: () => this.toggleSidebar() },
       { icon: "book", label: "Show bookmarks", words: "outline contents chapters sidebar", run: () => this.showBookmarks() },
+      ...(this.layers ? [{ icon: "layers", label: "Show layers", words: "optional content cad drawing hide sidebar",
+        run: () => { this.layersWanted = true; this.#setSidebar(true); this.#showTab("layers"); } }] : []),
       { icon: "full", label: "Fit page", words: "zoom whole", run: () => { v.currentScaleValue = "page-fit"; } },
       { icon: "spread", label: "Fit width", words: "zoom", run: () => { v.currentScaleValue = "page-width"; } },
       { icon: "plus", label: "Actual size", words: "zoom 100%", run: () => { v.currentScaleValue = "page-actual"; } },
