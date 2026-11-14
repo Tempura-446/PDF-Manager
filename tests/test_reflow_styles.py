@@ -666,3 +666,91 @@ def test_a_link_and_a_highlight_on_the_same_words_both_follow(tmp_path):
     north = boxes_of(out, "northern")
     assert all(inside(b, found["/Link"]) for b in north) and all(inside(b, found["/Highlight"]) for b in north)
     assert not all(inside(b, found["/Link"]) for b in boxes_of(out, "office"))
+
+
+def raised(path):
+    """A paragraph with a footnote mark above the line (a small "2") and a subscript below it."""
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont(PLAIN, 10)
+    c.drawString(72, 700, "The pressure in the boiler")
+    x = 72 + c.stringWidth("The pressure in the boiler", PLAIN, 10)
+    c.setFont(PLAIN, 6.5)
+    c.drawString(x, 703.5, "2")
+    x += c.stringWidth("2", PLAIN, 6.5)
+    c.setFont(PLAIN, 10)
+    c.drawString(x, 700, " rose while H")
+    x += c.stringWidth(" rose while H", PLAIN, 10)
+    c.setFont(PLAIN, 6.5)
+    c.drawString(x, 698, "2")
+    x += c.stringWidth("2", PLAIN, 6.5)
+    c.setFont(PLAIN, 10)
+    c.drawString(x, 700, "O was")
+    c.drawString(72, 688, "drained from the east wing overnight.")
+    c.save()
+    return path
+
+
+def small_marks(path):
+    """[(letter, size, height above its line's baseline)] of the letters set smaller than the text."""
+    import pypdfium2.raw as raw
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        tp = doc[0].get_textpage()
+        letters_, out = [], []
+        for i in range(tp.count_chars()):
+            ch = tp.get_text_range(i, 1)
+            if ch.strip():
+                x, y = ctypes.c_double(), ctypes.c_double()
+                raw.FPDFText_GetCharOrigin(tp.raw, i, ctypes.byref(x), ctypes.byref(y))
+                letters_.append((ch, round(raw.FPDFText_GetFontSize(tp.raw, i), 1), x.value, y.value))
+        for ch, size, x, y in letters_:
+            if size < 9:
+                base = min((b for b in letters_ if b[1] >= 9), key=lambda b: abs(b[3] - y) * 50 + abs(b[2] - x))
+                out.append((ch, size, round(y - base[3], 1)))
+        return out
+    finally:
+        doc.close()
+
+
+def test_marks_above_and_below_the_line_stay_there(tmp_path):
+    src, out = raised(tmp_path / "in.pdf"), tmp_path / "out.pdf"
+    assert small_marks(src) == [("2", 6.5, 3.5), ("2", 6.5, -2.0)]
+    text = "The steam pressure in the boiler2 rose sharply while H2O was drained from the east wing overnight."
+    textedit.edit_text(src, out, [{"page": 1, "rect": [70, 684, 330, 712], "paragraph": True, "text": text}])
+    assert small_marks(out) == [("2", 6.5, 3.5), ("2", 6.5, -2.0)]
+    assert page_text(out).replace(" ", "") == text.replace(" ", "")
+
+
+def test_a_big_first_word_doesnt_set_the_paragraphs_size_or_spacing(tmp_path):
+    """A paragraph that opens with a larger word (a run-in heading): the
+    rest keeps its own size, and the lines stay as far apart as they were."""
+    import pypdfium2.raw as raw
+    path, out = tmp_path / "in.pdf", tmp_path / "out.pdf"
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont(BOLD, 14)
+    c.drawString(72, 700, "Warning")
+    c.setFont(PLAIN, 10)
+    c.drawString(72 + c.stringWidth("Warning ", BOLD, 14), 700, "keep the doors away from direct heat")
+    c.drawString(72, 688, "for the first two weeks while the oil cures, and")
+    c.drawString(72, 676, "do not stack anything on the shelves.")
+    c.save()
+    text = ("Warning keep the cabinet doors away from direct heat for the first two weeks while the oil cures, "
+            "and do not stack anything on the shelves.")
+    textedit.edit_text(path, out, [{"page": 1, "rect": [70, 672, 330, 714], "paragraph": True, "text": text}])
+    doc = pdfium.PdfDocument(str(out))
+    try:
+        tp = doc[0].get_textpage()
+        full = tp.get_text_range()
+        sizes = {full[i]: round(raw.FPDFText_GetFontSize(tp.raw, i), 1) for i in (full.index("Warning"), full.index("cabinet"), full.index("shelves"))}
+        ys = set()
+        for i in range(tp.count_chars()):
+            if full[i].strip():
+                x, y = ctypes.c_double(), ctypes.c_double()
+                raw.FPDFText_GetCharOrigin(tp.raw, i, ctypes.byref(x), ctypes.byref(y))
+                ys.add(round(y.value, 1))
+        ys = sorted(ys, reverse=True)
+    finally:
+        doc.close()
+    assert sizes == {"W": 14.0, "c": 10.0, "s": 10.0}, sizes
+    assert ys == [700.0, 688.0, 676.0], ys
+    assert look_of(words(out), "Warning")[1] and not look_of(words(out), "cabinet")[1]

@@ -273,6 +273,40 @@ def _rows(textpage, chars):
     return [members for _, members in sorted(rows, key=lambda r: -r[0])]
 
 
+def _rows_with_marks(textpage, chars):
+    """:func:`_rows`, with small letters set above or below a line (a
+    footnote mark, the 2 of H2O) counted with that line, not as a line of
+    their own."""
+    raw = _raw()
+    found = []
+    for members in _rows(textpage, chars):
+        ys = sorted(_origin(textpage, i)[1] for i in members)
+        sizes = sorted(max(1.0, raw.FPDFText_GetFontSize(textpage.raw, i)) for i in members)
+        found.append([ys[len(ys) // 2], sizes[len(sizes) // 2], list(members)])
+    for row in sorted(found, key=lambda r: r[1]):  # the smallest first
+        hosts = [h for h in found if h is not row and h[2] and row[1] <= h[1] * 0.85 and abs(row[0] - h[0]) < h[1] * 0.6]
+        if hosts:
+            host = min(hosts, key=lambda h: abs(row[0] - h[0]))
+            host[2] += row[2]
+            row[2] = []
+    return [members for _, _, members in found if members]
+
+
+def _set_rises(rows):
+    """Give each letter of the rows (of :func:`_letters`) its "rise": how
+    far above (below: negative) its line's baseline it is set, 0 for the
+    line's own letters."""
+    for row in rows:
+        down = _down(row[0]["style"]["matrix"])
+        heights = [-(L["origin"][0] * down[0] + L["origin"][1] * down[1]) for L in row]
+        usual = max({round(L["style"]["size"], 2) for L in row},
+                    key=lambda size: sum(len(L["char"]) for L in row if round(L["style"]["size"], 2) == size))
+        base = statistics.median(h for h, L in zip(heights, row) if round(L["style"]["size"], 2) == usual)
+        for h, L in zip(heights, row):
+            rise = h - base
+            L["rise"] = round(rise, 2) if abs(rise) > 0.06 * L["style"]["size"] else 0.0
+
+
 # ---- where the letters are ---------------------------------------------------------------
 
 class _Covers:
@@ -907,8 +941,9 @@ def _look(style):
 
 
 def _old_words(rows, link_of=None):
-    """The old paragraph's words, each a list of (letter, (style, link)), in
-    order; ``link_of(letter)`` is the link a letter is in (None: none)."""
+    """The old paragraph's words, each a list of (letter, (style, link,
+    rise)), in order; ``link_of(letter)`` is the link a letter is in (None:
+    none), the rise how far above its line's baseline it is set."""
     words = []
     for row in rows:
         word = []
@@ -916,7 +951,7 @@ def _old_words(rows, link_of=None):
             if a is not None and (b.get("explicit_space") or b["s"] - (a["s"] + a["adv"]) > 0.2 * b["style"]["size"]):
                 words.append(word)
                 word = []
-            attr = (b["style"], link_of(b) if link_of else None)
+            attr = (b["style"], link_of(b) if link_of else None, b.get("rise", 0.0))
             word += [(ch, attr) for ch in b["char"]]
         if word:
             words.append(word)
@@ -924,7 +959,7 @@ def _old_words(rows, link_of=None):
 
 
 def _attr_look(attr):
-    return _look(attr[0]) + (attr[1],)
+    return _look(attr[0]) + (round(attr[2], 1), attr[1])
 
 
 def _char_styles(rows, text, link_of=None):
@@ -975,6 +1010,9 @@ def _char_styles(rows, text, link_of=None):
         if st is None:
             out[k] = last or first
         last = out[k] if not text[k].isspace() or last is None else last
+    for k in range(len(out) - 2, -1, -1):  # a space after a raised mark is the line's, not the mark's
+        if text[k].isspace() and out[k][2] and not out[k + 1][2]:
+            out[k] = out[k + 1]
     if len({_attr_look(st) for st, ch in zip(out, text) if not ch.isspace()}) < 2 and not any(
             a[1] is not None for word in old for _, a in word):
         return None
@@ -1655,9 +1693,11 @@ class _Page:
         its height (see textflow), unless ``opts`` has "flow": False."""
         opts = opts or {}
         chars = _chars(self.textpage, rect, across=3.0)
-        rows = [r for r in (_letters(self.textpage, row, self.cache, self.hidden) for row in _rows(self.textpage, chars)) if r]
+        rows = [r for r in (_letters(self.textpage, row, self.cache, self.hidden)
+                            for row in _rows_with_marks(self.textpage, chars)) if r]
         if not rows:
             return self.line(rect, text, None, opts)
+        _set_rises(rows)
         tc, word = _spacing(rows)
         everything = [L for row in rows for L in row]
         self.touch(everything)
@@ -1695,21 +1735,21 @@ class _Page:
                  else None)
         marks = opts.get("runs")
         if marks and len(marks) == len(text):  # the editor's bold and italic, letter by letter
-            looks = looks or [(base, None)] * len(text)
+            looks = looks or [(base, None, 0.0)] * len(text)
             made, was = {}, {}
-            for n, ((st, lk), (bold, italic)) in enumerate(zip(looks, marks)):
+            for n, ((st, lk, up), (bold, italic)) in enumerate(zip(looks, marks)):
                 if (bold, italic) != (st["bold"], st["italic"]):
                     key = (id(st), bold, italic)
                     if key not in made:
                         made[key] = _restyle(st, {"bold": bold, "italic": italic})
                         was[id(made[key])] = st
-                    looks[n] = (made[key], lk)
+                    looks[n] = (made[key], lk, up)
         else:
             was = {}
         reps, fonts_by, scaled_by, linked = {}, {}, {}, {}
         if looks:
             keys = [_attr_look(a) for a in looks]
-            for (st, _), key in zip(looks, keys):
+            for (st, _, _), key in zip(looks, keys):
                 reps.setdefault(key, st)
             # A look chosen for the whole paragraph goes on top of the words'
             # own: a font keeps bold words bold, bold keeps italic words
@@ -1868,7 +1908,10 @@ class _Page:
                     self.run(scaled(current, k)[0], fonts_by[current], group)
                     group = []
                 current = key
-                group.append((ch, *at(pen)))
+                px, py = at(pen)
+                if key[-2]:  # set above or below the line
+                    px, py = px - down[0] * key[-2] * k, py - down[1] * key[-2] * k
+                group.append((ch, px, py))
                 st, w = scaled(key, k)
                 if key[-1] is not None:  # in links or markups: where their words are now
                     (x0, y0), (x1, _) = at(pen), at(pen + w(ch))
@@ -2652,10 +2695,10 @@ def paragraph_runs(path, page, rect, text, password=None):
             try:
                 cache, hidden = {}, _Covers(pdf_page)  # (old words under an earlier change don't count)
                 chars = _chars(textpage, rect, across=3.0)
-                rows = [r for r in (_letters(textpage, row, cache, hidden) for row in _rows(textpage, chars)) if r]
+                rows = [r for r in (_letters(textpage, row, cache, hidden) for row in _rows_with_marks(textpage, chars)) if r]
                 if not rows:
                     return [{"text": text, "bold": False, "italic": False, "color": [0, 0, 0]}] if text else []
-                looks = _char_styles(rows, text) or [(rows[0][0]["style"], None)] * len(text)
+                looks = _char_styles(rows, text) or [(rows[0][0]["style"], None, 0.0)] * len(text)
             finally:
                 textpage.close()
                 pdf_page.close()
@@ -2663,7 +2706,7 @@ def paragraph_runs(path, page, rect, text, password=None):
             doc.close()
     import collections
 
-    runs, styles = [], [st for st, _ in looks]
+    runs, styles = [], [st for st, _, _ in looks]
     common = collections.Counter(_look(st) for st, ch in zip(styles, text) if not ch.isspace()).most_common(1)
     common = common[0][0] if common else None
     for n, ch in enumerate(text):  # a space between words in two styles goes with the usual style
