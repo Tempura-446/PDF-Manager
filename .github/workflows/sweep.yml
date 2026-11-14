@@ -33,8 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
@@ -68,7 +68,7 @@ jobs:
           --sweep "$RUNNER_TEMP/corpus" --sweep-out "$RUNNER_TEMP/sweep-report" --sweep-reader "$READER"
       - name: Keep the report
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: sweep-report
           path: |
