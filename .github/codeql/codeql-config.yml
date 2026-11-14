@@ -1,0 +1,6 @@
+# What CodeQL code scanning reads (see ../workflows/codeql.yml).
+name: ZPDF CodeQL config
+paths-ignore:
+  # pdf.js, vendored as it comes from Mozilla (packaging/update_pdfjs.py):
+  # not ZPDF's code, and its alerts would bury ZPDF's own.
+  - pdfmanager/static/pdfjs
