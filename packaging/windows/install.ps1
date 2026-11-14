@@ -6,7 +6,9 @@
 #   2. Installs ZPDF in its own folder: %LOCALAPPDATA%\PDF Manager\app
 #      (running it again updates it).
 #   3. Adds Start menu and desktop shortcuts, ZPDF in "Open with" for
-#      PDFs, and an entry in Settings > Apps to uninstall it.
+#      PDFs, ZPDF's actions in Explorer's right-click menu (a ZPDF submenu
+#      on PDFs, "Make a PDF with ZPDF" on pictures), and an entry in
+#      Settings > Apps to uninstall it. All for this user only.
 #   4. Asks whether to add Tesseract and Ghostscript too (unless -WithExtras
 #      or -NoExtras says). OCR itself is built in; these add PDF/A output,
 #      turning pages upright and a second OCR engine: OCRmyPDF in ZPDF's
@@ -21,6 +23,7 @@
 param(
     [switch]$NoDesktop,   # no desktop shortcut
     [switch]$NoOpenWith,  # don't add to "Open with"
+    [switch]$NoContextMenu,  # don't add ZPDF to Explorer's right-click menu
     [switch]$NoLaunch,    # don't start the app at the end
     # -WithOcr and -NoOcr, the names before 0.14, still work.
     [Alias("WithOcr")]
@@ -187,10 +190,11 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) { throw "Installing ZPDF's packages failed (see above)." }
 Say "Done"
 
-Step "Adding shortcuts and Open with"
+Step "Adding shortcuts, Open with and the right-click menu"
 $setup = @("-I", "-m", "pdfmanager", "setup-windows", "--app-dir", $appDir)
 if ($NoDesktop) { $setup += "--no-desktop" }
 if ($NoOpenWith) { $setup += "--no-open-with" }
+if ($NoContextMenu) { $setup += "--no-context-menu" }
 & $venvPython @setup | ForEach-Object { Say $_ }
 if ($LASTEXITCODE -ne 0) { throw "Adding the shortcuts failed (see above)." }
 

@@ -1,6 +1,7 @@
 """Set up ZPDF on Windows once it's installed with Python: Start menu
 and desktop shortcuts, ZPDF in "Open with" and Default apps for
-PDFs, and an entry in Settings > Apps to uninstall it. Everything is for
+PDFs, its actions in Explorer's right-click menu (see
+register_context_menu), and an entry in Settings > Apps to uninstall it. Everything is for
 the current user only, so no administrator rights are needed.
 
 The installer (packaging/windows/install.ps1) runs ``pdfm setup-windows``
@@ -25,6 +26,24 @@ UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFManager
 CLASSES = r"Software\Classes"
 CSIDL_PROGRAMS, CSIDL_DESKTOPDIRECTORY = 0x02, 0x10
 
+# Explorer's right-click menu. SystemFileAssociations adds verbs to a file
+# type whatever program opens it, per user. PDFs get a "ZPDF" submenu (a
+# verb with SubCommands and its own shell key: no COM handler needed),
+# pictures one verb. MultiSelectModel "Player" keeps the verbs there however
+# many files are selected (the default hides them past 15); Explorer still
+# starts one copy of the command per file, and the running app gathers the
+# files that arrive together into one job (see quickactions.py).
+SHELL_ASSOC = CLASSES + r"\SystemFileAssociations"
+MENU_KEY = "ZPDF"
+PDF_VERBS = (  # (key, label, --action or None to just open); Explorer sorts them by key
+    ("1open", "Open in ZPDF", None),
+    ("2combine", "Combine in ZPDF", "combine"),
+    ("3ocr", "Make searchable (OCR)", "ocr"),
+    ("4compress", "Make smaller", "compress"),
+)
+IMAGE_TYPES = (".jpg", ".jpeg", ".png", ".tif", ".tiff")
+IMAGE_VERB = "ZPDF.MakePdf"
+
 UNINSTALL_PS1 = r"""# Removes ZPDF (run from Settings > Apps, or right-click > Run with PowerShell).
 # Plain commands only, so it also works where scripts are limited (Smart App Control)
 # and without Python.
@@ -37,7 +56,7 @@ Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe' OR Name = 'python.ex
     ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
 Start-Sleep -Seconds 1
 foreach ($lnk in @({shortcuts})) {{ Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue }}
-foreach ($key in @("HKCU:\Software\Classes\{prog_id}", "HKCU:\{app_key}", "HKCU:\{uninstall_key}")) {{
+foreach ($key in @("HKCU:\Software\Classes\{prog_id}", "HKCU:\{app_key}", "HKCU:\{uninstall_key}"{menu_keys})) {{
     Remove-Item -Path $key -Recurse -Force -ErrorAction SilentlyContinue
 }}
 Remove-ItemProperty -Path "HKCU:\Software\Classes\.pdf\OpenWithProgids" -Name "{prog_id}" -ErrorAction SilentlyContinue
@@ -229,6 +248,70 @@ def register_open_with(command, icon):
     _set(r"Software\RegisteredApplications", {NAME: rf"{APP_KEY}\Capabilities"})
 
 
+def context_menu_keys():
+    """The keys register_context_menu makes, each removed with what's under it."""
+    return [rf"{SHELL_ASSOC}\.pdf\shell\{MENU_KEY}"] + \
+        [rf"{SHELL_ASSOC}\{ext}\shell\{IMAGE_VERB}" for ext in IMAGE_TYPES]
+
+
+def gui_command(exe, action=None):
+    """The command line Explorer runs for a verb (``%1``: the file)."""
+    flag = f" --action {action}" if action else ""
+    return f'"{exe}" -I -m pdfmanager gui{flag} "%1"'
+
+
+def register_context_menu(exe, icon):
+    """ZPDF's actions in Explorer's right-click menu: a "ZPDF" submenu on
+    PDFs (Open, Combine, Make searchable, Make smaller) and "Make a PDF with
+    ZPDF" on pictures. For this user only. On Windows 11 they're under
+    "Show more options" (the short menu only lists apps with a COM handler)."""
+    top = rf"{SHELL_ASSOC}\.pdf\shell\{MENU_KEY}"
+    _set(top, {"MUIVerb": NAME, "SubCommands": "", "Icon": f"{icon},0", "MultiSelectModel": "Player"})
+    for key, label, action in PDF_VERBS:
+        _set(rf"{top}\shell\{key}", {"MUIVerb": label, "MultiSelectModel": "Player"})
+        _set(rf"{top}\shell\{key}\command", {"": gui_command(exe, action)})
+    for ext in IMAGE_TYPES:
+        verb = rf"{SHELL_ASSOC}\{ext}\shell\{IMAGE_VERB}"
+        _set(verb, {"MUIVerb": "Make a PDF with ZPDF", "Icon": f"{icon},0", "MultiSelectModel": "Player"})
+        _set(rf"{verb}\command", {"": gui_command(exe, "images")})
+
+
+def remove_context_menu():
+    for key in context_menu_keys():
+        _delete_tree(key)
+
+
+def context_menu_registered():
+    """Whether the right-click actions are there (the PDF submenu's command)."""
+    if sys.platform != "win32":
+        return False
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            rf"{context_menu_keys()[0]}\shell\{PDF_VERBS[1][0]}\command", 0,
+                            winreg.KEY_READ):
+            return True
+    except OSError:
+        return False
+
+
+def set_context_menu(on):
+    """Add or take away the right-click actions (Settings in the app)."""
+    _require_windows()
+    if on:
+        app_dir = default_app_dir()
+        icon = app_dir / f"{NAME}.ico"
+        if not icon.exists():
+            icon.parent.mkdir(parents=True, exist_ok=True)
+            icon = appicon.save_ico(icon)
+        register_context_menu(pythonw(), icon)
+    else:
+        remove_context_menu()
+    _notify_shell()
+    return context_menu_registered()
+
+
 def register_uninstall(app_dir, icon):
     size_kb = sum(f.stat().st_size for f in Path(app_dir).rglob("*") if f.is_file()) // 1024
     script = Path(app_dir) / "uninstall.ps1"
@@ -242,7 +325,7 @@ def register_uninstall(app_dir, icon):
 
 # ---- install / remove -----------------------------------------------------------------
 
-def install(app_dir=None, desktop=True, open_with=True):
+def install(app_dir=None, desktop=True, open_with=True, context_menu=True):
     """Add the shortcuts and registry entries. Returns what was done, as lines."""
     _require_windows()
     app_dir = Path(app_dir or default_app_dir())
@@ -251,6 +334,7 @@ def install(app_dir=None, desktop=True, open_with=True):
     ours = data_dir() in Path(app_dir).resolve().parents  # the installer's own folder
     (app_dir / "uninstall.ps1").write_text(UNINSTALL_PS1.format(
         app_dir=_ps(app_dir), prog_id=PROG_ID, app_key=APP_KEY, uninstall_key=UNINSTALL_KEY,
+        menu_keys="".join(f', "HKCU:\\{_ps(k)}"' for k in context_menu_keys()),
         name=_ps(NAME), shortcuts=", ".join(f'"{_ps(p)}"' for p in shortcut_paths(True) + _old_shortcuts()),
         remove_files=REMOVE_FILES_PS1 if ours else KEEP_FILES_PS1),
         encoding="utf-8-sig")
@@ -265,6 +349,11 @@ def install(app_dir=None, desktop=True, open_with=True):
     if open_with:
         register_open_with(f'"{exe}" -I -m pdfmanager gui "%1"', icon)
         done.append('"Open with" for PDF files')
+    if context_menu:
+        register_context_menu(exe, icon)
+        done.append("ZPDF in the right-click menu of PDFs and pictures")
+    else:
+        remove_context_menu()
     register_uninstall(app_dir, icon)
     done.append("Settings > Apps entry (to uninstall)")
     _notify_shell()
@@ -277,6 +366,7 @@ def remove():
     for path in shortcut_paths(desktop=True):
         Path(path).unlink(missing_ok=True)
     _delete_tree(rf"{CLASSES}\{PROG_ID}")
+    remove_context_menu()
     _delete_value(rf"{CLASSES}\.pdf\OpenWithProgids", PROG_ID)
     _delete_tree(APP_KEY)
     _delete_value(r"Software\RegisteredApplications", NAME)

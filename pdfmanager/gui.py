@@ -48,6 +48,7 @@ from pdfmanager import accessibility  # -- accessibility --
 from pdfmanager import applog
 from pdfmanager import ocr  # which OCR engines are installed
 from pdfmanager import scanner, scanpdf  # Scan: paper to a searchable PDF
+from pdfmanager import quickactions  # Explorer's right-click actions
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
@@ -1342,6 +1343,122 @@ def _run_files(op, files, opts, password, extra_files, work, notes):
     return name, buf.getvalue(), "application/zip"
 
 
+def default_options(op):
+    """A tool's options as its form starts out (the right-click actions and
+    the watch folders use them)."""
+    opts = {}
+    for field in OPS[op]["fields"]:
+        value = field.get("default")
+        if value is None or field["kind"] in ("file", "hidden"):
+            continue
+        opts[field["key"]] = ("true" if value else "false") if isinstance(value, bool) else str(value)
+    return opts
+
+
+def run_action(action, paths, work):
+    """Run a right-click action (quickactions.ACTIONS) on ``paths`` with the
+    tool's default options, in the temporary folder ``work``. Returns
+    (results, failed): each result {"name", "data", "sources", "notes"}, each
+    failure {"name", "error"} (a file that couldn't be used, or, for a tool
+    run file by file, one that failed while the others went on)."""
+    spec = quickactions.ACTIONS[action]
+    failed, usable = [], []
+    for path in sorted((Path(p) for p in paths), key=quickactions.natural_key):
+        why = quickactions.refuse_reason(action, path)
+        if why:
+            failed.append({"name": path.name, "error": why})
+        else:
+            usable.append(path)
+
+    def copies(group, tag):
+        # Copies: a tool never touches the file Explorer gave it.
+        made = []
+        for index, source in enumerate(group):
+            folder = work / "in" / f"{tag}{index:03d}"
+            folder.mkdir(parents=True)
+            made.append(Path(shutil.copy2(source, folder / _safe_name(source.name))))
+        return made
+
+    results = []
+    if spec["together"]:
+        if len(usable) < spec["min"]:
+            told = "; ".join(f"{f['name']}: {f['error']}" for f in failed)
+            raise UserError((f"{spec['label']} needs at least {spec['min']} PDFs: select them together "
+                             f"and choose {spec['label']} in ZPDF again" if spec["min"] > 1 else
+                             "there was nothing to make a PDF from") + (f" ({told})" if told else ""))
+        notes, sub = [], work / "run"
+        sub.mkdir()
+        name, data, _ = run_operation(spec["op"], copies(usable, "t"), default_options(spec["op"]),
+                                      work=sub, notes=notes)
+        if len(usable) > 1:
+            name = f"{usable[0].stem} (combined).pdf"
+        results.append({"name": name, "data": data, "sources": usable, "notes": notes})
+    else:
+        for index, path in enumerate(usable):
+            notes, sub = [], work / f"run{index:03d}"
+            sub.mkdir()
+            with progress.section(index, len(usable), path.name if len(usable) > 1 else ""):
+                try:
+                    name, data, _ = run_operation(spec["op"], copies([path], f"f{index}-"),
+                                                  default_options(spec["op"]), work=sub, notes=notes)
+                except progress.Cancelled:
+                    raise
+                except EXPECTED_ERRORS as exc:
+                    failed.append({"name": path.name, "error": str(exc)})
+                    continue
+                except Exception as exc:  # noqa: BLE001 - one bad file doesn't stop the others
+                    failed.append({"name": path.name, "error": applog.unexpected(exc)})
+                    continue
+            results.append({"name": name, "data": data, "sources": [path], "notes": notes})
+    if not results:
+        raise UserError("; ".join(f"{f['name']}: {f['error']}" for f in failed) or "no files were given")
+    return results, failed
+
+
+def _start_action(handler, batch):
+    """Run a right-click batch whose files are all in, as a job the page follows."""
+    job = progress.Job()
+    job.expected = EXPECTED_ERRORS
+    batch.job = job
+    handler.jobs.add(job)
+
+    def work_on():
+        work = handler.work.make()
+        started, outcome = time.monotonic(), "failed"
+        try:
+            results, failed = run_action(batch.action, batch.paths, work)
+            outcome = "done"
+            out = []
+            for n, result in enumerate(results):
+                batch.outputs[n] = (result["name"], result["data"])
+                sources = result["sources"]
+                first = sources[0]
+                out.append({"n": n, "name": result["name"], "size": len(result["data"]),
+                            "before": sum(p.stat().st_size for p in sources if p.exists()),
+                            "from": first.name if len(sources) == 1 else
+                            f"{first.name} and {len(sources) - 1} more",
+                            "from_id": handler.opened.add(first), "count": len(sources),
+                            "notes": result["notes"]})
+            return {"json": {"batch": batch.id, "action": batch.action, "op": quickactions.ACTIONS[batch.action]["op"],
+                             "label": quickactions.ACTIONS[batch.action]["label"],
+                             "results": out, "failed": failed}}
+        except progress.Cancelled:
+            outcome = "cancelled"
+            raise
+        finally:
+            applog.tool_run("action-" + batch.action, batch.paths, time.monotonic() - started, outcome)
+            handler.work.remove(work)
+            batch.finished_at = time.monotonic()
+
+    job.start(work_on)
+
+
+def _shell_menu_available():
+    """The right-click actions run the installed app's Python: Windows, and
+    a copy installed with the installer (or pip)."""
+    return sys.platform == "win32" and update.how_installed() == "pip"
+
+
 def run_folder_operation(op, opts, apply):
     """Folder tools. With ``apply`` false nothing on disk changes."""
     directory = (opts.get("directory") or "").strip()
@@ -1988,6 +2105,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(HTTPStatus.BAD_REQUEST, str(exc))
         if path == "/api/events":
             return self._events()
+        if path.startswith("/api/action/"):
+            return self._action(path[len("/api/action/"):])
+        if path == "/api/shellmenu":
+            from pdfmanager import winsetup
+
+            available = _shell_menu_available()
+            return self._send(HTTPStatus.OK, {"available": available,
+                                              "on": available and winsetup.context_menu_registered()})
         if path == "/api/settings":
             return self._send(HTTPStatus.OK, update.public_settings())
         if path == "/api/update":
@@ -2239,6 +2364,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._access_check(body)
             if path == "/api/settings":
                 return self._save_settings(body)
+            if path == "/api/shellmenu":
+                from pdfmanager import winsetup
+
+                if not _shell_menu_available():
+                    raise UserError("the right-click menu is only for ZPDF installed on Windows with its installer")
+                on = winsetup.set_context_menu(bool(json.loads(body or b"{}").get("on")))
+                return self._send(HTTPStatus.OK, {"available": True, "on": on})
             if path == "/api/update/check":
                 return self._send(HTTPStatus.OK, {**update.check(force=True),
                                                   "can_restart": self._can_restart()})
@@ -2571,6 +2703,9 @@ class Handler(BaseHTTPRequestHandler):
                 str(data.get("proof", "")), _proof(self.instance_secret, "open", nonce)):
             return self._error(HTTPStatus.FORBIDDEN, "not allowed")
         proof = _proof(self.instance_secret, "answer", nonce)
+        action = data.get("action")
+        if action is not None:
+            return self._instance_action(action, data.get("paths") or [], proof)
         ids = []
         for path in data.get("paths") or []:
             try:
@@ -2590,6 +2725,44 @@ class Handler(BaseHTTPRequestHandler):
         if ids:
             url += "&open=" + ",".join(ids)
         return self._send(HTTPStatus.OK, {"url": url, "mode": self.instance_mode, "proof": proof})
+
+    def _instance_action(self, action, paths, proof):
+        """Files for a right-click action (see quickactions.py): they join the
+        batch of that action still gathering files, or start one. A new batch
+        is shown by the app's own window (an event), else by a new window on
+        it; files joining a batch need nothing more."""
+        if action not in quickactions.ACTIONS or not isinstance(paths, list):
+            return self._error(HTTPStatus.BAD_REQUEST, "bad request")
+        batch, new = self.actions.add(action, [Path(str(p)) for p in paths])
+        _log(f"action {action}: {len(paths)} file(s), batch {batch.id}{' (new)' if new else ''}")
+        if self.instance_mode == "desktop":
+            if new:
+                self.events.push({"action": batch.id})
+                raise_window = type(self).bring_to_front
+                if raise_window:
+                    threading.Thread(target=raise_window, daemon=True).start()
+            return self._send(HTTPStatus.OK, {"handled": True, "proof": proof})
+        if not new:
+            return self._send(HTTPStatus.OK, {"handled": True, "proof": proof})
+        url = f"http://127.0.0.1:{self.server.server_address[1]}/#token={self.token}&action={batch.id}"
+        return self._send(HTTPStatus.OK, {"url": url, "mode": self.instance_mode, "proof": proof})
+
+    def _action(self, rest):
+        """GET /api/action/<id>: how a right-click batch is getting on;
+        /api/action/<id>/file/<n>: one of its results (given once)."""
+        batch_id, _, more = rest.partition("/")
+        actions = getattr(self, "actions", None)
+        batch = actions.get(batch_id) if actions is not None else None
+        if batch is None:
+            return self._error(HTTPStatus.NOT_FOUND, "that action is no longer available")
+        if not more:
+            return self._send(HTTPStatus.OK, batch.snapshot())
+        kind, _, n = more.partition("/")
+        item = batch.outputs.pop(int(n), None) if kind == "file" and n.isdigit() else None
+        if item is None:
+            return self._error(HTTPStatus.NOT_FOUND, "that result is no longer available")
+        name, data = item
+        return self._send(HTTPStatus.OK, data, "application/pdf", _download_headers(name))
 
     def _events(self):
         """Long poll: events for the page (files handed over by another
@@ -3064,14 +3237,18 @@ class _Server(ThreadingHTTPServer):
         scans = getattr(handler, "scans", None)
         if scans is not None:
             scans.clear()
+        actions = getattr(handler, "actions", None)
+        if actions is not None:
+            actions.close()
 
 
-def make_server(port=0, desktop=False, open_paths=(), prefer=None):
+def make_server(port=0, desktop=False, open_paths=(), prefer=None, action=None):
     """Create (but don't start) the server. Returns (server, url). The
     server's result cache is ``server.RequestHandlerClass.results`` and its
     openable files ``server.RequestHandlerClass.opened``. ``open_paths``
     are PDFs to show in the reader straight away. With ``port`` 0, the
-    ``prefer``red port is tried first, then any free port."""
+    ``prefer``red port is tried first, then any free port. ``action``:
+    (right-click action, its files) for the page to run when it opens."""
     applog.setup()
     applog.install()
     token = secrets.token_urlsafe(24)
@@ -3084,6 +3261,7 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None):
                                                "pages": {}, "events": Events(),
                                                "saved_over": SavedOver(), "unsaved": UnsavedWork(),
                                                "work": WorkFolders(), "scans": scanpdf.ScanBoxes()})
+    handler.actions = quickactions.Batches(lambda batch: _start_action(handler, batch))
     server = None
     if not port and prefer:
         try:
@@ -3097,13 +3275,16 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None):
     url = f"http://127.0.0.1:{real_port}/#token={token}"
     if open_ids:
         url += "&open=" + ",".join(open_ids)
+    if action:
+        batch, _ = handler.actions.add(action[0], action[1])
+        url += "&action=" + batch.id
     return server, url
 
 
-def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False):
+def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False, action=None):
     """Run in the browser: print the link, open it, serve until Ctrl+C (or,
     with ``exit_when_closed``, until the page has been closed)."""
-    server, url = make_server(port, open_paths=open_paths, prefer=APP_PORT)
+    server, url = make_server(port, open_paths=() if action else open_paths, prefer=APP_PORT, action=action)
     print(f"ZPDF is running at {url}")
     print("Keep this window open while you use it; press Ctrl+C to stop.")
     if open_browser:
@@ -3291,9 +3472,10 @@ def _allow_foreground():
         pass
 
 
-def forward_to_running_app(paths=()):
-    """If ZPDF is already running, hand it ``paths`` to open and
-    return True, so this launch can end: there's only ever one copy.
+def forward_to_running_app(paths=(), action=None):
+    """If ZPDF is already running, hand it ``paths`` to open (or, with
+    ``action``, to run that right-click action on) and return True, so this
+    launch can end: there's only ever one copy.
 
     The running app either opens them itself (its own window, which comes
     to the front) or answers with an address to open, as a new window in
@@ -3306,8 +3488,11 @@ def forward_to_running_app(paths=()):
     # Neither side sends the secret: each proves it knows it (anything else
     # could be listening on that port after a crash left instance.json behind).
     nonce = secrets.token_urlsafe(16)
-    body = json.dumps({"nonce": nonce, "proof": _proof(secret, "open", nonce),
-                       "paths": [str(Path(p).resolve()) for p in paths]}).encode()
+    message = {"nonce": nonce, "proof": _proof(secret, "open", nonce),
+               "paths": [str(Path(p).resolve()) for p in paths]}
+    if action:
+        message["action"] = action
+    body = json.dumps(message).encode()
     request = urllib.request.Request(f"http://127.0.0.1:{port}/api/instance", data=body,
                                      headers={"Content-Type": "application/json",
                                               "Host": f"127.0.0.1:{port}"})
@@ -3463,7 +3648,7 @@ def _window_note():
     return data_dir() / "window-error.txt"
 
 
-def run_desktop(port=0, open_paths=()):
+def run_desktop(port=0, open_paths=(), action=None):
     """Open ZPDF in its own window (needs pywebview). Returns False if
     no window could be opened, so the caller can fall back to the browser.
 
@@ -3479,7 +3664,8 @@ def run_desktop(port=0, open_paths=()):
             return False
     except (OSError, IndexError):
         pass
-    server, url = make_server(port, desktop=True, open_paths=open_paths, prefer=APP_PORT)
+    server, url = make_server(port, desktop=True, open_paths=() if action else open_paths, prefer=APP_PORT,
+                              action=action)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     handler = server.RequestHandlerClass
@@ -3686,13 +3872,13 @@ def find_app_browser():
     return None
 
 
-def run_app_window(port=0, open_paths=()):
+def run_app_window(port=0, open_paths=(), action=None):
     """Open ZPDF as an Edge/Chrome app window. Returns False if no
     such browser is installed. Results are saved like downloads."""
     browser = find_app_browser()
     if not browser:
         return False
-    server, url = make_server(port, open_paths=open_paths, prefer=APP_PORT)
+    server, url = make_server(port, open_paths=() if action else open_paths, prefer=APP_PORT, action=action)
     # A browser profile of its own keeps the window separate from the user's
     # normal browsing, so closing the app never touches their other windows.
     # A second copy of the app (on another port) gets a temporary profile of
@@ -3854,16 +4040,18 @@ def _rename_old_install():
         _log(f"launch: renaming the old shortcuts failed: {exc!r}")
 
 
-def launch(open_paths=(), port=0):
+def launch(open_paths=(), port=0, action=None):
     """Open the app the best way available: its own pywebview window, else
     an Edge/Chrome app window, else a browser tab. Returns once closed. If
-    the app is already running, it gets the files instead."""
+    the app is already running, it gets the files instead. ``action``: a
+    right-click action to run on the files (quickactions.ACTIONS) rather
+    than opening them."""
     _startup.acquire()
     applog.setup()
     applog.started(update.how_installed())
-    _log(f"launch: {list(map(str, open_paths))} port {port}")
+    _log(f"launch: {list(map(str, open_paths))} port {port}" + (f" action {action}" if action else ""))
     try:
-        if not port and forward_to_running_app(open_paths):
+        if not port and forward_to_running_app(open_paths, action=action):
             _log("launch: handed to the running copy")
             return
         if sys.platform == "win32":
@@ -3871,11 +4059,12 @@ def launch(open_paths=(), port=0):
         # PDFM_WINDOW=desktop, app-window or browser uses only that kind of
         # window (for tests and troubleshooting).
         choice = os.environ.get("PDFM_WINDOW", "").strip().lower()
-        if choice in ("", "desktop") and run_desktop(port=port, open_paths=open_paths):
+        todo = (action, list(open_paths)) if action else None
+        if choice in ("", "desktop") and run_desktop(port=port, open_paths=open_paths, action=todo):
             return
-        if choice in ("", "app-window") and run_app_window(port=port, open_paths=open_paths):
+        if choice in ("", "app-window") and run_app_window(port=port, open_paths=open_paths, action=todo):
             return
-        serve(port=port, open_paths=open_paths, exit_when_closed=True)
+        serve(port=port, open_paths=open_paths, exit_when_closed=True, action=todo)
     finally:
         _startup.release()
 

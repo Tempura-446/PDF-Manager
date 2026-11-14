@@ -854,7 +854,7 @@ def test_windows_setup_registers_and_removes(tmp_path, monkeypatch):
     monkeypatch.setattr(winsetup, "make_shortcut", fake_shortcut)
     app_dir = tmp_path / "app"
     done = winsetup.install(app_dir)
-    assert len(done) == 4
+    assert len(done) == 5  # with the right-click menu (test_rightclick.py)
     assert made[0][0] == tmp_path / "Start" / "ZPDF.lnk"
     assert made[1][0] == tmp_path / "Desktop" / "ZPDF.lnk"
     assert made[0][2] == "-I -m pdfmanager gui"  # -I: the PDF's folder isn't searched for modules
@@ -906,8 +906,14 @@ def test_windows_shortcuts_and_registry_for_real(tmp_path, monkeypatch):
     monkeypatch.setattr(winsetup, "APP_KEY", r"Software\PDFManagerTest")
     monkeypatch.setattr(winsetup, "UNINSTALL_KEY",
                         r"Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFManagerTest")
+    monkeypatch.setattr(winsetup, "MENU_KEY", "ZPDFTest")
+    monkeypatch.setattr(winsetup, "IMAGE_VERB", "ZPDFTest.MakePdf")
     winsetup.install(tmp_path / "app")
     try:
+        assert winsetup.context_menu_registered()
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            rf"{winsetup.context_menu_keys()[0]}\shell\2combine\command") as key:
+            assert winreg.QueryValueEx(key, "")[0].endswith('-I -m pdfmanager gui --action combine "%1"')
         target, args = winsetup.read_shortcut(tmp_path / "Start" / "ZPDF Test.lnk")
         assert Path(target).name.lower() in ("pythonw.exe", "python.exe") and args == "-I -m pdfmanager gui"
         assert (tmp_path / "Desktop" / "ZPDF Test.lnk").exists()
@@ -921,6 +927,7 @@ def test_windows_shortcuts_and_registry_for_real(tmp_path, monkeypatch):
     assert not (tmp_path / "Start" / "ZPDF Test.lnk").exists()
     with pytest.raises(FileNotFoundError):
         winreg.OpenKey(winreg.HKEY_CURRENT_USER, winsetup.UNINSTALL_KEY)
+    assert not winsetup.context_menu_registered()
 
 
 # -- updates --------------------------------------------------------------------------------------
