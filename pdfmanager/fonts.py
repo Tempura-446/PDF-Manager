@@ -190,7 +190,9 @@ def pdf_font_codes(font):
     if "/ToUnicode" in font:
         try:
             for code, text in parse_to_unicode(font["/ToUnicode"].get_object().get_data()).items():
-                if len(text) == 1 and code:
+                # Code 0 is the font's "no such letter" box, whatever the map calls it
+                # (Word's maps can name it a space beside the real one).
+                if len(text) == 1 and any(code):
                     codes.setdefault(text, code)
         except Exception:  # noqa: BLE001 - a broken map: the encoding alone
             pass

@@ -46,6 +46,7 @@ it in its column (see textflow.py): text flows, as in a word processor.
 """
 
 import ctypes
+import difflib
 import math
 import os
 import statistics
@@ -54,7 +55,7 @@ import unicodedata
 from pathlib import Path
 
 from pypdf import Transformation
-from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject
+from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, FloatObject, NameObject
 
 from pdfmanager import core, fonts
 from pdfmanager.glyphs import _origin, _raw, _widths  # noqa: F401 - textedit._origin etc.
@@ -131,6 +132,34 @@ def _has_letter(font, letter):
         return False
 
 
+def _space_fonts(textpage):
+    """The fonts the page draws a space with (pdfium's handles, as
+    addresses). A font cut down to a document's letters may name a space
+    and have a placeholder (a box) for it: Word draws every space in a
+    one-letter font of its own, and sets the main font's words apart
+    without one. Only a font seen drawing a space is trusted to."""
+    raw = _raw()
+    found = set()
+    try:
+        for i in range(textpage.count_chars()):
+            if raw.FPDFText_GetUnicode(textpage.raw, i) != 32 or raw.FPDFText_IsGenerated(textpage.raw, i) == 1:
+                continue
+            handle = _font_handle(textpage, i)
+            if handle:
+                found.add(ctypes.cast(handle, ctypes.c_void_p).value)
+    except AttributeError:  # an older pdfium
+        return None
+    return found
+
+
+def _draws_space(style):
+    """Whether the page draws spaces in the font of ``style`` (see _space_fonts)."""
+    fonts_seen = style.get("spaces")
+    if fonts_seen is None or not style.get("handle"):
+        return True
+    return ctypes.cast(style["handle"], ctypes.c_void_p).value in fonts_seen
+
+
 def _font_data(font):
     """The font program (to tell apart cut-down copies of one font), or None."""
     raw = _raw()
@@ -192,6 +221,7 @@ def _style(textpage, index, cache):
         "raw_size": raw_size, "matrix": matrix,
         "size": raw_size * (math.hypot(m.a, m.b) or 1.0),
         "color": color, "angle": math.degrees(math.atan2(matrix[1], matrix[0])),
+        "spaces": cache["spaces"] if "spaces" in cache else cache.setdefault("spaces", _space_fonts(textpage)),
     }
     return style
 
@@ -463,7 +493,7 @@ class _OwnFont:
             codes = {letter: code for letter, code in codes.items() if first <= code[0] < first + count}
         self.font, self.codes, self.width_of = font, codes, _widths(font)
         space = codes.get(" ")
-        if space is not None and self.width_of(space) > 0:
+        if space is not None and any(space) and self.width_of(space) > 0:
             self.space = None  # the font has a space
         else:
             mono = fonts.strip_subset(font.get_object().get("/BaseFont", "")).lower()
@@ -513,6 +543,9 @@ def _own_font(page, style, text):
         # cut down to the letters used, so each is checked for a shape.
         whole = fonts.font_program(font) is None and not _is_embedded(style["handle"])
         if whole or all(_has_letter(style["handle"], ch) for ch in set(text) if ch != " "):
+            if not whole and own.space is None and not _draws_space(style):
+                # No space to draw in this font: the words are set apart by moving the pen.
+                own.space = own.width_of(own.codes[" "]) or 250
             return own
     return None
 
@@ -633,7 +666,7 @@ def _options(edit):
             if not low <= value <= high:
                 raise core.PdfManagerError(f"the {key} should be between {low:g} and {high:g}")
             opts[key] = value
-    for key in ("bold", "italic", "flow"):
+    for key in ("bold", "italic", "flow", "styles"):
         if edit.get(key) is not None:
             opts[key] = bool(edit[key])
     if edit.get("color") is not None:
@@ -648,6 +681,14 @@ def _options(edit):
         if edit["align"] not in ALIGNS:
             raise core.PdfManagerError("the alignment should be left, center, right or justify")
         opts["align"] = edit["align"]
+    if edit.get("runs") is not None:
+        runs, text = edit["runs"], edit.get("text")
+        if not isinstance(runs, list) or len(runs) > 5000 or not all(
+                isinstance(r, dict) and isinstance(r.get("text"), str) for r in runs):
+            raise core.PdfManagerError("the words' styles are damaged; make the change again")
+        if "".join(r["text"] for r in runs) != (text if isinstance(text, str) else ""):
+            raise core.PdfManagerError("the words' styles don't match the words; make the change again")
+        opts["runs"] = [(bool(r.get("bold")), bool(r.get("italic"))) for r in runs for _ in r["text"]]
     if edit.get("fit") not in (None, ""):
         if edit["fit"] != "shrink":
             raise core.PdfManagerError('fit can only be "shrink"')
@@ -729,6 +770,134 @@ def _wrap(text, room, measure):
             line = trial
     lines.append(line)
     return lines
+
+
+def _look(style):
+    """What a reader sees of a style: two letters with the same look are
+    written the same way."""
+    return (style["font"].split("+")[-1], round(style["size"], 2), tuple(round(v, 3) for v in style["color"]),
+            style["bold"], style["italic"])
+
+
+def _old_words(rows, link_of=None):
+    """The old paragraph's words, each a list of (letter, (style, link)), in
+    order; ``link_of(letter)`` is the link a letter is in (None: none)."""
+    words = []
+    for row in rows:
+        word = []
+        for a, b in zip([None] + row[:-1], row):
+            if a is not None and (b.get("explicit_space") or b["s"] - (a["s"] + a["adv"]) > 0.2 * b["style"]["size"]):
+                words.append(word)
+                word = []
+            attr = (b["style"], link_of(b) if link_of else None)
+            word += [(ch, attr) for ch in b["char"]]
+        if word:
+            words.append(word)
+    return words
+
+
+def _attr_look(attr):
+    return _look(attr[0]) + (attr[1],)
+
+
+def _char_styles(rows, text, link_of=None):
+    """The (style, link) of each character of ``text``, the paragraph's new
+    words, taken from the old words as a word processor would keep them:
+    words that are still there keep their own style (and link), a changed
+    word keeps the style of the letters it replaced, and new words take
+    the style of the word before them. None when every letter would look
+    the same (one style throughout, and no links)."""
+    old = _old_words(rows, link_of)
+    if len({_attr_look(st) for word in old for _, st in word}) < 2:
+        return None
+    spans, i = [], 0  # the new words: (start, end) in text
+    while i < len(text):
+        if text[i].isspace():
+            i += 1
+            continue
+        j = i
+        while j < len(text) and not text[j].isspace():
+            j += 1
+        spans.append((i, j))
+        i = j
+    new = [text[a:b] for a, b in spans]
+    out = [None] * len(text)
+    matcher = difflib.SequenceMatcher(None, ["".join(ch for ch, _ in w) for w in old], new, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for w, (a, _) in zip(old[i1:i2], spans[j1:j2]):
+                for n, (_, st) in enumerate(w):
+                    out[a + n] = st
+        elif tag == "replace":
+            was = [pair for w in old[i1:i2] for pair in w]
+            chars = [(k, text[k]) for a, b in spans[j1:j2] for k in range(a, b)]
+            inner = difflib.SequenceMatcher(None, "".join(ch for ch, _ in was), "".join(ch for _, ch in chars),
+                                            autojunk=False)
+            for t, a1, a2, b1, b2 in inner.get_opcodes():
+                for n in range(b2 - b1):
+                    if t == "equal":
+                        st = was[a1 + n][1]
+                    elif a2 > a1:  # in place of other letters: theirs, in proportion
+                        st = was[min(a2 - 1, a1 + n * (a2 - a1) // (b2 - b1))][1]
+                    else:  # typed in: the letter before's
+                        st = None
+                    out[chars[b1 + n][0]] = st
+    first = old[0][0][1] if old and old[0] else None
+    last = None
+    for k, st in enumerate(out):  # new words, spaces and line breaks: the style of what's before them
+        if st is None:
+            out[k] = last or first
+        last = out[k] if not text[k].isspace() or last is None else last
+    if len({_attr_look(st) for st, ch in zip(out, text) if not ch.isspace()}) < 2 and not any(
+            a[1] is not None for word in old for _, a in word):
+        return None
+    return out
+
+
+def _link_at(links, letter):
+    """Which of ``links`` (the index) a letter's middle is in, or None."""
+    l, b, r, t = letter["tight"]
+    x, y = (l + r) / 2, (b + t) / 2
+    for n, (_, (x0, y0, x1, y1)) in enumerate(links):
+        if x0 - 0.5 <= x <= x1 + 0.5 and y0 - 0.5 <= y <= y1 + 0.5:
+            return n
+    return None
+
+
+def _split_seq(seq, sep):
+    """A list of (character, style) split at ``sep`` characters."""
+    parts, part = [], []
+    for item in seq:
+        if item[0] == sep:
+            parts.append(part)
+            part = []
+        else:
+            part.append(item)
+    parts.append(part)
+    return parts
+
+
+def _wrap_seq(seq, room, measure):
+    """:func:`_wrap` for a list of (character, style)."""
+    lines, line = [], []
+    for word in _split_seq(seq, " "):
+        trial = word if not line else line + [(" ", word[0][1] if word else line[-1][1])] + word
+        if line and measure(trial) > room:
+            lines.append(line)
+            line = word
+        else:
+            line = trial
+    lines.append(line)
+    return lines
+
+
+def _strip_seq(seq):
+    a, b = 0, len(seq)
+    while a < b and seq[a][0].isspace():
+        a += 1
+    while b > a and seq[b - 1][0].isspace():
+        b -= 1
+    return seq[a:b]
 
 
 def _box(letters, line=None, before=None, after=None):
@@ -1355,6 +1524,41 @@ class _Page:
         flow = flow and (taken or True)
         style = _restyle(base, opts)
         font = self._font(style, base, text, opts)
+        # Words in other styles than the first (bold, italic, a colour) keep theirs.
+        links = self._links_over(everything)
+        looks = (_char_styles(rows, text, (lambda L: _link_at(links, L)) if links else None)
+                 if opts.get("styles", True) and not (_rtl(text) or any(_rtl(L["char"]) for L in everything))
+                 and not any(key in opts for key in ("font", "bold", "italic", "color")) else None)
+        marks = opts.get("runs") if not any(key in opts for key in ("font", "bold", "italic", "color")) else None
+        if marks and len(marks) == len(text):  # the editor's bold and italic, letter by letter
+            looks = looks or [(base, None)] * len(text)
+            made, was = {}, {}
+            for n, ((st, lk), (bold, italic)) in enumerate(zip(looks, marks)):
+                if (bold, italic) != (st["bold"], st["italic"]):
+                    key = (id(st), bold, italic)
+                    if key not in made:
+                        made[key] = _restyle(st, {"bold": bold, "italic": italic})
+                        was[id(made[key])] = st
+                    looks[n] = (made[key], lk)
+        else:
+            was = {}
+        reps, fonts_by, scaled_by, linked = {}, {}, {}, {}
+        if looks:
+            keys = [_attr_look(a) for a in looks]
+            for (st, _), key in zip(looks, keys):
+                reps.setdefault(key, st)
+            for key, rep in reps.items():
+                letters_of = "".join(ch for ch, k_ in zip(text, keys) if k_ == key)
+                if id(rep) in was:  # made bold or italic in the editor: that face of the words' own font
+                    said = {k_: self.notes[k_] for k_ in ("asked", "matched") if k_ in self.notes}
+                    fonts_by[key] = self._font(rep, was[id(rep)], letters_of, {"bold": rep["bold"], "italic": rep["italic"]})
+                    for k_ in ("asked", "matched"):
+                        self.notes.pop(k_, None)
+                    self.notes.update(said)
+                else:
+                    fonts_by[key] = self._choose(rep, letters_of)
+        left_out = self.notes.get("missing", "")
+        content = [(ch, key) for ch, key in zip(text, keys) if ch not in left_out] if looks else None
         text = self._shown(text)
         plain = not any(key in opts for key in ("font", "bold", "italic"))  # the old words' font
         was = font if plain else _choose(self.page, base, text)
@@ -1365,9 +1569,20 @@ class _Page:
         old_span = ((rows[-1][0]["origin"][0] - first["origin"][0]) * down[0]
                     + (rows[-1][0]["origin"][1] - first["origin"][1]) * down[1])
 
-        def layout(style, text=text, room=room, tight=1.0):
+        def scaled(key, k):
+            """The style of the words that look like ``key``, at ``k`` times their size."""
+            if (key, k) not in scaled_by:
+                rep = reps[key]
+                st = _restyle(rep, {"size": rep["size"] * k} if k != 1 else {})
+                scaled_by[key, k] = (st, _metrics(fonts_by[key][0], fonts_by[key][1], st)[0])
+            return scaled_by[key, k]
+
+        def layout(style, text=content or text, room=room, tight=1.0):
             """The new lines: ([(text, word gap, offset, ends a part)], letter width,
-            letter spacing, line spacing, drop, growth)."""
+            letter spacing, line spacing, drop, growth). With words in several
+            styles, ``text`` and each line's text are lists of (letter, look)."""
+            if isinstance(text, list):
+                return layout_runs(style, text, room, tight)
             k = style["size"] / base["size"]
             tight = min(1.0, max(tight, style["size"] * 1.02 / (lead * k)))  # lines never closer than their size
             width, space = _metrics(font[0], font[1], style)
@@ -1394,6 +1609,72 @@ class _Page:
             drop = (k - 1) * ascent  # a bigger size grows down from the old top
             grow = drop + (len(lines) - 1) * lead * k * tight - old_span + 0.22 * (style["size"] - base["size"])
             return lines, width, tck, lead * k * tight, drop, grow
+
+        def layout_runs(style, seq, room, tight):
+            k = style["size"] / base["size"]
+            tight = min(1.0, max(tight, style["size"] * 1.02 / (lead * k)))
+            width, space = _metrics(font[0], font[1], style)
+            tck = tc * k
+            gap = space + 2 * tck if align == "justify" or word is None else word * k
+
+            def measure(line):
+                pen = 0.0
+                for ch, key in line:
+                    pen += gap - tck if ch.isspace() else scaled(key, k)[1](ch) + tck
+                return pen - tck
+
+            lines = []
+            for part in _split_seq(seq, "\n"):
+                wrapped = _wrap_seq(part, room, measure)
+                for j, line in enumerate(wrapped):
+                    line, g, off = _strip_seq(line), gap, 0.0
+                    spaces = sum(1 for ch, _ in line if ch == " ")
+                    if align == "justify" and j < len(wrapped) - 1 and spaces:
+                        extra = (room - measure(line)) / spaces
+                        if 0 <= extra <= style["size"] * 2:
+                            g = gap + extra
+                    elif align in ("center", "right"):
+                        free = room - measure(line)
+                        off = free / 2 if align == "center" else free
+                    lines.append((line, g, off, j == len(wrapped) - 1))
+            drop = (k - 1) * ascent
+            grow = drop + (len(lines) - 1) * lead * k * tight - old_span + 0.22 * (style["size"] - base["size"])
+            return lines, width, tck, lead * k * tight, drop, grow
+
+        def rejoin(part):
+            """Lines joined into one text again (for running on into the next column)."""
+            if not content:
+                return "".join(ln[0] + ("\n" if ln[3] else " ") for ln in part).rstrip()
+            out = []
+            for ln in part:
+                out += ln[0] + [("\n" if ln[3] else " ", ln[0][-1][1] if ln[0] else content[0][1])]
+            return _strip_seq(out)
+
+        def emit(line, start, width, tck, g, at):
+            """Write one line from ``start`` along it; ``at(s)`` is the page point s along."""
+            if not content:
+                placed, _ = _place(line, start, width, tck, g)
+                self.run(style, font, [(ch, *at(s)) for ch, s in placed])
+                return
+            k = style["size"] / base["size"]
+            pen, group, current = start, [], None
+            for ch, key in line:
+                if ch.isspace():
+                    group.append((" ", *at(pen)))
+                    pen += g - tck
+                    continue
+                if key != current and current is not None:
+                    self.run(scaled(current, k)[0], fonts_by[current], group)
+                    group = []
+                current = key
+                group.append((ch, *at(pen)))
+                st, w = scaled(key, k)
+                if key[-1] is not None:  # in a link: where its words are now
+                    (x0, y0), (x1, _) = at(pen), at(pen + w(ch))
+                    linked.setdefault(key[-1], []).append((x0, y0, x1, st["size"]))
+                pen += w(ch) + tck
+            if current is not None:
+                self.run(scaled(current, k)[0], fonts_by[current], group)
 
         def squeeze(found, style, current):
             """Nothing below can move, so the paragraph has to end above
@@ -1427,7 +1708,7 @@ class _Page:
                     here = drop + (keep - 1) * lead_k - old_span + 0.22 * (style["size"] - base["size"])
                     if found["low"] - here < found["limit"] - 0.01:
                         continue
-                    words = "".join(ln[0] + ("\n" if ln[3] else " ") for ln in lines[keep:]).rstrip()
+                    words = rejoin(lines[keep:])
                     more = layout(style, words, max(nxt["x1"] - nxt["x0"], base["size"] * 4))[0]
                     push = (len(more) + 0.5) * lead_k
                     if nxt["low"] - push >= nxt["limit"] - 0.01 and self.flow.move(nxt, -push):
@@ -1471,15 +1752,63 @@ class _Page:
             self.notes["taller"] = True
             del fitted  # said either way: it takes more lines than it did
         for n, (line, g, off, _) in enumerate(lines):
-            placed, _ = _place(line, left + off, width, tck, g)
             d = drop + n * lead_k
             point = (first["origin"][0] + u[0] * (-first["s"]) + down[0] * d,
                      first["origin"][1] + u[1] * (-first["s"]) + down[1] * d)
-            self.run(style, font, [(ch, point[0] + u[0] * s, point[1] + u[1] * s) for ch, s in placed])
+            emit(line, left + off, width, tck, g, lambda s, p=point: (p[0] + u[0] * s, p[1] + u[1] * s))
         for n, (line, g, off, _) in enumerate(more):  # level text only: the paragraph is level
-            placed, _ = _place(line, off, width, tck, g)
-            self.run(style, font, [(ch, nxt["x0"] + s, nxt["baseline"] - n * lead_k) for ch, s in placed])
+            emit(line, off, width, tck, g, lambda s, n=n: (nxt["x0"] + s, nxt["baseline"] - n * lead_k))
+        if looks and links:
+            self._move_links(links, linked)
         return font
+
+    def _links_over(self, letters):
+        """The page's links over any of ``letters``: [(annotation, rect)]."""
+        annots = self.page.get("/Annots") if self.page is not None else None
+        if not annots:
+            return []
+        found = []
+        for ref in annots.get_object():
+            annot = ref.get_object()
+            if annot.get("/Subtype") != "/Link":
+                continue
+            try:
+                r = [float(v) for v in annot["/Rect"]]
+            except (KeyError, TypeError, ValueError):
+                continue
+            rect = (min(r[0], r[2]), min(r[1], r[3]), max(r[0], r[2]), max(r[1], r[3]))
+            if any(_link_at([(annot, rect)], L) is not None for L in letters):
+                found.append((annot, rect))
+        return found
+
+    def _move_links(self, links, linked):
+        """Each link around its words' new places: one box per line (as
+        /QuadPoints when the words now wrap), or the link goes when its
+        words are gone."""
+        for n, (annot, _) in enumerate(links):
+            boxes = linked.get(n)
+            if not boxes:
+                annots = self.page["/Annots"].get_object()
+                for i in range(len(annots) - 1, -1, -1):
+                    if annots[i].get_object() is annot:
+                        del annots[i]
+                continue
+            lines = {}
+            for x0, y, x1, size in boxes:
+                key = next((k for k in lines if abs(k - y) < size * 0.5), y)
+                lines.setdefault(key, []).append((x0, x1, size))
+            quads, rects = [], []
+            for y, row in sorted(lines.items(), key=lambda kv: -kv[0]):
+                size = max(r[2] for r in row)
+                a, b = min(r[0] for r in row), max(r[1] for r in row)
+                lo, hi = y - 0.25 * size, y + 0.9 * size
+                rects.append((a, lo, b, hi))
+                quads += [a, hi, b, hi, a, lo, b, lo]
+            union = (min(r[0] for r in rects), min(r[1] for r in rects),
+                     max(r[2] for r in rects), max(r[3] for r in rects))
+            annot[NameObject("/Rect")] = ArrayObject([FloatObject(round(v, 3)) for v in union])
+            if len(rects) > 1 or "/QuadPoints" in annot:
+                annot[NameObject("/QuadPoints")] = ArrayObject([FloatObject(round(v, 3)) for v in quads])
 
     # -- helpers ------------------------------------------------------------------------
     def _set(self, lines, origin, style, font, tc, word, lead, align=None, room=None, ends=None):
@@ -2086,6 +2415,54 @@ def _edit(path, output, edits, password, report, old_way):
             doc.close()
     core._write(writer, output)
     return sum(len(p) for p in by_page.values()), expect
+
+
+def paragraph_runs(path, page, rect, text, password=None):
+    """How the words of ``text`` (a paragraph's words as the reader shows
+    them) look on page ``page`` in ``rect``, for the reader's paragraph
+    editor: [{"text", "bold", "italic", "color": [r, g, b]}], in order,
+    their texts making up ``text``."""
+    import pypdfium2 as pdfium
+
+    reader = core.open_pdf(path, password)
+    if not 1 <= int(page) <= len(reader.pages):
+        raise core.PdfManagerError(f"page {page} doesn't exist")
+    x0, y0, x1, y1 = (float(v) for v in rect)
+    if not all(math.isfinite(v) for v in (x0, y0, x1, y1)):
+        raise core.PdfManagerError("the box around the words isn't on the page")
+    rect = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+    with core.PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(str(path), password=password)
+        try:
+            pdf_page = doc[int(page) - 1]
+            textpage = pdf_page.get_textpage()
+            try:
+                cache, hidden = {}, _Covers(pdf_page)  # (old words under an earlier change don't count)
+                chars = _chars(textpage, rect, across=3.0)
+                rows = [r for r in (_letters(textpage, row, cache, hidden) for row in _rows(textpage, chars)) if r]
+                if not rows:
+                    return [{"text": text, "bold": False, "italic": False, "color": [0, 0, 0]}] if text else []
+                looks = _char_styles(rows, text) or [(rows[0][0]["style"], None)] * len(text)
+            finally:
+                textpage.close()
+                pdf_page.close()
+        finally:
+            doc.close()
+    import collections
+
+    runs, styles = [], [st for st, _ in looks]
+    common = collections.Counter(_look(st) for st, ch in zip(styles, text) if not ch.isspace()).most_common(1)
+    common = common[0][0] if common else None
+    for n, ch in enumerate(text):  # a space between words in two styles goes with the usual style
+        if ch.isspace() and n + 1 < len(text) and _look(styles[n + 1]) == common:
+            styles[n] = styles[n + 1]
+    for ch, st in zip(text, styles):
+        look = (st["bold"], st["italic"], [round(v, 4) for v in st["color"]])
+        if runs and (runs[-1]["bold"], runs[-1]["italic"], runs[-1]["color"]) == look:
+            runs[-1]["text"] += ch
+        else:
+            runs.append({"text": ch, "bold": look[0], "italic": look[1], "color": look[2]})
+    return runs
 
 
 def font_choices(path, password=None):

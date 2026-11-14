@@ -459,6 +459,10 @@ textarea.rd-textedit { line-height: 1.25; padding: 2px 3px; resize: both; min-he
   box-shadow: 0 0 0 1.5px var(--accent), 0 0 0 4.5px var(--accent-ring), var(--shadow-lift);
 }
 textarea.rd-textedit.rd-textedit-fit { white-space: pre-wrap; overflow: auto; }
+/* A paragraph whose words can be bold or italic one by one: like the textarea. */
+.rd-textedit-rich { white-space: pre-wrap; overflow: auto; overflow-wrap: break-word; cursor: text; }
+.rd-textedit-rich:not(.rd-textedit-fit) { line-height: 1.25; padding: 2px 3px; min-height: 3em; resize: both; }
+.rd-textedit-rich.rd-textedit-fit { white-space: pre-wrap; overflow: auto; }
 .rd-textedit-box.rd-pending { pointer-events: none; }
 .rd-textedit-box.rd-pending .rd-textedit { box-shadow: none; caret-color: transparent; }
 .rd-textedit-box.rd-pending .rd-textedit-hint { display: none; }
