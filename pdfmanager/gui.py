@@ -1356,6 +1356,9 @@ def default_options(op):
     return opts
 
 
+watchfolders.default_options = default_options
+
+
 def run_action(action, paths, work):
     """Run a right-click action (quickactions.ACTIONS) on ``paths`` with the
     tool's default options, in the temporary folder ``work``. Returns

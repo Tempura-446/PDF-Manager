@@ -30,12 +30,18 @@ from pathlib import Path
 
 from pdfmanager import core, watch
 from pdfmanager.appdata import data_dir, write_private
+from pdfmanager.pageranges import PageRangeError
 
 TOOLS = {"ocr": "Make searchable (OCR)", "compress": "Make smaller", "pdfa": "Archive (PDF/A)"}
 SUFFIXES = {"ocr": " (searchable)", "compress": " (smaller)", "pdfa": " (PDF-A)", "recipe": " (done)"}
 DONE_FOLDER, ORIGINALS_FOLDER = "Done", "Originals"
 INTERVAL = 3.0   # seconds between looks (a file must hold still for one)
 NEWS_KEPT = 50
+# Errors whose message is told as it is (the tools' own; see gui.EXPECTED_ERRORS).
+PLAIN_ERRORS = (core.PdfManagerError, PageRangeError, ValueError, FileNotFoundError, NotADirectoryError)
+# A tool's options as its form starts out: gui.default_options, handed in by
+# gui when it loads (this module doesn't import gui, which imports it).
+default_options = None
 
 
 def _config_file():
@@ -113,11 +119,11 @@ def check(folder, do, results, originals, existing=()):
 
 def steps(entry):
     """The recipe steps a folder runs (a tool: one step with its default options)."""
-    from pdfmanager import gui, recipes
+    from pdfmanager import recipes
 
     do = entry["do"]
     if "tool" in do:
-        return [{"op": do["tool"], "options": gui.default_options(do["tool"])}]
+        return [{"op": do["tool"], "options": default_options(do["tool"]) if default_options else {}}]
     return recipes.get(do["recipe"])["steps"]
 
 
@@ -327,15 +333,13 @@ class WatchFolders:
             self.status.setdefault(folder_id, {}).update(changes)
 
     def _report(self, entry, path, result, error):
-        from pdfmanager import gui
-
         ok = error is None
         if ok:
             message = (f"{path.name}: skipped, the same as one done before" if result is None else
                        f"{path.name} is done: {result.name}" +
                        (f" in {result.parent.name}" if result.parent != path.parent else ""))
         else:
-            if isinstance(error, gui.EXPECTED_ERRORS):
+            if isinstance(error, PLAIN_ERRORS):
                 plain = str(error)
             else:
                 from pdfmanager import applog
