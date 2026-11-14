@@ -724,9 +724,10 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); this._saveKey(e); return; }
     if (mod && !isTyping(e) && !this.scalebar.hidden && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")
         && this._measureUndo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); return; }
-    // Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z): what the Undo and Redo buttons do.
+    // Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z): what the Undo and Redo buttons do, with
+    // any tool on or none (with Select, pdf.js has no keys of its own; with
+    // its tools on, it doesn't hear them as well: stopPropagation).
     if (mod && !e.altKey && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y") && !isTyping(e)
-        && (this.textEditMode || this.markupMode || this.annotbar.hidden)
         && this._undo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); e.stopPropagation(); return; }
     if (e.key === "Escape" && !this.ctxMenu.hidden) { this.#closeContextMenu(); return; }
     if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); this.pdfViewer.increaseScale(); return; }

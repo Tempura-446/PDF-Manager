@@ -1,5 +1,5 @@
 """0.29.0, from the Windows check (static/reader.js, tabs.js, tabstate.js):
-Redo of a note Undo took back. In a browser through Node's Playwright
+Redo of a note Undo took back; Ctrl+Z and Ctrl+Y with Select on. In a browser through Node's Playwright
 (skipped where there is none); winfix29.js runs one scenario at a time."""
 import json
 import os
@@ -60,3 +60,20 @@ def test_redo_brings_back_a_note_that_undo_took_away(app, tmp_path):
     # Ctrl+S: in the file.
     assert not saved["dirty"] and not saved["titleDot"], saved
     assert [kind for _, kind, _ in annotations(src) if kind != "/Popup"] == ["/Text"], annotations(src)
+
+
+def test_ctrl_z_and_ctrl_y_work_with_select_on(app, tmp_path):
+    srv, _ = app
+    src = text_pdf(tmp_path / "Report.pdf", pages=1)
+    out = run(app, tmp_path, "select", file=srv.RequestHandlerClass.opened.add(src))
+    drawn = out["drawn"]
+    assert drawn["mode"] == "NONE" and drawn["pdfjsMode"] == 0 and drawn["editors"] == 1 and drawn["undo"], drawn
+    assert out["inkUndone"]["editors"] == 0 and out["inkUndone"]["redo"], out["inkUndone"]
+    assert out["inkRedone"]["editors"] == 1 and not out["inkRedone"]["redo"], out["inkRedone"]
+    # Ctrl+Z in the find box is the box's own.
+    assert out["typing"]["editors"] == 1, out["typing"]
+    # A note, then Select: the reader's own undo and redo.
+    noted, undone, redone = out["noted"], out["noteUndone"], out["noteRedone"]
+    assert noted["mode"] == "NONE" and noted["notes"] == 1 and noted["depth"] == [1, 0], noted
+    assert undone["notes"] == 0 and undone["depth"] == [0, 1] and undone["redo"], undone
+    assert redone["notes"] == 1 and redone["depth"] == [1, 0] and not redone["redo"], redone

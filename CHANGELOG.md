@@ -35,6 +35,9 @@ that were wrong and are now right:
   page change): Ctrl+Z took it away, but Redo stayed off and Ctrl+Y did
   nothing. Redo now puts it back (with the dot), and Undo and Redo pick
   the same change whether from the buttons or the keys.
+- **Ctrl+Z and Ctrl+Y with Select on** (for instance after Esc from Draw)
+  did nothing, although the Undo and Redo buttons worked. They now do
+  what the buttons do, with any tool on (not while typing in a box).
 
 ## 0.28.0
 
