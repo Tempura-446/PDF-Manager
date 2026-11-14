@@ -25,7 +25,7 @@ English stays built in.
 
 - **First languages:** Simplified Chinese (zh-Hans), Spanish (es), French (fr), German (de).
 - **No native-speaker review is available.** Quality comes from the process below instead, and the packs are labelled as automatic translations.
-- **Still open:** whether ZPDF may download packs from ZPDF-releases when the user asks, or whether packs are only separate downloads installed from a file.
+- **Downloads:** ZPDF may download a pack from ZPDF-releases when the user asks for it in Settings (the only time it goes online for this, with checksum verification). Installing from a file stays available for offline PCs.
 
 ## Established sources to build on (licences to confirm before use)
 
