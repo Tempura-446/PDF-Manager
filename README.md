@@ -584,6 +584,30 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
     ZPDF says so: points then go exactly where you click, so zoom in close.
   - A scale read from the sheet is only as right as the sheet: measure one
     written dimension to check it before relying on the numbers.
+- **Layers** (drawings exported from CAD with layers, which PDF calls
+  optional content): a **Layers** tab appears in the sidebar, beside Pages,
+  Bookmarks and Comments, only when the file has layers. It lists them in
+  the file's own order, nested as the file nests them and under its
+  headings, each with a box to show or hide it; **Show all** and **Hide
+  all** switch them together.
+  - A **locked** layer (the padlock) can't be switched. Layers in a **radio
+    group** (shown as round buttons) keep one on: showing one hides the
+    others.
+  - Hiding a layer redraws the pages and the thumbnails without it, its
+    words can no longer be selected, **measuring snaps only to the lines of
+    the layers shown**, and **Print** prints the layers shown.
+  - Each tab keeps its own choice of layers while you switch between them.
+    Showing and hiding is only how you look at the file; it doesn't change
+    it.
+  - **Save layer visibility** makes the file open with the layers as they
+    are now, in ZPDF, Acrobat and other readers (it writes the file's
+    default layer settings). It's a change like any other: Undo takes it
+    back, and Save keeps it.
+  - **Flatten layers…** makes the layers shown part of the page and
+    removes the hidden layers' lines, text and pictures from the file for
+    good; the file has no layers after it. For sending a clean set (Undo
+    takes it back). The **Flatten layers** tool does the same to files
+    without opening them, and `pdfm flatten-layers` on the command line.
 - **Command palette (Ctrl+K):** type what you want (a tool, an action like
   "fit width" or "delete this page", a page number, or a zoom like "150%") and press Enter.
 - Rotate the view, hand tool (drag to scroll), dark pages for night
@@ -845,7 +869,19 @@ Metadata isn't changed, so use `sanitize` too.
 - `flatten` draws filled-in form fields and comments (highlights, notes,
   drawings, signatures) into the page. Links keep working, and so do
   comments that have no drawing of their own (readers draw those themselves).
+- `flatten-layers` (drawings with layers): keeps the layers that show when
+  the file opens as part of the page, removes the hidden layers' content
+  (what they draw, the XObjects that belong to them, their annotations) and
+  removes the layers. `--hide NAME` and `--show NAME` change which layers
+  count as shown (repeat them, or separate names with commas), and `--list`
+  only lists the layers and whether they show:
+
+  ```
+  pdfm flatten-layers plan.pdf --list
+  pdfm flatten-layers plan.pdf --hide Dimensions,Notes -o plan_clean.pdf
+  ```
 - `sanitize` removes the document details (author, title, dates, XMP),
+
   JavaScript and actions that launch programs, and attached files;
   `--comments` also removes comments. Form fields are kept.
 - `pdfa` converts to PDF/A-1b, -2b (default) or -3b: fonts embedded,

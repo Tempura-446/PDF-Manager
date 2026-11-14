@@ -4,7 +4,33 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.32.0
+
+Drawings with layers. CAD programs export each drawing layer as a PDF
+layer (optional content); ZPDF now shows them, prints with them and can
+flatten them.
+
+- **Layers tab in the reader.** For a PDF with layers, a **Layers** tab
+  beside Pages, Bookmarks and Comments lists them in the file's order,
+  nested as the file nests them, each with a box to show or hide it, and
+  **Show all** / **Hide all**. Locked layers can't be switched; in a radio
+  group one layer stays on. The pages and thumbnails redraw at once, and
+  each tab keeps its own choice when you switch tabs.
+- **Measuring follows the layers.** Snapping uses only the lines of the
+  layers shown, so a hidden dimension layer no longer pulls points off the
+  walls. A hidden layer's words can't be selected either.
+- **Printing follows the layers.** Print prints the layers shown.
+- **Save layer visibility** makes the file open with the layers as they
+  are now, in ZPDF and in Acrobat; it's a change like any other, with Undo.
+- **Flatten layers** (in the reader's Layers tab, as a tool under Improve,
+  and `pdfm flatten-layers`): the layers shown become part of the page,
+  the hidden layers' lines, text and pictures are removed from the file,
+  and the layers go, for sending a clean set.
+- The page previews of a tool no longer stumble when the file is taken
+  away while they load.
+
 ## 0.30.0
+
 
 Two ways to get work done without opening the tools first.
 
