@@ -271,3 +271,33 @@ def test_a_caption_in_a_picture_is_still_added(tmp_path, monkeypatch):
     src, out = photo_page(tmp_path / "photo.pdf"), tmp_path / "out.pdf"
     assert run(src, out) == ["page 1: read the text in 1 picture"]
     assert "Lake Windermere" in text_of(out)
+
+
+def test_a_picture_full_of_text_keeps_the_words_the_engine_was_less_sure_of(tmp_path, monkeypatch):
+    """From the Windows re-check: a scan with a stamp typed over it lost
+    "library", read at a confidence the scrap rule dropped. A picture with
+    plenty of words is a scan, read as a whole page is."""
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+    image, _ = ocrpages.letter()
+    path = tmp_path / "stamped.pdf"
+    c = canvas.Canvas(str(path), pagesize=(595.2, 841.92))
+    c.drawImage(ImageReader(image), 0, 0, 595.2, 841.92)
+    c.setFont("Helvetica", 12)
+    c.drawString(400, 800, "ZPDF-000123")
+    c.save()
+    said = "The committee approved the plans for the new library wing and the budget".split()
+
+    def recognise(picture, script=None):
+        w, h = picture.size
+        words = []
+        for k, text in enumerate(said):
+            x = w * (0.08 + 0.065 * k)
+            words.append(Word(text, [(x, h * 0.5), (x + w * 0.05, h * 0.5), (x + w * 0.05, h * 0.52), (x, h * 0.52)],
+                              0.45 if text == "library" else 0.95))
+        return [ocr.Line(" ".join(said), words[0].quad, 0.9, words)]
+    monkeypatch.setattr(ocr, "recognise", recognise)
+    out = tmp_path / "out.pdf"
+    run(path, out)
+    read = text_of(out)
+    assert "new library wing" in read, read

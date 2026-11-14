@@ -708,6 +708,7 @@ PICTURE_PIXELS = (120, 40)  # ... nor one smaller than this when drawn for readi
 PICTURES_PER_PAGE = 8
 PICTURE_CONFIDENCE = 0.6  # a word read in a picture counts when the engine is this sure of it
 PICTURE_LETTERS = 4       # ... and a picture's words are added when they have this many letters and digits
+PICTURE_TEXT = 40         # with this many letters and digits a picture is text: all its words stay
 
 
 def _char_kinds(textpage):
@@ -1000,9 +1001,13 @@ def _read_pages(source, output, force, deskew, rotate, script, note):
                     # A photo gives scraps (a horizon read as a dash, an edge as
                     # a letter): only words the engine is fairly sure of count,
                     # and a picture with next to nothing in it adds nothing.
-                    sure = [w for line in lines for w in line.words if w.confidence >= PICTURE_CONFIDENCE]
-                    if sum(1 for w in sure for c in w.text if c.isalnum()) < PICTURE_LETTERS:
-                        continue
+                    # A picture full of words is a scan, and is read as a whole
+                    # page is: every word the engine gave stays.
+                    sure = [w for line in lines for w in line.words]
+                    if sum(1 for w in sure for c in w.text if c.isalnum()) < PICTURE_TEXT:
+                        sure = [w for w in sure if w.confidence >= PICTURE_CONFIDENCE]
+                        if sum(1 for w in sure for c in w.text if c.isalnum()) < PICTURE_LETTERS:
+                            continue
                     for w in sure:
                         words.append(Word(w.text, [(x + box[0], y + box[1]) for x, y in w.quad], w.confidence))
                 if words:
