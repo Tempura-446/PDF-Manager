@@ -38,7 +38,7 @@ RELEASES = "Tempura-446/ZPDF-releases"
 # What friends get: the installer and what it installs from. Tests, docs and
 # the tools for building and publishing stay behind.
 INCLUDE = ("pdfmanager/", "packaging/windows/", "Install ZPDF.cmd", "pyproject.toml", "requirements.txt",
-           "README.md", "LICENSE", "CHANGELOG.md")
+           "README.md", "LICENSE", "CHANGELOG.md", "SECURITY.md", "TRADEMARKS.md")
 ZIP_DATE = (2026, 1, 1, 0, 0, 0)  # every entry, so the same files make the same zip
 
 INSTALL_NOTE = """

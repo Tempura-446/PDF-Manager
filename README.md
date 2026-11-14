@@ -1305,3 +1305,18 @@ work, and change it for your own use, but not pass it on to anyone else,
 publish your own version of it or sell it. To use ZPDF, download it from
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 It comes as is, without warranty. See [LICENSE](LICENSE) for the full terms.
+
+The name ZPDF and its icon are for this software only; see
+[TRADEMARKS.md](TRADEMARKS.md). To report a security problem, see
+[SECURITY.md](SECURITY.md).
+
+### Copies that break the licence
+
+If you find a copy of ZPDF on GitHub that someone has published, passed on
+or sold against the licence (a fork with its own releases, say, or ZPDF
+under another name), the owner can ask GitHub to take it down with a DMCA
+takedown notice: see
+[GitHub's DMCA Takedown Policy](https://docs.github.com/en/site-policy/content-removal-policies/dmca-takedown-policy)
+and the form at <https://github.com/contact/dmca>. A fork made only to
+read the code or to suggest a change here is fine and needs nothing. If you
+spot such a copy, open an issue with the link, or tell the owner privately.
