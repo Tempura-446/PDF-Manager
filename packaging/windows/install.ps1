@@ -16,6 +16,11 @@
 #      folder, and the two programs with winget. Skipped when they're
 #      already there or winget is missing; it never stops the installation.
 #
+# It shows its choices and progress in a window of its own (setup_ui.py and
+# setup.html, drawn by Microsoft Edge), once it has a Python to run it with.
+# In the console instead with -Console, in an automated run (CI), or where
+# no window can be shown.
+#
 # The app runs with Python's own pythonw.exe, which is signed, so Windows
 # Smart App Control lets it start. This script only uses plain PowerShell
 # commands, so it also works where scripts are limited (Constrained
@@ -26,6 +31,8 @@ param(
     [switch]$NoOpenWith,  # don't add to "Open with"
     [switch]$NoContextMenu,  # don't add ZPDF to Explorer's right-click menu
     [switch]$NoLaunch,    # don't start the app at the end
+    [switch]$Console,     # ask and report in this console, not in the setup window
+    [switch]$Engine,      # run by the setup window: ask nothing, mark the steps on "@@" lines
     # -WithOcr and -NoOcr, the names before 0.14, still work.
     [Alias("WithOcr")]
     [switch]$WithExtras,  # also install Tesseract and Ghostscript, without asking
@@ -40,8 +47,16 @@ $PythonVersion = "3.13.1"
 $TesseractId = "UB-Mannheim.TesseractOCR"
 $GhostscriptId = "ArtifexSoftware.GhostScript"
 
-function Say($text) { Write-Host "  $text" }
-function Step($text) { Write-Host ""; Write-Host "> $text" -ForegroundColor Cyan }
+$StepNumber = 0
+$StepCount = 3
+function Say($text) { if ($Engine) { Write-Host "$text" } else { Write-Host "      $text" } }
+# A step: its key is what the setup window knows it by.
+function Step($key, $text) {
+    if ($Engine) { Write-Host "@@step $key|$text"; return }
+    $script:StepNumber = $script:StepNumber + 1
+    Write-Host ""
+    Write-Host "  [$script:StepNumber/$script:StepCount] $text" -ForegroundColor Cyan
+}
 
 $source = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 if (-not (Test-Path (Join-Path $source "pyproject.toml"))) {
@@ -170,13 +185,35 @@ function Install-Extras($status) {
     if (-not $status.Ghostscript) { Install-WithWinget $GhostscriptId "Ghostscript (for PDF/A)" | Out-Null }
 }
 
-Write-Host "ZPDF installer" -ForegroundColor Cyan
+if (-not $Engine) {
+    Write-Host ""
+    Write-Host "  ZPDF Setup" -ForegroundColor Cyan
+    Write-Host "  For this Windows account only. No administrator rights needed."
+}
 
-Step "Looking for Python 3.10 to 3.14"
+Step "python" "Looking for Python 3.10 to 3.14"
 $python = Find-Python
 if ($python) { Say "Found $python" } else { $python = Install-Python; Say "Installed $python" }
 
-Step "Installing ZPDF in $appDir"
+# The rest in the setup window, when there is someone to show it to.
+$automated = ($env:CI -or $env:GITHUB_ACTIONS -or $env:TF_BUILD)
+if (-not $Engine -and -not $Console -and -not $automated) {
+    $window = @("-I", (Join-Path $PSScriptRoot "setup_ui.py"), "--source", $source, "--installer", $PSCommandPath)
+    if ($NoDesktop) { $window += "--no-desktop" }
+    if ($NoOpenWith) { $window += "--no-open-with" }
+    if ($NoContextMenu) { $window += "--no-context-menu" }
+    if ($WithExtras) { $window += "--with-extras" }
+    Write-Host ""
+    Write-Host "  Setup continues in the ZPDF Setup window." -ForegroundColor Cyan
+    $code = 3
+    try { & $python @window; $code = $LASTEXITCODE } catch { $code = 3 }
+    if ($code -eq 0) { exit 0 }
+    if ($code -eq 2) { Write-Host "  Setup was closed before anything was installed."; exit 0 }
+    if ($code -eq 1) { Write-Host "  The installation did not finish; the setup window said why."; exit 1 }
+    Write-Host "  The setup window could not be shown; carrying on here."
+}
+
+Step "app" "Installing ZPDF in $appDir"
 New-Item -ItemType Directory -Force -Path $appDir | Out-Null
 $venvPython = Join-Path $venv "Scripts\python.exe"
 if (-not (Test-Python $venvPython)) {
@@ -215,7 +252,7 @@ if ($lockPython -and ($venvVersion -eq $lockPython)) {
 if ($LASTEXITCODE -ne 0) { throw "Installing ZPDF's packages failed (see above)." }
 Say "Done"
 
-Step "Adding shortcuts, Open with and the right-click menu"
+Step "shortcuts" "Adding shortcuts, Open with and the right-click menu"
 $setup = @("-I", "-m", "pdfmanager", "setup-windows", "--app-dir", $appDir)
 if ($NoDesktop) { $setup += "--no-desktop" }
 if ($NoOpenWith) { $setup += "--no-open-with" }
@@ -232,8 +269,8 @@ try {
         $wanted = $false
     } elseif ($WithExtras) {
         $wanted = $true
-    } elseif ($env:CI -or $env:GITHUB_ACTIONS -or $env:TF_BUILD) {
-        $wanted = $false  # an automated run: no one to ask
+    } elseif ($Engine -or $automated) {
+        $wanted = $false  # the setup window asked already; an automated run has no one to ask
     } else {
         Write-Host ""
         Write-Host "ZPDF's OCR is built in. Two free programs can add more:"
@@ -241,10 +278,12 @@ try {
         $wanted = ("$answer".Trim() -notmatch "^(n|no)$")
     }
     if ($complete) {
-        Step "Tesseract and Ghostscript"
-        Say "Already installed"
+        if ($Engine) {
+            if ($WithExtras) { Write-Host "@@step extras|Tesseract and Ghostscript"; Write-Host "@@note extras|Already installed" }
+        } else { Say "Tesseract and Ghostscript are already installed" }
     } elseif ($wanted) {
-        Step "Adding Tesseract and Ghostscript"
+        $StepCount = 4
+        Step "extras" "Adding Tesseract and Ghostscript"
         if (-not $status) { $status = @{ OcrMyPdf = $false; Tesseract = $false; Ghostscript = $false } }
         Install-Extras $status
         $after = Get-OcrStatus
@@ -252,6 +291,7 @@ try {
             foreach ($part in @(@("OCRmyPDF", $after.OcrMyPdf), @("Tesseract (second OCR engine)", $after.Tesseract),
                                 @("Ghostscript (PDF/A)", $after.Ghostscript))) {
                 if ($part[1]) { Say "$($part[0]): ready" } else { Say "$($part[0]): not installed" }
+                if ($Engine) { if ($part[1]) { Write-Host "@@extra $($part[0])|1" } else { Write-Host "@@extra $($part[0])|0" } }
             }
         }
     }
@@ -259,11 +299,12 @@ try {
     Say "Tesseract and Ghostscript weren't added ($_). ZPDF works without them; run the installer again with -WithExtras to retry."
 }
 
+if ($Engine) { Write-Host "@@done"; exit 0 }
 Write-Host ""
-Write-Host "ZPDF is installed. Find it in the Start menu" -NoNewline -ForegroundColor Green
+Write-Host "  ZPDF is installed. Find it in the Start menu" -NoNewline -ForegroundColor Green
 if (-not $NoDesktop) { Write-Host " or on your desktop" -NoNewline -ForegroundColor Green }
 Write-Host "." -ForegroundColor Green
-Write-Host "To remove it: Settings > Apps > Installed apps > ZPDF > Uninstall."
+Write-Host "  To remove it: Settings > Apps > Installed apps > ZPDF > Uninstall."
 if (-not $NoLaunch) {
     Start-Process -FilePath (Join-Path $venv "Scripts\pythonw.exe") -ArgumentList "-I", "-m", "pdfmanager", "gui" `
         -WorkingDirectory $env:USERPROFILE

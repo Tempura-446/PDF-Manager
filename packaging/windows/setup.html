@@ -1,0 +1,405 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. -->
+<!-- ZPDF's setup window (shown by setup_ui.py, which serves this page and
+     runs the installation). Three screens in one card: what will be
+     installed and the choices; the steps as they run; the end (done, or what
+     went wrong). Its colours, type and corners are the app's own (gui.html). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZPDF Setup</title>
+<style>
+@font-face { font-family: "Instrument Sans"; font-weight: 400; font-display: swap; src: url(/fonts/instrument-sans-latin-400-normal.woff2) format("woff2"); }
+@font-face { font-family: "Instrument Sans"; font-weight: 500; font-display: swap; src: url(/fonts/instrument-sans-latin-500-normal.woff2) format("woff2"); }
+@font-face { font-family: "Instrument Sans"; font-weight: 600 700; font-display: swap; src: url(/fonts/instrument-sans-latin-600-normal.woff2) format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 400; font-display: swap; src: url(/fonts/jetbrains-mono-latin-400-normal.woff2) format("woff2"); }
+:root {
+  --bg: #e9ebee; --surface: #ffffff; --surface-2: #f2f4f6; --surface-3: #e4e7eb;
+  --text: #14171c; --text-2: #3b434e; --muted: #5b6470;
+  --border: #d9dde3; --border-strong: #c3c9d1; --input-border: #808891;
+  --accent: #0d6b6b; --accent-hover: #0a5757; --accent-text: #ffffff; --accent-soft: #dff0ef; --accent-ring: rgb(13 107 107 / .22);
+  --tint-a: #dfe6f5; --tint-b: #f3e4de;
+  --ok: #1b7f4f; --ok-soft: #e0f2e8; --warn: #8a5a00; --warn-soft: #fbf0d3; --err: #b3261e; --err-soft: #fbe6e2;
+  --shadow: 0 1px 2px rgb(20 23 28 / .06), 0 8px 24px rgb(20 23 28 / .08);
+  --radius-lg: 18px; --radius: 14px; --radius-sm: 11px; --radius-xs: 7px;
+  --fs-xs: 12px; --fs-sm: 13px; --fs-base: 14px; --fs-md: 16px; --fs-xl: 24px;
+  --t: 180ms;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1114; --surface: #1d2126; --surface-2: #242930; --surface-3: #2c3239;
+    --text: #eef0f3; --text-2: #c9ced6; --muted: #a4acb8;
+    --border: #2c3138; --border-strong: #3d444d; --input-border: #737b85;
+    --accent: #5cc9c4; --accent-hover: #7fd8d3; --accent-text: #0f1114; --accent-soft: #17302f; --accent-ring: rgb(92 201 196 / .3);
+    --tint-a: #18223a; --tint-b: #2c1b1b;
+    --ok: #5fd09a; --ok-soft: #173326; --warn: #e6b65e; --warn-soft: #3a2d10; --err: #f28c7e; --err-soft: #3f1f1b;
+    --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 10px 28px rgb(0 0 0 / .45);
+    color-scheme: dark;
+  }
+}
+@media (prefers-reduced-motion: reduce) { :root { --t: 0ms; } }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font: 400 var(--fs-base)/1.5 "Instrument Sans", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  background: radial-gradient(900px 500px at 0% 0%, var(--tint-a), transparent 60%),
+              radial-gradient(800px 480px at 100% 100%, var(--tint-b), transparent 60%), var(--bg);
+  display: grid; place-items: center; padding: 20px; overflow: hidden;
+  -webkit-user-select: none; user-select: none;
+}
+.card {
+  width: min(680px, 100%); max-height: 100%; min-height: min(430px, 100%); display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow);
+}
+header { display: flex; align-items: center; gap: 14px; padding: 22px 26px 0; }
+.mark { width: 44px; height: 44px; flex: none; }
+.mark svg { width: 100%; height: 100%; display: block; }
+h1 { font-size: var(--fs-xl); font-weight: 600; letter-spacing: -.01em; line-height: 1.2; margin: 0; text-wrap: balance; }
+.sub { color: var(--muted); font-size: var(--fs-sm); margin: 2px 0 0; }
+main { padding: 18px 26px 6px; overflow: auto; min-height: 0; flex: 1; }  /* (the card keeps one size from screen to screen) */
+footer { display: flex; align-items: center; gap: 10px; padding: 14px 26px 22px; }
+footer .grow { flex: 1; color: var(--muted); font-size: var(--fs-xs); min-width: 0; }
+[hidden] { display: none !important; }
+
+/* Buttons */
+button { font: inherit; cursor: pointer; }
+.btn {
+  min-height: 40px; padding: 0 18px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong);
+  background: var(--surface); color: var(--text); font-weight: 600; transition: background var(--t), border-color var(--t), transform var(--t);
+}
+.btn:hover { background: var(--surface-2); }
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); min-width: 132px; }
+.btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.quiet { border-color: transparent; color: var(--text-2); font-weight: 500; padding: 0 12px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Welcome: the choices */
+.lead { margin: 0 0 14px; color: var(--text-2); }
+.choices { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.choice {
+  display: grid; grid-template-columns: 22px 1fr; gap: 2px 12px; align-items: start; padding: 11px 14px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); cursor: pointer;
+  transition: border-color var(--t), background var(--t);
+}
+.choice:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.choice input { grid-row: 1 / span 2; width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); cursor: pointer; }
+.choice b { font-weight: 600; }
+.choice span { grid-column: 2; color: var(--muted); font-size: var(--fs-sm); }
+.where { margin: 12px 0 0; font-size: var(--fs-xs); color: var(--muted); overflow-wrap: anywhere; }
+.where code { font: 400 var(--fs-xs) "JetBrains Mono", Consolas, monospace; color: var(--text-2); -webkit-user-select: text; user-select: text; }
+
+/* Installing: the steps */
+.bar { height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; margin: 2px 0 16px; }
+.bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--accent); transition: width 400ms ease; }
+.steps { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.step { display: grid; grid-template-columns: 26px 1fr; gap: 0 12px; align-items: center; padding: 7px 0; color: var(--muted); }
+.step .dot {
+  width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border-strong); display: grid; place-items: center;
+  transition: background var(--t), border-color var(--t);
+}
+.step .dot svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; opacity: 0; }
+.step b { font-weight: 500; }
+.step small { grid-column: 2; font-size: var(--fs-xs); color: var(--muted); min-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step.done { color: var(--text-2); }
+.step.done .dot { background: var(--ok); border-color: var(--ok); color: var(--surface); }
+.step.done .dot svg { opacity: 1; }
+.step.now { color: var(--text); }
+.step.now b { font-weight: 600; }
+.step.now .dot { border-color: var(--accent); border-top-color: transparent; animation: spin 900ms linear infinite; }
+.step.failed { color: var(--err); }
+.step.failed .dot { background: var(--err); border-color: var(--err); color: var(--surface); }
+.step.failed .dot svg { opacity: 1; }
+.step.skipped small { font-style: italic; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .step.now .dot { animation: none; border-top-color: var(--accent); background: var(--accent-soft); } }
+
+details { margin: 12px 0 0; }
+summary { cursor: pointer; color: var(--text-2); font-size: var(--fs-sm); font-weight: 500; padding: 6px 0; width: max-content; border-radius: var(--radius-xs); }
+pre {
+  margin: 6px 0 0; padding: 10px 12px; max-height: 132px; overflow: auto; border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2);
+  font: 400 var(--fs-xs)/1.5 "JetBrains Mono", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere;
+  -webkit-user-select: text; user-select: text;
+}
+
+/* The end */
+.result { display: grid; grid-template-columns: 44px 1fr; gap: 14px; align-items: start; }
+.badge { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--ok-soft); color: var(--ok); }
+.badge svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.result.bad .badge { background: var(--err-soft); color: var(--err); }
+.result p { margin: 0 0 8px; color: var(--text-2); }
+.result p.msg { color: var(--text); font-weight: 500; -webkit-user-select: text; user-select: text; overflow-wrap: anywhere; }
+.facts { margin: 6px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: var(--fs-sm); color: var(--text-2); }
+.facts li { display: flex; gap: 8px; align-items: baseline; }
+.tag { font-size: var(--fs-xs); font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); }
+.tag.no { background: var(--warn-soft); color: var(--warn); }
+/* A short window (a small screen, or Windows set to show things larger): everything a little closer. */
+@media (max-height: 590px) {
+  body { padding: 8px; }
+  header { padding: 14px 20px 0; gap: 12px; }
+  .mark { width: 36px; height: 36px; }
+  h1 { font-size: 20px; }
+  main { padding: 10px 20px 2px; }
+  .lead { margin: 0 0 8px; font-size: var(--fs-sm); }
+  .choices { gap: 6px; }
+  .choice { padding: 7px 12px; }
+  .choice span { font-size: var(--fs-xs); line-height: 1.4; }
+  .where { margin: 8px 0 0; }
+  footer { padding: 10px 20px 14px; }
+  pre { max-height: 96px; }
+}
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="card" role="main">
+  <header>
+    <span class="mark" id="mark" aria-hidden="true"></span>
+    <div>
+      <h1 id="title">Install ZPDF</h1>
+      <p class="sub" id="subtitle"></p>
+    </div>
+  </header>
+
+  <main>
+    <!-- 1. What will be installed, and the choices -->
+    <section id="welcome">
+      <p class="lead" id="lead">ZPDF is installed for your Windows account only. No administrator rights are needed, and it takes about two minutes.</p>
+      <ul class="choices">
+        <li><label class="choice"><input type="checkbox" id="opt-desktop" checked><b>Desktop shortcut</b><span>ZPDF is always in the Start menu; this adds it to the desktop too.</span></label></li>
+        <li><label class="choice"><input type="checkbox" id="opt-openwith" checked><b>Open PDFs with ZPDF</b><span>Adds ZPDF to &ldquo;Open with&rdquo; for PDF files. Your default PDF program stays as it is.</span></label></li>
+        <li><label class="choice"><input type="checkbox" id="opt-menu" checked><b>Right-click menu in File Explorer</b><span>Combine, compress, make searchable and more, straight from a file.</span></label></li>
+        <li><label class="choice"><input type="checkbox" id="opt-extras"><b>Tesseract and Ghostscript</b><span id="extras-note">Two free programs that add PDF/A output through Ghostscript and a second OCR engine. About 150 MB; Windows may ask for permission. OCR itself is built in.</span></label></li>
+      </ul>
+      <p class="where">Installs to <code id="where"></code></p>
+    </section>
+
+    <!-- 2. The steps as they run -->
+    <section id="installing" hidden>
+      <div class="bar" role="progressbar" aria-label="Installation progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bar"><i></i></div>
+      <ol class="steps" id="steps"></ol>
+      <details id="details">
+        <summary>Show details</summary>
+        <pre id="log" tabindex="0" aria-label="Installation details"></pre>
+      </details>
+    </section>
+
+    <!-- 3. The end -->
+    <section id="done" hidden>
+      <div class="result" id="result">
+        <span class="badge" aria-hidden="true"><svg viewBox="0 0 24 24" id="badge-icon"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+        <div>
+          <p class="msg" id="result-msg"></p>
+          <p id="result-more"></p>
+          <ul class="facts" id="facts"></ul>
+          <details id="fail-details" hidden>
+            <summary>Show details</summary>
+            <pre id="fail-log" tabindex="0" aria-label="Installation details"></pre>
+          </details>
+        </div>
+      </div>
+    </section>
+    <p class="sr" role="status" aria-live="polite" id="live"></p>
+  </main>
+
+  <footer>
+    <span class="grow" id="foot"></span>
+    <button class="btn quiet" type="button" id="copy" hidden>Copy details</button>
+    <button class="btn" type="button" id="secondary">Cancel</button>
+    <button class="btn primary" type="button" id="primary">Install</button>
+  </footer>
+</div>
+
+<script>
+"use strict";
+const CONFIG = /*CONFIG*/{"token": "", "version": "", "updating": false, "appDir": "", "desktop": true, "openWith": true, "contextMenu": true, "extras": false, "mark": ""}/*END*/;
+const $ = (id) => document.getElementById(id);
+const CHECK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+const CROSS = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+let phase = "welcome", polling = null, lastLive = "";
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "X-Setup-Token": CONFIG.token, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${path}: ${res.status}`);
+  return res.json();
+}
+
+function say(text) {
+  if (text && text !== lastLive) { lastLive = text; $("live").textContent = text; }
+}
+
+function show(name) {
+  for (const id of ["welcome", "installing", "done"]) $(id).hidden = id !== name;
+}
+
+function renderWelcome() {
+  const verb = CONFIG.updating ? "Update" : "Install";
+  document.title = `${verb} ZPDF`;
+  $("title").textContent = `${verb} ZPDF`;
+  $("subtitle").textContent = CONFIG.version ? `Version ${CONFIG.version}` : "";
+  if (CONFIG.updating) $("lead").textContent = "ZPDF is already installed for your Windows account. This updates it in place; your settings, recent files and recipes stay as they are.";
+  $("where").textContent = CONFIG.appDir;
+  $("opt-desktop").checked = CONFIG.desktop;
+  $("opt-openwith").checked = CONFIG.openWith;
+  $("opt-menu").checked = CONFIG.contextMenu;
+  $("opt-extras").checked = CONFIG.extras;
+  $("primary").textContent = verb;
+  $("secondary").textContent = "Cancel";
+  $("foot").textContent = "";
+  show("welcome");
+}
+
+function renderSteps(state) {
+  const list = $("steps");
+  const done = state.steps.filter((s) => s.state === "done" || s.state === "skipped").length;
+  const running = state.steps.some((s) => s.state === "now");
+  const percent = Math.round(((done + (running ? 0.4 : 0)) / Math.max(state.steps.length, 1)) * 100);
+  $("bar").setAttribute("aria-valuenow", String(percent));
+  $("bar").firstElementChild.style.width = `${percent}%`;
+  if (list.children.length !== state.steps.length) {
+    list.replaceChildren(...state.steps.map(() => {
+      const li = document.createElement("li");
+      li.className = "step";
+      li.innerHTML = `<span class="dot" aria-hidden="true">${CHECK}</span><b></b><small></small>`;
+      return li;
+    }));
+  }
+  state.steps.forEach((step, i) => {
+    const li = list.children[i];
+    li.className = `step ${step.state}`;
+    li.querySelector("b").textContent = step.title;
+    li.querySelector("small").textContent = step.state === "now" ? (state.detail || "") : (step.note || "");
+    li.querySelector(".dot").innerHTML = step.state === "failed" ? CROSS : CHECK;
+    if (step.state === "now") { li.setAttribute("aria-current", "step"); say(`${step.title} (step ${i + 1} of ${state.steps.length})`); }
+    else li.removeAttribute("aria-current");
+  });
+  const log = $("log"), atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+  log.textContent = state.log.join("\n");
+  if (atEnd) log.scrollTop = log.scrollHeight;
+}
+
+function renderEnd(state) {
+  const ok = state.phase === "done";
+  const verb = CONFIG.updating ? "updated" : "installed";
+  $("title").textContent = ok ? `ZPDF is ${verb}` : "The installation didn't finish";
+  document.title = $("title").textContent;
+  $("subtitle").textContent = CONFIG.version ? `Version ${CONFIG.version}` : "";
+  $("result").className = ok ? "result" : "result bad";
+  $("badge-icon").innerHTML = ok ? '<path d="M5 12.5l4.5 4.5L19 7.5"/>' : '<path d="M12 7v6M12 16.8v.2"/>';
+  const facts = $("facts");
+  facts.replaceChildren();
+  if (ok) {
+    $("result-msg").textContent = state.options.desktop ? "Find it in the Start menu or on your desktop." : "Find it in the Start menu.";
+    $("result-more").textContent = "To remove it later: Settings, Apps, Installed apps, ZPDF, Uninstall.";
+    for (const part of state.extras || []) {
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="tag ${part.ready ? "" : "no"}"></span><span></span>`;
+      li.firstElementChild.textContent = part.ready ? "Ready" : "Not installed";
+      li.lastElementChild.textContent = part.name;
+      facts.append(li);
+    }
+    $("fail-details").hidden = true;
+    $("copy").hidden = true;
+    $("primary").textContent = "Open ZPDF";
+    $("secondary").textContent = "Close";
+    $("foot").textContent = "";
+    say(`ZPDF is ${verb}.`);
+  } else {
+    $("result-msg").textContent = state.error || "Something stopped the installation.";
+    const stopped = state.steps.find((s) => s.state === "failed");
+    $("result-more").textContent = (stopped ? `It stopped at \u201c${stopped.title}\u201d. ` : "")
+      + "You can try again: running it twice does no harm. If it keeps failing, copy the details and send them with your report.";
+    $("fail-log").textContent = state.log.join("\n");
+    $("fail-details").hidden = false;
+    $("copy").hidden = false;
+    $("primary").textContent = "Try again";
+    $("secondary").textContent = "Close";
+    $("foot").textContent = "";
+    say("The installation didn't finish. " + (state.error || ""));
+  }
+  show("done");
+  $("primary").focus();
+}
+
+function render(state) {
+  phase = state.phase;
+  if (phase === "installing") {
+    $("title").textContent = CONFIG.updating ? "Updating ZPDF" : "Installing ZPDF";
+    document.title = $("title").textContent;
+    show("installing");
+    renderSteps(state);
+    $("primary").hidden = true;
+    $("copy").hidden = true;
+    $("secondary").hidden = true;
+    $("foot").textContent = "You can keep using your PC. Closing this window doesn't stop the installation.";
+  } else if (phase === "done" || phase === "failed") {
+    stopPolling();
+    $("primary").hidden = false;
+    $("secondary").hidden = false;
+    renderEnd(state);
+  }
+}
+
+function stopPolling() { if (polling) { clearInterval(polling); polling = null; } }
+function startPolling() {
+  stopPolling();
+  const tick = async () => { try { render(await api("/api/state")); } catch (e) { /* the window outlived its server */ } };
+  polling = setInterval(tick, 500);
+  tick();
+}
+
+async function start() {
+  const options = {
+    desktop: $("opt-desktop").checked, openWith: $("opt-openwith").checked,
+    contextMenu: $("opt-menu").checked, extras: $("opt-extras").checked,
+  };
+  $("primary").disabled = true;
+  try {
+    render(await api("/api/start", options));
+    startPolling();
+  } finally {
+    $("primary").disabled = false;
+  }
+}
+
+$("primary").addEventListener("click", async () => {
+  if (phase === "welcome" || phase === "failed") return start();
+  if (phase === "done") { try { await api("/api/open", {}); } catch (e) { /* closing anyway */ } window.close(); }
+});
+$("secondary").addEventListener("click", async () => {
+  try { await api("/api/quit", {}); } catch (e) { /* closing anyway */ }
+  window.close();
+});
+$("copy").addEventListener("click", async () => {
+  const text = $("fail-log").textContent;
+  try { await navigator.clipboard.writeText(text); } catch (e) {
+    const area = document.createElement("textarea");
+    area.value = text; document.body.append(area); area.select(); document.execCommand("copy"); area.remove();
+  }
+  $("copy").textContent = "Copied";
+  setTimeout(() => { $("copy").textContent = "Copy details"; }, 1600);
+});
+for (const d of [$("details"), $("fail-details")]) {
+  d.addEventListener("toggle", () => { d.querySelector("summary").textContent = d.open ? "Hide details" : "Show details"; });
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && phase === "welcome") $("secondary").click();
+});
+
+$("mark").innerHTML = CONFIG.mark;
+renderWelcome();
+$("primary").focus();
+// An installation already running (the page was reloaded): show it.
+api("/api/state").then((state) => { if (state.phase !== "welcome") { render(state); if (state.phase === "installing") startPolling(); } }).catch(() => {});
+</script>
+</body>
+</html>
