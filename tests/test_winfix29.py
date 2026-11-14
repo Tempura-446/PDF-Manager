@@ -81,3 +81,19 @@ def test_ctrl_z_and_ctrl_y_work_with_select_on(app, tmp_path):
     assert noted["mode"] == "NONE" and noted["notes"] == 1 and noted["depth"] == [1, 0], noted
     assert undone["notes"] == 0 and undone["depth"] == [0, 1] and undone["redo"], undone
     assert redone["notes"] == 1 and redone["depth"] == [1, 0] and not redone["redo"], redone
+
+
+def test_the_unsaved_dot_shows_as_soon_as_save_turns_red(app, tmp_path):
+    srv, _ = app
+    opened = srv.RequestHandlerClass.opened
+    out = run(app, tmp_path, "dot", first=opened.add(text_pdf(tmp_path / "First.pdf", pages=1)),
+              second=opened.add(text_pdf(tmp_path / "Second.pdf", pages=1)))
+    assert out["before"]["tabDot"] is False and not out["before"]["annotSaveMain"], out["before"]
+    # The stroke drawn, Draw still on: Save and the dot together (pdf.js hasn't handed it over yet).
+    drawing = out["drawing"]
+    assert drawing["mode"] == "INK" and drawing["annotSaveMain"] and drawing["tabDot"], drawing
+    assert out["selected"]["tabDot"] and out["selected"]["dirty"] and out["selected"]["annotSaveMain"], out["selected"]
+    undone = out["undone"]
+    assert not undone["tabDot"] and not undone["annotSaveMain"] and undone["editors"] == 0, undone
+    # The server heard of it as soon as the dot showed.
+    assert ["Second.pdf"] in out["unsavedPosts"], out["unsavedPosts"]

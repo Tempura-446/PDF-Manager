@@ -81,6 +81,34 @@ const { chromium } = require("playwright");
       out.saved = await state();
     }
 
+    if (cfg.scenario === "dot") {
+      // A second tab (a new one): a stroke drawn, Draw still on.
+      await open(cfg.first);
+      await page.evaluate((id) => reader.openById(id), cfg.second);
+      await page.waitForFunction(() => reader.tabs.length === 2 && reader.activeTab === reader.tabs[1] && document.querySelector(".page canvas"), null, { timeout: 30000 });
+      await settled();
+      await page.waitForTimeout(800);
+      out.before = await state();
+      await page.evaluate(() => reader.openAnnotate());
+      await page.waitForTimeout(400);
+      await page.evaluate(() => reader.useTool("INK"));
+      await page.waitForTimeout(400);
+      const [x, y] = await pageBox();
+      await page.mouse.move(x + 150, y + 150);
+      await page.mouse.down();
+      await page.mouse.move(x + 300, y + 220, { steps: 8 });
+      await page.mouse.up();
+      await page.waitForTimeout(600);
+      out.drawing = await state();
+      await page.keyboard.press("Escape");  // (Select: pdf.js hands the drawing over)
+      await page.waitForTimeout(800);
+      out.selected = await state();
+      // Undone: no dot, Save quiet again.
+      await page.evaluate(() => reader.undoBtn.click());
+      await page.waitForTimeout(800);
+      out.undone = await state();
+    }
+
     if (cfg.scenario === "select") {
       const key = async (k) => { await page.keyboard.press(k); await page.waitForTimeout(600); await settled(); await page.waitForTimeout(300); };
       await open(cfg.file);

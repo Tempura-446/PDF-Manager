@@ -42,6 +42,9 @@ that were wrong and are now right:
   warning only worked in a browser). It now asks "Close ZPDF? Your changes
   to … haven't been saved." with Yes and No (No keeps it open). Restarting
   after an update, which asks itself, doesn't ask again.
+- **The unsaved dot while drawing** came only once the drawing was put
+  down (Select or Esc), although Save turned red as soon as the stroke was
+  drawn. The dot now shows with it.
 
 ## 0.28.0
 

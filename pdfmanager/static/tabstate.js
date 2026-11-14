@@ -381,11 +381,14 @@ export function deriveUi(tab, tabs, view = {}) {
   const { shown = false, annotating = false, annotUndo = false, changed = false, marked = false, active = false } = view;
   const on = shown && tab ? tab : null;
   const open = !!(on && !annotating);  // the toolbar's own Save and Undo (the annotate bar has its own)
-  // The annotate bar's Save is the main action only once there is something to save.
+  // Something to save in the shown tab: changes, or a drawing pdf.js hasn't
+  // handed over yet (still being drawn: it is in pdf.js's Undo already). The
+  // annotate bar's Save is the main action then, and the dot shows, at once.
   const pending = !!(tab && (tab.dirty || (!tab.savedSince && (annotUndo || changed))));
+  const unsaved = (t) => t.needsSaving || (t === on && pending);
   return {
-    dots: new Map(tabs.map((t) => [t.id, t.needsSaving])),
-    titleDot: !!(on && on.needsSaving),
+    dots: new Map(tabs.map((t) => [t.id, unsaved(t)])),
+    titleDot: !!(on && unsaved(on)),
     saveNow: open && !!tab.dirty,
     undoNow: open && !!(annotUndo || tab.undoDepth),
     annotSave: {
@@ -398,7 +401,7 @@ export function deriveUi(tab, tabs, view = {}) {
     heading: tab ? tab.name : "",
     close: closePrompt(tab),
     ctrlS: saveAction(tab, { changed }),
-    anyUnsaved: tabs.some((t) => t.needsSaving),  // closing ZPDF or updating it asks first
-    unsaved: tabs.filter((t) => t.needsSaving).map((t) => t.name),  // ... naming these (the server keeps them for the window's X)
+    anyUnsaved: tabs.some(unsaved),  // closing ZPDF or updating it asks first
+    unsaved: tabs.filter(unsaved).map((t) => t.name),  // ... naming these (the server keeps them for the window's X)
   };
 }

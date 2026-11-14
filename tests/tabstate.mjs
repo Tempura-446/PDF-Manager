@@ -22,6 +22,21 @@ const ui = (tab, view = {}) => {
 };
 const DOC = { name: "doc" }, DOC2 = { name: "doc2" };
 
+test("a drawing still being drawn: the dot with Save, at once", () => {
+  const t = fresh(), other = fresh();
+  t.loaded(DOC);
+  // pdf.js can undo the stroke, but hasn't put it in its storage yet (no annotationChanged).
+  const u = deriveUi(t, [t, other], { shown: true, active: true, annotating: true, annotUndo: true });
+  eq([u.annotSave.main, u.dots.get(t.id), u.titleDot, u.dots.get(other.id), u.anyUnsaved, u.unsaved],
+     [true, true, true, false, true, ["A.pdf"]], "pending");
+  // Not the shown tab's drawing: another tab's dot doesn't follow it.
+  eq(deriveUi(other, [t, other], { shown: true, annotUndo: true }).dots.get(t.id), false, "only the shown tab");
+  // Undone back to how it was saved (pdf.js can still undo): no dot.
+  t.annotationChanged();
+  t.undoneToSaved();
+  eq(deriveUi(t, [t], { shown: true, annotUndo: true }).dots.get(t.id), false, "saved since");
+});
+
 test("opened: nothing to save", () => {
   const t = fresh();
   eq([t.dirty, t.version, t.edited, t.unsaved, t.needsSaving], [false, 0, false, false, false], "state");
