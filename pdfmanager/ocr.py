@@ -93,8 +93,16 @@ def builtin_available():
     return _builtin_imports
 
 
+def ocrmypdf_installed():
+    """OCRmyPDF (the Python package that drives Tesseract) can be imported."""
+    try:
+        return bool(importlib.util.find_spec("ocrmypdf"))
+    except (ImportError, ValueError):
+        return False
+
+
 def tesseract_available():
-    return bool(importlib.util.find_spec("ocrmypdf")) and bool(scan.find_tesseract())
+    return ocrmypdf_installed() and bool(scan.find_tesseract())
 
 
 def _codes(language):
@@ -167,12 +175,17 @@ PIP_TESSERACT = "from Python: pip install pdf-manager[tesseract]"
 
 def _tesseract_missing(no_ocrmypdf=False):
     """What OCR with Tesseract lacks here, and what to do (``no_ocrmypdf``:
-    it didn't import)."""
+    it didn't import). Names everything missing, so one install round is
+    enough."""
     instead = ", or choose the Built-in engine" if builtin_available() else ""
-    if no_ocrmypdf or not importlib.util.find_spec("ocrmypdf"):
-        also = "" if scan.find_tesseract() else f", and the Tesseract program ({TESSERACT_LINK})"
+    no_program = not scan.find_tesseract()
+    if no_ocrmypdf or not ocrmypdf_installed():
+        if no_program:
+            return ("OCR with Tesseract needs OCRmyPDF and the Tesseract program, and neither is installed: "
+                    f"install OCRmyPDF ({PIP_TESSERACT}) and the Tesseract program ({TESSERACT_LINK})"
+                    f"{instead}")
         return ("OCR with Tesseract needs OCRmyPDF, which isn't installed with this copy of ZPDF "
-                f"({PIP_TESSERACT}){also}{instead}")
+                f"({PIP_TESSERACT}){instead}")
     return ("OCR with Tesseract needs the Tesseract program, which isn't installed on this computer: "
             f"install it ({TESSERACT_LINK}) and try again{instead}")
 

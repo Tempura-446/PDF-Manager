@@ -188,6 +188,7 @@ def test_critique24_in_a_browser(app, tmp_path, monkeypatch):
         assert not room["annotating"]["side"] and room["annotating"]["button"] == "false", room["annotating"]
         assert room["annotating"]["column"] > room["start"]["column"] + 300, room
         assert room["note"] == {"box": True, "add": True}, room["note"]
+        assert room["typed"] == "Check this", room["typed"]
         assert room["noteSaved"] == {"box": False}, "Ctrl+S adds the note being typed"
         # One row at a time: find takes the annotate bar's place; the panel stays aside. Closing
         # find brings the annotate bar back (0.24.1), the panel still aside.

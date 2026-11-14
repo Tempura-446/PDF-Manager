@@ -4,6 +4,51 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.29.0
+
+Mostly behind the scenes: the reader now keeps each open document's state
+in one place, and everything it shows about saving (the dot on a tab and
+by the title, the Save button, closing a tab, Ctrl+S) follows from it, so
+they can no longer disagree. The reader's code is also split into parts
+(tabs, annotating, Sign, find, the text editor box, measuring). Things
+that were wrong and are now right:
+
+- **Undo after Black out** brought the words back, but Save still made a
+  "(redacted)" copy and called itself "Save a redacted copy". It saves as
+  usual again.
+- **Undo after saving**: with annotations saved, turning, deleting or
+  moving a page and then undoing it left the unsaved dot and a red Save,
+  although the document was as saved.
+- **Ctrl+S straight after saving** saved the file again (and offered Undo
+  again) although nothing had changed; it now says "No changes to save",
+  as the Save button already showed.
+- **Undo of "Saved over"** put the file back, but a page change undone after
+  that could show the document as saved when it wasn't.
+- **Closing ZPDF or updating it** now warns about a tool's result that was
+  never saved anywhere (its tab has the dot, and closing the tab already
+  asked).
+- **OCR with Tesseract, with both OCRmyPDF and the Tesseract program
+  missing**, asked only for OCRmyPDF; it now names both, with where to get
+  each. (The OCR tests also no longer depend on whether OCRmyPDF is
+  installed on the computer running them.)
+- **Redo after undoing a note** (or a shape, a stamp, a link, a text or
+  page change): Ctrl+Z took it away, but Redo stayed off and Ctrl+Y did
+  nothing. Redo now puts it back (with the dot), and Undo and Redo pick
+  the same change whether from the buttons or the keys.
+- **Ctrl+Z and Ctrl+Y with Select on** (for instance after Esc from Draw)
+  did nothing, although the Undo and Redo buttons worked. They now do
+  what the buttons do, with any tool on (not while typing in a box).
+- **Closing ZPDF with the window's X** didn't warn about unsaved work (the
+  warning only worked in a browser). It now asks "Close ZPDF? Your changes
+  to … haven't been saved." with Yes and No (No keeps it open). Restarting
+  after an update, which asks itself, doesn't ask again.
+- **The unsaved dot while drawing** came only once the drawing was put
+  down (Select or Esc), although Save turned red as soon as the stroke was
+  drawn. The dot now shows with it.
+- **The Measurements list** stayed open over the next tab after switching
+  away from the measured one. It now goes with its document, and is there
+  again on coming back.
+
 ## 0.28.0
 
 Safety nets, mostly behind the scenes: checks that catch a kind of mistake

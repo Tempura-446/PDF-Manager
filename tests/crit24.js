@@ -139,7 +139,11 @@ const fs = require("fs");
         return { box: inside(document.querySelector(".rd-notebox")), add: inside(add) };
       });
       await shot(page, `light-${w}-note-editor`);
+      // (Typed once the note box has the keyboard: on a busy machine the focus comes a moment
+      // after the box, and keys before it go elsewhere, leaving an empty note to save.)
+      await page.waitForFunction(() => document.activeElement && document.activeElement.closest(".rd-notebox"), null, { timeout: 10000 });
       await page.keyboard.type("Check this");
+      r.typed = await page.evaluate(() => document.activeElement.value ?? document.activeElement.textContent);
       // (Whether "Saved over" was shown at all, not only still showing: it can be gone or replaced by the time it's checked.)
       await page.evaluate(() => { window.__savedOver = false;
         new MutationObserver(() => { if ([...document.querySelectorAll(".rd-toast")].some((t) => /Saved over/.test(t.textContent))) window.__savedOver = true; })
@@ -149,7 +153,11 @@ const fs = require("fs");
       await page.waitForTimeout(1500);
       // (The note and the save done, so the find bar below meets a settled document: on a busy machine they take longer.)
       await page.waitForFunction(() => reader.doc && reader.loading.hidden && !reader.activeTab.dirty && !document.querySelector(".rd-annotbar").hidden
-        && window.__savedOver, null, { timeout: 30000 });
+        && window.__savedOver, null, { timeout: 30000 })
+        .catch(async (e) => { out.diag = await page.evaluate(() => ({ doc: !!reader.doc, loading: !reader.loading.hidden,
+          dirty: !!reader.activeTab.dirty, annot: !document.querySelector(".rd-annotbar").hidden, savedOver: window.__savedOver,
+          toasts: [...document.querySelectorAll(".rd-toast")].map((t) => t.textContent), note: !!document.querySelector(".rd-notebox"),
+          ui: reader.ui })); throw e; });
       r.noteSaved = await page.evaluate(() => ({ box: !!document.querySelector(".rd-notebox") }));
       // The find bar: one row at a time, and the panel still aside.
       await page.keyboard.press("Control+f");

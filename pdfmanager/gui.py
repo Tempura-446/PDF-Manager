@@ -1556,6 +1556,37 @@ class OpenFiles:
             return path in self.items.values()
 
 
+class UnsavedWork:
+    """What the app's pages say is unsaved: the name of each reader tab with
+    the dot (changes not saved to a file, or a tool's result not saved
+    anywhere). Kept here so closing the desktop window can ask without
+    asking the page (see may_close): from pywebview's closing event the
+    page can't be asked (evaluate_js there can hang the window on Windows)."""
+
+    MAX = 200
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._pages = {}  # page id -> names
+
+    def said(self, page, names):
+        names = [str(n)[:260] for n in names][:self.MAX]
+        with self._lock:
+            if names:
+                self._pages[str(page)] = names
+            else:
+                self._pages.pop(str(page), None)
+
+    def gone(self, page):
+        """The page was closed or reloaded."""
+        with self._lock:
+            self._pages.pop(str(page), None)
+
+    def names(self):
+        with self._lock:
+            return [name for names in self._pages.values() for name in names]
+
+
 class SavedOver:
     """What a file held before Save wrote over it, for Undo: the last few,
     in memory, each up to LIMIT bytes (bigger files get no Undo)."""
@@ -1857,6 +1888,7 @@ class Handler(BaseHTTPRequestHandler):
     bring_to_front = None
     quit_app = None  # closes the pywebview window (to restart after an update)
     quit_requested = False  # makes wait_until_closed return
+    unsaved = None  # UnsavedWork: what closing the desktop window asks about
     opened = None  # OpenFiles
     saved_over = None  # SavedOver: Undo after Save wrote over a file
     scans = None  # scanpdf.ScanBoxes: the pages of each Scan page under way
@@ -2141,6 +2173,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/ping":  # sent regularly while the page is open
                 return self._send(HTTPStatus.OK, {"ok": True})
+            if path == "/api/unsaved":  # the reader's unsaved tabs changed (see UnsavedWork)
+                return self._unsaved(body)
             if path == "/api/run":
                 return self._run(body)
             if path == "/api/inspect":
@@ -2499,6 +2533,19 @@ class Handler(BaseHTTPRequestHandler):
                      else outline.get_outline(path, password))
         return self._send(HTTPStatus.OK, {"items": items, "pages": pages})
 
+    def _unsaved(self, body):
+        """{"page": id, "names": [...]}: this page's unsaved tabs now."""
+        try:
+            data = json.loads(body or b"{}")
+        except ValueError:
+            data = None
+        names = data.get("names") if isinstance(data, dict) else None
+        if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+            return self._error(HTTPStatus.BAD_REQUEST, "names must be a list of file names")
+        page = str(data.get("page") or self.headers.get("X-Pdfm-Page") or "")
+        self.unsaved.said(page, names)
+        return self._send(HTTPStatus.OK, {"ok": True})
+
     def _bye(self):
         """The page is being closed (or reloaded). Sent with
         navigator.sendBeacon, which can't add headers, so the token comes
@@ -2509,6 +2556,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
         if self.pages is not None:
             self.pages.pop(query.get("page", [""])[0], None)
+        if self.unsaved is not None:
+            self.unsaved.gone(query.get("page", [""])[0])
         type(self).closed_at = time.monotonic()
         return self._send(HTTPStatus.OK, {"ok": True})
 
@@ -3033,7 +3082,7 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None):
                                                "last_seen": time.monotonic(),
                                                "closed_at": None, "jobs": progress.JobStore(),
                                                "pages": {}, "events": Events(),
-                                               "saved_over": SavedOver(),
+                                               "saved_over": SavedOver(), "unsaved": UnsavedWork(),
                                                "work": WorkFolders(), "scans": scanpdf.ScanBoxes()})
     server = None
     if not port and prefer:
@@ -3444,7 +3493,13 @@ def run_desktop(port=0, open_paths=()):
         api._window = window
         _allow_autofill(window)
         handler.bring_to_front = lambda: _raise_window(window)
-        handler.quit_app = lambda: window.destroy()
+        handler.quit_app = lambda: _close_on_purpose(handler, window)
+        try:
+            # Closing with the window's X: ask first when anything is unsaved
+            # (WebView2 fires no beforeunload when the window itself closes).
+            window.events.closing += lambda: may_close(handler, lambda text: _ask_to_close(window, text))
+        except AttributeError as exc:  # pywebview before 4 has no closing event
+            _log(f"launch: no closing event to warn about unsaved work: {exc!r}")
         # Keep the window's cache and settings between launches (pywebview
         # otherwise starts every time like a private browser window).
         options = {}
@@ -3474,6 +3529,76 @@ def run_desktop(port=0, open_paths=()):
     server.shutdown()
     server.server_close()
     return True
+
+
+def close_question(names):
+    """What closing ZPDF asks with the files ``names`` unsaved (None: nothing to ask)."""
+    if not names:
+        return None
+    if len(names) == 1:
+        which = f"Your changes to “{names[0]}” haven't been saved."
+    elif len(names) <= 3:
+        which = f"Your changes to {len(names)} files haven't been saved: " + ", ".join(names) + "."
+    else:
+        which = f"Your changes to {len(names)} files haven't been saved."
+    return "Close ZPDF? " + which
+
+
+def may_close(handler, ask):
+    """pywebview's closing event (False keeps the window open). Closing on
+    purpose (to start again after an update, which asked about unsaved work
+    itself) never asks. Otherwise, with anything unsaved (as the page last
+    told the server), ``ask(text)``: True closes anyway. Whatever goes wrong
+    asking, the window closes (it must never be impossible to close)."""
+    if handler.quit_requested:
+        return True
+    question = close_question(handler.unsaved.names() if handler.unsaved is not None else [])
+    if not question:
+        return True
+    try:
+        answer = bool(ask(question))
+    except Exception as exc:  # noqa: BLE001
+        _log(f"closing: couldn't ask about unsaved work: {exc!r}")
+        return True
+    _log(f"closing with unsaved work: {'closed' if answer else 'kept open'}")
+    return answer
+
+
+def _close_on_purpose(handler, window):
+    """Close the window without asking (see may_close)."""
+    handler.quit_requested = True
+    window.destroy()
+
+
+MB_YESNO, MB_ICONWARNING, MB_DEFBUTTON2, MB_SETFOREGROUND, MB_TOPMOST, IDYES = 0x4, 0x30, 0x100, 0x10000, 0x40000, 6
+
+
+def _ask_to_close(window, text):
+    """Ask ``text`` with Yes and No (No the default): True for Yes.
+
+    pywebview runs the closing event on the window's own thread and waits
+    for it, so this mustn't wait for that thread: on Windows a plain
+    MessageBoxW (it runs its own message loop; owned by the window, when its
+    handle can be had, so it sits on top of it). Elsewhere pywebview's own
+    dialog, unless this is the GUI's main thread, where it would wait for
+    itself (GTK, Cocoa, Qt): the window then closes as before."""
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        try:
+            owner = int(window.native.Handle.ToInt64())
+        except Exception:  # noqa: BLE001 - no WinForms form to own it
+            owner = None
+        flags = MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | (0 if owner else MB_TOPMOST | MB_SETFOREGROUND)
+        box = ctypes.windll.user32.MessageBoxW
+        box.argtypes = (wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT)
+        box.restype = ctypes.c_int
+        return box(owner, text, "ZPDF", flags) == IDYES
+    confirm = getattr(window, "create_confirmation_dialog", None)
+    if confirm is None or threading.current_thread() is threading.main_thread():
+        return True
+    return bool(confirm("Close ZPDF?", text))
 
 
 def _allow_autofill(window):
