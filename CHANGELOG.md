@@ -38,6 +38,10 @@ that were wrong and are now right:
 - **Ctrl+Z and Ctrl+Y with Select on** (for instance after Esc from Draw)
   did nothing, although the Undo and Redo buttons worked. They now do
   what the buttons do, with any tool on (not while typing in a box).
+- **Closing ZPDF with the window's X** didn't warn about unsaved work (the
+  warning only worked in a browser). It now asks "Close ZPDF? Your changes
+  to … haven't been saved." with Yes and No (No keeps it open). Restarting
+  after an update, which asks itself, doesn't ask again.
 
 ## 0.28.0
 

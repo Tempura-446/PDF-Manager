@@ -399,5 +399,6 @@ export function deriveUi(tab, tabs, view = {}) {
     close: closePrompt(tab),
     ctrlS: saveAction(tab, { changed }),
     anyUnsaved: tabs.some((t) => t.needsSaving),  // closing ZPDF or updating it asks first
+    unsaved: tabs.filter((t) => t.needsSaving).map((t) => t.name),  // ... naming these (the server keeps them for the window's X)
   };
 }

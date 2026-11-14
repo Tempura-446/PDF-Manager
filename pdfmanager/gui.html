@@ -1587,6 +1587,8 @@ async function ensureReader() {
     onCommands: () => openPalette(),
     onHome: () => select("home"),
     onChange: () => fpSync(),
+    // Closing the desktop window asks the server what's unsaved (see gui.py's may_close).
+    onUnsaved: (names) => jsonApi("/api/unsaved", { page: pageId, names }).catch(() => {}),
     recent: (host) => fillRecent(host, { onEmpty: () => { const box = host.closest(".rd-recent"); if (box) box.hidden = true; } }),
     onFormHint: (tab) => { if (fp.tab === tab) fpSuggest(); },
     onRepair: (tab) => repairInReader(tab),

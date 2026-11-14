@@ -1,5 +1,6 @@
 """0.29.0, from the Windows check (static/reader.js, tabs.js, tabstate.js):
-Redo of a note Undo took back; Ctrl+Z and Ctrl+Y with Select on. In a browser through Node's Playwright
+Redo of a note Undo took back (and the server kept told what's unsaved,
+for closing the desktop window: test_close_guard.py); Ctrl+Z and Ctrl+Y with Select on. In a browser through Node's Playwright
 (skipped where there is none); winfix29.js runs one scenario at a time."""
 import json
 import os
@@ -60,6 +61,9 @@ def test_redo_brings_back_a_note_that_undo_took_away(app, tmp_path):
     # Ctrl+S: in the file.
     assert not saved["dirty"] and not saved["titleDot"], saved
     assert [kind for _, kind, _ in annotations(src) if kind != "/Popup"] == ["/Text"], annotations(src)
+    # The server was kept told what's unsaved, as it changed (closing the desktop window asks from that).
+    posts = [p for i, p in enumerate(out["unsavedPosts"]) if i == 0 or p != out["unsavedPosts"][i - 1]]
+    assert posts == [[], ["Report.pdf"], [], ["Report.pdf"], []], out["unsavedPosts"]
 
 
 def test_ctrl_z_and_ctrl_y_work_with_select_on(app, tmp_path):

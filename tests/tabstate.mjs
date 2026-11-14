@@ -241,6 +241,7 @@ test("many tabs: dots and the close of the window", () => {
   const c = fresh(null);
   c.made({ op: "scan" });
   eq(deriveUi(null, [a, c]).anyUnsaved, true, "an unsaved result counts");
+  eq(deriveUi(null, [a, b, c]).unsaved, [b.name, c.name], "named for closing the window");
 });
 
 console.log(JSON.stringify({ ok, failed }));

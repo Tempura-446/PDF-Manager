@@ -20,6 +20,9 @@ const { chromium } = require("playwright");
     page.on("pageerror", (e) => out.errors.push(String(e.message || e)));
     page.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource/.test(m.text())) out.errors.push(m.text()); });
     page.on("dialog", (d) => { out.native.push(d.type() + ": " + d.message()); d.dismiss().catch(() => {}); });
+    // What the page tells the server is unsaved (closing the desktop window asks from that).
+    out.unsavedPosts = [];
+    page.on("request", (r) => { if (r.url().includes("/api/unsaved")) out.unsavedPosts.push(JSON.parse(r.postData() || "{}").names); });
     const settled = () => page.waitForFunction(() => reader.doc && reader.loading.hidden
       && document.querySelector(".page canvas"), null, { timeout: 30000 });
     // What the screen says about the shown document.

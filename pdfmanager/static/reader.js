@@ -142,7 +142,7 @@ const header = (res, name) => { try { return decodeURIComponent(res.headers.get(
 const ANNOT_KEYS = { h: "HIGHLIGHT", c: "NOTE", a: "FREETEXT", d: "INK", s: "SIGN" };
 
 export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measuring(Object)))))) {
-  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onRepair, onForgetRecent, onSaveTab } = {}) {
+  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onRepair, onForgetRecent, onSaveTab, onUnsaved } = {}) {
     super();
     this.host = host;
     this.token = token;
@@ -154,6 +154,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     this.onCommands = onCommands;
     this.onHome = onHome;
     this.onChange = onChange;  // the open documents or the shown one changed (the app's file panel follows)
+    this.onUnsaved = onUnsaved;  // (names) => the tabs with unsaved work are these now (closing the window asks)
     this.recent = recent;  // (host) => fills host with the app's Recent list (the start screen's), resolves to how many
     this.onFormHint = onFormHint;  // (tab) => the "looks like a form" check came out for tab, or was dismissed
     this.onRepair = onRepair;  // (tab) => run Repair on a file that can't be shown; resolves when its result is open (or it failed)
