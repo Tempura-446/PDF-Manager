@@ -4,6 +4,35 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.38.0
+
+Markups for drawings, in the reader's Annotate bar.
+
+- **Shapes** has a new group, *For drawings*:
+  - **Cloud, any shape:** click the corners of what changed; double-click
+    or press Enter to close it. The revision cloud follows the outline you
+    clicked. (The dragged, rectangular Cloud is still there.)
+  - **Line with corners** and **Arrow with corners:** click each point,
+    double-click or Enter to finish.
+  - **Dimension:** drag from one end to the other. The ends snap to the
+    drawing's lines, as measuring does (Alt: no snapping), and the line
+    carries the real length from the sheet's scale, with an arrowhead at
+    each end. Without a scale it says the length in inches on paper.
+  - **Callout:** drag from what you're pointing at to where the words go,
+    then type them. They sit in a box with a pointer.
+  While drawing click by click, Backspace goes back one point, Esc gives
+  up, and Shift keeps a line at a multiple of 45°.
+- **Stamps** has a *Drawing review* group: Approved as noted, Revise and
+  resubmit, Rejected, For information, Not for construction, with your
+  name and the date like the others.
+- All of these are standard PDF annotations (a cloudy polygon, a polyline,
+  a callout, a dimension line with its measure), so Acrobat, Bluebeam and
+  other readers show them and list them as comments. They can be deleted
+  from the Comments tab and undone like other markups.
+- Words in callouts and dimensions read upright on pages that are turned.
+- Not yet: moving or reshaping a markup after it's placed (delete it and
+  draw it again), and your own stamps with a colour.
+
 ## 0.37.0
 
 The fields a form already has can be changed.

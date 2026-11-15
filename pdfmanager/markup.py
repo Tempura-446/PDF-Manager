@@ -39,7 +39,8 @@ from pypdf.generic import (ArrayObject, BooleanObject, DecodedStreamObject, Dict
 from pdfmanager import core
 
 KINDS = ("note", "underline", "strikeout", "rect", "ellipse", "cloud", "line", "arrow", "measure", "link",
-         "stamp")
+         "stamp", "polycloud", "polyline", "callout", "dimension")
+DRAWING_KINDS = ("polycloud", "polyline", "callout", "dimension")  # see "construction markups" below
 DEFAULT_COLORS = {"note": "#f5c400", "underline": "#1f4fd8", "strikeout": "#d52b1e"}
 PRINT = 4  # annotation flag: printed with the page
 NOTE_SIZE = 20
@@ -196,6 +197,14 @@ def _add(writer, page, page_ref, change, author):
             annots = page["/Annots"]
         annots.get_object().extend(added)
         return added[0]
+    if kind in DRAWING_KINDS:
+        ref = writer._add_object(_drawing_markup(writer, page, page_ref, change, author))
+        annots = page.get("/Annots")
+        if annots is None:
+            page[NameObject("/Annots")] = ArrayObject()
+            annots = page["/Annots"]
+        annots.get_object().append(ref)
+        return ref
     color = _color(change.get("color"), DEFAULT_COLORS.get(kind, "#d52b1e"))
     text = str(change.get("text") or "")
     width = max(0.25, min(_num(change.get("width", 2)), 50))
@@ -306,7 +315,10 @@ STAMP_NAMES = {"APPROVED": "/Approved", "NOT APPROVED": "/NotApproved", "DRAFT":
                "FOR PUBLIC RELEASE": "/ForPublicRelease"}
 STAMP_COLORS = {"APPROVED": "#1f8a3b", "FINAL": "#1f8a3b", "RECEIVED": "#1f4fd8",
                 "REVIEWED": "#1f4fd8", "FOR COMMENT": "#1f4fd8", "DRAFT": "#d52b1e",
-                "NOT APPROVED": "#d52b1e", "CONFIDENTIAL": "#d52b1e", "VOID": "#d52b1e"}
+                "NOT APPROVED": "#d52b1e", "CONFIDENTIAL": "#d52b1e", "VOID": "#d52b1e",
+                # the answers to a submittal (shop drawings sent for review)
+                "APPROVED AS NOTED": "#1f8a3b", "REVISE AND RESUBMIT": "#d52b1e", "REJECTED": "#d52b1e",
+                "FOR INFORMATION": "#1f4fd8", "NOT FOR CONSTRUCTION": "#d52b1e"}
 
 
 def _stamp(writer, page, page_ref, change, author):
@@ -367,6 +379,244 @@ def stamp_annotation(writer, page, page_ref, change, author):
     annot[NameObject("/Name")] = NameObject(STAMP_NAMES.get(label, "/" + re.sub(r"\W+", "", label.title()) or "/Draft"))
     annot[NameObject("/Subj")] = TextStringObject(label.title())
     annot[NameObject("/AP")] = _appearance(writer, rect, " ".join(parts), fonts)
+    return annot
+
+
+# ---- construction markups: clouds, lines with corners, callouts, dimensions ---------
+
+CALLOUT_SIZE = 10       # points: a callout's words
+CALLOUT_WIDTH = 170     # the widest a callout's box gets
+DIMENSION_SIZE = 9
+
+
+def _points(change, least, few):
+    try:
+        pts = [(_num(p[0]), _num(p[1])) for p in change.get("points") or []]
+    except (TypeError, ValueError, IndexError):
+        raise core.PdfManagerError("a point is not a pair of numbers") from None
+    out = []
+    for p in pts:  # a double click gives the same point twice
+        if not out or math.hypot(p[0] - out[-1][0], p[1] - out[-1][1]) > 0.01:
+            out.append(p)
+    if len(out) < least:
+        raise core.PdfManagerError(few)
+    return out
+
+
+def _arrowhead(tip, back, size):
+    """A filled arrowhead at ``tip``, pointing away from ``back``: (its
+    path, where the shaft should stop)."""
+    length = math.hypot(tip[0] - back[0], tip[1] - back[1]) or 1
+    ux, uy = (tip[0] - back[0]) / length, (tip[1] - back[1]) / length
+    size = min(size, length * 0.6)
+    bx, by = tip[0] - ux * size, tip[1] - uy * size
+    wing = size * 0.45
+    f = _fmt
+    return (f"{f(tip[0])} {f(tip[1])} m {f(bx - uy * wing)} {f(by + ux * wing)} l "
+            f"{f(bx + uy * wing)} {f(by - ux * wing)} l h f"), (bx, by)
+
+
+def _polygon_cloud(points, bump):
+    """A cloud's outline along a closed outline: half-circle bumps bulging
+    outwards along each side, each about ``bump`` points across."""
+    area = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(points, points[1:] + points[:1]))
+    if area < 0:
+        points = points[::-1]  # anticlockwise: outward is to the right of each side
+    parts = []
+    for (ax, ay), (bx, by) in zip(points, points[1:] + points[:1]):
+        length = math.hypot(bx - ax, by - ay)
+        if length < 0.01:
+            continue
+        count = max(1, round(length / bump))
+        nx, ny = (by - ay) / length, -(bx - ax) / length
+        h = length / count / 2 * 4 / 3  # a half circle as one Bézier curve
+        for i in range(count):
+            px, py = ax + (bx - ax) * i / count, ay + (by - ay) * i / count
+            qx, qy = ax + (bx - ax) * (i + 1) / count, ay + (by - ay) * (i + 1) / count
+            if not parts:
+                parts.append(f"{_fmt(px)} {_fmt(py)} m")
+            parts.append(f"{_fmt(px + nx * h)} {_fmt(py + ny * h)} {_fmt(qx + nx * h)} {_fmt(qy + ny * h)} "
+                         f"{_fmt(qx)} {_fmt(qy)} c")
+    return " ".join(parts) + " h"
+
+
+def _upright(page):
+    """For words that read upright as the page is shown, whatever its
+    /Rotate: (into upright space, back to the page, the "cm" numbers)."""
+    a, b, c, d = {0: (1, 0, 0, 1), 90: (0, 1, -1, 0), 180: (-1, 0, 0, -1),
+                  270: (0, -1, 1, 0)}[core.quarter_turn(page.get("/Rotate", 0))]
+    return (lambda p: (a * p[0] + b * p[1], c * p[0] + d * p[1]),
+            lambda p: (a * p[0] + c * p[1], b * p[0] + d * p[1]),
+            f"{a} {b} {c} {d} 0 0")
+
+
+def _wrap_words(text, size, room):
+    """``text`` in lines no wider than ``room`` (its own line breaks kept)."""
+    lines = []
+    for para in str(text).splitlines() or [""]:
+        line = ""
+        for word in para.split():
+            trial = f"{line} {word}".strip()
+            if line and _text_width(trial, size) > room:
+                lines.append(line)
+                line = word
+            else:
+                line = trial
+        lines.append(line)
+    return lines[:40]
+
+
+_HELV = {"/Type": "/Font", "/Subtype": "/Type1", "/BaseFont": "/Helvetica", "/Encoding": "/WinAnsiEncoding"}
+
+
+def _helvetica():
+    return DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/Helv"): DictionaryObject(
+        {NameObject(k): NameObject(v) for k, v in _HELV.items()})})})
+
+
+def _drawing_markup(writer, page, page_ref, change, author):
+    """A revision cloud ("polycloud": points), a line with corners
+    ("polyline": points, "arrow" none/end/both), a callout ("tip" it points
+    at, "at" where the words go, "text") or a dimension line ("points",
+    "value" its words, "scale" as measurements take it)."""
+    kind = change["kind"]
+    color = _color(change.get("color"), "#d52b1e")
+    width = max(0.25, min(_num(change.get("width", 1.5)), 50))
+    text = str(change.get("text") or "")
+    f = _fmt
+    floats = lambda values: ArrayObject(FloatObject(v) for v in values)  # noqa: E731
+    path = lambda pts: " ".join(f"{f(x)} {f(y)} {'m' if i == 0 else 'l'}" for i, (x, y) in enumerate(pts))  # noqa: E731
+
+    def bounds(pts, pad):
+        return [min(p[0] for p in pts) - pad, min(p[1] for p in pts) - pad,
+                max(p[0] for p in pts) + pad, max(p[1] for p in pts) + pad]
+
+    if kind == "polycloud":
+        pts = _points(change, 3, "a cloud needs at least three points")
+        bump = max(10.0, width * 6)
+        rect = bounds(pts, bump / 2 * 4 / 3 * 0.75 + width)
+        annot = _base(writer, page_ref, "/Polygon", rect, color, author, text)
+        annot[NameObject("/Vertices")] = floats(v for p in pts for v in p)
+        annot[NameObject("/BE")] = DictionaryObject({NameObject("/S"): NameObject("/C"), NameObject("/I"): NumberObject(1)})
+        annot[NameObject("/BS")] = DictionaryObject({NameObject("/W"): FloatObject(width), NameObject("/S"): NameObject("/S")})
+        annot[NameObject("/AP")] = _appearance(writer, rect, f"{_rgb(color)} {f(width)} w 1 j {_polygon_cloud(pts, bump)} S")
+        return annot
+
+    if kind == "polyline":
+        pts = _points(change, 2, "a line needs at least two points")
+        arrow = str(change.get("arrow") or "none").lower()
+        if arrow not in ("none", "end", "both"):
+            raise core.PdfManagerError("an arrow is none, end or both")
+        head = max(9.0, width * 4)
+        shaft, heads = list(pts), []
+        if arrow in ("end", "both"):
+            shape, shaft[-1] = _arrowhead(pts[-1], pts[-2], head)
+            heads.append(shape)
+        if arrow == "both":
+            shape, shaft[0] = _arrowhead(pts[0], pts[1], head)
+            heads.append(shape)
+        rect = bounds(pts, (head if heads else 0) + width)
+        annot = _base(writer, page_ref, "/PolyLine", rect, color, author, text)
+        annot[NameObject("/Vertices")] = floats(v for p in pts for v in p)
+        annot[NameObject("/BS")] = DictionaryObject({NameObject("/W"): FloatObject(width)})
+        content = f"{_rgb(color)} {f(width)} w 1 J 1 j {path(shaft)} S"
+        if heads:
+            annot[NameObject("/LE")] = ArrayObject([NameObject("/ClosedArrow" if arrow == "both" else "/None"),
+                                                    NameObject("/ClosedArrow")])
+            annot[NameObject("/IC")] = floats(color)
+            content += f" {_rgb(color, False)} " + " ".join(heads)
+        annot[NameObject("/AP")] = _appearance(writer, rect, content)
+        return annot
+
+    to_up, to_page, turn = _upright(page)
+    if kind == "callout":
+        words = " ".join(text.split())
+        if not words:
+            raise core.PdfManagerError("a callout needs words")
+        try:
+            tip, at = _point(change.get("tip")), _point(change.get("at"))
+        except core.PdfManagerError:
+            raise core.PdfManagerError("a callout needs the point it's about and where its words go") from None
+        size = max(6.0, min(_num(change.get("size", CALLOUT_SIZE)), 36))
+        tx, ty = to_up(tip)
+        ax, ay = to_up(at)
+        pad, lead = size * 0.45, size * 1.2
+        lines = _wrap_words(text.strip(), size, CALLOUT_WIDTH * size / CALLOUT_SIZE)
+        box_w = max(_text_width(line, size) for line in lines) + 2 * pad
+        box_h = len(lines) * lead + 2 * pad - (lead - size) * 0.5
+        right = ax >= tx  # the box goes on the far side of the point it was put at
+        x0 = ax if right else ax - box_w
+        y0 = ay - box_h / 2
+        edge = (x0 if right else x0 + box_w, ay)                 # where the leader meets the box
+        knee = (edge[0] - (12 if right else -12), ay)
+        head, stop = _arrowhead((tx, ty), knee, max(8.0, width * 4))
+        parts = [f"q {turn} cm {_rgb(color)} {_rgb(color, False)} {f(width)} w 1 J 1 j",
+                 f"{f(stop[0])} {f(stop[1])} m {f(knee[0])} {f(knee[1])} l {f(edge[0])} {f(edge[1])} l S", head,
+                 f"q 1 1 1 rg {f(x0)} {f(y0)} {f(box_w)} {f(box_h)} re B Q",
+                 f"0.1 0.1 0.1 rg BT /Helv {f(size)} Tf"]
+        for i, line in enumerate(lines):
+            parts.append(f"1 0 0 1 {f(x0 + pad)} {f(y0 + box_h - pad - size * 0.8 - i * lead)} Tm {_pdf_text(line)} Tj")
+        parts.append("ET Q")
+        corners = [to_page(p) for p in ((x0, y0), (x0 + box_w, y0 + box_h))]
+        box = [min(c[0] for c in corners), min(c[1] for c in corners), max(c[0] for c in corners), max(c[1] for c in corners)]
+        grow = max(8.0, width * 4) + width
+        rect = [min(box[0], tip[0] - grow), min(box[1], tip[1] - grow), max(box[2], tip[0] + grow), max(box[3], tip[1] + grow)]
+        annot = _base(writer, page_ref, "/FreeText", rect, color, author, text.strip())
+        hex_rgb = " ".join(f(c) for c in color)
+        annot.update({
+            NameObject("/IT"): NameObject("/FreeTextCallout"),
+            NameObject("/CL"): floats([*tip, *to_page(knee), *to_page(edge)]),
+            NameObject("/LE"): NameObject("/ClosedArrow"),
+            NameObject("/DA"): TextStringObject(f"{hex_rgb} rg /Helv {f(size)} Tf"),
+            NameObject("/RD"): floats([box[0] - rect[0], box[1] - rect[1], rect[2] - box[2], rect[3] - box[3]]),
+            NameObject("/BS"): DictionaryObject({NameObject("/W"): FloatObject(width)}),
+            NameObject("/AP"): _appearance(writer, rect, " ".join(parts), _helvetica())})
+        if core.quarter_turn(page.get("/Rotate", 0)):
+            annot[NameObject("/Rotate")] = NumberObject(core.quarter_turn(page.get("/Rotate", 0)))
+        return annot
+
+    # dimension
+    pts = _points(change, 2, "a dimension needs two points")[:2]
+    (ax, ay), (bx, by) = pts
+    if math.hypot(bx - ax, by - ay) < 2:
+        raise core.PdfManagerError("draw the dimension longer")
+    value = " ".join(str(change.get("value") or "").split())[:80]
+    head = max(7.0, width * 4)
+    first, stop_a = _arrowhead(pts[0], pts[1], head)
+    second, stop_b = _arrowhead(pts[1], pts[0], head)
+    length = math.hypot(bx - ax, by - ay)
+    nx, ny = -(by - ay) / length, (bx - ax) / length
+    ticks = " ".join(f"{f(x - nx * 5)} {f(y - ny * 5)} m {f(x + nx * 5)} {f(y + ny * 5)} l" for x, y in pts)
+    content = (f"{_rgb(color)} {_rgb(color, False)} {f(width)} w 1 J {f(stop_a[0])} {f(stop_a[1])} m "
+               f"{f(stop_b[0])} {f(stop_b[1])} l S 0.6 w {ticks} S {first} {second}")
+    reach = head + width + 5
+    if value:
+        # Along the line, above it and reading left to right as the page is shown.
+        ua, ub = to_up(pts[0]), to_up(pts[1])
+        if ub[0] < ua[0] or (abs(ub[0] - ua[0]) < 0.01 and ub[1] < ua[1]):
+            ua, ub = ub, ua
+        ulen = math.hypot(ub[0] - ua[0], ub[1] - ua[1])
+        cos, sin = (ub[0] - ua[0]) / ulen, (ub[1] - ua[1]) / ulen
+        size = DIMENSION_SIZE
+        wide = _text_width(value, size)
+        gap = width / 2 + 3
+        ox = (ua[0] + ub[0]) / 2 - cos * wide / 2 - sin * gap
+        oy = (ua[1] + ub[1]) / 2 - sin * wide / 2 + cos * gap
+        content += (f" q {turn} cm 0.1 0.1 0.1 rg BT /Helv {f(size)} Tf {f(cos)} {f(sin)} {f(-sin)} {f(cos)} "
+                    f"{f(ox)} {f(oy)} Tm {_pdf_text(value)} Tj ET Q")
+        reach = max(reach, gap + size * 1.2)
+    rect = bounds(pts, reach)
+    annot = _base(writer, page_ref, "/Line", rect, color, author, value)
+    annot.update({
+        NameObject("/L"): floats([ax, ay, bx, by]),
+        NameObject("/LE"): ArrayObject([NameObject("/ClosedArrow"), NameObject("/ClosedArrow")]),
+        NameObject("/IC"): floats(color), NameObject("/IT"): NameObject("/LineDimension"),
+        NameObject("/Cap"): BooleanObject(True), NameObject("/CP"): NameObject("/Top"),
+        NameObject("/BS"): DictionaryObject({NameObject("/W"): FloatObject(width)}),
+        NameObject("/AP"): _appearance(writer, rect, content, _helvetica())})
+    measure = _measure_dict(change.get("scale")) if isinstance(change.get("scale"), dict) else None
+    if measure is not None:
+        annot[NameObject("/Measure")] = measure
     return annot
 
 
