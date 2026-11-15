@@ -318,3 +318,13 @@ def test_the_reader_runs_exactly_what_the_check_calls_harmless():
     reader = (Path(risks.__file__).parent / "static" / "reader.js").read_text(encoding="utf-8")
     assert "const FORM_SCRIPT = new RegExp(" + json.dumps("^" + risks.FORM_SCRIPT_SOURCE + "$") + ");" in reader
     assert "js.length <= FORM_SCRIPT_MAX && FORM_SCRIPT.test(js)" in reader and "const FORM_SCRIPT_MAX = 2000;" in reader
+
+
+def test_the_check_and_the_reader_read_the_pattern_alike():
+    """No \\s or \\d, which Python and JavaScript take differently: an odd
+    digit, an odd space or a byte-order mark is refused by both."""
+    assert "\\s" not in risks.FORM_SCRIPT_SOURCE and "\\d" not in risks.FORM_SCRIPT_SOURCE
+    for odd in ("AFNumber_Format(٢)", "AFNumber_Format(２)", "AFNumber_Format(2)\x1c",
+                "﻿AFNumber_Format(2)", "AFNumber_Format(2) ", "AFNumber_Format( 2)"):
+        assert not risks.FORM_SCRIPT.fullmatch(odd), repr(odd)
+    assert risks.FORM_SCRIPT.fullmatch("AFNumber_Format( 2 ,\t0 )\r\n;\n")

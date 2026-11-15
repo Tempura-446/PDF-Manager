@@ -26,6 +26,7 @@ const { chromium } = require("playwright");
     // The form works (a format, a total) and nothing else in the file runs.
     const field = (name) => `.annotationLayer input[name="${name}"]`;
     await page.waitForSelector(field("Price"), { timeout: 30000 });
+    out.autocomplete = await page.$$eval(".annotationLayer input", (list) => list.map((i) => i.getAttribute("autocomplete")));
     await page.waitForTimeout(1500);  // the sandbox is ready a moment after the page
     await page.click(field("Price"));
     await page.keyboard.type("12.5", { delay: 150 });

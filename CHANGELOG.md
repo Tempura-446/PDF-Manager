@@ -40,7 +40,13 @@ Safer opening of PDFs you didn't make.
   kept with the document, its pages or its fields, in a closed sandbox: a
   script could show a message box when the file opened, though it could
   not reach files or programs. Now only a form's own format and total
-  functions run, and nothing else in a PDF does.
+  functions run, and nothing else in a PDF does. A script dressed up as
+  one of those functions (hidden in its arguments) is treated as a script:
+  not run, reported, and taken out by Make safe.
+- **Fixed: what you typed in one PDF's form was offered in another's.** The
+  app window remembered form entries and suggested them in fields of the
+  same name in other PDFs. The reader's form fields no longer use that
+  memory.
 - Command line: `pdfm make-safe file.pdf`, and `--check` to only list what
   the file can do.
 - *Remove hidden data* is unchanged: it's for what you send out (details,

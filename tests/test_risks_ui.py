@@ -70,6 +70,7 @@ def test_risks_in_a_browser(app, tmp_path):
     assert out["native"] == [], out["native"]
     assert out["form"]["price"] == "12.50" and out["form"]["other"] == "abc", out["form"]
     assert out["form"]["total"] in ("12.5", "12.50"), out["form"]
+    assert out["autocomplete"] and set(out["autocomplete"]) == {"off"}     # entries aren't offered in other PDFs
     assert out["chip"]["text"] == "could do harm"
     assert "It has scripts" in out["chip"]["title"] and "Links that hide where they go" in out["chip"]["title"]
     assert out["first"]["op"] == "makesafe" and "Make it safe" in out["first"]["words"]
