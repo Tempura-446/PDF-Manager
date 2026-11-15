@@ -461,7 +461,7 @@ def test_a_plain_page_has_no_signature_line(tmp_path):
 
 
 def test_signature_lines_made_the_kept_facts_look_again():
-    assert filefacts.LOOK == 5  # facts kept before 0.24.3 (no "signed_on_line") are worked out again
+    assert filefacts.LOOK >= 5  # facts kept before 0.24.3 (no "signed_on_line") are worked out again (6: before 0.39.0, no "risks")
 
 
 # -- 0.24.1: where the line to sign on is ----------------------------------------------------
