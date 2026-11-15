@@ -57,6 +57,12 @@
 - [x] Review stamps: Approved as noted; Revise and resubmit; Rejected; For information; Not for construction, with name and date.
 - [ ] Left for later: a saved list of the user's own stamps with a colour (one own stamp's words are remembered today).
 
+**Seen in the Windows check of 0.38.0, for a later release:**
+- Measurements remembered for a file come back on a copy of it changed by a tool (Rotate): the copies share the PDF's `/ID`. Key the memory on more than the ID (the page count and sizes, or the path), or ask before bringing them back.
+- The zoom changes when Annotate & sign opens, and choosing Distance closes the Annotate bar (the page moves both times).
+- Once, the Annotate bar closed and the side panel opened after a double-click ended a line (not reproduced).
+- A callout's comment popup opens after it's added and stays until a click elsewhere.
+
 ### Phase 3 (release C): PDF to DXF
 
 **Task 3.1: vector export**
