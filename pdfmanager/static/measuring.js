@@ -1400,7 +1400,7 @@ export const Measuring = (Base) => class extends Base {
     if (kept.length) {
       this.listCount.hidden = false;
       this.listCount.textContent = String(kept.length);
-      this.toast(`${kept.length} measurement${kept.length === 1 ? "" : "s"} from last time are back.`, 5000,
+      this.toast(`${kept.length} measurement${kept.length === 1 ? " from last time is" : "s from last time are"} back.`, 5000,
         ["Show", () => { this.toggleScaleBar(true); this._toggleMeasPanel(true); }]);
     }
   }

@@ -41,7 +41,7 @@
 **Task 1.2: in the tool page**
 - [x] The striped "already in the file" fields are editable (one file chosen). A deletion is marked, says why it matters (filled in, signed, used by a total) and can be taken back until Run.
 
-**Left for later releases** (Phase 2 covers most): checkbox ↔ radio and other type changes; moving a field to another page; format, total, validation, font and colours of a field the form has; tab order; a field whose calculation is a script other than `AFSimple_Calculate` isn't followed on rename.
+**Left for later releases:** checkbox ↔ radio and other type changes, moving a field to another page, and the format and total of a field the form has are now Task 2.2b; font and colours are in Task 2.2; tab order in Phase 3. A field whose calculation is a script other than `AFSimple_Calculate` isn't followed on rename.
 
 ### Phase 2 (release B): the designer in the reader
 
@@ -60,6 +60,12 @@
 - [ ] **Format:** none, number (decimals, separator, currency, negative style), percent, date (pattern), time, phone, postcode, a custom mask. **Validation:** a range, or a pattern. **Calculation:** sum, product, average, minimum, maximum of chosen fields (picked by clicking them on the page), or a simple formula over field names (`Qty * Price`), checked before it's written.
 - [ ] With several fields selected, the panel changes what they share.
 - [ ] Test (browser): each property set in the panel reads back from the saved file and behaves when filling in (required marks, a comb field, a currency format, a sum).
+
+**Task 2.2b: what 0.37.0 left out for fields a form already has** (asked for after 0.37.0; the designer and the tool page both get these, through `forms.edit_fields`)
+- [ ] **Move a field to another page:** a change takes `"to_page"`. The widget leaves one page's `/Annots` for the other's, its `/P` follows, and its place in the tab order is set on the new page. In the designer: cut and paste, or drag onto another page's thumbnail. In the tool page: a "Move to page…" choice on the selected field.
+- [ ] **Switch the base type:** text ↔ dropdown ↔ list (choices kept or asked for), checkbox ↔ radio button (a lone checkbox becomes a group of one; a group's buttons become separate checkboxes named from their values), text ↔ signature when the field is empty. The field keeps its name, place, tooltip and required flag; its value is kept when the new type can hold it, else cleared with a note. A signed signature field can't be switched.
+- [ ] **Format and total of an existing field:** read `AFNumber_Format`, `AFPercent_Format`, `AFDate_FormatEx`, `AFSpecial_Format`, `AFRange_Validate` and `AFSimple_Calculate` back into the same choices the designer offers (so `field_details` reports "amount, 2 decimals", "sum of Price, Tax"), and write changes to them with the calculation order (`/CO`) kept right. A simple formula over field names (`Qty * Price`) is read and written as Acrobat's simplified field notation (`AFSimple_Calculate` can't express it; `/AA /C` with `event.value = ...` built from the checked formula). A script that is none of these is shown as "custom script" and left untouched unless replaced.
+- [ ] Tests: a field moved from page 1 to page 2 is listed, tabbed to and filled there; each type switch reads back as the new type with name and place unchanged; an Acrobat-made amount field's format is reported and changed to a date; a total's list of fields is edited and still adds up in the reader.
 
 **Task 2.3: layout help**
 - [ ] Guides while dragging: edges and centres of other fields, and the page's own lines (the snapping geometry measuring uses).

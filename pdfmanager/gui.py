@@ -52,6 +52,7 @@ from pdfmanager import scanner, scanpdf  # Scan: paper to a searchable PDF
 from pdfmanager import quickactions  # Explorer's right-click actions
 from pdfmanager import watchfolders  # Settings > Watch folders
 from pdfmanager import layers  # layers (optional content) of drawings
+from pdfmanager import risks  # what a PDF can do, and Make safe
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
@@ -371,6 +372,12 @@ OPERATIONS = [
                 _f("javascript", "Scripts and actions that run programs", "check", True),
                 _f("attachments", "Attached files", "check", True),
                 _f("comments", "Comments, highlights and notes", "check", False)]},
+    {"id": "makesafe", "group": "Security", "label": "Make safe", "files": "pdf", "action": "Make safe",
+     "help": "For a PDF from someone you don't know: take out what could do harm (scripts, actions "
+             "that start programs or send what you type, attached files that can run) and keep the "
+             "rest: pages, text, comments, forms with their totals. ZPDF never runs any of these "
+             "itself; this is for the copy you keep or pass on.",
+     "fields": []},
     # -- digital ID signatures (certsign.py) --
     {"id": "sign-cert", "group": "Security", "label": "Digital ID", "files": "pdf",
      "action": "Sign with Digital ID",
@@ -558,7 +565,7 @@ OPERATIONS = [
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
-SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
+SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "makesafe": "safe", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
           "insert-blank": "blanks", "booklet": "booklet", "autocrop": "trimmed",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
@@ -784,6 +791,11 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                                                   ("comments", "comments"))
                  if (n := counts[key])]
         notes.append(f"{src.name}: removed " + (", ".join(found) if found else "nothing (none found)"))
+    elif op == "makesafe":
+        removed = risks.make_safe(src, out, password=password)
+        notes.append(f"{src.name}: took out {risks.summary(removed)}")
+        left = [r for r in risks.check(out, password)["risks"]]
+        notes.extend(f"Still there: {r['detail']}" for r in left)
     elif op == "sign-cert":
         result = _sign_cert_op(src, out, opts, password, extra_files)
         notes.append(f"{src.name}: signed by {result['signer']}"
@@ -941,6 +953,11 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         notes.append(f"{src.name}: {len(found['images'])} picture"
                      f"{'s' if len(found['images']) != 1 else ''}, {len(found['attachments'])} "
                      f"attached file{'s' if len(found['attachments']) != 1 else ''}")
+        can_run = [Path(p).name for p in found["attachments"] if risks.runnable(Path(p).name)]
+        if can_run:
+            notes.append(f"Careful: {', '.join(can_run[:5])}{'…' if len(can_run) > 5 else ''} can run "
+                         "on your computer. Open "
+                         f"{'it' if len(can_run) == 1 else 'them'} only if you trust who sent this PDF.")
         return found["images"] + found["attachments"]
     elif op == "to-images":
         return core.pdf_to_images(src, out_dir / f"{src.stem}_images",

@@ -4,6 +4,54 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.39.0
+
+Safer opening of PDFs you didn't make.
+
+- **ZPDF says what a PDF could do.** When a file is opened, the file panel
+  shows a warning chip if it has:
+  - scripts, or actions that start a program;
+  - attached files that can run (programs, scripts, Office files with
+    macros);
+  - a form that sends what you type to an internet address;
+  - a web address that other programs open as soon as the file opens;
+  - links that show one address and go to another;
+  - pointers at other files.
+  Hover the chip for the details. ZPDF itself never runs a PDF's scripts
+  or actions; the warning is about what other programs would do with the
+  file and what you might click.
+- **Make safe** (suggested first for such a file, and under Protect):
+  takes those parts out and keeps the rest: pages, text, comments, forms
+  with their own totals and number formats, attachments that can't run.
+  It says what it took out. Links that mislead stay, since there's nothing
+  to put in their place; see the next point.
+- **Links show where they really go.** Clicking a link that leaves the
+  document asks first and shows the real address, with the site's name in
+  bold, whatever the words on the page say. It also says when the address
+  isn't protected (http) or the site's name looks unusual. Turn the asking
+  off in the dialog or in the reader's More menu (Ask before opening web
+  links). Only web, mail and phone links are opened at all.
+- **Saving attachments** (Extract pictures & files) warns about the ones
+  that can run on your computer.
+- A form's totals and formats made here or in Acrobat aren't counted as
+  scripts to fear, and Make safe keeps them working.
+- **Fixed: a PDF's own scripts could run in the reader.** The part of the
+  reader that makes form totals and number formats work also ran scripts
+  kept with the document, its pages or its fields, in a closed sandbox: a
+  script could show a message box when the file opened, though it could
+  not reach files or programs. Now only a form's own format and total
+  functions run, and nothing else in a PDF does. A script dressed up as
+  one of those functions (hidden in its arguments) is treated as a script:
+  not run, reported, and taken out by Make safe.
+- **Fixed: what you typed in one PDF's form was offered in another's.** The
+  app window remembered form entries and suggested them in fields of the
+  same name in other PDFs. The reader's form fields no longer use that
+  memory.
+- Command line: `pdfm make-safe file.pdf`, and `--check` to only list what
+  the file can do.
+- *Remove hidden data* is unchanged: it's for what you send out (details,
+  all scripts, all attachments); Make safe is for what you receive.
+
 ## 0.38.0
 
 Markups for drawings, in the reader's Annotate bar.

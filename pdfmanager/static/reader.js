@@ -61,6 +61,44 @@ const SHAPES = [["rect", "Rectangle"], ["ellipse", "Ellipse"], ["cloud", "Cloud"
 // with the real length, words with a pointer.
 const DRAWING_SHAPES = [["polycloud", "Cloud, any shape"], ["polyline", "Line with corners"], ["polyarrow", "Arrow with corners"],
   ["dimension", "Dimension"], ["callout", "Callout"]];
+// A field's script that is only calls of Acrobat's form functions with plain
+// values (numbers, quoted text, true or false, a list of quoted texts): how
+// forms format and add up. The functions are these by name and nothing can
+// hide in an argument. The pattern is risks.py's FORM_SCRIPT_SOURCE, kept
+// the same by tests/test_risks.py, so the risk check and the reader agree
+// on what is harmless.
+const FORM_SCRIPT = new RegExp("^[ \\t\\n\\r]*(?:AFNumber_Format|AFNumber_Keystroke|AFPercent_Format|AFPercent_Keystroke|AFDate_Format|AFDate_FormatEx|AFDate_Keystroke|AFDate_KeystrokeEx|AFTime_Format|AFTime_FormatEx|AFTime_Keystroke|AFTime_KeystrokeEx|AFSpecial_Format|AFSpecial_Keystroke|AFSpecial_KeystrokeEx|AFRange_Validate|AFSimple_Calculate)[ \\t\\n\\r]*\\([ \\t\\n\\r]*(?:(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')|-?[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|new[ \\t\\n\\r]+Array[ \\t\\n\\r]*\\([ \\t\\n\\r]*(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')(?:[ \\t\\n\\r]*,[ \\t\\n\\r]*(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*'))*)?[ \\t\\n\\r]*\\))(?:[ \\t\\n\\r]*,[ \\t\\n\\r]*(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')|-?[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|new[ \\t\\n\\r]+Array[ \\t\\n\\r]*\\([ \\t\\n\\r]*(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')(?:[ \\t\\n\\r]*,[ \\t\\n\\r]*(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*'))*)?[ \\t\\n\\r]*\\)))*)?[ \\t\\n\\r]*\\)(?:[ \\t\\n\\r]*;[ \\t\\n\\r]*(?:AFNumber_Format|AFNumber_Keystroke|AFPercent_Format|AFPercent_Keystroke|AFDate_Format|AFDate_FormatEx|AFDate_Keystroke|AFDate_KeystrokeEx|AFTime_Format|AFTime_FormatEx|AFTime_Keystroke|AFTime_KeystrokeEx|AFSpecial_Format|AFSpecial_Keystroke|AFSpecial_KeystrokeEx|AFRange_Validate|AFSimple_Calculate)[ \\t\\n\\r]*\\([ \\t\\n\\r]*(?:(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')|-?[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|new[ \\t\\n\\r]+Array[ \\t\\n\\r]*\\([ \\t\\n\\r]*(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')(?:[ \\t\\n\\r]*,[ \\t\\n\\r]*(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*'))*)?[ \\t\\n\\r]*\\))(?:[ \\t\\n\\r]*,[ \\t\\n\\r]*(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')|-?[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|new[ \\t\\n\\r]+Array[ \\t\\n\\r]*\\([ \\t\\n\\r]*(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')(?:[ \\t\\n\\r]*,[ \\t\\n\\r]*(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*'))*)?[ \\t\\n\\r]*\\)))*)?[ \\t\\n\\r]*\\))*[ \\t\\n\\r]*;?[ \\t\\n\\r]*$");
+const FORM_SCRIPT_MAX = 2000;
+
+/** ``doc`` (pdf.js's) as the scripting sandbox may see it: without the
+ *  document's own scripts and its pages' open and close actions, and with
+ *  only the field scripts that are form functions and nothing else. So a
+ *  PDF's scripts are never run here; a form still formats and adds up. */
+function formScriptsOnly(doc) {
+  const bound = (target, prop) => { const v = target[prop]; return typeof v === "function" ? v.bind(target) : v; };
+  const none = async () => null;
+  const quietPage = (page) => new Proxy(page, { get: (t, p) => (p === "getJSActions" ? none : bound(t, p)) });
+  const fields = async () => {
+    const all = await doc.getFieldObjects();
+    if (!all) return all;
+    const clean = (list) => list.map((field) => {
+      if (!field?.actions) return field;
+      const isMap = field.actions instanceof Map, actions = new Map();
+      for (const [when, scripts] of (isMap ? field.actions : Object.entries(field.actions))) {
+        const kept = (Array.isArray(scripts) ? scripts : [scripts]).filter((js) => typeof js === "string" && js.length <= FORM_SCRIPT_MAX && FORM_SCRIPT.test(js));
+        if (kept.length) actions.set(when, kept);
+      }
+      return { ...field, actions: !actions.size ? null : isMap ? actions : Object.fromEntries(actions) };
+    });
+    // (pdf.js gives Maps, from each name to its fields and from each event
+    // to its scripts; older versions gave plain objects.)
+    if (all instanceof Map) return new Map([...all].map(([name, list]) => [name, clean(list)]));
+    return Object.fromEntries(Object.entries(all).map(([name, list]) => [name, clean(list)]));
+  };
+  return new Proxy(doc, { get: (t, p) => (p === "getJSActions" ? none : p === "getFieldObjects" ? fields
+    : p === "getPage" ? async (n) => quietPage(await t.getPage(n)) : bound(t, p)) });
+}
+
 const HIGHLIGHT_COLORS = "yellow=#FFFF98,green=#53FFBC,blue=#80EBFF,pink=#FFCBE6,red=#FF4F5F";
 
 
@@ -469,6 +507,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
       this.#menuItem("spread", "Two-page view", () => this.toggleSpread(), spread),
       this.#menuItem("hand", "Hand tool (drag to scroll)", () => this.toggleHand(), this.container.classList.contains("hand")),
       this.#menuItem("moon", "Dark pages", () => this.toggleDarkPages(), this.container.classList.contains("dark")),
+      this.#menuItem("link", "Ask before opening web links", () => store.set("pdfm-link-ask", !store.get("pdfm-link-ask", true)), store.get("pdfm-link-ask", true)),
       el("hr"),
       this.#menuItem("full", "Full screen", () => this.toggleFullscreen()),
       this.#menuItem("print", "Print…", () => this.print()),
@@ -709,6 +748,17 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     // (Pressed and let go without moving: no "click" event, which the browser
     // doesn't always send when pdf.js's text layer moves things under the
     // pointer meanwhile.)
+    // A link out of the document: its real address is shown first (_openLink).
+    for (const type of ["click", "auxclick"]) {
+      this.container.addEventListener(type, (e) => {
+        const a = e.target.closest?.(".annotationLayer a[href]");
+        const href = a?.getAttribute("href");
+        if (!href || href.startsWith("#") || (type === "auxclick" && e.button !== 1)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this._openLink(a.href);
+      }, true);
+    }
     let pressed = null;
     this.container.addEventListener("pointerdown", (e) => { pressed = e.isPrimary ? [e.clientX, e.clientY, e.timeStamp] : null; }, true);
     this.container.addEventListener("pointerup", (e) => {
@@ -1178,14 +1228,21 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     this.linkService = new viewer.PDFLinkService({ eventBus, externalLinkTarget: viewer.LinkTarget.BLANK, externalLinkRel: "noopener noreferrer nofollow" });
     this.findController = new viewer.PDFFindController({ eventBus, linkService: this.linkService });
     // Form scripts (number and date formats, totals, checks — Acrobat's AF
-    // functions) run in pdf.js's sandbox, as in Firefox.
+    // functions) run in pdf.js's sandbox, as in Firefox. Nothing else in a
+    // PDF is run: the sandbox is handed the document through formScriptsOnly
+    // (below), which leaves out its own scripts, its pages' and any field
+    // script that isn't made of those functions alone.
     this.scripting = new viewer.PDFScriptingManager({ eventBus, sandboxBundleSrc: BASE + "build/pdf.sandbox.min.mjs",
       wasmUrl: BASE + "wasm/" });
     // The viewer hands the scripting manager each document itself, without
     // waiting for the answer: one closed meanwhile (another tab shown, a
     // change reloading it) would leave a rejection nobody catches.
+    // A page's own open and close scripts: the manager reads them from the
+    // page the first time it's shown. Told every page was shown before, it
+    // never does.
+    Object.defineProperty(this.scripting, "_visitedPages", { value: new (class extends Map { has() { return true; } })() });
     const setScripted = this.scripting.setDocument.bind(this.scripting);
-    this.scripting.setDocument = (doc) => setScripted(doc).catch(() => {});
+    this.scripting.setDocument = (doc) => setScripted(doc ? formScriptsOnly(doc) : doc).catch(() => {});
     this.pdfViewer = new viewer.PDFViewer({
       container: this.container, viewer: this.viewerEl, eventBus,
       linkService: this.linkService, findController: this.findController, scriptingManager: this.scripting,
@@ -1266,6 +1323,13 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     eventBus.on("pagechanging", ({ pageNumber }) => { this.#updatePage(); this.#remember(); this._refreshScale(); if (this.measureMode) this._geometry(pageNumber); });
     eventBus.on("pagesloaded", () => { this.#whenShown(() => this._refreshScale()); this.#sizeThumbs(); });
     eventBus.on("annotationlayerrendered", ({ source }) => this.#nameFields(source?.div?.querySelector(".annotationLayer")));
+    // What's typed into one PDF's form isn't offered in another's: the
+    // browser's own memory of form entries is turned off for the fields.
+    eventBus.on("annotationlayerrendered", ({ source }) => {
+      for (const field of source?.div?.querySelectorAll(".annotationLayer input, .annotationLayer textarea, .annotationLayer select") || []) {
+        field.setAttribute("autocomplete", "off");
+      }
+    });
     eventBus.on("pagerendered", ({ pageNumber }) => {
       this._drawMeasures(pageNumber);
       if (this.markupMode === "IMAGES" || this.markupMode === "LINKS") this._drawObjectBoxes(pageNumber);
@@ -1752,7 +1816,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
       link.addEventListener("click", (e) => {
         e.preventDefault();
         if (item.dest) this.linkService.goToDestination(item.dest);
-        else if (item.url) window.open(item.url, "_blank", "noopener,noreferrer");
+        else if (item.url) this._openLink(item.url);
         if (window.innerWidth <= 760) this.#setSidebar(false);
       });
       const row = el("div", { class: "row" });
@@ -2232,6 +2296,36 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
 
   /** A toast that explains the tool just chosen: it goes when that tool or
    *  its bar does, or when another bar opens (see #endHint). */
+  /** Open a link that leaves the document, in the browser: only web, mail
+   *  and phone addresses, and (unless turned off in the More menu) after
+   *  showing where it really goes, which the words on the page may not say. */
+  async _openLink(url) {
+    let address = null;
+    try { address = new URL(url, location.href); } catch (e) { address = null; }
+    if (!address || !["http:", "https:", "mailto:", "tel:"].includes(address.protocol)) {
+      this.toast("That link isn't a web address, so ZPDF won't open it.", 6000);
+      return;
+    }
+    if (store.get("pdfm-link-ask", true)) {
+      const web = address.protocol.startsWith("http");
+      const rest = web ? address.href.slice((address.protocol + "//" + address.host).length) : address.href.slice(address.protocol.length);
+      const shown = el("p", { class: "rd-linkaddr" }, web ? address.protocol + "//" : address.protocol,
+        el("strong", {}, web ? address.host : ""), rest.length > 300 ? rest.slice(0, 300) + "…" : rest);
+      const again = el("input", { type: "checkbox" });
+      const notes = [];
+      if (address.protocol === "http:") notes.push("This address isn't protected (http): what you type there can be read on the way.");
+      if (web && (/^xn--|\.xn--/.test(address.hostname) || /^[\d.]+$|^\[/.test(address.hostname))) notes.push("The site's name is unusual (numbers, or letters made to look like others). Check it carefully.");
+      const answer = await this._dialog("Open this link?", [
+        el("p", {}, web ? "It goes to this address, whatever the words on the page say:" : address.protocol === "tel:" ? "It will start a call to:" : "It will start a message to:"), shown,
+        ...notes.map((n) => el("p", { class: "rd-linknote" }, n)),
+        el("label", { class: "rd-check" }, again, "Don't ask again (More menu → Ask before opening web links)"),
+      ], [["cancel", "Cancel"], ["ok", web ? "Open in browser" : address.protocol === "tel:" ? "Start the call" : "Start the message", true]]);
+      if (answer !== "ok") return;
+      if (again.checked) store.set("pdfm-link-ask", false);
+    }
+    window.open(address.href, "_blank", "noopener,noreferrer");
+  }
+
   _hint(message, ms) {
     this.toast(message, ms);
     this.hintEl = this.toastEl;

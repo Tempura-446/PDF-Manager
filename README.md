@@ -709,6 +709,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `redact` | black out text, numbers or areas for good | `pdfm redact doc.pdf -t "John Smith" --find emails` |
 | `flatten` | make forms and comments part of the page | `pdfm flatten form.pdf` |
 | `sanitize` | remove hidden data (details, scripts, attachments) | `pdfm sanitize doc.pdf` |
+| `make-safe` | take out what could do harm in a PDF you were sent (`--check`: only list it) | `pdfm make-safe invoice.pdf` |
 | `sign-cert` | sign with a digital ID (.pfx/.p12), visible or invisible | `pdfm sign-cert doc.pdf --pfx me.pfx --page last --reason "Approved"` |
 | `verify` | check the digital signatures in PDFs | `pdfm verify signed.pdf` |
 | `pdfa` | convert to PDF/A for archiving | `pdfm pdfa doc.pdf --level 2` |
@@ -911,6 +912,14 @@ Metadata isn't changed, so use `sanitize` too.
 
   JavaScript and actions that launch programs, and attached files;
   `--comments` also removes comments. Form fields are kept.
+- `make-safe` is for a PDF from someone else. It takes out scripts,
+  actions that start programs, send what's typed, open a web address by
+  themselves or point at other files, and attachments that can run; it
+  keeps the pages, text, comments, forms with their totals and formats,
+  and other attachments. `--check` only lists what the file can do. In the
+  app, the file panel warns about such a file when it's opened and offers
+  **Make it safe**, and the reader shows a link's real address before
+  opening it. ZPDF never runs a PDF's scripts or actions itself.
 - `pdfa` converts to PDF/A-1b, -2b (default) or -3b: fonts embedded,
   colours tied to sRGB, no encryption or scripts. ZPDF does it itself,
   with nothing else to install, and leaves the pages as they are: it adds

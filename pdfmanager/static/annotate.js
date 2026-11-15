@@ -372,8 +372,8 @@ export const Annotating = (Base) => class extends Base {
     this.#cancelMarkup();
     const shape = this.shapeSelect.value;
     if (shape === "dimension") this._geometry(this.pdfViewer.currentPageNumber || 1);  // the drawing's lines, read ahead for snapping
-    // Said when the shape is picked, and once more when its tool is next
-    // turned on: not after every markup placed (the tool is set again then).
+    // Said when the shape is picked in the list (and the first time its tool
+    // is turned on): not after every markup placed, when the tool is set again.
     if (!byHand && this.shapeHinted === shape) return;
     this.shapeHinted = shape;
     const how = POLY_SHAPES.has(shape) ? "Click each corner; double-click or press Enter to finish (Backspace: back one point, Esc: cancel)."

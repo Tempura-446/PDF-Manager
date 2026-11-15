@@ -15,7 +15,7 @@ from pdfmanager import appdata
 SAMPLE = 10            # pages looked at for text and scans
 BIG_PICTURE = 400_000  # pixels from which a picture can be a page's scan
 REMEMBERED = 300       # files whose facts are kept
-LOOK = 5              # raised when facts are worked out differently, so kept ones are looked at again
+LOOK = 6              # raised when facts are worked out differently, so kept ones are looked at again
 TEXT_SHOWING = {"Tj", "TJ", "'", '"'}
 # A printed place to sign: the word near a rule or a run of underscores.
 SIGN_WORDS = re.compile(r"\b(signature|signed|sign here|unterschrift|signé|firma)\b", re.I)
@@ -226,7 +226,8 @@ def _pdfa(pdf, pikepdf):
 
 
 def facts(path, password=None):
-    """{"size", "pages", "protected", "scanned", "has_text", "form_fields",
+    """{"risks" (what it can do that matters, see risks.py), "risk" (the worst
+    level), "size", "pages", "protected", "scanned", "has_text", "form_fields",
     "signatures", "to_sign" (signature fields still empty), "tagged",
     "pdfa", "sign_line" (the first page with a printed line to sign on, 0
     for none), "sign_at" (where on it the line is, see _sign_place; None
@@ -272,6 +273,7 @@ def facts(path, password=None):
     except Exception:  # a file damaged past its first page
         return {"size": size, "pages": None, "error": "can't be read"}
     found["sign_at"] = _sign_place(path, password, sign_line, lines) if sign_line else None
+    found["risks"], found["risk"] = _risks(path, password)
     found["signed_on_line"] = bool(found["sign_at"]) and _drawn_on(path, password, found["sign_at"])
     return found
 
@@ -315,6 +317,18 @@ def small_for_its_pages(found):
     return bool(pages) and found.get("size", 0) < SMALL_PAGE * pages
 
 
+def _risks(path, password):
+    """What the file can do that matters (risks.py): (the list, the worst
+    level). A file the check can't read has nothing said about it."""
+    from pdfmanager import risks
+
+    try:
+        seen = risks.check(path, password)
+    except Exception:
+        return [], "none"
+    return seen["risks"], seen["level"]
+
+
 def suggestions(found, made_by=None):
     """What to offer for a file with these facts, most useful first:
     [{"op": tool id, "title", "why"}], three at most. "sign" is the drawn
@@ -327,6 +341,11 @@ def suggestions(found, made_by=None):
     if found.get("pages") is None:
         return []  # locked: nothing to offer before its password
     out = []
+    removable = [r for r in found.get("risks") or [] if r.get("kind") != "hidden_links"]
+    if removable and made_by != "makesafe":
+        out.append({"op": "makesafe", "title": "Make it safe",
+                    "why": "; ".join(r["title"] for r in removable[:2])
+                    + ("" if len(removable) <= 2 else f" (and {len(removable) - 2} more)")})
     if found.get("scanned") and not found.get("has_text"):
         out.append({"op": "ocr", "title": "Make it searchable",
                     "why": "Read the text so you can search and copy it"})

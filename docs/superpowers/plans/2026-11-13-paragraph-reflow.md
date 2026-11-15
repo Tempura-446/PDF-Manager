@@ -142,6 +142,8 @@ Visual check: before/after renders of the untouched regions must be pixel-identi
 
 ---
 
+**Asked about again after 0.38.0:** hanging bullet and number indents (Task 3.1), several paragraphs at once with Enter splitting one (Task 3.2), text flowing around pictures (Task 4.1), "Continue on the next page" (Task 4.2), and CJK and right-to-left scripts (Tasks 5.1 and 5.2) are all in Phases 3 to 5 above and not built yet. Nothing new was needed in the plan for them.
+
 ## Order and size
 
 | Release | Phases | Size | Risk |

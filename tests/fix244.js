@@ -91,17 +91,12 @@ const { chromium } = require("playwright");
     out.back = await state();
 
     // Links, form fields and selecting text work as before with Select on.
-    await page.evaluate(() => {
-      window.__link = null;
-      document.addEventListener("click", (e) => {
-        if (!e.target.closest?.(".linkAnnotation a")) return;
-        window.__link = !e.defaultPrevented;
-        e.preventDefault();  // (not opened: there's nowhere to go)
-      });
-    });
+    // (Since 0.39.0 a link out of the document asks first, showing its address: that is "followed".)
     await page.mouse.click(...await middle(".page[data-page-number='1'] .linkAnnotation a"));
     await page.waitForTimeout(300);
-    out.link = await page.evaluate(() => ({ followed: window.__link, mode: reader.editMode }));
+    out.link = await page.evaluate(() => ({ followed: !!document.querySelector("dialog[open] .rd-linkaddr"), mode: reader.editMode }));
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector("dialog[open]"), null, { timeout: 5000 });
     await page.mouse.click(...await middle(".page[data-page-number='1'] .textWidgetAnnotation input"));
     await page.keyboard.type("Ann");
     await page.waitForTimeout(300);

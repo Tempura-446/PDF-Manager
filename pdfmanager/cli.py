@@ -19,6 +19,7 @@ from pdfmanager import (__version__, archive, compare, core, imaging, office, or
 from pdfmanager import certsign, comments, filetools, formdetect, pdfacheck
 from pdfmanager import accessibility  # -- accessibility --
 from pdfmanager import ocr  # the OCR engine ids
+from pdfmanager import risks  # what a PDF can do, and Make safe
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -326,6 +327,20 @@ def run_sanitize(a, src, out, pw):
                               password=pw)
     found = ", ".join(f"{n} {k}" for k, n in counts.items() if n) or "nothing found"
     return f"{out}  (removed: {found})"
+
+
+def run_make_safe(a, src, out, pw):
+    if a.check:
+        seen = risks.check(src, pw)
+        if not seen["risks"]:
+            print(f"{src}: nothing that could do harm")
+        for risk in seen["risks"]:
+            print(f"{src}: [{risk['severity']}] {risk['title']}: {risk['detail']}")
+            for example in risk["examples"]:
+                print(f"    {example}")
+        return None
+    removed = risks.make_safe(src, out, password=pw)
+    return f"{out}  (took out {risks.summary(removed)})"
 
 
 def run_pdfa(a, src, out, pw):
@@ -778,7 +793,7 @@ OUTPUTS = {
     "compress": ("compressed", "pdf"), "color": ("color", "pdf"),
     "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
     "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
-    "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "headers": ("headers", "pdf"), "form": ("form", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "pdfa": ("pdfa", "pdf"),
+    "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "headers": ("headers", "pdf"), "form": ("form", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "make-safe": ("safe", "pdf"), "pdfa": ("pdfa", "pdf"),
     "to-excel": (None, "xlsx"),  # with --csv: a folder, <input>_tables
     "split": ("split", "dir"), "to-images": ("images", "dir"), "extract-media": ("media", "dir"),
 }
@@ -1475,6 +1490,12 @@ def build_parser():
     sp.add_argument("--show", action="append", default=[], metavar="NAME",
                     help="show this layer too, though the file opens with it hidden")
     sp.add_argument("--list", action="store_true", help="only list the layers and whether they show")
+
+    sp = per_file("make-safe", run_make_safe,
+                  "take out what could do harm in a PDF from someone else (scripts, actions that "
+                  "start programs or send what's typed, attachments that can run); keeps the rest")
+    sp.add_argument("--check", action="store_true",
+                    help="only say what the file can do, without writing a copy")
 
     sp = per_file("sanitize", run_sanitize,
                   "remove hidden data: document details, scripts, attached files")

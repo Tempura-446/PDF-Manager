@@ -57,6 +57,33 @@
 - [x] Review stamps: Approved as noted; Revise and resubmit; Rejected; For information; Not for construction, with name and date.
 - [ ] Left for later: a saved list of the user's own stamps with a colour (one own stamp's words are remembered today).
 
+### Phase 2b (release B2): change a placed markup; a quantity schedule
+
+Asked for after 0.38.0, whose "Not yet" list this is.
+
+**Task 2b.1: move and reshape after placing**
+- [ ] `markup.apply` gets `{"op": "change", "page", "id", ...}` for the reader's own markups (clouds, lines and arrows with or without corners, rectangles, ellipses, callouts, dimensions, stamps, notes): new `points` / `rect` / `tip` / `at`, `color`, `width`, `text`. The annotation is rebuilt with the same builder that made it (same id kept where the file allows, so replies and the Comments tab stay attached), and a dimension's length is worked out again from its new ends and the sheet's scale.
+- [ ] In the reader, with a shape tool or the arrow tool on, clicking a placed markup selects it: handles on each corner or end (a cloud's or polyline's every vertex, a callout's tip, knee and box, a dimension's two ends, a stamp's or rectangle's corners). Drag a handle to reshape, the body to move, Delete to remove; a dimension's ends snap to the drawing like when it was drawn (Alt: no snapping). Double-click a callout to change its words. The colour swatches and the thickness list change the selected markup.
+- [ ] Each change is one step for Undo and Redo, like placing.
+- [ ] Markups made by other programs of the same types (a `/Polygon` cloud from Bluebeam, a `/Line` from Acrobat) can be moved and reshaped the same way where their keys are the standard ones; the others are left alone and say so.
+- [ ] Tests: each kind changed through the engine keeps its type and keys and reads back at its new place; in a browser, dragging a cloud's vertex and a dimension's end changes the saved file, and the dimension's words follow.
+
+**Task 2b.2: stamps of your own**
+- [ ] A list of the user's own stamps, kept in the app's settings: words, colour, with or without name and date. Add, change and remove them from the Stamp list ("Your stamps…"); they show in the list under the built-in ones.
+- [ ] Test: a saved green "CHECKED" stamp is offered after a restart and places a `/Stamp` in that colour.
+
+**Task 2b.3: a quantity schedule (takeoff) from dimensions and measurements**
+- [ ] One table of everything measured on the document: the Scale bar's measurements (lengths, paths, areas with their cut-outs, counts, angles: already exported as CSV) **and** the dimension markups placed with the annotate bar, plus measurement annotations other programs saved in the file (`/Measure` with `/IT /LineDimension`, `/PolyLineDimension`, `/PolygonDimension`).
+- [ ] Columns: sheet (page label or number), kind, label, group, quantity, unit, the scale it was read at, colour, who placed it and when. Totals per group and per unit at the end, so "Walls: 126' 4"" or "Flooring: 84.2 m²" can be read straight off.
+- [ ] Export as **CSV** and as **XLSX** (a real workbook through the existing spreadsheet writer used by PDF → Excel: one sheet of items, one of totals, numbers as numbers with their unit in the next column so they can be summed). From the Measurements panel's Export button, as a tool ("Quantities from a drawing") for several files at once, and `pdfm quantities plan.pdf -o takeoff.xlsx`.
+- [ ] Test: a sheet at 1/4" = 1'-0" with two dimensions, one area and a count gives a workbook whose rows hold those lengths in feet as numbers and whose totals add up; a file marked up in another program with standard measurement annotations is read too.
+
+**Seen in the Windows check of 0.38.0, for a later release:**
+- Measurements remembered for a file come back on a copy of it changed by a tool (Rotate): the copies share the PDF's `/ID`. Key the memory on more than the ID (the page count and sizes, or the path), or ask before bringing them back.
+- The zoom changes when Annotate & sign opens, and choosing Distance closes the Annotate bar (the page moves both times).
+- Once, the Annotate bar closed and the side panel opened after a double-click ended a line (not reproduced).
+- A callout's comment popup opens after it's added and stays until a click elsewhere.
+
 ### Phase 3 (release C): PDF to DXF
 
 **Task 3.1: vector export**
@@ -102,6 +129,7 @@
 |---|---|---|---|
 | A | 1: layers panel, print/save/flatten with layers | small–medium | low |
 | B | 2: clouds, callouts, dimensions, arrows, construction stamps | medium | low: standard annotation types |
+| B2 | 2b: move and reshape placed markups, your own stamps, quantity schedule to CSV/XLSX | medium | medium: selecting and rebuilding annotations in place |
 | C | 3: PDF → DXF | medium | medium: curve fitting, scale |
 | D | 4: DXF → PDF, DWG via ODA | medium | medium: a new dependency (ezdxf) |
 | E | 5: sheet sets (split/name, links, set compare) | medium | low–medium: title-block detection |
