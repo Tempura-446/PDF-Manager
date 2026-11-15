@@ -567,7 +567,8 @@ def test_cli_and_gui_redact(tmp_path, capsys):
         "redact", [src], {"terms": "Smith, Card", "boxes": json.dumps({"2": [[70, 690, 200, 720]]})},
         work=work, notes=notes)
     assert name == "s_redacted.pdf"
-    assert notes == ["s.pdf: blacked out 3 areas on pages 1, 2"]
+    assert notes[0] == "s.pdf: blacked out 3 areas on pages 1, 2"
+    assert len(notes) == 2 and notes[1].startswith("Checked: nothing redacted is left")  # (0.40.0: the check)
 
 
 # -- recipes -------------------------------------------------------------------------------

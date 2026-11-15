@@ -509,13 +509,15 @@ def test_gui_tool_notes_and_method(tmp_path, monkeypatch):
     notes = []
     name, data, _ = gui.run_operation("redact", [src], {"terms": "John Smith"}, work=tmp_path / "w1",
                                       notes=notes)
-    assert name == "s_redacted.pdf" and notes == ["s.pdf: blacked out 3 areas on page 1"]
+    assert name == "s_redacted.pdf" and notes[0] == "s.pdf: blacked out 3 areas on page 1"
+    assert len(notes) == 2 and notes[1].startswith("Checked: nothing redacted is left")  # (0.40.0: the check)
     notes = []
     monkeypatch.setattr(redactcontent, "_same_places", lambda old, new, removed=0: False)
     gui.run_operation("redact", [src], {"terms": "John Smith", "method": "remove"},
                       work=tmp_path / "w2", notes=notes)
-    assert notes == ["s.pdf: blacked out 3 areas on page 1; page 1 became a picture "
-                     "(the rest of the text would have moved)"]
+    assert notes[0] == ("s.pdf: blacked out 3 areas on page 1; page 1 became a picture "
+                        "(the rest of the text would have moved)")
+    assert len(notes) == 2 and notes[1].startswith("Checked: nothing redacted is left")
     tool = gui.OPS["redact"]
     assert [f for f in tool["fields"] if f["key"] == "method"][0]["default"] == "remove"
 

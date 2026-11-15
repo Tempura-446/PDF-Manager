@@ -138,7 +138,9 @@ class Report(dict):
     - ``pictures``: {1-based page: why} for the pages that were turned into
       pictures although the method was "remove" (empty for "image", where
       every redacted page becomes one);
-    - ``bookmarks``: how many bookmark titles had words blacked out.
+    - ``bookmarks``: how many bookmark titles had words blacked out;
+    - ``proof``: the check made on the written file (``check_redacted``), or
+      None when nothing was redacted or the check couldn't be made.
     """
 
     def __init__(self, counts=(), method="remove", pictures=None, bookmarks=0):
@@ -146,6 +148,7 @@ class Report(dict):
         self.method = method
         self.pictures = dict(pictures or {})
         self.bookmarks = bookmarks
+        self.proof = None
 
 
 def redact(path, output, terms=(), patterns=(), boxes=None, case_sensitive=False,
@@ -203,8 +206,15 @@ def redact(path, output, terms=(), patterns=(), boxes=None, case_sensitive=False
         buf.seek(0)
         writer = core.clone_document(PdfReader(buf))
     core._write(writer, output)
-    return Report({number + 1: len(found) for number, found in sorted(areas.items())}, method,
-                  {n + 1: why for n, why in sorted(pictures.items())}, bookmarks)
+    report = Report({number + 1: len(found) for number, found in sorted(areas.items())}, method,
+                    {n + 1: why for n, why in sorted(pictures.items())}, bookmarks)
+    if areas:
+        # Look again, in the file as written: is anything redacted still kept somewhere?
+        try:
+            report.proof = check_redacted(output, terms, patterns, case_sensitive, whole_words, areas, password)
+        except Exception:  # noqa: BLE001 - the check failing must not lose the redacted file
+            report.proof = None
+    return report
 
 
 def _drop_annotations(page, areas):
@@ -467,3 +477,173 @@ def _prune_fields(writer, widget_ids):
         return True
 
     acroform[NameObject("/Fields")] = ArrayObject(f for f in acroform.get("/Fields", []) if keep(f))
+
+
+# -- after Black out: is anything redacted still in the file? ---------------------------------
+
+INFO_NAMES = {"/Title": "title", "/Author": "author", "/Subject": "subject", "/Keywords": "keywords",
+              "/Creator": "made with", "/Producer": "made with"}
+DEEP_STREAM = 5_000_000  # bytes: larger inner data isn't searched (pictures aren't either)
+
+
+def check_redacted(path, terms=(), patterns=(), case_sensitive=False, whole_words=False, areas=None,
+                   password=None):
+    """Look through the PDF at ``path`` for what should be gone: the words
+    and kinds of numbers that were redacted (``terms``, ``patterns``),
+    anywhere they could be kept, and any text left under the redacted
+    ``areas`` ({0-based page: [boxes]}).
+
+    Returns {"clean", "checked": the places looked in, "found": [{"where",
+    "what"}]}. The places: the pages' text, the document's details, its
+    bookmarks, form values, comments, attached files (names and contents),
+    the rest of the file's data, and earlier versions kept in the file (a
+    file saved over itself keeps the old one inside)."""
+    import pypdfium2 as pdfium
+
+    regexes = _regexes(terms, patterns, case_sensitive, whole_words)
+    found, seen = [], set()
+
+    def note(where, what):
+        what = " ".join(str(what).split())[:80]
+        if (where, what) not in seen:
+            seen.add((where, what))
+            found.append({"where": where, "what": what})
+
+    def search(text, where):
+        hit = False
+        for regex in regexes:
+            for match in regex.finditer(text or ""):
+                note(where, match.group(0))
+                hit = True
+        return hit
+
+    checked = ["page text"]
+    in_pages = set()
+    with core.PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(str(path), password=password)
+        try:
+            for number, page in enumerate(doc):
+                textpage = page.get_textpage()
+                before = len(found)
+                search(textpage.get_text_range(), f"the text of page {number + 1}")
+                in_pages.update(f["what"] for f in found[before:])
+                for x0, y0, x1, y1 in (areas or {}).get(number, ()):
+                    left = textpage.get_text_bounded(min(x0, x1) + 0.5, min(y0, y1) + 0.5,
+                                                     max(x0, x1) - 0.5, max(y0, y1) - 0.5).strip()
+                    if left:
+                        note(f"under a box on page {number + 1}", left)
+                textpage.close()
+        finally:
+            doc.close()
+    if areas:
+        checked.append("under the boxes")
+
+    reader = core.open_pdf(path, password)
+    root = reader.trailer["/Root"].get_object()
+    checked.append("document details")
+    try:
+        info = reader.trailer.get("/Info")
+        info = info.get_object() if info is not None else {}
+        for key, value in info.items():
+            search(str(value), f"the document's details ({INFO_NAMES.get(key, key.lstrip('/').lower())})")
+        meta = root.get("/Metadata")
+        if meta is not None:
+            search(meta.get_object().get_data().decode("utf-8", "replace"), "the document's details (XMP)")
+    except Exception:  # noqa: BLE001 - damaged details: nothing readable is nothing kept readable
+        pass
+
+    checked.append("bookmarks")
+    from pdfmanager import risks
+
+    for item in risks._walk(root.get("/Outlines"), "/First", "/Next"):
+        if "/Title" in item:
+            search(str(item["/Title"]), "a bookmark")
+
+    checked.append("form values")
+    acroform = root.get("/AcroForm")
+    if acroform is not None:
+        for field in risks._walk(acroform.get_object().get("/Fields"), "/Kids"):
+            for key in ("/V", "/DV", "/TU"):
+                if key in field:
+                    search(str(field[key].get_object()), f"a form field ({field.get('/T', 'unnamed')})")
+
+    checked.append("comments")
+    for number, page in enumerate(reader.pages):
+        for ref in page.get("/Annots") or []:
+            annot = ref.get_object()
+            if not isinstance(annot, DictionaryObject) or annot.get("/Subtype") in ("/Widget", "/Link"):
+                continue
+            for key in ("/Contents", "/RC", "/Subj"):
+                if key in annot:
+                    search(str(annot[key].get_object()), f"a comment on page {number + 1}")
+
+    checked.append("attachments")
+    for name, _ in risks._attached(root, reader.pages):
+        search(name, f"the name of an attached file ({name})")
+    try:
+        for name, contents in (reader.attachments or {}).items():
+            for data in contents if isinstance(contents, list) else [contents]:
+                for encoding in ("utf-8", "utf-16"):
+                    if search(bytes(data[:DEEP_STREAM]).decode(encoding, "ignore"), f"inside an attached file ({name})"):
+                        break
+    except Exception:  # noqa: BLE001 - an attachment that can't be read out
+        pass
+
+    # The rest of the file's data: anything written in the open that the
+    # places above don't cover.
+    if regexes:
+        try:
+            import pikepdf
+
+            with pikepdf.open(path, password=password or "") as pdf:
+                for obj in pdf.objects:
+                    if not isinstance(obj, pikepdf.Stream) or obj.get("/Subtype") == "/Image" \
+                            or obj.get("/Type") in ("/EmbeddedFile", "/Metadata", "/XRef", "/ObjStm"):
+                        continue
+                    try:
+                        data = obj.read_bytes()
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if len(data) > DEEP_STREAM:
+                        continue
+                    before = len(found)
+                    search(data.decode("latin-1"), "the file's inner data")
+                    # (What the page text already showed is the same find, not another.)
+                    found[before:] = [f for f in found[before:] if f["what"] not in in_pages]
+        except Exception:  # noqa: BLE001 - qpdf can't read it: the places above were still checked
+            pass
+
+    checked.append("earlier versions")
+    try:
+        raw = open(path, "rb").read()
+        if raw.count(b"%%EOF") > 1 or "/Prev" in reader.trailer:
+            note("earlier versions kept in the file", "what was there before the last save")
+    except OSError:
+        pass
+    return {"clean": not found, "checked": checked, "found": found}
+
+
+def proof_words(proof):
+    """The check's result as one sentence for the person."""
+    if proof["clean"]:
+        places = [p for p in proof["checked"] if p not in ("under the boxes", "earlier versions")]
+        under = " Nothing is left under the boxes." if "under the boxes" in proof["checked"] else ""
+        return (f"Checked: nothing redacted is left in the {', '.join(places[:-1])} or {places[-1]}, "
+                f"and the file keeps no earlier version.{under}")
+    by_what = {}
+    for item in proof["found"]:
+        by_what.setdefault(item["what"], []).append(item["where"])
+    parts = [f'"{what}" is still in ' + "; ".join(wheres[:4]) + ("..." if len(wheres) > 4 else "")
+             for what, wheres in list(by_what.items())[:4]]
+    more = "" if len(by_what) <= 4 else f" (and {len(by_what) - 4} more)"
+    fix = []
+    wheres = " ".join(w for item in proof["found"] for w in [item["where"]])
+    if "details" in wheres or "attached" in wheres:
+        fix.append("Remove hidden data takes out document details and attached files")
+    if "comment" in wheres or "form field" in wheres or "bookmark" in wheres:
+        fix.append("comments, form values and bookmarks can be changed in the reader")
+    if "under a box" in wheres or "text of page" in wheres or "inner data" in wheres:
+        fix.append("black it out again with the method that turns pages into pictures")
+    if "earlier versions" in wheres:
+        fix.append("save the result as a new file")
+    return "Careful: " + ". ".join(parts) + more + "." + (" " + "; ".join(fix).capitalize() + "." if fix else "")

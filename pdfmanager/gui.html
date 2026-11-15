@@ -885,9 +885,18 @@ body.form-folded #options-card { display: none; }
 .fp-head { display: flex; flex-direction: column; gap: 10px; }
 .fp-name { margin: 0; font: 500 var(--fs-lg)/1.2 var(--display); letter-spacing: 0; overflow-wrap: anywhere; }
 .fp-facts { display: flex; flex-wrap: wrap; gap: 6px; }
+.pw-meter { display: flex; align-items: center; gap: 8px; min-height: 18px; margin-top: 6px; font-size: var(--fs-xs); color: var(--muted); }
+.pw-bars { display: inline-flex; gap: 3px; flex: none; }
+.pw-bars i { width: 22px; height: 4px; border-radius: 2px; background: var(--border-strong); }
+.pw-meter[data-score="0"] .pw-bars i:nth-child(-n+1), .pw-meter[data-score="1"] .pw-bars i:nth-child(-n+2) { background: var(--err); }
+.pw-meter[data-score="2"] .pw-bars i:nth-child(-n+3) { background: var(--warn); }
+.pw-meter[data-score="3"] .pw-bars i:nth-child(-n+4), .pw-meter[data-score="4"] .pw-bars i { background: var(--ok, #1f7a4d); }
+.pw-meter[data-score=""] .pw-bars { visibility: hidden; }
 .fp-fact { font: 500 var(--fs-xs)/1.5 var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 2px 7px; }
 .fp-fact.flag { color: var(--accent); border-color: transparent; background: var(--accent-soft); }
 .fp-fact.bad { border-color: transparent; background: var(--err-soft); }
+.fp-fact.warn { color: var(--warn); border-color: transparent; background: color-mix(in srgb, var(--warn) 14%, transparent); }  /* (the theme's warning colour: readable on dark too) */
+.fp-line.careful, .result-note .careful { color: var(--err); font-weight: 600; }
 .fp-fact.wait { height: 22px; border-color: transparent; background: var(--surface-2); animation: fp-wait 1.2s ease-in-out infinite alternate; }
 @keyframes fp-wait { to { opacity: .45; } }
 .fp-sec { display: flex; flex-direction: column; gap: 8px; }
@@ -1220,7 +1229,7 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
         <summary><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Password-protected files?</summary>
         <div class="pw-row">
           <label for="pw">Current password</label>
-          <div class="pw-input"><input type="password" id="pw" autocomplete="current-password" spellcheck="false">
+          <div class="pw-input"><input type="password" id="pw" autocomplete="off" spellcheck="false">
             <button type="button" class="pw-toggle" id="pw-toggle" aria-pressed="false" aria-label="Show password" aria-controls="pw">Show</button></div>
           <div class="hint">Results stay protected with the same password.</div>
         </div>
@@ -1418,6 +1427,7 @@ const ICONS = {
   form: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h4M7 14h4"/><rect x="13" y="7.5" width="5" height="3" rx=".5"/><rect x="13" y="12.5" width="3" height="3" rx=".5"/>',
   sanitize: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/>',
   makesafe: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="M12 8v5M12 16.5v.01"/>',
+  "upgrade-protection": '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/><path d="m9.5 15.5 2.5-2.5 2.5 2.5M12 13v5"/>',
   sign: '<path d="M3 17c2-1 3-5 5-5s0 5 2 5 3-6 5-6 1 6 3 6 2-2 3-2"/><path d="M3 21h18"/>',
   "sign-cert": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4"/><path d="M14 3v5h5v3"/><circle cx="17" cy="15" r="3"/><path d="m15.5 17.6-.8 3.9 2.3-1.3 2.3 1.3-.8-3.9"/>',
   "verify-sig": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="m9 14 2 2 4-4"/>',
@@ -1710,11 +1720,18 @@ function factChips(facts) {
     parts.splice(at < 0 ? parts.length : at, 0, "tagged");
   }
   const chips = parts.map((text) => ({ text, flag: text === "scanned, no text yet", bad: text === "can't be read" }));
+  if (facts.weak_protection) {
+    const at = chips.findIndex((c) => c.text === "weak protection" || c.text === "protected");
+    const how = /40-bit/.test(facts.weak_protection) ? "is broken in minutes on an ordinary computer" : "is old and no longer considered safe";
+    const weak = { text: "weak protection", warn: true,
+      title: `Its encryption (${facts.weak_protection}) ${how}, whatever the password. Upgrade protection writes it with AES-256, same password.` };
+    if (at >= 0) chips[at] = weak; else chips.push(weak);
+  }
   // What the file can do that matters (risks.py), said first and in full on hover.
   const risks = facts.risks || [];
   if (risks.length) {
     chips.unshift({ text: facts.risk === "high" ? "could do harm" : facts.risk === "medium" ? "check before trusting" : "points at other files",
-      bad: facts.risk === "high", flag: facts.risk !== "high",
+      bad: facts.risk === "high", warn: facts.risk === "medium", flag: facts.risk === "low",
       title: risks.map((r) => `${r.title}: ${r.detail}${r.examples?.length ? " (" + r.examples.slice(0, 2).join("; ") + ")" : ""}`).join("\n") });
   }
   return chips;
@@ -1801,7 +1818,7 @@ function fpShowFacts(facts) {
   const chips = factChips(facts);
   fp.chips.removeAttribute("aria-busy");
   fp.chips.hidden = !chips.length;
-  fp.chips.replaceChildren(...chips.map((c) => el("span", { class: "fp-fact" + (c.flag ? " flag" : c.bad ? " bad" : ""), role: "listitem", ...(c.title ? { title: c.title, tabindex: "0" } : {}) },
+  fp.chips.replaceChildren(...chips.map((c) => el("span", { class: "fp-fact" + (c.warn ? " warn" : c.flag ? " flag" : c.bad ? " bad" : ""), role: "listitem", ...(c.title ? { title: c.title, tabindex: "0" } : {}) },
     c.bad ? icon("alert") : null, c.text)));
   fp.facts = facts;
   fpSuggest();
@@ -1809,7 +1826,7 @@ function fpShowFacts(facts) {
 
 // Suggestions, most useful first, three at most: the server's (from the facts)
 // and the reader's own "Make it fillable" (a printed form it found on the first pages).
-const SUGGESTION_ORDER = ["makesafe", "ocr", "compress", "fillable", "verify-sig", "sign", "repair"];
+const SUGGESTION_ORDER = ["makesafe", "upgrade-protection", "ocr", "compress", "fillable", "verify-sig", "sign", "repair"];
 const FILLABLE = { op: "fillable", title: "Make it fillable", why: "It looks like a form you can't type in yet" };
 function fpSuggest() {
   if (!fp.tab || !fp.sug) return;
@@ -2038,7 +2055,7 @@ async function fpRun(item) {
       item.url = URL.createObjectURL(blob);
       const said = el("div", { class: "fp-said" }, humanSize(blob.size));
       done.replaceChildren(icon("check"), el("div", {}, el("b", {}, name), said,
-        ...notes.map((line) => el("div", { class: "fp-line" }, line)),
+        ...notes.map((line) => el("div", { class: "fp-line" + (/^Careful\b/.test(line) ? " careful" : "") }, line)),
         el("div", { class: "fp-save" }, ...saveControls(blob, name, resultId, item.url, (...n) => said.replaceChildren(...n),
           { onError: fail, download: "Save" }))));
       done.hidden = false;
@@ -2083,7 +2100,7 @@ function fpShowNote(tab) {
     : [`: ${m.sizes}, cleaned up and made into this PDF.`];
   fp.note.replaceChildren(el("div", { class: "fp-done" }, icon("check"), el("div", {},
     el("b", {}, m.label), ...made,
-    ...m.notes.map((line) => el("div", { class: "fp-line" }, line)), finish)));
+    ...m.notes.map((line) => el("div", { class: "fp-line" + (/^Careful\b/.test(line) ? " careful" : "") }, line)), finish)));
 }
 
 /** A file the reader can't show: run Repair on it (by its id when it's a
@@ -2793,7 +2810,7 @@ const TAGLINES = {
   clean: "Drop blank pages and straighten scans", watermark: "Stamp text or a logo on every page", number: "Add page numbers",
   flatten: "Bake forms and comments into the page", "flatten-layers": "Keep a drawing's shown layers, drop the hidden ones", headers: "Titles, dates and Bates numbers", form: "Create fillable forms",
   metadata: "Set the title, author and keywords", encrypt: "Protect with a password", decrypt: "Remove a password",
-  redact: "Black out text for good", sanitize: "Remove hidden data and scripts", makesafe: "Take out what could do harm in a PDF you were sent", pdfa: "Convert for long-term archiving", "pdfa-check": "See if a file meets PDF/A, and why not",
+  redact: "Black out text for good", sanitize: "Remove hidden data and scripts", makesafe: "Take out what could do harm in a PDF you were sent", "upgrade-protection": "Replace old, weak encryption with AES-256", pdfa: "Convert for long-term archiving", "pdfa-check": "See if a file meets PDF/A, and why not",
   comments: "List comments, or send them as XFDF", web: "Save a web page as a PDF", attach: "Attach files to a PDF, or remove them", labels: "Number pages i, ii, iii then 1, 2, 3", repair: "Mend damaged files; open fast online",
   "sign-cert": "Sign with a certificate (.pfx or .p12), like Acrobat", "verify-sig": "See who signed and if anything changed",
   tag: "Tag for screen readers, like Acrobat's Autotag", "access-check": "See what keeps screen readers out, and how to fix it",  // -- accessibility --
@@ -2829,7 +2846,7 @@ function whenText(t) {
 function factsLine(facts) {
   if (!facts) return "";
   if (facts.error) return "can't be read";
-  if (facts.pages == null) return facts.protected ? "protected" : "can't be read";
+  if (facts.pages == null) return facts.protected ? (facts.weak_protection ? "weak protection" : "protected") : "can't be read";
   const parts = [facts.pages + (facts.pages === 1 ? " page" : " pages")];
   const size = Number(facts.size);
   if (size >= 0 && facts.size != null) {
@@ -2840,7 +2857,7 @@ function factsLine(facts) {
   if (facts.form_fields > 0) parts.push("form, " + facts.form_fields + (facts.form_fields === 1 ? " field" : " fields"));
   if (facts.signatures > 0) parts.push("signed");
   if (facts.pdfa) parts.push("PDF/A");
-  if (facts.protected) parts.push("protected");
+  if (facts.protected) parts.push(facts.weak_protection ? "weak protection" : "protected");
   return parts.join(" · ");
 }
 const MULTI_TOOLS = [["merge", "Several PDFs into one"], ["compare", "What changed between two versions"], ["search", "Find words or ask a question across its PDFs", "Search a folder"]];
@@ -3793,6 +3810,7 @@ function renderFields(op, form, prefix, empty) {
       input = el("input", { id, name: f.key, type: "file", accept: f.accept || "", multiple: !!f.multiple });
     } else {
       input = el("input", { id, name: f.key, type: f.kind === "number" ? "number" : f.kind === "password" ? "password" : "text",
+        ...(f.kind === "password" ? { autocomplete: "off" } : {}),
         value: f.default ?? "", placeholder: f.placeholder || "", min: f.min, max: f.max,
         step: f.step || (f.kind === "number" ? "any" : null), required: !!f.required, spellcheck: "false" });
     }
@@ -3812,6 +3830,25 @@ function renderFields(op, form, prefix, empty) {
     const wrap = f.kind === "check"
       ? el("div", { class: "field check" + (wide ? " wide" : ""), "data-key": f.key }, input, el("label", { for: id }, f.label))
       : el("div", { class: "field" + (wide ? " wide" : ""), "data-key": f.key }, el("label", { for: id }, f.label), control);
+    if (f.strength) {
+      // How hard the password is to guess, said as it's typed (worked out by the app on this computer).
+      const bar = el("div", { class: "pw-meter", "data-score": "", role: "status", "aria-live": "polite" },
+        el("span", { class: "pw-bars", "aria-hidden": "true" }, el("i"), el("i"), el("i"), el("i"), el("i")), el("span", { class: "pw-words" }));
+      let seq = 0, timer = 0;
+      const rate = async () => {
+        const mine = ++seq;
+        if (!input.value) { bar.dataset.score = ""; bar.lastChild.textContent = ""; return; }
+        try {
+          const got = await (await api("/api/password/strength", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password: input.value }) })).json();
+          if (mine !== seq) return;
+          bar.dataset.score = String(got.score);
+          bar.lastChild.textContent = got.label ? `${got.label}. ${got.advice}` : "";
+        } catch (e) { /* the meter is a help, not a gate */ }
+      };
+      input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(rate, 200); });
+      wrap.append(bar);
+    }
     if (f.hint) wrap.append(el("div", { class: "hint" }, f.hint));
     form.append(wrap);
   }
@@ -3959,7 +3996,7 @@ async function showResult(name, blob, resultId, note = "", skipped = []) {
     el("div", { class: "result-body" },
       el("div", { class: "result-title" }, icon("check"), "Done"),
       el("div", { class: "result-name" }, name), subEl,
-      note ? el("div", { class: "result-note" }, ...note.split("\n").map((line) => el("div", {}, line))) : null,
+      note ? el("div", { class: "result-note" }, ...note.split("\n").map((line) => el("div", /^Careful\b/.test(line) ? { class: "careful" } : {}, line))) : null,
       // Files that couldn't be opened were left out: said again here, by name.
       skipped.length ? el("div", { class: "result-skipped" }, icon("alert"),
         el("span", {}, `${plural(skipped.length, "file")} ${skipped.length === 1 ? "was" : "were"} left out (can't be opened): `, el("b", {}, skipped.join(", ")))) : null,

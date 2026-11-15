@@ -53,6 +53,7 @@ from pdfmanager import quickactions  # Explorer's right-click actions
 from pdfmanager import watchfolders  # Settings > Watch folders
 from pdfmanager import layers  # layers (optional content) of drawings
 from pdfmanager import risks  # what a PDF can do, and Make safe
+from pdfmanager import protection  # password strength, old encryption and its upgrade
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
@@ -334,7 +335,7 @@ OPERATIONS = [
     {"id": "encrypt", "group": "Security", "label": "Add password", "files": "pdf",
      "help": "Protect PDFs with a password to open them, and limit what people can do with "
              "them: print, copy or change.",
-     "fields": [_f("new_password", "Password to open", "password", "",
+     "fields": [_f("new_password", "Password to open", "password", "", strength=True,
                    hint="Leave it empty to let anyone open the PDF, with the limits below."),
                 _f("printing", "Printing", "select", "high",
                    choices=[["high", "Allowed"], ["low", "Low quality only"],
@@ -345,6 +346,13 @@ OPERATIONS = [
                 _f("owner_password", "Permissions password", "password", "",
                    hint="Needed for the limits above, and different from the password to "
                         "open: it lifts the limits (and removes the protection).")]},
+    {"id": "upgrade-protection", "group": "Security", "label": "Upgrade protection", "files": "pdf",
+     "action": "Upgrade protection",
+     "help": "For a PDF protected years ago or by an old program: its encryption (RC4) no longer "
+             "protects it. This writes the same file with AES-256, with the same password and the "
+             "same limits on printing, copying and changes. Enter its password in the box above "
+             "the Run button: the permissions password if it has one, so that it's kept too.",
+     "fields": []},
     {"id": "decrypt", "group": "Security", "label": "Remove password", "files": "pdf",
      "help": "Enter the current password in the box above the Run button.", "fields": []},
     {"id": "redact", "group": "Security", "label": "Redact", "files": "pdf", "panel": "redact", "action": "Black out",
@@ -565,7 +573,7 @@ OPERATIONS = [
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
-SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "makesafe": "safe", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
+SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "makesafe": "safe", "upgrade-protection": "protected", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
           "insert-blank": "blanks", "booklet": "booklet", "autocrop": "trimmed",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
@@ -718,6 +726,8 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             f"on page{'s' if len(found) != 1 else ''} {_pages_list(list(found))}"
             + _redact_extra(found) if found
             else "nothing matched, so nothing was blacked out"))
+        if getattr(found, "proof", None):
+            notes.append(redact.proof_words(found.proof))
     elif op == "recipe":
         try:
             steps = json.loads(opts.get("steps") or "[]")
@@ -791,9 +801,13 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                                                   ("comments", "comments"))
                  if (n := counts[key])]
         notes.append(f"{src.name}: removed " + (", ".join(found) if found else "nothing (none found)"))
+    elif op == "upgrade-protection":
+        notes.append(f"{src.name}: {protection.upgrade(src, out, password)}")
     elif op == "makesafe":
         removed = risks.make_safe(src, out, password=password)
         notes.append(f"{src.name}: took out {risks.summary(removed)}")
+        if sum(removed.values()) and risks.signed(src, password):
+            notes.append(risks.SIGNED_NOTE)
         left = [r for r in risks.check(out, password)["risks"]]
         notes.extend(f"Still there: {r['detail']}" for r in left)
     elif op == "sign-cert":
@@ -1142,7 +1156,8 @@ def _clean_note(name, report):
 def _protect(outputs, password, op):
     """PDFs made from a password-protected file get the same password."""
     # A signed PDF keeps its password inside the signed file.
-    if password and op not in ("decrypt", "encrypt", "pdfa", "media", "sign-cert"):
+    # (An upgraded protection is already in place, with its two passwords.)
+    if password and op not in ("decrypt", "encrypt", "pdfa", "media", "sign-cert", "upgrade-protection"):
         for path in outputs:
             if path.suffix.lower() == ".pdf":
                 core.encrypt(path, path, password)
@@ -2465,6 +2480,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/redact/apply":
                 return self._redact_apply(body)
             # -- end of true redaction --
+            if path == "/api/password/strength":
+                # How hard a password being typed is to guess (worked out here, on this computer).
+                data = json.loads(body or b"{}")
+                return self._send(HTTPStatus.OK, protection.strength(str(data.get("password") or "")[:500]))
             if path == "/api/form/fields":
                 return self._form_fields(body)
             if path == "/api/form/detect":
@@ -3852,7 +3871,7 @@ def run_desktop(port=0, open_paths=(), action=None):
         window = webview.create_window("ZPDF", url, js_api=api, width=1180, height=820,
                                        min_size=(400, 560), background_color="#f6f6f3")
         api._window = window
-        _allow_autofill(window)
+        _no_autofill(window)
         handler.bring_to_front = lambda: _raise_window(window)
         handler.quit_app = lambda: _close_on_purpose(handler, window)
         try:
@@ -3962,10 +3981,14 @@ def _ask_to_close(window, text):
     return bool(confirm("Close ZPDF?", text))
 
 
-def _allow_autofill(window):
-    """Let WebView2 offer to save and fill in passwords (autocomplete=
-    "current-password") and other form entries: both are off by default in
-    an app's WebView2, and pywebview leaves them so. Windows' EdgeChromium
+def _no_autofill(window):
+    """Keep WebView2 from saving or offering passwords and form entries: a
+    PDF's password, or what was typed into one PDF's form, must not be kept
+    in the app's browser profile and offered again in another document.
+    (0.22.1 turned both on, for password managers; they are off since
+    0.40.0, when the checks showed what that kept.) WebView2 has them off by
+    default; they are set off here all the same, so a profile or a later
+    default can't bring them back. Windows' EdgeChromium
     backend only: pywebview runs its before_show event on the window's own
     thread right after making the WebView2 control (window.native.browser.
     webview); its CoreWebView2 is ready later, in CoreWebView2Initialization
@@ -3978,10 +4001,10 @@ def _allow_autofill(window):
         try:
             if args.IsSuccess:
                 settings = sender.CoreWebView2.Settings
-                settings.IsPasswordAutosaveEnabled = True
-                settings.IsGeneralAutofillEnabled = True
+                settings.IsPasswordAutosaveEnabled = False
+                settings.IsGeneralAutofillEnabled = False
         except Exception as exc:  # noqa: BLE001 - an older WebView2 lacks these settings
-            _log(f"launch: couldn't turn on password autofill: {exc!r}")
+            _log(f"launch: couldn't turn off password saving and autofill: {exc!r}")
 
     def before_show(window):
         try:

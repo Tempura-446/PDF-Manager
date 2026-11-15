@@ -120,7 +120,8 @@ def test_accessibility_fixes_in_a_browser(app, tmp_path):
     assert not out["repairRun"]
     assert not out["mixed"]["run"] and out["mixed"]["summary"].startswith("Ready · 1 file") and "can't be opened" in out["mixed"]["summary"], out["mixed"]
     assert min(out["cardBtn"]) >= 24
-    assert out["pwRow"] == {"label": "Current password", "autocomplete": "current-password", "toggle": True}, out["pwRow"]
+    # (0.40.0: "off". A PDF's password isn't a login: the browser must not offer to keep it.)
+    assert out["pwRow"] == {"label": "Current password", "autocomplete": "off", "toggle": True}, out["pwRow"]
 
     # The annotate bar: Save, Close and Undo show without scrolling it, at every width.
     for w in (1024, 1280, 1440, 1920):
@@ -144,7 +145,7 @@ def test_accessibility_fixes_in_a_browser(app, tmp_path):
 
     # Password: label, toggle, autocomplete; a wrong one is marked; Escape doesn't drop focus on the page.
     pw = out["pw"]
-    assert pw["label"] == "Password" and pw["autocomplete"] == "current-password" and pw["toggle"] == "false", pw
+    assert pw["label"] == "Password" and pw["autocomplete"] == "off" and pw["toggle"] == "false", pw
     assert min(pw["toggleSize"]) >= 24
     assert out["pwShown"] == ["true", "text"]
     wrong = out["pwWrong"]
