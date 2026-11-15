@@ -44,6 +44,7 @@ def test_the_schedule_from_the_measurements_panel(app, tmp_path):
     out = json.loads(run.stdout)
     assert not out["errors"], out["errors"]
     assert "Excel" in out["buttons"] and "CSV" in out["buttons"]
+    assert out["emptyButtons"] == ["CSV", "Excel"]          # (Windows check of 31261d4: unreachable with an empty list)
     assert out["Excel"] == "plan quantities.xlsx" and out["CSV"] == "plan quantities.csv"
 
     rows = list(openpyxl.load_workbook(got / "book.xlsx")["Quantities"].iter_rows(values_only=True))

@@ -148,6 +148,10 @@ def test_the_workbook_holds_numbers_and_the_csv_the_same_rows(tmp_path):
     assert lines[0] == quantities.COLUMNS and ["Totals"] in lines
     assert any(r[3:6] == ["North wall", "12.0", "ft"] for r in lines)
     assert any(r[3] == "'=HYPERLINK(1)" for r in lines)
+    # an empty cell stays empty (Windows check of 31261d4: each held a lone apostrophe)
+    assert not any(cell == "'" for row in lines for cell in row)
+    wall = next(r for r in lines if r[3] == "North wall")
+    assert wall[6] == "" and wall[7] == ""
 
 
 def test_files_made_before_0_43_still_read_right(tmp_path):

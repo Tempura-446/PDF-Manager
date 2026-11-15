@@ -295,7 +295,7 @@ TOTAL_COLUMNS = ["Group", "Kind", "Total", "Unit", "Measurements"]
 def _safe(value):
     """A cell's text, never read as a formula by a spreadsheet."""
     text = _str(value)
-    return "'" + text if text[:1] in "=+-@\t\r" else text
+    return "'" + text if text and text[0] in "=+-@\t\r" else text
 
 
 def write_csv(found, output):

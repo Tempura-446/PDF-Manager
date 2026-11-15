@@ -301,7 +301,7 @@ main:focus { outline: none; }  /* the skip link's target: the page itself needs 
 .dlg-field input, .dlg-field select { height: 38px; padding: 0 11px; border: 1px solid var(--input-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; transition: border-color var(--t), box-shadow var(--t); }
 .dlg-field.inline { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
 .dlg-field.inline select { min-width: 160px; }
-.dlg-status { min-height: 1.3em; font-size: var(--fs-sm) !important; color: var(--ok); }
+.dlg-status { min-height: 1.3em; flex-shrink: 0; font-size: var(--fs-sm) !important; line-height: 1.5; color: var(--ok); }  /* (never squeezed to one line by the scrolling dialog) */
 .dlg-status.err { color: var(--err); }
 /* The buttons stay in sight when a short window makes the dialog scroll. */
 .dlg-buttons { display: flex; gap: 8px; align-items: center; margin-top: 0; padding: 8px 0 22px; flex-wrap: wrap;  /* (the dialog's bottom: no form padding below them) */

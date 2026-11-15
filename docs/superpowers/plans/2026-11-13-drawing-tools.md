@@ -78,6 +78,7 @@ Asked for after 0.38.0, whose "Not yet" list this is.
 - [x] From the Measurements panel (CSV and Excel buttons, `/api/quantities`, the open document as it is now), the tool "Quantities from a drawing", and `pdfm quantities plan.pdf [-o takeoff.xlsx] [--csv]`.
 - [x] The scale written with a measurement follows ISO 32000 12.9 (`/D` and `/A` are factors on `/X`'s unit); an area's cut-outs are kept in `/ZPDFHoles`. Files from before are read right.
 - [x] Tests: `tests/test_quantities.py`, `tests/test_quantities_ui.py` + `tests/quantitiesui.js`.
+- [ ] Seen in the Windows check of 0.43.0, to look at: "This looks like a form to fill in" on a plain drawing (boxes, lines and circles, no fields); a count put in the PDF has no scale in the schedule while the list's has one; the Sheet column is text; Acrobat and Bluebeam files not tried (items H and I).
 - [ ] Left for later: one workbook for several files (a sheet set); areas put in the PDF before 0.43.0 have no cut-outs recorded, so they read as the whole outline; elliptical/arc measurements of other programs; prices per unit.
 
 **Seen in the Windows check of 0.38.0, for a later release:**

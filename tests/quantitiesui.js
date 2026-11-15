@@ -19,6 +19,11 @@ const { chromium } = require("playwright");
     await page.waitForFunction(() => reader.doc && reader.loading.hidden, null, { timeout: 30000 });
     await page.waitForTimeout(800);
 
+    // With nothing in the reader's list, what's in the document can still be totalled up.
+    await page.evaluate(() => { reader.toggleScaleBar(true); reader._toggleMeasPanel(true); });
+    await page.waitForSelector(".rd-mempty", { timeout: 10000 });
+    out.emptyButtons = await page.$$eval(".rd-mfoot button", (l) => l.map((b) => b.textContent.trim()));
+
     // A measurement drawn in the reader and not yet in the PDF: 216 pt at 1/4" = 1'-0" is 12 ft.
     await page.evaluate(() => {
       reader.toggleScaleBar(true);

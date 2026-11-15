@@ -1268,7 +1268,15 @@ export const Measuring = (Base) => class extends Base {
       this.measPanel.replaceChildren(head, unitRow, groupRow, el("p", { class: "rd-mempty" },
         "Click two points with Distance, along a run of walls with Path, the corners of a room with Area (or two corners with Rectangle), "
         + "openings inside an area with Cut-out, each fixture with Count, or three points with Angle. Drag a measurement to move it, or a point of it "
-        + "to change it; arrow keys nudge the selected point. Ctrl+Z undoes. Measurements are kept with the file on this computer."));
+        + "to change it; arrow keys nudge the selected point. Ctrl+Z undoes. Measurements are kept with the file on this computer."),
+        // (Dimensions and measurements already in the document can still be totalled up.)
+        el("p", { class: "rd-mempty" }, "A quantity schedule of the dimensions and measurements already in the document:"),
+        el("div", { class: "rd-mfoot" }, ...[["CSV", "csv"], ["Excel", "xlsx"]].map(([label, format]) => {
+          const b = el("button", { class: "rd-btn", type: "button", title: `Save what's measured in the document as ${label === "CSV" ? "a CSV file" : "an Excel workbook"}, with totals`,
+            html: svg("csv") + `<span>${label}</span>` });
+          b.addEventListener("click", () => this._exportQuantities(format));
+          return b;
+        })));
       return;
     }
     const kindIcon = { area: "area", path: "path", count: "count", angle: "angle" };
