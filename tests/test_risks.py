@@ -146,7 +146,7 @@ def test_a_link_that_shows_one_address_and_goes_to_another(tmp_path):
     got = kinds(found)
     assert got["hidden_links"]["count"] == 1 and got["hidden_links"]["severity"] == "medium"
     example = got["hidden_links"]["examples"][0]
-    assert "www.mybank.com" in example and "evil-site.net" in example
+    assert example == "shows www.mybank.com, goes to mybank.com.evil-site.net"
     # nothing to take out: the reader shows the real address before opening any link
     out = tmp_path / "safe.pdf"
     removed = risks.make_safe(tmp_path / "phish.pdf", out)
