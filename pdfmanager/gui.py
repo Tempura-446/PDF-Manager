@@ -523,15 +523,6 @@ OPERATIONS = [
                 _f("format", "Format", "select", "xlsx",
                    choices=[["xlsx", "Excel workbook (.xlsx)"], ["csv", "CSV files (zip)"]],
                    hint="A table that continues on the next page is kept as one table.")]},
-    # Quantities: a schedule of what was measured on a drawing (pdfmanager/quantities.py)
-    {"id": "quantities", "group": "Convert", "label": "Quantities from a drawing", "files": "pdf",
-     "help": "A schedule (takeoff) of everything measured on a drawing: the dimensions and measurements "
-             "saved in the PDF by ZPDF or another program, each worked out from its own points and "
-             "scale, with totals per group. Numbers are numbers, so they can be summed.",
-     "fields": [_f("format", "Format", "select", "xlsx",
-                   choices=[["xlsx", "Excel workbook (.xlsx)"], ["csv", "CSV file"]],
-                   hint="Measurements still only in the reader's list aren't in the file yet: export them "
-                        "from the Measurements panel, or put them in the PDF first.")]},
     # -- pptx and html --
     {"id": "to-pptx", "group": "Convert", "label": "PDF → PowerPoint", "files": "pdf",
      "help": "Turn PDFs into PowerPoint slides (.pptx), one slide per page. No PowerPoint "
@@ -549,6 +540,15 @@ OPERATIONS = [
                    hint="Flowing text fits any screen: headings, paragraphs, lists, tables and "
                         "pictures. Exact layout keeps each page as it looks."),
                 _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
+    # Quantities: a schedule of what was measured on a drawing (pdfmanager/quantities.py)
+    {"id": "quantities", "group": "Convert", "label": "Quantities from a drawing", "files": "pdf",
+     "help": "A schedule (takeoff) of everything measured on a drawing: the dimensions and measurements "
+             "saved in the PDF by ZPDF or another program, each worked out from its own points and "
+             "scale, with totals per group. Numbers are numbers, so they can be summed.",
+     "fields": [_f("format", "Format", "select", "xlsx",
+                   choices=[["xlsx", "Excel workbook (.xlsx)"], ["csv", "CSV file"]],
+                   hint="Measurements still only in the reader's list aren't in the file yet: export them "
+                        "from the Measurements panel, or put them in the PDF first.")]},
     # -- end of pptx and html --
     # -- web pages --
     {"id": "web", "group": "Convert", "label": "Web page → PDF", "files": "web", "url_field": "url",
