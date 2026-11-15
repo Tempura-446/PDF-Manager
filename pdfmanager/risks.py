@@ -132,14 +132,24 @@ def _get(holder, key):
 
 
 def _text(value):
-    """A string that may be kept as a stream (scripts often are)."""
+    """A string that may be kept as a stream (scripts often are), read the
+    way the reader's pdf.js reads it: by its byte-order mark, and without a
+    mark left at its start (so both judge the same text)."""
     value = value.get_object() if value is not None else None
     if isinstance(value, StreamObject):
         try:
-            return value.get_data().decode("latin-1")
+            data = value.get_data()
         except Exception:
             return ""
-    return str(value) if value is not None else ""
+        for mark, encoding in ((b"\xfe\xff", "utf-16-be"), (b"\xff\xfe", "utf-16-le"), (b"\xef\xbb\xbf", "utf-8")):
+            if data.startswith(mark):
+                text = data[len(mark):].decode(encoding, "replace")
+                break
+        else:
+            text = data.decode("latin-1")
+    else:
+        text = str(value) if value is not None else ""
+    return text.lstrip("\ufeff")
 
 
 def _file_name(spec):

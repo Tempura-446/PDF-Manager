@@ -328,3 +328,21 @@ def test_the_check_and_the_reader_read_the_pattern_alike():
                 "﻿AFNumber_Format(2)", "AFNumber_Format(2) ", "AFNumber_Format( 2)"):
         assert not risks.FORM_SCRIPT.fullmatch(odd), repr(odd)
     assert risks.FORM_SCRIPT.fullmatch("AFNumber_Format( 2 ,\t0 )\r\n;\n")
+
+
+def test_a_byte_order_mark_before_a_form_function_is_read_as_the_reader_reads_it(tmp_path):
+    """pdf.js drops a mark at the start of a script; so does the check, and both call it a form function."""
+    src = tmp_path / "form.pdf"
+    forms.add_fields(plain(tmp_path / "p.pdf"), src, [
+        {"page": 1, "rect": [72, 700, 200, 720], "type": "text", "name": "Other"}])
+    w = PdfWriter(clone_from=str(src))
+    field = w.pages[0]["/Annots"][0].get_object()
+    field[NameObject("/AA")] = DictionaryObject({
+        NameObject("/F"): action("/JavaScript", JS='﻿AFNumber_Format(2, 0, 0, 0, "X", true)'),
+        NameObject("/K"): action("/JavaScript", JS='﻿﻿AFNumber_Keystroke(2, 0, 0, 0, "X", true)')})
+    w.write(str(tmp_path / "bom.pdf"))
+    assert risks.check(tmp_path / "bom.pdf")["level"] == "none"
+    # ... and a mark doesn't dress a script up as one
+    field["/AA"][NameObject("/F")] = action("/JavaScript", JS="﻿app.alert(1)")
+    w.write(str(tmp_path / "bad.pdf"))
+    assert kinds(risks.check(tmp_path / "bad.pdf"))["scripts"]["count"] == 1
