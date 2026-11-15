@@ -43,17 +43,19 @@
 
 ### Phase 2 (release B): construction markups
 
-**Task 2.1: markup tools on the annotate bar's More tools**
-- [ ] **Revision cloud:** a polygon with arc-scalloped edges. It's a `/Polygon` annotation with `/BE << /S /C /I 1 >>` (border effect cloudy), so other viewers draw it as a cloud too. Pick the colour, and the arc size relative to the zoom.
-- [ ] **Callout:** a text box with a leader line and an arrowhead. It's a `/FreeText` annotation with `/IT /FreeTextCallout` and `/CL`.
-- [ ] **Dimension line:** two points on the drawing (with snapping) and a line with arrowheads labelled with the scaled length, in the drawing's units and precision. It's a `/Line` annotation with `/LE` arrows, `/Cap true` and a `/Measure` dictionary, so Acrobat reads it as a measurement.
-- [ ] **Arrow and polyline** with arrowheads.
-- [ ] All of them move, resize, change colour and undo like the existing editors. They appear in the Comments tab, and they're saved as standard annotations.
-- [ ] Test: each tool saves an annotation of the right subtype and keys, and pdf.js renders it after reopening. A dimension at 1/4" = 1' over 2 inches of paper reads 8'-0".
+**Done in 0.38.0** (`markup.py` kinds `polycloud`, `polyline`, `callout`, `dimension`; `annotate.js`; `tests/test_construction_markups.py`, `tests/test_drawing_markups_ui.py`).
+
+**Task 2.1: markup tools on the annotate bar's Shapes**
+- [x] **Revision cloud** through clicked corners: `/Polygon` with `/BE << /S /C /I 1 >>`.
+- [x] **Callout:** `/FreeText` with `/IT /FreeTextCallout`, `/CL`, `/LE`.
+- [x] **Dimension line:** `/Line` with `/LE` arrows, `/Cap true`, `/IT /LineDimension` and a `/Measure` dictionary; ends snap to the drawing; the label is the scaled length in the Scale bar's units.
+- [x] **Arrow and polyline** with corners (`/PolyLine`, `/LE`).
+- [x] They appear in the Comments tab, delete and undo like other markups, and are saved as standard annotations.
+- [ ] Left for later: move, reshape and recolour a placed markup (no markup of the reader's own can be moved yet); arc size choice for clouds.
 
 **Task 2.2: construction stamps**
-- [ ] A set of review stamps: Approved; Approved as noted; Revise and resubmit; Rejected; For information; Not for construction. Each carries the user's name and date, as the existing stamps do. Users can add their own (text and colour).
-- [ ] Test: placing "Revise and resubmit" saves a `/Stamp` annotation with the name and date in its appearance.
+- [x] Review stamps: Approved as noted; Revise and resubmit; Rejected; For information; Not for construction, with name and date.
+- [ ] Left for later: a saved list of the user's own stamps with a colour (one own stamp's words are remembered today).
 
 ### Phase 3 (release C): PDF to DXF
 

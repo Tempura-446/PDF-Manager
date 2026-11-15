@@ -54,7 +54,13 @@ function fieldEntries(fields) {
 // Rubber stamps: their words (markup.py draws them in their colours).
 const STAMPS = ["APPROVED", "NOT APPROVED", "REVIEWED", "RECEIVED", "DRAFT", "FINAL", "CONFIDENTIAL",
   "FOR COMMENT", "VOID"];
+// The answers to a submittal (drawings sent for review).
+const REVIEW_STAMPS = ["APPROVED AS NOTED", "REVISE AND RESUBMIT", "REJECTED", "FOR INFORMATION", "NOT FOR CONSTRUCTION"];
 const SHAPES = [["rect", "Rectangle"], ["ellipse", "Ellipse"], ["cloud", "Cloud"], ["arrow", "Arrow"], ["line", "Line"]];
+// For drawings: a cloud or a line through the points clicked, a dimension
+// with the real length, words with a pointer.
+const DRAWING_SHAPES = [["polycloud", "Cloud, any shape"], ["polyline", "Line with corners"], ["polyarrow", "Arrow with corners"],
+  ["dimension", "Dimension"], ["callout", "Callout"]];
 const HIGHLIGHT_COLORS = "yellow=#FFFF98,green=#53FFBC,blue=#80EBFF,pink=#FFCBE6,red=#FF4F5F";
 
 
@@ -252,18 +258,21 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     tip("UNDERLINE", "Underline text: select the words (or select them first, then click here)");
     tip("STRIKEOUT", "Strike out text: select the words (or select them first, then click here)");
     tip("NOTE", "Add a note: click where it goes, then type your comment (C)");
-    tip("SHAPE", "Draw a rectangle, ellipse, cloud, arrow or line: drag on the page (Shift: square, circle, 45°)");
+    tip("SHAPE", "Draw a rectangle, ellipse, cloud, arrow or line: drag on the page (Shift: square, circle, 45°). For drawings: a cloud or line through the points you click, a dimension, a callout");
     tip("IMAGES", "Edit the pictures on the page: drag to move, drag a corner to resize (Shift: freely), replace or delete");
     tip("LINKS", "Edit links: click one to change where it goes or delete it; drag a box to add one");
     tip("STAMPS", "Stamp the page (Approved, Draft…): click where it goes, or drag its size");
-    this.stampSelect = el("select", { class: "rd-zoom", "aria-label": "Stamp", hidden: true },
-      ...STAMPS.map((v) => el("option", { value: v }, v[0] + v.slice(1).toLowerCase())), el("option", { value: "" }, "Your own words…"));
+    this.stampSelect = el("select", { class: "rd-zoom rd-wide", "aria-label": "Stamp", hidden: true },
+      ...STAMPS.map((v) => el("option", { value: v }, v[0] + v.slice(1).toLowerCase())),
+      el("optgroup", { label: "Drawing review" }, ...REVIEW_STAMPS.map((v) => el("option", { value: v }, v[0] + v.slice(1).toLowerCase()))),
+      el("option", { value: "" }, "Your own words…"));
     this.stampSelect.value = store.get("pdfm-stamp", "APPROVED");
     this.stampDated = el("input", { type: "checkbox", checked: store.get("pdfm-stamp-dated", true) });
     this.stampDatedLabel = el("label", { class: "rd-check", hidden: true, title: "Add your name and the date and time under the words" },
       this.stampDated, "Name and date");
-    this.shapeSelect = el("select", { class: "rd-zoom", "aria-label": "Shape", hidden: true },
-      ...SHAPES.map(([v, label]) => el("option", { value: v }, label)));
+    this.shapeSelect = el("select", { class: "rd-zoom rd-wide", "aria-label": "Shape", hidden: true },
+      ...SHAPES.map(([v, label]) => el("option", { value: v }, label)),
+      el("optgroup", { label: "For drawings" }, ...DRAWING_SHAPES.map(([v, label]) => el("option", { value: v }, label))));
     this.shapeSelect.value = store.get("pdfm-shape", "rect");
     tip("EDITTEXT", "Change words on the page: click a line of text (E)");
     this.signBtn = el("button", { class: "rd-btn rd-tool", type: "button", title: "Add your signature (S)", html: svg("sign") + "<span>Sign</span>" });
@@ -596,7 +605,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     this.outlineTab.addEventListener("click", () => this.#showTab("outline"));
     this.commentsTab.addEventListener("click", () => this.#showTab("comments"));
     this.authorInput.addEventListener("change", () => store.set("pdfm-author", this.authorInput.value.trim()));
-    this.shapeSelect.addEventListener("change", () => store.set("pdfm-shape", this.shapeSelect.value));
+    this.shapeSelect.addEventListener("change", () => { store.set("pdfm-shape", this.shapeSelect.value); this._shapeChosen(); });
 
     this._wireFind();
 
@@ -727,7 +736,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
     if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); this.print(); return; }
     if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); this._saveKey(e); return; }
-    if (mod && !isTyping(e) && !this.scalebar.hidden && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")
+    if (mod && !isTyping(e) && !this.scalebar.hidden && this.annotbar.hidden && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")
         && this._measureUndo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); return; }
     // Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z): what the Undo and Redo buttons do, with
     // any tool on or none (with Select, pdf.js has no keys of its own; with

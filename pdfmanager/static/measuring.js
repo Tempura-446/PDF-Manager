@@ -445,6 +445,28 @@ export const Measuring = (Base) => class extends Base {
     this._drawAllMeasures();
   }
 
+  /** For the Dimension markup (annotate.js): ``pdf`` moved onto the
+   *  drawing's lines near it, as a measuring click is; as it was if there's
+   *  nothing near or the lines aren't read yet. */
+  _snapNear(n, pdf, viewScale) {
+    try {
+      const c = this._geometry(n)?.candidates(pdf, SNAP_PX / viewScale, { from: null, ortho: null })?.[0];
+      return c && Number.isFinite(c.x) && Number.isFinite(c.y) ? [c.x, c.y] : pdf;
+    } catch (err) {
+      return pdf;
+    }
+  }
+
+  /** The real length between two points of page ``n`` as the Scale bar
+   *  says it, and the sheet's scale (null: none set, the length is in
+   *  inches on paper). */
+  _dimensionOf(n, a, b) {
+    const scale = this.#pageScale(n);
+    const uu = this.pdfViewer.getPageView(n - 1)?.pdfPage?.userUnit || 1;
+    const length = measure.distance(a, b) * uu;
+    return { value: scale ? measure.formatLength(length, scale, this.units) : `${(length / 72).toFixed(2)} in`, scale };
+  }
+
   /** The lines of page ``n`` (see snap.js), read from the file the first
    *  time they're needed; null while they're being read. */
   _geometry(n) {

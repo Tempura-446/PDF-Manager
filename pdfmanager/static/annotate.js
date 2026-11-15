@@ -10,6 +10,7 @@ import { COLORS, el, isTyping, pdfjs, store, svg } from "./readerkit.js";
 // Notes, underline, strikeout and shapes: the reader's own tools, written into
 // the file by the server (markup.py) as standard annotations.
 const MARKUP = new Set(["NOTE", "UNDERLINE", "STRIKEOUT", "SHAPE", "IMAGES", "LINKS", "CERTSIGN", "STAMPS", "REDACT"]);
+const POLY_SHAPES = new Set(["polycloud", "polyline", "polyarrow"]);  // drawn click by click
 const KIND_NAMES = { Text: "Note", FreeText: "Text", Highlight: "Highlight", Underline: "Underline", StrikeOut: "Strikeout",
   Squiggly: "Squiggly", Square: "Rectangle", Circle: "Ellipse", Line: "Line", Polygon: "Shape", PolyLine: "Lines",
   Ink: "Drawing", Stamp: "Stamp", Caret: "Insert", FileAttachment: "Attachment", Sound: "Sound" };
@@ -122,6 +123,7 @@ export const Annotating = (Base) => class extends Base {
     this.textEditMode = editText;
     this.markupMode = markup ? name : null;
     this.#cancelMarkup();
+    if (name === "SHAPE") this._shapeChosen(false);  // how the chosen shape is drawn, if it isn't a plain drag
     this.root.classList.toggle("rd-edittext", editText);
     this.root.classList.toggle("rd-markup", markup);
     this.root.dataset.markup = markup ? name.toLowerCase() : "";
@@ -254,6 +256,7 @@ export const Annotating = (Base) => class extends Base {
   #cancelMarkup() {
     this.shapeDraft?.el.remove();
     this.shapeDraft = null;
+    this.#endPoly();
     this.noteBox?.remove();
     this.noteBox = null;
   }
@@ -273,7 +276,15 @@ export const Annotating = (Base) => class extends Base {
     if (mode === "STAMPS") { this.#placeStamp(at); return; }
     if (mode === "REDACT") { this.#dragBox(at, "Drag a box over what should be blacked out.", (rect) => this.#addRedactions(at.n, [rect])); return; }
     // SHAPE: drag out the shape; it's drawn on screen until the file has it.
+    const shape = this.shapeSelect.value;
+    if (POLY_SHAPES.has(shape)) { this.#polyClick(e, at, shape); return; }
     this.#cancelMarkup();
+    if (shape === "dimension" && !e.altKey) {  // onto the drawing's lines, like a measurement (Alt: exactly here)
+      // (The page's lines may still be being read: then the start is snapped as soon as they are.)
+      at.unsnapped = !this._geometry(at.n);
+      at.pt = this._snapNear(at.n, at.pt, at.view.viewport.scale);
+      [at.x, at.y] = at.view.viewport.convertToViewportPoint(...at.pt);
+    }
     const svgEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svgEl.setAttribute("class", "rd-shapedraft");
     at.view.div.append(svgEl);
@@ -282,11 +293,12 @@ export const Annotating = (Base) => class extends Base {
   }
 
   _markupMove(e) {
+    if (this.polyDraft) { this.#polyMove(e); return; }
     const d = this.shapeDraft;
     if (!d || e.pointerId !== d.pointer) return;
     const view = d.start.view, box = view.div.getBoundingClientRect();
     let x = e.clientX - box.left - view.div.clientLeft, y = e.clientY - box.top - view.div.clientTop;
-    const line = d.kind === "arrow" || d.kind === "line";
+    const line = d.kind === "arrow" || d.kind === "line" || d.kind === "dimension" || d.kind === "callout";
     if (e.shiftKey) {  // a square or circle; a line at 45° steps
       const dx = x - d.start.x, dy = y - d.start.y;
       if (line) {
@@ -298,10 +310,22 @@ export const Annotating = (Base) => class extends Base {
       }
     }
     d.end = { x, y, pt: view.viewport.convertToPdfPoint(x, y) };
+    if (d.kind === "dimension" && d.start.unsnapped && this._geometry(d.start.n)) {
+      d.start.unsnapped = false;
+      d.start.pt = this._snapNear(d.start.n, d.start.pt, view.viewport.scale);
+      [d.start.x, d.start.y] = view.viewport.convertToViewportPoint(...d.start.pt);
+    }
+    if (d.kind === "dimension" && !e.altKey && !e.shiftKey) {
+      d.end.pt = this._snapNear(d.start.n, d.end.pt, view.viewport.scale);
+      [x, y] = [d.end.x, d.end.y] = view.viewport.convertToViewportPoint(...d.end.pt);
+    }
     const color = this.#markupColor(), width = Math.max(1, (this.annotParams?.size?.shape || 2) * view.viewport.scale);
     const [x0, y0, x1, y1] = [Math.min(d.start.x, x), Math.min(d.start.y, y), Math.max(d.start.x, x), Math.max(d.start.y, y)];
     const shape = d.kind === "ellipse" ? `<ellipse cx="${(x0 + x1) / 2}" cy="${(y0 + y1) / 2}" rx="${(x1 - x0) / 2}" ry="${(y1 - y0) / 2}"/>`
-      : line ? `<line x1="${d.start.x}" y1="${d.start.y}" x2="${x}" y2="${y}"${d.kind === "arrow" ? ' marker-end="url(#rd-arrowhead)"' : ""}/>`
+      : line ? `<line x1="${d.start.x}" y1="${d.start.y}" x2="${x}" y2="${y}"${d.kind === "arrow" || d.kind === "dimension" ? ' marker-end="url(#rd-arrowhead)"' : ""}`
+        + `${d.kind === "dimension" || d.kind === "callout" ? ' marker-start="url(#rd-arrowhead)"' : ""}/>`
+        + (d.kind === "dimension" ? `<text x="${(d.start.x + x) / 2}" y="${(d.start.y + y) / 2 - 8}" text-anchor="middle" stroke="none" fill="${color}" class="rd-dimdraft">${
+          this._dimensionOf(d.start.n, d.start.pt, d.end.pt).value.replace(/[<&]/g, "")}</text>` : "")
       : `<rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}"${d.kind === "cloud" ? ' stroke-dasharray="2 3" rx="6"' : ""}/>`;
     d.el.innerHTML = `<defs><marker id="rd-arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">`
       + `<path d="M0 0 10 5 0 10z" fill="${color}"/></marker></defs><g fill="none" stroke="${color}" stroke-width="${width}">${shape}</g>`;
@@ -325,11 +349,171 @@ export const Annotating = (Base) => class extends Base {
     const { start, end, kind } = d;
     if (Math.hypot(end.x - start.x, end.y - start.y) < 4) { d.el.remove(); return; }  // a click, not a drag
     const page = start.n, color = this.#markupColor(), width = this.annotParams?.size?.shape || 2;
+    if (kind === "callout") { this.#openCalloutBox(start, end, d.el, { color, width: Math.min(width, 3) }); return; }
+    if (kind === "dimension") {
+      const { value, scale } = this._dimensionOf(page, start.pt, end.pt);
+      this._applyMarkup([{ op: "add", page, kind, points: [start.pt, end.pt], value, scale: scale || undefined, color, width: Math.min(width, 3) }])
+        .finally(() => {
+          d.el.remove();
+          // After the page is shown again, so nothing takes its place.
+          if (!scale) this.toast("This sheet has no scale set, so the dimension is in inches on paper. Set the scale on the Scale bar for real lengths.", 7000);
+        });
+      return;
+    }
     const change = kind === "arrow" || kind === "line"
       ? { op: "add", page, kind, points: [start.pt, end.pt], color, width }
       : { op: "add", page, kind, rect: [start.pt[0], start.pt[1], end.pt[0], end.pt[1]], color, width };
     this._applyMarkup([change]).finally(() => d.el.remove());
   }
+
+  // -- markups for drawings: a cloud or a line through the points clicked, a callout --
+  /** The shape was chosen in the list: say how the click-by-click ones work. */
+  _shapeChosen(byHand = true) {
+    this.#cancelMarkup();
+    const shape = this.shapeSelect.value;
+    if (shape === "dimension") this._geometry(this.pdfViewer.currentPageNumber || 1);  // the drawing's lines, read ahead for snapping
+    // Said when the shape is picked, and once more when its tool is next
+    // turned on: not after every markup placed (the tool is set again then).
+    if (!byHand && this.shapeHinted === shape) return;
+    this.shapeHinted = shape;
+    const how = POLY_SHAPES.has(shape) ? "Click each corner; double-click or press Enter to finish (Backspace: back one point, Esc: cancel)."
+      : shape === "dimension" ? "Drag from one end to the other: the ends snap to the drawing's lines (Alt: no snapping), and the length uses the sheet's scale."
+      : shape === "callout" ? "Drag from what you're pointing at to where the words go, then type them." : "";
+    if (how) this._hint(how, 7000);
+  }
+
+  /** A click while a cloud or a line with corners is being drawn: its
+   *  first point, the next one, or (a double click, or back on the first
+   *  point of a cloud) the end of it. */
+  #polyClick(e, at, kind) {
+    let d = this.polyDraft;
+    if (d && (d.page !== at.n || d.kind !== kind)) { this.#endPoly(); d = null; }
+    if (!d) {
+      this.#cancelMarkup();
+      const svgEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svgEl.setAttribute("class", "rd-shapedraft");
+      at.view.div.append(svgEl);
+      d = this.polyDraft = { el: svgEl, kind, page: at.n, view: at.view, pts: [at.pt], hover: null, pressed: e.timeStamp,
+        key: (ev) => this.#polyKey(ev) };
+      document.addEventListener("keydown", d.key, true);
+      this.#polyDraw();
+      return;
+    }
+    const pt = this.#polyPoint(e, at), vp = d.view.viewport;
+    const [fx, fy] = vp.convertToViewportPoint(...d.pts[0]), [px, py] = vp.convertToViewportPoint(...pt);
+    const [lx, ly] = vp.convertToViewportPoint(...d.pts.at(-1));
+    if (kind === "polycloud" && d.pts.length >= 3 && Math.hypot(px - fx, py - fy) < 10) { this.#polyFinish(); return; }
+    // A second press on the point just placed, soon after it: a double
+    // click, which ends the shape. (Pointer events carry no click count.)
+    if (Math.hypot(px - lx, py - ly) < 4) {
+      if (e.timeStamp - d.pressed < 600) this.#polyFinish();
+      return;
+    }
+    d.pts.push(pt);
+    d.pressed = e.timeStamp;
+    this.#polyDraw();
+  }
+
+  /** The point for a pointer event while drawing: with Shift, at a
+   *  multiple of 45° from the last point. */
+  #polyPoint(e, at) {
+    const d = this.polyDraft;
+    if (!e.shiftKey || !d?.pts.length) return at.pt;
+    const from = d.pts.at(-1), a = Math.round(Math.atan2(at.pt[1] - from[1], at.pt[0] - from[0]) / (Math.PI / 4)) * (Math.PI / 4);
+    const len = Math.hypot(at.pt[0] - from[0], at.pt[1] - from[1]);
+    return [from[0] + len * Math.cos(a), from[1] + len * Math.sin(a)];
+  }
+
+  #polyMove(e) {
+    const d = this.polyDraft, at = this.#pointOnPage(e);
+    d.hover = at && at.n === d.page ? this.#polyPoint(e, at) : null;
+    this.#polyDraw();
+  }
+
+  #polyDraw() {
+    const d = this.polyDraft;
+    if (!d) return;
+    // The page is drawn afresh after a zoom: the preview goes back on it.
+    d.view = this.pdfViewer.getPageView(d.page - 1) || d.view;
+    if (!d.el.isConnected || d.el.parentNode !== d.view.div) d.view.div?.append(d.el);
+    const vp = d.view.viewport, color = this.#markupColor();
+    const width = Math.max(1, (this.annotParams?.size?.shape || 2) * vp.scale);
+    const pts = [...d.pts, ...(d.hover ? [d.hover] : [])].map((p) => vp.convertToViewportPoint(...p));
+    const path = pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`).join(" ") + (d.kind === "polycloud" && pts.length > 2 ? " Z" : "");
+    const dots = d.pts.map((p) => vp.convertToViewportPoint(...p)).map(([x, y], i) =>
+      `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${i === 0 && d.kind === "polycloud" && d.pts.length >= 3 ? 6 : 3}" fill="#fff" stroke="${color}" stroke-width="1.5"/>`).join("");
+    d.el.innerHTML = `<defs><marker id="rd-polyhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">`
+      + `<path d="M0 0 10 5 0 10z" fill="${color}"/></marker></defs>`
+      + `<path d="${path}" fill="none" stroke="${color}" stroke-width="${width}" stroke-linejoin="round"${
+        d.kind === "polycloud" ? ' stroke-dasharray="2 3"' : d.kind === "polyarrow" ? ' marker-end="url(#rd-polyhead)"' : ""}/>${dots}`;
+  }
+
+  #polyKey(e) {
+    if (!this.polyDraft || e.target.closest?.("input:not([type=checkbox]), textarea, [contenteditable]")) return;  // (a list keeps the keys: the shape was just picked there)
+    if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); this.#polyFinish(); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); this.#endPoly(); }
+    else if (e.key === "Backspace") {
+      e.preventDefault(); e.stopPropagation();
+      this.polyDraft.pts.pop();
+      if (this.polyDraft.pts.length) this.#polyDraw(); else this.#endPoly();
+    }
+  }
+
+  /** Put the cloud or line being drawn away, without adding it. */
+  #endPoly() {
+    const d = this.polyDraft;
+    if (!d) return;
+    document.removeEventListener("keydown", d.key, true);
+    d.el.remove();
+    this.polyDraft = null;
+  }
+
+  #polyFinish() {
+    const d = this.polyDraft;
+    if (!d) return;
+    const least = d.kind === "polycloud" ? 3 : 2;
+    if (d.pts.length < least) {
+      this.toast(least === 3 ? "A cloud needs at least three corners: click another, or press Esc to cancel." : "Click at least two points, or press Esc to cancel.", 5000);
+      return;
+    }
+    document.removeEventListener("keydown", d.key, true);
+    this.polyDraft = null;
+    d.hover = null;
+    const color = this.#markupColor(), width = this.annotParams?.size?.shape || 2;
+    const change = d.kind === "polycloud" ? { op: "add", page: d.page, kind: "polycloud", points: d.pts, color, width }
+      : { op: "add", page: d.page, kind: "polyline", points: d.pts, arrow: d.kind === "polyarrow" ? "end" : "none", color, width };
+    this._applyMarkup([change]).finally(() => d.el.remove());
+  }
+
+  /** A box to type a callout's words into, where its pointer was dragged to. */
+  #openCalloutBox(start, end, draft, look) {
+    const text = el("textarea", { rows: 3, placeholder: "What to say about it", "aria-label": "Callout words" });
+    const add = el("button", { type: "button", class: "rd-btn primary" }, "Add callout");
+    const cancel = el("button", { type: "button", class: "rd-btn" }, "Cancel");
+    const box = el("div", { class: "rd-notebox rd-calloutbox", style: `left:${end.x}px;top:${end.y}px` }, text, el("div", { class: "rd-notebtns" }, cancel, add));
+    start.view.div.append(box);
+    this._keepInColumn(box, { ...start, x: end.x, y: end.y });
+    this.noteBox = box;
+    this.shapeDraft = { el: draft, pointer: -1 };  // the pointer line stays until the words are in (or given up)
+    const done = () => {
+      const words = text.value.trim();
+      this.shapeDraft = null;
+      this.noteBox = null;
+      box.remove();
+      if (!words) { draft.remove(); return; }
+      this._applyMarkup([{ op: "add", page: start.n, kind: "callout", tip: start.pt, at: end.pt, text: words, ...look }])
+        .finally(() => draft.remove());
+    };
+    add.addEventListener("click", done);
+    cancel.addEventListener("click", () => this.#cancelMarkup());
+    text.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") this.#cancelMarkup();
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) done();
+    });
+    setTimeout(() => text.focus(), 0);
+  }
+  // -- end of markups for drawings --
 
   // -- stamps --
   /** A stamp where the page was clicked (the usual size), or in the box
@@ -437,7 +621,8 @@ export const Annotating = (Base) => class extends Base {
       if (seq !== this.commentsSeq || doc !== this.doc) return;
       for (const a of annots) {
         if (!KIND_NAMES[a.subtype] || a.replyType === "Group") continue;
-        items.push({ page: n, id: a.id, kind: a.subtype === "Line" && a.lineEndings?.[1] && a.lineEndings[1] !== "None" ? "Arrow" : KIND_NAMES[a.subtype],
+        items.push({ page: n, id: a.id, kind: a.subtype === "Line" && a.lineEndings?.every((end) => end && end !== "None") ? "Dimension"
+            : a.subtype === "Line" && a.lineEndings?.[1] && a.lineEndings[1] !== "None" ? "Arrow" : KIND_NAMES[a.subtype],
           text: a.contentsObj?.str || "", author: a.titleObj?.str || "", date: a.modificationDate || a.creationDate,
           reply: a.inReplyTo || null, rect: a.rect, color: a.color });
       }

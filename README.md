@@ -441,10 +441,16 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   and shapes are standard PDF annotations with their own appearance, so
   Acrobat and other viewers show them the same, and they print. Use
   *Flatten forms & comments* afterwards to make them part of the page.
+- **Markups for drawings** (Shapes → For drawings): a **revision cloud**
+  through the corners you click, a **line or arrow with corners**, a
+  **dimension** whose ends snap to the drawing and which carries the real
+  length from the sheet's scale, and a **callout** (words in a box with a
+  pointer). Other programs read them as the same kinds of markup.
 - **Stamps** (Annotate & sign → Stamp): Approved, Not approved, Reviewed,
   Received, Draft, Final, Confidential, For comment, Void or your own
-  words, with your name and the date if you like. Click where it goes, or
-  drag its size.
+  words, with your name and the date if you like; and for drawing reviews
+  Approved as noted, Revise and resubmit, Rejected, For information and
+  Not for construction. Click where it goes, or drag its size.
 - **Comments tab**: every comment with its replies; **Summary** makes a
   PDF listing them page by page (with the words each highlight or
   strike-out marks), **Export** saves them as an XFDF file to send, and
