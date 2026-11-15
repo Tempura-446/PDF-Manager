@@ -51,13 +51,19 @@ const { chromium } = require("playwright");
     if (shots) await page.screenshot({ path: `${shots}/privacy.png` });
 
     await page.click("#set-clear-history");
-    await page.waitForFunction(() => /Cleared|nothing to clear/.test(document.querySelector("#set-status").textContent), null, { timeout: 10000 });
-    out.cleared = await page.evaluate(() => ({ status: document.querySelector("#set-status").textContent,
+    await page.waitForFunction(() => /Cleared|nothing to clear/.test(document.querySelector("#privacy-status").textContent), null, { timeout: 10000 });
+    out.cleared = await page.evaluate(() => ({ status: document.querySelector("#privacy-status").textContent,
       history: document.querySelector("#set-history").textContent }));
+    // (said next to the button, in view, not at the foot of the dialog)
+    out.statusSeen = await page.evaluate(() => {
+      const r = document.querySelector("#privacy-status").getBoundingClientRect(), b = document.querySelector("#set-clear-history").getBoundingClientRect();
+      const bar = document.querySelector("#settings-dialog .dlg-buttons").getBoundingClientRect();
+      return r.top >= b.bottom - 1 && r.top - b.bottom < 40 && r.bottom <= bar.top && r.bottom <= innerHeight;
+    });
     out.placesAfterClear = await places(page);
 
     await page.click("#set-remember");
-    await page.waitForFunction(() => /won't keep/.test(document.querySelector("#set-status").textContent), null, { timeout: 10000 });
+    await page.waitForFunction(() => /won't keep/.test(document.querySelector("#privacy-status").textContent), null, { timeout: 10000 });
     out.off = await page.evaluate(() => ({ history: document.querySelector("#set-history").textContent,
       clearDisabled: document.querySelector("#set-clear-history").disabled }));
     await page.click("#set-cancel");

@@ -54,6 +54,7 @@ def test_privacy_settings_in_a_browser(app, tmp_path):
     assert out["before"]["remember"] and "1 in the Recent list" in out["before"]["history"]
     assert len(out["before"]["online"]) == len(privacy.ONLINE) and "no telemetry" in out["before"]["page"]
     assert "the Recent list" in out["cleared"]["status"] and "where you were" in out["cleared"]["status"]
+    assert out["statusSeen"]            # (Windows check of 0536473: it was out of sight at the dialog's foot)
     assert "Nothing is kept right now" in out["cleared"]["history"] and out["placesAfterClear"] == 0
     assert out["off"]["history"].startswith("Off") and out["off"]["clearDisabled"]
     assert "Lease.pdf" not in out["recentAfter"]["text"]
