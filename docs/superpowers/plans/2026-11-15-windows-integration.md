@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** three things asked for on 2026-11-15:
-1. **TWAIN and AirScan scanners**, next to the WIA ones ZPDF drives today.
+1. **TWAIN and AirScan scanners**, next to the WIA ones ZPDF drives today (TWAIN-only devices through scan-to-folder and NAPS2, not a driver layer of our own: see Phase 2).
 2. **Start at login, minimized to the tray**, so Watch folders keep working without the window open.
 3. **First-page thumbnails of PDFs in File Explorer.**
 
@@ -23,14 +23,26 @@ First, because it needs no driver and no native code, and works the same on Linu
 - [ ] **TLS:** printers use self-signed certificates; accept them for the chosen device only and say so once.
 - [ ] **Tests:** a fake eSCL device (a small local HTTP server) with a feeder of three pages, a jam, and a duplex job.
 
-## Phase 2 (release B): TWAIN
+## Phase 2 (release B): scanners without WIA or AirScan (TWAIN-only and the rest)
 
-- [ ] **Which TWAIN:** most TWAIN drivers are 32-bit, and ZPDF runs as 64-bit Python, which can't load them. So TWAIN goes through a small **helper process**: a 32-bit and a 64-bit `zpdf-twain.exe` that loads the TWAIN data source manager (`TWAINDSM.dll`, the TWAIN Working Group's, redistributable), lists sources, sets resolution, colour, feeder/flatbed/duplex and transfers pages to files, talking to ZPDF over pipes in JSON.
-- [ ] **The helper's build:** C or C# in `packaging/windows/twain/`, built in CI and shipped in the release; `release.py` checks both are there. (A Python route, `pytwain`, only reaches 64-bit drivers; it can serve as the first step for those.)
-- [ ] **The driver's own window** as a choice ("Use the scanner's own settings window"), since some drivers offer features only there.
-- [ ] **Same interface** as WIA and eSCL; a device that has both a WIA and a TWAIN driver is listed once, WIA first, with "Try the other driver" when a scan fails.
-- [ ] **Tests:** the pipe protocol against a fake helper; the helper itself against the TWAIN Working Group's sample data source in the Windows CI job.
-- [ ] **Check on real hardware:** needs the owner's (or a friend's) TWAIN-only scanner; without one it ships marked "not tried on a real TWAIN scanner".
+**Decided with the owner (2026-11-15): ZPDF doesn't write its own TWAIN helper.** Most TWAIN drivers are 32-bit, so driving them takes compiled code in two builds, a native build step in CI and a real TWAIN scanner to test on, none of which we have. These scanners are covered two other ways, both without compiled code in ZPDF.
+
+**Task 2.1: scan to a folder, picked up by a watch folder**
+- [ ] Nearly every scanner (TWAIN-only ones included) has a button or a vendor program that saves scans into a folder. On the Scan page, "My scanner isn't listed" opens a short guide: choose (or make) the folder the scanner saves to, choose what happens to each scan (make searchable; or clean up, make searchable and compress; or a saved recipe), and where results go. It creates the watch folder (`watchfolders.py`) with those choices.
+- [ ] Watch folders take the picture files scanners write (JPEG, PNG, TIFF, multi-page TIFF), not only PDFs: each becomes a PDF first (the Scan page's own path through `scanpdf.py`), then the recipe runs.
+- [ ] Pages scanned one file each can be joined: files arriving within a short time of each other ("a batch") become one PDF, in name order, when the guide's "one document per batch" is on.
+- [ ] The Scan page shows the watched scanner folder as a source ("Scans from folder: …"), with the last results and Open.
+- [ ] Tests: the guide creates the watch folder with the chosen recipe; a JPEG and a multi-page TIFF dropped in come out as searchable PDFs; three files within the batch time become one PDF; a file still being written is left until it holds still.
+
+**Task 2.2: NAPS2 as an optional helper, if it's installed**
+- [ ] NAPS2 is a free, open-source scanning program that already drives TWAIN (32-bit drivers too), WIA and eSCL, with a command-line mode. ZPDF uses it the way it uses LibreOffice or Tesseract: found if installed (`winprograms.py`), never bundled.
+- [ ] **Before building: confirm** NAPS2's command-line options as they are today (listing devices, choosing the driver and device, resolution, colour, feeder/flatbed/duplex, output files) and that its licence allows being run as a separate program this way (the same footing as LibreOffice). Both are from memory so far.
+- [ ] With NAPS2 present, the Scan page lists its devices under "More scanners (through NAPS2)", and Scan runs it for the pages, which then go through ZPDF's own clean-up and OCR. Without it, "My scanner isn't listed" offers it as the second way ("Install NAPS2 (free) to scan from ZPDF with this scanner"), after scan-to-folder.
+- [ ] Errors in plain words: NAPS2 not found, no device, the feeder empty, cancelled.
+- [ ] Tests: a fake `naps2.console` (a script that answers the list and writes pages) behind the same `scanner` interface; the Scan page's list with and without it.
+- [ ] Check on real hardware when someone has a TWAIN-only scanner; until then it's marked "through NAPS2: not tried on a real TWAIN scanner".
+
+**Given up, knowingly:** for these scanners the scan settings live in the vendor's program or in NAPS2, not on ZPDF's Scan page; NAPS2 is a separate install.
 
 ## Phase 3 (release C): start at login, in the tray, for Watch folders
 
@@ -58,10 +70,10 @@ First, because it needs no driver and no native code, and works the same on Linu
 | Release | What | Size | Risk |
 |---|---|---|---|
 | A | eSCL / AirScan network scanners | small–medium | low: plain HTTP, testable with a fake device |
+| B | Scan to a folder with a guided watch folder; NAPS2 if installed | small–medium | low: no compiled code; NAPS2's command line to confirm first |
 | C | Tray, background watching, start at login | medium | low–medium: process lifetime, one running copy |
-| B | TWAIN through a helper process | medium–large | medium: native helper, 32-bit drivers, needs real hardware |
 | D | Explorer thumbnails | medium | medium–high: native DLL inside Explorer; Smart App Control blocks it unsigned |
 
-**Suggested order:** A, then C (both pure Python and checkable now), then B and D, which need a native build step in CI.
+**Order:** A, B, C (all Python, checkable now), then D, the only one that needs a native build step in CI. B's scan-to-folder is most useful together with C (watching without the window open).
 
-**Decisions for the owner:** B and D each add compiled Windows code to the releases (today everything is Python and JavaScript); D is limited on PCs with Smart App Control unless releases are code-signed.
+**Decisions for the owner:** D adds compiled Windows code to the releases (today everything is Python and JavaScript) and is limited on PCs with Smart App Control unless releases are code-signed. TWAIN through our own helper was decided against (Phase 2).
