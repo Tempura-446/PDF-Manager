@@ -64,7 +64,10 @@ const DRAWING_SHAPES = [["polycloud", "Cloud, any shape"], ["polyline", "Line wi
 // A field's script made only of Acrobat's form functions (AFNumber_Format,
 // AFSimple_Calculate...): how forms format and add up. The same test as
 // risks.py's FORM_SCRIPT.
-const FORM_SCRIPT = /^\s*(?:AF\w+\s*\((?:[^()]|\([^()]*\))*\)\s*;?\s*)+$/;
+// (Each space can be matched in one way only, so a script written to make
+// the test slow can't; and none that long is a form function anyway.)
+const FORM_SCRIPT = /^\s*(?:AF\w+\s*\((?:[^()]|\([^()]*\))*\)\s*(?:;\s*)?)+$/;
+const FORM_SCRIPT_MAX = 2000;
 
 /** ``doc`` (pdf.js's) as the scripting sandbox may see it: without the
  *  document's own scripts and its pages' open and close actions, and with
@@ -81,7 +84,7 @@ function formScriptsOnly(doc) {
       if (!field?.actions) return field;
       const isMap = field.actions instanceof Map, actions = new Map();
       for (const [when, scripts] of (isMap ? field.actions : Object.entries(field.actions))) {
-        const kept = (Array.isArray(scripts) ? scripts : [scripts]).filter((js) => typeof js === "string" && FORM_SCRIPT.test(js));
+        const kept = (Array.isArray(scripts) ? scripts : [scripts]).filter((js) => typeof js === "string" && js.length <= FORM_SCRIPT_MAX && FORM_SCRIPT.test(js));
         if (kept.length) actions.set(when, kept);
       }
       return { ...field, actions: !actions.size ? null : isMap ? actions : Object.fromEntries(actions) };

@@ -44,7 +44,10 @@ ACTION_KIND = {"/JavaScript": "scripts", "/Launch": "launch", "/SubmitForm": "su
                "/ImportData": "remote", "/GoToR": "remote", "/GoToE": "remote"}
 # A field's script made only of Acrobat's form functions (AFNumber_Format,
 # AFSimple_Calculate...): how forms format and add up, here and in Acrobat.
-FORM_SCRIPT = re.compile(r"\s*(?:AF\w+\s*\((?:[^()]|\([^()]*\))*\)\s*;?\s*)+")
+# (Each space can be matched in one way only, so a script written to make
+# the test slow can't; and none that long is a form function anyway.)
+FORM_SCRIPT = re.compile(r"\s*(?:AF\w+\s*\((?:[^()]|\([^()]*\))*\)\s*(?:;\s*)?)+")
+FORM_SCRIPT_MAX = 2000
 ADDRESS = re.compile(r"(?<![@\w.-])(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,24})(?![\w-])", re.I)
 LINK_PAGES, LINKS = 80, 400  # how far misleading links are looked for
 EXAMPLES = 5
@@ -203,7 +206,7 @@ def _judge(action, where):
     kind = ACTION_KIND.get(action.get("/S"))
     if kind == "scripts":
         script = _text(action.get("/JS"))
-        if where == "field" and FORM_SCRIPT.fullmatch(script):
+        if where == "field" and len(script) <= FORM_SCRIPT_MAX and FORM_SCRIPT.fullmatch(script):
             return None, ""
         return kind, " ".join(script.split())[:80]
     if kind == "launch":

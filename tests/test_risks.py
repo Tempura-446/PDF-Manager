@@ -258,3 +258,15 @@ def test_command_line(tmp_path, capsys):
     assert "took out 1 script, 1 attachment that could run" in capsys.readouterr().out
     assert main(["make-safe", str(out), "--check"]) == 0
     assert "nothing that could do harm" in capsys.readouterr().out
+
+
+def test_a_script_made_to_stall_the_form_test_does_not(tmp_path):
+    import time
+
+    for script in ("AFa()" + " AFa()" * 60 + "!", "AFa(" + "(" * 500, "AFa()" + " " * 1500 + "x"):
+        began = time.perf_counter()
+        assert not (len(script) <= risks.FORM_SCRIPT_MAX and risks.FORM_SCRIPT.fullmatch(script))
+        assert time.perf_counter() - began < 0.5
+    for fine in ('AFNumber_Format(2, 0, 0, 0, "", true);', 'AFSimple_Calculate("SUM", new Array("a", "b"));',
+                 "AFDate_FormatEx(\"dd/mm/yyyy\"); AFRange_Validate(true, 0, false, 0)"):
+        assert risks.FORM_SCRIPT.fullmatch(fine)
