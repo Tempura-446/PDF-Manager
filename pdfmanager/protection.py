@@ -61,7 +61,7 @@ def _runs(lowered):
 def strength(password):
     """{"score": 0 (very weak) to 4 (strong), "label", "advice"} for a
     password. An empty one has no label."""
-    password = str(password or "")
+    password = str(password or "")[:200]  # (longer than that makes no difference to the answer)
     if not password:
         return {"score": 0, "label": "", "advice": ""}
     lowered = password.lower()
@@ -77,7 +77,9 @@ def strength(password):
         # A phrase: each word is one choice among a few thousand, not letter by letter.
         guesses = min(guesses, 7776.0 ** words)
 
-    bare = re.sub(r"[\d\W_]+$", "", lowered)
+    bare = lowered
+    while bare and not bare[-1].isalpha():  # (the tail of digits and signs, taken off one by one)
+        bare = bare[:-1]
     stem, tail = bare.translate(LEET), lowered[len(bare):]  # "Passw0rd1!" is "password" and "1!"
     if lowered in COMMON or plain in COMMON or stem in COMMON or letters in COMMON:
         guesses, advice = min(guesses, 1e3), "This is one of the most common passwords: it's guessed at once."
@@ -153,46 +155,27 @@ def info(path):
 _PAD = bytes.fromhex("28bf4e5e4e758a4164004e56fffa01082e2e00b6d0683e802f0ca9fe6453697a")
 
 
-def _rc4(key, data):
-    box = list(range(256))
-    j = 0
-    for i in range(256):
-        j = (j + box[i] + key[i % len(key)]) % 256
-        box[i], box[j] = box[j], box[i]
-    out, i, j = bytearray(), 0, 0
-    for byte in data:
-        i = (i + 1) % 256
-        j = (j + box[i]) % 256
-        box[i], box[j] = box[j], box[i]
-        out.append(byte ^ box[(box[i] + box[j]) % 256])
-    return bytes(out)
-
-
 def _user_password(path, owner_password):
     """The password to open an RC4-protected PDF, worked out from its
     permissions password (the old scheme keeps it, scrambled with that
-    password: PDF 1.7, algorithm 7). "" when anyone can open the file."""
-    import hashlib
-
+    password: PDF 1.7, algorithm 7). "" when anyone can open the file.
+    pypdf's own reading of the old scheme does the work."""
     from pypdf import PdfReader
+    from pypdf._crypt_providers import rc4_decrypt
+    from pypdf._encryption import AlgV4
 
     encrypt = PdfReader(str(path)).trailer["/Encrypt"].get_object()
     revision = int(encrypt.get("/R", 2))
-    length = int(encrypt.get("/Length", 40)) // 8 if revision >= 3 else 5
+    bits = int(encrypt.get("/Length", 40)) if revision >= 3 else 40
     scrambled = encrypt["/O"]
     scrambled = scrambled.original_bytes if hasattr(scrambled, "original_bytes") else bytes(scrambled)
-    padded = (owner_password.encode("latin-1", "replace") + _PAD)[:32]
-    digest = hashlib.md5(padded).digest()  # noqa: S324 - the PDF standard's own scheme, read here, not chosen
-    if revision >= 3:
-        for _ in range(50):
-            digest = hashlib.md5(digest[:length]).digest()  # noqa: S324
-    key = digest[:length]
+    key = AlgV4.compute_O_value_key(owner_password.encode("latin-1", "replace"), revision, bits)
     if revision == 2:
-        plain = _rc4(key, scrambled)
+        plain = rc4_decrypt(key, scrambled)
     else:
         plain = scrambled
         for i in range(19, -1, -1):
-            plain = _rc4(bytes(b ^ i for b in key), plain)
+            plain = rc4_decrypt(bytes(b ^ i for b in key), plain)
     end = -1
     for cut in range(33):  # the password, then as much of the padding as fits in 32 bytes
         if plain[cut:32] == _PAD[:32 - cut]:
