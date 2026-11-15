@@ -384,11 +384,40 @@ def check(path, password=None):
     return {"risks": found, "level": found[0]["severity"] if found else "none"}
 
 
+SIGNED_NOTE = ("This file is digitally signed. Taking parts out changes it, so the signature shows as no "
+               "longer valid on the safe copy. The original is untouched and still verifies: keep it.")
+
+
+def signed(path, password=None):
+    """Whether the PDF carries a digital signature (a signed signature field)."""
+    try:
+        reader = core.open_pdf(path, password)
+        acroform = _get(reader.trailer["/Root"].get_object(), "/AcroForm")
+        if not isinstance(acroform, DictionaryObject):
+            return False
+        for field in _walk(acroform.get("/Fields"), "/Kids"):
+            kind = field.get("/FT")
+            if kind is None and "/Parent" in field:
+                kind = field["/Parent"].get_object().get("/FT")
+            if kind == "/Sig" and field.get("/V") is not None:
+                return True
+    except Exception:  # noqa: BLE001 - a file that can't be read has no signature to speak of
+        return False
+    return False
+
+
 def make_safe(path, output, password=None):
     """Write a copy of the PDF without what ``check`` warns about (scripts,
     actions that start programs, send what's typed, open a web address by
     themselves or point at other files, and attachments that can run),
-    keeping the rest. Returns how many of each were taken out."""
+    keeping the rest. Returns how many of each were taken out.
+
+    A file with nothing to take out is copied as it is, byte for byte: a
+    digital signature on it stays valid. One that had parts taken out is
+    written anew, which any signature on it doesn't survive (``signed``
+    says whether there is one, so the caller can warn)."""
+    import shutil
+
     reader = core.open_pdf(path, password)
     writer = core.clone_document(reader)
     root = writer._root_object
@@ -417,5 +446,9 @@ def make_safe(path, output, password=None):
                 if holder[i].get_object() is at:
                     del holder[i]
         removed["attachments"] += 1
+    if not sum(removed.values()):
+        if str(path) != str(output):
+            shutil.copyfile(path, output)  # untouched: what was signed is still what's there
+        return removed
     core._write(writer, output)
     return removed

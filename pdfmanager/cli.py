@@ -359,6 +359,8 @@ def run_make_safe(a, src, out, pw):
                 print(f"    {example}")
         return None
     removed = risks.make_safe(src, out, password=pw)
+    if sum(removed.values()) and risks.signed(src, pw):
+        print(f"  note: {risks.SIGNED_NOTE}")
     return f"{out}  (took out {risks.summary(removed)})"
 
 

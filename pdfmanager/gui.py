@@ -806,6 +806,8 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
     elif op == "makesafe":
         removed = risks.make_safe(src, out, password=password)
         notes.append(f"{src.name}: took out {risks.summary(removed)}")
+        if sum(removed.values()) and risks.signed(src, password):
+            notes.append(risks.SIGNED_NOTE)
         left = [r for r in risks.check(out, password)["risks"]]
         notes.extend(f"Still there: {r['detail']}" for r in left)
     elif op == "sign-cert":

@@ -354,7 +354,9 @@ def suggestions(found, made_by=None):
     if removable and made_by != "makesafe":
         out.append({"op": "makesafe", "title": "Make it safe",
                     "why": "; ".join(r["title"] for r in removable[:2])
-                    + ("" if len(removable) <= 2 else f" (and {len(removable) - 2} more)")})
+                    + ("" if len(removable) <= 2 else f" (and {len(removable) - 2} more)")
+                    + (". It's signed: the safe copy's signature won't verify, the original's still will"
+                       if found.get("signatures") else "")})
     if found.get("weak_protection") and made_by != "upgrade-protection":
         out.append({"op": "upgrade-protection", "title": "Protect it better",
                     "why": f"Its encryption ({found['weak_protection']}) is old and quickly broken"})

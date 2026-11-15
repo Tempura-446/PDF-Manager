@@ -30,6 +30,12 @@ Stronger protection of your own documents.
   keeps no earlier version; or, if a redacted word is still somewhere
   (the title, an attachment's name or contents), exactly where, and what
   takes it out.
+- **Make safe and signed files.** Taking parts out of a digitally signed
+  PDF changes it, so the signature no longer verifies on the safe copy.
+  ZPDF now says so, before (in the suggestion) and after (in the result),
+  and reminds you that the original is untouched and still verifies. A
+  signed file with nothing to take out is copied byte for byte, so its
+  signature stays valid.
 - `pdfm make-safe --check` and `pdfm upgrade-protection --check` exit
   with code 2 when a file could do harm or is weakly protected, for
   scripts.

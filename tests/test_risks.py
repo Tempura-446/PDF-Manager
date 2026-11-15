@@ -346,3 +346,58 @@ def test_a_byte_order_mark_before_a_form_function_is_read_as_the_reader_reads_it
     field["/AA"][NameObject("/F")] = action("/JavaScript", JS="﻿app.alert(1)")
     w.write(str(tmp_path / "bad.pdf"))
     assert kinds(risks.check(tmp_path / "bad.pdf"))["scripts"]["count"] == 1
+
+
+# -- signed files -------------------------------------------------------------------------------
+
+def signed_file(tmp_path, with_open_action):
+    pytest.importorskip("pyhanko")
+    from pdfmanager import certsign
+    from test_certsign import PFX_PASSWORD, make_id
+
+    base = plain(tmp_path / "contract.pdf", ["A contract"])
+    if with_open_action:
+        w = PdfWriter(clone_from=str(base))
+        w._root_object[NameObject("/OpenAction")] = action("/URI", URI="http://track.example/opened")
+        w.write(str(base))
+    out = tmp_path / "contract-signed.pdf"
+    certsign.sign(base, out, make_id(tmp_path / "jane.pfx")[0], PFX_PASSWORD, page=1, box=[50, 50, 250, 110])
+    return out
+
+
+def intact(path):
+    from pdfmanager import certsign
+
+    return [s["intact"] for s in certsign.verify(path)]
+
+
+def test_a_signed_file_with_nothing_to_take_out_keeps_its_signature(tmp_path):
+    src = signed_file(tmp_path, with_open_action=False)
+    assert risks.signed(src) and not risks.signed(plain(tmp_path / "p.pdf"))
+    out = tmp_path / "safe.pdf"
+    removed = risks.make_safe(src, out)
+    assert sum(removed.values()) == 0
+    assert out.read_bytes() == src.read_bytes() and intact(out) == [True]   # byte for byte: still verifies
+
+
+def test_making_a_signed_file_safe_says_what_happens_to_the_signature(tmp_path):
+    from pdfmanager import filefacts, gui
+
+    src = signed_file(tmp_path, with_open_action=True)
+    before = src.read_bytes()
+    why = filefacts.suggestions(filefacts.facts(src))[0]
+    assert why["op"] == "makesafe" and "signed" in why["why"]            # said before it's run
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    notes = []
+    (result,) = gui._run_file_op("makesafe", src, out_dir, {}, None, [], notes)
+    assert risks.SIGNED_NOTE in notes
+    assert result != src and src.read_bytes() == before and intact(src) == [True]   # the original still verifies
+    assert intact(result) == [False] and risks.check(result)["level"] == "none"     # the copy is safe, not signed
+    # an unsigned file gets no such note
+    notes = []
+    plain_risky = PdfWriter(clone_from=str(plain(tmp_path / "q.pdf")))
+    plain_risky._root_object[NameObject("/OpenAction")] = action("/URI", URI="http://track.example/x")
+    plain_risky.write(str(tmp_path / "risky.pdf"))
+    gui._run_file_op("makesafe", tmp_path / "risky.pdf", out_dir, {}, None, [], notes)
+    assert risks.SIGNED_NOTE not in notes
