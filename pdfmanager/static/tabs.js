@@ -207,7 +207,11 @@ export const Tabs = (Base) => class extends Base {
       marked: this.markupMode === "REDACT" && !!tab && this._redactCount(tab) > 0, active: this.active,
     });
     // A dot (and the word, for screen readers): changes not saved, or a tool's result not saved anywhere yet.
-    for (const [id, parts] of this.tabEls) parts.dot.hidden = parts.unsaved.hidden = !ui.dots.get(id);
+    for (const [id, parts] of this.tabEls) {
+      const dot = !!ui.dots.get(id);
+      parts.dot.hidden = parts.unsaved.hidden = !dot;
+      parts.unsaved.textContent = dot ? ", unsaved" : "";  // (the words too: some tools read hidden text)
+    }
     // With one document (no tab bar) the title says it too.
     this.titleDot.hidden = this.titleSr.hidden = !ui.titleDot;
     this.titleText.textContent = ui.heading;
@@ -247,7 +251,7 @@ export const Tabs = (Base) => class extends Base {
       if (!parts) {
         const dot = el("span", { class: "rd-dot", title: "Not saved" });
         const label = el("span", { class: "rd-doctab-label" }, tab.name);
-        const unsaved = el("span", { class: "rd-sr" }, ", unsaved");
+        const unsaved = el("span", { class: "rd-sr", hidden: true });
         const btn = el("button", { type: "button", class: "rd-doctab-name", role: "tab", title: tab.name }, dot, label, unsaved);
         btn.addEventListener("click", () => this.#switchTo(tab));
         const close = el("button", { type: "button", class: "rd-doctab-x", title: "Close", "aria-label": `Close ${tab.name}`, html: svg("x") });

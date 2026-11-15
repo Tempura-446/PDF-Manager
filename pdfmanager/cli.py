@@ -334,6 +334,8 @@ def run_make_safe(a, src, out, pw):
         seen = risks.check(src, pw)
         if not seen["risks"]:
             print(f"{src}: nothing that could do harm")
+        if seen["risks"]:
+            a.risks_found = True  # the exit code says so (2), for scripts
         for risk in seen["risks"]:
             print(f"{src}: [{risk['severity']}] {risk['title']}: {risk['detail']}")
             for example in risk["examples"]:
@@ -918,7 +920,7 @@ def run_per_file(a):
         # text and info print their results; the count is status, not data.
         print(f"{len(inputs) - failures} of {len(inputs)} file(s) done",
               file=sys.stderr if a.command in ("text", "info") else sys.stdout)
-    return 1 if failures else 0
+    return 1 if failures else 2 if getattr(a, "risks_found", False) else 0
 
 
 # --------------------------------------------------------------------------
@@ -1495,7 +1497,8 @@ def build_parser():
                   "take out what could do harm in a PDF from someone else (scripts, actions that "
                   "start programs or send what's typed, attachments that can run); keeps the rest")
     sp.add_argument("--check", action="store_true",
-                    help="only say what the file can do, without writing a copy")
+                    help="only say what the file can do, without writing a copy (exit code 2 "
+                         "when a file has something that could do harm, 0 when none does)")
 
     sp = per_file("sanitize", run_sanitize,
                   "remove hidden data: document details, scripts, attached files")

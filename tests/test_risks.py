@@ -250,7 +250,7 @@ def test_command_line(tmp_path, capsys):
     from pdfmanager.cli import main
 
     src = scripted(tmp_path)
-    assert main(["make-safe", str(src), "--check"]) == 0
+    assert main(["make-safe", str(src), "--check"]) == 2          # 2: something that could do harm
     said = capsys.readouterr().out
     assert "[high] It has scripts" in said and "invoice.exe" in said
     out = tmp_path / "cli.pdf"
