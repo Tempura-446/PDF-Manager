@@ -1371,6 +1371,12 @@ def _run_operation(op, files, opts, password=None, extra_files=None, work=None, 
     # Digital ID (that tool takes it as it is), and no other tool can read it.
     people = [Path(f).name for f in files if Path(f).suffix.lower() == ".pdf" and certcrypt.is_for_people(f)]
     if op == "decrypt-cert":
+        # (Files that aren't protected this way are left out, and said; with
+        # none that is, the tool's own words say what it's for.)
+        plain = [f for f in files if Path(f).name not in people]
+        if people and plain:
+            notes.append("left out (not protected for particular people): " + ", ".join(Path(f).name for f in plain))
+            files = [f for f in files if Path(f).name in people]
         return _run_files(op, list(files), opts, password, extra_files, work, notes)
     if people:
         raise UserError(f"{people[0]} {certcrypt.NOT_READABLE}")

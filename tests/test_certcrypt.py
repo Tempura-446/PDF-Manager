@@ -205,6 +205,19 @@ def test_any_other_tool_in_the_app_says_what_the_file_is(tmp_path, people):
                                       {"pfx": people["Ann Reader"][0]}, work, [])
     assert name == "for_opened.pdf" and data.startswith(b"%PDF")
 
+    # a plain file in the same list is left out, and said, instead of stopping the run
+    work2 = tmp_path / "work2"
+    work2.mkdir()
+    notes = []
+    name, data, _ = gui.run_operation("decrypt-cert", [tmp_path / "p.pdf", out], {"pfx_password": PW}, None,
+                                      {"pfx": people["Ann Reader"][0]}, work2, notes)
+    assert name == "for_opened.pdf" and any("left out" in n and "p.pdf" in n for n in notes)
+    work3 = tmp_path / "work3"
+    work3.mkdir()
+    with pytest.raises(core.PdfManagerError, match="isn't protected for particular people"):
+        gui.run_operation("decrypt-cert", [tmp_path / "p.pdf"], {"pfx_password": PW}, None,
+                          {"pfx": people["Ann Reader"][0]}, work3, [])
+
 
 def test_how_long_a_signature_stays_checkable(tmp_path):
     """Said with each signature: with a timestamp it lasts; without one it

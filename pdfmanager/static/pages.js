@@ -239,6 +239,8 @@ export class PageBoard {
       if (gen !== this.gen) return "stale";
       this.task = null;
       if (locked) { this.#state(locked); return locked; }
+      // (pdf.js can't read a PDF encrypted for certificates; said as what it is.)
+      if (/unknown encryption method/i.test(err.message || "")) { this.#state("for-people"); return "for-people"; }
       this.#state("error", err.message);
       return "error";
     }
@@ -709,6 +711,7 @@ export class PageBoard {
       loading: "Loading pages…",
       password: "This PDF is password-protected. Enter its password under Options to see the pages.",
       "wrong-password": "That password doesn't open this PDF. Check the password under Options.",
+      "for-people": "This PDF is protected for particular people: open it with your Digital ID first (Protect → Open with Digital ID).",
       error: `The pages can't be shown${detail ? ": " + detail : "."}`,
     }[name];
     if (name === "ready") this.#update();

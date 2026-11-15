@@ -1499,7 +1499,7 @@ function plural(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
 /** Show an error above the page. ``detail``: the technical words behind a
  *  plain message (folded away under "Details"); ``focus``: move focus to it. */
 function showError(text, { detail = "", focus = false } = {}) {
-  text = String(text || "").replace(/^./, (c) => c.toUpperCase());  // (the server's words start in lower case)
+  text = String(text || "").replace(/^(?!\S+\.[A-Za-z0-9]{2,5}(?:[\s:]|$))./, (c) => c.toUpperCase());  // (the server's words start in lower case)
   const e = $("error");
   const more = [];
   if (/Try Repair/.test(text) && current && current.id !== "repair" && ops.some((o) => o.id === "repair")) {
@@ -1712,7 +1712,7 @@ async function fpSignWithPen(page = 0, line = null) {
 /** Tools that run in the panel: one PDF in, nothing to draw or arrange on the pages. */
 const runsInPanel = (op) => !!op && op.files === "pdf" && !op.board && !op.panel && !((op.min || 1) >= 2);
 const fp = { tab: null, key: "", seq: 0, timer: 0, items: new Map(), open: null, facts: null, grid: new Map() };
-const capital = (text) => String(text || "").replace(/^./, (c) => c.toUpperCase());
+const capital = (text) => String(text || "").replace(/^(?!\S+\.[A-Za-z0-9]{2,5}(?:[\s:]|$))./, (c) => c.toUpperCase());
 
 /** The facts as chips: factsLine's parts, "tagged" too; what needs doing stands out. */
 function factChips(facts) {
@@ -3943,7 +3943,7 @@ async function updateLive() {
     $("live-img").src = liveUrl;
   } catch (e) {
     if (seq !== liveSeq) return;
-    message = String(e.message || e).replace(/^./, (c) => c.toUpperCase());
+    message = String(e.message || e).replace(/^(?!\S+\.[A-Za-z0-9]{2,5}(?:[\s:]|$))./, (c) => c.toUpperCase());
   }
   $("live").classList.remove("busy");
   $("live").classList.toggle("failed", !!message);
@@ -4022,7 +4022,7 @@ async function run(preview) {
     const said = plainError(err.message);
     showError(said, { detail: err.message, focus: true });
     // …and by the button too, where the eyes are.
-    $("run-err").replaceChildren(icon("alert"), String(said || "").replace(/^./, (c) => c.toUpperCase()));
+    $("run-err").replaceChildren(icon("alert"), String(said || "").replace(/^(?!\S+\.[A-Za-z0-9]{2,5}(?:[\s:]|$))./, (c) => c.toUpperCase()));
     $("run-err").hidden = false;
   } finally { busy(false); }
 }
