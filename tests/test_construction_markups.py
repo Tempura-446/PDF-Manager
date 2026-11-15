@@ -152,6 +152,11 @@ def test_a_dimension_reads_the_right_way_up(tmp_path):
     _, (up,) = added(tmp_path, {"kind": "dimension", "points": [[100, 300], [100, 500]], "value": "2 m"})
     a, b = (float(v) for v in re.search(r"Tf ((?:[-\d.]+ ){6})Tm", drawn(up)).group(1).split()[:2])
     assert abs(a) < 0.01 and b > 0.99
+    # ... whichever way it leans by a hair, and whichever end was first
+    for points in ([[100, 300], [101, 500]], [[101, 300], [100, 500]], [[100, 500], [101, 300]]):
+        _, (lean,) = added(tmp_path, {"kind": "dimension", "points": points, "value": "2 m"})
+        b = float(re.search(r"Tf ((?:[-\d.]+ ){6})Tm", drawn(lean)).group(1).split()[1])
+        assert b > 0.99, points
 
 
 def test_review_stamps(tmp_path):

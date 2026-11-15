@@ -89,8 +89,8 @@ const { chromium } = require("playwright");
     // its corners, it snaps onto them; the sheet's scale gives the length.
     await page.evaluate(() => { reader.activeTab.scales = { ...(reader.activeTab.scales || {}), "*": { ratio: 48, units: "ft", label: "1/4\" = 1'-0\"" } }; });
     await shape("dimension");
-    await page.evaluate(() => reader._geometry(1));  // the drawing's lines, read ahead as measuring does
-    await page.waitForFunction(() => !!reader._geometry(1), null, { timeout: 30000 });
+    // (Choosing Dimension reads the drawing's lines ahead, so the first press snaps too.)
+    await page.waitForFunction(() => !!reader.activeTab.geometry?.get(1), null, { timeout: 30000 });
     await drag([101.5, 301.5], [245, 299]);
     out.steps.dimDraft = await page.evaluate(() => document.querySelector(".rd-dimdraft")?.textContent || "");
     await page.mouse.up();

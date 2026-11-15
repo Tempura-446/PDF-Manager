@@ -262,7 +262,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     tip("IMAGES", "Edit the pictures on the page: drag to move, drag a corner to resize (Shift: freely), replace or delete");
     tip("LINKS", "Edit links: click one to change where it goes or delete it; drag a box to add one");
     tip("STAMPS", "Stamp the page (Approved, Draft…): click where it goes, or drag its size");
-    this.stampSelect = el("select", { class: "rd-zoom", "aria-label": "Stamp", hidden: true },
+    this.stampSelect = el("select", { class: "rd-zoom rd-wide", "aria-label": "Stamp", hidden: true },
       ...STAMPS.map((v) => el("option", { value: v }, v[0] + v.slice(1).toLowerCase())),
       el("optgroup", { label: "Drawing review" }, ...REVIEW_STAMPS.map((v) => el("option", { value: v }, v[0] + v.slice(1).toLowerCase()))),
       el("option", { value: "" }, "Your own words…"));
@@ -270,7 +270,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     this.stampDated = el("input", { type: "checkbox", checked: store.get("pdfm-stamp-dated", true) });
     this.stampDatedLabel = el("label", { class: "rd-check", hidden: true, title: "Add your name and the date and time under the words" },
       this.stampDated, "Name and date");
-    this.shapeSelect = el("select", { class: "rd-zoom", "aria-label": "Shape", hidden: true },
+    this.shapeSelect = el("select", { class: "rd-zoom rd-wide", "aria-label": "Shape", hidden: true },
       ...SHAPES.map(([v, label]) => el("option", { value: v }, label)),
       el("optgroup", { label: "For drawings" }, ...DRAWING_SHAPES.map(([v, label]) => el("option", { value: v }, label))));
     this.shapeSelect.value = store.get("pdfm-shape", "rect");
@@ -736,7 +736,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
     if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); this.print(); return; }
     if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); this._saveKey(e); return; }
-    if (mod && !isTyping(e) && !this.scalebar.hidden && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")
+    if (mod && !isTyping(e) && !this.scalebar.hidden && this.annotbar.hidden && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")
         && this._measureUndo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); return; }
     // Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z): what the Undo and Redo buttons do, with
     // any tool on or none (with Select, pdf.js has no keys of its own; with

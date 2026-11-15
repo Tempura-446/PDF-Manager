@@ -123,7 +123,7 @@ export const Annotating = (Base) => class extends Base {
     this.textEditMode = editText;
     this.markupMode = markup ? name : null;
     this.#cancelMarkup();
-    if (name === "SHAPE") this._shapeChosen();  // how the chosen shape is drawn, if it isn't a plain drag
+    if (name === "SHAPE") this._shapeChosen(false);  // how the chosen shape is drawn, if it isn't a plain drag
     this.root.classList.toggle("rd-edittext", editText);
     this.root.classList.toggle("rd-markup", markup);
     this.root.dataset.markup = markup ? name.toLowerCase() : "";
@@ -280,6 +280,8 @@ export const Annotating = (Base) => class extends Base {
     if (POLY_SHAPES.has(shape)) { this.#polyClick(e, at, shape); return; }
     this.#cancelMarkup();
     if (shape === "dimension" && !e.altKey) {  // onto the drawing's lines, like a measurement (Alt: exactly here)
+      // (The page's lines may still be being read: then the start is snapped as soon as they are.)
+      at.unsnapped = !this._geometry(at.n);
       at.pt = this._snapNear(at.n, at.pt, at.view.viewport.scale);
       [at.x, at.y] = at.view.viewport.convertToViewportPoint(...at.pt);
     }
@@ -308,6 +310,11 @@ export const Annotating = (Base) => class extends Base {
       }
     }
     d.end = { x, y, pt: view.viewport.convertToPdfPoint(x, y) };
+    if (d.kind === "dimension" && d.start.unsnapped && this._geometry(d.start.n)) {
+      d.start.unsnapped = false;
+      d.start.pt = this._snapNear(d.start.n, d.start.pt, view.viewport.scale);
+      [d.start.x, d.start.y] = view.viewport.convertToViewportPoint(...d.start.pt);
+    }
     if (d.kind === "dimension" && !e.altKey && !e.shiftKey) {
       d.end.pt = this._snapNear(d.start.n, d.end.pt, view.viewport.scale);
       [x, y] = [d.end.x, d.end.y] = view.viewport.convertToViewportPoint(...d.end.pt);
@@ -345,12 +352,12 @@ export const Annotating = (Base) => class extends Base {
     if (kind === "callout") { this.#openCalloutBox(start, end, d.el, { color, width: Math.min(width, 3) }); return; }
     if (kind === "dimension") {
       const { value, scale } = this._dimensionOf(page, start.pt, end.pt);
-      if (!scale && !this.noScaleHinted) {
-        this.noScaleHinted = true;
-        this.toast("This sheet has no scale set, so the dimension is in inches on paper. Set the scale on the Scale bar for real lengths.", 7000);
-      }
       this._applyMarkup([{ op: "add", page, kind, points: [start.pt, end.pt], value, scale: scale || undefined, color, width: Math.min(width, 3) }])
-        .finally(() => d.el.remove());
+        .finally(() => {
+          d.el.remove();
+          // After the page is shown again, so nothing takes its place.
+          if (!scale) this.toast("This sheet has no scale set, so the dimension is in inches on paper. Set the scale on the Scale bar for real lengths.", 7000);
+        });
       return;
     }
     const change = kind === "arrow" || kind === "line"
@@ -361,9 +368,14 @@ export const Annotating = (Base) => class extends Base {
 
   // -- markups for drawings: a cloud or a line through the points clicked, a callout --
   /** The shape was chosen in the list: say how the click-by-click ones work. */
-  _shapeChosen() {
+  _shapeChosen(byHand = true) {
     this.#cancelMarkup();
     const shape = this.shapeSelect.value;
+    if (shape === "dimension") this._geometry(this.pdfViewer.currentPageNumber || 1);  // the drawing's lines, read ahead for snapping
+    // Said when the shape is picked, and once more when its tool is next
+    // turned on: not after every markup placed (the tool is set again then).
+    if (!byHand && this.shapeHinted === shape) return;
+    this.shapeHinted = shape;
     const how = POLY_SHAPES.has(shape) ? "Click each corner; double-click or press Enter to finish (Backspace: back one point, Esc: cancel)."
       : shape === "dimension" ? "Drag from one end to the other: the ends snap to the drawing's lines (Alt: no snapping), and the length uses the sheet's scale."
       : shape === "callout" ? "Drag from what you're pointing at to where the words go, then type them." : "";
@@ -421,6 +433,9 @@ export const Annotating = (Base) => class extends Base {
   #polyDraw() {
     const d = this.polyDraft;
     if (!d) return;
+    // The page is drawn afresh after a zoom: the preview goes back on it.
+    d.view = this.pdfViewer.getPageView(d.page - 1) || d.view;
+    if (!d.el.isConnected || d.el.parentNode !== d.view.div) d.view.div?.append(d.el);
     const vp = d.view.viewport, color = this.#markupColor();
     const width = Math.max(1, (this.annotParams?.size?.shape || 2) * vp.scale);
     const pts = [...d.pts, ...(d.hover ? [d.hover] : [])].map((p) => vp.convertToViewportPoint(...p));
@@ -434,7 +449,7 @@ export const Annotating = (Base) => class extends Base {
   }
 
   #polyKey(e) {
-    if (!this.polyDraft || isTyping(e)) return;
+    if (!this.polyDraft || e.target.closest?.("input:not([type=checkbox]), textarea, [contenteditable]")) return;  // (a list keeps the keys: the shape was just picked there)
     if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); this.#polyFinish(); }
     else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); this.#endPoly(); }
     else if (e.key === "Backspace") {
@@ -606,7 +621,8 @@ export const Annotating = (Base) => class extends Base {
       if (seq !== this.commentsSeq || doc !== this.doc) return;
       for (const a of annots) {
         if (!KIND_NAMES[a.subtype] || a.replyType === "Group") continue;
-        items.push({ page: n, id: a.id, kind: a.subtype === "Line" && a.lineEndings?.[1] && a.lineEndings[1] !== "None" ? "Arrow" : KIND_NAMES[a.subtype],
+        items.push({ page: n, id: a.id, kind: a.subtype === "Line" && a.lineEndings?.every((end) => end && end !== "None") ? "Dimension"
+            : a.subtype === "Line" && a.lineEndings?.[1] && a.lineEndings[1] !== "None" ? "Arrow" : KIND_NAMES[a.subtype],
           text: a.contentsObj?.str || "", author: a.titleObj?.str || "", date: a.modificationDate || a.creationDate,
           reply: a.inReplyTo || null, rect: a.rect, color: a.color });
       }

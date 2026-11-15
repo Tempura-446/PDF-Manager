@@ -593,7 +593,10 @@ def _drawing_markup(writer, page, page_ref, change, author):
     if value:
         # Along the line, above it and reading left to right as the page is shown.
         ua, ub = to_up(pts[0]), to_up(pts[1])
-        if ub[0] < ua[0] or (abs(ub[0] - ua[0]) < 0.01 and ub[1] < ua[1]):
+        # Left to right; a line that goes (nearly) straight up the page reads
+        # upwards, whichever way it leans by a hair.
+        upright = abs(ub[0] - ua[0]) <= 0.15 * abs(ub[1] - ua[1])
+        if (ub[1] < ua[1]) if upright else (ub[0] < ua[0]):
             ua, ub = ub, ua
         ulen = math.hypot(ub[0] - ua[0], ub[1] - ua[1])
         cos, sin = (ub[0] - ua[0]) / ulen, (ub[1] - ua[1]) / ulen
