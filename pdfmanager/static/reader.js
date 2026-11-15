@@ -469,6 +469,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
       this.#menuItem("spread", "Two-page view", () => this.toggleSpread(), spread),
       this.#menuItem("hand", "Hand tool (drag to scroll)", () => this.toggleHand(), this.container.classList.contains("hand")),
       this.#menuItem("moon", "Dark pages", () => this.toggleDarkPages(), this.container.classList.contains("dark")),
+      this.#menuItem("link", "Ask before opening web links", () => store.set("pdfm-link-ask", !store.get("pdfm-link-ask", true)), store.get("pdfm-link-ask", true)),
       el("hr"),
       this.#menuItem("full", "Full screen", () => this.toggleFullscreen()),
       this.#menuItem("print", "Print…", () => this.print()),
@@ -709,6 +710,17 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     // (Pressed and let go without moving: no "click" event, which the browser
     // doesn't always send when pdf.js's text layer moves things under the
     // pointer meanwhile.)
+    // A link out of the document: its real address is shown first (_openLink).
+    for (const type of ["click", "auxclick"]) {
+      this.container.addEventListener(type, (e) => {
+        const a = e.target.closest?.(".annotationLayer a[href]");
+        const href = a?.getAttribute("href");
+        if (!href || href.startsWith("#") || (type === "auxclick" && e.button !== 1)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this._openLink(a.href);
+      }, true);
+    }
     let pressed = null;
     this.container.addEventListener("pointerdown", (e) => { pressed = e.isPrimary ? [e.clientX, e.clientY, e.timeStamp] : null; }, true);
     this.container.addEventListener("pointerup", (e) => {
@@ -1752,7 +1764,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
       link.addEventListener("click", (e) => {
         e.preventDefault();
         if (item.dest) this.linkService.goToDestination(item.dest);
-        else if (item.url) window.open(item.url, "_blank", "noopener,noreferrer");
+        else if (item.url) this._openLink(item.url);
         if (window.innerWidth <= 760) this.#setSidebar(false);
       });
       const row = el("div", { class: "row" });
@@ -2232,6 +2244,36 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
 
   /** A toast that explains the tool just chosen: it goes when that tool or
    *  its bar does, or when another bar opens (see #endHint). */
+  /** Open a link that leaves the document, in the browser: only web, mail
+   *  and phone addresses, and (unless turned off in the More menu) after
+   *  showing where it really goes, which the words on the page may not say. */
+  async _openLink(url) {
+    let address = null;
+    try { address = new URL(url, location.href); } catch (e) { address = null; }
+    if (!address || !["http:", "https:", "mailto:", "tel:"].includes(address.protocol)) {
+      this.toast("That link isn't a web address, so ZPDF won't open it.", 6000);
+      return;
+    }
+    if (store.get("pdfm-link-ask", true)) {
+      const web = address.protocol.startsWith("http");
+      const rest = web ? address.href.slice((address.protocol + "//" + address.host).length) : address.href.slice(address.protocol.length);
+      const shown = el("p", { class: "rd-linkaddr" }, web ? address.protocol + "//" : address.protocol,
+        el("strong", {}, web ? address.host : ""), rest.length > 300 ? rest.slice(0, 300) + "…" : rest);
+      const again = el("input", { type: "checkbox" });
+      const notes = [];
+      if (address.protocol === "http:") notes.push("This address isn't protected (http): what you type there can be read on the way.");
+      if (web && (/^xn--|\.xn--/.test(address.hostname) || /^[\d.]+$|^\[/.test(address.hostname))) notes.push("The site's name is unusual (numbers, or letters made to look like others). Check it carefully.");
+      const answer = await this._dialog("Open this link?", [
+        el("p", {}, web ? "It goes to this address, whatever the words on the page say:" : "It will start a message or a call to:"), shown,
+        ...notes.map((n) => el("p", { class: "rd-linknote" }, n)),
+        el("label", { class: "rd-check" }, again, "Don't ask again (More menu → Ask before opening web links)"),
+      ], [["cancel", "Cancel"], ["ok", "Open in browser", true]]);
+      if (answer !== "ok") return;
+      if (again.checked) store.set("pdfm-link-ask", false);
+    }
+    window.open(address.href, "_blank", "noopener,noreferrer");
+  }
+
   _hint(message, ms) {
     this.toast(message, ms);
     this.hintEl = this.toastEl;
