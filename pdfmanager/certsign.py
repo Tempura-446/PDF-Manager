@@ -687,7 +687,7 @@ def _blank(fq_name):
             "intact": False, "coverage": None, "changes": None, "changes_detail": None,
             "trusted": False, "status": INVALID, "summary": "", "reason": None,
             "location": None, "contact": None, "page": None, "box": None, "revision": None,
-            "error": None}
+            "error": None, "certificate_expires": None, "lasting": ""}
 
 
 def _check_one(reader, fq_name, value, ref, roots, pages):
@@ -778,7 +778,32 @@ def _check_one(reader, fq_name, value, ref, roots, pages):
     else:
         entry["status"] = UNTRUSTED
     entry["summary"] = _summary(entry, revoked, expired)
+    try:
+        entry["certificate_expires"] = _when(validity["not_after"].native)
+        entry["lasting"] = _lasting(entry, validity["not_after"].native)
+    except Exception:  # noqa: BLE001 - an odd certificate date: nothing said about it
+        pass
     return entry
+
+
+def _lasting(e, ends, now=None):
+    """Whether the signature will still be accepted once the signer's
+    certificate has expired, in one sentence ("" for a signature that
+    isn't valid anyway, or a document timestamp)."""
+    import datetime as dt
+
+    if e["kind"] == "timestamp" or e["status"] not in (VALID, UNTRUSTED):
+        return ""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    day = f"{ends:%d %b %Y}"
+    if e["time_source"] == "timestamp":
+        return ("A timestamp server vouched for when it was signed, so it stays checkable after the "
+                f"signer's certificate expires ({day}).")
+    if ends < now:
+        return (f"The signer's certificate expired on {day} and no timestamp server vouched for when it "
+                "was signed: other programs may no longer accept this signature.")
+    return (f"No timestamp server vouched for when it was signed: once the signer's certificate expires "
+            f"({day}), other programs may stop accepting it. Signing with a timestamp server avoids that.")
 
 
 def _summary(e, revoked=False, expired=False):
@@ -827,6 +852,8 @@ def report(results, name=None):
                           ("contact", "Contact")):
             if e[key]:
                 lines.append(f"   {word}: {e[key]}")
+        if e.get("lasting"):
+            lines.append(f"   Later on: {e['lasting']}")
         if e["page"]:
             lines.append(f"   Shown on page {e['page']}")
         lines.append("")

@@ -1427,6 +1427,8 @@ const ICONS = {
   form: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h4M7 14h4"/><rect x="13" y="7.5" width="5" height="3" rx=".5"/><rect x="13" y="12.5" width="3" height="3" rx=".5"/>',
   sanitize: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/>',
   makesafe: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="M12 8v5M12 16.5v.01"/>',
+  "encrypt-cert": '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.5" r="1.6"/>',
+  "decrypt-cert": '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/><circle cx="12" cy="15.5" r="1.6"/>',
   "upgrade-protection": '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/><path d="m9.5 15.5 2.5-2.5 2.5 2.5M12 13v5"/>',
   sign: '<path d="M3 17c2-1 3-5 5-5s0 5 2 5 3-6 5-6 1 6 3 6 2-2 3-2"/><path d="M3 21h18"/>',
   "sign-cert": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4"/><path d="M14 3v5h5v3"/><circle cx="17" cy="15" r="3"/><path d="m15.5 17.6-.8 3.9 2.3-1.3 2.3 1.3-.8-3.9"/>',
@@ -1678,6 +1680,8 @@ async function ensureReader() {
     recent: (host) => fillRecent(host, { onEmpty: () => { const box = host.closest(".rd-recent"); if (box) box.hidden = true; } }),
     onFormHint: (tab) => { if (fp.tab === tab) fpSuggest(); },
     onRepair: (tab) => repairInReader(tab),
+    onBrokenWhy: (tab) => brokenFacts(tab),
+    onOpenWithId: (tab, id, password) => openWithIdInReader(tab, id, password),
     onForgetRecent: (tab) => jsonApi("/api/recent/forget", { path: tab.path }),
   });
   return reader;
@@ -2131,6 +2135,48 @@ async function repairInReader(tab) {
     return "";
   } catch (e) {
     return `Repair couldn’t mend it: ${String(e.message || e).replace(/\.$/, "")}.`;
+  }
+}
+
+/** What's known of a file the reader can't show (its facts, from the server). */
+async function brokenFacts(tab) {
+  try {
+    if (tab.fileId) return await (await api("/api/facts/" + encodeURIComponent(tab.fileId))).json();
+    if (!tab.original) return null;
+    const body = new FormData();
+    body.append("file", new Blob([tab.original], { type: "application/pdf" }), "file.pdf");
+    return await (await api("/api/facts", { method: "POST", body })).json();
+  } catch (e) { return null; }
+}
+
+/** Open a PDF protected for particular people with a Digital ID: the Open
+ *  with Digital ID tool, its unprotected copy shown in a new tab. Returns
+ *  "" when that worked, else what to say. */
+async function openWithIdInReader(tab, id, password) {
+  const op = ops.find((o) => o.id === "decrypt-cert");
+  if (!op) return "Opening with a Digital ID isn't available.";
+  const body = new FormData();
+  body.append("op", "decrypt-cert");
+  body.append("pfx_password", password || "");
+  body.append("pfx", id, id.name);
+  const name = /\.pdf$/i.test(tab.name) ? tab.name : tab.name + ".pdf";
+  if (tab.fileId) body.append("ids", tab.fileId);
+  else body.append("files", new File([tab.original], name, { type: "application/pdf" }));
+  const ui = { start() {}, message() {}, progress() {}, cancelled() {}, end() {} };
+  try {
+    const res = await runJob("/api/run", { method: "POST", body, headers: isDesktop() ? { "X-Pdfm-Keep": "1" } : {} }, ui);
+    if (!res) return "Cancelled.";
+    const made = decodeURIComponent(res.headers.get("X-Pdfm-Filename") || "") || name.replace(/\.pdf$/i, "_opened.pdf");
+    const notes = decodeURIComponent(res.headers.get("X-Pdfm-Note") || "").split("\n").filter(Boolean);
+    const bytes = new Uint8Array(await (await res.blob()).arrayBuffer());
+    const tabNow = await reader.openResult(bytes, made, null, tab);
+    if (!tabNow || tabNow.broken) { if (tabNow) reader.closeTab(tabNow); return "It opened, but the copy can’t be shown."; }
+    tabNow.made({ op: "decrypt-cert", label: op.label, from: tab, sizes: humanSize(bytes.length).replace(" ", "\u00a0"), notes });
+    if (fp.tab === tabNow) fpShowNote(tabNow);
+    reader.toast(`Opened ${made} in a new tab. It has no protection: save it only where it's safe.`, 7000);
+    return "";
+  } catch (e) {
+    return `${String(e.message || e).replace(/\.$/, "")}.`;
   }
 }
 
@@ -2625,7 +2671,7 @@ async function inspect(it) {
   body.append("password", $("pw").value);
   try {
     const info = await (await api("/api/inspect", { method: "POST", body })).json();
-    Object.assign(it, { pages: info.pages, thumb: info.thumb, locked: info.locked, error: info.error });
+    Object.assign(it, { pages: info.pages, thumb: info.thumb, locked: info.locked, error: info.error, for_people: !!info.for_people });
   } catch (e) { it.error = e.message; }
   it.loading = false;
   renderFiles();
@@ -2670,6 +2716,7 @@ function renderFiles() {
     else thumb.append(icon(it.locked ? "lock" : "file"));
     const sub = el("div", { class: "file-sub" });
     if (it.locked) sub.append(el("span", { class: "badge warn" }, "Locked"));
+    else if (it.for_people) sub.append(el("span", { class: "badge warn", title: "It opens only with the Digital ID of one of the people it was protected for" }, "For particular people"));
     else if (it.error) sub.append(el("span", { class: "badge warn" }, "Unreadable"));
     else if (it.pages != null) sub.append(el("span", {}, plural(it.pages, "page")), el("span", {}, "·"));
     sub.append(el("span", {}, humanSize(it.file.size)));
@@ -2712,7 +2759,8 @@ function renderFiles() {
 /** Files the page couldn't open (Repair is for those, so it takes them). */
 function unreadable() {
   if (!current || current.id === "repair") return [];
-  return items.filter((it) => it.error && !it.locked && !it.loading);
+  // (One protected for particular people is what Open with Digital ID is for.)
+  return items.filter((it) => it.error && !it.locked && !it.loading && !(it.for_people && current.id === "decrypt-cert"));
 }
 function move(from, to) {
   if (to < 0 || to >= items.length || from === to) return;
@@ -2736,9 +2784,12 @@ function updateSummary() {
   // Redact: nothing to black out chosen yet (words, kinds of numbers, or areas drawn).
   const choose = ready && !done && current.id === "redact" && !redactChosen();
   const badSay = bad.length === 1 ? `${bad[0].file.name} can't be opened` : `${bad.length} files can't be opened`;
+  // Protected for particular people: not damaged, and Repair is no help.
+  const people = bad.length && bad.every((it) => it.for_people);
   $("summary").textContent = done ? "Done · change anything and run again, or start over"
     : choose ? "Choose what to black out: words, kinds of numbers, or areas on the page"
     : ready ? `Ready · ${plural(usable, "file")}` + (bad.length ? ` · ${badSay} and will be left out` : "")
+    : people ? `${bad.length === 1 ? bad[0].file.name + " is" : "These files are"} protected for particular people: open ${bad.length === 1 ? "it" : "them"} with your Digital ID first (Protect → Open with Digital ID).`
     : bad.length ? `${badSay} — ${bad.length === 1 ? "it" : "they"} may be damaged. Try Repair, or remove ${bad.length === 1 ? "it" : "them"}.`
     : (need === 1 ? "Add a file to get started" : `Add ${current.files === "pdf2" ? "exactly 2" : "at least " + need} files`);
   // A file that can't be opened is said once (a polite status), not again at every repaint.
@@ -2810,7 +2861,8 @@ const TAGLINES = {
   clean: "Drop blank pages and straighten scans", watermark: "Stamp text or a logo on every page", number: "Add page numbers",
   flatten: "Bake forms and comments into the page", "flatten-layers": "Keep a drawing's shown layers, drop the hidden ones", headers: "Titles, dates and Bates numbers", form: "Create fillable forms",
   metadata: "Set the title, author and keywords", encrypt: "Protect with a password", decrypt: "Remove a password",
-  redact: "Black out text for good", sanitize: "Remove hidden data and scripts", makesafe: "Take out what could do harm in a PDF you were sent", "upgrade-protection": "Replace old, weak encryption with AES-256", pdfa: "Convert for long-term archiving", "pdfa-check": "See if a file meets PDF/A, and why not",
+  redact: "Black out text for good", sanitize: "Remove hidden data and scripts", makesafe: "Take out what could do harm in a PDF you were sent", "upgrade-protection": "Replace old, weak encryption with AES-256",
+  "encrypt-cert": "Only the people you choose can open it, with their Digital ID", "decrypt-cert": "Open a PDF that was protected for you", pdfa: "Convert for long-term archiving", "pdfa-check": "See if a file meets PDF/A, and why not",
   comments: "List comments, or send them as XFDF", web: "Save a web page as a PDF", attach: "Attach files to a PDF, or remove them", labels: "Number pages i, ii, iii then 1, 2, 3", repair: "Mend damaged files; open fast online",
   "sign-cert": "Sign with a certificate (.pfx or .p12), like Acrobat", "verify-sig": "See who signed and if anything changed",
   tag: "Tag for screen readers, like Acrobat's Autotag", "access-check": "See what keeps screen readers out, and how to fix it",  // -- accessibility --
@@ -2846,7 +2898,7 @@ function whenText(t) {
 function factsLine(facts) {
   if (!facts) return "";
   if (facts.error) return "can't be read";
-  if (facts.pages == null) return facts.protected ? (facts.weak_protection ? "weak protection" : "protected") : "can't be read";
+  if (facts.pages == null) return facts.protected ? (facts.for_people ? "for particular people" : facts.weak_protection ? "weak protection" : "protected") : "can't be read";
   const parts = [facts.pages + (facts.pages === 1 ? " page" : " pages")];
   const size = Number(facts.size);
   if (size >= 0 && facts.size != null) {
@@ -3410,7 +3462,8 @@ async function fillRecent(host, { emptyText = "", onEmpty = null, still = () => 
     const folder = e.title !== e.name ? folderOf(e.title) : "";
     const where = names[e.name] > 1 ? folder : "";
     // (The reader couldn't open it last time, and it hasn't changed since: said in the error style.)
-    const facts = e.failed ? "can't be opened" : factsLine(e.facts), bad = e.failed || facts === "can't be read";
+    const failed = e.failed && !e.facts?.for_people;  // (protected for people isn't a failure to open)
+    const facts = failed ? "can't be opened" : factsLine(e.facts), bad = failed || facts === "can't be read";
     const line = [facts, where && `in ${where}`].filter(Boolean).join(" · ");
     const flag = !bad && !!(e.facts && e.facts.scanned && !e.facts.has_text);
     const row = el("div", { class: "recent-row", "data-key": e.key, "data-name": e.name, "data-facts": facts, "data-where": folder },

@@ -15,7 +15,7 @@ from pdfmanager import appdata
 SAMPLE = 10            # pages looked at for text and scans
 BIG_PICTURE = 400_000  # pixels from which a picture can be a page's scan
 REMEMBERED = 300       # files whose facts are kept
-LOOK = 7              # raised when facts are worked out differently, so kept ones are looked at again
+LOOK = 8              # raised when facts are worked out differently, so kept ones are looked at again
 TEXT_SHOWING = {"Tj", "TJ", "'", '"'}
 # A printed place to sign: the word near a rule or a run of underscores.
 SIGN_WORDS = re.compile(r"\b(signature|signed|sign here|unterschrift|signé|firma)\b", re.I)
@@ -246,6 +246,10 @@ def facts(path, password=None):
     except pikepdf.PasswordError:
         return {"size": size, "pages": None, "protected": True, "weak_protection": _weak_protection(path)}
     except Exception:
+        from pdfmanager import certcrypt
+
+        if certcrypt.is_for_people(path):  # opens with a Digital ID, not a password
+            return {"size": size, "pages": None, "protected": True, "for_people": True}
         return {"size": size, "pages": None, "error": "can't be read"}
     try:
         with pdf:
@@ -347,6 +351,9 @@ def suggestions(found, made_by=None):
     if found.get("error"):
         return [{"op": "repair", "title": "Repair it",
                  "why": "This file can't be read as it is; a repair often brings it back"}]
+    if found.get("for_people"):
+        return [{"op": "decrypt-cert", "title": "Open it with your Digital ID",
+                 "why": "It's protected for particular people: one of their Digital IDs opens it"}]
     if found.get("pages") is None:
         return []  # locked: nothing to offer before its password
     out = []

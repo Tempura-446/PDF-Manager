@@ -117,6 +117,10 @@ def info(path):
     "advice"} for the PDF at ``path``. The password isn't needed: how a file
     is encrypted is written in the open."""
     nothing = {"protected": False, "method": "", "weak": False, "advice": ""}
+    from pdfmanager import certcrypt
+
+    if certcrypt.is_for_people(path):
+        return {"protected": True, "method": certcrypt.FOR_PEOPLE, "weak": False, "advice": ""}
     try:
         from pypdf import PdfReader
 

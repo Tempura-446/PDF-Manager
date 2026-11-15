@@ -21,6 +21,7 @@ from pdfmanager import accessibility  # -- accessibility --
 from pdfmanager import ocr  # the OCR engine ids
 from pdfmanager import risks  # what a PDF can do, and Make safe
 from pdfmanager import protection  # password strength, old encryption and its upgrade
+from pdfmanager import certcrypt  # protecting a PDF for people's certificates
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -207,6 +208,18 @@ def run_color(a, src, out, pw):
 
 def _encrypt_limits(a):
     return filetools.permissions(a.printing, a.changes, not a.no_copy)
+
+
+def run_encrypt_for(a, src, out, pw):
+    names = certcrypt.encrypt_for(src, out, a.cert or [], password=pw, id_password=a.id_password)
+    return f"{out}  (protected for {', '.join(names)}; only their Digital IDs open it)"
+
+
+def run_open_with_id(a, src, out, pw):
+    password = a.id_password
+    if password is None and sys.stdin.isatty():
+        password = getpass.getpass("Digital ID password: ")
+    return f"{out}  ({certcrypt.open_with_id(src, out, a.id, password)})"
 
 
 def run_upgrade_protection(a, src, out, pw):
@@ -814,7 +827,7 @@ OUTPUTS = {
     "rotate": ("rotated", "pdf"), "resize": ("resized", "pdf"), "crop": ("cropped", "pdf"),
     "nup": ("nup", "pdf"), "insert-blank": ("blanks", "pdf"), "booklet": ("booklet", "pdf"),
     "compress": ("compressed", "pdf"), "color": ("color", "pdf"),
-    "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"), "upgrade-protection": ("protected", "pdf"),
+    "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"), "upgrade-protection": ("protected", "pdf"), "encrypt-for": ("for-people", "pdf"), "open-with-id": ("opened", "pdf"),
     "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
     "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "headers": ("headers", "pdf"), "form": ("form", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "make-safe": ("safe", "pdf"), "pdfa": ("pdfa", "pdf"),
     "to-excel": (None, "xlsx"),  # with --csv: a folder, <input>_tables
@@ -897,6 +910,7 @@ KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split", 
                     "to-excel",
                     "extract-media",
                     "pdfa"}  # PDF/A doesn't allow encryption
+KEEP_UNENCRYPTED.update({"encrypt-for", "open-with-id"})  # protected for people, or opened for good
 KEEP_UNENCRYPTED.add("upgrade-protection")  # protects its own output, with both passwords
 KEEP_UNENCRYPTED.add("comments")  # a summary, CSV or XFDF; an import protects itself
 KEEP_UNENCRYPTED.add("sign-cert")  # stays protected inside the signed file; re-saving breaks it
@@ -1514,6 +1528,19 @@ def build_parser():
     sp.add_argument("--show", action="append", default=[], metavar="NAME",
                     help="show this layer too, though the file opens with it hidden")
     sp.add_argument("--list", action="store_true", help="only list the layers and whether they show")
+
+    sp = per_file("encrypt-for", run_encrypt_for,
+                  "protect a PDF for particular people: only their Digital IDs open it (no password)")
+    sp.add_argument("--cert", action="append", metavar="FILE",
+                    help="a person's certificate (.cer, .crt, .pem; repeat for each person). Your own "
+                         "Digital ID (.pfx) can be given for yourself, with --id-password")
+    sp.add_argument("--id-password", help="the password of a Digital ID given with --cert")
+
+    sp = per_file("open-with-id", run_open_with_id,
+                  "open a PDF protected for particular people with your Digital ID; writes an "
+                  "unprotected copy")
+    sp.add_argument("--id", required=True, metavar="FILE", help="your Digital ID (.pfx or .p12)")
+    sp.add_argument("--id-password", help="its password (asked for if left out)")
 
     sp = per_file("upgrade-protection", run_upgrade_protection,
                   "protect a PDF that has old, weak encryption (RC4) with AES-256 instead, keeping "
