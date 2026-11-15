@@ -630,9 +630,12 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
     them, and hints appear at the top of the page, clear of the title block.
   - **Kept with the file:** measurements are remembered on this computer
     for each file and come back when it's opened again. **Copy** (to paste
-    in a spreadsheet), **CSV** (group, name, page, kind, the value as shown
-    and a plain number with its unit, for Excel or an estimate) and **Into
-    PDF**: the measurements become measurement annotations in the document
+    in a spreadsheet), **CSV** and **Excel** (a quantity schedule: these
+    measurements together with the dimension lines and measurements already
+    in the document, each with its sheet, kind, group, name, a plain number
+    and its unit, and totals per group; in the workbook the totals are on
+    their own sheet and numbers are numbers, ready to sum and price) and
+    **Into PDF**: the measurements become measurement annotations in the document
     (with the drawing's scale), showing their values in Acrobat and other
     viewers and when printed, and listed under Comments.
   - **Compare revisions** (the layers button in the scale bar, or More →
@@ -757,6 +760,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `check-access` | check PDFs for accessibility problems, and how to fix them | `pdfm check-access *.pdf` · `--json` |
 | `to-word` | convert to an editable Word document | `pdfm to-word doc.pdf` |
 | `to-excel` | put the tables into an Excel workbook (or CSV files) | `pdfm to-excel doc.pdf -p 2-5` · `--one-sheet` · `--csv` |
+| `quantities` | a quantity schedule (takeoff) of what was measured on a drawing, with totals per group, as a workbook or CSV | `pdfm quantities plan.pdf` · `--csv` |
 | `to-pptx` | convert to a PowerPoint presentation, a slide per page | `pdfm to-pptx doc.pdf` · `--pictures` · `-p 1-5` |
 | `to-html` | convert to a web page (one .html file, pictures inside) | `pdfm to-html doc.pdf` · `--exact` |
 | `from-office` | convert Word, Excel, PowerPoint, … (and web pages) to PDF | `pdfm from-office report.docx` |

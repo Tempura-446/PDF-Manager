@@ -976,7 +976,8 @@ export const Measuring = (Base) => class extends Base {
       return { text: measure.formatArea(a, scale, this.units),
         sub: "perimeter " + measure.formatLength(measure.perimeter(m.pts) * uu, scale, this.units)
           + (holes ? ` · less ${holes} cut-out${holes === 1 ? "" : "s"}` : ""),
-        real: scale ? a / 5184 * scale.ratio * scale.ratio : null, units: scale?.units };
+        real: scale ? a / 5184 * scale.ratio * scale.ratio : null, units: scale?.units,
+        perimeter: scale ? measure.realInches(measure.perimeter(m.pts) * uu, scale) : null };
     }
     const len = measure.pathLength(m.pts) * uu;
     return { text: measure.formatLength(len, scale, this.units), sub: m.kind === "path" ? `${m.pts.length - 1} segments` : "",
@@ -1267,7 +1268,15 @@ export const Measuring = (Base) => class extends Base {
       this.measPanel.replaceChildren(head, unitRow, groupRow, el("p", { class: "rd-mempty" },
         "Click two points with Distance, along a run of walls with Path, the corners of a room with Area (or two corners with Rectangle), "
         + "openings inside an area with Cut-out, each fixture with Count, or three points with Angle. Drag a measurement to move it, or a point of it "
-        + "to change it; arrow keys nudge the selected point. Ctrl+Z undoes. Measurements are kept with the file on this computer."));
+        + "to change it; arrow keys nudge the selected point. Ctrl+Z undoes. Measurements are kept with the file on this computer."),
+        // (Dimensions and measurements already in the document can still be totalled up.)
+        el("p", { class: "rd-mempty" }, "A quantity schedule of the dimensions and measurements already in the document:"),
+        el("div", { class: "rd-mfoot" }, ...[["CSV", "csv"], ["Excel", "xlsx"]].map(([label, format]) => {
+          const b = el("button", { class: "rd-btn", type: "button", title: `Save what's measured in the document as ${label === "CSV" ? "a CSV file" : "an Excel workbook"}, with totals`,
+            html: svg("csv") + `<span>${label}</span>` });
+          b.addEventListener("click", () => this._exportQuantities(format));
+          return b;
+        })));
       return;
     }
     const kindIcon = { area: "area", path: "path", count: "count", angle: "angle" };
@@ -1310,7 +1319,8 @@ export const Measuring = (Base) => class extends Base {
     const button = (icon, label, title, fn) => { const b = el("button", { class: "rd-btn", type: "button", title, html: svg(icon) + `<span>${label}</span>` }); b.addEventListener("click", fn); return b; };
     const foot = el("div", { class: "rd-mfoot" },
       button("copy", "Copy", "Copy the measurements, to paste in a spreadsheet or an email", () => this.#copyMeasures()),
-      button("csv", "CSV", "Save the measurements as a CSV file, for Excel or an estimate", () => this._exportMeasures()),
+      button("csv", "CSV", "A quantity schedule as a CSV file: these measurements and the dimensions in the PDF, with totals", () => this._exportQuantities("csv")),
+      button("csv", "Excel", "A quantity schedule as an Excel workbook: these measurements and the dimensions in the PDF, numbers as numbers, with totals per group", () => this._exportQuantities("xlsx")),
       button("pdfin", "Into PDF", "Write the measurements into the PDF as measurement annotations, so they show in any viewer and print", () => this._measuresIntoPdf()),
       el("span", { style: "flex:1" }),
       button("trash", "", "Remove every measurement", () => this.clearMeasures()));
@@ -1446,6 +1456,38 @@ export const Measuring = (Base) => class extends Base {
     this.selected = null;
     this._drawAllMeasures();
     this.toast(`${items.length === 1 ? "The measurement is" : `${items.length} measurements are`} in the PDF now. Save to keep them.`, 4000);
+  }
+
+  /** A quantity schedule (quantities.py): the list's measurements and what
+   *  is measured in the document itself (dimension lines, measurements put
+   *  in the PDF, other programs' measurement annotations), with totals. */
+  async _exportQuantities(format) {
+    const tab = this.activeTab;
+    if (!tab || !this.doc) return;
+    const author = this.authorInput?.value.trim() || "";
+    const measures = (tab.measures || []).map((m) => {
+      const v = this.#measureValue(m), scale = this.#pageScale(m.page);
+      const row = { page: m.page, sheet: String(this.labels?.[m.page - 1] || m.page), group: m.group || "", name: m.label || "",
+        kind: { area: "Area", count: "Count", angle: "Angle" }[m.kind] || "Length", measured: v.text,
+        scale: scale ? scale.label : "", colour: this.#groupColor(m.group) || "#1f4fd8", by: author };
+      if (m.kind === "count") [row.quantity, row.unit] = [v.count, "items"];
+      else if (m.kind === "angle") [row.quantity, row.unit] = [+v.angle.toFixed(2), "°"];
+      else if (v.real !== null) {
+        [row.quantity, row.unit] = measure.plainNumber(v.real, m.kind === "area", v.units);
+        if (m.kind === "area" && v.perimeter != null) [row.perimeter, row.perimeter_unit] = measure.plainNumber(v.perimeter, false, v.units);
+      }
+      return row;
+    });
+    try {
+      const res = await this._post("/api/quantities", await this._currentBytes(), tab,
+        { measures: JSON.stringify(measures), format, name: this.name });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "it could not be made");
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      const stem = this.name.replace(/\.pdf$/i, "");
+      await this._saveBytes(bytes, `${stem} quantities.${format}`, () => {}, tab.fileId);
+    } catch (err) {
+      this.toast("Could not make the schedule: " + (err.message || err), 6000);
+    }
   }
 
   async _exportMeasures() {

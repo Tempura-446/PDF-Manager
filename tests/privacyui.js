@@ -58,7 +58,10 @@ const { chromium } = require("playwright");
     out.statusSeen = await page.evaluate(() => {
       const r = document.querySelector("#privacy-status").getBoundingClientRect(), b = document.querySelector("#set-clear-history").getBoundingClientRect();
       const bar = document.querySelector("#settings-dialog .dlg-buttons").getBoundingClientRect();
-      return r.top >= b.bottom - 1 && r.top - b.bottom < 40 && r.bottom <= bar.top && r.bottom <= innerHeight;
+      const status = document.querySelector("#privacy-status"), next = status.nextElementSibling.getBoundingClientRect();
+      // (all of its lines are inside its own box, clear of the paragraph under it)
+      const whole = status.scrollHeight <= status.clientHeight + 1 && r.bottom <= next.top + 1;
+      return whole && r.top >= b.bottom - 1 && r.top - b.bottom < 40 && r.bottom <= bar.top && r.bottom <= innerHeight;
     });
     out.placesAfterClear = await places(page);
 

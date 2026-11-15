@@ -72,11 +72,14 @@ Asked for after 0.38.0, whose "Not yet" list this is.
 - [ ] A list of the user's own stamps, kept in the app's settings: words, colour, with or without name and date. Add, change and remove them from the Stamp list ("Your stamps…"); they show in the list under the built-in ones.
 - [ ] Test: a saved green "CHECKED" stamp is offered after a restart and places a `/Stamp` in that colour.
 
-**Task 2b.3: a quantity schedule (takeoff) from dimensions and measurements**
-- [ ] One table of everything measured on the document: the Scale bar's measurements (lengths, paths, areas with their cut-outs, counts, angles: already exported as CSV) **and** the dimension markups placed with the annotate bar, plus measurement annotations other programs saved in the file (`/Measure` with `/IT /LineDimension`, `/PolyLineDimension`, `/PolygonDimension`).
-- [ ] Columns: sheet (page label or number), kind, label, group, quantity, unit, the scale it was read at, colour, who placed it and when. Totals per group and per unit at the end, so "Walls: 126' 4"" or "Flooring: 84.2 m²" can be read straight off.
-- [ ] Export as **CSV** and as **XLSX** (a real workbook through the existing spreadsheet writer used by PDF → Excel: one sheet of items, one of totals, numbers as numbers with their unit in the next column so they can be summed). From the Measurements panel's Export button, as a tool ("Quantities from a drawing") for several files at once, and `pdfm quantities plan.pdf -o takeoff.xlsx`.
-- [ ] Test: a sheet at 1/4" = 1'-0" with two dimensions, one area and a count gives a workbook whose rows hold those lengths in feet as numbers and whose totals add up; a file marked up in another program with standard measurement annotations is read too.
+**Task 2b.3: a quantity schedule (takeoff) from dimensions and measurements** (done in 0.43.0)
+- [x] `pdfmanager/quantities.py`: `read` (the reader's dimensions and measurements in the PDF, and other programs' `/Measure` / `/IT …Dimension` annotations, each worked out from its points and scale), `schedule` (plus the reader's list, with `totals` per group, kind and unit), `write_csv`, `write_xlsx` (sheets Quantities and Totals, numbers as numbers).
+- [x] Columns: sheet, kind, group, name, quantity, unit, perimeter and its unit, the words, the scale, colour, who and when.
+- [x] From the Measurements panel (CSV and Excel buttons, `/api/quantities`, the open document as it is now), the tool "Quantities from a drawing", and `pdfm quantities plan.pdf [-o takeoff.xlsx] [--csv]`.
+- [x] The scale written with a measurement follows ISO 32000 12.9 (`/D` and `/A` are factors on `/X`'s unit); an area's cut-outs are kept in `/ZPDFHoles`. Files from before are read right.
+- [x] Tests: `tests/test_quantities.py`, `tests/test_quantities_ui.py` + `tests/quantitiesui.js`.
+- [ ] Seen in the Windows check of 0.43.0, to look at: "This looks like a form to fill in" on a plain drawing (boxes, lines and circles, no fields); a count put in the PDF has no scale in the schedule while the list's has one; the Sheet column is text; Acrobat and Bluebeam files not tried (items H and I).
+- [ ] Left for later: one workbook for several files (a sheet set); areas put in the PDF before 0.43.0 have no cut-outs recorded, so they read as the whole outline; elliptical/arc measurements of other programs; prices per unit.
 
 **Seen in the Windows check of 0.38.0, for a later release:**
 - Measurements remembered for a file come back on a copy of it changed by a tool (Rotate): the copies share the PDF's `/ID`. Key the memory on more than the ID (the page count and sizes, or the path), or ask before bringing them back.
