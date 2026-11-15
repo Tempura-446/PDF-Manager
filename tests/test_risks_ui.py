@@ -11,8 +11,9 @@ from pathlib import Path
 
 import pytest
 from pypdf import PdfWriter
+from pypdf.generic import DictionaryObject, NameObject
 
-from pdfmanager import gui
+from pdfmanager import forms, gui
 from test_risks import action, add_js, link, plain
 
 HERE = Path(__file__).parent
@@ -31,9 +32,20 @@ def test_risks_in_a_browser(app, tmp_path):
     node = shutil.which("node")
     if not node or subprocess.run([node, "-e", "require('playwright')"], capture_output=True, cwd=tmp_path).returncode:
         pytest.skip("needs Node.js with Playwright")
-    src = plain(tmp_path / "p.pdf", ["Sign in at www.mybank.com to confirm"])
+    # A form whose total adds up, with a script of the document's own, a
+    # field script that isn't a form function, and a link that misleads.
+    src = tmp_path / "form.pdf"
+    forms.add_fields(plain(tmp_path / "p.pdf", ["Sign in at www.mybank.com to confirm"]), src, [
+        {"page": 1, "rect": [72, 600, 200, 620], "type": "text", "name": "Price", "format": "amount"},
+        {"page": 1, "rect": [72, 570, 200, 590], "type": "text", "name": "Total", "calculate": "sum: Price"},
+        {"page": 1, "rect": [72, 540, 200, 560], "type": "text", "name": "Other"}])
     w = PdfWriter(clone_from=str(src))
     add_js(w, "app.alert('hello');")
+    other = w.pages[0]["/Annots"][2].get_object()
+    other[NameObject("/AA")] = DictionaryObject({
+        NameObject("/K"): action("/JavaScript", JS="app.alert('typed');"),
+        NameObject("/Bl"): action("/JavaScript", JS="app.alert('left');")})
+    w.pages[0][NameObject("/AA")] = DictionaryObject({NameObject("/O"): action("/JavaScript", JS="app.alert('page');")})
     link(w, [100, 755, 330, 772], action("/URI", URI="http://mybank.com.evil-site.net/login?next=1"))
     risky = tmp_path / "Invoice.pdf"
     w.write(str(risky))
@@ -48,6 +60,11 @@ def test_risks_in_a_browser(app, tmp_path):
     out = json.loads(run.stdout)
     assert not out["errors"], out["errors"]
 
+    # Nothing of the PDF's own ran: not on opening, not when its page showed,
+    # not when typing in the field with a script. The form's total still adds up.
+    assert out["native"] == [], out["native"]
+    assert out["form"]["price"] == "12.50" and out["form"]["other"] == "abc", out["form"]
+    assert out["form"]["total"] in ("12.5", "12.50"), out["form"]
     assert out["chip"]["text"] == "could do harm"
     assert "It has scripts" in out["chip"]["title"] and "Links that hide where they go" in out["chip"]["title"]
     assert out["first"]["op"] == "makesafe" and "Make it safe" in out["first"]["words"]

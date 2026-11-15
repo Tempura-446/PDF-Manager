@@ -15,11 +15,26 @@ const { chromium } = require("playwright");
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
     ctx.on("page", (p) => out.opened.push(p.url()));       // anything a link opened
     const page = await ctx.newPage();
+    out.native = [];  // alert boxes: a script of the PDF's that ran
+    page.on("dialog", (d) => { out.native.push(d.type() + ": " + d.message()); d.dismiss().catch(() => {}); });
     page.on("pageerror", (e) => out.errors.push(String(e.message || e)));
     page.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource/.test(m.text())) out.errors.push(m.text()); });
     await page.goto(url + "&open=" + id);
     await page.waitForSelector(".page canvas", { timeout: 60000 });
     await page.waitForFunction(() => reader.doc && reader.loading.hidden, null, { timeout: 30000 });
+
+    // The form works (a format, a total) and nothing else in the file runs.
+    const field = (name) => `.annotationLayer input[name="${name}"]`;
+    await page.waitForSelector(field("Price"), { timeout: 30000 });
+    await page.waitForTimeout(1500);  // the sandbox is ready a moment after the page
+    await page.click(field("Price"));
+    await page.keyboard.type("12.5", { delay: 150 });
+    await page.click(field("Other"));
+    await page.keyboard.type("abc", { delay: 150 });
+    await page.evaluate(() => document.activeElement?.blur());  // (a field shows its format once it's left)
+    await page.waitForTimeout(800);
+    out.form = await page.evaluate((names) => Object.fromEntries(names.map((n) =>
+      [n.toLowerCase(), document.querySelector(`.annotationLayer input[name="${n}"]`).value])), ["Price", "Total", "Other"]);
 
     // The file panel: a chip that says it, and Make it safe as the first suggestion.
     await page.waitForSelector(".fp-fact.bad", { timeout: 30000 });

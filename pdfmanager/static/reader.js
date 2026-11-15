@@ -61,6 +61,40 @@ const SHAPES = [["rect", "Rectangle"], ["ellipse", "Ellipse"], ["cloud", "Cloud"
 // with the real length, words with a pointer.
 const DRAWING_SHAPES = [["polycloud", "Cloud, any shape"], ["polyline", "Line with corners"], ["polyarrow", "Arrow with corners"],
   ["dimension", "Dimension"], ["callout", "Callout"]];
+// A field's script made only of Acrobat's form functions (AFNumber_Format,
+// AFSimple_Calculate...): how forms format and add up. The same test as
+// risks.py's FORM_SCRIPT.
+const FORM_SCRIPT = /^\s*(?:AF\w+\s*\((?:[^()]|\([^()]*\))*\)\s*;?\s*)+$/;
+
+/** ``doc`` (pdf.js's) as the scripting sandbox may see it: without the
+ *  document's own scripts and its pages' open and close actions, and with
+ *  only the field scripts that are form functions and nothing else. So a
+ *  PDF's scripts are never run here; a form still formats and adds up. */
+function formScriptsOnly(doc) {
+  const bound = (target, prop) => { const v = target[prop]; return typeof v === "function" ? v.bind(target) : v; };
+  const none = async () => null;
+  const quietPage = (page) => new Proxy(page, { get: (t, p) => (p === "getJSActions" ? none : bound(t, p)) });
+  const fields = async () => {
+    const all = await doc.getFieldObjects();
+    if (!all) return all;
+    const clean = (list) => list.map((field) => {
+      if (!field?.actions) return field;
+      const isMap = field.actions instanceof Map, actions = new Map();
+      for (const [when, scripts] of (isMap ? field.actions : Object.entries(field.actions))) {
+        const kept = (Array.isArray(scripts) ? scripts : [scripts]).filter((js) => typeof js === "string" && FORM_SCRIPT.test(js));
+        if (kept.length) actions.set(when, kept);
+      }
+      return { ...field, actions: !actions.size ? null : isMap ? actions : Object.fromEntries(actions) };
+    });
+    // (pdf.js gives Maps, from each name to its fields and from each event
+    // to its scripts; older versions gave plain objects.)
+    if (all instanceof Map) return new Map([...all].map(([name, list]) => [name, clean(list)]));
+    return Object.fromEntries(Object.entries(all).map(([name, list]) => [name, clean(list)]));
+  };
+  return new Proxy(doc, { get: (t, p) => (p === "getJSActions" ? none : p === "getFieldObjects" ? fields
+    : p === "getPage" ? async (n) => quietPage(await t.getPage(n)) : bound(t, p)) });
+}
+
 const HIGHLIGHT_COLORS = "yellow=#FFFF98,green=#53FFBC,blue=#80EBFF,pink=#FFCBE6,red=#FF4F5F";
 
 
@@ -1190,14 +1224,21 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     this.linkService = new viewer.PDFLinkService({ eventBus, externalLinkTarget: viewer.LinkTarget.BLANK, externalLinkRel: "noopener noreferrer nofollow" });
     this.findController = new viewer.PDFFindController({ eventBus, linkService: this.linkService });
     // Form scripts (number and date formats, totals, checks — Acrobat's AF
-    // functions) run in pdf.js's sandbox, as in Firefox.
+    // functions) run in pdf.js's sandbox, as in Firefox. Nothing else in a
+    // PDF is run: the sandbox is handed the document through formScriptsOnly
+    // (below), which leaves out its own scripts, its pages' and any field
+    // script that isn't made of those functions alone.
     this.scripting = new viewer.PDFScriptingManager({ eventBus, sandboxBundleSrc: BASE + "build/pdf.sandbox.min.mjs",
       wasmUrl: BASE + "wasm/" });
     // The viewer hands the scripting manager each document itself, without
     // waiting for the answer: one closed meanwhile (another tab shown, a
     // change reloading it) would leave a rejection nobody catches.
+    // A page's own open and close scripts: the manager reads them from the
+    // page the first time it's shown. Told every page was shown before, it
+    // never does.
+    Object.defineProperty(this.scripting, "_visitedPages", { value: new (class extends Map { has() { return true; } })() });
     const setScripted = this.scripting.setDocument.bind(this.scripting);
-    this.scripting.setDocument = (doc) => setScripted(doc).catch(() => {});
+    this.scripting.setDocument = (doc) => setScripted(doc ? formScriptsOnly(doc) : doc).catch(() => {});
     this.pdfViewer = new viewer.PDFViewer({
       container: this.container, viewer: this.viewerEl, eventBus,
       linkService: this.linkService, findController: this.findController, scriptingManager: this.scripting,
@@ -2264,10 +2305,10 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
       if (address.protocol === "http:") notes.push("This address isn't protected (http): what you type there can be read on the way.");
       if (web && (/^xn--|\.xn--/.test(address.hostname) || /^[\d.]+$|^\[/.test(address.hostname))) notes.push("The site's name is unusual (numbers, or letters made to look like others). Check it carefully.");
       const answer = await this._dialog("Open this link?", [
-        el("p", {}, web ? "It goes to this address, whatever the words on the page say:" : "It will start a message or a call to:"), shown,
+        el("p", {}, web ? "It goes to this address, whatever the words on the page say:" : address.protocol === "tel:" ? "It will start a call to:" : "It will start a message to:"), shown,
         ...notes.map((n) => el("p", { class: "rd-linknote" }, n)),
         el("label", { class: "rd-check" }, again, "Don't ask again (More menu → Ask before opening web links)"),
-      ], [["cancel", "Cancel"], ["ok", "Open in browser", true]]);
+      ], [["cancel", "Cancel"], ["ok", web ? "Open in browser" : address.protocol === "tel:" ? "Start the call" : "Start the message", true]]);
       if (answer !== "ok") return;
       if (again.checked) store.set("pdfm-link-ask", false);
     }

@@ -35,6 +35,12 @@ Safer opening of PDFs you didn't make.
   that can run on your computer.
 - A form's totals and formats made here or in Acrobat aren't counted as
   scripts to fear, and Make safe keeps them working.
+- **Fixed: a PDF's own scripts could run in the reader.** The part of the
+  reader that makes form totals and number formats work also ran scripts
+  kept with the document, its pages or its fields, in a closed sandbox: a
+  script could show a message box when the file opened, though it could
+  not reach files or programs. Now only a form's own format and total
+  functions run, and nothing else in a PDF does.
 - Command line: `pdfm make-safe file.pdf`, and `--check` to only list what
   the file can do.
 - *Remove hidden data* is unchanged: it's for what you send out (details,

@@ -65,7 +65,7 @@ def test_scripts_and_programs(tmp_path):
     got = kinds(found)
     assert found["level"] == "high"
     assert got["scripts"]["severity"] == "high" and got["scripts"]["count"] == 2
-    assert "never runs" in got["scripts"]["detail"]
+    assert got["scripts"]["detail"].startswith("2 scripts that could run") and "never runs them" in got["scripts"]["detail"]
     assert got["launch"]["severity"] == "high" and "cmd.exe" in " ".join(got["launch"]["examples"])
     assert found["risks"][0]["severity"] == "high"                           # the worst first
 
@@ -147,6 +147,7 @@ def test_a_link_that_shows_one_address_and_goes_to_another(tmp_path):
     assert got["hidden_links"]["count"] == 1 and got["hidden_links"]["severity"] == "medium"
     example = got["hidden_links"]["examples"][0]
     assert example == "shows www.mybank.com, goes to mybank.com.evil-site.net"
+    assert got["hidden_links"]["detail"].startswith("1 link that shows one web address and goes to another")
     # nothing to take out: the reader shows the real address before opening any link
     out = tmp_path / "safe.pdf"
     removed = risks.make_safe(tmp_path / "phish.pdf", out)

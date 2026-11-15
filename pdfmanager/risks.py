@@ -49,25 +49,36 @@ ADDRESS = re.compile(r"(?<![@\w.-])(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,24})(
 LINK_PAGES, LINKS = 80, 400  # how far misleading links are looked for
 EXAMPLES = 5
 
+# kind: (title, what one does, what several do, (one, several))
 WORDS = {
     "scripts": ("It has scripts",
+                "{n} that could run when the file is opened or clicked. ZPDF never runs it, but other "
+                "programs may.",
                 "{n} that could run when the file is opened or clicked. ZPDF never runs them, but other "
                 "programs may.", ("script", "scripts")),
     "launch": ("It can start programs",
                "{n} that would start a program or open a file on your computer. ZPDF never does that.",
+               "{n} that would start a program or open a file on your computer. ZPDF never does that.",
                ("action", "actions")),
     "attachments": ("It carries files that can run",
+                    "{n} that is a program, a script or a document with macros. Don't open it unless you "
+                    "trust who sent this.",
                     "{n} that are programs, scripts or documents with macros. Don't open them unless you "
                     "trust who sent this.", ("attached file", "attached files")),
     "submit": ("It can send what you type",
+               "{n} that sends what's filled in to an internet address.",
                "{n} that send what's filled in to an internet address.", ("form action", "form actions")),
     "opens_site": ("It opens a web address by itself",
                    "{n} that other programs would open as soon as the file is opened. ZPDF doesn't.",
+                   "{n} that other programs would open as soon as the file is opened. ZPDF doesn't.",
                    ("web address", "web addresses")),
     "hidden_links": ("Links that hide where they go",
+                     "{n} that shows one web address and goes to another. ZPDF shows the real address "
+                     "before opening any link.",
                      "{n} that show one web address and go to another. ZPDF shows the real address before "
                      "opening any link.", ("link", "links")),
     "remote": ("It points at other files",
+               "{n} that opens another file or reads data from one.",
                "{n} that open another file or read data from one.", ("action", "actions")),
 }
 SUMMARY = {
@@ -334,10 +345,10 @@ def check(path, password=None):
     order = {"high": 0, "medium": 1, "low": 2}
     found = []
     for kind in sorted(counts, key=lambda k: (order[SEVERITY[k]], KINDS.index(k))):
-        title, detail, (one, many) = WORDS[kind]
+        title, single, several, (one, many) = WORDS[kind]
         n = counts[kind]
         found.append({"kind": kind, "severity": SEVERITY[kind], "count": n, "title": title,
-                      "detail": detail.format(n=f"{n} {one if n == 1 else many}"),
+                      "detail": (single if n == 1 else several).format(n=f"{n} {one if n == 1 else many}"),
                       "examples": examples.get(kind, [])})
     return {"risks": found, "level": found[0]["severity"] if found else "none"}
 
