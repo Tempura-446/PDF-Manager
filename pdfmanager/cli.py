@@ -694,6 +694,27 @@ def run_comments(a, src, out, pw):
 
 
 # -- web pages --
+def cmd_privacy(a):
+    from pdfmanager import privacy
+
+    if a.remember:
+        privacy.set_remembering(a.remember == "on")
+    if a.clear_history:
+        cleared = privacy.clear_history()
+        print("cleared: " + ", ".join(cleared) if cleared else "there was nothing to clear")
+    kept = privacy.history()
+    if not privacy.remembering():
+        print("History: off. Nothing about the files you open is kept.")
+    else:
+        print(f"History: on. Kept now: {kept['recent']} in the Recent list, {kept['facts']} file(s) read"
+              + (", text from Search a folder." if kept["search"] else "."))
+    print(f"Working files: {privacy.temp_root()} (deleted when ZPDF closes; leftovers are swept at the next start).")
+    print("ZPDF has no telemetry. It goes online only for:")
+    for o in privacy.ONLINE:
+        print(f"  - {o['what']}: {o['when']}. Sends {o['sends']}.")
+    return 0
+
+
 def cmd_web(a):
     """Print web pages (addresses or saved .html files) to PDF."""
     failures = 0
@@ -1735,6 +1756,13 @@ def build_parser():
     g.add_argument("--csv", action="store_true", help="a spreadsheet of the comments")
     g.add_argument("--export", action="store_true", help="an XFDF file of the comments (Acrobat reads it)")
     g.add_argument("--import", dest="import_xfdf", metavar="XFDF", help="add the comments of an XFDF file")
+
+    sp = other("privacy", cmd_privacy, "what ZPDF keeps on this computer and when it goes online; "
+                                       "clear the history, or stop keeping one")
+    sp.add_argument("--clear-history", action="store_true",
+                    help="empty the Recent list, what was read from your files and the text kept by search")
+    sp.add_argument("--remember", choices=("on", "off"),
+                    help="keep a history of the files you open (on, the default) or none (off, which also clears it)")
 
     sp = other("web", cmd_web, "save web pages as PDFs, as the browser prints them (needs "
                                "Microsoft Edge, Chrome or Chromium)")

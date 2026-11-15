@@ -1079,8 +1079,10 @@ def test_settings_and_update_endpoints(app, updates):
     base, token, srv = app
     update, github = updates
     status, _, data = call(base, token, "/api/settings")
-    assert status == 200 and json.loads(data) == {"repo": "Tempura-446/ZPDF-releases", "token_set": False,
-                                                 "check": True, "how": "source"}
+    got = json.loads(data)
+    assert status == 200 and {k: got[k] for k in ("repo", "token_set", "check", "how")} == {
+        "repo": "Tempura-446/ZPDF-releases", "token_set": False, "check": True, "how": "source"}
+    assert got["remember"] is True and got["online"]        # (0.42.0: privacy, shown in the same dialog)
     status, _, data = call(base, token, "/api/settings", {"token": "ghp_x", "check": False})
     assert json.loads(data)["token_set"] and "ghp_x" not in data.decode()
     assert update.settings()["github_token"] == "ghp_x" and update.settings()["check_updates"] is False

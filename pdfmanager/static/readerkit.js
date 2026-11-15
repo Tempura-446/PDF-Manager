@@ -165,5 +165,10 @@ export function el(tag, attrs = {}, ...children) {
 export const isTyping = (e) => /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.target.isContentEditable;
 export const store = {
   get(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; } },
-  set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* storage unavailable */ } },
+  // (With "Remember the files I open" off in Settings, where you were in a
+  // file isn't kept: the page sets this flag.)
+  set(key, value) {
+    if (globalThis.zpdfForgetFiles && key.startsWith("pdfm-pos:")) return;
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* storage unavailable */ }
+  },
 };

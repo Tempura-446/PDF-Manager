@@ -396,6 +396,10 @@ def remembered(path):
     """facts(path), kept from one look to the next for as long as the file
     is the same (its size and the time it was last written)."""
     path = Path(path)
+    from pdfmanager import privacy
+
+    if not privacy.remembering():
+        return facts(path)
     try:
         stat = path.stat()
         stamp = [stat.st_size, stat.st_mtime_ns, LOOK]

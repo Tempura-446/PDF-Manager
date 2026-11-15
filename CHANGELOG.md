@@ -4,6 +4,32 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.42.0
+
+What ZPDF leaves on your computer, and a plain list of when it goes online.
+
+- **Settings → Privacy.** *Remember the files I open* is the Recent list,
+  where you were in each file, what ZPDF read from it, and the text kept by
+  Search a folder. It says how much is kept now. Turn it off and none of it
+  is kept from one use to the next.
+- **Clear history** empties all of that in one click. Measurements and
+  drawing scales you set are your work, not history, and stay.
+- **Working files** no longer go into the shared temporary folder. Each
+  running copy of ZPDF has its own folder inside ZPDF's data folder; it's
+  deleted when ZPDF closes, and what a crash left behind is removed at the
+  next start.
+- **When ZPDF goes online**: the list is in Settings. ZPDF has no
+  telemetry; it connects only to check for a new version (with a switch),
+  to download an update or an OCR language when you ask, for a timestamp
+  when you sign with a timestamp server, for a web address you turn into a
+  PDF, and when you click a link.
+- `pdfm privacy` shows the same and takes `--clear-history` and
+  `--remember off`.
+- **Open with Digital ID** given a mixed list now leaves out the files that
+  aren't protected for people (and says so) instead of stopping. A page
+  preview of such a file says what it is, not "unknown encryption method".
+  A message that starts with a file's name keeps the name as it's written.
+
 ## 0.41.0
 
 Protect a PDF for people, not with a password.

@@ -54,6 +54,7 @@ from pdfmanager import watchfolders  # Settings > Watch folders
 from pdfmanager import layers  # layers (optional content) of drawings
 from pdfmanager import risks  # what a PDF can do, and Make safe
 from pdfmanager import protection  # password strength, old encryption and its upgrade
+from pdfmanager import privacy  # working files, history, and when ZPDF goes online
 from pdfmanager import certcrypt  # protecting a PDF for people's certificates
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
@@ -1371,6 +1372,12 @@ def _run_operation(op, files, opts, password=None, extra_files=None, work=None, 
     # Digital ID (that tool takes it as it is), and no other tool can read it.
     people = [Path(f).name for f in files if Path(f).suffix.lower() == ".pdf" and certcrypt.is_for_people(f)]
     if op == "decrypt-cert":
+        # (Files that aren't protected this way are left out, and said; with
+        # none that is, the tool's own words say what it's for.)
+        plain = [f for f in files if Path(f).name not in people]
+        if people and plain:
+            notes.append("left out (not protected for particular people): " + ", ".join(Path(f).name for f in plain))
+            files = [f for f in files if Path(f).name in people]
         return _run_files(op, list(files), opts, password, extra_files, work, notes)
     if people:
         raise UserError(f"{people[0]} {certcrypt.NOT_READABLE}")
@@ -1605,9 +1612,13 @@ def run_folder_operation(op, opts, apply):
                                recursive, dry_run=not apply)
         rows = [[str(s), str(d)] for s, d in plan]
     elif op == "search":
-        return search.search(directory, opts.get("query") or "", recursive,
-                             _bool(opts.get("case_sensitive")), _bool(opts.get("whole_words")),
-                             how="exact" if opts.get("how") == "exact" else "best")
+        try:
+            return search.search(directory, opts.get("query") or "", recursive,
+                                 _bool(opts.get("case_sensitive")), _bool(opts.get("whole_words")),
+                                 how="exact" if opts.get("how") == "exact" else "best")
+        finally:
+            if not privacy.remembering():
+                search.forget_index()  # (the text read for this search isn't kept)
     elif op == "duplicates":
         rows = []
         for keep, *extra in organize.find_duplicates(directory, recursive):
@@ -1896,6 +1907,8 @@ class RecentFiles:
 
     @classmethod
     def load(cls):
+        if not privacy.remembering():
+            return []
         try:
             items = json.loads(cls._file().read_text(encoding="utf-8"))
             return [i for i in items if isinstance(i, dict) and i.get("path")]
@@ -1904,6 +1917,8 @@ class RecentFiles:
 
     @classmethod
     def _save(cls, items):
+        if not privacy.remembering():
+            return
         try:
             write_private(cls._file(), json.dumps(items[:cls.LIMIT], indent=1))
         except OSError:
@@ -2258,7 +2273,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(HTTPStatus.OK, {"available": available,
                                               "on": available and winsetup.context_menu_registered()})
         if path == "/api/settings":
-            return self._send(HTTPStatus.OK, update.public_settings())
+            return self._send(HTTPStatus.OK, _settings_for_page())
         if path == "/api/update":
             return self._send(HTTPStatus.OK, {**update.check(), "can_restart": self._can_restart()})
         if path == "/api/diagnostics":
@@ -2472,6 +2487,15 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 return self._error(HTTPStatus.BAD_REQUEST, "bad request")
         if not self._token_ok():
+            # (A small body is read and dropped first: answering while it's
+            # still being sent can reach the sender as a broken connection
+            # instead of this refusal, as Windows does.)
+            try:
+                unread = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                unread = 0
+            if 0 < unread <= 1_000_000:
+                self.rfile.read(unread)
             return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
         length = int(self.headers.get("Content-Length") or 0)
         if length > MAX_UPLOAD:
@@ -2558,6 +2582,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._access_check(body)
             if path == "/api/settings":
                 return self._save_settings(body)
+            if path == "/api/history/clear":
+                return self._send(HTTPStatus.OK, {"cleared": privacy.clear_history(), **_settings_for_page()})
             if path in ("/api/watch/add", "/api/watch/pause", "/api/watch/remove"):
                 data = json.loads(body or b"{}")
                 if path == "/api/watch/add":
@@ -3163,7 +3189,9 @@ class Handler(BaseHTTPRequestHandler):
         if "check" in data:
             changes["check_updates"] = None if data["check"] else False
         update.save_settings(**changes)
-        return self._send(HTTPStatus.OK, update.public_settings())
+        if "remember" in data:
+            privacy.set_remembering(bool(data["remember"]))  # (turning it off clears what's kept)
+        return self._send(HTTPStatus.OK, _settings_for_page())
 
     def _can_restart(self):
         """Can this copy close itself and start again (after an update)?"""
@@ -3483,6 +3511,13 @@ class _Server(ThreadingHTTPServer):
             watcher.stop()
 
 
+def _settings_for_page():
+    """Settings as the page shows them, with what's remembered and the
+    occasions ZPDF goes online."""
+    return {**update.public_settings(), "remember": privacy.remembering(), "history": privacy.history(),
+            "online": privacy.ONLINE}
+
+
 def make_server(port=0, desktop=False, open_paths=(), prefer=None, action=None):
     """Create (but don't start) the server. Returns (server, url). The
     server's result cache is ``server.RequestHandlerClass.results`` and its
@@ -3527,6 +3562,7 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None, action=None):
 def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False, action=None):
     """Run in the browser: print the link, open it, serve until Ctrl+C (or,
     with ``exit_when_closed``, until the page has been closed)."""
+    privacy.begin_run()
     server, url = make_server(port, open_paths=() if action else open_paths, prefer=APP_PORT, action=action)
     print(f"ZPDF is running at {url}")
     print("Keep this window open while you use it; press Ctrl+C to stop.")
@@ -3551,6 +3587,7 @@ def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False, acti
     finally:
         server.shutdown()
         server.server_close()
+        privacy.end_run()
 
 
 def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5, grace=2.0,
@@ -4301,6 +4338,7 @@ def launch(open_paths=(), port=0, action=None):
         if not port and forward_to_running_app(open_paths, action=action):
             _log("launch: handed to the running copy")
             return
+        privacy.begin_run()  # this copy's working files, in its own folder; earlier leftovers swept
         if sys.platform == "win32":
             threading.Thread(target=_rename_old_install, daemon=True).start()
         # PDFM_WINDOW=desktop, app-window or browser uses only that kind of
@@ -4314,6 +4352,7 @@ def launch(open_paths=(), port=0, action=None):
         serve(port=port, open_paths=open_paths, exit_when_closed=True, action=todo)
     finally:
         _startup.release()
+        privacy.end_run()
 
 
 def main_app(argv=None):
