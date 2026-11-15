@@ -888,13 +888,15 @@ body.form-folded #options-card { display: none; }
 .pw-meter { display: flex; align-items: center; gap: 8px; min-height: 18px; margin-top: 6px; font-size: var(--fs-xs); color: var(--muted); }
 .pw-bars { display: inline-flex; gap: 3px; flex: none; }
 .pw-bars i { width: 22px; height: 4px; border-radius: 2px; background: var(--border-strong); }
-.pw-meter[data-score="0"] .pw-bars i:nth-child(-n+1), .pw-meter[data-score="1"] .pw-bars i:nth-child(-n+1) { background: var(--err); }
-.pw-meter[data-score="2"] .pw-bars i:nth-child(-n+2) { background: var(--page-warn, #8a5a00); }
-.pw-meter[data-score="3"] .pw-bars i:nth-child(-n+3), .pw-meter[data-score="4"] .pw-bars i { background: var(--page-ok, #1f7a4d); }
+.pw-meter[data-score="0"] .pw-bars i:nth-child(-n+1), .pw-meter[data-score="1"] .pw-bars i:nth-child(-n+2) { background: var(--err); }
+.pw-meter[data-score="2"] .pw-bars i:nth-child(-n+3) { background: var(--page-warn, #8a5a00); }
+.pw-meter[data-score="3"] .pw-bars i:nth-child(-n+4), .pw-meter[data-score="4"] .pw-bars i { background: var(--page-ok, #1f7a4d); }
 .pw-meter[data-score=""] .pw-bars { visibility: hidden; }
 .fp-fact { font: 500 var(--fs-xs)/1.5 var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 2px 7px; }
 .fp-fact.flag { color: var(--accent); border-color: transparent; background: var(--accent-soft); }
 .fp-fact.bad { border-color: transparent; background: var(--err-soft); }
+.fp-fact.warn { color: var(--page-warn, #8a5a00); border-color: transparent; background: color-mix(in srgb, var(--page-warn, #8a5a00) 14%, transparent); }
+.fp-line.careful { color: var(--err); font-weight: 600; }
 .fp-fact.wait { height: 22px; border-color: transparent; background: var(--surface-2); animation: fp-wait 1.2s ease-in-out infinite alternate; }
 @keyframes fp-wait { to { opacity: .45; } }
 .fp-sec { display: flex; flex-direction: column; gap: 8px; }
@@ -1227,7 +1229,7 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
         <summary><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Password-protected files?</summary>
         <div class="pw-row">
           <label for="pw">Current password</label>
-          <div class="pw-input"><input type="password" id="pw" autocomplete="current-password" spellcheck="false">
+          <div class="pw-input"><input type="password" id="pw" autocomplete="off" spellcheck="false">
             <button type="button" class="pw-toggle" id="pw-toggle" aria-pressed="false" aria-label="Show password" aria-controls="pw">Show</button></div>
           <div class="hint">Results stay protected with the same password.</div>
         </div>
@@ -1719,9 +1721,10 @@ function factChips(facts) {
   }
   const chips = parts.map((text) => ({ text, flag: text === "scanned, no text yet", bad: text === "can't be read" }));
   if (facts.weak_protection) {
-    const at = chips.findIndex((c) => c.text === "protected");
-    const weak = { text: "weak protection", flag: true,
-      title: `Its encryption (${facts.weak_protection}) is old and quickly broken, whatever the password. Upgrade protection writes it with AES-256, same password.` };
+    const at = chips.findIndex((c) => c.text === "weak protection" || c.text === "protected");
+    const how = /40-bit/.test(facts.weak_protection) ? "is broken in minutes on an ordinary computer" : "is old and no longer considered safe";
+    const weak = { text: "weak protection", warn: true,
+      title: `Its encryption (${facts.weak_protection}) ${how}, whatever the password. Upgrade protection writes it with AES-256, same password.` };
     if (at >= 0) chips[at] = weak; else chips.push(weak);
   }
   // What the file can do that matters (risks.py), said first and in full on hover.
@@ -1815,7 +1818,7 @@ function fpShowFacts(facts) {
   const chips = factChips(facts);
   fp.chips.removeAttribute("aria-busy");
   fp.chips.hidden = !chips.length;
-  fp.chips.replaceChildren(...chips.map((c) => el("span", { class: "fp-fact" + (c.flag ? " flag" : c.bad ? " bad" : ""), role: "listitem", ...(c.title ? { title: c.title, tabindex: "0" } : {}) },
+  fp.chips.replaceChildren(...chips.map((c) => el("span", { class: "fp-fact" + (c.warn ? " warn" : c.flag ? " flag" : c.bad ? " bad" : ""), role: "listitem", ...(c.title ? { title: c.title, tabindex: "0" } : {}) },
     c.bad ? icon("alert") : null, c.text)));
   fp.facts = facts;
   fpSuggest();
@@ -2052,7 +2055,7 @@ async function fpRun(item) {
       item.url = URL.createObjectURL(blob);
       const said = el("div", { class: "fp-said" }, humanSize(blob.size));
       done.replaceChildren(icon("check"), el("div", {}, el("b", {}, name), said,
-        ...notes.map((line) => el("div", { class: "fp-line" }, line)),
+        ...notes.map((line) => el("div", { class: "fp-line" + (/^Careful\b/.test(line) ? " careful" : "") }, line)),
         el("div", { class: "fp-save" }, ...saveControls(blob, name, resultId, item.url, (...n) => said.replaceChildren(...n),
           { onError: fail, download: "Save" }))));
       done.hidden = false;
@@ -2097,7 +2100,7 @@ function fpShowNote(tab) {
     : [`: ${m.sizes}, cleaned up and made into this PDF.`];
   fp.note.replaceChildren(el("div", { class: "fp-done" }, icon("check"), el("div", {},
     el("b", {}, m.label), ...made,
-    ...m.notes.map((line) => el("div", { class: "fp-line" }, line)), finish)));
+    ...m.notes.map((line) => el("div", { class: "fp-line" + (/^Careful\b/.test(line) ? " careful" : "") }, line)), finish)));
 }
 
 /** A file the reader can't show: run Repair on it (by its id when it's a
@@ -2843,7 +2846,7 @@ function whenText(t) {
 function factsLine(facts) {
   if (!facts) return "";
   if (facts.error) return "can't be read";
-  if (facts.pages == null) return facts.protected ? "protected" : "can't be read";
+  if (facts.pages == null) return facts.protected ? (facts.weak_protection ? "weak protection" : "protected") : "can't be read";
   const parts = [facts.pages + (facts.pages === 1 ? " page" : " pages")];
   const size = Number(facts.size);
   if (size >= 0 && facts.size != null) {
@@ -2854,7 +2857,7 @@ function factsLine(facts) {
   if (facts.form_fields > 0) parts.push("form, " + facts.form_fields + (facts.form_fields === 1 ? " field" : " fields"));
   if (facts.signatures > 0) parts.push("signed");
   if (facts.pdfa) parts.push("PDF/A");
-  if (facts.protected) parts.push("protected");
+  if (facts.protected) parts.push(facts.weak_protection ? "weak protection" : "protected");
   return parts.join(" · ");
 }
 const MULTI_TOOLS = [["merge", "Several PDFs into one"], ["compare", "What changed between two versions"], ["search", "Find words or ask a question across its PDFs", "Search a folder"]];
@@ -3807,6 +3810,7 @@ function renderFields(op, form, prefix, empty) {
       input = el("input", { id, name: f.key, type: "file", accept: f.accept || "", multiple: !!f.multiple });
     } else {
       input = el("input", { id, name: f.key, type: f.kind === "number" ? "number" : f.kind === "password" ? "password" : "text",
+        ...(f.kind === "password" ? { autocomplete: "off" } : {}),
         value: f.default ?? "", placeholder: f.placeholder || "", min: f.min, max: f.max,
         step: f.step || (f.kind === "number" ? "any" : null), required: !!f.required, spellcheck: "false" });
     }
@@ -3829,7 +3833,7 @@ function renderFields(op, form, prefix, empty) {
     if (f.strength) {
       // How hard the password is to guess, said as it's typed (worked out by the app on this computer).
       const bar = el("div", { class: "pw-meter", "data-score": "", role: "status", "aria-live": "polite" },
-        el("span", { class: "pw-bars", "aria-hidden": "true" }, el("i"), el("i"), el("i"), el("i")), el("span", { class: "pw-words" }));
+        el("span", { class: "pw-bars", "aria-hidden": "true" }, el("i"), el("i"), el("i"), el("i"), el("i")), el("span", { class: "pw-words" }));
       let seq = 0, timer = 0;
       const rate = async () => {
         const mine = ++seq;

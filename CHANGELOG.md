@@ -36,6 +36,12 @@ Stronger protection of your own documents.
   and reminds you that the original is untouched and still verifies. A
   signed file with nothing to take out is copied byte for byte, so its
   signature stays valid.
+- **The app window no longer offers to save passwords or remember form
+  entries.** Typing a PDF's password brought up the browser's "Save your
+  password?" box, and a saved one would have been kept in the app's
+  profile. Version 0.22.1 had turned this on for password managers; it is
+  off again, together with the remembering of form entries. Keep PDF
+  passwords in your password manager yourself.
 - `pdfm make-safe --check` and `pdfm upgrade-protection --check` exit
   with code 2 when a file could do harm or is weakly protected, for
   scripts.

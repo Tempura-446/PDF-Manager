@@ -2187,7 +2187,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
 
   async #askPassword(wrong) {
     const inputId = `rd-pw-${Math.random().toString(36).slice(2)}`;
-    const input = el("input", { type: "password", id: inputId, autocomplete: "current-password", spellcheck: "false" });
+    const input = el("input", { type: "password", id: inputId, autocomplete: "off", spellcheck: "false" });
     const toggle = el("button", { type: "button", class: "pw-toggle", "aria-pressed": "false", "aria-label": "Show password" }, "Show");
     toggle.addEventListener("click", () => {
       const show = input.type === "password";

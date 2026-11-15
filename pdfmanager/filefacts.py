@@ -359,7 +359,9 @@ def suggestions(found, made_by=None):
                        if found.get("signatures") else "")})
     if found.get("weak_protection") and made_by != "upgrade-protection":
         out.append({"op": "upgrade-protection", "title": "Protect it better",
-                    "why": f"Its encryption ({found['weak_protection']}) is old and quickly broken"})
+                    "why": f"Its encryption ({found['weak_protection']}) " + (
+                        "is broken in minutes, whatever the password" if "40-bit" in found["weak_protection"]
+                        else "is old and no longer considered safe")})
     if found.get("scanned") and not found.get("has_text"):
         out.append({"op": "ocr", "title": "Make it searchable",
                     "why": "Read the text so you can search and copy it"})

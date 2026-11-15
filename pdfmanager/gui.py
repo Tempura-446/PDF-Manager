@@ -3871,7 +3871,7 @@ def run_desktop(port=0, open_paths=(), action=None):
         window = webview.create_window("ZPDF", url, js_api=api, width=1180, height=820,
                                        min_size=(400, 560), background_color="#f6f6f3")
         api._window = window
-        _allow_autofill(window)
+        _no_autofill(window)
         handler.bring_to_front = lambda: _raise_window(window)
         handler.quit_app = lambda: _close_on_purpose(handler, window)
         try:
@@ -3981,10 +3981,14 @@ def _ask_to_close(window, text):
     return bool(confirm("Close ZPDF?", text))
 
 
-def _allow_autofill(window):
-    """Let WebView2 offer to save and fill in passwords (autocomplete=
-    "current-password") and other form entries: both are off by default in
-    an app's WebView2, and pywebview leaves them so. Windows' EdgeChromium
+def _no_autofill(window):
+    """Keep WebView2 from saving or offering passwords and form entries: a
+    PDF's password, or what was typed into one PDF's form, must not be kept
+    in the app's browser profile and offered again in another document.
+    (0.22.1 turned both on, for password managers; they are off since
+    0.40.0, when the checks showed what that kept.) WebView2 has them off by
+    default; they are set off here all the same, so a profile or a later
+    default can't bring them back. Windows' EdgeChromium
     backend only: pywebview runs its before_show event on the window's own
     thread right after making the WebView2 control (window.native.browser.
     webview); its CoreWebView2 is ready later, in CoreWebView2Initialization
@@ -3997,10 +4001,10 @@ def _allow_autofill(window):
         try:
             if args.IsSuccess:
                 settings = sender.CoreWebView2.Settings
-                settings.IsPasswordAutosaveEnabled = True
-                settings.IsGeneralAutofillEnabled = True
+                settings.IsPasswordAutosaveEnabled = False
+                settings.IsGeneralAutofillEnabled = False
         except Exception as exc:  # noqa: BLE001 - an older WebView2 lacks these settings
-            _log(f"launch: couldn't turn on password autofill: {exc!r}")
+            _log(f"launch: couldn't turn off password saving and autofill: {exc!r}")
 
     def before_show(window):
         try:

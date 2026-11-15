@@ -99,7 +99,8 @@ def strength(password):
             ending = 200.0 if re.fullmatch(r"(19|20)\d\d", tail) else 10.0 ** len(tail)  # (a year is a common ending)
             guesses = min(guesses, 2e5 * ending * (2 if password != lowered else 1)
                           * (20 if stem != bare else 1))  # (capitals, and 0 for o: a little harder)
-            advice = advice or "A single word with numbers after it is easy to guess. Use several words."
+            advice = advice or ("A single word is easy to guess, even with numbers or signs added or swapped in. "
+                                "Use several words.")
     score = sum(guesses >= limit for limit in GUESSES)
     if not advice:
         advice = ("" if score == 4 else "Longer is stronger: three or four unrelated words work well."
@@ -197,9 +198,9 @@ def upgrade(path, output, password):
 
     before = info(path)
     if not before["protected"]:
-        raise core.PdfManagerError(f"{path} isn't protected: use Add password to protect it")
+        raise core.PdfManagerError(f"nothing to upgrade: {path} isn't protected (use Add password to protect it)")
     if not before["weak"]:
-        raise core.PdfManagerError(f"{path} is already protected with {before['method']}")
+        raise core.PdfManagerError(f"nothing to upgrade: {path} is already protected with {before['method']}")
     try:
         pdf = pikepdf.open(path, password=password or "")
     except pikepdf.PasswordError:

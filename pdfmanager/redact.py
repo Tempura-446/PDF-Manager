@@ -633,7 +633,7 @@ def proof_words(proof):
     by_what = {}
     for item in proof["found"]:
         by_what.setdefault(item["what"], []).append(item["where"])
-    parts = [f"“{what}” is still in " + "; ".join(wheres[:4]) + ("…" if len(wheres) > 4 else "")
+    parts = [f'"{what}" is still in ' + "; ".join(wheres[:4]) + ("..." if len(wheres) > 4 else "")
              for what, wheres in list(by_what.items())[:4]]
     more = "" if len(by_what) <= 4 else f" (and {len(by_what) - 4} more)"
     fix = []

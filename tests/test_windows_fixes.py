@@ -153,29 +153,30 @@ def test_the_desktop_window_turns_on_autofill(monkeypatch):
             self.items.append(fn)
             return self
 
-    settings = types.SimpleNamespace(IsPasswordAutosaveEnabled=False, IsGeneralAutofillEnabled=False)
+    settings = types.SimpleNamespace(IsPasswordAutosaveEnabled=True, IsGeneralAutofillEnabled=True)
     control = types.SimpleNamespace(CoreWebView2=None, CoreWebView2InitializationCompleted=Event())
     window = types.SimpleNamespace(events=types.SimpleNamespace(before_show=Event()),
                                    native=types.SimpleNamespace(browser=types.SimpleNamespace(webview=control)))
     logged = []
     monkeypatch.setattr(gui, "_log", logged.append)
     monkeypatch.setattr(sys, "platform", "win32")
-    gui._allow_autofill(window)
+    gui._no_autofill(window)
     [before_show] = window.events.before_show.items
     before_show(window)
     [ready] = control.CoreWebView2InitializationCompleted.items
     sender = types.SimpleNamespace(CoreWebView2=types.SimpleNamespace(Settings=settings))
     ready(sender, types.SimpleNamespace(IsSuccess=True))
-    assert settings.IsPasswordAutosaveEnabled and settings.IsGeneralAutofillEnabled
+    # (0.40.0: off, so a PDF's password and form entries aren't kept by the app window.)
+    assert not settings.IsPasswordAutosaveEnabled and not settings.IsGeneralAutofillEnabled
     assert not logged
     # An older WebView2 without these settings, or another backend: logged, nothing raised.
     ready(types.SimpleNamespace(CoreWebView2=types.SimpleNamespace(Settings=object())), types.SimpleNamespace(IsSuccess=True))
     before_show(types.SimpleNamespace(native=None))
     assert len(logged) == 2 and all("autofill" in m for m in logged)
-    gui._allow_autofill(types.SimpleNamespace(events=types.SimpleNamespace()))  # pywebview < 5
+    gui._no_autofill(types.SimpleNamespace(events=types.SimpleNamespace()))  # pywebview < 5
     assert len(logged) == 3
     # Not on Windows: nothing is touched.
     monkeypatch.setattr(sys, "platform", "linux")
     other = types.SimpleNamespace(events=types.SimpleNamespace(before_show=Event()))
-    gui._allow_autofill(other)
+    gui._no_autofill(other)
     assert not other.events.before_show.items
