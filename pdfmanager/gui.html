@@ -672,6 +672,9 @@ select.re-name { width: auto; }
 /* Redact: the words and how they match on one row, the kinds of numbers on the next. */
 .fields > .field[data-key="emails"] { grid-column-start: 1; }
 .empty-note { color: var(--muted); margin: 0; font-size: var(--fs-base); }
+.dlg-online summary { cursor: pointer; color: var(--muted); font-size: var(--fs-sm); }
+.dlg-online ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: var(--fs-sm); line-height: 1.5; }
+.dlg-online li b { color: var(--text); font-weight: 600; }
 details.pw { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
 details.pw summary { cursor: pointer; color: var(--muted); font-size: var(--fs-base); display: flex; align-items: center; gap: 6px; list-style: none; }
 details.pw summary::-webkit-details-marker { display: none; }
@@ -1313,6 +1316,16 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
       <div><button type="button" class="btn secondary" id="watch-add-btn">Watch this folder</button></div>
       <p class="dlg-status" id="watch-status" aria-live="polite"></p>
     </div>
+    <h3>Privacy</h3>
+    <label class="dlg-check"><input type="checkbox" id="set-remember"> Remember the files I open</label>
+    <p class="dlg-hint" id="set-history">The Recent list, where you were in each file, what ZPDF read from it, and the text kept by Search a folder.</p>
+    <div><button type="button" class="btn secondary" id="set-clear-history">Clear history</button></div>
+    <p class="dlg-hint">ZPDF's working files stay in its own folder, not the shared temporary one. They're deleted when a
+      tool finishes, at the latest when ZPDF closes, and after a crash at the next start. Measurements and drawing
+      scales you set are your work: they stay until you remove them.</p>
+    <details class="dlg-online"><summary>When ZPDF goes online</summary>
+      <p class="dlg-hint">ZPDF has no telemetry: nothing about you or your files is ever sent. It connects only on these occasions:</p>
+      <ul id="set-online"></ul></details>
     <h3>Updates</h3>
     <label class="dlg-check"><input type="checkbox" id="set-check"> Check for new versions when ZPDF starts</label>
     <label class="dlg-field"><span>GitHub repository</span><input type="text" id="set-repo" spellcheck="false" autocomplete="off" placeholder="owner/name"></label>
@@ -4390,6 +4403,13 @@ async function openSettings() {
   $("settings-version").textContent = `You have version ${$("version").textContent.replace("Version ", "")}` +
     ({ source: " (running from a source folder: update it with git pull)", frozen: " (the standalone app: download a new one to update it)" }[s.how] || ".");
   $("set-check").checked = s.check;
+  showPrivacy(s);
+  $("set-online").replaceChildren(...(s.online || []).map((o) => {
+    const li = document.createElement("li"), b = document.createElement("b");
+    b.textContent = o.what;
+    li.append(b, `: ${o.when}. Sends ${o.sends}.` + (o.switch ? ` Switch: ${o.switch}.` : ""));
+    return li;
+  }));
   $("set-repo").value = s.repo;
   $("set-token").value = "";
   $("set-token-state").textContent = s.token_set ? "· saved" : "";
@@ -4485,6 +4505,48 @@ $("set-shell-menu").addEventListener("change", async (e) => {
     updateStatus("set-status", menu.on ? "ZPDF is in the right-click menu." : "ZPDF was taken out of the right-click menu.");
   } catch (err) { e.target.checked = !want; updateStatus("set-status", err.message, true); }
 });
+// Clear history, the window's part: where you were in every file. Returns how many.
+function forgetPlaces() {
+  let n = 0;
+  try {
+    for (const key of Object.keys(localStorage)) if (key.startsWith("pdfm-pos:")) { localStorage.removeItem(key); n++; }
+  } catch (e) { /* storage unavailable */ }
+  return n;
+}
+// What's remembered, said under the switch; the reader keeps (or not) where you were.
+function showPrivacy(s) {
+  $("set-remember").checked = s.remember;
+  window.zpdfForgetFiles = !s.remember;
+  const h = s.history || {}, kept = [];
+  if (h.recent) kept.push(`${h.recent} in the Recent list`);
+  if (h.facts) kept.push(`${h.facts} file${h.facts === 1 ? "" : "s"} read`);
+  if (h.search) kept.push("text from Search a folder");
+  $("set-history").textContent = !s.remember
+    ? "Off: no Recent list, and nothing about your files is kept from one use to the next."
+    : "The Recent list, where you were in each file, what ZPDF read from it, and the text kept by Search a folder." +
+      (kept.length ? ` Kept now: ${kept.join(", ")}.` : " Nothing is kept right now.");
+  $("set-clear-history").disabled = !s.remember;
+}
+$("set-remember").addEventListener("change", async (e) => {
+  try {
+    const s = await jsonApi("/api/settings", { remember: e.target.checked });
+    if (!s.remember) forgetPlaces();
+    showPrivacy(s);
+    updateStatus("set-status", s.remember ? "ZPDF remembers the files you open again." : "History cleared; ZPDF won't keep one.");
+    if (inHome()) renderHome().catch(() => {});
+  } catch (err) { e.target.checked = !e.target.checked; updateStatus("set-status", err.message, true); }
+});
+$("set-clear-history").addEventListener("click", async () => {
+  try {
+    const s = await jsonApi("/api/history/clear", {});
+    const places = forgetPlaces();
+    const cleared = [...(s.cleared || []), ...(places ? ["where you were in your files"] : [])];
+    showPrivacy(s);
+    updateStatus("set-status", cleared.length ? `Cleared: ${cleared.join(", ")}.` : "There was nothing to clear.");
+    if (inHome()) renderHome().catch(() => {});
+  } catch (err) { updateStatus("set-status", err.message, true); }
+});
+jsonApi("/api/settings").then((s) => { window.zpdfForgetFiles = !s.remember; }).catch(() => {});
 async function saveSettings() {
   const data = { check: $("set-check").checked, repo: $("set-repo").value.trim() };
   if ($("set-token").value.trim()) data.token = $("set-token").value.trim();

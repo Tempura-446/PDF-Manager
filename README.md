@@ -302,6 +302,31 @@ other go into one job, so select them all and choose the action once.
 To take ZPDF out of the menu (or put it back), use **Settings → Show ZPDF
 in the right-click menu**. Uninstalling takes it away too.
 
+## Privacy: what ZPDF keeps, and when it goes online
+
+ZPDF works on your computer. It has **no telemetry**: nothing about you or
+your files is sent anywhere. **Settings → Privacy** shows and controls what
+it keeps:
+
+- **Remember the files I open** (on by default): the Recent list, where you
+  were in each file, what ZPDF read from it (pages, whether it's signed or a
+  scan), and the text kept by Search a folder so the next search is fast.
+  Turn it off and none of these is kept from one use to the next.
+- **Clear history** empties all of them now. Measurements and drawing scales
+  you set on a drawing are your work, not history: they stay until you
+  remove them.
+- **Working files.** What a tool writes on the way to its result goes into
+  ZPDF's own folder (`temp` in its data folder), not the shared temporary
+  folder. It's deleted when the tool finishes, at the latest when ZPDF
+  closes, and after a crash at the next start.
+- **When ZPDF goes online** lists every occasion: checking for a new
+  version (there's a switch), downloading an update or an OCR language when
+  you ask, a timestamp when you sign with a timestamp server, turning a web
+  address into a PDF, and opening a link you click.
+
+`pdfm privacy` prints the same; `--clear-history` and `--remember off` do
+it from the command line.
+
 ## Watch folders
 
 **Settings → Watch folders** processes PDFs put in a folder while ZPDF is
@@ -721,6 +746,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `flatten` | make forms and comments part of the page | `pdfm flatten form.pdf` |
 | `sanitize` | remove hidden data (details, scripts, attachments) | `pdfm sanitize doc.pdf` |
 | `make-safe` | take out what could do harm in a PDF you were sent (`--check`: only list it) | `pdfm make-safe invoice.pdf` |
+| `privacy` | what ZPDF keeps on this computer and when it goes online (`--clear-history`, `--remember off`) | `pdfm privacy --clear-history` |
 | `encrypt-for` / `open-with-id` | protect a PDF for people's certificates (no password); open one with your Digital ID | `pdfm encrypt-for doc.pdf --cert ann.cer` |
 | `upgrade-protection` | replace old, weak encryption (RC4) with AES-256, same password and limits (`--check`: only say how each file is protected) | `pdfm upgrade-protection old.pdf` |
 | `sign-cert` | sign with a digital ID (.pfx/.p12), visible or invisible | `pdfm sign-cert doc.pdf --pfx me.pfx --page last --reason "Approved"` |
