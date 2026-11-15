@@ -416,7 +416,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     this.brokenSaid = el("p", { class: "rd-broken-said", role: "status" });
     this.broken = el("div", { class: "rd-empty rd-broken", hidden: true },
       el("section", { class: "rd-empty-card rd-broken-card", "aria-labelledby": "rd-broken-name" },
-        el("div", { class: "rd-empty-icon rd-broken-icon", html: svg("alert") }),
+        (this.brokenIcon = el("div", { class: "rd-empty-icon rd-broken-icon", html: svg("alert") })),
         Object.assign(this.brokenName, { id: "rd-broken-name" }),
         this.brokenWhy,
         el("div", { class: "rd-broken-actions" }, this.brokenOpenId, this.brokenRepair, this.brokenForget, this.brokenClose),
@@ -917,6 +917,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     this.activeTab = tab;
     this.#busy(false);
     this.empty.hidden = true;
+    this.sigbar.hidden = true;  // (the last document's signature banner isn't this file's)
     this.broken.hidden = false;
     this.brokenName.textContent = tab.name;
     this.brokenName.title = tab.path || tab.name;
@@ -950,6 +951,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
       ? "This PDF is protected for particular people: it opens only with the Digital ID of one of them, not with a password."
       : BROKEN_WHY;
     this.brokenOpenId.hidden = !people;
+    this.broken.classList.toggle("rd-forpeople", people);  // (a lock, not the "something's wrong" sign)
+    this.brokenIcon.innerHTML = svg(people ? "lock" : "alert");
     if (people) this.brokenRepair.hidden = true;
   }
 

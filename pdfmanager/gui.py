@@ -875,7 +875,8 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                                 if extra_files.get("trust") else None)
         out.write_text(certsign.report(found, src.name), encoding="utf-8")
         notes.extend([f"{src.name}: no digital signatures"] if not found else
-                     [f"{src.name}, {e['field']}: {e['summary']}" for e in found])
+                     [f"{src.name}, {e['field']}: {e['summary']}" + (f" {e['lasting']}" if e.get("lasting") else "")
+                      for e in found])
     elif op == "pdfa":
         level = opts.get("level") or "2"
         archive.to_pdfa(src, out, level=level, password=password, notes=notes)
@@ -1688,8 +1689,11 @@ def _inspect_pdf(path, password=None):
     try:
         reader = core.open_pdf(path, password)
     except core.PdfManagerError as exc:
-        locked = "encrypted" in str(exc) or "password" in str(exc)
         said = str(exc).replace(str(path), Path(path).name)  # the file's name, not where it's kept
+        if certcrypt.is_for_people(path):
+            # Not damaged and not asking for a password: it opens with a Digital ID.
+            return {"pages": None, "locked": False, "error": said, "for_people": True}
+        locked = "encrypted" in str(exc) or "password" in str(exc)
         return {"pages": None, "locked": locked, "error": None if locked else said}
     info = {"pages": len(reader.pages), "locked": False, "error": None, "thumb": None}
     try:
@@ -2617,7 +2621,10 @@ class Handler(BaseHTTPRequestHandler):
                 target = self.opened.get(str(data.get("id", ""))) if self.opened is not None else None
                 if target is None:
                     raise UserError("that file is no longer available")
-                RecentFiles.failed(target)
+                # (A file protected for particular people isn't one that failed:
+                # it opens with a Digital ID.)
+                if not certcrypt.is_for_people(target):
+                    RecentFiles.failed(target)
                 return self._send(HTTPStatus.OK, {"ok": True})
             if path == "/api/recent/restore":  # Undo after a forget
                 items = json.loads(body or b"{}").get("items")
