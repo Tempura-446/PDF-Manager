@@ -279,7 +279,8 @@ OPERATIONS = [
     {"id": "form", "group": "Stamp", "label": "Add form fields", "files": "pdf", "panel": "form",
      "help": "Make a PDF fillable: Find fields picks out the lines, boxes and tick boxes of a "
              "printed form, and you can draw more where people should type, tick, choose or "
-             "sign. It can then be filled in with any PDF reader, including the reader here.",
+             "sign. It can then be filled in with any PDF reader, including the reader here. "
+             "The fields a form already has can be moved, resized, renamed or deleted.",
      "fields": [_f("detect", "Find the fields in each file", "check", False,
                    hint="For several copies of different forms: each file gets the fields "
                         "found in it, as well as any you drew."),
@@ -288,7 +289,7 @@ OPERATIONS = [
                             ["14", "14 pt"]]),
                 _f("border", "Draw a border around each field", "check", True),
                 _f("required", "Make text fields required", "check", False),
-                _f("fields", "", "hidden", "")]},
+                _f("fields", "", "hidden", ""), _f("edits", "", "hidden", "")]},
     {"id": "headers", "live": True, "group": "Stamp", "label": "Headers & footers", "files": "pdf",
      "help": "Add text at the top or bottom of every page: a title, the date, page numbers or "
              "Bates numbers (which continue from one file to the next).",
@@ -727,24 +728,28 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             fields = [{**f, "page": int(page)} for page, found in raw.items() for f in found]
         except (ValueError, TypeError, AttributeError):
             raise UserError("the fields drawn on the pages are damaged; draw them again") from None
-        if _bool(opts.get("detect")):
-            found = formdetect.detect(src, password)
-            drawn = [(f["page"], f["rect"]) for f in fields]
-            fields += [{**f, "page": page} for page, items in found.items() for f in items
-                       if not any(p == page and formdetect.overlap(f["rect"], r) > 0.3
-                                  for p, r in drawn)]
-        if not fields:
-            raise UserError("no fields: use Find fields, or drag where people should type, "
-                            "tick or sign" if not _bool(opts.get("detect")) else
-                            "no fields were found in this file: it needs lines, boxes or tick "
-                            "boxes to fill in (draw the fields instead)")
-        if _bool(opts.get("required")):
-            fields = [{**f, "required": f.get("type") in ("text", "multiline")} for f in fields]
-        names = forms.add_fields(src, out, fields, border=_bool(opts.get("border")),
-                                 font_size=_num(opts.get("font_size"), float, 0),
-                                 password=password)
-        notes.append(f"{src.name}: added {len(names)} field{'s' if len(names) != 1 else ''} "
-                     f"({', '.join(names[:8])}{'…' if len(names) > 8 else ''})")
+        try:
+            edits = json.loads(opts.get("edits") or "[]")
+            if not isinstance(edits, list) or not all(isinstance(e, dict) for e in edits):
+                raise ValueError
+        except ValueError:
+            raise UserError("the changes to the form's fields are damaged; make them again") from None
+        name, edited = src.name, None
+        if edits:
+            # The form's own fields first; new ones are then added to the result.
+            edited = out.with_name(out.stem + ".fields-edited.pdf")
+            done = forms.edit_fields(src, edited, edits, password=password)
+            bits = [f"changed {done['changed']}" if done["changed"] else "",
+                    f"deleted {done['deleted']}" if done["deleted"] else ""]
+            notes.append(f"{name}: {' and '.join(b for b in bits if b) or 'changed none'} "
+                         "of the form's own fields")
+            notes.extend(done["notes"])
+            src = edited
+        try:
+            _form_op(src, out, fields, opts, password, notes, name, bool(edits))
+        finally:
+            if edited is not None and edited != out:
+                edited.unlink(missing_ok=True)
     elif op == "headers":
         # Bates numbers continue from file to file: the next number is kept
         # in the options between files.
@@ -988,6 +993,33 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
     else:
         raise UserError(f"unknown operation {op!r}")
     return [out]
+
+
+def _form_op(src, out, fields, opts, password, notes, name, edited):
+    """Add the drawn (and found) fields to ``src``. ``edited``: ``src`` is
+    the file with its own fields already changed, which is a result even
+    with nothing to add."""
+    if _bool(opts.get("detect")):
+        found = formdetect.detect(src, password)
+        drawn = [(f["page"], f["rect"]) for f in fields]
+        fields = fields + [{**f, "page": page} for page, items in found.items() for f in items
+                           if not any(p == page and formdetect.overlap(f["rect"], r) > 0.3
+                                      for p, r in drawn)]
+    if not fields:
+        if edited:
+            shutil.copyfile(src, out)
+            return
+        raise UserError("no fields: use Find fields, or drag where people should type, "
+                        "tick or sign" if not _bool(opts.get("detect")) else
+                        "no fields were found in this file: it needs lines, boxes or tick "
+                        "boxes to fill in (draw the fields instead)")
+    if _bool(opts.get("required")):
+        fields = [{**f, "required": f.get("type") in ("text", "multiline")} for f in fields]
+    names = forms.add_fields(src, out, fields, border=_bool(opts.get("border")),
+                             font_size=_num(opts.get("font_size"), float, 0),
+                             password=password)
+    notes.append(f"{name}: added {len(names)} field{'s' if len(names) != 1 else ''} "
+                 f"({', '.join(names[:8])}{'…' if len(names) > 8 else ''})")
 
 
 def _sign_cert_op(src, out, opts, password, extra_files):
@@ -2935,7 +2967,9 @@ class Handler(BaseHTTPRequestHandler):
         with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
             path = Path(tmp) / "file.pdf"
             path.write_bytes(uploads[0][2])
-            found = forms.existing_fields(path, fields.get("password") or None)
+            # "details": also what the editor needs to change them.
+            listing = forms.field_details if _bool(fields.get("details")) else forms.existing_fields
+            found = listing(path, fields.get("password") or None)
         return self._send(HTTPStatus.OK, {"fields": {str(p): f for p, f in found.items()}})
 
     def _opened_path(self, key):

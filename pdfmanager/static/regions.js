@@ -14,23 +14,29 @@
 //             buttons with one name are a group, each with its own value;
 //             a dropdown has its choices. Find fields (with a ``detect``
 //             callback) adds the fields of a printed form. Fields already
-//             in the file are shown striped.
+//             in the file are shown striped; with ``setExisting(fields,
+//             true)`` they can be changed too: moved, resized, renamed,
+//             made required, a text box switched between one line and
+//             several, a dropdown's choices set, or deleted (and put back).
 //
 //   const ed = new RegionEditor(host, { mode, onChange(value), detect() });
 //   await ed.load(file, password)        // "ok", "password", "wrong-password" or "error"
 //   ed.setCrop({ left, bottom, right, top })   // margins in points
 //   ed.setMatches({ page: [[x0, y0, x1, y1]] })
-//   ed.setExisting({ page: [{ rect, name, type }] })   // form fields in the file
+//   ed.setExisting({ page: [{ rect, name, type, index, … }] }, editable)   // form fields in the file
 // Coordinates sent back are PDF points (origin bottom left, before rotation):
 // crop margins {left, bottom, right, top}; redact boxes {"1": [[x0, y0, x1, y1]]}
 // with 1-based page numbers; form fields {"1": [{ rect, type, name, value?,
-// options?, border? }]}.
+// options?, border? }]}. In "form" mode onChange also gets the changes to
+// the file's own fields: [{ page, index, rect?, name?, type?, required?,
+// options?, delete? }] (what forms.edit_fields takes).
 
 import { DOC_OPTIONS, destroyTask, loadPdfjs, openDocument } from "./pdfjs.js";
 
 const ICON = {
   prev: '<path d="m15 18-6-6 6-6"/>', next: '<path d="m9 18 6-6-6-6"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
   text: '<path d="M4 7V5h16v2M12 5v14M9 19h6"/>', multiline: '<path d="M4 6h16M4 10h16M4 14h16M4 18h10"/>',
   checkbox: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="m8 12 3 3 5-6"/>',
   radio: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor"/>',
@@ -101,8 +107,10 @@ export class RegionEditor {
     this.matches = {};   // redact: page index -> boxes found by text search
     this.kinds = {};     // form: page index -> [{type, name}], one per box
     this.existing = {};  // form: page index -> fields already in the file
+    this.editable = false;  // form: the file's own fields can be changed
     this.fieldType = "text";
     this.selected = -1;
+    this.selectedOld = -1;  // form: the selected field of the file's own
     this.gen = 0;
 
     this.prevBtn = el("button", { type: "button", class: "chip-btn", title: "Previous page", "aria-label": "Previous page", onclick: () => this.goTo(this.pageIndex - 1) }, icon("prev"));
@@ -116,13 +124,17 @@ export class RegionEditor {
       el("div", { class: "re-nav" }, this.prevBtn, this.pageLabel, this.nextBtn), this.status,
       this.findBtn, mode !== "crop" ? this.clearBtn : null);
     if (mode === "form") this.#buildFieldBar();
+    // What just happened (fields found, a field marked for deleting), on a
+    // line of its own that keeps its height: the page mustn't move under
+    // the pointer when the words change.
+    this.note = mode === "form" ? el("div", { class: "re-note", "aria-live": "polite" }) : null;
     this.canvas = el("canvas", { class: "re-canvas" });
     this.overlay = el("div", { class: "re-overlay", tabindex: "0", role: "application",
       "aria-label": { crop: "Crop area: drag its edges", redact: "Page: drag to draw a box to black out",
         form: "Page: drag or click to add a form field" }[mode] });
     this.stage = el("div", { class: "re-stage" }, this.canvas, this.overlay);
     this.message = el("div", { class: "pb-message" });
-    this.root = el("div", { class: "region-editor", "data-mode": mode }, this.toolbar, this.fieldBar, this.stage, this.message);
+    this.root = el("div", { class: "region-editor", "data-mode": mode }, this.toolbar, this.note, this.fieldBar, this.stage, this.message);
     host.append(this.root);
 
     this.overlay.addEventListener("pointerdown", (e) => this.#down(e));
@@ -171,7 +183,7 @@ export class RegionEditor {
   async close() {
     this.gen++;
     this.file = null; this.password = null; this.doc = null; this.total = 0;
-    this.boxes = {}; this.matches = {}; this.kinds = {}; this.existing = {}; this.selected = -1;
+    this.boxes = {}; this.matches = {}; this.kinds = {}; this.existing = {}; this.selected = -1; this.selectedOld = -1;
     const task = this.task;
     this.task = null;
     await destroyTask(task);
@@ -195,11 +207,36 @@ export class RegionEditor {
     this.#draw();
   }
 
-  /** Form fields already in the file: {page: [{rect, name, type}]}. */
-  setExisting(fields) {
+  /** Form fields already in the file: {page: [{rect, name, type, index,
+   * required, options, value, used_by…}]}. ``editable``: they can be
+   * changed; ``edits`` are changes made earlier (as onChange gave them). */
+  setExisting(fields, editable = false, edits = null) {
     this.existing = {};
-    for (const [page, list] of Object.entries(fields || {})) this.existing[Number(page) - 1] = list;
+    this.editable = editable;
+    const picked = this.selectedOld;  // kept when the same list is given again
+    this.selectedOld = -1;
+    for (const [page, list] of Object.entries(fields || {})) {
+      this.existing[Number(page) - 1] = list.map((f, i) => {
+        const dot = f.name.lastIndexOf(".");
+        const field = { ...f, index: f.index ?? i, rect: [...f.rect], options: (f.options || []).join(", "),
+          prefix: f.name.slice(0, dot + 1), short: f.name.slice(dot + 1), deleted: false };
+        field.was = { rect: [...f.rect], short: field.short, type: f.type, required: !!f.required, options: field.options };
+        return field;
+      });
+    }
+    for (const e of (editable && edits) || []) {
+      const f = (this.existing[e.page - 1] || []).find((x) => x.index === e.index);
+      if (!f) continue;
+      if (e.delete) f.deleted = true;
+      if (e.rect) f.rect = [...e.rect];
+      if (e.name != null) { f.short = e.name; f.name = f.prefix + e.name; }
+      if (e.type) f.type = e.type;
+      if (e.required != null) f.required = e.required;
+      if (e.options != null) f.options = e.options;
+    }
+    if (editable && picked >= 0 && picked < (this.existing[this.pageIndex] || []).length) this.selectedOld = picked;
     this.#draw();
+    if (editable) this.#emit();
   }
 
   setMatches(matches) {
@@ -213,7 +250,7 @@ export class RegionEditor {
   async goTo(index) {
     if (!this.doc || index < 0 || index >= this.total || index === this.pageIndex) return;
     this.pageIndex = index;
-    this.selected = -1;
+    this.selected = -1; this.selectedOld = -1;
     await this.#show();
   }
 
@@ -278,10 +315,36 @@ export class RegionEditor {
     if (this.mode === "crop") {
       parts.push(this.#rectEl(this.#toScreen(this.#cropBox()), "re-crop", -1));
     } else if (this.mode === "form") {
-      for (const f of this.existing[this.pageIndex] || []) {
+      (this.existing[this.pageIndex] || []).forEach((f, i) => {
         const r = this.#toScreen(f.rect);
-        parts.push(el("div", { class: "re-existing", title: `Already in the file: ${f.name}`, style: `left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px` }));
-      }
+        if (!this.editable) {
+          parts.push(el("div", { class: "re-existing", title: `Already in the file: ${f.name}`, style: `left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px` }));
+          return;
+        }
+        if (!f.deleted && f.rect.some((v, k) => Math.abs(v - f.was.rect[k]) > 0.05)) {
+          // The page still shows the field where it is in the file: faded there.
+          const w = this.#toScreen(f.was.rect);
+          parts.push(el("div", { class: "re-was", "data-type": f.type, title: `Where ${f.name} is now`, style: `left:${w.x}px;top:${w.y}px;width:${w.w}px;height:${w.h}px` }));
+        }
+        const chosen = i === this.selectedOld;
+        const box = el("div", { class: "re-rect re-existing re-old" + (chosen ? " selected" : "") + (f.deleted ? " deleted" : "") + (this.#changed(f) ? " changed" : ""),
+          "data-old": i, "data-type": f.type, style: `left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`,
+          title: f.deleted ? `${f.name}: will be deleted` : `Already in the file: ${f.name} (click to change it)` });
+        // (A filled-in field shows its value on the page: no name over it.)
+        if (!["checkbox", "radio"].includes(f.type) && !(f.value && !f.deleted)) box.append(el("span", { class: "re-field-label" }, f.short));
+        if (chosen && !f.deleted) for (const h of HANDLES[this.mode]) box.append(el("span", { class: `re-handle re-${h}`, "data-handle": h }));
+        if (chosen) {
+          const label = f.deleted ? "Keep this field" : "Delete this field from the file";
+          box.append(el("button", { type: "button", class: "re-delete" + (f.deleted ? " re-restore" : ""), title: label, "aria-label": label,
+            onpointerdown: (e) => e.stopPropagation(), onclick: () => this.#removeOld(i) }, icon(f.deleted ? "undo" : "x")));
+          if (!f.deleted && this.#changed(f)) {
+            const back = "Put this field back as it is in the file";
+            box.append(el("button", { type: "button", class: "re-delete re-restore re-revert", title: back, "aria-label": back,
+              onpointerdown: (e) => e.stopPropagation(), onclick: () => this.#revertOld(i) }, icon("undo")));
+          }
+        }
+        parts.push(box);
+      });
       const kinds = this.kinds[this.pageIndex] || [];
       (this.boxes[this.pageIndex] || []).forEach((b, i) => {
         const box = this.#rectEl(this.#toScreen(b), "re-field" + (i === this.selected ? " selected" : ""), i);
@@ -331,14 +394,25 @@ export class RegionEditor {
       kind = handle || (rectEl ? "move" : null);
       if (!kind) return;
       origin = this.#toScreen(this.#cropBox());
+    } else if (rectEl && rectEl.dataset.old != null) {
+      // One of the file's own fields.
+      index = Number(rectEl.dataset.old);
+      const field = this.existing[this.pageIndex][index];
+      if (index !== this.selectedOld || this.selected !== -1) { this.selectedOld = index; this.selected = -1; this.#draw(); }
+      e.preventDefault();
+      this.overlay.focus({ preventScroll: true });
+      if (field.deleted) return;
+      kind = handle || "move";
+      this.dragOld = index;
+      origin = this.#toScreen(field.rect);
     } else if (rectEl) {
       index = Number(rectEl.dataset.index);
-      if (index !== this.selected) { this.selected = index; this.#draw(); }
+      if (index !== this.selected || this.selectedOld !== -1) { this.selected = index; this.selectedOld = -1; this.#draw(); }
       kind = handle || "move";
       origin = this.#toScreen(this.boxes[this.pageIndex][index]);
     } else {
       kind = "draw";
-      this.selected = -1;
+      this.selected = -1; this.selectedOld = -1;
       this.drawStart = start;
       origin = { x: start.x, y: start.y, w: 0, h: 0 };
     }
@@ -380,6 +454,8 @@ export class RegionEditor {
       if (this.mode === "crop") {
         const [x0, y0, x1, y1] = this.#toPdf(rect), [vx0, vy0, vx1, vy1] = this.view;
         this.crop = { left: x0 - vx0, bottom: y0 - vy0, right: vx1 - x1, top: vy1 - y1 };
+      } else if (this.dragOld != null) {
+        this.existing[this.pageIndex][this.dragOld].rect = this.#toPdf(rect);
       } else {
         const list = this.boxes[this.pageIndex] ||= [];
         if (kind === "draw") {
@@ -393,6 +469,13 @@ export class RegionEditor {
     }
     if (done) {
       this.findNote = "";
+      if (this.dragOld != null) {
+        // A click without a drag leaves the field exactly where it was.
+        const f = this.existing[this.pageIndex][this.dragOld];
+        if (f.rect.every((v, i) => Math.abs(v - f.was.rect[i]) < 0.35)) f.rect = [...f.was.rect];
+        this.dragOld = null;
+        this.#draw();
+      }
       if (kind === "draw" && this.mode === "form" && (this.drawing == null || this.#tooSmall(this.drawing))) {
         // A click: a field of the usual size, with its top left corner there.
         if (this.drawing != null) this.#splice(this.drawing);
@@ -432,6 +515,48 @@ export class RegionEditor {
     this.#emit();
   }
 
+  /** One of the file's own fields differs from how it is in the file. */
+  #changed(f) {
+    return f.deleted || f.short !== f.was.short || f.type !== f.was.type || f.required !== f.was.required
+      || f.options !== f.was.options || f.rect.some((v, i) => Math.abs(v - f.was.rect[i]) > 0.05);
+  }
+
+  /** Mark one of the file's own fields to be deleted, or keep it after all. */
+  #removeOld(index) {
+    const f = this.existing[this.pageIndex]?.[index];
+    if (!f) return;
+    f.deleted = !f.deleted;
+    this.findNote = "";
+    if (f.deleted) {
+      const why = [];
+      if (f.value) why.push("it's filled in");
+      if ((f.used_by || []).length) why.push(`${f.used_by.join(", ")} is worked out from it`);
+      if (f.signed) why.push("it's signed");
+      if (f.widgets > 1 && f.type !== "radio") why.push("the same field is shown in other places, which stay");
+      this.findNote = `${f.name} will be deleted${why.length ? ` (${why.join("; ")})` : ""}. Click its ↶ to keep it.`;
+    }
+    this.#draw();
+    this.#emit();
+  }
+
+  /** Undo every change to one of the file's own fields (in all the places
+   * it's shown, for what they share: name, type, required, choices). */
+  #revertOld(index) {
+    const f = this.existing[this.pageIndex]?.[index];
+    if (!f) return;
+    f.rect = [...f.was.rect];
+    const full = f.name;
+    for (const list of Object.values(this.existing)) {
+      for (const g of list) {
+        if (g.name !== full) continue;
+        Object.assign(g, { short: g.was.short, name: g.prefix + g.was.short, type: g.was.type, required: g.was.required, options: g.was.options });
+      }
+    }
+    this.findNote = "";
+    this.#draw();
+    this.#emit();
+  }
+
   #clearPage() {
     this.findNote = "";
     if (!(this.boxes[this.pageIndex] || []).length) return;
@@ -446,7 +571,8 @@ export class RegionEditor {
     if (e.key === "PageDown" || (e.key === "ArrowRight" && e.altKey)) { e.preventDefault(); this.goTo(this.pageIndex + 1); return; }
     if (e.key === "PageUp" || (e.key === "ArrowLeft" && e.altKey)) { e.preventDefault(); this.goTo(this.pageIndex - 1); return; }
     if (this.mode !== "crop" && this.selected >= 0 && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); this.#remove(this.selected); return; }
-    if (this.mode !== "crop" && e.key === "Escape") { this.selected = -1; this.#draw(); }
+    if (this.selectedOld >= 0 && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); this.#removeOld(this.selectedOld); return; }
+    if (this.mode !== "crop" && e.key === "Escape") { this.selected = -1; this.selectedOld = -1; this.#draw(); }
   }
 
   #emit() {
@@ -456,7 +582,29 @@ export class RegionEditor {
       if (!list.length) continue;
       out[Number(page) + 1] = this.mode === "form" ? list.map((rect, i) => ({ rect, ...this.kinds[page][i] })) : list;
     }
-    this.onChange(out);
+    this.onChange(out, this.mode === "form" ? this.#edits() : undefined);
+  }
+
+  /** The changes to the file's own fields, as forms.edit_fields takes them. */
+  #edits() {
+    const out = [];
+    if (!this.editable) return out;
+    for (const [page, list] of Object.entries(this.existing)) {
+      for (const f of list) {
+        if (!this.#changed(f)) continue;
+        const change = { page: Number(page) + 1, index: f.index };
+        if (f.deleted) change.delete = true;
+        else {
+          if (f.rect.some((v, i) => Math.abs(v - f.was.rect[i]) > 0.05)) change.rect = f.rect;
+          if (f.short !== f.was.short) change.name = f.short;
+          if (f.type !== f.was.type) change.type = f.type;
+          if (f.required !== f.was.required) change.required = f.required;
+          if (f.options !== f.was.options) change.options = f.options;
+        }
+        out.push(change);
+      }
+    }
+    return out;
   }
 
   // ---- form fields ----------------------------------------------------------------
@@ -473,6 +621,7 @@ export class RegionEditor {
     this.typeSelect = el("select", { class: "re-name", "aria-label": "Type of this field",
       onchange: () => {
         const kind = this.kinds[this.pageIndex]?.[this.selected], type = this.typeSelect.value;
+        if (this.#old()) { this.#changeSelected({ type }); return; }
         if (!kind) return;
         // An automatic name follows the type ("Text 2" -> "Checkbox 1").
         const name = AUTO_NAME.test(kind.name) ? (kind.name = "", this.#nextName(type)) : kind.name;
@@ -513,9 +662,11 @@ export class RegionEditor {
       el("label", { title: "Fill this field in by itself with the total of other fields" }, el("span", {}, "Sum of"), this.sumInput));
     this.valueLabel = el("label", { title: "What this button gives when it's chosen" }, el("span", {}, "Value"), this.valueInput);
     this.optionsLabel = el("label", { title: "The choices in the list, separated by commas" }, el("span", {}, "Choices"), this.optionsInput);
+    this.requiredInput = el("input", { type: "checkbox", onchange: () => this.#changeSelected({ required: this.requiredInput.checked }) });
+    this.requiredLabel = el("label", { class: "re-required", title: "The form can't be sent or finished with this field left empty" }, this.requiredInput, el("span", {}, "Required"));
     // One slot for a radio button's value or a dropdown's choices, which
     // keeps its space: the page mustn't move while a field is clicked.
-    this.extraSlot = el("div", { class: "re-extra" }, this.valueLabel, this.optionsLabel, this.textLabel);
+    this.extraSlot = el("div", { class: "re-extra" }, this.valueLabel, this.optionsLabel, this.textLabel, this.requiredLabel);
     this.nameBox = el("div", { class: "re-name-box" },
       el("label", {}, this.nameLabel, this.nameInput), el("label", {}, el("span", {}, "Type"), this.typeSelect),
       this.extraSlot);
@@ -528,11 +679,33 @@ export class RegionEditor {
   /** The type of field added by the next drag or click. */
   #setType(type) {
     this.fieldType = type;
-    if (this.selected >= 0) { this.selected = -1; this.#draw(); }
+    if (this.selected >= 0 || this.selectedOld >= 0) { this.selected = -1; this.selectedOld = -1; this.#draw(); }
     this.#syncFieldBar();
   }
 
+  /** The selected field of the file's own (unless it's to be deleted). */
+  #old() {
+    const f = this.editable && this.selectedOld >= 0 ? this.existing[this.pageIndex]?.[this.selectedOld] : null;
+    return f && !f.deleted ? f : null;
+  }
+
   #changeSelected(changes) {
+    const old = this.#old();
+    if (old) {
+      if (changes.name != null) {
+        // One field may be shown in several places (a radio group's buttons,
+        // a box repeated on each page): they share the name.
+        const short = changes.name.replace(/\./g, " "), full = old.name;
+        for (const list of Object.values(this.existing)) for (const f of list) if (f.name === full) { f.short = short; f.name = f.prefix + short; }
+      }
+      for (const key of ["type", "required", "options"]) {
+        if (changes[key] == null) continue;
+        for (const list of Object.values(this.existing)) for (const f of list) if (f.name === old.name) f[key] = changes[key];
+      }
+      this.#draw();
+      this.#emit();
+      return;
+    }
     const kind = this.kinds[this.pageIndex]?.[this.selected];
     if (!kind) return;
     Object.assign(kind, changes);
@@ -542,14 +715,41 @@ export class RegionEditor {
 
   #syncFieldBar() {
     if (!this.fieldBar) return;
-    const kind = this.kinds[this.pageIndex]?.[this.selected];
+    const old = this.#old();
+    const kind = old ? { type: old.type, name: old.short, options: old.options } : this.kinds[this.pageIndex]?.[this.selected];
     for (const b of this.typeBtns) b.setAttribute("aria-pressed", String(b.dataset.type === this.fieldType));
     // Hidden but keeping its space, so the page doesn't jump while drawing.
     this.nameBox.style.visibility = kind ? "" : "hidden";
     this.nameBox.inert = !kind;
-    if (!kind) return;
+    if (!kind) {
+      // One row tall while hidden too, or the page jumps at the first click.
+      if (!this.nameBox.dataset.used) this.valueLabel.hidden = this.optionsLabel.hidden = this.textLabel.hidden = this.requiredLabel.hidden = true;
+      return;
+    }
+    this.nameBox.dataset.used = "1";
     if (document.activeElement !== this.nameInput) this.nameInput.value = kind.name;
+    // One of the file's own fields keeps its type, except a text box, which
+    // can take one line or several.
+    this.typeSelect.querySelector("option[data-other]")?.remove();
+    if (old && !FIELD_TYPES[old.type]) {
+      this.typeSelect.append(el("option", { value: old.type, "data-other": true }, { list: "List", button: "Button" }[old.type] || "Other"));
+    }
+    const swap = old && (old.type === "text" || old.type === "multiline");
+    for (const o of this.typeSelect.options) o.disabled = !!old && !(swap && (o.value === "text" || o.value === "multiline"));
+    this.typeSelect.disabled = !!old && !swap;
+    this.typeSelect.title = old && !swap ? "The type of a field already in the file can't be changed: delete it and draw a new one" : "";
     this.typeSelect.value = kind.type;
+    this.requiredLabel.hidden = !old || old.type === "button" || old.type === "signature";
+    this.requiredInput.checked = !!old?.required;
+    if (old) {
+      this.nameLabel.textContent = old.type === "radio" ? "Group" : "Name";
+      this.nameInput.setAttribute("aria-label", "Field name");
+      this.valueLabel.hidden = this.textLabel.hidden = true;
+      this.optionsLabel.hidden = !(old.type === "dropdown" || old.type === "list");
+      this.extraSlot.style.visibility = "";
+      if (document.activeElement !== this.optionsInput) this.optionsInput.value = old.options;
+      return;
+    }
     this.nameLabel.textContent = kind.type === "radio" ? "Group" : "Name";
     this.nameInput.setAttribute("aria-label", kind.type === "radio" ? "Group name (buttons with the same one are a group)" : "Field name");
     this.valueLabel.hidden = kind.type !== "radio";
@@ -657,10 +857,13 @@ export class RegionEditor {
       this.status.textContent = `Trim: top ${mm(top)} · right ${mm(right)} · bottom ${mm(bottom)} · left ${mm(left)} mm`;
     } else if (this.mode === "form") {
       const here = (this.boxes[this.pageIndex] || []).length, all = this.boxCount;
-      const old = Object.values(this.existing).reduce((n, l) => n + l.length, 0);
+      const olds = Object.values(this.existing).flat();
+      const old = olds.length, gone = olds.filter((f) => f.deleted).length;
+      const altered = olds.filter((f) => !f.deleted && this.#changed(f)).length;
       const count = (n) => `${n} field${n === 1 ? "" : "s"}`;
-      this.status.textContent = `${here !== all ? `this page: ${count(here)} · ` : ""}new: ${count(all)}${old ? ` · already in the file: ${old}` : ""}`;
-      if (this.findNote) this.status.textContent += ` — ${this.findNote}`;
+      this.status.textContent = `${here !== all ? `this page: ${count(here)} · ` : ""}new: ${count(all)}${old ? ` · already in the file: ${old}` : ""}`
+        + `${altered ? ` (${altered} changed)` : ""}${gone ? ` (${gone} to delete)` : ""}`;
+      this.note.textContent = this.findNote || "";
       this.clearBtn.disabled = !here;
       this.#syncFieldBar();
     } else {
@@ -678,6 +881,7 @@ export class RegionEditor {
     this.root.dataset.state = name;
     this.toolbar.hidden = this.stage.hidden = name !== "ready";
     if (this.fieldBar) this.fieldBar.hidden = name !== "ready";
+    if (this.note) this.note.hidden = name !== "ready";
     const text = {
       empty: "", loading: "Loading the page…",
       password: "This PDF is password-protected. Enter its password under Options to see the pages.",

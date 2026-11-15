@@ -31,13 +31,17 @@
 
 ### Phase 1 (release A): change the fields a file has
 
+**Done in 0.37.0.**
+
 **Task 1.1: the engine**
-- [ ] `forms.edit_fields(path, output, changes)`: move or resize a widget, rename a field (keeping hierarchy and unique names), change its type where that makes sense (text ↔ multi-line; checkbox ↔ radio), delete a field or one widget of it, and set any property of Phase 2. Appearance streams are rebuilt; `/CO` (calculation order) and scripts that name a renamed field are updated.
-- [ ] `forms.existing_fields` returns everything the panel shows: rect, type, name, tooltip, flags, default and current value, choices, format, calculation, validation, font, colours, tab index.
-- [ ] Tests: each change on a form made by ZPDF and on forms made by Acrobat, LibreOffice and Word (fixtures built with pikepdf to match their structures: kids with shared parents, widgets merged with fields, inherited flags).
+- [x] `forms.edit_fields(path, output, changes)`: move or resize a widget, rename a field (keeping hierarchy and unique names), text ↔ multi-line, required, read-only, tooltip, a dropdown's choices, delete a field or one widget of it. A resized widget's appearance is drawn again with its own border and background; scripts (`AFSimple_Calculate`) that name a renamed or deleted field and `/CO` are updated.
+- [x] `forms.field_details` returns what the tool page needs (index, rect, type, name, tooltip, required, read-only, value, choices, widgets, calculated, used_by, signed); `existing_fields` is unchanged.
+- [x] Tests on a form made by ZPDF and on one shaped like Acrobat's (kids with a shared parent, a name tree, flags on the parent, a widget merged with its field), signed, encrypted, XFA.
 
 **Task 1.2: in the tool page**
-- [ ] The striped "already in the file" fields become editable like new ones. Deleting asks first when the field has a value or is used by another field's calculation.
+- [x] The striped "already in the file" fields are editable (one file chosen). A deletion is marked, says why it matters (filled in, signed, used by a total) and can be taken back until Run.
+
+**Left for later releases** (Phase 2 covers most): checkbox ↔ radio and other type changes; moving a field to another page; format, total, validation, font and colours of a field the form has; tab order; a field whose calculation is a script other than `AFSimple_Calculate` isn't followed on rename.
 
 ### Phase 2 (release B): the designer in the reader
 

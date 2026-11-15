@@ -205,8 +205,11 @@ closed.
   a box of the usual size. Radio buttons added one after another make one
   group (each with its own value); a dropdown takes its choices separated by
   commas. Click a field to move, resize, rename or remove it. Fields already
-  in the file are shown striped. The fields work in any PDF reader,
-  including the one here.
+  in the file are shown striped, and are changed the same way: click one to
+  move, resize or rename it, make it required, or delete it (marked in red
+  until you run; its ↶ keeps it). A total that added up a renamed field
+  follows the new name. The fields work in any PDF reader, including the
+  one here.
 - **Digital ID** (the certificate tool) signs PDFs with your certificate (a .pfx or
   .p12 file), like Acrobat: visible in a corner of a page (showing your
   name, the date and the reason) or invisible, optionally with a time from
@@ -691,7 +694,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `watermark` | stamp text or another PDF | `pdfm watermark doc.pdf -t CONFIDENTIAL` |
 | `number` | add page numbers | `pdfm number doc.pdf --format "Page {n} of {total}"` |
 | `headers` | headers, footers and Bates numbers | `pdfm headers *.pdf --bottom-right "{bates}" --bates ABC` |
-| `form` | add fillable form fields, or find a printed form's (or list them) | `pdfm form doc.pdf --detect` |
+| `form` | add fillable form fields, find a printed form's, list them, or change the ones there (`--edit changes.json`) | `pdfm form doc.pdf --detect` |
 | `extract-media` | save the pictures and attached files | `pdfm extract-media doc.pdf` |
 | `text` | extract text | `pdfm text doc.pdf -o doc.txt` |
 | `clean` | remove blank pages, turn pages upright | `pdfm clean scan.pdf --rotate` |

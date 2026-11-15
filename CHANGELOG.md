@@ -4,6 +4,36 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.37.0
+
+The fields a form already has can be changed.
+
+- **Add form fields** used to show a form's own fields striped, to look
+  at only. Click one now to **move** it, **resize** it, **rename** it,
+  make it **required**, or **delete** it; a text box can be switched
+  between one line and several, and a dropdown's choices can be set. New
+  fields are added in the same run.
+- A renamed field stays unique ("Total" beside another Total becomes
+  "Total 2"), and a total that added it up follows the new name. A deleted
+  field is taken out of the totals that used it, and the result says so.
+- Deleting is only marked until you press Run: the field turns red, and
+  its ↶ keeps it after all. It says first when the field is filled in,
+  signed, or used by a total.
+- A changed field has a ↶ too, which puts it back as it is in the file.
+- **Start over** now also clears the fields and boxes drawn on the pages.
+- It works on forms from other programs too: a field shown in several
+  places (each place moves by itself; the name is shared), names in a tree
+  ("person.name"), settings kept on a parent. A resized field is drawn
+  again at its new size with its own border and background.
+- Changing the fields of a signed file makes its signature show as no
+  longer valid; the result says so.
+- With several files chosen, their own fields are only shown, as before:
+  what's drawn goes on each file, and their fields differ.
+- Command line: `pdfm form doc.pdf --edit changes.json`.
+- Not yet: changing a field's type (other than text one line/several),
+  moving a field to another page, the format and total of a field the
+  form already has. An XFA form (Adobe LiveCycle) can't be changed.
+
 ## 0.36.0
 
 Make searchable (OCR) reads pages it used to pass over.
