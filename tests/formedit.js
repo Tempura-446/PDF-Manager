@@ -32,6 +32,7 @@ const { chromium } = require("playwright");
     await page.dispatchEvent('.tools button[data-op="form"]', "click");
     await page.setInputFiles("#file-input", formPath);
     await page.waitForSelector(".re-old");
+    await page.waitForTimeout(400);  // the field list may be given once more as the page settles
     const olds = () => page.$$eval(".re-old", (list) => list.map((b) => ({ cls: b.className, label: b.textContent, type: b.dataset.type })));
     const bar = () => page.evaluate(() => {
       const box = document.querySelector(".re-name-box"), type = box.querySelector("select.re-name");
@@ -51,12 +52,16 @@ const { chromium } = require("playwright");
       return { x: b.x + b.width / 2, y: b.y + b.height / 2, box: b };
     };
     const pick = async (index) => { const c = await centre(index); await page.mouse.click(c.x, c.y); };
+    // Where the page sits: it mustn't move when a field is picked or marked.
+    const pageTop = () => page.evaluate(() => Math.round(document.querySelector(".re-stage").getBoundingClientRect().top + window.scrollY));
+    out.tops = [await pageTop()];
     out.start = await olds();
     out.status0 = await page.textContent(".pb-status");
 
     // Price: renamed and moved.
     await pick(0);
     out.price = await bar();
+    out.tops.push(await pageTop());
     await page.fill(".re-name-box input.re-name", "Net price");
     const place = () => page.$eval(".re-old", (e) => [e.offsetLeft, e.offsetTop]);  // on the page shown
     const from = await place();
@@ -68,8 +73,15 @@ const { chromium } = require("playwright");
     const to = await place();
     out.movedBy = [Math.round(to[0] - from[0]), Math.round(to[1] - from[1])];
 
-    // Tax: only clicked, which changes nothing.
-    await pick(1);
+    // Tax: moved, then put back with its button.
+    const t = await centre(1);
+    await page.mouse.move(t.x, t.y);
+    await page.mouse.down();
+    await page.mouse.move(t.x + 60, t.y + 200, { steps: 3 });
+    await page.mouse.up();
+    out.taxMoved = (await olds())[1].cls.includes("changed");
+    await page.click(".re-old.selected .re-revert");
+    out.taxBack = !(await olds())[1].cls.includes("changed");
     // Total: required, and several lines.
     await pick(2);
     out.total = await bar();
@@ -79,7 +91,8 @@ const { chromium } = require("playwright");
     await pick(3);
     out.agree = await bar();
     await page.click(".re-old.selected .re-delete");
-    out.afterDelete = { status: await page.textContent(".pb-status"), bar: (await bar()).shown };
+    out.afterDelete = { status: await page.textContent(".pb-status"), note: await page.textContent(".re-note"), bar: (await bar()).shown };
+    out.tops.push(await pageTop());
     // A radio button: deleted with the key, then kept after all.
     await pick(4);
     out.radio = await bar();

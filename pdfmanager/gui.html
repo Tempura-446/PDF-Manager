@@ -565,7 +565,11 @@ select.re-name { width: auto; }
 .re-old.selected { outline: 2px solid var(--page-accent); outline-offset: 1px; }
 .re-old.deleted { cursor: pointer; background: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--page-err, #c0392b) 30%, transparent) 0 5px, color-mix(in srgb, var(--page-err, #c0392b) 10%, transparent) 5px 10px); outline: 1.5px dashed var(--page-err, #c0392b); }
 .re-old.deleted .re-field-label { color: var(--page-err, #c0392b); text-decoration: line-through; }
-.re-delete.re-restore { background: var(--text-2); }
+.re-delete.re-restore { background: #3a3a36; color: #fff; }  /* on the page, which is white in dark mode too */
+.re-delete.re-revert { top: 16px; }
+.re-was[data-type="radio"] { border-radius: 50%; }
+.re-note { min-height: 2.9em; margin-bottom: 8px; color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; }
+.region-editor[data-mode="form"] .pb-status { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .re-was { position: absolute; background: rgb(255 255 255 / .82); outline: 1px dotted var(--page-muted); pointer-events: none; }
 .re-required { cursor: pointer; }
 .re-required[hidden] { display: none; }
@@ -2735,6 +2739,8 @@ $("form").addEventListener("input", () => { if (current?.id === "redact") update
 /** Back to an empty tool: no files, no result, options as they were. */
 function startOver() {
   items = [];
+  // What was drawn on the pages goes with the files.
+  for (const id of ["f-fields", "f-edits", "f-boxes"]) if ($(id)) $(id).value = "";
   clearMessages();
   renderFiles();
   updateSummary();

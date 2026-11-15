@@ -19,6 +19,8 @@ The fields a form already has can be changed.
 - Deleting is only marked until you press Run: the field turns red, and
   its ↶ keeps it after all. It says first when the field is filled in,
   signed, or used by a total.
+- A changed field has a ↶ too, which puts it back as it is in the file.
+- **Start over** now also clears the fields and boxes drawn on the pages.
 - It works on forms from other programs too: a field shown in several
   places (each place moves by itself; the name is shared), names in a tree
   ("person.name"), settings kept on a parent. A resized field is drawn

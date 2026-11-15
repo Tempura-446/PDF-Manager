@@ -47,14 +47,16 @@ def test_changing_a_forms_own_fields_in_a_browser(app, tmp_path):
     assert out["agree"]["typeOff"] and out["agree"]["type"] == "checkbox" and out["agree"]["requiredShown"]
     assert out["radio"]["typeOff"] and out["radio"]["name"] == "Size"
     assert abs(out["movedBy"][0] - 150) <= 2 and abs(out["movedBy"][1] - 24) <= 2
-    assert "to delete" in out["afterDelete"]["status"] and "Agree will be deleted" in out["afterDelete"]["status"]
+    assert "to delete" in out["afterDelete"]["status"] and "Agree will be deleted" in out["afterDelete"]["note"]
+    assert len(set(out["tops"])) == 1, out["tops"]      # the page stays put under the pointer
+    assert out["taxMoved"] and out["taxBack"]
     assert not out["afterDelete"]["bar"]                 # nothing to set on a field that's going
     assert out["radioDeleted"] and out["radioKept"]
     assert out["newFields"] == 1
     assert "(2 changed)" in out["status"] and "(1 to delete)" in out["status"]
 
     edits = {e["index"]: e for e in out["edits"]}
-    assert set(edits) == {0, 2, 3}                       # a click alone (Tax) changes nothing
+    assert set(edits) == {0, 2, 3}                       # Tax was put back
     assert edits[0]["name"] == "Net price" and "rect" in edits[0]
     assert edits[2] == {"page": 1, "index": 2, "type": "multiline", "required": True}
     assert edits[3] == {"page": 1, "index": 3, "delete": True}
