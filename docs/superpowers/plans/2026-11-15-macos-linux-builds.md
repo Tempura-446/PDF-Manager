@@ -33,16 +33,17 @@ Linux first: CI already runs there, so every step can be checked without new har
 
 ## Phase 2 (release B): macOS
 
-Needs a Mac to check on: the owner's, a friend's, or GitHub's macOS runners (paid minutes on a private repository, free on a public one).
+**Decided by the owner (2026-11-15): the app stays unsigned, and there is no Mac to check on.** So the macOS build is checked by machine only: the test suite and a smoke test of the built app on GitHub's macOS runners (free while the repository is public). It ships marked "builds and passes its tests; not checked by a person on a Mac" until someone with a Mac reports back.
 
 - [ ] **macOS back in CI** for the test suite (`macos-latest`, Apple silicon), fixing what it turns up: paths, fonts (`fonts.py` looks in Windows and Linux folders), the default browser, case-insensitive file names.
 - [ ] **The app bundle:** `ZPDF.app` from PyInstaller with an `.icns` icon and an `Info.plist` that declares PDF as a document type (so "Open With" and double-click work, through the `open-file` Apple event, which pywebview/pyobjc must pass on to the reader). A `.dmg` to drag it into Applications. Built for Apple silicon and Intel (two builds or one universal).
 - [ ] **The window:** pywebview on WKWebView; check Save as, printing, the password-autofill switches (the WebView2 ones don't exist there), and that the native menu bar has the usual Quit, Close, Copy and Paste.
-- [ ] **Signing and notarization (the owner's decision, costs money):** an unsigned app is blocked by Gatekeeper; friends would have to right-click → Open, or run `xattr -d com.apple.quarantine`. Passing Gatekeeper cleanly needs an Apple Developer account (US$99 a year), a Developer ID certificate and notarization in `release.py`. The README says how to open it either way.
+- [ ] **Unsigned, said plainly:** no Apple Developer account, no notarization. Gatekeeper blocks an unsigned app on first open, so the README and the `.dmg`'s own note say how to open it: right-click → Open (on newer macOS: System Settings → Privacy & Security → Open Anyway), or `xattr -d com.apple.quarantine /Applications/ZPDF.app`. The release's checksum is the only proof the download is ours until releases are signed with our own key (security plan, Phase 5).
+- [ ] **A smoke test of the built app in CI** stands in for a person: on `macos-latest` the bundle starts, opens a PDF handed to it, runs one tool, saves and closes (the browser-window mode where the native window can't be driven), with screenshots kept as artifacts so the owner can look at them.
 - [ ] **Outside programs:** LibreOffice, Tesseract and Ghostscript from their installers or Homebrew; Microsoft Word for Mac through AppleScript only if it proves worth it (LibreOffice otherwise); Chrome or Edge for web pages (Safari can't print to PDF from a command).
 - [ ] **Scanning:** Image Capture (ImageCaptureCore through pyobjc), or SANE where installed; otherwise "Scan" takes pictures and PDFs only and says so.
 - [ ] **Finder:** a Quick Action ("Services") for the right-click actions.
-- [ ] **Updates:** the Update button downloads the new `.dmg`/zip, replaces the bundle and starts again; with a signed build, the signature is checked first (ties in with the signed releases of the security plan, Phase 5).
+- [ ] **Updates:** the Update button downloads the new `.dmg`/zip, checks its checksum, replaces the bundle and starts again (and clears the quarantine mark on what it downloaded itself, so the updated app opens without the Gatekeeper step again).
 - [ ] **Tests:** the bundle's `Info.plist` and document types; the open-file event with a fake; the suite green on `macos-latest`.
 
 ## Phase 3: one release, three systems
@@ -63,9 +64,9 @@ Needs a Mac to check on: the owner's, a friend's, or GitHub's macOS runners (pai
 | Release | What | Size | Risk |
 |---|---|---|---|
 | A | Linux: run-through, AppImage and .deb, SANE, file manager actions, updates, CI smoke test | medium | low: CI already runs there |
-| B | macOS: CI, .app and .dmg, WKWebView, Finder, updates; signing if the owner wants it | medium–large | medium: no Mac to check on yet; Gatekeeper without signing |
+| B | macOS: CI, .app and .dmg (unsigned), WKWebView, Finder, updates, CI smoke test | medium–large | high for polish: no person checks it on a Mac; Gatekeeper asks on first open |
 | C | One release for three systems, README, check routines | small | low |
 
-**Decisions for the owner before B:** which Mac the checks run on; whether to pay for an Apple Developer account (signed, notarized builds) or ship unsigned with instructions.
+**Decided:** unsigned builds; no Mac for checks (see Phase 2). If a friend with a Mac turns up, their run-through replaces the "not checked by a person" mark.
 
 **Place in the roadmap:** after the drawing tools' B2 and the security plan's release D/E (signed releases help all three systems), or sooner if a friend on a Mac or Linux is waiting. Linux (A) can go at any time.
