@@ -53,6 +53,7 @@ from pdfmanager import quickactions  # Explorer's right-click actions
 from pdfmanager import watchfolders  # Settings > Watch folders
 from pdfmanager import layers  # layers (optional content) of drawings
 from pdfmanager import risks  # what a PDF can do, and Make safe
+from pdfmanager import protection  # password strength, old encryption and its upgrade
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
@@ -334,7 +335,7 @@ OPERATIONS = [
     {"id": "encrypt", "group": "Security", "label": "Add password", "files": "pdf",
      "help": "Protect PDFs with a password to open them, and limit what people can do with "
              "them: print, copy or change.",
-     "fields": [_f("new_password", "Password to open", "password", "",
+     "fields": [_f("new_password", "Password to open", "password", "", strength=True,
                    hint="Leave it empty to let anyone open the PDF, with the limits below."),
                 _f("printing", "Printing", "select", "high",
                    choices=[["high", "Allowed"], ["low", "Low quality only"],
@@ -345,6 +346,13 @@ OPERATIONS = [
                 _f("owner_password", "Permissions password", "password", "",
                    hint="Needed for the limits above, and different from the password to "
                         "open: it lifts the limits (and removes the protection).")]},
+    {"id": "upgrade-protection", "group": "Security", "label": "Upgrade protection", "files": "pdf",
+     "action": "Upgrade protection",
+     "help": "For a PDF protected years ago or by an old program: its encryption (RC4) no longer "
+             "protects it. This writes the same file with AES-256, with the same password and the "
+             "same limits on printing, copying and changes. Enter its password in the box above "
+             "the Run button: the permissions password if it has one, so that it's kept too.",
+     "fields": []},
     {"id": "decrypt", "group": "Security", "label": "Remove password", "files": "pdf",
      "help": "Enter the current password in the box above the Run button.", "fields": []},
     {"id": "redact", "group": "Security", "label": "Redact", "files": "pdf", "panel": "redact", "action": "Black out",
@@ -565,7 +573,7 @@ OPERATIONS = [
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
-SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "makesafe": "safe", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
+SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "makesafe": "safe", "upgrade-protection": "protected", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
           "insert-blank": "blanks", "booklet": "booklet", "autocrop": "trimmed",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
@@ -718,6 +726,8 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             f"on page{'s' if len(found) != 1 else ''} {_pages_list(list(found))}"
             + _redact_extra(found) if found
             else "nothing matched, so nothing was blacked out"))
+        if getattr(found, "proof", None):
+            notes.append(redact.proof_words(found.proof))
     elif op == "recipe":
         try:
             steps = json.loads(opts.get("steps") or "[]")
@@ -791,6 +801,8 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                                                   ("comments", "comments"))
                  if (n := counts[key])]
         notes.append(f"{src.name}: removed " + (", ".join(found) if found else "nothing (none found)"))
+    elif op == "upgrade-protection":
+        notes.append(f"{src.name}: {protection.upgrade(src, out, password)}")
     elif op == "makesafe":
         removed = risks.make_safe(src, out, password=password)
         notes.append(f"{src.name}: took out {risks.summary(removed)}")
@@ -1142,7 +1154,8 @@ def _clean_note(name, report):
 def _protect(outputs, password, op):
     """PDFs made from a password-protected file get the same password."""
     # A signed PDF keeps its password inside the signed file.
-    if password and op not in ("decrypt", "encrypt", "pdfa", "media", "sign-cert"):
+    # (An upgraded protection is already in place, with its two passwords.)
+    if password and op not in ("decrypt", "encrypt", "pdfa", "media", "sign-cert", "upgrade-protection"):
         for path in outputs:
             if path.suffix.lower() == ".pdf":
                 core.encrypt(path, path, password)
@@ -2465,6 +2478,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/redact/apply":
                 return self._redact_apply(body)
             # -- end of true redaction --
+            if path == "/api/password/strength":
+                # How hard a password being typed is to guess (worked out here, on this computer).
+                data = json.loads(body or b"{}")
+                return self._send(HTTPStatus.OK, protection.strength(str(data.get("password") or "")[:500]))
             if path == "/api/form/fields":
                 return self._form_fields(body)
             if path == "/api/form/detect":

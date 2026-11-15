@@ -20,6 +20,7 @@ from pdfmanager import certsign, comments, filetools, formdetect, pdfacheck
 from pdfmanager import accessibility  # -- accessibility --
 from pdfmanager import ocr  # the OCR engine ids
 from pdfmanager import risks  # what a PDF can do, and Make safe
+from pdfmanager import protection  # password strength, old encryption and its upgrade
 from pdfmanager.pageranges import PageRangeError
 
 PAGES_HELP = "pages, e.g. '1-3,5', '7-', 'odd', 'even', 'end' (1-based)"
@@ -208,7 +209,23 @@ def _encrypt_limits(a):
     return filetools.permissions(a.printing, a.changes, not a.no_copy)
 
 
+def run_upgrade_protection(a, src, out, pw):
+    if a.check:
+        seen = protection.info(src)
+        print(f"{src}: " + (f"{seen['method']}" + (f" (weak: {seen['advice']})" if seen["weak"] else "")
+                           if seen["protected"] else "not protected"))
+        if seen["weak"]:
+            a.risks_found = True  # exit code 2, for scripts
+        return None
+    return f"{out}  ({protection.upgrade(src, out, pw)})"
+
+
 def run_encrypt(a, src, out, pw):
+    if a.user_password and not getattr(a, "_strength_said", False):
+        a._strength_said = True
+        rated = protection.strength(a.user_password)
+        if rated["score"] <= 1:
+            print(f"note: that password is {rated['label'].lower()}. {rated['advice']}", file=sys.stderr)
     perms = _encrypt_limits(a)
     limited = filetools.restricts(perms)
     core.encrypt(src, out, a.user_password or "", a.owner_password, pw,
@@ -708,6 +725,8 @@ def run_redact(a, src, out, pw):
     if getattr(found, "bookmarks", 0):
         extra += f"; blacked out the words in {found.bookmarks} bookmark(s)"
     # -- end of true redaction --
+    if getattr(found, "proof", None):
+        print(f"  {redact.proof_words(found.proof)}")
     return f"{out}  ({sum(found.values())} area(s) on page(s) {', '.join(map(str, found))}{extra})"
 
 
@@ -793,7 +812,7 @@ OUTPUTS = {
     "rotate": ("rotated", "pdf"), "resize": ("resized", "pdf"), "crop": ("cropped", "pdf"),
     "nup": ("nup", "pdf"), "insert-blank": ("blanks", "pdf"), "booklet": ("booklet", "pdf"),
     "compress": ("compressed", "pdf"), "color": ("color", "pdf"),
-    "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"),
+    "encrypt": ("encrypted", "pdf"), "decrypt": ("decrypted", "pdf"), "upgrade-protection": ("protected", "pdf"),
     "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
     "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "headers": ("headers", "pdf"), "form": ("form", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "make-safe": ("safe", "pdf"), "pdfa": ("pdfa", "pdf"),
     "to-excel": (None, "xlsx"),  # with --csv: a folder, <input>_tables
@@ -876,6 +895,7 @@ KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split", 
                     "to-excel",
                     "extract-media",
                     "pdfa"}  # PDF/A doesn't allow encryption
+KEEP_UNENCRYPTED.add("upgrade-protection")  # protects its own output, with both passwords
 KEEP_UNENCRYPTED.add("comments")  # a summary, CSV or XFDF; an import protects itself
 KEEP_UNENCRYPTED.add("sign-cert")  # stays protected inside the signed file; re-saving breaks it
 KEEP_UNENCRYPTED |= {"to-pptx", "to-html"}  # -- pptx and html -- (not PDFs)
@@ -1492,6 +1512,12 @@ def build_parser():
     sp.add_argument("--show", action="append", default=[], metavar="NAME",
                     help="show this layer too, though the file opens with it hidden")
     sp.add_argument("--list", action="store_true", help="only list the layers and whether they show")
+
+    sp = per_file("upgrade-protection", run_upgrade_protection,
+                  "protect a PDF that has old, weak encryption (RC4) with AES-256 instead, keeping "
+                  "its password and limits; give the permissions password if it has one")
+    sp.add_argument("--check", action="store_true",
+                    help="only say how each file is protected (exit code 2 when one is weak)")
 
     sp = per_file("make-safe", run_make_safe,
                   "take out what could do harm in a PDF from someone else (scripts, actions that "

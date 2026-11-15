@@ -15,7 +15,7 @@ from pdfmanager import appdata
 SAMPLE = 10            # pages looked at for text and scans
 BIG_PICTURE = 400_000  # pixels from which a picture can be a page's scan
 REMEMBERED = 300       # files whose facts are kept
-LOOK = 6              # raised when facts are worked out differently, so kept ones are looked at again
+LOOK = 7              # raised when facts are worked out differently, so kept ones are looked at again
 TEXT_SHOWING = {"Tj", "TJ", "'", '"'}
 # A printed place to sign: the word near a rule or a run of underscores.
 SIGN_WORDS = re.compile(r"\b(signature|signed|sign here|unterschrift|signé|firma)\b", re.I)
@@ -244,7 +244,7 @@ def facts(path, password=None):
     try:
         pdf = pikepdf.open(path, password=password or "")
     except pikepdf.PasswordError:
-        return {"size": size, "pages": None, "protected": True}
+        return {"size": size, "pages": None, "protected": True, "weak_protection": _weak_protection(path)}
     except Exception:
         return {"size": size, "pages": None, "error": "can't be read"}
     try:
@@ -274,6 +274,7 @@ def facts(path, password=None):
         return {"size": size, "pages": None, "error": "can't be read"}
     found["sign_at"] = _sign_place(path, password, sign_line, lines) if sign_line else None
     found["risks"], found["risk"] = _risks(path, password)
+    found["weak_protection"] = _weak_protection(path)
     found["signed_on_line"] = bool(found["sign_at"]) and _drawn_on(path, password, found["sign_at"])
     return found
 
@@ -317,6 +318,14 @@ def small_for_its_pages(found):
     return bool(pages) and found.get("size", 0) < SMALL_PAGE * pages
 
 
+def _weak_protection(path):
+    """The name of the file's encryption when it no longer protects (RC4), else ""."""
+    from pdfmanager import protection
+
+    seen = protection.info(path)
+    return seen["method"] if seen["weak"] else ""
+
+
 def _risks(path, password):
     """What the file can do that matters (risks.py): (the list, the worst
     level). A file the check can't read has nothing said about it."""
@@ -346,6 +355,9 @@ def suggestions(found, made_by=None):
         out.append({"op": "makesafe", "title": "Make it safe",
                     "why": "; ".join(r["title"] for r in removable[:2])
                     + ("" if len(removable) <= 2 else f" (and {len(removable) - 2} more)")})
+    if found.get("weak_protection") and made_by != "upgrade-protection":
+        out.append({"op": "upgrade-protection", "title": "Protect it better",
+                    "why": f"Its encryption ({found['weak_protection']}) is old and quickly broken"})
     if found.get("scanned") and not found.get("has_text"):
         out.append({"op": "ocr", "title": "Make it searchable",
                     "why": "Read the text so you can search and copy it"})

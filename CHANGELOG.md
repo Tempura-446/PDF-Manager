@@ -4,6 +4,40 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.40.0
+
+Stronger protection of your own documents.
+
+- **How strong is that password?** Add password now says so while you
+  type: Very weak, Weak, Fair, Good or Strong, with a short reason ("one
+  of the most common passwords", "a single word with numbers after it").
+  It's an estimate worked out on this computer; nothing is sent anywhere.
+  A weak password is still accepted: the choice stays yours. The command
+  line says it too.
+- **Old, weak encryption is named and upgraded.** PDFs protected years
+  ago, or by old programs, use RC4, which no longer protects: the 40-bit
+  kind is broken in minutes whatever the password. ZPDF shows "weak
+  protection" for such a file (even before its password is typed) and
+  offers **Protect it better** (Upgrade protection, under Protect). That
+  writes the same file with AES-256, with the same password and the same
+  limits on printing, copying and changes. Give the permissions password
+  if the file has one, so it's kept as well; with only the password to
+  open, the limits stay but their old password no longer lifts them.
+- **After Black out, ZPDF checks the result** and says what it found:
+  either that nothing redacted is left in the page text, the document's
+  details, bookmarks, form values, comments, attached files or the file's
+  inner data, that nothing is left under the boxes and that the file
+  keeps no earlier version; or, if a redacted word is still somewhere
+  (the title, an attachment's name or contents), exactly where, and what
+  takes it out.
+- `pdfm make-safe --check` and `pdfm upgrade-protection --check` exit
+  with code 2 when a file could do harm or is weakly protected, for
+  scripts.
+- A reader tab is announced as "unsaved" only when it is.
+- Still to come in this part of the plan: encrypting for people's
+  certificates instead of a password, and signatures with a trusted
+  timestamp that stay checkable for years.
+
 ## 0.39.0
 
 Safer opening of PDFs you didn't make.
