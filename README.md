@@ -482,6 +482,10 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   checks its result and says so: that nothing redacted is left anywhere in
   the file, or where a redacted word is still kept (the title, an
   attachment) and what takes it out.
+- **Protect for people**: instead of a password, choose the certificates
+  (.cer files) of the people who may open a PDF; only their Digital IDs
+  open it. **Open with Digital ID** opens one that was protected for you,
+  in the reader or as a tool.
 - **Passwords and old protection**: Add password says how strong the
   password is as you type. A PDF protected with old encryption (RC4) is
   marked "weak protection", and **Upgrade protection** writes it with
@@ -717,6 +721,7 @@ Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
 | `flatten` | make forms and comments part of the page | `pdfm flatten form.pdf` |
 | `sanitize` | remove hidden data (details, scripts, attachments) | `pdfm sanitize doc.pdf` |
 | `make-safe` | take out what could do harm in a PDF you were sent (`--check`: only list it) | `pdfm make-safe invoice.pdf` |
+| `encrypt-for` / `open-with-id` | protect a PDF for people's certificates (no password); open one with your Digital ID | `pdfm encrypt-for doc.pdf --cert ann.cer` |
 | `upgrade-protection` | replace old, weak encryption (RC4) with AES-256, same password and limits (`--check`: only say how each file is protected) | `pdfm upgrade-protection old.pdf` |
 | `sign-cert` | sign with a digital ID (.pfx/.p12), visible or invisible | `pdfm sign-cert doc.pdf --pfx me.pfx --page last --reason "Approved"` |
 | `verify` | check the digital signatures in PDFs | `pdfm verify signed.pdf` |

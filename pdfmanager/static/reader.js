@@ -99,6 +99,7 @@ function formScriptsOnly(doc) {
     : p === "getPage" ? async (n) => quietPage(await t.getPage(n)) : bound(t, p)) });
 }
 
+const BROKEN_WHY = "ZPDF can’t show this file — it may be damaged.";
 const HIGHLIGHT_COLORS = "yellow=#FFFF98,green=#53FFBC,blue=#80EBFF,pink=#FFCBE6,red=#FF4F5F";
 
 
@@ -188,7 +189,7 @@ const header = (res, name) => { try { return decodeURIComponent(res.headers.get(
 const ANNOT_KEYS = { h: "HIGHLIGHT", c: "NOTE", a: "FREETEXT", d: "INK", s: "SIGN" };
 
 export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measuring(Layering(Object))))))) {
-  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onRepair, onForgetRecent, onSaveTab, onUnsaved } = {}) {
+  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onRepair, onForgetRecent, onSaveTab, onUnsaved, onBrokenWhy, onOpenWithId } = {}) {
     super();
     this.host = host;
     this.token = token;
@@ -203,6 +204,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     this.onUnsaved = onUnsaved;  // (names) => the tabs with unsaved work are these now (closing the window asks)
     this.recent = recent;  // (host) => fills host with the app's Recent list (the start screen's), resolves to how many
     this.onFormHint = onFormHint;  // (tab) => the "looks like a form" check came out for tab, or was dismissed
+    this.onBrokenWhy = onBrokenWhy;    // (tab) => what's known of a file that can't be shown ({ for_people } when it's protected for certificates)
+    this.onOpenWithId = onOpenWithId;  // (tab, Digital ID file, its password) => "" once the opened copy is in a tab, else what went wrong
     this.onRepair = onRepair;  // (tab) => run Repair on a file that can't be shown; resolves when its result is open (or it failed)
     this.onForgetRecent = onForgetRecent;  // (tab) => take a file that can't be shown off the Recent list
     this.onSaveTab = onSaveTab;  // (tab) => save a tab the app made (a tool's result): resolves true once saved
@@ -406,6 +409,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     // for its tab, with a way out (Repair), not a toast that goes.
     this.brokenName = el("h2", { class: "rd-broken-name" });
     this.brokenRepair = el("button", { class: "rd-btn primary seal rd-broken-repair", type: "button", html: svg("wrench") + "<span>Try to repair it</span>" });
+    this.brokenOpenId = el("button", { class: "rd-btn primary seal rd-broken-openid", type: "button", hidden: true, html: svg("badge") + "<span>Open with my Digital ID</span>" });
+    this.brokenWhy = el("p", { class: "rd-broken-why" }, BROKEN_WHY);
     this.brokenForget = el("button", { class: "rd-btn rd-broken-forget", type: "button" }, "Remove from Recent");
     this.brokenClose = el("button", { class: "rd-btn rd-broken-close", type: "button" }, "Close");
     this.brokenSaid = el("p", { class: "rd-broken-said", role: "status" });
@@ -413,8 +418,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
       el("section", { class: "rd-empty-card rd-broken-card", "aria-labelledby": "rd-broken-name" },
         el("div", { class: "rd-empty-icon rd-broken-icon", html: svg("alert") }),
         Object.assign(this.brokenName, { id: "rd-broken-name" }),
-        el("p", { class: "rd-broken-why" }, "ZPDF can’t show this file — it may be damaged."),
-        el("div", { class: "rd-broken-actions" }, this.brokenRepair, this.brokenForget, this.brokenClose),
+        this.brokenWhy,
+        el("div", { class: "rd-broken-actions" }, this.brokenOpenId, this.brokenRepair, this.brokenForget, this.brokenClose),
         this.brokenSaid));
     this.main = el("div", { class: "rd-main" }, this.container, this.loading, this.empty, this.broken, this.measPanel);
     // The file panel: beside the pages in a wide window, over them (with a
@@ -600,6 +605,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
   #wire() {
     this.emptyOpenBtn.addEventListener("click", () => this.chooseFile());
     this.brokenRepair.addEventListener("click", () => this.#repairBroken());
+    this.brokenOpenId.addEventListener("click", () => this.#openBrokenWithId());
     this.brokenForget.addEventListener("click", () => this.#forgetBroken());
     this.brokenClose.addEventListener("click", () => this.closeTab(this.activeTab));
     this.fileInput.addEventListener("change", () => { const f = this.fileInput.files[0]; this.fileInput.value = ""; if (f) this.openFile(f); });
@@ -915,6 +921,15 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     this.brokenName.textContent = tab.name;
     this.brokenName.title = tab.path || tab.name;
     this.brokenRepair.hidden = !this.onRepair || (!tab.fileId && !tab.original);
+    this.#brokenForPeople(tab);
+    // Not damaged, perhaps: protected for particular people (asked once per tab).
+    if (tab.forPeople === undefined && this.onBrokenWhy) {
+      tab.forPeople = null;
+      Promise.resolve(this.onBrokenWhy(tab)).then((known) => {
+        tab.forPeople = !!known?.for_people;
+        if (this.activeTab === tab && tab.broken) this.#brokenForPeople(tab);
+      }, () => { tab.forPeople = false; });
+    }
     this.brokenForget.hidden = !this.onForgetRecent || !tab.path || tab.forgotten;
     this.brokenSaid.textContent = tab.brokenSaid || "";
     this.pageInput.value = "";
@@ -925,6 +940,41 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     this.sidebar.hidden = true;
     this.root.classList.remove("reading");
     this._refresh();
+  }
+
+  /** The words and buttons for a file that can't be shown: damaged (Try to
+   *  repair it), or protected for particular people (Open with my Digital ID). */
+  #brokenForPeople(tab) {
+    const people = !!tab.forPeople && !!this.onOpenWithId;
+    this.brokenWhy.textContent = people
+      ? "This PDF is protected for particular people: it opens only with the Digital ID of one of them, not with a password."
+      : BROKEN_WHY;
+    this.brokenOpenId.hidden = !people;
+    if (people) this.brokenRepair.hidden = true;
+  }
+
+  async #openBrokenWithId() {
+    const tab = this.activeTab;
+    if (!tab?.broken || !this.onOpenWithId || this.brokenOpenId.disabled) return;
+    const pfx = el("input", { type: "file", accept: ".pfx,.p12,application/x-pkcs12", "aria-label": "Digital ID file" });
+    const password = el("input", { type: "password", autocomplete: "off", "aria-label": "Digital ID password" });
+    const answer = await this._dialog("Open with your Digital ID", [
+      el("p", {}, "Your Digital ID is a .pfx or .p12 file. If this PDF was protected for you, it opens it; you get an unprotected copy in a new tab, and the protected file stays as it is."),
+      el("label", { class: "rd-field" }, "Digital ID file", pfx), el("label", { class: "rd-field" }, "Its password", password)],
+      [["cancel", "Cancel"], ["ok", "Open", true]],
+      { ready: () => { if (pfx.files[0]) return true; pfx.focus(); return false; } });
+    if (answer !== "ok" || !pfx.files[0]) return;
+    this.brokenOpenId.disabled = true;
+    this.brokenOpenId.classList.add("busy");
+    tab.say("");
+    this.brokenSaid.textContent = "";
+    try {
+      const said = await this.onOpenWithId(tab, pfx.files[0], password.value);
+      if (said) { tab.say(said); if (this.activeTab === tab) this.brokenSaid.textContent = said; }
+    } finally {
+      this.brokenOpenId.disabled = false;
+      this.brokenOpenId.classList.remove("busy");
+    }
   }
 
   async #repairBroken() {
@@ -2076,6 +2126,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
       el("b", {}, (s.kind === "timestamp" ? "Document timestamp" : s.signer || "Unknown signer") + (s.email ? ` <${s.email}>` : "")),
       el("div", {}, words[s.status] || s.status || ""),
       s.summary ? el("div", { class: "rd-muted" }, s.summary) : null,
+      s.lasting ? el("div", { class: "rd-muted" }, s.lasting) : null,
       el("small", {}, [s.time ? "Signed " + when(s.time) + (s.time_source === "timestamp" ? " (time from a timestamp server)" : " (time from the signer's computer)") : "",
         s.reason ? "Reason: " + s.reason : "", s.location ? "Location: " + s.location : "", s.page ? "Page " + s.page : "",
         s.issuer ? "Certificate from " + s.issuer : ""].filter(Boolean).join(" · "))));

@@ -56,6 +56,13 @@ class PdfManagerError(Exception):
 def open_pdf(path, password=None):
     try:
         reader = PdfReader(str(path))
+    except NotImplementedError:
+        # Encrypted in a way a password doesn't open: for people's certificates.
+        from pdfmanager import certcrypt
+
+        if certcrypt.is_for_people(path):
+            raise PdfManagerError(f"{path} {certcrypt.NOT_READABLE}") from None
+        raise PdfManagerError(f"{path} is protected in a way ZPDF can't open") from None
     except PyPdfError as exc:
         reader = _mended(path, password)
         if reader is None:

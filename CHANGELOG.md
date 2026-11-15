@@ -4,6 +4,40 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.41.0
+
+Protect a PDF for people, not with a password.
+
+- **Protect for people** (under Protect): choose the certificates of the
+  people who may open the file, and only they can, each with their own
+  Digital ID. There's no password to send along, to forget or to be
+  guessed. A certificate is the public part of someone's Digital ID: a
+  .cer file they can give to anyone. Add your own too (your .cer, or your
+  Digital ID with its password), or you won't be able to open the result
+  yourself. Acrobat opens these files as well ("certificate security").
+- **Open with Digital ID**: a PDF protected this way opens with your
+  Digital ID (.pfx or .p12). You get an unprotected copy to read and work
+  on; the protected file stays as it is. In the reader, such a file is no
+  longer called damaged: it says what it is and offers **Open with my
+  Digital ID**; the copy opens in a new tab and is kept only if you save
+  it.
+- ZPDF says plainly when a certificate can't be used: it has expired, or
+  it's for signing only (many Digital IDs have a second certificate for
+  protecting files). An ID the file wasn't protected for is refused in
+  words: "wasn't protected for Eve Other".
+- Every other tool, given such a file, says it's protected for particular
+  people and how to open it, instead of failing or trying to repair it.
+- **How long a signature stays checkable** is now said with each
+  signature in Check signatures: one signed with a timestamp server stays
+  checkable after the signer's certificate expires; one without says the
+  date after which other programs may stop accepting it.
+- Command line: `pdfm encrypt-for doc.pdf --cert ann.cer --cert bob.cer`
+  and `pdfm open-with-id doc.pdf --id me.pfx`.
+- Not yet: seeing who a file was protected for before opening it, limits
+  on printing or copying per person, and signatures that carry their own
+  proof of validity for the long term (they need the certificate's issuer
+  to be reachable when signing).
+
 ## 0.40.0
 
 Stronger protection of your own documents.

@@ -54,6 +54,7 @@ from pdfmanager import watchfolders  # Settings > Watch folders
 from pdfmanager import layers  # layers (optional content) of drawings
 from pdfmanager import risks  # what a PDF can do, and Make safe
 from pdfmanager import protection  # password strength, old encryption and its upgrade
+from pdfmanager import certcrypt  # protecting a PDF for people's certificates
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 
@@ -346,6 +347,25 @@ OPERATIONS = [
                 _f("owner_password", "Permissions password", "password", "",
                    hint="Needed for the limits above, and different from the password to "
                         "open: it lifts the limits (and removes the protection).")]},
+    {"id": "encrypt-cert", "group": "Security", "label": "Protect for people", "files": "pdf",
+     "action": "Protect",
+     "help": "Protect a PDF for particular people instead of with a password: only they can open "
+             "it, with their Digital ID, and there's no password to send or to be guessed. You "
+             "need each person's certificate: the public part of their Digital ID, a .cer file "
+             "they can give to anyone. Add your own too, or you won't be able to open the result. "
+             "Acrobat opens these files as well.",
+     "fields": [_f("certificates", "Their certificates (.cer, .crt, .pem)", "file", None, multiple=True,
+                   accept=".cer,.crt,.pem,.der,.pfx,.p12",
+                   hint="One file per person, or one file holding several. Your own Digital ID "
+                        "(.pfx) can be given here for yourself, with its password below."),
+                _f("id_password", "Your Digital ID's password (only if you added it)", "password", "")]},
+    {"id": "decrypt-cert", "group": "Security", "label": "Open with Digital ID", "files": "pdf",
+     "action": "Open",
+     "help": "Open a PDF that was protected for particular people, with your Digital ID (.pfx or "
+             ".p12). You get an unprotected copy to read and work on; the protected file stays "
+             "as it is.",
+     "fields": [_f("pfx", "Digital ID (.pfx or .p12 file)", "file", None, accept=".pfx,.p12"),
+                _f("pfx_password", "Digital ID password", "password", "")]},
     {"id": "upgrade-protection", "group": "Security", "label": "Upgrade protection", "files": "pdf",
      "action": "Upgrade protection",
      "help": "For a PDF protected years ago or by an old program: its encryption (RC4) no longer "
@@ -573,7 +593,7 @@ OPERATIONS = [
 ]
 OPS = {op["id"]: op for op in OPERATIONS}
 
-SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "makesafe": "safe", "upgrade-protection": "protected", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
+SUFFIX = {"form": "form", "media": "media", "headers": "headers", "recipe": "recipe", "redact": "redacted", "bookmarks": "bookmarks", "flatten": "flat", "sanitize": "clean", "makesafe": "safe", "upgrade-protection": "protected", "encrypt-cert": "for-people", "decrypt-cert": "opened", "pdfa": "pdfa", "clean": "clean", "extract": "extract", "delete": "edited", "reorder": "reordered",
           "insert-blank": "blanks", "booklet": "booklet", "autocrop": "trimmed",
           "reverse": "reversed", "rotate": "rotated", "resize": "resized", "crop": "cropped",
           "nup": "nup", "compress": "compressed", "color": "color", "ocr": "ocr",
@@ -801,6 +821,20 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                                                   ("comments", "comments"))
                  if (n := counts[key])]
         notes.append(f"{src.name}: removed " + (", ".join(found) if found else "nothing (none found)"))
+    elif op == "encrypt-cert":
+        chosen = extra_files.get("certificates[]") or ([extra_files["certificates"]] if extra_files.get("certificates") else [])
+        if not chosen:
+            raise UserError("choose the certificates of the people who may open it (.cer files), "
+                            "and yours to open it yourself")
+        names = certcrypt.encrypt_for(src, out, chosen, password=password,
+                                      id_password=opts.get("id_password") or None)
+        notes.append(f"{src.name}: protected for {', '.join(names)}. Only their Digital IDs open it: "
+                     "there's no password.")
+    elif op == "decrypt-cert":
+        if not extra_files.get("pfx"):
+            raise UserError("choose your Digital ID: a .pfx or .p12 file")
+        notes.append(f"{src.name}: " + certcrypt.open_with_id(src, out, extra_files["pfx"],
+                                                             opts.get("pfx_password") or None))
     elif op == "upgrade-protection":
         notes.append(f"{src.name}: {protection.upgrade(src, out, password)}")
     elif op == "makesafe":
@@ -1157,7 +1191,8 @@ def _protect(outputs, password, op):
     """PDFs made from a password-protected file get the same password."""
     # A signed PDF keeps its password inside the signed file.
     # (An upgraded protection is already in place, with its two passwords.)
-    if password and op not in ("decrypt", "encrypt", "pdfa", "media", "sign-cert", "upgrade-protection"):
+    if password and op not in ("decrypt", "encrypt", "pdfa", "media", "sign-cert", "upgrade-protection",
+                               "encrypt-cert", "decrypt-cert"):
         for path in outputs:
             if path.suffix.lower() == ".pdf":
                 core.encrypt(path, path, password)
@@ -1309,8 +1344,8 @@ def _mend_inputs(op, files, password, work, notes):
 
 def _check_pages(op, files, password):
     """Each PDF has a page to work on (Repair is for files that don't open)."""
-    if op == "repair" or OPS[op].get("files") not in ("pdf", "pdf2"):
-        return
+    if op in ("repair", "decrypt-cert") or OPS[op].get("files") not in ("pdf", "pdf2"):
+        return  # (a file protected for people has no page to count until it's opened)
     for path in files:
         if Path(path).suffix.lower() == ".pdf" and not len(core.open_pdf(path, password).pages):
             raise UserError(f"{Path(path).name} has no pages")
@@ -1331,6 +1366,13 @@ def _run_operation(op, files, opts, password=None, extra_files=None, work=None, 
     if files and len(files) < spec.get("min", 1):  # (a typed address needs no file)
         raise UserError(f"add at least {spec['min']} files")
     notes = [] if notes is None else notes
+    # A PDF protected for particular people isn't damaged: it's opened with a
+    # Digital ID (that tool takes it as it is), and no other tool can read it.
+    people = [Path(f).name for f in files if Path(f).suffix.lower() == ".pdf" and certcrypt.is_for_people(f)]
+    if op == "decrypt-cert":
+        return _run_files(op, list(files), opts, password, extra_files, work, notes)
+    if people:
+        raise UserError(f"{people[0]} {certcrypt.NOT_READABLE}")
     mended = _mend_inputs(op, files, password, work, notes)
     damaged = [Path(a).name for a, b in zip(files, mended) if a != b]
     if not damaged:
