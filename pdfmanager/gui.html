@@ -889,14 +889,14 @@ body.form-folded #options-card { display: none; }
 .pw-bars { display: inline-flex; gap: 3px; flex: none; }
 .pw-bars i { width: 22px; height: 4px; border-radius: 2px; background: var(--border-strong); }
 .pw-meter[data-score="0"] .pw-bars i:nth-child(-n+1), .pw-meter[data-score="1"] .pw-bars i:nth-child(-n+2) { background: var(--err); }
-.pw-meter[data-score="2"] .pw-bars i:nth-child(-n+3) { background: var(--page-warn, #8a5a00); }
-.pw-meter[data-score="3"] .pw-bars i:nth-child(-n+4), .pw-meter[data-score="4"] .pw-bars i { background: var(--page-ok, #1f7a4d); }
+.pw-meter[data-score="2"] .pw-bars i:nth-child(-n+3) { background: var(--warn); }
+.pw-meter[data-score="3"] .pw-bars i:nth-child(-n+4), .pw-meter[data-score="4"] .pw-bars i { background: var(--ok, #1f7a4d); }
 .pw-meter[data-score=""] .pw-bars { visibility: hidden; }
 .fp-fact { font: 500 var(--fs-xs)/1.5 var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 2px 7px; }
 .fp-fact.flag { color: var(--accent); border-color: transparent; background: var(--accent-soft); }
 .fp-fact.bad { border-color: transparent; background: var(--err-soft); }
-.fp-fact.warn { color: var(--page-warn, #8a5a00); border-color: transparent; background: color-mix(in srgb, var(--page-warn, #8a5a00) 14%, transparent); }
-.fp-line.careful { color: var(--err); font-weight: 600; }
+.fp-fact.warn { color: var(--warn); border-color: transparent; background: color-mix(in srgb, var(--warn) 14%, transparent); }  /* (the theme's warning colour: readable on dark too) */
+.fp-line.careful, .result-note .careful { color: var(--err); font-weight: 600; }
 .fp-fact.wait { height: 22px; border-color: transparent; background: var(--surface-2); animation: fp-wait 1.2s ease-in-out infinite alternate; }
 @keyframes fp-wait { to { opacity: .45; } }
 .fp-sec { display: flex; flex-direction: column; gap: 8px; }
@@ -1731,7 +1731,7 @@ function factChips(facts) {
   const risks = facts.risks || [];
   if (risks.length) {
     chips.unshift({ text: facts.risk === "high" ? "could do harm" : facts.risk === "medium" ? "check before trusting" : "points at other files",
-      bad: facts.risk === "high", flag: facts.risk !== "high",
+      bad: facts.risk === "high", warn: facts.risk === "medium", flag: facts.risk === "low",
       title: risks.map((r) => `${r.title}: ${r.detail}${r.examples?.length ? " (" + r.examples.slice(0, 2).join("; ") + ")" : ""}`).join("\n") });
   }
   return chips;
@@ -3996,7 +3996,7 @@ async function showResult(name, blob, resultId, note = "", skipped = []) {
     el("div", { class: "result-body" },
       el("div", { class: "result-title" }, icon("check"), "Done"),
       el("div", { class: "result-name" }, name), subEl,
-      note ? el("div", { class: "result-note" }, ...note.split("\n").map((line) => el("div", {}, line))) : null,
+      note ? el("div", { class: "result-note" }, ...note.split("\n").map((line) => el("div", /^Careful\b/.test(line) ? { class: "careful" } : {}, line))) : null,
       // Files that couldn't be opened were left out: said again here, by name.
       skipped.length ? el("div", { class: "result-skipped" }, icon("alert"),
         el("span", {}, `${plural(skipped.length, "file")} ${skipped.length === 1 ? "was" : "were"} left out (can't be opened): `, el("b", {}, skipped.join(", ")))) : null,

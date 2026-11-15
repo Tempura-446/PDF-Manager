@@ -45,6 +45,9 @@ def test_password_strength():
     strong = protection.strength("correct horse battery staple")
     assert strong["score"] == 4 and strong["label"] == "Strong"
     assert protection.strength("vK7#pQ2m!xW9zL4t")["score"] == 4
+    # words are counted as words, not letter by letter: two aren't many
+    assert protection.strength("blue kettle")["score"] <= 1 and protection.strength("mountain river")["score"] <= 1
+    assert protection.strength("orange tiger lamp")["score"] == 3
     # longer is never weaker, and the scores go up in order
     assert [protection.strength("xk" * n)["score"] for n in (2, 4, 8, 16)] == sorted(
         protection.strength("xk" * n)["score"] for n in (2, 4, 8, 16))

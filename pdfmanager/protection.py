@@ -73,8 +73,10 @@ def strength(password):
             + (1 if " " in password else 0) + (40 if re.search(r"[^\x00-\x7f]", password) else 0)) or 26
     guesses = float(pool) ** len(password)
     words = len([w for w in re.split(r"[\s\-_.,]+", password) if len(w) >= 3])
-    if words >= 3:
+    parts = [w for w in re.split(r"[\s\-_.,]+", password) if w]
+    if words >= 3 or (words >= 2 and all(w.isalpha() for w in parts)):
         # A phrase: each word is one choice among a few thousand, not letter by letter.
+        # (Two ordinary words are few choices however many letters they have.)
         guesses = min(guesses, 7776.0 ** words)
 
     bare = lowered
