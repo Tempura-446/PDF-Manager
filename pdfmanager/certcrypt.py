@@ -18,9 +18,8 @@ from pathlib import Path
 
 from pdfmanager import core
 
-FOR_PEOPLE = "for particular people (certificates)"
-NOT_READABLE = ("is protected for particular people: only their Digital IDs open it. "
-                "Open it with yours (Open with Digital ID)")
+from pdfmanager.forpeople import FOR_PEOPLE, NOT_READABLE, is_for_people  # noqa: F401 - part of this module's face
+
 PEM_START, PEM_END = b"-----BEGIN CERTIFICATE-----", b"-----END CERTIFICATE-----"
 
 
@@ -30,26 +29,6 @@ def _need_pyhanko():
     except ImportError:
         raise core.PdfManagerError(
             "protecting a PDF for people's certificates needs pyHanko: pip install pyhanko") from None
-
-
-def is_for_people(path):
-    """Whether the PDF is encrypted for certificates (not with a password)."""
-    try:
-        data = Path(path).read_bytes()
-    except OSError:
-        return False
-    if b"Adobe.PubSec" not in data and b"Adobe.PPKLite" not in data and b"Entrust.PPKEF" not in data:
-        return False
-    try:
-        from pyhanko.pdf_utils.crypt import PubKeySecurityHandler
-        from pyhanko.pdf_utils.reader import PdfFileReader
-
-        reader = PdfFileReader(io.BytesIO(data), strict=False)
-        return isinstance(reader.security_handler, PubKeySecurityHandler)
-    except ImportError:
-        return True  # (said by the file itself; pyHanko isn't here to confirm)
-    except Exception:  # noqa: BLE001 - a damaged file isn't one of these
-        return False
 
 
 def _name(cert):

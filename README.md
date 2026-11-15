@@ -482,7 +482,7 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   checks its result and says so: that nothing redacted is left anywhere in
   the file, or where a redacted word is still kept (the title, an
   attachment) and what takes it out.
-- **Protect for people**: instead of a password, choose the certificates
+- **Encrypt for people**: instead of a password, choose the certificates
   (.cer files) of the people who may open a PDF; only their Digital IDs
   open it. **Open with Digital ID** opens one that was protected for you,
   in the reader or as a tool.

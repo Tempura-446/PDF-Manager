@@ -8,7 +8,7 @@ also the notes of its release on
 
 Protect a PDF for people, not with a password.
 
-- **Protect for people** (under Protect): choose the certificates of the
+- **Encrypt for people** (under Protect): choose the certificates of the
   people who may open the file, and only they can, each with their own
   Digital ID. There's no password to send along, to forget or to be
   guessed. A certificate is the public part of someone's Digital ID: a

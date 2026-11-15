@@ -347,7 +347,7 @@ OPERATIONS = [
                 _f("owner_password", "Permissions password", "password", "",
                    hint="Needed for the limits above, and different from the password to "
                         "open: it lifts the limits (and removes the protection).")]},
-    {"id": "encrypt-cert", "group": "Security", "label": "Protect for people", "files": "pdf",
+    {"id": "encrypt-cert", "group": "Security", "label": "Encrypt for people", "files": "pdf",
      "action": "Protect",
      "help": "Protect a PDF for particular people instead of with a password: only they can open "
              "it, with their Digital ID, and there's no password to send or to be guessed. You "
