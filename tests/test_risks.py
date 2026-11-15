@@ -270,3 +270,51 @@ def test_a_script_made_to_stall_the_form_test_does_not(tmp_path):
     for fine in ('AFNumber_Format(2, 0, 0, 0, "", true);', 'AFSimple_Calculate("SUM", new Array("a", "b"));',
                  "AFDate_FormatEx(\"dd/mm/yyyy\"); AFRange_Validate(true, 0, false, 0)"):
         assert risks.FORM_SCRIPT.fullmatch(fine)
+
+
+CRAFTED = ("AFNumber_Keystroke(2, app.alert('crafted-K'))", "AFNumber_Format(2, app.alert('crafted-F'))",
+           "AFSimple_Calculate(app.alert('crafted-Bl'))", 'AFNumber_Format(2, "a" + app.alert(1))',
+           'AFSimple_Calculate("SUM", new Array(app.alert(1)))', "AFNumber_Format(2); app.alert(1)",
+           "AFNumber_Format(`${app.alert(1)}`)", 'AFNumber_Format("a\\\\") + app.alert(1) //")',
+           "AFMadeUp(1)", "AFNumber_Format(2, [app.alert(1)])", "AFNumber_Format(2, x)", "AFNumber_Format(2)\napp.alert(1)")
+
+
+def test_a_script_dressed_as_a_form_function_is_a_script(tmp_path):
+    """Only the form functions by name, with plain values: nothing hides in an argument."""
+    for script in CRAFTED:
+        assert not risks.FORM_SCRIPT.fullmatch(script), script
+    for fine in ('AFNumber_Format(2, 0, 0, 0, "", true);', 'AFNumber_Keystroke(2, 0, 0, 0, "€", true);',
+                 'AFSimple_Calculate("SUM", new Array("Price", "Tax"));', "AFSimple_Calculate('AVG', new Array('a'))",
+                 'AFDate_FormatEx("dd/mm/yyyy");', "AFPercent_Format(1, 0);", "AFSpecial_Format(2);",
+                 "AFRange_Validate(true, -5, false, 1e+06);", 'AFSimple_Calculate("SUM", new Array("He said \\"hi\\""));'):
+        assert risks.FORM_SCRIPT.fullmatch(fine), fine
+    # in a file: reported, and taken out by Make safe, while a real total stays
+    src = tmp_path / "form.pdf"
+    forms.add_fields(plain(tmp_path / "p.pdf"), src, [
+        {"page": 1, "rect": [72, 700, 200, 720], "type": "text", "name": "Price", "format": "amount"},
+        {"page": 1, "rect": [72, 670, 200, 690], "type": "text", "name": "Total", "calculate": "sum: Price"},
+        {"page": 1, "rect": [72, 640, 200, 660], "type": "text", "name": "Other"}])
+    w = PdfWriter(clone_from=str(src))
+    other = w.pages[0]["/Annots"][2].get_object()
+    other[NameObject("/AA")] = DictionaryObject({
+        NameObject("/K"): action("/JavaScript", JS=CRAFTED[0]), NameObject("/F"): action("/JavaScript", JS=CRAFTED[1]),
+        NameObject("/Bl"): action("/JavaScript", JS=CRAFTED[2])})
+    crafted = tmp_path / "crafted.pdf"
+    w.write(str(crafted))
+    found = risks.check(crafted)
+    assert found["level"] == "high" and kinds(found)["scripts"]["count"] == 3
+    out = tmp_path / "safe.pdf"
+    assert risks.make_safe(crafted, out)["scripts"] == 3 and risks.check(out)["level"] == "none"
+    annots = PdfReader(str(out)).pages[0]["/Annots"]
+    assert "/AA" not in annots[2].get_object() or not annots[2].get_object()["/AA"]
+    assert "AFSimple_Calculate" in annots[1].get_object()["/AA"]["/C"]["/JS"]
+
+
+def test_the_reader_runs_exactly_what_the_check_calls_harmless():
+    """reader.js's pattern for the scripts its sandbox may run is this module's."""
+    import json
+    from pathlib import Path
+
+    reader = (Path(risks.__file__).parent / "static" / "reader.js").read_text(encoding="utf-8")
+    assert "const FORM_SCRIPT = new RegExp(" + json.dumps("^" + risks.FORM_SCRIPT_SOURCE + "$") + ");" in reader
+    assert "js.length <= FORM_SCRIPT_MAX && FORM_SCRIPT.test(js)" in reader and "const FORM_SCRIPT_MAX = 2000;" in reader

@@ -61,12 +61,13 @@ const SHAPES = [["rect", "Rectangle"], ["ellipse", "Ellipse"], ["cloud", "Cloud"
 // with the real length, words with a pointer.
 const DRAWING_SHAPES = [["polycloud", "Cloud, any shape"], ["polyline", "Line with corners"], ["polyarrow", "Arrow with corners"],
   ["dimension", "Dimension"], ["callout", "Callout"]];
-// A field's script made only of Acrobat's form functions (AFNumber_Format,
-// AFSimple_Calculate...): how forms format and add up. The same test as
-// risks.py's FORM_SCRIPT.
-// (Each space can be matched in one way only, so a script written to make
-// the test slow can't; and none that long is a form function anyway.)
-const FORM_SCRIPT = /^\s*(?:AF\w+\s*\((?:[^()]|\([^()]*\))*\)\s*(?:;\s*)?)+$/;
+// A field's script that is only calls of Acrobat's form functions with plain
+// values (numbers, quoted text, true or false, a list of quoted texts): how
+// forms format and add up. The functions are these by name and nothing can
+// hide in an argument. The pattern is risks.py's FORM_SCRIPT_SOURCE, kept
+// the same by tests/test_risks.py, so the risk check and the reader agree
+// on what is harmless.
+const FORM_SCRIPT = new RegExp("^\\s*(?:AFNumber_Format|AFNumber_Keystroke|AFPercent_Format|AFPercent_Keystroke|AFDate_Format|AFDate_FormatEx|AFDate_Keystroke|AFDate_KeystrokeEx|AFTime_Format|AFTime_FormatEx|AFTime_Keystroke|AFTime_KeystrokeEx|AFSpecial_Format|AFSpecial_Keystroke|AFSpecial_KeystrokeEx|AFRange_Validate|AFSimple_Calculate)\\s*\\(\\s*(?:(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')|-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?|true|false|new\\s+Array\\s*\\(\\s*(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')(?:\\s*,\\s*(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*'))*)?\\s*\\))(?:\\s*,\\s*(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')|-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?|true|false|new\\s+Array\\s*\\(\\s*(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')(?:\\s*,\\s*(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*'))*)?\\s*\\)))*)?\\s*\\)(?:\\s*;\\s*(?:AFNumber_Format|AFNumber_Keystroke|AFPercent_Format|AFPercent_Keystroke|AFDate_Format|AFDate_FormatEx|AFDate_Keystroke|AFDate_KeystrokeEx|AFTime_Format|AFTime_FormatEx|AFTime_Keystroke|AFTime_KeystrokeEx|AFSpecial_Format|AFSpecial_Keystroke|AFSpecial_KeystrokeEx|AFRange_Validate|AFSimple_Calculate)\\s*\\(\\s*(?:(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')|-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?|true|false|new\\s+Array\\s*\\(\\s*(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')(?:\\s*,\\s*(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*'))*)?\\s*\\))(?:\\s*,\\s*(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')|-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?|true|false|new\\s+Array\\s*\\(\\s*(?:(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*')(?:\\s*,\\s*(?:\"(?:[^\"\\\\\\n\\r]|\\\\[^\\n\\r])*\"|'(?:[^'\\\\\\n\\r]|\\\\[^\\n\\r])*'))*)?\\s*\\)))*)?\\s*\\))*\\s*;?\\s*$");
 const FORM_SCRIPT_MAX = 2000;
 
 /** ``doc`` (pdf.js's) as the scripting sandbox may see it: without the

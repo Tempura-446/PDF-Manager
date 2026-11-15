@@ -45,6 +45,11 @@ def test_risks_in_a_browser(app, tmp_path):
     other[NameObject("/AA")] = DictionaryObject({
         NameObject("/K"): action("/JavaScript", JS="app.alert('typed');"),
         NameObject("/Bl"): action("/JavaScript", JS="app.alert('left');")})
+    # ... and scripts dressed as form functions, hiding in an argument
+    price = w.pages[0]["/Annots"][0].get_object()
+    price["/AA"][NameObject("/Bl")] = action("/JavaScript", JS="AFSimple_Calculate(app.alert('crafted-Bl'))")
+    other["/AA"][NameObject("/F")] = action("/JavaScript", JS="AFNumber_Format(2, app.alert('crafted-F'))")
+    other["/AA"][NameObject("/Fo")] = action("/JavaScript", JS="AFNumber_Keystroke(2, app.alert('crafted-Fo'))")
     w.pages[0][NameObject("/AA")] = DictionaryObject({NameObject("/O"): action("/JavaScript", JS="app.alert('page');")})
     link(w, [100, 755, 330, 772], action("/URI", URI="http://mybank.com.evil-site.net/login?next=1"))
     risky = tmp_path / "Invoice.pdf"

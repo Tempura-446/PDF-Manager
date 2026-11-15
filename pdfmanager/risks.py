@@ -42,11 +42,25 @@ SEVERITY = {"scripts": "high", "launch": "high", "attachments": "high", "submit"
 REMOVED = ("scripts", "launch", "submit", "remote", "attachments", "opens_site")  # what Make safe takes out
 ACTION_KIND = {"/JavaScript": "scripts", "/Launch": "launch", "/SubmitForm": "submit",
                "/ImportData": "remote", "/GoToR": "remote", "/GoToE": "remote"}
-# A field's script made only of Acrobat's form functions (AFNumber_Format,
-# AFSimple_Calculate...): how forms format and add up, here and in Acrobat.
-# (Each space can be matched in one way only, so a script written to make
-# the test slow can't; and none that long is a form function anyway.)
-FORM_SCRIPT = re.compile(r"\s*(?:AF\w+\s*\((?:[^()]|\([^()]*\))*\)\s*(?:;\s*)?)+")
+# A field's script that is only calls of Acrobat's form functions with plain
+# values: how forms format and add up, here and in Acrobat. Nothing else
+# passes: the functions are these by name, and an argument is a number, a
+# quoted text, true or false, or new Array(...) of quoted texts. So nothing
+# can hide in an argument (AFNumber_Format(2, app.alert(1)) is refused).
+# The reader's sandbox runs exactly what this accepts (reader.js has the
+# same pattern: tests/test_risks.py keeps the two the same), so the check
+# and the reader agree on what is harmless.
+FORM_FUNCTIONS = ("AFNumber_Format", "AFNumber_Keystroke", "AFPercent_Format", "AFPercent_Keystroke",
+                  "AFDate_Format", "AFDate_FormatEx", "AFDate_Keystroke", "AFDate_KeystrokeEx",
+                  "AFTime_Format", "AFTime_FormatEx", "AFTime_Keystroke", "AFTime_KeystrokeEx",
+                  "AFSpecial_Format", "AFSpecial_Keystroke", "AFSpecial_KeystrokeEx",
+                  "AFRange_Validate", "AFSimple_Calculate")
+_TEXT = r'''(?:"(?:[^"\\\n\r]|\\[^\n\r])*"|'(?:[^'\\\n\r]|\\[^\n\r])*')'''
+_VALUE = r"(?:" + _TEXT + r"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|new\s+Array\s*\(\s*(?:" + _TEXT \
+    + r"(?:\s*,\s*" + _TEXT + r")*)?\s*\))"
+_CALL = r"(?:" + "|".join(FORM_FUNCTIONS) + r")\s*\(\s*(?:" + _VALUE + r"(?:\s*,\s*" + _VALUE + r")*)?\s*\)"
+FORM_SCRIPT_SOURCE = r"\s*" + _CALL + r"(?:\s*;\s*" + _CALL + r")*\s*;?\s*"
+FORM_SCRIPT = re.compile(FORM_SCRIPT_SOURCE)
 FORM_SCRIPT_MAX = 2000
 ADDRESS = re.compile(r"(?<![@\w.-])(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,24})(?![\w-])", re.I)
 LINK_PAGES, LINKS = 80, 400  # how far misleading links are looked for
