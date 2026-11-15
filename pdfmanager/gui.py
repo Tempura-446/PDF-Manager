@@ -2487,6 +2487,15 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 return self._error(HTTPStatus.BAD_REQUEST, "bad request")
         if not self._token_ok():
+            # (A small body is read and dropped first: answering while it's
+            # still being sent can reach the sender as a broken connection
+            # instead of this refusal, as Windows does.)
+            try:
+                unread = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                unread = 0
+            if 0 < unread <= 1_000_000:
+                self.rfile.read(unread)
             return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
         length = int(self.headers.get("Content-Length") or 0)
         if length > MAX_UPLOAD:
