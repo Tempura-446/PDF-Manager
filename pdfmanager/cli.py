@@ -619,6 +619,19 @@ def run_to_excel(a, src, out, pw):
     return f"{made['output']}  ({n} table{'s' if n != 1 else ''})"
 
 
+def run_quantities(a, src, out, pw):
+    from pdfmanager import quantities
+
+    found = quantities.schedule(src, pw)
+    if not found["items"]:
+        raise core.PdfManagerError(f"{Path(src).name}: {quantities.said(found)}")
+    if a.csv or str(out).lower().endswith(".csv"):
+        quantities.write_csv(found, out)
+    else:
+        quantities.write_xlsx(found, out, Path(src).name)
+    return f"{out}  ({quantities.said(found)})"
+
+
 # -- pptx and html --
 def run_to_pptx(a, src, out, pw):
     from pdfmanager import slides
@@ -852,6 +865,7 @@ OUTPUTS = {
     "watermark": ("watermarked", "pdf"), "number": ("numbered", "pdf"), "ocr": ("ocr", "pdf"), "clean": ("clean", "pdf"),
     "flatten": ("flat", "pdf"), "redact": ("redacted", "pdf"), "headers": ("headers", "pdf"), "form": ("form", "pdf"), "bookmarks": ("bookmarks", "pdf"), "to-word": (None, "docx"), "sanitize": ("sanitized", "pdf"), "make-safe": ("safe", "pdf"), "pdfa": ("pdfa", "pdf"),
     "to-excel": (None, "xlsx"),  # with --csv: a folder, <input>_tables
+    "quantities": ("quantities", "xlsx"),  # with --csv: <input>_quantities.csv
     "split": ("split", "dir"), "to-images": ("images", "dir"), "extract-media": ("media", "dir"),
 }
 OUTPUTS["sign-cert"] = ("signed", "pdf")  # digital ID signatures
@@ -880,6 +894,8 @@ def _output_for(a, src, batch):
     suffix, kind = OUTPUTS[a.command]
     if a.command == "to-excel" and a.csv:
         suffix, kind = "tables", "dir"
+    if a.command == "quantities" and a.csv:
+        kind = "csv"
     if kind is None:
         return None
     if a.command == "metadata" and a.output is None:
@@ -894,7 +910,7 @@ def _output_for(a, src, batch):
     if not batch and not _is_folder(a.output):
         if a.output:
             return Path(a.output)
-        return src.with_suffix(ext) if suffix is None else _default_output(src, suffix)
+        return src.with_suffix(ext) if suffix is None else _default_output(src, suffix, ext)
     if a.output:  # -o is a folder; keep the original file names
         folder = Path(a.output)
         if folder.exists() and not folder.is_dir():
@@ -928,7 +944,7 @@ def _check_outputs(plan):
 # Commands whose output should not inherit the input's password.
 # (split re-encrypts its own output files.)
 KEEP_UNENCRYPTED = {"decrypt", "encrypt", "info", "text", "to-images", "split", "to-word",
-                    "to-excel",
+                    "to-excel", "quantities",
                     "extract-media",
                     "pdfa"}  # PDF/A doesn't allow encryption
 KEEP_UNENCRYPTED.update({"encrypt-for", "open-with-id"})  # protected for people, or opened for good
@@ -1735,6 +1751,12 @@ def build_parser():
                     help="auto (default): Microsoft Word if installed, else the built-in "
                          "converter; word; basic (built-in: paragraphs, headings, pictures); "
                          "layout (LibreOffice: exact look, text in boxes)")
+
+    sp = per_file("quantities", run_quantities,
+                  "a schedule (takeoff) of what was measured on a drawing: the dimensions and measurements "
+                  "saved in the PDF, with totals per group, as an Excel workbook or a CSV file",
+                  out_help="output .xlsx or .csv (default: <input>_quantities.xlsx); with several inputs, a folder")
+    sp.add_argument("--csv", action="store_true", help="write a CSV file instead of a workbook")
 
     sp = per_file("to-excel", run_to_excel,
                   "export the tables in PDFs to Excel workbooks (.xlsx) or CSV files",

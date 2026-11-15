@@ -640,7 +640,8 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
 .rd-mtotals div { display: flex; justify-content: space-between; gap: 10px; }
 .rd-mtotals b { font-variant-numeric: tabular-nums; }
 .rd-mtotals small { color: var(--muted); font-size: var(--fs-xs); }
-.rd-mfoot { display: flex; gap: 4px; padding: 6px 8px 8px; border-top: 1px solid var(--border); }
+.rd-mfoot { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px 8px; border-top: 1px solid var(--border); }
+.rd-mfoot .rd-btn { white-space: nowrap; }
 .rd-now { padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface-2); }
 .rd-scaleresult { margin-top: 10px; display: grid; gap: 6px; }
 .rd-scaleresult p { margin: 0; }

@@ -683,12 +683,17 @@ def _measure_dict(scale):
         return DictionaryObject({NameObject("/Type"): NameObject("/NumberFormat"), NameObject("/U"): TextStringObject(unit),
                                  NameObject("/C"): FloatObject(factor), NameObject("/D"): NumberObject(places)})
 
-    length = [fmt("m", per_point, 1000)] if metric else [fmt("ft", per_point, 1), fmt("in", 12, 16)]
-    area = [fmt("m²" if metric else "sq ft", per_point * per_point, 100)]
+    # /X turns page units into the largest real unit; /D and /A then say how
+    # distances and areas are written, as factors on that unit (ISO 32000
+    # 12.9: 1 for the same unit, 12 for the inches left over).
+    unit = "m" if metric else "ft"
+    x = [fmt(unit, per_point, 1000 if metric else 1)]
+    length = [fmt("m", 1, 1000)] if metric else [fmt("ft", 1, 1), fmt("in", 12, 16)]
+    area = [fmt("m²" if metric else "sq ft", 1, 100)]
     return DictionaryObject({
         NameObject("/Type"): NameObject("/Measure"), NameObject("/Subtype"): NameObject("/RL"),
         NameObject("/R"): TextStringObject(str(scale.get("label") or "")[:80]),
-        NameObject("/X"): ArrayObject(length), NameObject("/D"): ArrayObject(length), NameObject("/A"): ArrayObject(area),
+        NameObject("/X"): ArrayObject(x), NameObject("/D"): ArrayObject(length), NameObject("/A"): ArrayObject(area),
         NameObject("/O"): ArrayObject([FloatObject(0), FloatObject(0)])})
 
 
@@ -768,8 +773,10 @@ def _measure(writer, page_ref, change, author):
                    + (f"q [3 2] 0 d 0.8 w {dashed} S Q " if holes else "") + text)
         fonts[NameObject("/ExtGState")] = DictionaryObject({NameObject("/G0"): DictionaryObject({
             NameObject("/Type"): NameObject("/ExtGState"), NameObject("/ca"): FloatObject(0.15)})})
-        return [build("/Polygon", content, [bounds(pts), box], {
-            NameObject("/Vertices"): vertices(pts), NameObject("/IT"): NameObject("/PolygonDimension")})]
+        keys = {NameObject("/Vertices"): vertices(pts), NameObject("/IT"): NameObject("/PolygonDimension")}
+        if holes:  # (the cut-outs, so the area can be worked out again from the file: quantities.py)
+            keys[NameObject("/ZPDFHoles")] = ArrayObject(vertices(h) for h in holes)
+        return [build("/Polygon", content, [bounds(pts), box], keys)]
     # distance, path: the line(s), ticks at the ends, the length by the middle (or the end of a path)
     ends = [(pts[0], pts[1]), (pts[-1], pts[-2])]
     ticks = []

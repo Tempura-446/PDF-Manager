@@ -4,6 +4,35 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.43.0
+
+A quantity schedule (takeoff) from what you measured on a drawing.
+
+- **Quantities from a drawing** (under Convert, and `pdfm quantities
+  plan.pdf`): one table of everything measured in a PDF, as an Excel
+  workbook or a CSV file. It lists the dimension lines you placed, the
+  measurements you put in the PDF, and the measurement annotations other
+  programs save (Acrobat, Bluebeam and the like): sheet, kind, group, name,
+  quantity, unit, an area's perimeter, the scale, the colour, who placed it
+  and when.
+- **Totals per group**: "Walls: 126.33 ft", "Flooring: 84.2 m²", the count
+  of outlets. In the workbook they're on their own sheet, and every number
+  is a number with its unit in the next column, so you can sum and price
+  them.
+- Each quantity is worked out again from the annotation's own points and
+  scale, not copied from its words. A measurement without any scale is
+  listed with its words and no number.
+- In the reader, the **Measurements** panel's CSV button now saves this
+  schedule, and there's an **Excel** button beside it. Both include the
+  measurements still only in your list and what's already in the document,
+  unsaved changes too.
+- An area's cut-outs are now kept in the PDF when measurements are put into
+  it, so the area can be worked out again later.
+- The scale ZPDF writes with a dimension or measurement now follows the PDF
+  standard exactly (the factors for distances and areas), so other programs
+  read the same lengths from it. Files from earlier versions are still read
+  correctly.
+
 ## 0.42.0
 
 What ZPDF leaves on your computer, and a plain list of when it goes online.

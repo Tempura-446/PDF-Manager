@@ -523,6 +523,15 @@ OPERATIONS = [
                 _f("format", "Format", "select", "xlsx",
                    choices=[["xlsx", "Excel workbook (.xlsx)"], ["csv", "CSV files (zip)"]],
                    hint="A table that continues on the next page is kept as one table.")]},
+    # Quantities: a schedule of what was measured on a drawing (pdfmanager/quantities.py)
+    {"id": "quantities", "group": "Convert", "label": "Quantities from a drawing", "files": "pdf",
+     "help": "A schedule (takeoff) of everything measured on a drawing: the dimensions and measurements "
+             "saved in the PDF by ZPDF or another program, each worked out from its own points and "
+             "scale, with totals per group. Numbers are numbers, so they can be summed.",
+     "fields": [_f("format", "Format", "select", "xlsx",
+                   choices=[["xlsx", "Excel workbook (.xlsx)"], ["csv", "CSV file"]],
+                   hint="Measurements still only in the reader's list aren't in the file yet: export them "
+                        "from the Measurements panel, or put them in the PDF first.")]},
     # -- pptx and html --
     {"id": "to-pptx", "group": "Convert", "label": "PDF → PowerPoint", "files": "pdf",
      "help": "Turn PDFs into PowerPoint slides (.pptx), one slide per page. No PowerPoint "
@@ -1030,6 +1039,16 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                          "result, install Microsoft Word.")
     elif op == "to-excel":
         return _to_excel(src, out_dir, opts, password, notes)
+    elif op == "quantities":
+        from pdfmanager import quantities
+
+        found = quantities.schedule(src, password)
+        notes.append(f"{src.name}: {quantities.said(found)}")
+        if not found["items"]:
+            return []
+        if (opts.get("format") or "xlsx") == "csv":
+            return [quantities.write_csv(found, out_dir / f"{src.stem} quantities.csv")]
+        return [quantities.write_xlsx(found, out_dir / f"{src.stem} quantities.xlsx", src.name)]
     # -- pptx and html --
     elif op == "to-pptx":
         from pdfmanager import slides
@@ -1454,7 +1473,7 @@ def _run_files(op, files, opts, password, extra_files, work, notes):
     if not outputs:
         raise UserError("nothing was found to save" + (f" ({'; '.join(notes)})" if notes else ""))
     _protect(protect, password, op)
-    if len(outputs) == 1 and op != "media" and (outputs[0].suffix != ".csv" or op == "comments"):  # CSV tables: a ZIP
+    if len(outputs) == 1 and op != "media" and (outputs[0].suffix != ".csv" or op in ("comments", "quantities")):  # CSV tables: a ZIP
         path = outputs[0]
         ctype = {".txt": "text/plain; charset=utf-8",
                  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -2524,6 +2543,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(HTTPStatus.OK, png, "image/png")
             if path == "/api/keep":
                 return self._keep(body)
+            if path == "/api/quantities":
+                return self._quantities(body)
             if path == "/api/markup":
                 return self._markup(body)
             if path == "/api/images/list":
@@ -3322,6 +3343,34 @@ class Handler(BaseHTTPRequestHandler):
                 core.encrypt(out, out, password)  # stays protected
             data = out.read_bytes()
         return self._send(HTTPStatus.OK, data, "application/pdf", {"X-Pdfm-Added": json.dumps(added)})
+
+    def _quantities(self, body):
+        """The reader's Measurements panel: one schedule of what's measured in
+        the open document (as it is now, unsaved changes included) and what's
+        still only in the reader's list; sends back a workbook or a CSV file."""
+        from pdfmanager import quantities
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        try:
+            extra = json.loads(fields.get("measures") or "[]")
+        except ValueError:
+            raise UserError("the measurements are damaged; try again") from None
+        as_csv = fields.get("format") == "csv"
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            src.write_bytes(uploads[0][2])
+            found = quantities.schedule(src, fields.get("password") or None, extra)
+            if not found["items"]:
+                raise UserError("there's nothing measured yet: measure with the Scale bar, or place a dimension")
+            out = Path(tmp) / ("q.csv" if as_csv else "q.xlsx")
+            (quantities.write_csv(found, out) if as_csv
+             else quantities.write_xlsx(found, out, str(fields.get("name") or "")[:120]))
+            data = out.read_bytes()
+        kind = "text/csv; charset=utf-8" if as_csv else \
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        return self._send(HTTPStatus.OK, data, kind, {"X-Pdfm-Said": json.dumps(quantities.said(found))})
 
     def _arrange(self, body):
         """Reorder, turn, delete, copy or insert the reader's pages; sends back

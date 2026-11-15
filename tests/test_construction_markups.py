@@ -132,7 +132,8 @@ def test_a_dimension_line(tmp_path):
     measure = dim["/Measure"]
     assert measure["/Subtype"] == "/RL" and measure["/R"] == "1/4\" = 1'-0\""
     # 2 inches of paper at 1/4" = 1': 144 points x the factor = 8 feet
-    assert abs(144 * float(measure["/D"][0]["/C"]) - 8) < 1e-6
+    assert abs(144 * float(measure["/X"][0]["/C"]) - 8) < 1e-6
+    assert float(measure["/D"][0]["/C"]) == 1 and float(measure["/A"][0]["/C"]) == 1   # (factors on /X's unit)
     assert drawn(dim).count(" h f") == 2               # an arrowhead at each end
     assert ink(out, [100, 296, 244, 318]) > 0.02
     # without a scale it is still a dimension, with the words given
