@@ -4,6 +4,37 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.46.0
+
+Watch folders keep working with the window closed.
+
+- **In the background.** While a folder is being watched, closing ZPDF's
+  window can leave ZPDF running as an icon in the notification area (by
+  the clock). It keeps doing each file that arrives and says so from the
+  icon. The first time, ZPDF asks; the answer is kept and can be changed
+  under Settings → Watch folders (ask me, keep watching, or close).
+- **The icon:** a click opens ZPDF again; a right-click offers Open ZPDF,
+  Pause watching (or Resume) and Quit ZPDF. Opening a PDF from Explorer
+  brings the window back too.
+- **Start when I sign in** (Settings → Watch folders): ZPDF starts with no
+  window, only the icon, so scans are picked up from the moment you sign
+  in. It's off unless you turn it on, needs no administrator rights, shows
+  in Windows' own Startup apps list, and is removed when ZPDF is
+  uninstalled.
+- Nothing runs in the background unless a folder is being watched: with no
+  watch folder, or all of them paused, closing the window closes ZPDF as
+  before.
+- Unsaved work is never lost to this: it stays open in the hidden window,
+  and Quit from the icon brings the window back to ask about it.
+- While ZPDF keeps watching, Settings → Watch folders also offers **quit
+  ZPDF now**, besides Quit in the icon's menu.
+- For now this needs Windows and ZPDF's own window (the normal installed
+  app). Where it can't work, Settings says why.
+- Tried on a real PC: hiding to the icon and coming back, files done while
+  hidden, opening a file from outside, start at sign-in, the icon after
+  Explorer restarts. Not yet tried on one: the icon's right-click menu and
+  quitting with unsaved work.
+
 ## 0.45.0
 
 Any scanner at all: let it save into a folder, and ZPDF does the rest.

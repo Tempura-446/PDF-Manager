@@ -357,6 +357,17 @@ Watching happens only while ZPDF is open; to process a folder without the
 app, use [`pdfm watch`](#watching-a-folder) (for example from a scheduled
 task).
 
+**With the window closed.** While a folder is being watched, closing the
+window can leave ZPDF in the notification area (by the clock), still doing
+each file that arrives; the first time it asks, and Settings → Watch
+folders keeps the choice (ask me, keep watching, close ZPDF). The icon
+opens ZPDF again with a click, and its right-click menu pauses watching or
+quits. **Start ZPDF in the background when I sign in to Windows** starts
+it that way with no window, so a scanner's folder is watched from sign-in
+on; it's off unless you turn it on, and Windows lists it under Startup
+apps. Nothing stays running when no folder is watched. This part needs
+Windows and ZPDF's own window.
+
 ## Scan: paper to a searchable PDF
 
 **Scan paper** on the start screen (or Scan, under Convert) turns paper

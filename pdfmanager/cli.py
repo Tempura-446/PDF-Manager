@@ -1305,7 +1305,7 @@ def cmd_gui(a):
         gui.serve(port=a.port, open_browser=not a.no_browser, open_paths=paths,
                   action=(action, paths) if action else None)
     else:
-        gui.launch(paths, port=a.port, action=action)
+        gui.launch(paths, port=a.port, action=action, background_start=bool(getattr(a, "background", False)))
 
 
 # --------------------------------------------------------------------------
@@ -1974,6 +1974,9 @@ def build_parser():
         if name == "gui":
             from pdfmanager.quickactions import ACTIONS
 
+            sp.add_argument("--background", action="store_true",
+                            help="start with no window, only the icon in the notification area, so watch "
+                                 "folders work (Windows; what \"start when I sign in\" runs)")
             sp.add_argument("--action", choices=sorted(ACTIONS),
                             help="run a right-click action on the files in the app (Explorer's "
                                  "menu uses it; files given together go into one job)")

@@ -55,6 +55,7 @@ from pdfmanager import layers  # layers (optional content) of drawings
 from pdfmanager import risks  # what a PDF can do, and Make safe
 from pdfmanager import protection  # password strength, old encryption and its upgrade
 from pdfmanager import privacy  # working files, history, and when ZPDF goes online
+from pdfmanager import background  # watching with the window closed, from the notification area
 from pdfmanager import certcrypt  # protecting a PDF for people's certificates
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
@@ -2170,6 +2171,7 @@ class Handler(BaseHTTPRequestHandler):
     bring_to_front = None
     quit_app = None  # closes the pywebview window (to restart after an update)
     quit_requested = False  # makes wait_until_closed return
+    background = None  # background.InBackground: the window hidden, ZPDF in the notification area
     unsaved = None  # UnsavedWork: what closing the desktop window asks about
     opened = None  # OpenFiles
     saved_over = None  # SavedOver: Undo after Save wrote over a file
@@ -2292,7 +2294,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(HTTPStatus.OK, {"available": available,
                                               "on": available and winsetup.context_menu_registered()})
         if path == "/api/settings":
-            return self._send(HTTPStatus.OK, _settings_for_page())
+            return self._send(HTTPStatus.OK, _settings_for_page(type(self).instance_mode))
         if path == "/api/update":
             return self._send(HTTPStatus.OK, {**update.check(), "can_restart": self._can_restart()})
         if path == "/api/diagnostics":
@@ -2603,8 +2605,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._access_check(body)
             if path == "/api/settings":
                 return self._save_settings(body)
+            if path == "/api/quit":  # Settings: quit for good, also while folders are watched
+                behind = type(self).background
+                if behind is None:
+                    raise UserError("close the window to quit ZPDF")
+                threading.Timer(0.4, behind.quit).start()  # once this answer has been sent
+                return self._send(HTTPStatus.OK, {"quitting": True})
             if path == "/api/history/clear":
-                return self._send(HTTPStatus.OK, {"cleared": privacy.clear_history(), **_settings_for_page()})
+                return self._send(HTTPStatus.OK, {"cleared": privacy.clear_history(),
+                                                  **_settings_for_page(type(self).instance_mode)})
             if path in ("/api/watch/add", "/api/watch/pause", "/api/watch/remove"):
                 data = json.loads(body or b"{}")
                 if path == "/api/watch/add":
@@ -2971,6 +2980,8 @@ class Handler(BaseHTTPRequestHandler):
                 str(data.get("proof", "")), _proof(self.instance_secret, "open", nonce)):
             return self._error(HTTPStatus.FORBIDDEN, "not allowed")
         proof = _proof(self.instance_secret, "answer", nonce)
+        if data.get("quiet"):  # "are you running?": yes, and nothing more
+            return self._send(HTTPStatus.OK, {"handled": True, "proof": proof})
         action = data.get("action")
         if action is not None:
             return self._instance_action(action, data.get("paths") or [], proof)
@@ -3225,7 +3236,15 @@ class Handler(BaseHTTPRequestHandler):
         update.save_settings(**changes)
         if "remember" in data:
             privacy.set_remembering(bool(data["remember"]))  # (turning it off clears what's kept)
-        return self._send(HTTPStatus.OK, _settings_for_page())
+        if "background" in data or "login" in data:  # watching with the window closed (background.py)
+            ok, why = background.supported(type(self).instance_mode)
+            if not ok:
+                raise UserError(why)
+            if "background" in data:
+                background.set_keep(str(data["background"]))
+            if "login" in data:
+                background.set_start_at_login(bool(data["login"]))
+        return self._send(HTTPStatus.OK, _settings_for_page(type(self).instance_mode))
 
     def _can_restart(self):
         """Can this copy close itself and start again (after an update)?"""
@@ -3573,11 +3592,11 @@ class _Server(ThreadingHTTPServer):
             watcher.stop()
 
 
-def _settings_for_page():
+def _settings_for_page(mode=None):
     """Settings as the page shows them, with what's remembered and the
     occasions ZPDF goes online."""
     return {**update.public_settings(), "remember": privacy.remembering(), "history": privacy.history(),
-            "online": privacy.ONLINE}
+            "online": privacy.ONLINE, "background": background.state(mode)}
 
 
 def make_server(port=0, desktop=False, open_paths=(), prefer=None, action=None):
@@ -3814,14 +3833,16 @@ def _allow_foreground():
         pass
 
 
-def forward_to_running_app(paths=(), action=None):
+def forward_to_running_app(paths=(), action=None, quiet=False):
     """If ZPDF is already running, hand it ``paths`` to open (or, with
     ``action``, to run that right-click action on) and return True, so this
     launch can end: there's only ever one copy.
 
     The running app either opens them itself (its own window, which comes
     to the front) or answers with an address to open, as a new window in
-    its Edge/Chrome copy or a new browser tab."""
+    its Edge/Chrome copy or a new browser tab. ``quiet``: only find out
+    whether a copy is running (a start at sign-in when one already is):
+    nothing is opened or brought forward."""
     try:
         record = json.loads(_instance_file().read_text(encoding="utf-8"))
         port, secret = int(record["port"]), str(record["secret"])
@@ -3834,6 +3855,8 @@ def forward_to_running_app(paths=(), action=None):
                "paths": [str(Path(p).resolve()) for p in paths]}
     if action:
         message["action"] = action
+    if quiet:
+        message["quiet"] = True
     body = json.dumps(message).encode()
     request = urllib.request.Request(f"http://127.0.0.1:{port}/api/instance", data=body,
                                      headers={"Content-Type": "application/json",
@@ -3849,7 +3872,7 @@ def forward_to_running_app(paths=(), action=None):
     if not isinstance(answer, dict) or not secrets.compare_digest(
             str(answer.get("proof", "")), _proof(secret, "answer", nonce)):
         return False  # not ZPDF
-    if answer.get("handled"):
+    if answer.get("handled") or quiet:
         return True
     url = str(answer.get("url") or "")
     if not url.startswith(f"http://127.0.0.1:{port}/#token="):
@@ -3990,7 +4013,7 @@ def _window_note():
     return data_dir() / "window-error.txt"
 
 
-def run_desktop(port=0, open_paths=(), action=None):
+def run_desktop(port=0, open_paths=(), action=None, hidden=False):
     """Open ZPDF in its own window (needs pywebview). Returns False if
     no window could be opened, so the caller can fall back to the browser.
 
@@ -4016,18 +4039,30 @@ def run_desktop(port=0, open_paths=(), action=None):
     try:
         import webview
 
+        shape = {"hidden": True} if hidden and "hidden" in inspect.signature(webview.create_window).parameters else {}
         window = webview.create_window("ZPDF", url, js_api=api, width=1180, height=820,
-                                       min_size=(400, 560), background_color="#f6f6f3")
+                                       min_size=(400, 560), background_color="#f6f6f3", **shape)
         api._window = window
         _no_autofill(window)
-        handler.bring_to_front = lambda: _raise_window(window)
+        # Closing with the window's X: while a folder is watched ZPDF can stay
+        # in the background (background.py); otherwise ask first when anything
+        # is unsaved (WebView2 fires no beforeunload when the window itself closes).
+        behind = background.InBackground(
+            handler, window, may_close=lambda: may_close(handler, lambda text: _ask_to_close(window, text)),
+            ask=lambda text: _ask_to_close(window, text, warning=False),
+            bring_forward=lambda: _raise_window(window), log=_log)
+        handler.background = behind
+        handler.bring_to_front = behind.open
         handler.quit_app = lambda: _close_on_purpose(handler, window)
         try:
-            # Closing with the window's X: ask first when anything is unsaved
-            # (WebView2 fires no beforeunload when the window itself closes).
-            window.events.closing += lambda: may_close(handler, lambda text: _ask_to_close(window, text))
+            window.events.closing += behind.closing
         except AttributeError as exc:  # pywebview before 4 has no closing event
             _log(f"launch: no closing event to warn about unsaved work: {exc!r}")
+        if shape:
+            # (On its own thread: if no icon can be shown the window is shown
+            # instead, which pywebview only does once the window exists, and
+            # that happens in webview.start() below.)
+            threading.Thread(target=behind.started_hidden, name="start-hidden", daemon=True).start()
         # Keep the window's cache and settings between launches (pywebview
         # otherwise starts every time like a private browser window).
         options = {}
@@ -4042,6 +4077,7 @@ def run_desktop(port=0, open_paths=(), action=None):
             storage.mkdir(parents=True, exist_ok=True)
             options = {"private_mode": False, "storage_path": str(storage)}
         webview.start(**options)
+        behind.stop()
         _unregister_instance(server)
     except Exception as exc:  # e.g. a missing or blocked web engine
         print(f"Could not open the app window ({exc}); trying another way.")
@@ -4099,9 +4135,10 @@ def _close_on_purpose(handler, window):
 
 
 MB_YESNO, MB_ICONWARNING, MB_DEFBUTTON2, MB_SETFOREGROUND, MB_TOPMOST, IDYES = 0x4, 0x30, 0x100, 0x10000, 0x40000, 6
+MB_ICONQUESTION = 0x20
 
 
-def _ask_to_close(window, text):
+def _ask_to_close(window, text, warning=True):
     """Ask ``text`` with Yes and No (No the default): True for Yes.
 
     pywebview runs the closing event on the window's own thread and waits
@@ -4118,7 +4155,9 @@ def _ask_to_close(window, text):
             owner = int(window.native.Handle.ToInt64())
         except Exception:  # noqa: BLE001 - no WinForms form to own it
             owner = None
-        flags = MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | (0 if owner else MB_TOPMOST | MB_SETFOREGROUND)
+        # (A question that isn't a warning: the question mark, and Yes the default.)
+        look = MB_ICONWARNING | MB_DEFBUTTON2 if warning else MB_ICONQUESTION
+        flags = MB_YESNO | look | (0 if owner else MB_TOPMOST | MB_SETFOREGROUND)
         box = ctypes.windll.user32.MessageBoxW
         box.argtypes = (wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT)
         box.restype = ctypes.c_int
@@ -4386,17 +4425,30 @@ def _rename_old_install():
         _log(f"launch: renaming the old shortcuts failed: {exc!r}")
 
 
-def launch(open_paths=(), port=0, action=None):
+def launch(open_paths=(), port=0, action=None, background_start=False):
     """Open the app the best way available: its own pywebview window, else
     an Edge/Chrome app window, else a browser tab. Returns once closed. If
     the app is already running, it gets the files instead. ``action``: a
     right-click action to run on the files (quickactions.ACTIONS) rather
-    than opening them."""
+    than opening them. ``background_start``: start with no window, only
+    the notification-area icon (at sign-in; see background.py): nothing
+    happens if ZPDF is running already or can't stay in the background."""
     _startup.acquire()
     applog.setup()
     applog.started(update.how_installed())
     _log(f"launch: {list(map(str, open_paths))} port {port}" + (f" action {action}" if action else ""))
     try:
+        if background_start:
+            if not port and forward_to_running_app(quiet=True):
+                _log("launch: in the background, and a copy is running already")
+                return
+            if not background.supported()[0] or not desktop_available():
+                _log("launch: can't start in the background here; not starting")
+                return
+            privacy.begin_run()
+            if not run_desktop(port=port, hidden=True):
+                _log("launch: the window couldn't be made; not starting in the background")
+            return
         if not port and forward_to_running_app(open_paths, action=action):
             _log("launch: handed to the running copy")
             return
@@ -4421,4 +4473,5 @@ def main_app(argv=None):
     """Entry point for the `pdfm-app` launcher. PDFs given as arguments
     (e.g. by "Open with…" or a file association) open in the reader."""
     args = sys.argv[1:] if argv is None else argv
-    launch([a for a in args if Path(a).suffix.lower() == ".pdf" and Path(a).is_file()])
+    launch([a for a in args if Path(a).suffix.lower() == ".pdf" and Path(a).is_file()],
+           background_start="--background" in args)

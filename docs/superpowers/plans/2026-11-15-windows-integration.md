@@ -46,16 +46,18 @@
 
 **Given up, knowingly:** for these scanners the scan settings live in the vendor's program or in NAPS2, not on ZPDF's Scan page; NAPS2 is a separate install.
 
-## Phase 3 (release C): start at login, in the tray, for Watch folders
+## Phase 3 (release C): start at login, in the tray, for Watch folders — done in 0.46.0
 
-- [ ] **A background mode:** `pdfm-app --background` starts the server and the watch thread without a window. A **tray icon** (pystray, or the Win32 `Shell_NotifyIcon` through ctypes to avoid a dependency) with: Open ZPDF, the watched folders and what they did last, Pause watching / Resume, Settings, Quit.
-- [ ] **Closing the window:** with any watch folder on, closing asks once: "Keep watching in the background?" (Yes keeps the tray icon; No quits). The answer is a setting. Without watch folders, closing quits as now.
-- [ ] **Start at login:** a switch in Settings → Watch folders: "Start ZPDF when I sign in, to keep watching". It writes a per-user Run entry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, no administrator rights) that starts `--background`. Off by default; shown in Windows' own Startup apps list; removed by the uninstaller.
-- [ ] **One copy:** a window opened later (a double-clicked PDF, the Start menu) joins the background copy instead of starting a second one (the hand-off that exists today), and the watch lock stays with it.
-- [ ] **Said, not silent:** a toast when a watched file is done or fails (the news the page shows today), through the tray icon; nothing else runs in the background, and the privacy list says what does.
-- [ ] **Updates:** the Update button restarts the background copy too.
-- [ ] **Linux and macOS later:** an autostart `.desktop` file / a LaunchAgent, with the same switch (builds plan).
-- [ ] **Tests:** the Run entry written and removed (a fake registry); `--background` serves and watches with no window; closing with a watch folder keeps the server; the second launch joins.
+- [x] **Background mode:** `pdfm gui --background` (and `pdfm-app --background`) starts the app's own window hidden with only the notification-area icon (`gui.launch(background_start=True)`, `run_desktop(hidden=True)`). The icon (`tray.py`: Shell_NotifyIconW through ctypes, its own hidden window and message loop, re-added when Explorer restarts) has Open ZPDF, Pause/Resume watching, Quit ZPDF; a click opens.
+- [x] **Closing the window** with a folder being watched: asked once ("ask"), then kept as "yes" or "no" (`background.keep`); with yes the window hides (`background.InBackground.closing`). Without watch folders, or all paused, closing quits as before. If the icon can't be shown the window comes straight back: ZPDF is never left running out of sight.
+- [x] **Start at sign-in:** a per-user Run entry written by Settings (`background.set_start_at_login`), off by default, removed by the uninstaller (`winsetup.remove` and `uninstall.ps1`). Turning it on also sets "keep watching".
+- [x] **One copy:** a start at sign-in while ZPDF is open asks quietly whether a copy is running and does nothing more (`forward_to_running_app(quiet=True)`); an ordinary second start (a double-clicked PDF) shows the hidden window again.
+- [x] **Said, not silent:** a watched file done or failed is said from the icon while the window is hidden (`WatchFolders.on_news`).
+- [x] **Tests:** `tests/test_background.py` (fakes for the window, the icon and the registry; the real icon's Win32 calls on the Windows CI job).
+- [x] **Seen on the owner's PC (check of d3ef2c3):** hiding to the icon and coming back, a file done while hidden, a file opened from outside while hidden, the settings, the Run entry and a start with `--background`, a second such start doing nothing, the icon back after Explorer restarts. Memory while hidden is the same as open (about 610 MB with WebView2's processes).
+- [ ] **Still not seen:** the icon's right-click menu (Open, Pause/Resume, Quit) and Quit with unsaved work (the check couldn't right-click the notification area); the notes from the icon (Do not disturb was on); signing out and in; a restart for an update while hidden.
+- [ ] Earlier list, for reference: pywebview's `hidden=True`, `hide()` and `show()`; the balloon; the icon after Explorer restarts; memory used by the hidden window (the page stays loaded).
+- [ ] Left for later: the Edge app-window and browser modes (no window of their own to hide); unloading the page while hidden to save memory; updates restarting the background copy; Linux (an autostart `.desktop` file) and macOS (a LaunchAgent).
 
 ## Phase 4 (release D): PDF thumbnails in File Explorer
 
