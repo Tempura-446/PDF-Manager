@@ -911,6 +911,32 @@ def describe(annot):
     return None
 
 
+def describe_all(path, password=None):
+    """Every markup in the PDF that can be changed after placing, by page:
+    {page number: [describe(...) with "id", the name pdf.js knows it by]},
+    in the order they are on the page. Pages with none are left out."""
+    reader = core.open_pdf(path, password)
+    found = {}
+    for number, page in enumerate(reader.pages, 1):
+        annots = page.get("/Annots")
+        annots = annots.get_object() if annots is not None else []
+        shapes = []
+        for ref in annots if isinstance(annots, list) else []:
+            if not hasattr(ref, "idnum"):
+                continue  # (written inside the list: nothing pdf.js could name)
+            try:
+                shape = describe(ref)
+            except Exception:  # noqa: BLE001 - a damaged annotation is simply not offered
+                shape = None
+            if shape:
+                bounds = [float(v) for v in ref.get_object().get("/Rect", [0, 0, 0, 0])]
+                shapes.append({**shape, "bounds": bounds,
+                               "id": f"{ref.idnum}R" + (str(ref.generation) if ref.generation else "")})
+        if shapes:
+            found[number] = shapes
+    return found
+
+
 def _moved(shape, dx, dy):
     """A described markup, moved by (dx, dy)."""
     out = dict(shape)

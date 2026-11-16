@@ -501,6 +501,15 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   **dimension** whose ends snap to the drawing and which carries the real
   length from the sheet's scale, and a **callout** (words in a box with a
   pointer). Other programs read them as the same kinds of markup.
+- **Changing a markup afterwards**: with Shapes, Stamps or Note on, press
+  on a markup you made with ZPDF. Handles appear on its corners, ends or
+  points: drag one to reshape it, or the markup itself to move it. A
+  dimension's length follows its ends (and they snap to the drawing again;
+  Alt puts them exactly where you let go). **Delete** removes it, the arrow
+  keys nudge it (Shift: ten points), **Esc** lets go; the bar's colour and
+  thickness change it, and a double-click changes a callout's words. It
+  stays the same annotation, with its replies. Markups from other programs
+  and measurements aren't changed this way yet.
 - **Stamps** (Annotate & sign → Stamp): Approved, Not approved, Reviewed,
   Received, Draft, Final, Confidential, For comment, Void or your own
   words, with your name and the date if you like; and for drawing reviews

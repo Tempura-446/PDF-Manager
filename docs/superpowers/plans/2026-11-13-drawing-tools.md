@@ -61,12 +61,12 @@
 
 Asked for after 0.38.0, whose "Not yet" list this is.
 
-**Task 2b.1: move and reshape after placing**
-- [ ] `markup.apply` gets `{"op": "change", "page", "id", ...}` for the reader's own markups (clouds, lines and arrows with or without corners, rectangles, ellipses, callouts, dimensions, stamps, notes): new `points` / `rect` / `tip` / `at`, `color`, `width`, `text`. The annotation is rebuilt with the same builder that made it (same id kept where the file allows, so replies and the Comments tab stay attached), and a dimension's length is worked out again from its new ends and the sheet's scale.
-- [ ] In the reader, with a shape tool or the arrow tool on, clicking a placed markup selects it: handles on each corner or end (a cloud's or polyline's every vertex, a callout's tip, knee and box, a dimension's two ends, a stamp's or rectangle's corners). Drag a handle to reshape, the body to move, Delete to remove; a dimension's ends snap to the drawing like when it was drawn (Alt: no snapping). Double-click a callout to change its words. The colour swatches and the thickness list change the selected markup.
-- [ ] Each change is one step for Undo and Redo, like placing.
-- [ ] Markups made by other programs of the same types (a `/Polygon` cloud from Bluebeam, a `/Line` from Acrobat) can be moved and reshaped the same way where their keys are the standard ones; the others are left alone and say so.
-- [ ] Tests: each kind changed through the engine keeps its type and keys and reads back at its new place; in a browser, dragging a cloud's vertex and a dimension's end changes the saved file, and the dimension's words follow.
+**Task 2b.1: move and reshape after placing** (done in 0.47.0)
+- [x] `markup.apply` takes `{"op": "change", "page", "id", ...}` for ZPDF's own markups (rect, ellipse, cloud, polycloud, line, arrow, polyline, callout, dimension, stamp, note): `move`, `rect`, `points`, `tip`, `at`, `color`, `width`, `text`, `value`. `markup.describe` reads a markup back as the change that would add it; `change_markup` draws it again with the tool that drew it and puts the result in the old annotation's place (same object: its order, `/NM`, author, creation date, popup and replies stay). A dimension with new ends needs its new words (the reader works them out from the scale). Stamps and notes keep their drawing and only move their rectangle.
+- [x] Reader (`static/markedit.js`): with Shapes, Stamps or Note on, a press on a markup selects it; handles on corners, ends or points; drag a handle or the body; Delete, arrows (Shift: ten points), Esc; the bar's colour and thickness; a callout's words by double-click or Enter. `/api/markup/describe` gives the reader the changeable markups of the document's current version.
+- [x] Each change is one step for Undo and Redo (it goes through the same document change as placing).
+- [x] Tests: `tests/test_markup_change.py`, `tests/test_markup_change_ui.py` + `tests/markedit.js`.
+- [ ] Left for later: markups made by other programs (standard `/Polygon`, `/Line` and the like: left alone for now, with a plain message); measurements put in the PDF; adding or removing a point of a cloud or a line with corners; the bar showing the selected markup's own colour; one upload less per change (the markups are asked for again after each change).
 
 **Task 2b.2: stamps of your own**
 - [ ] A list of the user's own stamps, kept in the app's settings: words, colour, with or without name and date. Add, change and remove them from the Stamp list ("Your stamps…"); they show in the list under the built-in ones.

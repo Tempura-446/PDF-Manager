@@ -401,6 +401,12 @@
 .rd-markup[data-markup="note"] .annotationLayer, .rd-markup[data-markup="shape"] .annotationLayer { pointer-events: none; }
 .rd-markup[data-markup="shape"] .textLayer, .rd-markup[data-markup="note"] .textLayer { pointer-events: none; }
 .rd-markup[data-markup="underline"] .textLayer span, .rd-markup[data-markup="strikeout"] .textLayer span { cursor: text; }
+/* A placed markup that's selected: its outline and its handles (markedit.js). */
+.rd-markedit { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 26; }
+.rd-markedit .rd-markline { fill: none; stroke: var(--rd-accent, #0b6b6b); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.rd-markedit.rd-markmoving .rd-markline { stroke-dasharray: none; stroke-width: 2; }
+.rd-markedit .rd-markgrip { fill: #fff; stroke: var(--rd-accent, #0b6b6b); stroke-width: 2; }
+.rd-calloutwords { width: 100%; min-width: 280px; font: inherit; }
 .rd-shapedraft { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 25; }
 select.rd-zoom.rd-wide { width: auto; min-width: 12.5em; max-width: 16em; }  /* "Revise and resubmit", "Cloud, any shape" in full */
 .rd-linkaddr { margin: 6px 0 10px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); font: 13px/1.5 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; user-select: text; }

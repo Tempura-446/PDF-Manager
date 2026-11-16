@@ -2547,6 +2547,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._keep(body)
             if path == "/api/quantities":
                 return self._quantities(body)
+            if path == "/api/markup/describe":
+                return self._markup_describe(body)
             if path == "/api/markup":
                 return self._markup(body)
             if path == "/api/images/list":
@@ -3403,6 +3405,18 @@ class Handler(BaseHTTPRequestHandler):
         kind = "text/csv; charset=utf-8" if as_csv else \
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         return self._send(HTTPStatus.OK, data, kind, {"X-Pdfm-Said": json.dumps(quantities.said(found))})
+
+    def _markup_describe(self, body):
+        """The markups of the open document that can be changed after placing
+        (markup.describe_all), for the reader to select, move and reshape."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            src.write_bytes(uploads[0][2])
+            found = markup.describe_all(src, fields.get("password") or None)
+        return self._send(HTTPStatus.OK, {"pages": {str(n): shapes for n, shapes in found.items()}})
 
     def _arrange(self, body):
         """Reorder, turn, delete, copy or insert the reader's pages; sends back

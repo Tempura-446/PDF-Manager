@@ -28,6 +28,7 @@ import { COLORS, el, fadeOut, heldTimer, ICON, isTyping, MIN_ZOOM, MAX_ZOOM, pdf
 import { Annotating } from "./annotate.js";
 import { Finding } from "./find.js";
 import { Layering } from "./layers.js";
+import { MarkupEditing } from "./markedit.js";
 import { Measuring } from "./measuring.js";
 import { Signing } from "./sign.js";
 import { Tabs } from "./tabs.js";
@@ -188,7 +189,7 @@ const header = (res, name) => { try { return decodeURIComponent(res.headers.get(
  *  t, e and m are the reader's own: next, previous, rotate, panel, edit text, measure). */
 const ANNOT_KEYS = { h: "HIGHLIGHT", c: "NOTE", a: "FREETEXT", d: "INK", s: "SIGN" };
 
-export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measuring(Layering(Object))))))) {
+export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEditing(Measuring(Layering(Object)))))))) {
   constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onRepair, onForgetRecent, onSaveTab, onUnsaved, onBrokenWhy, onOpenWithId } = {}) {
     super();
     this.host = host;
@@ -805,6 +806,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     if (mod && e.key === "0") { e.preventDefault(); this.pdfViewer.currentScaleValue = "auto"; return; }
     if (mod || e.altKey || isTyping(e)) return;
     if (this.measureMode && this._measureKey(e)) { e.preventDefault(); return; }
+    if (this.markSel && this._markKey(e)) { e.preventDefault(); return; }   // a selected markup: Delete, Esc, the arrows
     if (e.key === "Escape" && !this.findbar.hidden) { this.closeFind(); return; }
     if (this.markupMode === "IMAGES" && this.pickedImage && !isTyping(e) && (e.key === "Delete" || e.key === "Backspace")) {
       e.preventDefault();
@@ -1387,6 +1389,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
       this._drawMeasures(pageNumber);
       if (this.markupMode === "IMAGES" || this.markupMode === "LINKS") this._drawObjectBoxes(pageNumber);
       this._drawRedactions(pageNumber);
+      this._markReady();          // (the document may have been written again: its markups, and the selected one's handles)
+      this._markDraw(pageNumber);
       if (this.overlay) this.overlay.draw(this.pdfViewer.getPageView(pageNumber - 1), pageNumber).catch(() => {});
     });
     eventBus.on("scalechanging", ({ scale, presetValue }) => {
