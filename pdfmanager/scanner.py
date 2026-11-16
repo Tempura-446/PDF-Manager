@@ -467,3 +467,41 @@ def scan(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", on_pag
         _scan_lock.release()
     return pages
 
+
+# -- every scanner: Windows' own (WIA) and the network's driverless ones (escl.py) --------
+
+def all_scanners(network=True, look=True):
+    """WIA scanners (where Windows has them) and then network scanners that
+    need no driver (eSCL / AirScan; see escl.py): [{"id", "name", "feeder",
+    "flatbed", "duplex", "network"}]. Listing never fails for one kind's
+    sake: what Windows couldn't list is left out."""
+    from pdfmanager import escl
+
+    out = []
+    try:
+        out += [{**d, "duplex": False, "network": False} for d in list_scanners()]
+    except ScannerError:
+        pass
+    if network:
+        out += [{k: d[k] for k in ("id", "name", "feeder", "flatbed", "duplex", "network", "found")}
+                for d in escl.devices(look=look)]
+    return out
+
+
+def scan_any(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", duplex=False, on_page=None):
+    """scan(), for either kind of scanner (a network one by its "escl:" id).
+    ``duplex``: both sides, from a network scanner's feeder that can."""
+    from pdfmanager import escl
+
+    if not str(device_id).startswith("escl:"):
+        return scan(device_id, mode=mode, dpi=dpi, source=source, on_page=on_page)
+    if mode not in MODES:
+        raise ScannerError(f"choose a colour setting: {', '.join(MODES)}", "refused")
+    if not _scan_lock.acquire(blocking=False):
+        raise ScannerError("A scan is already running. Wait for it to finish.", "busy")
+    try:
+        return escl.scan(device_id, mode=mode, dpi=dpi, source=source, duplex=duplex, on_page=on_page)
+    except escl.EsclError as exc:
+        raise ScannerError(str(exc), exc.code) from None
+    finally:
+        _scan_lock.release()

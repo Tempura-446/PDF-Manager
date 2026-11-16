@@ -2791,12 +2791,15 @@ class Handler(BaseHTTPRequestHandler):
         """GET /api/scan/status, /devices, /pages?box=, /thumb?box=&page=&look=."""
         query = self._scan_query()
         if what == "status":
-            return self._send(HTTPStatus.OK, {"scanner": scanner.status(), "ocr": scanpdf.ocr_engine(),
+            # (A scanner can always be tried: network ones need nothing from Windows.)
+            wia = scanner.status()
+            return self._send(HTTPStatus.OK, {"scanner": {"available": True, "reason": "", "wia": wia},
+                                              "ocr": scanpdf.ocr_engine(),
                                               "upright": scanpdf.can_turn_upright(),
                                               "modes": list(scanner.MODES),
                                               "resolutions": list(scanner.RESOLUTIONS)})
         if what == "devices":
-            return self._send(HTTPStatus.OK, {"devices": scanner.list_scanners()})
+            return self._send(HTTPStatus.OK, {"devices": scanner.all_scanners()})
         box = self.scans.get(query.get("box"), create=False)
         if what == "pages":
             return self._send(HTTPStatus.OK, {"box": box.id, "pages": box.list()})
@@ -2819,6 +2822,15 @@ class Handler(BaseHTTPRequestHandler):
         if what == "close":
             self.scans.drop(str(data.get("box", "")))
             return self._send(HTTPStatus.OK, {"ok": True})
+        if what in ("add-network", "forget-network"):   # a network scanner by its address (escl.py)
+            from pdfmanager import escl
+
+            if what == "forget-network":
+                escl.forget(str(data.get("device") or ""))
+                return self._send(HTTPStatus.OK, {"ok": True})
+            device = escl.add(data.get("address"))
+            return self._send(HTTPStatus.OK, {"device": {k: device[k] for k in
+                                                         ("id", "name", "feeder", "flatbed", "duplex", "network", "found")}})
         box = self.scans.get(str(data.get("box", "")), create=False)
         if what == "acquire":
             mode = data.get("mode") or scanner.DEFAULT_MODE
@@ -2830,8 +2842,8 @@ class Handler(BaseHTTPRequestHandler):
 
             def acquire_job():
                 added = []
-                scanner.scan(device, mode=mode, dpi=dpi, source=source,
-                             on_page=lambda image, d: added.append(box.add(image, d)))
+                scanner.scan_any(device, mode=mode, dpi=dpi, source=source, duplex=_bool(data.get("duplex")),
+                                 on_page=lambda image, d: added.append(box.add(image, d)))
                 return {"json": {"box": box.id, "pages": added}}
 
             return self._job_or_now(acquire_job)

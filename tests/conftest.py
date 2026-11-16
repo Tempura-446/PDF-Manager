@@ -66,3 +66,12 @@ def _each_test_has_its_own_folder(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(appdata, "_data_dir", lambda: folder)
     yield
     applog.shutdown()
+
+
+@pytest.fixture(autouse=True)
+def no_looking_for_network_scanners(monkeypatch):
+    """No test asks the network which scanners are on it (escl.discover):
+    listing scanners would otherwise send a multicast question and wait."""
+    from pdfmanager import escl
+
+    monkeypatch.setattr(escl, "discover", lambda wait=2.5: [])

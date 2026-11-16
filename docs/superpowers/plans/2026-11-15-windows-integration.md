@@ -13,15 +13,15 @@
 - Watch folders (`watchfolders.py`) are processed by one thread **while ZPDF is open**. Closing the window stops them. Nothing starts ZPDF at login, and there is no tray icon.
 - Explorer shows ZPDF's icon for PDFs when ZPDF is the default app. Windows only draws PDF thumbnails when the default app registers a thumbnail handler (Edge and Acrobat do); ZPDF doesn't.
 
-## Phase 1 (release A): driverless network scanners (eSCL / AirScan)
+## Phase 1 (release A): driverless network scanners (eSCL / AirScan) — done in 0.44.0
 
-First, because it needs no driver and no native code, and works the same on Linux and macOS later.
-
-- [ ] **Find scanners:** mDNS (`_uscan._tcp`, `_uscans._tcp`) on the local network, plus "Add by address" for networks where discovery is blocked. The find runs only when the Scan page asks, and is listed in "When ZPDF goes online" as a local-network request (privacy plan: nothing leaves the network).
-- [ ] **Scan:** the eSCL protocol over HTTP(S): read `ScannerCapabilities` (flatbed, feeder, duplex, resolutions, colour modes, sizes), post a `ScanSettings` job, fetch pages (`NextDocument`) as JPEG or PDF until the feeder is empty, delete the job. Plain words for busy, cover open, jam, empty feeder.
-- [ ] **One interface:** `scanner.list_scanners()` and `scanner.scan()` return eSCL devices beside WIA ones, marked "network"; the Scan page needs no new controls beyond duplex where the device has it.
-- [ ] **TLS:** printers use self-signed certificates; accept them for the chosen device only and say so once.
-- [ ] **Tests:** a fake eSCL device (a small local HTTP server) with a feeder of three pages, a jam, and a duplex job.
+- [x] **Find scanners:** `escl.discover` sends one multicast DNS question (`_uscan._tcp`, `_uscans._tcp`) with its own small DNS reader, only when the Scan page lists scanners; `escl.add(address)` for networks where that finds nothing (remembered in settings as `network_scanners`). Listed in "When ZPDF goes online".
+- [x] **Scan:** `escl.capabilities` and `escl.scan` (ScanJobs, NextDocument until 404, 503 asked again, DELETE at the end, also when cancelled). Empty feeder, jam, open cover, busy, attention, no answer in plain words (from ScannerStatus).
+- [x] **One interface:** `scanner.all_scanners()` and `scanner.scan_any()`; the Scan page gets "Both sides of each sheet", "Add a network scanner…" and "Forget this one"; `pdfm scan --add / --duplex`.
+- [x] **TLS:** a scanner offering only HTTPS is used with its own certificate (local network); one offering both keeps plain HTTP.
+- [x] **Tests:** `tests/test_escl.py` (a fake scanner: feeder, both sides, jam, busy, cancel; mDNS packets, damaged ones too), `tests/test_escl_ui.py` + `tests/esclui.js`. No test asks the real network (`conftest.py`).
+- [ ] **Not yet tried on a real scanner.** To check: discovery on Windows (the firewall may ask the first time; replies are requested unicast), a device listed twice (Windows' WSD driver and the network one), page sizes other than the largest, PDF output from devices that don't offer JPEG.
+- [ ] Left for later: choosing the page size; the network scanner's own resolutions in the Resolution list (the nearest offered is used now); WSD scan.
 
 ## Phase 2 (release B): scanners without WIA or AirScan (TWAIN-only and the rest)
 

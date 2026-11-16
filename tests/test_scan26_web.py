@@ -115,9 +115,11 @@ def test_scan_page_without_wia(app, tmp_path, photos):
     finally:
         scanner.use(None)
     assert not out["errors"], out["errors"]
-    assert out["scannerRadio"]["disabled"] and out["scannerRadio"]["photosShown"]
-    assert "can’t be used here" in out["scannerRadio"]["why"] and "Windows Image Acquisition" in out["scannerRadio"]["why"]
-    assert "Photos work on any computer" in out["scannerRadio"]["why"]
+    # (0.44.0: the Scanner choice stays on, since a network scanner needs nothing from
+    # Windows; why scanners with a Windows driver can't be used is still known and said.)
+    assert not out["scannerRadio"]["disabled"] and out["scannerRadio"]["why"] == ""
+    assert not out["status"]["scanner"]["wia"]["available"]
+    assert "Windows Image Acquisition" in out["status"]["scanner"]["wia"]["reason"]
     assert out["tabbable"] >= 6
     _check_photos_and_pdf(out)
 

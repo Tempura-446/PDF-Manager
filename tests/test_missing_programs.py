@@ -375,39 +375,39 @@ def test_scan_status_off_windows_says_why(app, bare, monkeypatch):
     monkeypatch.setattr(scanner, "sys", types.SimpleNamespace(platform="linux", modules=sys.modules))
     status, _, data = _call(app, "/api/scan/status")
     state = json.loads(data)
-    assert status == 200 and state["scanner"]["available"] is False
-    assert_plain(state["scanner"]["reason"], "Windows only")
+    # (0.44.0: a network scanner needs nothing from Windows, so scanning can
+    # always be tried; why Windows' own scanners can't be used is still said.)
+    assert status == 200 and state["scanner"]["available"] is True and state["scanner"]["wia"]["available"] is False
+    assert_plain(state["scanner"]["wia"]["reason"], "Windows only")
     # Without OCR, Make PDF says it can't read the pages (the page shows that).
     assert state["ocr"] is None and state["upright"] is False
     status, _, data = _call(app, "/api/scan/devices")
-    assert status == 400
-    assert_plain(json.loads(data)["error"], "Windows only")
+    assert status == 200 and json.loads(data)["devices"] == []
 
 
 def test_scan_status_without_pythonnet_says_why(app, bare, monkeypatch):
     monkeypatch.setattr(scanner, "sys", types.SimpleNamespace(platform="win32", modules=sys.modules))
     monkeypatch.setitem(sys.modules, "clr", None)   # pythonnet missing: `import clr` fails
     status, _, data = _call(app, "/api/scan/status")
-    state = json.loads(data)["scanner"]
+    state = json.loads(data)["scanner"]["wia"]
     assert status == 200 and state["available"] is False
     assert_plain(state["reason"], "Windows Image Acquisition", "Reinstall ZPDF", "Photos")
     status, _, data = _call(app, "/api/scan/devices")
-    assert status == 400
-    assert_plain(json.loads(data)["error"], "Windows Image Acquisition")
+    assert status == 200 and json.loads(data)["devices"] == []
 
 
 def test_scan_status_without_wia_says_why(app, bare):
     scanner.use(_ComWithout(scanner.ScannerError(
         "Windows Image Acquisition isn't installed on this PC, so ZPDF can't talk to scanners.",
         "unavailable")))
-    state = json.loads(_call(app, "/api/scan/status")[2])["scanner"]
+    state = json.loads(_call(app, "/api/scan/status")[2])["scanner"]["wia"]
     assert state["available"] is False
     assert_plain(state["reason"], "Windows Image Acquisition isn't installed")
 
 
 def test_scan_status_with_wia_stopped_says_what_to_do(app, bare):
     scanner.use(_ComWithout(OSError("The service has not been started")))
-    state = json.loads(_call(app, "/api/scan/status")[2])["scanner"]
+    state = json.loads(_call(app, "/api/scan/status")[2])["scanner"]["wia"]
     assert state["available"] is False
     assert_plain(state["reason"], "Windows Image Acquisition isn't working",
                  "service is running")

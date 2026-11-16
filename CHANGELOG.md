@@ -4,6 +4,34 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.44.0
+
+Scan from a network scanner with no driver.
+
+- **Network scanners (AirScan).** The Scan page now also finds scanners
+  and multifunction printers on your network that offer driverless
+  scanning (AirScan, also called eSCL or Mopria Scan: most network devices
+  of the last ten years). They're listed next to the scanners Windows
+  knows, marked "(network)", and scan the same way: the glass or every
+  page in the feeder, greyscale, colour or black and white.
+- **Both sides of each sheet**, for a network scanner whose feeder turns
+  the page.
+- **Add a network scanner…** by its address (for example 192.168.1.40),
+  for networks where the search finds nothing. It's remembered; **Forget
+  this one** takes it off the list.
+- Scanning no longer needs Windows' own scanner support to be working: the
+  Scanner choice stays available, and when nothing is found ZPDF says why
+  scanners with a Windows driver can't be used, if they can't.
+- What goes wrong is said plainly: the feeder is empty, paper is jammed,
+  the cover is open, the scanner is busy or didn't answer.
+- `pdfm scan` lists and uses network scanners too; `--add ADDRESS`
+  remembers one, `--duplex` scans both sides.
+- Everything stays on your network: ZPDF asks the network which scanners
+  are there only when you open the Scan page, and talks only to the
+  scanner you choose. Settings → Privacy → When ZPDF goes online lists it.
+- Not tried on a real scanner yet: it's written to the published protocol
+  and tested against a simulated device.
+
 ## 0.43.0
 
 A quantity schedule (takeoff) from what you measured on a drawing.
