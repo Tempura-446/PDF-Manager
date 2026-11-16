@@ -101,11 +101,22 @@ export const MarkupEditing = (Base) => class extends Base {
         if (this.activeTab !== tab || (tab.version || 0) !== version) return;
         this.markCache = { tab, version, pages };
         if (this.markAfter) { const again = this.markAfter; this.markAfter = null; again(pages); }
+        else this.#refreshSelection(pages);
       } catch (e) { /* asked again at the next press */ } finally {
         if (this.markAsking === asking) this.markAsking = null;
       }
     })();
     return null;
+  }
+
+  /** The document was written again some other way (Undo, another tool)
+   *  with a markup selected: it is picked up as it is now, or let go if it
+   *  isn't there any more. */
+  #refreshSelection(pages) {
+    const sel = this.markSel;
+    if (!sel || this.markDrag) return;
+    const now = pages?.[sel.page]?.[sel.index];
+    if (now && now.kind === sel.shape.kind) { sel.shape = now; this._markDraw(sel.page); } else this._markLetGo();
   }
 
   /** The annotate bar's tool changed, or the document did: have the markups ready. */
@@ -130,6 +141,8 @@ export const MarkupEditing = (Base) => class extends Base {
     if (!EDIT_MODES.has(this.markupMode) || !at) return false;
     const scale = at.view.viewport.scale;
     const sel = this.markSel;
+    // While a change is being written (or the markups asked for again), a press waits its turn.
+    if (this.markBusy || (sel && !this._markShapes())) return true;
     if (sel && sel.page === at.n) {
       const grip = handlesOf(sel.shape).find((h) => dist(h.pt, at.pt) * scale <= GRIP);
       if (grip) { this.#beginDrag(e, at, grip.key); return true; }
@@ -193,9 +206,12 @@ export const MarkupEditing = (Base) => class extends Base {
   /** Send a change to the selected markup; it stays selected afterwards. */
   async _markChange(change, failure = "Could not change that: ") {
     const sel = this.markSel;
-    if (!sel) return;
+    if (!sel || this.markBusy) return;      // (one change at a time: a held arrow key doesn't pile them up)
     const { page, index } = sel, tab = this.activeTab, version = tab?.version || 0;
-    await this._applyMarkup([{ op: "change", page, id: sel.shape.id, ...change }], failure);
+    this.markBusy = true;
+    try {
+      await this._applyMarkup([{ op: "change", page, id: sel.shape.id, ...change }], failure);
+    } finally { this.markBusy = false; }
     if (this.activeTab !== tab) return;
     if ((tab.version || 0) === version) { this._markDraw(page); return; }   // it didn't work (and said so)
     // The document was written again: its markups are asked for anew, and this one picked up again.
@@ -208,6 +224,7 @@ export const MarkupEditing = (Base) => class extends Base {
     const sel = this.markSel;
     if (!sel || !EDIT_MODES.has(this.markupMode)) return false;
     if (e.key === "Escape") { this._markLetGo(); return true; }
+    if (this.markBusy || !this._markShapes()) return true;   // (still writing the last change)
     if (e.key === "Delete" || e.key === "Backspace") {
       const { page } = sel, id = sel.shape.id;
       this._markLetGo();
@@ -248,8 +265,9 @@ export const MarkupEditing = (Base) => class extends Base {
    *  as it would be, while it's being dragged). */
   _markDraw(n, shape = null) {
     const sel = this.markSel;
+    if (!sel) { document.querySelector(".rd-markedit")?.remove(); return; }
+    if (sel.page !== n) return;             // (another page was shown again: the selected one's handles stay)
     document.querySelector(".rd-markedit")?.remove();
-    if (!sel || sel.page !== n) return;
     const view = this.pdfViewer.getPageView(n - 1);
     if (!view?.div || !view.viewport) return;
     const s = shape || sel.shape, vp = view.viewport;
