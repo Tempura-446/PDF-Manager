@@ -272,26 +272,29 @@ class _Refused(Exception):
 
 
 def _xml(data):
-    """A scanner's XML answer, parsed. One that declares a document type or
-    entities is refused before it's read (they can be made to expand without
-    end), whatever encoding it's written in."""
+    """A scanner's XML answer as an element tree. It is read by expat with
+    handlers of our own: one that declares a document type or entities is
+    refused at the declaration, before anything could expand (they can be
+    made to expand without end), whatever encoding it's written in."""
     import xml.parsers.expat
 
     def refuse(*_):
         raise _Refused()
 
-    scout = xml.parsers.expat.ParserCreate()
-    scout.StartDoctypeDeclHandler = refuse
-    scout.EntityDeclHandler = refuse
+    builder = ElementTree.TreeBuilder()
+    name = lambda raw: "{" + raw if "}" in raw else raw  # noqa: E731 - "{namespace}tag", as ElementTree names them
+    reader = xml.parsers.expat.ParserCreate(namespace_separator="}")
+    reader.StartDoctypeDeclHandler = refuse
+    reader.EntityDeclHandler = refuse
+    reader.StartElementHandler = lambda tag, attrs: builder.start(name(tag), {name(k): v for k, v in attrs.items()})
+    reader.EndElementHandler = lambda tag: builder.end(name(tag))
+    reader.CharacterDataHandler = builder.data
     try:
-        scout.Parse(data, True)
+        reader.Parse(data, True)
+        return builder.close()
     except _Refused:
         raise EsclError("the scanner's answer isn't one ZPDF reads", "refused") from None
-    except xml.parsers.expat.ExpatError:
-        raise EsclError("the scanner's answer couldn't be read", "refused") from None
-    try:
-        return ElementTree.fromstring(data)  # (no document type and no entities in it: checked above)
-    except ElementTree.ParseError:
+    except (xml.parsers.expat.ExpatError, AssertionError):
         raise EsclError("the scanner's answer couldn't be read", "refused") from None
 
 
