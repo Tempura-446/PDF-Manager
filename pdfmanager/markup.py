@@ -17,6 +17,7 @@ A change is a dict:
     {"op": "text", "page": 1, "id": "12R", "text": "..."}     (the comment of an annotation)
     {"op": "reply", "page": 1, "id": "12R", "text": "..."}
     {"op": "delete", "page": 1, "id": "12R"}                  (with its popup and replies)
+    {"op": "change", "page": 1, "id": "12R", ...}             (a markup of ZPDF's own, after placing: see change_markup)
     {"op": "add", "page": 1, "kind": "link", "rect": [...], "url": "https://..." | "to_page": 3}
     {"op": "link", "page": 1, "id": "12R", "url": "..." | "to_page": 3}   (where a link goes)
     {"op": "add", "page": 1, "kind": "stamp", "rect": [...], "label": "APPROVED",
@@ -33,7 +34,7 @@ import re
 import secrets
 import time
 
-from pypdf.generic import (ArrayObject, BooleanObject, DecodedStreamObject, DictionaryObject,
+from pypdf.generic import (ArrayObject, BooleanObject, DecodedStreamObject, DictionaryObject, NullObject,
                            FloatObject, NameObject, NumberObject, TextStringObject)
 
 from pdfmanager import core
@@ -223,7 +224,7 @@ def _add(writer, page, page_ref, change, author):
                                                                      x + NOTE_SIZE + 200, y]),
             NameObject("/Parent"): ref, NameObject("/Open"): BooleanObject(False), NameObject("/F"): NumberObject(0)})
         annot[NameObject("/Popup")] = writer._add_object(popup)
-        added = [ref, annot["/Popup"]]
+        added = [ref, annot.raw_get("/Popup")]  # (by reference: one popup, not a second copy in the page's list)
     elif kind in ("underline", "strikeout"):
         boxes = [_rect(r) for r in change.get("rects") or []]
         boxes = [b for b in boxes if b[2] > b[0] and b[3] > b[1]]
@@ -828,6 +829,176 @@ def _set_target(writer, annot, change):
     annot[NameObject("/Dest")] = ArrayObject([writer.pages[number - 1].indirect_reference, NameObject("/Fit")])
 
 
+# ---- changing a markup after it's placed ------------------------------------------------
+
+CHANGEABLE = ("rect", "ellipse", "cloud", "polycloud", "line", "arrow", "polyline", "callout", "dimension",
+              "stamp", "note")
+
+
+def _pairs(values):
+    values = [float(v) for v in values]
+    return [[values[i], values[i + 1]] for i in range(0, len(values) - 1, 2)]
+
+
+def _hex(annot):
+    rgb = [float(c) for c in annot.get("/C", [])][:3]
+    return "#" + "".join(f"{round(max(0, min(1, c)) * 255):02x}" for c in rgb) if len(rgb) == 3 else None
+
+
+def _scale_of(measure):
+    """The reader's scale ({ratio, units, label}) from a /Measure dictionary."""
+    try:
+        first = measure["/X"][0].get_object()
+        per, unit = float(first["/C"]), str(first.get("/U", ""))
+    except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+        return None
+    metric = unit == "m"
+    return {"ratio": per * 72 / 0.0254 if metric else per * 72 * 12, "units": "m" if metric else "ft",
+            "label": str(measure.get("/R", ""))}
+
+
+def describe(annot):
+    """A markup of ZPDF's own as the change that would add it again: {"kind",
+    "color", "width", "text", and its shape: "rect", "points", "tip"/"at",
+    "value"/"scale", "arrow"}. None for anything else (another program's
+    annotation, a measurement, a highlight, a link)."""
+    annot = annot.get_object()
+    if not str(annot.get("/NM", "")).startswith("zpdf-"):
+        return None
+    subtype, intent = annot.get("/Subtype"), annot.get("/IT")
+    text = str(annot.get("/Contents", ""))
+    rect = [float(v) for v in annot.get("/Rect", [0, 0, 0, 0])]
+    style = annot.get("/BS")
+    width = float(style.get_object().get("/W", 1.5)) if style is not None else 1.5
+    out = {"color": _hex(annot), "width": width, "text": text}
+    if subtype in ("/Square", "/Circle"):
+        if subtype == "/Circle" and re.search(r"\(\d+ of \d+\)$", text):
+            return None  # one mark of a count (a measurement)
+        inset = [float(v) for v in annot.get("/RD", [width / 2] * 4)]
+        return {**out, "kind": "rect" if subtype == "/Square" else "ellipse",
+                "rect": [rect[0] + inset[0], rect[1] + inset[1], rect[2] - inset[2], rect[3] - inset[3]]}
+    if subtype == "/Polygon" and intent is None and "/BE" in annot:
+        pts = _pairs(annot.get("/Vertices", []))
+        xs, ys = sorted({p[0] for p in pts}), sorted({p[1] for p in pts})
+        if len(pts) == 4 and len(xs) == 2 and len(ys) == 2:  # the cloud dragged out as a box
+            return {**out, "kind": "cloud", "rect": [xs[0], ys[0], xs[1], ys[1]], "points": pts}
+        return {**out, "kind": "polycloud", "points": pts}
+    if subtype == "/Line":
+        pts = _pairs(annot.get("/L", []))
+        if intent == "/LineDimension":
+            if "/Cap" not in annot:
+                return None  # a measurement put in the PDF, not a dimension markup
+            measure = annot.get("/Measure")
+            return {**out, "kind": "dimension", "points": pts, "value": text, "text": "",
+                    "scale": _scale_of(measure.get_object()) if measure is not None else None}
+        ends = [str(e) for e in annot.get("/LE", [])]
+        return {**out, "kind": "arrow" if "/ClosedArrow" in ends else "line", "points": pts}
+    if subtype == "/PolyLine" and intent is None and "/Measure" not in annot and "°" not in text:
+        ends = [str(e) for e in annot.get("/LE", [])]
+        arrow = "both" if ends[:1] == ["/ClosedArrow"] else "end" if "/ClosedArrow" in ends else "none"
+        return {**out, "kind": "polyline", "points": _pairs(annot.get("/Vertices", [])), "arrow": arrow}
+    if subtype == "/FreeText" and intent == "/FreeTextCallout":
+        leader = _pairs(annot.get("/CL", []))
+        if len(leader) < 3:
+            return None
+        size = re.search(r"/Helv ([\d.]+) Tf", str(annot.get("/DA", "")))
+        return {**out, "kind": "callout", "tip": leader[0], "at": leader[2],
+                "size": float(size.group(1)) if size else CALLOUT_SIZE}
+    if subtype == "/Stamp":
+        return {**out, "kind": "stamp", "rect": rect}
+    if subtype == "/Text" and "/IRT" not in annot:
+        return {**out, "kind": "note", "at": [rect[0], rect[3]]}
+    return None
+
+
+def _moved(shape, dx, dy):
+    """A described markup, moved by (dx, dy)."""
+    out = dict(shape)
+    for key in ("points",):
+        if key in out:
+            out[key] = [[x + dx, y + dy] for x, y in out[key]]
+    for key in ("tip", "at"):
+        if key in out:
+            out[key] = [out[key][0] + dx, out[key][1] + dy]
+    if "rect" in out:
+        x0, y0, x1, y1 = out["rect"]
+        out["rect"] = [x0 + dx, y0 + dy, x1 + dx, y1 + dy]
+    return out
+
+
+def change_markup(writer, page, ref, change, author):
+    """Change a markup of ZPDF's own in place: move it ("move": [dx, dy]),
+    reshape it ("rect", "points", "tip", "at"), or give it another "color",
+    "width" or "text" (a dimension: "value", its words, which the reader
+    works out again from the new ends). It is drawn again by what drew it,
+    and stays the same annotation: its place in the page's order, its name,
+    who made it and when, and its replies are kept."""
+    annot = ref.get_object()
+    shape = describe(annot)
+    if shape is None:
+        raise core.PdfManagerError("only markups made with ZPDF's own tools (shapes, lines, clouds, callouts, "
+                                   "dimensions, stamps, notes) can be changed after placing")
+    kind = shape["kind"]
+    if "move" in change:
+        try:
+            dx, dy = (_num(v) for v in change["move"][:2])
+        except (TypeError, ValueError):
+            raise core.PdfManagerError("a move is two numbers") from None
+        shape = _moved(shape, dx, dy)
+    if "points" in change and kind == "cloud":
+        kind = shape["kind"] = "polycloud"   # a box-shaped cloud given corners of its own
+    if kind == "cloud":
+        shape.pop("points", None)
+    for key in ("rect", "points", "tip", "at", "color", "width", "text", "value", "arrow"):
+        if key in change and change[key] is not None:
+            shape[key] = change[key]
+    if kind == "dimension" and "points" in change and "value" not in change:
+        raise core.PdfManagerError("a dimension with new ends needs its new words")
+    now = TextStringObject(_pdf_date())
+    if kind in ("stamp", "note"):
+        # Drawn once, for where it was: a viewer fits the same drawing to the
+        # new rectangle, so only the rectangle (and the words) change.
+        if kind == "stamp":
+            x0, y0, x1, y1 = _rect(shape["rect"])
+            if x1 - x0 < 8 or y1 - y0 < 8:
+                raise core.PdfManagerError("draw the stamp bigger")
+            new = [x0, y0, x1, y1]
+        else:
+            x, y = (_num(v) for v in shape["at"][:2])
+            new = [x, y - NOTE_SIZE, x + NOTE_SIZE, y]
+            # Its popup goes with it: the one it names, and (files from before
+            # 0.47.0) the copy of it written into the page's list.
+            popups = [annot["/Popup"]] if "/Popup" in annot else []
+            for other in page["/Annots"].get_object():
+                other = other.get_object()
+                if other.get("/Subtype") == "/Popup" and "/Parent" in other and other["/Parent"] is annot:
+                    popups.append(other)
+            for popup in popups:
+                popup[NameObject("/Rect")] = ArrayObject(
+                    FloatObject(v) for v in [x + NOTE_SIZE, y - 120, x + NOTE_SIZE + 200, y])
+        annot[NameObject("/Rect")] = ArrayObject(FloatObject(v) for v in new)
+        if "text" in change:
+            if shape["text"]:
+                annot[NameObject("/Contents")] = TextStringObject(str(shape["text"]))
+            elif "/Contents" in annot:
+                del annot["/Contents"]
+        annot[NameObject("/M")] = now
+        return
+    # Drawn again by the tool that drew it, as a new annotation, whose
+    # contents then take the old one's place.
+    annots = page["/Annots"].get_object()
+    made = _add(writer, page, page.indirect_reference, {**shape, "op": "add", "kind": kind}, author)
+    new = made.get_object()
+    kept = {key: annot.raw_get(key) for key in ("/NM", "/T", "/CreationDate", "/Popup", "/Subj") if key in annot}
+    for key in list(annot.keys()):
+        del annot[key]
+    annot.update(new)
+    annot.update(kept)
+    annot[NameObject("/M")] = now
+    annots.remove(made)
+    writer._objects[made.idnum - 1] = NullObject()   # (the spare copy isn't written)
+
+
 def _find(reader, writer, number, ident):
     """The annotation pdf.js calls ``ident`` on page ``number``: its index
     in the page's /Annots, the same in the reader's and the copy's pages."""
@@ -894,6 +1065,8 @@ def apply(path, output, changes, password=None, author=None):
             if annot.get("/Subtype") != "/Link":
                 raise core.PdfManagerError("that isn't a link")
             _set_target(writer, annot, change)
+        elif op == "change":
+            change_markup(writer, page, ref, change, author)
         elif op == "delete":
             doomed.setdefault(number, set()).add(_key(ref))
         else:
