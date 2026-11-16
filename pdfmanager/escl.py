@@ -233,10 +233,11 @@ def _request(parts, method, path, body=None, timeout=TIMEOUT, limit=MAX_XML):
     """One request to a scanner: (status, headers, bytes). ``path`` is
     relative to the device's root, or absolute (a job's own address)."""
     if path.startswith(("http://", "https://")):
-        there = urllib.parse.urlsplit(path)
-        if there.hostname != parts.hostname:   # (a job is on the scanner that made it)
-            raise EsclError("the scanner sent the job somewhere else; nothing was scanned", "refused")
-        target = there.path
+        # A job's address as the scanner gave it. Scanners name themselves in
+        # many ways there (their host name, another address of theirs), so
+        # only its path is used: the request still goes to the scanner we're
+        # talking to, never to wherever the answer points.
+        target = urllib.parse.urlsplit(path).path or "/"
     elif path.startswith("/"):
         target = path
     else:
