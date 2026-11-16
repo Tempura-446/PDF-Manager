@@ -632,11 +632,27 @@ def office_to_pdf(path, output):
 def find_browser():
     """A Chromium-based browser to print web pages with: Edge (on every
     Windows), Chrome or Chromium; or None."""
+    return next(iter(find_browsers()), None)
+
+
+def _other_browser(browser):
+    """Another installed browser than ``browser`` (for a second try when it
+    stalls), or None."""
+    found = find_browsers()
+    same = lambda a, b: os.path.realpath(a) == os.path.realpath(b)  # noqa: E731
+    if not any(same(b, browser) for b in found):
+        return None
+    return next((b for b in found if not same(b, browser)), None)
+
+
+def find_browsers():
+    """Every Chromium-based browser found, the preferred one first."""
+    out = []
     for name in ("msedge", "microsoft-edge", "google-chrome", "chrome", "chromium",
                  "chromium-browser"):
         found = shutil.which(name)
         if found:
-            return found
+            out.append(found)
     candidates = []
     if sys.platform == "win32":
         for base in (os.environ.get("PROGRAMFILES(X86)"), os.environ.get("PROGRAMFILES"),
@@ -652,10 +668,14 @@ def find_browser():
         pw = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "/opt/pw-browsers")
         candidates += sorted(pw.glob("chromium_headless_shell-*/chrome-headless-shell-*/chrome-headless-shell"))
         candidates += sorted(pw.glob("chromium-*/chrome-linux*/chrome"))
-    for path in candidates:
-        if path.is_file():
-            return str(path)
-    return None
+    out += [str(path) for path in candidates if path.is_file()]
+    seen, unique = set(), []
+    for path in out:
+        real = os.path.realpath(path)
+        if real not in seen:
+            seen.add(real)
+            unique.append(path)
+    return unique
 
 
 def _web_address(source):
@@ -868,19 +888,23 @@ def html_to_pdf(source, output, timeout=120):
             target, profile = tmp / "page.pdf", tmp / "profile"
             if local is not None and local.suffix.lower() in (".html", ".htm", ".xhtml"):
                 address = _locked_copy(local, tmp / f"page{local.suffix.lower()}").as_uri()
-            shell = "headless-shell" in Path(browser).name
-            command = [browser, "--headless" if shell else "--headless=new", "--disable-gpu",
-                       "--no-first-run", "--no-default-browser-check", "--disable-extensions",
-                       "--disable-sync", "--disable-background-networking",
-                       "--disable-component-update", "--no-pdf-header-footer",
-                       "--run-all-compositor-stages-before-draw", "--virtual-time-budget=10000",
-                       f"--user-data-dir={profile}", f"--print-to-pdf={target}"]
-            if sys.platform.startswith("linux") and hasattr(os, "geteuid") and os.geteuid() == 0:
-                command.append("--no-sandbox")  # Chromium refuses to run as root otherwise
-            command.append(address)
+            def command_for(program, folder):
+                shell = "headless-shell" in Path(program).name
+                command = [program, "--headless" if shell else "--headless=new", "--disable-gpu",
+                           "--no-first-run", "--no-default-browser-check", "--disable-extensions",
+                           "--disable-sync", "--disable-background-networking",
+                           "--disable-component-update", "--no-pdf-header-footer",
+                           "--run-all-compositor-stages-before-draw", "--virtual-time-budget=10000",
+                           f"--user-data-dir={folder}", f"--print-to-pdf={target}"]
+                if sys.platform.startswith("linux") and hasattr(os, "geteuid") and os.geteuid() == 0:
+                    command.append("--no-sandbox")  # Chromium refuses to run as root otherwise
+                return command + [address]
+
+            command = command_for(browser, profile)
             # A headless browser now and then stalls at start-up (seen on Linux CI, and it
             # can happen on a busy PC): cut the first try short and try once more with a
-            # fresh profile before giving up.
+            # fresh profile before giving up: with another installed browser when there is
+            # one (a stall has been seen to repeat with the same browser on the same machine).
             first = min(timeout, max(FIRST_TRY, timeout // 2))
             try:
                 _print_with(command, target, first, profile)
@@ -890,8 +914,8 @@ def html_to_pdf(source, output, timeout=120):
                 _stop_browsers_using(profile)
                 target.unlink(missing_ok=True)
                 profile2 = tmp / "profile2"
-                command = [f"--user-data-dir={profile2}" if a.startswith("--user-data-dir=") else a for a in command]
-                _print_with(command, target, timeout - first, profile2)
+                browser = _other_browser(browser) or browser
+                _print_with(command_for(browser, profile2), target, timeout - first, profile2)
             shutil.move(str(target), str(output))
         finally:
             _remove_browser_folder(tmp)

@@ -32,6 +32,9 @@ Change a markup after you've placed it.
   longer scrolls the page; a double-click on a callout opens its words
   (Enter does too); the bar's bin removes the selected markup; a cloud is
   taken by a press on its bumps.
+- **Web page to PDF:** when the browser stalls and the page is tried
+  again, the second try uses another installed browser (Chrome after Edge,
+  say) when there is one.
 - **Fixed: a network scanner failing with "error 0x80190199".** Through
   Windows' own driver for network scanners, that code is the scanner
   answering "these settings conflict". ZPDF now tries once more with only

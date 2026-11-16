@@ -574,3 +574,36 @@ def test_a_browser_that_stalls_once_is_tried_again(tmp_path, monkeypatch):
     monkeypatch.setattr(office, "FIRST_TRY", 2)
     out, program = office.html_to_pdf(page, tmp_path / "out.pdf", timeout=8)
     assert office._whole_pdf(out) and marker.exists()
+
+
+def test_a_browser_that_keeps_stalling_hands_over_to_another_one(tmp_path, monkeypatch):
+    """Seen on CI: the same browser stalled on both tries. The second try goes to
+    another installed browser when there is one."""
+    import sys
+
+    from pdfmanager import office
+
+    page = tmp_path / "page.html"
+    page.write_text("<p>Hello</p>", encoding="utf-8")
+
+    def browser(name, body):
+        script = tmp_path / f"{name}.py"
+        script.write_text(
+            "import sys, time\n"
+            "target = [a.split('=', 1)[1] for a in sys.argv if a.startswith('--print-to-pdf=')][0]\n" + body,
+            encoding="utf-8")
+        launcher = tmp_path / (f"{name}.cmd" if sys.platform == "win32" else name)
+        if sys.platform == "win32":
+            launcher.write_text(f'@"{sys.executable}" "{script}" %*\n', encoding="utf-8")
+        else:
+            launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
+            launcher.chmod(0o755)
+        return str(launcher)
+
+    stalls = browser("stalls", "time.sleep(60)\n")
+    works = browser("works", "open(target, 'wb').write(b'%PDF-1.4\\n' + b'0' * 200 + b'\\n%%EOF\\n')\n")
+    monkeypatch.setattr(office, "find_browsers", lambda: [stalls, works])
+    monkeypatch.setattr(office, "FIRST_TRY", 2)
+    out, _ = office.html_to_pdf(page, tmp_path / "out.pdf", timeout=8)
+    assert office._whole_pdf(out)
+    assert office._other_browser(works) == stalls and office._other_browser("/nowhere/else") is None
