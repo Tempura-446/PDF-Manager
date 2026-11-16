@@ -378,6 +378,16 @@ into a PDF in one place. The pages come from:
   whose feeder turns the page offers **Both sides of each sheet**.
   Everything stays on your network. (Written to the published protocol and
   tested against a simulated device; not yet tried on a real scanner.)
+- **any other scanner, through a folder**: every scanner can save its
+  scans into a folder, with its own Scan button or its program. **My
+  scanner isn't listed…** on the Scan page takes that folder and watches
+  it: each scan put there (a PDF, or a picture: JPEG, PNG, BMP, TIFF with
+  one or many pages) becomes a searchable PDF in a "Done" folder inside
+  it, while ZPDF is open. With **Pages scanned together become one
+  document**, a scanner that saves a file per page gives one PDF per
+  stack of paper. This is how scanners with only a TWAIN driver work with
+  ZPDF. The folder is an ordinary watch folder (Settings → Watch
+  folders), where it can be paused or removed.
 - **photos** taken with a phone (any computer): ZPDF finds the page's four
   edges in each photo, flattens it as if it had been scanned, crops and
   straightens it, and gives it a clean look: shadows evened out, the paper

@@ -984,6 +984,11 @@ body.scan-mode main > :not(#scan-host, .page-head, #error) { display: none !impo
 .scan-field select { width: 100%; }
 .scan-links { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; }
 #scan-add-row input { flex: 1; min-width: 0; }
+.scan-guide { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2, transparent); }
+.scan-guide .hint { margin: 0; }
+.scan-guide .hint.err { color: var(--err); }
+.scan-guide .scan-row input { flex: 1; min-width: 0; }
+.scan-guide-list { margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); display: flex; flex-direction: column; gap: 4px; }
 .scan-row { display: flex; gap: 6px; }
 .scan-row select { flex: 1; min-width: 0; }
 .scan-row .chip-btn { width: 38px; height: 38px; flex: none; }
@@ -1315,6 +1320,8 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
       <label class="dlg-field"><span>The originals</span><select id="watch-originals">
         <option value="keep">Stay where they are</option>
         <option value="move">Move to an “Originals” folder inside it</option></select></label>
+      <label class="dlg-check"><input type="checkbox" id="watch-images"> Pictures too (scans saved as JPG, PNG or TIFF become PDFs)</label>
+      <label class="dlg-check"><input type="checkbox" id="watch-batch"> Files that arrive together become one document (a scanner that saves a file per page)</label>
       <div><button type="button" class="btn secondary" id="watch-add-btn">Watch this folder</button></div>
       <p class="dlg-status" id="watch-status" aria-live="polite"></p>
     </div>
@@ -3034,7 +3041,9 @@ function buildScan() {
           onclick: () => scanDevices(true) }, icon("rotate"))),
       el("p", { class: "hint scan-links", id: "scan-device-hint" },
         el("button", { type: "button", class: "link-btn", id: "scan-add-network", onclick: () => scanAddNetwork() }, "Add a network scanner…"),
-        el("button", { type: "button", class: "link-btn", id: "scan-forget-network", hidden: true, onclick: () => scanForgetNetwork() }, "Forget this one")),
+        el("button", { type: "button", class: "link-btn", id: "scan-forget-network", hidden: true, onclick: () => scanForgetNetwork() }, "Forget this one"),
+        el("button", { type: "button", class: "link-btn", id: "scan-not-listed", "aria-expanded": "false", "aria-controls": "scan-folder-guide",
+          onclick: () => scanFolderGuide() }, "My scanner isn’t listed…")),
       el("div", { class: "scan-row", id: "scan-add-row", hidden: true },
         el("input", { type: "text", id: "scan-address", placeholder: "192.168.1.40", spellcheck: "false", autocomplete: "off",
           "aria-label": "The scanner’s address on your network", "aria-describedby": "scan-add-hint",
@@ -3042,6 +3051,21 @@ function buildScan() {
         el("button", { type: "button", class: "btn secondary pb-small", id: "scan-address-add", onclick: () => scanAddNetworkGo() }, "Add")),
       el("p", { class: "hint", id: "scan-add-hint", hidden: true },
         "The address its display or your router shows. Works with scanners and printers that offer AirScan (also called eSCL or Mopria Scan); no driver is needed.")),
+    el("div", { class: "scan-guide", id: "scan-folder-guide", hidden: true, role: "group", "aria-labelledby": "scan-guide-title" },
+      el("strong", { id: "scan-guide-title" }, "Any scanner: let it save into a folder"),
+      el("p", { class: "hint" }, "Every scanner can save its scans into a folder: with its Scan button, or the program that came with it. "
+        + "Tell ZPDF which folder, and each scan put there becomes a finished PDF in a “Done” folder inside it, while ZPDF is open."),
+      el("ul", { class: "scan-guide-list", id: "scan-guide-list", hidden: true, "aria-label": "Folders watched for scans" }),
+      el("div", { class: "scan-field field" }, el("label", { for: "scan-folder" }, "The folder your scanner saves to"),
+        el("div", { class: "scan-row" }, el("input", { type: "text", id: "scan-folder", spellcheck: "false", autocomplete: "off", placeholder: "C:\\Users\\you\\Documents\\Scans" }),
+          el("button", { type: "button", class: "btn secondary pb-small", id: "scan-folder-browse", hidden: true, onclick: () => scanFolderBrowse() }, "Browse…"))),
+      el("div", { class: "scan-field field" }, el("label", { for: "scan-folder-do" }, "Each scan is"),
+        el("select", { id: "scan-folder-do" }, el("option", { value: "tool:ocr" }, "Made searchable (OCR)"))),
+      el("div", { class: "scan-checks" }, scanCheck("scan-folder-batch", "Pages scanned together become one document", true,
+        "For a scanner that saves a file per page: the files of one stack, arriving within a few seconds of each other, make one PDF.")),
+      el("div", { class: "scan-row" }, el("button", { type: "button", class: "btn secondary", id: "scan-folder-add", onclick: () => scanFolderAdd() }, "Watch this folder"),
+        el("button", { type: "button", class: "link-btn", onclick: () => { scanFolderGuide(false); $("settings-btn").click(); } }, "All watch folders…")),
+      el("p", { class: "hint", id: "scan-folder-said", "aria-live": "polite" })),
     scanSeg("mode", "Colour", [["grey", "Greyscale"], ["colour", "Colour"], ["bw", "Black and white"]], prefs.mode),
     el("div", { class: "scan-field field" }, el("label", { for: "scan-dpi" }, "Resolution"),
       el("select", { id: "scan-dpi" }, ...[["150", "150 dpi: quick, smaller"], ["200", "200 dpi"], ["300", "300 dpi: best for documents"]]
@@ -3151,7 +3175,7 @@ async function scanDevices(again = false) {
       : [el("option", { value: "" }, "No scanner found")]));
     if (!devices.length) {
       const wia = scanState.status?.scanner?.wia;
-      scanSay("No scanner was found. Check that it is switched on and connected, then press ↻ to look again; a network scanner can also be added by its address. Or use Photos."
+      scanSay("No scanner was found. Check that it is switched on and connected, then press ↻ to look again; a network scanner can also be added by its address, and any scanner can save into a folder ZPDF watches (My scanner isn’t listed). Or use Photos."
         + (wia && !wia.available ? ` (Scanners with a Windows driver can’t be used here: ${wia.reason})` : ""), true);
     }
     else if (again) scanSay(`${plural(devices.length, "scanner")} found.`);
@@ -3160,6 +3184,51 @@ async function scanDevices(again = false) {
     select.replaceChildren(el("option", { value: "" }, "No scanner found"));
     scanSay(capital(e.message || e), true);
   } finally { $("scan-refresh").disabled = false; scanShowParts(); }
+}
+/** "My scanner isn't listed": any scanner can save into a folder, and ZPDF
+ *  watches that folder (a watch folder that takes pictures too). */
+let scanFolderTimer = 0;
+async function scanFolderGuide(show = $("scan-folder-guide").hidden) {
+  $("scan-folder-guide").hidden = !show;
+  $("scan-not-listed").setAttribute("aria-expanded", String(show));
+  clearInterval(scanFolderTimer);
+  if (!show) return;
+  // (What the watched folders are doing is kept up to date while the guide is open.)
+  scanFolderTimer = setInterval(async () => {
+    if ($("scan-folder-guide").hidden || $("scan-host").hidden) { clearInterval(scanFolderTimer); return; }
+    try { scanFolderShow(await jsonApi("/api/watch")); } catch (e) { /* next time */ }
+  }, 4000);
+  $("scan-folder-browse").hidden = !(isDesktop() && window.pywebview.api.pick_folder);
+  $("scan-folder").focus();
+  try { scanFolderShow(await jsonApi("/api/watch")); } catch (e) { /* the list is a nicety */ }
+}
+function scanFolderShow(info) {
+  const pick = $("scan-folder-do"), was = pick.value;
+  pick.replaceChildren(el("option", { value: "tool:ocr" }, "Made searchable (OCR)"),
+    ...info.tools.filter((t) => t.id !== "ocr").map((t) => el("option", { value: "tool:" + t.id }, t.label)),
+    ...(info.recipes.length ? [el("optgroup", { label: "Put through a saved recipe" }, ...info.recipes.map((r) => el("option", { value: "recipe:" + r }, r)))] : []));
+  if ([...pick.options].some((o) => o.value === was)) pick.value = was;
+  const mine = info.folders.filter((f) => f.images), list = $("scan-guide-list");
+  list.replaceChildren(...mine.map((f) => el("li", {}, el("span", { class: "wi-folder" }, f.folder), " ", el("span", { class: "wi-state" }, watchState(f)))));
+  list.hidden = !mine.length;
+}
+async function scanFolderBrowse() {
+  try { const chosen = await window.pywebview.api.pick_folder(); if (chosen) $("scan-folder").value = chosen; } catch (e) { /* closed */ }
+}
+async function scanFolderAdd() {
+  const folder = $("scan-folder").value.trim(), said = $("scan-folder-said");
+  const [kind, ...rest] = $("scan-folder-do").value.split(":");
+  said.classList.remove("err");
+  if (!folder) { said.textContent = "Type the folder your scanner saves to, or choose it with Browse."; said.classList.add("err"); return; }
+  try {
+    const info = await jsonApi("/api/watch/add", { folder, [kind]: rest.join(":"), results: "done", originals: "keep", images: true,
+      batch: $("scan-folder-batch").checked });
+    watchInfo = info;
+    scanFolderShow(info);
+    $("scan-folder").value = "";
+    said.textContent = `ZPDF now watches ${folder}. Scan with your scanner’s own button or program: each scan saved there shows up as a PDF in its “Done” folder, while ZPDF is open.`;
+    scheduleWatchNews(1500);
+  } catch (e) { said.textContent = capital(e.message || e); said.classList.add("err"); }
 }
 /** A network scanner that didn't answer the search: asked for by its address
  *  (driverless scanning: AirScan / eSCL), remembered from then on. */
@@ -4525,8 +4594,9 @@ async function watchCall(path, data, said = "") {
 async function addWatch() {
   const [kind, ...rest] = $("watch-do").value.split(":");
   const folder = $("watch-folder").value.trim();
-  const ok = await watchCall("/api/watch/add", { folder, [kind]: rest.join(":"), results: $("watch-results").value, originals: $("watch-originals").value },
-    `Watching ${folder}. PDFs put there from now on, and those there already, are done one by one.`);
+  const ok = await watchCall("/api/watch/add", { folder, [kind]: rest.join(":"), results: $("watch-results").value, originals: $("watch-originals").value,
+      images: $("watch-images").checked, batch: $("watch-batch").checked },
+    `Watching ${folder}. ${$("watch-images").checked ? "PDFs and pictures" : "PDFs"} put there from now on, and those there already, are done one by one.`);
   if (ok) { $("watch-folder").value = ""; scheduleWatchNews(1500); }
 }
 $("watch-add-btn").addEventListener("click", addWatch);
@@ -4537,6 +4607,13 @@ $("watch-browse").addEventListener("click", async () => {
 // A note when a watched file is done or couldn't be (with the plain reason).
 let watchNewsTimer = 0;
 function scheduleWatchNews(ms) { clearTimeout(watchNewsTimer); watchNewsTimer = setTimeout(watchNews, ms); }
+/** Several pieces of watch-folder news as one line: the one document done in
+ *  its own words (how many files went into it, where it is), or how many
+ *  documents; then each file that couldn't be done, in its own words once. */
+function watchNewsWords(done, failed, waiting) {
+  return [done.length === 1 ? done[0].message : done.length ? `${plural(done.length, "document")} done in watch folders` : "",
+    ...failed.map((n) => n.message), ...waiting.map((n) => n.message)].filter(Boolean).join(". ") + ".";
+}
 async function watchNews() {
   try {
     if (watchLast === null) await loadWatch();
@@ -4544,9 +4621,8 @@ async function watchNews() {
     watchLast = last;
     const failed = news.filter((n) => !n.ok && !n.waiting), done = news.filter((n) => n.ok), waiting = news.filter((n) => n.waiting);
     if (news.length === 1) appToast(news[0].message, news[0].ok ? 6000 : 12000, news[0].id ? ["Open", () => openInReaderById([news[0].id])] : null);
-    else if (news.length) appToast([done.length ? `${plural(done.length, "file")} done in watch folders` : "",
-      failed.length ? `${failed.length} couldn’t be done (${failed.map((n) => n.message).join("; ")})` : "",
-      waiting.map((n) => n.message).join("; ")].filter(Boolean).join("; "), failed.length || waiting.length ? 12000 : 6000);
+    else if (news.length) appToast(watchNewsWords(done, failed, waiting), failed.length || waiting.length ? 12000 : 6000,
+      done.length === 1 && done[0].id ? ["Open", () => openInReaderById([done[0].id])] : null);
     if ($("settings-dialog").open) await loadWatch();
   } catch (e) { /* the app is closing, or busy: try again */ }
   const open = $("settings-dialog").open;

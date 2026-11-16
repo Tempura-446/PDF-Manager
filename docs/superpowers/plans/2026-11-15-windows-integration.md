@@ -28,12 +28,13 @@
 
 **Decided with the owner (2026-11-15): ZPDF doesn't write its own TWAIN helper.** Most TWAIN drivers are 32-bit, so driving them takes compiled code in two builds, a native build step in CI and a real TWAIN scanner to test on, none of which we have. These scanners are covered two other ways, both without compiled code in ZPDF.
 
-**Task 2.1: scan to a folder, picked up by a watch folder**
-- [ ] Nearly every scanner (TWAIN-only ones included) has a button or a vendor program that saves scans into a folder. On the Scan page, "My scanner isn't listed" opens a short guide: choose (or make) the folder the scanner saves to, choose what happens to each scan (make searchable; or clean up, make searchable and compress; or a saved recipe), and where results go. It creates the watch folder (`watchfolders.py`) with those choices.
-- [ ] Watch folders take the picture files scanners write (JPEG, PNG, TIFF, multi-page TIFF), not only PDFs: each becomes a PDF first (the Scan page's own path through `scanpdf.py`), then the recipe runs.
-- [ ] Pages scanned one file each can be joined: files arriving within a short time of each other ("a batch") become one PDF, in name order, when the guide's "one document per batch" is on.
-- [ ] The Scan page shows the watched scanner folder as a source ("Scans from folder: …"), with the last results and Open.
-- [ ] Tests: the guide creates the watch folder with the chosen recipe; a JPEG and a multi-page TIFF dropped in come out as searchable PDFs; three files within the batch time become one PDF; a file still being written is left until it holds still.
+**Task 2.1: scan to a folder, picked up by a watch folder** (done in 0.45.0)
+- [x] "My scanner isn't listed…" on the Scan page: the folder the scanner saves to, what happens to each scan (Make searchable, another tool, or a saved recipe), "Pages scanned together become one document"; it adds a watch folder with `images` (and `batch`). The watched scan folders are listed there with what they've done; "All watch folders…" opens Settings.
+- [x] `watch.py`: `images` (JPEG, PNG, BMP, TIFF with many pages become a PDF first, at the scan's own size when the file says its resolution) and `batch` (seconds: files within that of each other are one document, taken once nothing new has come for that long and nothing is still being written; pages in name order). `process_files`, `candidates`. Settings → Watch folders has both as tick boxes; existing folders are unchanged.
+- [x] Tests: `tests/test_scan_folder.py`, `tests/test_scan_folder_ui.py` + `tests/scanfolder.js`.
+- [x] From the Windows check: a file that isn't a picture no longer sinks the pages that arrive with it (left out and said; `left_out`); arrival is the later of the written and the created time (`_arrived`), so files copied in group by when they came; the guide's list keeps itself up to date.
+- [ ] Seen in the check, to look at: the HP took about 2 minutes to show up in the scanner list (WIA listing, the network search, or both: to time on that PC); Remove has no confirmation; HP Smart's own scan-to-folder output not seen (item H).
+- [ ] Left for later: the batch time as a setting (20 seconds now); `pdfm watch --images / --batch` on the command line; cleaning up scans from a folder like the Scan page does (straighten, blank pages) without a recipe; watching while ZPDF is closed (Phase 3).
 
 **Task 2.2: NAPS2 as an optional helper, if it's installed**
 - [ ] NAPS2 is a free, open-source scanning program that already drives TWAIN (32-bit drivers too), WIA and eSCL, with a command-line mode. ZPDF uses it the way it uses LibreOffice or Tesseract: found if installed (`winprograms.py`), never bundled.

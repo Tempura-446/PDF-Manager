@@ -2610,7 +2610,8 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/watch/add":
                     do = {"recipe": data["recipe"]} if data.get("recipe") else {"tool": data.get("tool")}
                     self.watcher.add(data.get("folder"), do, data.get("results") or "done",
-                                     data.get("originals") or "keep")
+                                     data.get("originals") or "keep", images=_bool(data.get("images")),
+                                     batch=_bool(data.get("batch")))
                 elif path == "/api/watch/pause":
                     self.watcher.set_paused(str(data.get("id")), data.get("paused"))
                 else:

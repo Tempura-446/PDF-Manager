@@ -4,6 +4,33 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.45.0
+
+Any scanner at all: let it save into a folder, and ZPDF does the rest.
+
+- **My scanner isn't listed…** on the Scan page. Every scanner can save
+  its scans into a folder, with its own Scan button or the program that
+  came with it. Tell ZPDF which folder, and each scan put there becomes a
+  finished, searchable PDF in a "Done" folder inside it. It works with
+  scanners ZPDF can't drive itself, such as ones that only have a TWAIN
+  driver.
+- **Pictures too.** A watch folder can now take the picture files scanners
+  write (JPEG, PNG, BMP, and TIFF with one or many pages), not only PDFs.
+  Each becomes a PDF at the scan's own size first.
+- **Pages scanned together become one document.** For a scanner that
+  saves a file per page: the files of one stack, arriving within a few
+  seconds of each other, make one PDF, in the order they're named. ZPDF
+  waits until nothing new has come before it puts them together.
+- A file among them that isn't a picture is left out and said by name; the
+  pages around it still make their document. "Together" goes by when the
+  files came into the folder, so scans copied in by hand group the same
+  way as ones a scanner writes.
+- Both are also options of any watch folder under Settings → Watch folders
+  (off unless you tick them, so folders you already watch behave as
+  before).
+- Watching still happens only while ZPDF is open; running in the
+  background from the tray is the next step on the plan.
+
 ## 0.44.0
 
 Scan from a network scanner with no driver.
