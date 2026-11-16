@@ -14,6 +14,8 @@ const BOX_KINDS = new Set(["rect", "ellipse", "cloud", "stamp"]);      // change
 const POINT_KINDS = new Set(["line", "arrow", "dimension", "polyline", "polycloud"]);
 const NEAR = 7;       // px: how close a press must be to a markup's outline
 const GRIP = 9;       // px: how close to a handle
+const CLOUD_BUMP = 6; // PDF units: how far a cloud's bumps stand out from its outline
+const TWICE = 500;    // ms: two presses this close together are a double-click
 
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 /** How far ``p`` is from the segment a-b. */
@@ -50,8 +52,11 @@ export function distanceTo(shape, p) {
     const r = Math.hypot((p[0] - (x0 + x1) / 2) / rx, (p[1] - (y0 + y1) / 2) / ry);
     return Math.abs(r - 1) * Math.min(rx, ry);
   }
-  if (shape.kind === "rect" || shape.kind === "cloud") return along(corners(shape.rect), true);
-  return along(shape.points, shape.kind === "polycloud");
+  if (shape.kind === "rect") return along(corners(shape.rect), true);
+  // A cloud's bumps stand out from its outline: a press on them counts too.
+  if (shape.kind === "cloud") return Math.max(0, along(corners(shape.rect), true) - CLOUD_BUMP);
+  if (shape.kind === "polycloud") return Math.max(0, along(shape.points, true) - CLOUD_BUMP);
+  return along(shape.points, false);
 }
 
 /** ``shape`` with the handle ``key`` put at ``pt`` (or, with no key, moved by ``by``). */
@@ -143,13 +148,22 @@ export const MarkupEditing = (Base) => class extends Base {
     const sel = this.markSel;
     // While a change is being written (or the markups asked for again), a press waits its turn.
     if (this.markBusy || (sel && !this._markShapes())) return true;
+    // A second press on the selected callout soon after the first: its words.
+    // (Counted here: a pointerdown doesn't say it's the second of two.)
+    const last = this.markPress;
+    this.markPress = { t: e.timeStamp, x: e.clientX, y: e.clientY };
+    if (sel && sel.page === at.n && sel.shape.kind === "callout" && last && e.timeStamp - last.t < TWICE
+        && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 6 && distanceTo(sel.shape, at.pt) * scale <= NEAR) {
+      this.markPress = null;
+      this._markEditText();
+      return true;
+    }
     if (sel && sel.page === at.n) {
       const grip = handlesOf(sel.shape).find((h) => dist(h.pt, at.pt) * scale <= GRIP);
       if (grip) { this.#beginDrag(e, at, grip.key); return true; }
     }
     const hit = this.#markAt(at.n, at.pt, scale);
     if (!hit) { if (sel) this._markLetGo(); return false; }
-    if (e.detail >= 2 && hit.shape.kind === "callout") { this.#select(at.n, hit.index); this._markEditText(); return true; }
     this.#select(at.n, hit.index);
     this.#beginDrag(e, at, null);
     return true;
@@ -159,6 +173,7 @@ export const MarkupEditing = (Base) => class extends Base {
     const shape = this._markShapes()?.[page]?.[index];
     if (!shape) { this._markLetGo(); return; }
     this.markSel = { page, index, shape, tab: this.activeTab };
+    if (this.deleteBtn) this.deleteBtn.disabled = false;   // the bar's bin removes it too
     this._markDraw(page);
     this._hint?.(shape.kind === "note" ? "Drag the note to move it. Delete removes it; Esc lets go."
       : "Drag a handle to reshape it, or the markup to move it. Delete removes it; Esc lets go.", 5000);
@@ -168,7 +183,21 @@ export const MarkupEditing = (Base) => class extends Base {
     const sel = this.markSel;
     this.markSel = this.markDrag = null;
     document.querySelector(".rd-markedit")?.remove();
-    if (sel) this._endHint?.();
+    if (sel) {
+      this._endHint?.();
+      if (this.deleteBtn) this.deleteBtn.disabled = true;
+    }
+  }
+
+  /** Remove the selected markup (the Delete key, the bar's bin): true when there was one. */
+  _markDelete() {
+    const sel = this.markSel;
+    if (!sel || !EDIT_MODES.has(this.markupMode)) return false;
+    if (this.markBusy || this.markPending) return true;
+    const { page } = sel, id = sel.shape.id;
+    this._markLetGo();
+    this._applyMarkup([{ op: "delete", page, id }], "Could not remove that: ");
+    return true;
   }
 
   #beginDrag(e, at, key) {
@@ -208,31 +237,53 @@ export const MarkupEditing = (Base) => class extends Base {
     const sel = this.markSel;
     if (!sel || this.markBusy) return;      // (one change at a time: a held arrow key doesn't pile them up)
     const { page, index } = sel, tab = this.activeTab, version = tab?.version || 0;
-    this.markBusy = true;
+    // From here until the markup is picked up again its keys are still its own
+    // (markPending): the selection is gone for a moment while the page is redrawn.
+    this.markBusy = this.markPending = true;
     try {
       await this._applyMarkup([{ op: "change", page, id: sel.shape.id, ...change }], failure);
     } finally { this.markBusy = false; }
-    if (this.activeTab !== tab) return;
-    if ((tab.version || 0) === version) { this._markDraw(page); return; }   // it didn't work (and said so)
+    if (this.activeTab !== tab) { this.#settled(false); return; }
+    if ((tab.version || 0) === version) { this._markDraw(page); this.#settled(false); return; }   // it didn't work (and said so)
     // The document was written again: its markups are asked for anew, and this one picked up again.
-    this.markAfter = () => { if (EDIT_MODES.has(this.markupMode)) this.#select(page, index); };
+    this.markAfter = () => {
+      const on = EDIT_MODES.has(this.markupMode) && this.activeTab === tab;
+      if (on) this.#select(page, index);
+      this.#settled(on);
+    };
     if (this._markShapes()) { const again = this.markAfter; this.markAfter = null; again(); }
+  }
+
+  /** A change is over and the markup picked up again (or not: ``on``). The
+   *  arrow keys pressed meanwhile are sent as one move, so a held key ends
+   *  where its presses say. */
+  #settled(on) {
+    this.markPending = false;
+    const by = this.markQueued;
+    this.markQueued = null;
+    if (on && by && (by[0] || by[1]) && this.markSel) this._markChange({ move: by });
+  }
+
+  /** Whether a key may be the selected markup's (also just after a change,
+   *  while it is being picked up again). */
+  _markHasKeys() {
+    if (this.markPending && !this.markBusy && !this.markAfter && !this.markAsking) this.#settled(false);   // (it never came back)
+    return !!this.markSel || !!this.markPending;
   }
 
   /** Delete, Esc and the arrow keys for the selected markup: true when the key was its. */
   _markKey(e) {
     const sel = this.markSel;
-    if (!sel || !EDIT_MODES.has(this.markupMode)) return false;
-    if (e.key === "Escape") { this._markLetGo(); return true; }
-    if (this.markBusy || !this._markShapes()) return true;   // (still writing the last change)
-    if (e.key === "Delete" || e.key === "Backspace") {
-      const { page } = sel, id = sel.shape.id;
-      this._markLetGo();
-      this._applyMarkup([{ op: "delete", page, id }], "Could not remove that: ");
-      return true;
-    }
+    // (While the page is shown again after a change the tool reads as off for a moment: markPending says it's still ours.)
+    if (!this.markPending && (!sel || !EDIT_MODES.has(this.markupMode))) return false;
     const step = e.shiftKey ? 10 : 1;
     const by = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
+    if (e.key === "Escape") { this.markQueued = null; this._markLetGo(); return true; }
+    if (this.markBusy || this.markPending || !this._markShapes()) {   // still writing the last change
+      if (by) this.markQueued = [(this.markQueued?.[0] || 0) + by[0], (this.markQueued?.[1] || 0) + by[1]];
+      return true;                                                   // (and no key scrolls the page meanwhile)
+    }
+    if (e.key === "Delete" || e.key === "Backspace") return this._markDelete();
     if (by) { this._markChange({ move: by }); return true; }
     if (e.key === "Enter" && sel.shape.kind === "callout") { this._markEditText(); return true; }
     return false;

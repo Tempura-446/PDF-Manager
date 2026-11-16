@@ -685,7 +685,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
     this.sizeSelect.addEventListener("change", () => this._setSize(+this.sizeSelect.value));
     this.undoBtn.addEventListener("click", () => this._undo());
     this.redoBtn.addEventListener("click", () => this._undo(true));
-    this.deleteBtn.addEventListener("click", () => this.uiManager?.delete());
+    this.deleteBtn.addEventListener("click", () => { if (!this._markDelete()) this.uiManager?.delete(); });
     this.annotSaveBtn.addEventListener("click", () => this.save());
     this.annotCloseBtn.addEventListener("click", () => this.closeAnnotate());
 
@@ -788,7 +788,11 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
     if (mod && e.key.toLowerCase() === "o") { e.preventDefault(); this.chooseFile(); return; }
     if (e.key === "Escape" && !this.menu.hidden) { this.#closeMenu(); this.moreBtn.focus(); return; }
     if (e.key === "Escape" && !this.zoomMenu.hidden) { this.#closeZoomMenu(); this.zoomMenuBtn.focus(); return; }
-    if (!this.doc) return;
+    if (!this.doc) {
+      // (The document is being shown again after a markup changed: its keys are still its own.)
+      if (!mod && !e.altKey && !isTyping(e) && this.markPending && this._markKey(e)) e.preventDefault();
+      return;
+    }
     if (e.key === "Escape" && this.panelOpen && !this.#panelDocked()) { e.preventDefault(); this.setPanel(false, { focus: true }); return; }
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
     if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); this.print(); return; }
@@ -806,7 +810,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
     if (mod && e.key === "0") { e.preventDefault(); this.pdfViewer.currentScaleValue = "auto"; return; }
     if (mod || e.altKey || isTyping(e)) return;
     if (this.measureMode && this._measureKey(e)) { e.preventDefault(); return; }
-    if (this.markSel && this._markKey(e)) { e.preventDefault(); return; }   // a selected markup: Delete, Esc, the arrows
+    if (this._markHasKeys() && this._markKey(e)) { e.preventDefault(); return; }   // a selected markup: Delete, Esc, the arrows
     if (e.key === "Escape" && !this.findbar.hidden) { this.closeFind(); return; }
     if (this.markupMode === "IMAGES" && this.pickedImage && !isTyping(e) && (e.key === "Delete" || e.key === "Backspace")) {
       e.preventDefault();
@@ -1340,7 +1344,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
       this.annotRedo = !!details.hasSomethingToRedo;
       this.#compareAnnotations();
       this._refresh({ notify: false });
-      this.deleteBtn.disabled = !details.hasSelectedEditor;
+      this.deleteBtn.disabled = !details.hasSelectedEditor && !this.markSel;
     });
 
     eventBus.on("pagesinit", () => {

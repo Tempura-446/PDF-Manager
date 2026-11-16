@@ -27,6 +27,11 @@ Change a markup after you've placed it.
   order, who made it and when, and the replies to it are kept.
 - Markups made by other programs, measurements and highlights aren't
   changed this way yet; ZPDF says so if you try through the command set.
+- **From the check on Windows:** an arrow key held down moves the markup
+  by every press (they're added up while the file is written) and no
+  longer scrolls the page; a double-click on a callout opens its words
+  (Enter does too); the bar's bin removes the selected markup; a cloud is
+  taken by a press on its bumps.
 - **Fixed: a network scanner failing with "error 0x80190199".** Through
   Windows' own driver for network scanners, that code is the scanner
   answering "these settings conflict". ZPDF now tries once more with only

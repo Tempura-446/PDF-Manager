@@ -86,6 +86,21 @@ const { chromium } = require("playwright");
     await page.waitForFunction(() => !!reader.markSel, null, { timeout: 10000 });
     out.afterNudge = (await annots())[0].rect;
 
+    // The arrow key held: twelve key-downs faster than the file is written.
+    // Every one counts, and the page stays where it is.
+    const settled = async () => {
+      await page.waitForFunction(() => !reader.markBusy && !reader.markPending && !reader.markQueued && !!reader.markSel, null, { timeout: 30000 });
+      await ready();
+    };
+    const scrollBefore = await page.evaluate(() => reader.container.scrollTop);
+    for (let i = 0; i < 12; i++) { await page.keyboard.down("ArrowRight"); await page.waitForTimeout(15); }
+    await page.keyboard.up("ArrowRight");
+    await page.waitForTimeout(200);
+    await settled();
+    out.afterHold = (await annots())[0].rect;
+    out.scrolled = (await page.evaluate(() => reader.container.scrollTop)) - scrollBefore;
+    out.binReady = await page.evaluate(() => !reader.deleteBtn.disabled);
+
     // The bar's blue: the selected rectangle takes it.
     v = await version();
     await page.evaluate(() => reader._setColor(1));
@@ -110,6 +125,25 @@ const { chromium } = require("playwright");
     await page.keyboard.press("Delete");
     await rewritten(v);
     out.afterDelete = (await annots()).length;
+
+    // A cloud is taken by its bumps, which stand out from its outline.
+    await click(460, 565);
+    out.cloudByItsBumps = (await selected())?.kind;
+
+    // A double-click on the callout opens its words.
+    {
+      const [sx, sy] = await at(460, 348);
+      await page.mouse.dblclick(sx, sy);
+      await page.waitForSelector("dialog[open] .rd-calloutwords", { timeout: 5000 }).then(() => { out.wordsBox = true; }, () => { out.wordsBox = false; });
+      if (out.wordsBox) {
+        v = await version();
+        await page.fill("dialog[open] .rd-calloutwords", "Wall moved");
+        await page.keyboard.press("Enter");
+        if (await page.$("dialog[open]")) await page.click("dialog[open] button:has-text('Change')");
+        await rewritten(v);
+        out.afterWords = (await annots()).find((a) => a.subtype === "FreeText")?.text;
+      }
+    }
 
     // Empty paper: a press lets go; a drag still draws a new rectangle.
     await click(150, 560 + 60);
