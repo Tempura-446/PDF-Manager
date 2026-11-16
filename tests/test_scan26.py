@@ -172,6 +172,23 @@ def test_a_scanner_that_keeps_refusing_says_so_in_words(wia):
     assert err.value.hresult == 0x80190199
 
 
+def test_a_driver_handing_back_nothing_is_tried_again(wia):
+    """Seen on a real PC as "'NoneType' object has no attribute 'GetType'":
+    the driver gave no picture and no error."""
+    s = FakeScanner(gives_nothing=2)  # PNG and BMP of the first try
+    wia.scanners = [s]
+    assert len(scanner.scan(s.id)) == 1
+
+
+def test_a_driver_that_keeps_handing_back_nothing_says_so_in_words(wia):
+    s = FakeScanner(device_id="SWD\\Escl\\abc", gives_nothing=99)
+    wia.scanners = [s]
+    with pytest.raises(scanner.ScannerError) as err:
+        scanner.scan(s.id)
+    assert "NoneType" not in str(err.value) and "didn't answer as expected" in str(err.value)
+    assert "(network)" in str(err.value)
+
+
 def test_a_network_scanner_answering_busy(wia):
     s = FakeScanner(transfer_error=0x801901F7)  # HTTP 503
     wia.scanners = [s]

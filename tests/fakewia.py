@@ -95,8 +95,9 @@ class FakeScanner:
 
     def __init__(self, name="Fake scanner", device_id=None, flatbed=True, feeder=True, flatbed_pages=None,
                  feeder_pages=None, connect_error=None, transfer_error=None, delay=0.0, png=True,
-                 reports_status=True, refuses=None):
+                 reports_status=True, refuses=None, gives_nothing=0):
         self.name = name
+        self.gives_nothing = gives_nothing  # Transfers that hand back nothing, without failing
         self.refuses = refuses  # (item's values by number) -> an HRESULT to fail Transfer with, or None
         self.id = device_id or "{6BDD1FC6-810F-11D0-BEC7-08002BE2092F}\\" + name.replace(" ", "")
         self.flatbed, self.feeder = flatbed, feeder
@@ -162,6 +163,9 @@ class _Item:
             time.sleep(s.delay)
         if s.transfer_error:
             raise FakeComError(s.transfer_error)
+        if s.gives_nothing:
+            s.gives_nothing -= 1
+            return None
         if s.refuses:
             refused = s.refuses({int(k): v.Value for k, v in s.item_props.values.items()})
             if refused:

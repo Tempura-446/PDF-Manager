@@ -157,6 +157,7 @@ class Com:
         return out
 
     def _invoke(self, obj, name, flag, values):
+        _some(obj)
         return obj.GetType().InvokeMember(name, flag, None, obj, self._args(values))
 
     def get(self, obj, name, *index):
@@ -250,6 +251,24 @@ def status():
                                               f"({_short(exc)}). Check that the Windows Image Acquisition "
                                               "service is running."}
     return {"available": True, "reason": ""}
+
+
+NO_ANSWER = ("The scanner's driver didn't answer as expected. Switch the scanner off and on again, "
+             "then try again.")
+
+
+def _some(value):
+    """``value``, which a driver should have given: some hand back nothing
+    (no device, no item, no picture) instead of failing."""
+    if value is None:
+        raise ScannerError(NO_ANSWER, "noanswer")
+    return value
+
+
+def _open(com, info):
+    """Connect to a scanner: (the device, its item to scan with)."""
+    device = _some(com.call(info, "Connect"))
+    return device, _some(com.get(_some(com.get(device, "Items")), "Item", 1))
 
 
 def _short(exc):
@@ -425,12 +444,12 @@ def _transfer(com, item, folder, number):
     from PIL import Image
 
     try:
-        picture = com.call(item, "Transfer", FORMAT_PNG)
+        picture = _some(com.call(item, "Transfer", FORMAT_PNG))
     except Exception as exc:
         code = com.hresult(exc)
         if code in ERRORS and code not in (0x8021000B, 0x8021000C):
             raise
-        picture = com.call(item, "Transfer", FORMAT_BMP)  # drivers that only give bitmaps
+        picture = _some(com.call(item, "Transfer", FORMAT_BMP))  # drivers that only give bitmaps
     target = Path(folder) / f"page{number:04d}.scan"
     if target.exists():
         target.unlink()
@@ -467,8 +486,7 @@ def scan(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", on_pag
                 raise ScannerError("That scanner isn't connected any more. Check that it is switched on, "
                                    "then choose it again.", "gone")
             try:
-                device = com.call(match[0], "Connect")
-                item = com.get(com.get(device, "Items"), "Item", 1)
+                device, item = _open(com, match[0])
                 before = _configure(com, device, item, mode, dpi, source)
             except Exception as exc:
                 raise _failure(com, exc, " to start") from None
@@ -483,23 +501,22 @@ def scan(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", on_pag
                     failure = _failure(com, exc, f" on page {number}")
                     if feeder and pages and failure.code == "empty":
                         break  # every page in the feeder is done
-                    if failure.code != "refused" or pages or asked != mode:
+                    if failure.code not in ("refused", "noanswer") or pages:
                         raise failure from None
-                    # Refused before the first page: once more with only the
+                    # Refused (or nothing given) before the first page: once more with only the
                     # settings that matter, in grey where black and white was
                     # asked (made black and white here afterwards).
                     mode = "grey" if asked == "bw" else asked
                     try:
-                        device = com.call(match[0], "Connect")
-                        item = com.get(com.get(device, "Items"), "Item", 1)
+                        device, item = _open(com, match[0])
                         _configure(com, device, item, mode, dpi, source, before=before)
                         image = _transfer(com, item, folder, number)
                     except Exception as again:
                         second = _failure(com, again, f" on page {number}")
                         last = second if second.code != "general" else failure
-                        if last.code == "refused" and "\\escl\\" in str(device_id).lower():
+                        if last.code in ("refused", "noanswer") and "\\escl\\" in str(device_id).lower():
                             last = ScannerError(f"{last} Or choose this scanner's \"(network)\" entry in the "
-                                                "list, where ZPDF talks to it directly.", "refused", last.hresult)
+                                                "list, where ZPDF talks to it directly.", last.code, last.hresult)
                         raise last from None
                 if asked == "bw" and image.mode != "1":
                     image = image.convert("L").point(lambda v: 255 if v >= 160 else 0).convert("1")

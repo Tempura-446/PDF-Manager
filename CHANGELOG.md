@@ -34,6 +34,10 @@ Change a markup after you've placed it.
   white, made black and white afterwards), and if the scanner still
   refuses says so in words and points to its "(network)" entry in the
   list, where ZPDF talks to the scanner directly.
+- **Fixed: a scan failing with "'NoneType' object has no attribute
+  'GetType'".** A scanner's driver sometimes hands back nothing (no
+  picture, no error). ZPDF now tries once more, and if that gives nothing
+  either says so in plain words.
 
 ## 0.46.0
 
