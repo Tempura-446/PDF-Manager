@@ -311,9 +311,14 @@ def _documents(pending, settings, state, now):
     nothing in the folder is still being written)."""
     if not settings.batch:
         return [[p] for p in pending if _ready(p, state)]
-    ready = [_ready(p, state) for p in pending]   # (every file looked at: each needs two looks)
-    if not all(ready):
+    # (Every file is looked at: each needs two looks. One that changed since
+    # the last look is still being written, and everything waits for it; one
+    # that stays empty is no page, and holds nothing up.)
+    before = dict(state.sizes)
+    ready = {p: _ready(p, state) for p in pending}
+    if any(p in state.sizes and before.get(p) != state.sizes[p] for p in pending):
         return []
+    pending = [p for p in pending if ready[p]]
     ordered = sorted(pending, key=lambda p: (state.sizes[p][1], p.name))
     groups = []
     for path in ordered:

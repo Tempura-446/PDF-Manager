@@ -114,6 +114,21 @@ def test_pages_that_arrive_together_become_one_document(tmp_path, fake_ocr):
     assert len(PdfReader(str(inbox / "Done" / "report_1.pdf")).pages) == 2
 
 
+def test_an_empty_file_doesnt_hold_up_the_documents_around_it(tmp_path, fake_ocr):
+    """With pages joined, everything waits while a file is still being
+    written; a file that stays empty isn't one (a scan that was cancelled)."""
+    inbox = tmp_path / "Scans"
+    inbox.mkdir()
+    watcher = watchfolders.WatchFolders(thread=False)
+    watcher.add(inbox, {"tool": "ocr"}, images=True, batch=True)
+    gap = watchfolders.BATCH_GAP
+    aged(picture(inbox / "page_1.jpg"), gap + 6)
+    aged(picture(inbox / "page_2.jpg"), gap + 3)
+    (inbox / "cancelled.jpg").write_bytes(b"")
+    settle(watcher, 3)
+    assert fake_ocr == [("page_1.pdf", 2)] and (inbox / "cancelled.jpg").exists()
+
+
 def test_a_file_that_isnt_a_picture_is_said_and_the_rest_goes_on(tmp_path, fake_ocr):
     inbox = tmp_path / "Scans"
     inbox.mkdir()
