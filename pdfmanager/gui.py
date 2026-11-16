@@ -4053,7 +4053,10 @@ def run_desktop(port=0, open_paths=(), action=None, hidden=False):
         except AttributeError as exc:  # pywebview before 4 has no closing event
             _log(f"launch: no closing event to warn about unsaved work: {exc!r}")
         if shape:
-            behind.started_hidden()
+            # (On its own thread: if no icon can be shown the window is shown
+            # instead, which pywebview only does once the window exists, and
+            # that happens in webview.start() below.)
+            threading.Thread(target=behind.started_hidden, name="start-hidden", daemon=True).start()
         # Keep the window's cache and settings between launches (pywebview
         # otherwise starts every time like a private browser window).
         options = {}
