@@ -267,12 +267,30 @@ def _request(parts, method, path, body=None, timeout=TIMEOUT, limit=MAX_XML):
         conn.close()
 
 
+class _Refused(Exception):
+    """A scanner's XML declares a document type or entities."""
+
+
 def _xml(data):
-    """A scanner's XML answer, parsed; entity tricks are refused."""
-    if b"<!DOCTYPE" in data or b"<!ENTITY" in data:
-        raise EsclError("the scanner's answer isn't one ZPDF reads", "refused")
+    """A scanner's XML answer, parsed. One that declares a document type or
+    entities is refused before it's read (they can be made to expand without
+    end), whatever encoding it's written in."""
+    import xml.parsers.expat
+
+    def refuse(*_):
+        raise _Refused()
+
+    scout = xml.parsers.expat.ParserCreate()
+    scout.StartDoctypeDeclHandler = refuse
+    scout.EntityDeclHandler = refuse
     try:
-        return ElementTree.fromstring(data)
+        scout.Parse(data, True)
+    except _Refused:
+        raise EsclError("the scanner's answer isn't one ZPDF reads", "refused") from None
+    except xml.parsers.expat.ExpatError:
+        raise EsclError("the scanner's answer couldn't be read", "refused") from None
+    try:
+        return ElementTree.fromstring(data)  # (no document type and no entities in it: checked above)
     except ElementTree.ParseError:
         raise EsclError("the scanner's answer couldn't be read", "refused") from None
 

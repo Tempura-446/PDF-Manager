@@ -62,6 +62,7 @@ class Fake:
         self.refuse_job = None       # a status for POST ScanJobs instead of 201
         self.jobs, self.deleted, self.settings, self.sent = 0, [], [], 0
         self.location_host = None    # the scanner's own name for itself in a job's address
+        self.caps = None             # other bytes to answer ScannerCapabilities with
 
 
 @pytest.fixture
@@ -84,7 +85,7 @@ def scanner(tmp_path, monkeypatch):
 
         def do_GET(self):
             if self.path == "/eSCL/ScannerCapabilities":
-                return self.answer(200, (CAPS % (ADF if fake.feeder else "")).encode())
+                return self.answer(200, fake.caps or (CAPS % (ADF if fake.feeder else "")).encode())
             if self.path == "/eSCL/ScannerStatus":
                 return self.answer(200, (STATUS % (fake.state, fake.adf)).encode())
             if self.path.endswith("/NextDocument") and self.path.startswith("/eSCL/ScanJobs/"):
@@ -111,7 +112,8 @@ def scanner(tmp_path, monkeypatch):
             if fake.refuse_job:
                 return self.answer(fake.refuse_job)
             fake.jobs, fake.sent = fake.jobs + 1, 0
-            host = fake.location_host or self.headers.get("Host")
+            # (its own address, or the name it gives itself; never what the request said)
+            host = fake.location_host or f"127.0.0.1:{self.server.server_address[1]}"
             return self.answer(201, headers=[("Location", f"http://{host}/eSCL/ScanJobs/{fake.jobs}")])
 
         def do_DELETE(self):
@@ -195,6 +197,21 @@ def test_what_goes_wrong_is_said_in_plain_words(scanner):
         escl.scan("{6BDD1FC6-WIA}")
     with pytest.raises(escl.EsclError):
         escl.capabilities("escl:file:///etc/passwd")
+
+
+def test_xml_that_declares_entities_is_refused_in_any_encoding(scanner):
+    """A device on the network could answer with XML made to expand without
+    end; a document type or an entity is refused before anything is read."""
+    laughs = ('<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY a "ha"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;">'
+              '<!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;">]><x>&c;</x>')
+    for raw in (laughs.encode(), laughs.replace('<?xml version="1.0"?>', '<?xml version="1.0" encoding="UTF-16"?>').encode("utf-16")):
+        scanner.caps = raw
+        with pytest.raises(escl.EsclError, match="isn't one ZPDF reads") as refused:
+            escl.capabilities(scanner.id)
+        assert refused.value.code == "refused"
+    scanner.caps = b"<not closed"
+    with pytest.raises(escl.EsclError, match="couldn't be read"):
+        escl.capabilities(scanner.id)
 
 
 def test_a_cancelled_scan_ends_the_scanners_job(scanner):
