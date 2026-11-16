@@ -330,8 +330,8 @@ class WatchFolders:
                 memory = self.memories[folder_id] = watch.ProcessedFiles(_memory_file(folder_id))
         self._set(folder_id, state="watching", detail="")
 
-        def report(path, result, error):
-            self._report(entry, path, result, error)
+        def report(path, result, error, files=1):
+            self._report(entry, path, result, error, files)
 
         def stop():
             return self.stopping.is_set() or not self._still_on(folder_id)
@@ -346,7 +346,7 @@ class WatchFolders:
         with self.lock:
             self.status.setdefault(folder_id, {}).update(changes)
 
-    def _report(self, entry, path, result, error):
+    def _report(self, entry, path, result, error, files=1):
         if isinstance(error, watch.FileInUse):
             # Not a failure (it is tried again once closed): just news.
             with self.lock:
@@ -359,7 +359,8 @@ class WatchFolders:
         ok = error is None
         if ok:
             message = (f"{path.name}: skipped, the same as one done before" if result is None else
-                       f"{path.name} is done: {result.name}" +
+                       (f"{path.name} is done: " if files == 1 else
+                        f"{path.name} and {files - 1} more ({files} files) are done as one document: ") + result.name +
                        (f" in {result.parent.name}" if result.parent != path.parent else ""))
         else:
             if isinstance(error, PLAIN_ERRORS):

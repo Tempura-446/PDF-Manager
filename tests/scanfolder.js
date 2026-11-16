@@ -49,8 +49,7 @@ const fs = require("fs");
       await page.waitForTimeout(200);
     }
     out.done = true;
-    await page.click("#scan-not-listed");                 // close, open again: the folder shows what it did
-    await page.click("#scan-not-listed");
+    // The listed folder follows what it does, without closing and opening the guide.
     await page.waitForFunction(() => /1 done/.test(document.getElementById("scan-guide-list").textContent), null, { timeout: 15000 });
     out.after = await page.$$eval("#scan-guide-list li", (l) => l.map((li) => li.textContent));
   } catch (e) {

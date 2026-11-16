@@ -3187,10 +3187,17 @@ async function scanDevices(again = false) {
 }
 /** "My scanner isn't listed": any scanner can save into a folder, and ZPDF
  *  watches that folder (a watch folder that takes pictures too). */
+let scanFolderTimer = 0;
 async function scanFolderGuide(show = $("scan-folder-guide").hidden) {
   $("scan-folder-guide").hidden = !show;
   $("scan-not-listed").setAttribute("aria-expanded", String(show));
+  clearInterval(scanFolderTimer);
   if (!show) return;
+  // (What the watched folders are doing is kept up to date while the guide is open.)
+  scanFolderTimer = setInterval(async () => {
+    if ($("scan-folder-guide").hidden || $("scan-host").hidden) { clearInterval(scanFolderTimer); return; }
+    try { scanFolderShow(await jsonApi("/api/watch")); } catch (e) { /* next time */ }
+  }, 4000);
   $("scan-folder-browse").hidden = !(isDesktop() && window.pywebview.api.pick_folder);
   $("scan-folder").focus();
   try { scanFolderShow(await jsonApi("/api/watch")); } catch (e) { /* the list is a nicety */ }

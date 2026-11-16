@@ -32,6 +32,8 @@
 - [x] "My scanner isn't listed…" on the Scan page: the folder the scanner saves to, what happens to each scan (Make searchable, another tool, or a saved recipe), "Pages scanned together become one document"; it adds a watch folder with `images` (and `batch`). The watched scan folders are listed there with what they've done; "All watch folders…" opens Settings.
 - [x] `watch.py`: `images` (JPEG, PNG, BMP, TIFF with many pages become a PDF first, at the scan's own size when the file says its resolution) and `batch` (seconds: files within that of each other are one document, taken once nothing new has come for that long and nothing is still being written; pages in name order). `process_files`, `candidates`. Settings → Watch folders has both as tick boxes; existing folders are unchanged.
 - [x] Tests: `tests/test_scan_folder.py`, `tests/test_scan_folder_ui.py` + `tests/scanfolder.js`.
+- [x] From the Windows check: a file that isn't a picture no longer sinks the pages that arrive with it (left out and said; `left_out`); arrival is the later of the written and the created time (`_arrived`), so files copied in group by when they came; the guide's list keeps itself up to date.
+- [ ] Seen in the check, to look at: the HP took about 2 minutes to show up in the scanner list (WIA listing, the network search, or both: to time on that PC); Remove has no confirmation; HP Smart's own scan-to-folder output not seen (item H).
 - [ ] Left for later: the batch time as a setting (20 seconds now); `pdfm watch --images / --batch` on the command line; cleaning up scans from a folder like the Scan page does (straighten, blank pages) without a recipe; watching while ZPDF is closed (Phase 3).
 
 **Task 2.2: NAPS2 as an optional helper, if it's installed**

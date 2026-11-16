@@ -329,7 +329,7 @@ def test_a_file_open_in_another_program_waits_and_is_done_once_closed(tmp_path, 
     monkeypatch.setattr(watch.shutil, "copy2", copy2)
     clock = {"t": 1000.0}
     monkeypatch.setattr(watch.time, "monotonic", lambda: clock["t"])
-    report = lambda path, result, error: reports.append((path.name, result, error))
+    report = lambda path, result, error, files=1: reports.append((path.name, result, error))
     watch.poll(settings, state, log=lambda m: None, report=report)  # first look: size noted
     watch.poll(settings, state, log=lambda m: None, report=report)  # locked: waits, no report yet
     assert reports == [] and pdf in state.busy and not state.failed

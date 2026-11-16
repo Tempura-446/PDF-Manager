@@ -22,6 +22,9 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setattr(appdata, "_data_dir", lambda: tmp_path / "zpdf-data")
     monkeypatch.setattr(core, "ocr", lambda src, out, **kw: Path(out).write_bytes(Path(src).read_bytes()))
     monkeypatch.setattr(watchfolders, "INTERVAL", 0.3)
+    from pdfmanager import watch
+
+    monkeypatch.setattr(watch, "_arrived", lambda path, state: state.sizes[path][1])   # (aged(): see test_scan_folder.py)
     srv, url = gui.make_server()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield srv, url

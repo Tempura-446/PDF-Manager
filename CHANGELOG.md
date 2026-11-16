@@ -21,6 +21,10 @@ Any scanner at all: let it save into a folder, and ZPDF does the rest.
   saves a file per page: the files of one stack, arriving within a few
   seconds of each other, make one PDF, in the order they're named. ZPDF
   waits until nothing new has come before it puts them together.
+- A file among them that isn't a picture is left out and said by name; the
+  pages around it still make their document. "Together" goes by when the
+  files came into the folder, so scans copied in by hand group the same
+  way as ones a scanner writes.
 - Both are also options of any watch folder under Settings → Watch folders
   (off unless you tick them, so folders you already watch behave as
   before).

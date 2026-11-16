@@ -115,6 +115,10 @@ def candidates(settings):
     return sorted(found)
 
 
+class NotAPicture(core.PdfManagerError):
+    """A file named like a picture that isn't one (or is damaged)."""
+
+
 def _picture_pages(path):
     """[(image, dpi)] for a picture file: every page of a TIFF; the dpi it
     was saved with, when that's a scanner's (else the page is fitted to
@@ -135,15 +139,18 @@ def _picture_pages(path):
     except PermissionError:
         raise
     except Exception as exc:  # noqa: BLE001 - whatever Pillow says of a file that isn't a picture
-        raise core.PdfManagerError(f"{path.name} couldn't be read as a picture ({type(exc).__name__})") from None
+        raise NotAPicture(f"{path.name} couldn't be read as a picture") from None
     if not pages:
-        raise core.PdfManagerError(f"{path.name} has no pages")
+        raise NotAPicture(f"{path.name} has no pages")
     return pages
 
 
-def _gather(paths, work):
+def _gather(paths, work, left_out=None):
     """One PDF at ``work`` from the files of a document, in order: pictures
-    a page each, PDFs as they are."""
+    a page each, PDFs as they are. In a document of several files, one that
+    can't be read as a picture is left out (and added to ``left_out`` as
+    (path, error)) so the pages around it still make their document; alone,
+    or when nothing is left, it's an error."""
     from pdfmanager import scanpdf
 
     if len(paths) == 1 and paths[0].suffix.lower() == ".pdf":
@@ -155,10 +162,20 @@ def _gather(paths, work):
             parts.append(path)
             continue
         part = work.with_name(f"part{n}.pdf")
-        scanpdf._write_pdf(_picture_pages(path), part, "auto")
+        try:
+            scanpdf._write_pdf(_picture_pages(path), part, "auto")
+        except NotAPicture as exc:
+            if len(paths) == 1 or left_out is None:
+                raise
+            left_out.append((path, exc))
+            continue
         parts.append(part)
-    if len(parts) == 1:
+    if not parts:
+        raise left_out.pop(0)[1]  # (none of them could be read: the first says why, the others are told too)
+    if len(parts) == 1 and parts[0].parent == work.parent:
         shutil.move(str(parts[0]), str(work))
+    elif len(parts) == 1:
+        shutil.copy2(parts[0], work)
     else:
         core.merge(parts, work, bookmarks=False)
 
@@ -242,10 +259,13 @@ def process_file(path, settings, known_hashes=None):
     return process_files([Path(path)], settings, known_hashes)
 
 
-def process_files(paths, settings, known_hashes=None):
+def process_files(paths, settings, known_hashes=None, left_out=None):
     """Run the configured steps on the files of one document (one file, or
     a batch that becomes one PDF, named after the first). Returns the final
-    path, or None if it was skipped as a duplicate."""
+    path, or None if it was skipped as a duplicate. ``left_out``: a list
+    that gets (path, error) for each file of a batch that couldn't be read
+    as a picture; the document is made from the others, and those files are
+    left where they are."""
     paths = [Path(p) for p in paths]
     path = paths[0]
     single_pdf = len(paths) == 1 and path.suffix.lower() == ".pdf"
@@ -254,8 +274,13 @@ def process_files(paths, settings, known_hashes=None):
         _retire(path, settings)
         return None
     with tempfile.TemporaryDirectory() as tmp:
+        gathered = Path(tmp) / "gathered.pdf"
+        _gather(paths, gathered, left_out)
+        bad = {p for p, _ in left_out or []}
+        paths = [p for p in paths if p not in bad]
+        path = paths[0]                             # (named after the first file that's in it)
         work = Path(tmp) / (path.stem + ".pdf")
-        _gather(paths, work)
+        gathered.rename(work)
         if settings.remove_blank or settings.auto_rotate:
             scan.clean(work, work, remove_blank=settings.remove_blank,
                        auto_rotate=settings.auto_rotate)
@@ -303,10 +328,22 @@ def _retire(path, settings):
         path.unlink()
 
 
+def _arrived(path, state):
+    """When a file came into the folder, as near as the file system says:
+    the later of when it was written and when it was created here (a file
+    copied in keeps its old written time, and gets a new created time)."""
+    written = state.sizes[path][1]
+    try:
+        stat = path.stat()
+    except OSError:
+        return written
+    return max(written, getattr(stat, "st_birthtime", stat.st_ctime))
+
+
 def _documents(pending, settings, state, now):
     """The files to take now, as documents (lists of files). Without
-    ``batch`` each ready file is its own. With it, files whose times are
-    within ``batch`` seconds of the next one's belong together, and a
+    ``batch`` each ready file is its own. With it, files that arrived
+    within ``batch`` seconds of the next one belong together, and a
     document is taken only once nothing new has come for that long (and
     nothing in the folder is still being written)."""
     if not settings.batch:
@@ -319,14 +356,15 @@ def _documents(pending, settings, state, now):
     if any(p in state.sizes and before.get(p) != state.sizes[p] for p in pending):
         return []
     pending = [p for p in pending if ready[p]]
-    ordered = sorted(pending, key=lambda p: (state.sizes[p][1], p.name))
+    came = {p: _arrived(p, state) for p in pending}
+    ordered = sorted(pending, key=lambda p: (came[p], p.name))
     groups = []
     for path in ordered:
-        if groups and state.sizes[path][1] - state.sizes[groups[-1][-1]][1] <= settings.batch:
+        if groups and came[path] - came[groups[-1][-1]] <= settings.batch:
             groups[-1].append(path)
         else:
             groups.append([path])
-    closed = [g for g in groups if now - state.sizes[g[-1]][1] >= settings.batch]
+    closed = [g for g in groups if now - came[g[-1]] >= settings.batch]
     return [sorted(g, key=lambda p: p.name) for g in closed]   # (pages in the order they're named)
 
 
@@ -334,9 +372,11 @@ def poll(settings, state, known_hashes=None, log=print, memory=None, report=None
     """Process every ready file at the top level of the inbox once (PDFs,
     and pictures with ``settings.images``; a batch as one document with
     ``settings.batch``). ``memory``: a ProcessedFiles, to skip files done
-    before and remember those done now. ``report(path, result, error)`` is
-    told of each document done or failed (by its first file). ``stop()``:
-    checked between documents; true stops the pass."""
+    before and remember those done now. ``report(path, result, error,
+    files=n)`` is told of each document done or failed (by its first file,
+    with how many files went into it), and of each file left out of a
+    batch because it isn't a picture. ``stop()``: checked between
+    documents; true stops the pass."""
     done = []
     pending = [p for p in candidates(settings)
                if not _skipped(p, settings) and not (memory is not None and memory.knows(p))]
@@ -349,8 +389,9 @@ def poll(settings, state, known_hashes=None, log=print, memory=None, report=None
         said = path.name if len(paths) == 1 else f"{path.name} and {len(paths) - 1} more"
         if stop and stop():
             break
+        left_out = []
         try:
-            result = process_files(paths, settings, known_hashes)
+            result = process_files(paths, settings, known_hashes, left_out)
         except PermissionError as exc:
             if not _in_use(exc):
                 raise
@@ -362,17 +403,32 @@ def poll(settings, state, known_hashes=None, log=print, memory=None, report=None
                 log(f"in use: {said}")
                 if report:
                     report(path, None, FileInUse(f"{said} is open in another program; "
-                                                 "ZPDF will do it once it's closed"))
+                                                 "ZPDF will do it once it's closed"), files=len(paths))
             continue
         except Exception as exc:  # keep watching even if one file is bad
+            # (Each file is told for itself, so none is dropped without a word.)
             for each in paths:
                 state.failed.add((each, *state.sizes[each]))
                 if memory is not None:
                     memory.remember(each, "failed")
-            log(f"failed: {said}: {exc}")
-            if report:
-                report(path, None, exc)
+                why = next((e for p, e in left_out if p == each), exc)
+                log(f"failed: {each.name}: {why}")
+                if report:
+                    report(each, None, why, files=1)
             continue
+        # Files of the batch that aren't pictures: left where they are and
+        # said; the document was made from the others.
+        bad = {p for p, _ in left_out}
+        for each, why in left_out:
+            state.failed.add((each, *state.sizes[each]))
+            if memory is not None:
+                memory.remember(each, "failed")
+            log(f"left out: {each.name}: {why}")
+            if report:
+                report(each, None, why, files=1)
+        paths = [p for p in paths if p not in bad]
+        path = paths[0]
+        said = path.name if len(paths) == 1 else f"{path.name} and {len(paths) - 1} more"
         state.busy.pop(path, None)
         state.told.discard(path)
         log(f"skipped duplicate: {said}" if result is None else f"{said} -> {result}")
@@ -383,7 +439,7 @@ def poll(settings, state, known_hashes=None, log=print, memory=None, report=None
         if memory is not None and result is not None and result.parent.resolve() == settings.inbox.resolve():
             memory.remember(result, "result")
         if report:
-            report(path, result, None)
+            report(path, result, None, files=len(paths))
         done.append((path, result))
     # Forget failures of files that are gone or have changed since.
     state.failed = {f for f in state.failed if state.sizes.get(f[0]) == f[1:]}
