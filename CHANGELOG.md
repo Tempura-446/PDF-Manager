@@ -31,7 +31,8 @@ Change a markup after you've placed it.
   by every press (they're added up while the file is written) and no
   longer scrolls the page; a double-click on a callout opens its words
   (Enter does too); the bar's bin removes the selected markup; a cloud is
-  taken by a press on its bumps.
+  taken by a press on its bumps, however thick its line; Esc while an
+  arrow key is held lets go for good.
 - **Web page to PDF:** when the browser stalls and the page is tried
   again, the second try uses another installed browser (Chrome after Edge,
   say) when there is one.

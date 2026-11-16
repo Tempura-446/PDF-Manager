@@ -37,7 +37,7 @@ def marked(tmp_path):
         {"op": "add", "page": 1, "kind": "line", "points": [[100, 420], [300, 420]]},
         {"op": "add", "page": 1, "kind": "underline", "rects": [[72, 795, 140, 810]]},
         {"op": "add", "page": 1, "kind": "callout", "tip": [420, 300], "at": [470, 360], "text": "Check this"},
-        {"op": "add", "page": 1, "kind": "cloud", "rect": [400, 480, 520, 560]},
+        {"op": "add", "page": 1, "kind": "cloud", "rect": [400, 480, 520, 560], "width": 4},
     ], author="Ada")
     return out
 
@@ -79,6 +79,8 @@ def test_changing_markups_in_a_browser(app, tmp_path):
     assert out["afterNudge"][0] == resized[0] + 10 and out["afterNudge"][2] == resized[2] + 10
     # A held arrow key: every press counts, however they fall among the writes; the page doesn't scroll.
     assert out["afterHold"][0] == out["afterNudge"][0] + 12 and out["scrolled"] == 0
+    # Esc while the key is held: let go for good; the presses after it move nothing and scroll nothing.
+    assert out["escLetGo"] and 1 <= out["afterEsc"][0] - out["afterHold"][0] <= 4 and out["escScrolled"] == 0
     assert out["binReady"] and out["cloudByItsBumps"] == "cloud"
     assert out["wordsBox"] and out["afterWords"] == "Wall moved"       # a double-click opens the callout's words
     assert out["afterColour"] == [31, 79, 216]                       # the bar's blue

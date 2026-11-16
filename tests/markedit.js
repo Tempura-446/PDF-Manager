@@ -101,6 +101,20 @@ const { chromium } = require("playwright");
     out.scrolled = (await page.evaluate(() => reader.container.scrollTop)) - scrollBefore;
     out.binReady = await page.evaluate(() => !reader.deleteBtn.disabled);
 
+    // Esc while the key is held: the markup is let go for good, and the
+    // key-downs that follow move nothing and scroll nothing.
+    for (let i = 0; i < 4; i++) { await page.keyboard.down("ArrowRight"); await page.waitForTimeout(15); }
+    await page.keyboard.press("Escape");
+    for (let i = 0; i < 8; i++) { await page.keyboard.down("ArrowRight"); await page.waitForTimeout(15); }
+    await page.keyboard.up("ArrowRight");
+    await page.waitForFunction(() => !reader.markBusy && !reader.markPending, null, { timeout: 30000 });
+    await page.waitForTimeout(400);
+    await ready();
+    out.escLetGo = (await selected()) === null;
+    out.afterEsc = (await annots())[0].rect;
+    out.escScrolled = (await page.evaluate(() => reader.container.scrollTop)) - scrollBefore;
+    await click(out.afterEsc[0] + 1, 550);      // (picked up again for what follows)
+
     // The bar's blue: the selected rectangle takes it.
     v = await version();
     await page.evaluate(() => reader._setColor(1));
@@ -127,7 +141,7 @@ const { chromium } = require("playwright");
     out.afterDelete = (await annots()).length;
 
     // A cloud is taken by its bumps, which stand out from its outline.
-    await click(460, 565);
+    await click(460, 573);      // (a thick cloud: its bumps reach 16 points out)
     out.cloudByItsBumps = (await selected())?.kind;
 
     // A double-click on the callout opens its words.

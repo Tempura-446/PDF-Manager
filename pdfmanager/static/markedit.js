@@ -14,7 +14,6 @@ const BOX_KINDS = new Set(["rect", "ellipse", "cloud", "stamp"]);      // change
 const POINT_KINDS = new Set(["line", "arrow", "dimension", "polyline", "polycloud"]);
 const NEAR = 7;       // px: how close a press must be to a markup's outline
 const GRIP = 9;       // px: how close to a handle
-const CLOUD_BUMP = 6; // PDF units: how far a cloud's bumps stand out from its outline
 const TWICE = 500;    // ms: two presses this close together are a double-click
 
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -54,8 +53,10 @@ export function distanceTo(shape, p) {
   }
   if (shape.kind === "rect") return along(corners(shape.rect), true);
   // A cloud's bumps stand out from its outline: a press on them counts too.
-  if (shape.kind === "cloud") return Math.max(0, along(corners(shape.rect), true) - CLOUD_BUMP);
-  if (shape.kind === "polycloud") return Math.max(0, along(shape.points, true) - CLOUD_BUMP);
+  // (How far they reach grows with the line: markup.py draws them max(10, 6 x width) across.)
+  const reach = Math.max(10, (+shape.width || 2) * 6) / 2 + (+shape.width || 2);
+  if (shape.kind === "cloud") return Math.max(0, along(corners(shape.rect), true) - reach);
+  if (shape.kind === "polycloud") return Math.max(0, along(shape.points, true) - reach);
   return along(shape.points, false);
 }
 
@@ -247,7 +248,7 @@ export const MarkupEditing = (Base) => class extends Base {
     if ((tab.version || 0) === version) { this._markDraw(page); this.#settled(false); return; }   // it didn't work (and said so)
     // The document was written again: its markups are asked for anew, and this one picked up again.
     this.markAfter = () => {
-      const on = EDIT_MODES.has(this.markupMode) && this.activeTab === tab;
+      const on = EDIT_MODES.has(this.markupMode) && this.activeTab === tab && !this.markDropped;   // (Esc meanwhile: let go)
       if (on) this.#select(page, index);
       this.#settled(on);
     };
@@ -258,7 +259,7 @@ export const MarkupEditing = (Base) => class extends Base {
    *  arrow keys pressed meanwhile are sent as one move, so a held key ends
    *  where its presses say. */
   #settled(on) {
-    this.markPending = false;
+    this.markPending = this.markDropped = false;
     const by = this.markQueued;
     this.markQueued = null;
     if (on && by && (by[0] || by[1]) && this.markSel) this._markChange({ move: by });
@@ -268,19 +269,32 @@ export const MarkupEditing = (Base) => class extends Base {
    *  while it is being picked up again). */
   _markHasKeys() {
     if (this.markPending && !this.markBusy && !this.markAfter && !this.markAsking) this.#settled(false);   // (it never came back)
-    return !!this.markSel || !!this.markPending;
+    return !!this.markSel || !!this.markPending || !!this.markHush;
   }
 
   /** Delete, Esc and the arrow keys for the selected markup: true when the key was its. */
   _markKey(e) {
     const sel = this.markSel;
+    // Esc was pressed with an arrow key held: that key does nothing more (it doesn't move the
+    // markup, and doesn't scroll the page either) until a key is pressed afresh.
+    if (this.markHush) {
+      if (e.repeat && e.key.startsWith("Arrow")) return true;
+      this.markHush = false;
+      if (!sel && !this.markPending) return false;
+    }
     // (While the page is shown again after a change the tool reads as off for a moment: markPending says it's still ours.)
     if (!this.markPending && (!sel || !EDIT_MODES.has(this.markupMode))) return false;
     const step = e.shiftKey ? 10 : 1;
     const by = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
-    if (e.key === "Escape") { this.markQueued = null; this._markLetGo(); return true; }
+    if (e.key === "Escape") {
+      // Also while a change is being written: the markup isn't picked up again after it.
+      this.markQueued = null;
+      if (this.markPending) this.markDropped = this.markHush = true;
+      this._markLetGo();
+      return true;
+    }
     if (this.markBusy || this.markPending || !this._markShapes()) {   // still writing the last change
-      if (by) this.markQueued = [(this.markQueued?.[0] || 0) + by[0], (this.markQueued?.[1] || 0) + by[1]];
+      if (by && !this.markDropped) this.markQueued = [(this.markQueued?.[0] || 0) + by[0], (this.markQueued?.[1] || 0) + by[1]];
       return true;                                                   // (and no key scrolls the page meanwhile)
     }
     if (e.key === "Delete" || e.key === "Backspace") return this._markDelete();
