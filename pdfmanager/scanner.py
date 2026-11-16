@@ -416,7 +416,8 @@ def _configure(com, device, item, mode, dpi, source, before=None):
         for pid, value in before.items():
             if value is not None:
                 _write(com, item, pid, value)
-    was = {pid: _read(com, item, pid) for pid in (CUR_INTENT, XPOS, YPOS, XEXTENT, YEXTENT)}
+    # (Read only the first time: the second try has what it needs already.)
+    was = None if before is not None else {pid: _read(com, item, pid) for pid in (CUR_INTENT, XPOS, YPOS, XEXTENT, YEXTENT)}
     # The intent first: drivers reset the type, depth and resolution from it.
     if before is None:
         _write(com, item, CUR_INTENT, INTENT[mode])
@@ -474,7 +475,7 @@ def scan(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", on_pag
     com = _layer()
     if not _scan_lock.acquire(blocking=False):
         raise ScannerError("A scan is already running. Wait for it to finish.", "busy")
-    pages, asked = [], mode
+    pages = []
     try:
         with com.apartment(), tempfile.TemporaryDirectory(prefix="pdfm-scan-") as folder:
             progress.say("connecting to the scanner")
@@ -506,10 +507,10 @@ def scan(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", on_pag
                     # Refused (or nothing given) before the first page: once more with only the
                     # settings that matter, in grey where black and white was
                     # asked (made black and white here afterwards).
-                    mode = "grey" if asked == "bw" else asked
+                    plainer = "grey" if mode == "bw" else mode
                     try:
                         device, item = _open(com, match[0])
-                        _configure(com, device, item, mode, dpi, source, before=before)
+                        _configure(com, device, item, plainer, dpi, source, before=before)
                         image = _transfer(com, item, folder, number)
                     except Exception as again:
                         second = _failure(com, again, f" on page {number}")
@@ -518,7 +519,7 @@ def scan(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", on_pag
                             last = ScannerError(f"{last} Or choose this scanner's \"(network)\" entry in the "
                                                 "list, where ZPDF talks to it directly.", last.code, last.hresult)
                         raise last from None
-                if asked == "bw" and image.mode != "1":
+                if mode == "bw" and image.mode != "1":
                     image = image.convert("L").point(lambda v: 255 if v >= 160 else 0).convert("1")
                 image.info["dpi"] = (dpi, dpi)
                 pages.append((image, dpi))

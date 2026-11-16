@@ -212,7 +212,7 @@ def _add(writer, page, page_ref, change, author):
     added = []
     if kind == "note":
         x, y = (_num(v) for v in change.get("at", ())[:2])
-        rect = [x, y - NOTE_SIZE, x + NOTE_SIZE, y]
+        rect, popup_rect = _note_rects(x, y)
         annot = _base(writer, page_ref, "/Text", rect, color, author, text)
         annot.update({NameObject("/Name"): NameObject("/Comment"),
                       NameObject("/Open"): BooleanObject(False),
@@ -220,8 +220,7 @@ def _add(writer, page, page_ref, change, author):
         ref = writer._add_object(annot)
         popup = DictionaryObject({
             NameObject("/Type"): NameObject("/Annot"), NameObject("/Subtype"): NameObject("/Popup"),
-            NameObject("/Rect"): ArrayObject(FloatObject(v) for v in [x + NOTE_SIZE, y - 120,
-                                                                     x + NOTE_SIZE + 200, y]),
+            NameObject("/Rect"): ArrayObject(FloatObject(v) for v in popup_rect),
             NameObject("/Parent"): ref, NameObject("/Open"): BooleanObject(False), NameObject("/F"): NumberObject(0)})
         annot[NameObject("/Popup")] = writer._add_object(popup)
         added = [ref, annot.raw_get("/Popup")]  # (by reference: one popup, not a second copy in the page's list)
@@ -871,7 +870,7 @@ def describe(annot):
     rect = [float(v) for v in annot.get("/Rect", [0, 0, 0, 0])]
     style = annot.get("/BS")
     width = float(style.get_object().get("/W", 1.5)) if style is not None else 1.5
-    out = {"color": _hex(annot), "width": width, "text": text}
+    out = {"color": _hex(annot), "width": width, "text": text, "name": str(annot["/NM"])}
     if subtype in ("/Square", "/Circle"):
         if subtype == "/Circle" and re.search(r"\(\d+ of \d+\)$", text):
             return None  # one mark of a count (a measurement)
@@ -934,19 +933,27 @@ def describe_all(path, password=None):
                 shape = None
             if shape:
                 bounds = [float(v) for v in ref.get_object().get("/Rect", [0, 0, 0, 0])]
-                shapes.append({**shape, "bounds": bounds,
-                               "id": f"{ref.idnum}R" + (str(ref.generation) if ref.generation else "")})
+                shapes.append({**shape, "bounds": bounds, "id": _ident(ref)})
         if shapes:
             found[number] = shapes
     return found
 
 
+def _note_rects(x, y):
+    """Where a note placed at (x, y) and its popup go: (its icon's rectangle, the popup's)."""
+    return [x, y - NOTE_SIZE, x + NOTE_SIZE, y], [x + NOTE_SIZE, y - 120, x + NOTE_SIZE + 200, y]
+
+
+def _ident(ref):
+    """pdf.js's name for the annotation at ``ref`` (what _find reads)."""
+    return f"{ref.idnum}R" + (str(ref.generation) if ref.generation else "")
+
+
 def _moved(shape, dx, dy):
     """A described markup, moved by (dx, dy)."""
     out = dict(shape)
-    for key in ("points",):
-        if key in out:
-            out[key] = [[x + dx, y + dy] for x, y in out[key]]
+    if "points" in out:
+        out["points"] = [[x + dx, y + dy] for x, y in out["points"]]
     for key in ("tip", "at"):
         if key in out:
             out[key] = [out[key][0] + dx, out[key][1] + dy]
@@ -968,7 +975,7 @@ def change_markup(writer, page, ref, change, author):
     if shape is None:
         raise core.PdfManagerError("only markups made with ZPDF's own tools (shapes, lines, clouds, callouts, "
                                    "dimensions, stamps, notes) can be changed after placing")
-    kind = shape["kind"]
+    kind, drawn_words = shape["kind"], shape.get("value")
     if "move" in change:
         try:
             dx, dy = (_num(v) for v in change["move"][:2])
@@ -998,7 +1005,7 @@ def change_markup(writer, page, ref, change, author):
                 x, y = (_num(v) for v in shape["at"][:2])
             except (TypeError, ValueError, KeyError, IndexError):
                 raise core.PdfManagerError("a note's place is two numbers") from None
-            new = [x, y - NOTE_SIZE, x + NOTE_SIZE, y]
+            new, popup_rect = _note_rects(x, y)
             # Its popup goes with it: the one it names, and (files from before
             # 0.47.0) the copy of it written into the page's list.
             popups = [annot["/Popup"]] if "/Popup" in annot else []
@@ -1007,8 +1014,7 @@ def change_markup(writer, page, ref, change, author):
                 if other.get("/Subtype") == "/Popup" and "/Parent" in other and other["/Parent"] is annot:
                     popups.append(other)
             for popup in popups:
-                popup[NameObject("/Rect")] = ArrayObject(
-                    FloatObject(v) for v in [x + NOTE_SIZE, y - 120, x + NOTE_SIZE + 200, y])
+                popup[NameObject("/Rect")] = ArrayObject(FloatObject(v) for v in popup_rect)
         annot[NameObject("/Rect")] = ArrayObject(FloatObject(v) for v in new)
         if "text" in change:
             if shape["text"]:
@@ -1023,7 +1029,7 @@ def change_markup(writer, page, ref, change, author):
     made = _add(writer, page, page.indirect_reference, {**shape, "op": "add", "kind": kind}, author)
     new = made.get_object()
     kept = {key: annot.raw_get(key) for key in ("/NM", "/T", "/CreationDate", "/Popup", "/Subj") if key in annot}
-    if kind == "dimension" and str(annot.get("/Contents", "")) != describe(annot)["value"]:
+    if kind == "dimension" and str(annot.get("/Contents", "")) != drawn_words:
         kept["/Contents"] = annot.raw_get("/Contents")   # a comment written on it stays its comment
     for key in list(annot.keys()):
         del annot[key]
@@ -1121,4 +1127,4 @@ def apply(path, output, changes, password=None, author=None):
                     grew = True
         page[NameObject("/Annots")] = ArrayObject(ref for ref in refs if _key(ref) not in gone)
     core._write(writer, output)
-    return [f"{ref.idnum}R" + (str(ref.generation) if ref.generation else "") for ref in added]
+    return [_ident(ref) for ref in added]

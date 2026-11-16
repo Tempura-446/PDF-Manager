@@ -41,7 +41,7 @@ const { chromium } = require("playwright");
     // The markups of this version of the document are known, and the page is shown.
     const ready = async () => {
       await page.waitForFunction(() => reader.loading.hidden && document.querySelector(".page canvas")
-        && reader.markCache && reader.markCache.tab === reader.activeTab && reader.markCache.version === (reader.activeTab.version || 0),
+        && reader.activeTab.markShapes?.pages && reader.activeTab.markShapes.version === (reader.activeTab.version || 0),
       null, { timeout: 30000 });
       await page.waitForTimeout(300);
     };

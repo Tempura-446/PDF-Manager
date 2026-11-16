@@ -68,6 +68,14 @@ Asked for after 0.38.0, whose "Not yet" list this is.
 - [x] Tests: `tests/test_markup_change.py`, `tests/test_markup_change_ui.py` + `tests/markedit.js`.
 - [ ] Left for later: markups made by other programs (standard `/Polygon`, `/Line` and the like: left alone for now, with a plain message); measurements put in the PDF; adding or removing a point of a cloud or a line with corners; the bar showing the selected markup's own colour; one upload less per change (the markups are asked for again after each change).
 
+**From the audit of 0.47.0 (2026-11-16), left for a follow-up release:**
+- [ ] Keep the selection through a rewrite in the reader's own reload (`#reloadEditing`, as it already does for a picked picture), instead of markedit.js picking it up again with `markPending` / `markAfter` and the keyboard branch for the moment without a document.
+- [ ] Nudge like a drag: add the presses up, show the outline, write once when the key goes up. One Undo step by construction; the Undo merge key, the key queue and the relative `"move"` (with `_moved` on the server) can then go.
+- [ ] `/api/markup` answers with the markups as they are now (a header, like the fonts of a text edit), so the whole file isn't sent a second time to `/api/markup/describe` after each change.
+- [ ] A positive mark on what ZPDF draws (`/ZPDFKind`) when it's made; `describe` then reads it, with today's reading of the annotation (name, `/Cap`, `/BE`, the words) only for files from before. `quantities.py` should use the same test.
+- [ ] `_add` split into building an annotation and adding it to the page, so `change_markup` doesn't add a spare one and take it out again (pypdf's private `_objects`); a stamp resized to another shape is then drawn again, not stretched.
+- [ ] While dragging, keep one overlay and change its attributes (and at most once a frame) instead of rebuilding it on every pointer move.
+
 **Task 2b.2: stamps of your own**
 - [ ] A list of the user's own stamps, kept in the app's settings: words, colour, with or without name and date. Add, change and remove them from the Stamp list ("Your stamps…"); they show in the list under the built-in ones.
 - [ ] Test: a saved green "CHECKED" stamp is offered after a restart and places a `/Stamp` in that colour.

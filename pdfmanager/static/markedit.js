@@ -7,6 +7,7 @@
 // in the bar change it; a double-click changes a callout's words. The
 // server draws it again with the tool that drew it. A part of Reader.
 
+import { distance as dist, rectangle } from "./measure.js";
 import { el } from "./readerkit.js";
 
 const EDIT_MODES = new Set(["SHAPE", "STAMPS", "NOTE"]);
@@ -16,17 +17,16 @@ const NEAR = 7;       // px: how close a press must be to a markup's outline
 const GRIP = 9;       // px: how close to a handle
 const TWICE = 500;    // ms: two presses this close together are a double-click
 
-const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 /** How far ``p`` is from the segment a-b. */
 function fromSegment(p, a, b) {
   const dx = b[0] - a[0], dy = b[1] - a[1], len = dx * dx + dy * dy;
   const t = len ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len)) : 0;
   return dist(p, [a[0] + t * dx, a[1] + t * dy]);
 }
-const corners = ([x0, y0, x1, y1]) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+const corners = ([x0, y0, x1, y1]) => rectangle([x0, y0], [x1, y1]);
 
 /** The points a markup is changed by: [{ key, pt }] in PDF coordinates. */
-export function handlesOf(shape) {
+function handlesOf(shape) {
   if (BOX_KINDS.has(shape.kind)) return corners(shape.rect).map((pt, i) => ({ key: "corner" + i, pt }));
   if (POINT_KINDS.has(shape.kind)) return shape.points.map((pt, i) => ({ key: "point" + i, pt }));
   if (shape.kind === "callout") return [{ key: "tip", pt: shape.tip }, { key: "at", pt: shape.at }];
@@ -35,7 +35,7 @@ export function handlesOf(shape) {
 
 /** How far a point is from a markup's own lines (PDF units); 0 inside a
  *  stamp, a note or a callout's box. */
-export function distanceTo(shape, p) {
+function distanceTo(shape, p) {
   const inside = ([x0, y0, x1, y1]) => p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1;
   const along = (pts, closed) => {
     let best = Infinity;
@@ -61,7 +61,7 @@ export function distanceTo(shape, p) {
 }
 
 /** ``shape`` with the handle ``key`` put at ``pt`` (or, with no key, moved by ``by``). */
-export function reshaped(shape, key, pt, by = null) {
+function reshaped(shape, key, pt, by = null) {
   const out = { ...shape };
   if (!key) {
     const [dx, dy] = by;
@@ -81,8 +81,8 @@ export function reshaped(shape, key, pt, by = null) {
   return out;
 }
 
-/** What to send for ``after`` instead of ``before`` (see markup.py "change"). */
-export function changeFor(before, after, key, by) {
+/** What to send so the markup becomes ``after`` (see markup.py "change"). */
+function changeFor(after, key, by) {
   if (!key) return { move: by };
   if (key.startsWith("corner")) return { rect: after.rect };
   if (key.startsWith("point")) return { points: after.points };
@@ -96,10 +96,10 @@ export const MarkupEditing = (Base) => class extends Base {
     const tab = this.activeTab;
     if (!tab || !this.doc) return null;
     const version = tab.version || 0;
-    if (this.markCache?.tab === tab && this.markCache.version === version) return this.markCache.pages;
+    // Kept with the tab (so it goes when the tab does, and is still there after a look at another tab).
+    // ``pages`` null: it couldn't be listed; not asked again for the same version, which would send the whole file each time.
+    if (tab.markShapes?.version === version) return tab.markShapes.pages;
     if (this.markAsking?.tab === tab && this.markAsking.version === version) return null;
-    // (It couldn't be listed: not asked again for the same version, which would send the whole file each time.)
-    if (this.markFailed?.tab === tab && this.markFailed.version === version) return null;
     const asking = this.markAsking = { tab, version };
     (async () => {
       let pages = null, stale = false;
@@ -107,20 +107,18 @@ export const MarkupEditing = (Base) => class extends Base {
         const res = await this._post("/api/markup/describe", await this._currentBytes(), tab);
         if (res.ok) ({ pages } = await res.json());
         stale = this.activeTab === tab && (tab.version || 0) !== version;   // written again meanwhile
-      } catch (e) { pages = null; } finally {
+      } catch (e) { /* the list didn't come: handled below */ } finally {
         if (this.markAsking === asking) this.markAsking = null;
       }
       if (stale) { this._markShapes(); return; }         // ask for how it is now
+      if ((tab.version || 0) === version) tab.markShapes = { version, pages };
       if (this.activeTab !== tab || !pages) {
         // Another document is shown, or the list didn't come: nothing is picked up again.
-        if (!pages && this.activeTab === tab) this.markFailed = { tab, version };
         this.markAfter = null;
         if (this.markPending) this.#settled(false);
         return;
       }
-      this.markCache = { tab, version, pages };
-      if (this.markAfter) { const again = this.markAfter; this.markAfter = null; again(pages); }
-      else this.#refreshSelection(pages);
+      if (!this.#runAfter()) this.#refreshSelection(pages);
     })();
     return null;
   }
@@ -131,8 +129,17 @@ export const MarkupEditing = (Base) => class extends Base {
   #refreshSelection(pages) {
     const sel = this.markSel;
     if (!sel || this.markDrag) return;
-    const now = pages?.[sel.page]?.[sel.index];
-    if (now && now.kind === sel.shape.kind) { sel.shape = now; this._markDraw(sel.page); } else this._markLetGo();
+    // Found by its name, which it keeps through every change (its place in the list may not be the same).
+    const index = (pages?.[sel.page] || []).findIndex((s) => s.name === sel.shape.name);
+    if (index >= 0) { sel.index = index; sel.shape = pages[sel.page][index]; this._markDraw(sel.page); } else this._markLetGo();
+  }
+
+  /** What waits for the markups to be listed again is done now: true when something did. */
+  #runAfter() {
+    const again = this.markAfter;
+    this.markAfter = null;
+    again?.();
+    return !!again;
   }
 
   /** The annotate bar's tool changed, or the document did: have the markups ready. */
@@ -253,7 +260,7 @@ export const MarkupEditing = (Base) => class extends Base {
     if (!d || e.pointerId !== d.pointer) return false;
     this.markDrag = null;
     if (!d.moved || !d.now) return true;      // a click: selected, nothing changed
-    const change = changeFor(d.shape, d.now, d.key, d.by);
+    const change = changeFor(d.now, d.key, d.by);
     if (d.shape.kind === "dimension" && change.points) {
       // Its words in the scale it was drawn with (the sheet's own, if it had none then, which it then takes).
       const { value, scale } = this._dimensionOf(d.page, change.points[0], change.points[1], d.shape.scale || undefined);
@@ -268,7 +275,7 @@ export const MarkupEditing = (Base) => class extends Base {
   async _markChange(change, failure = "Could not change that: ", nudge = false) {
     const sel = this.markSel;
     if (!sel || this.markBusy) return;      // (one change at a time: a held arrow key doesn't pile them up)
-    const { page, index } = sel, tab = this.activeTab, version = tab?.version || 0;
+    const { page, index } = sel, { name } = sel.shape, tab = this.activeTab, version = tab?.version || 0;
     this.markPage = page;
     // Nudges made one after another are one step for Undo.
     const merge = nudge ? `nudge:${page}:${index}` : null;
@@ -283,10 +290,13 @@ export const MarkupEditing = (Base) => class extends Base {
     // The document was written again: its markups are asked for anew, and this one picked up again.
     this.markAfter = () => {
       const on = EDIT_MODES.has(this.markupMode) && this.activeTab === tab && !this.markDropped;   // (Esc meanwhile: let go)
-      if (on) this.#select(page, index);
+      if (on) {
+        const at = (this._markShapes()?.[page] || []).findIndex((s) => s.name === name);   // by its name; else where it was
+        this.#select(page, at >= 0 ? at : index);
+      }
       this.#settled(on);
     };
-    if (this._markShapes()) { const again = this.markAfter; this.markAfter = null; again(); }
+    if (this._markShapes()) this.#runAfter();
   }
 
   /** A change is over and the markup picked up again (or not: ``on``). The
@@ -392,11 +402,10 @@ export const MarkupEditing = (Base) => class extends Base {
     else outline = `<path d="${path(corners(s.bounds), true)}"/>`;
     const grips = handlesOf(s).map((h) => {
       const [x, y] = px(h.pt);
-      return `<circle class="rd-markgrip" data-key="${h.key}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5"/>`;
+      return `<circle class="rd-markgrip" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5"/>`;
     }).join("");
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("class", "rd-markedit" + (shape ? " rd-markmoving" : ""));
-    svg.dataset.kind = s.kind;
     svg.innerHTML = `<g class="rd-markline">${outline}</g>${grips}`;
     view.div.append(svg);
   }
