@@ -21,6 +21,7 @@
 - [x] **TLS:** a scanner offering only HTTPS is used with its own certificate (local network); one offering both keeps plain HTTP.
 - [x] **Tests:** `tests/test_escl.py` (a fake scanner: feeder, both sides, jam, busy, cancel; mDNS packets, damaged ones too), `tests/test_escl_ui.py` + `tests/esclui.js`. No test asks the real network (`conftest.py`).
 - [ ] **Not yet tried on a real scanner.** To check: discovery on Windows (the firewall may ask the first time; replies are requested unicast), a device listed twice (Windows' WSD driver and the network one), page sizes other than the largest, PDF output from devices that don't offer JPEG.
+- [ ] Seen when publishing 0.44.0: Windows itself lists a network device through its own eSCL driver (id `SWD\\Escl\\…`, e.g. the owner's HP Color LaserJet MFP M281fdw, which WIA shows as flatbed only), so the same device can appear twice: once from Windows and once as "(network)". Decide which to show: ours may offer the feeder and both sides where Windows' entry doesn't. The tests of network scanners now empty Windows' own list, since a PC may have scanners.
 - [ ] Left for later: choosing the page size; the network scanner's own resolutions in the Resolution list (the nearest offered is used now); WSD scan.
 
 ## Phase 2 (release B): scanners without WIA or AirScan (TWAIN-only and the rest)

@@ -20,6 +20,14 @@ from test_escl import scanner  # noqa: F401 - the fake network scanner (a fixtur
 HERE = Path(__file__).parent
 
 
+@pytest.fixture(autouse=True)
+def no_scanners_of_windows(monkeypatch):
+    """These tests are about network scanners: the PC they run on may have
+    scanners of its own through Windows (WIA), which the app is right to
+    list, so that list is empty here."""
+    monkeypatch.setattr(scanners, "list_scanners", lambda: [])
+
+
 @pytest.fixture
 def app():
     srv, url = gui.make_server()
@@ -65,7 +73,7 @@ def test_a_network_scanner_through_the_server(app, scanner):  # noqa: F811
 def test_both_kinds_of_scanner_are_listed_and_the_command_line(scanner, tmp_path, capsys):  # noqa: F811
     from pdfmanager.cli import main
 
-    assert scanners.all_scanners() == []                       # (no WIA here, nothing remembered)
+    assert scanners.all_scanners() == []                       # (none of Windows' here, nothing remembered)
     assert main(["scan", "--add", f"127.0.0.1:{scanner.port}"]) == 0
     assert "added Acme OfficeScan 300 (network)" in capsys.readouterr().out
     (listed,) = scanners.all_scanners()
