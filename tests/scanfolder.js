@@ -49,6 +49,11 @@ const fs = require("fs");
       await page.waitForTimeout(200);
     }
     out.done = true;
+    // Two pieces of news at once (a document done, a file left out of it) as one toast.
+    out.words = await page.evaluate(() => [
+      watchNewsWords([{ message: "goodone.jpg and 1 more (2 files) are done as one document: goodone.pdf in Done" }],
+        [{ message: "fake2.jpg couldn't be done: fake2.jpg couldn't be read as a picture" }], []),
+      watchNewsWords([{ message: "a" }, { message: "b" }], [], [])]);
     // The listed folder follows what it does, without closing and opening the guide.
     await page.waitForFunction(() => /1 done/.test(document.getElementById("scan-guide-list").textContent), null, { timeout: 15000 });
     out.after = await page.$$eval("#scan-guide-list li", (l) => l.map((li) => li.textContent));

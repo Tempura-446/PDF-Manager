@@ -4607,6 +4607,13 @@ $("watch-browse").addEventListener("click", async () => {
 // A note when a watched file is done or couldn't be (with the plain reason).
 let watchNewsTimer = 0;
 function scheduleWatchNews(ms) { clearTimeout(watchNewsTimer); watchNewsTimer = setTimeout(watchNews, ms); }
+/** Several pieces of watch-folder news as one line: the one document done in
+ *  its own words (how many files went into it, where it is), or how many
+ *  documents; then each file that couldn't be done, in its own words once. */
+function watchNewsWords(done, failed, waiting) {
+  return [done.length === 1 ? done[0].message : done.length ? `${plural(done.length, "document")} done in watch folders` : "",
+    ...failed.map((n) => n.message), ...waiting.map((n) => n.message)].filter(Boolean).join(". ") + ".";
+}
 async function watchNews() {
   try {
     if (watchLast === null) await loadWatch();
@@ -4614,9 +4621,8 @@ async function watchNews() {
     watchLast = last;
     const failed = news.filter((n) => !n.ok && !n.waiting), done = news.filter((n) => n.ok), waiting = news.filter((n) => n.waiting);
     if (news.length === 1) appToast(news[0].message, news[0].ok ? 6000 : 12000, news[0].id ? ["Open", () => openInReaderById([news[0].id])] : null);
-    else if (news.length) appToast([done.length ? `${plural(done.length, "file")} done in watch folders` : "",
-      failed.length ? `${failed.length} couldn’t be done (${failed.map((n) => n.message).join("; ")})` : "",
-      waiting.map((n) => n.message).join("; ")].filter(Boolean).join("; "), failed.length || waiting.length ? 12000 : 6000);
+    else if (news.length) appToast(watchNewsWords(done, failed, waiting), failed.length || waiting.length ? 12000 : 6000,
+      done.length === 1 && done[0].id ? ["Open", () => openInReaderById([done[0].id])] : null);
     if ($("settings-dialog").open) await loadWatch();
   } catch (e) { /* the app is closing, or busy: try again */ }
   const open = $("settings-dialog").open;

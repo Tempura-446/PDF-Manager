@@ -55,6 +55,11 @@ def test_a_folder_for_scans_from_the_scan_page(app, tmp_path):
     assert "Type the folder" in out["empty"] and "no folder" in out["missing"]
     assert "now watches" in out["added"]["said"] and str(folder) in out["added"]["listed"][0]
     assert out["done"] and "1 done" in out["after"][0]
+    # (the re-check of 0c6f026: the toast said "1 file done" and named the bad file twice)
+    assert out["words"] == [
+        "goodone.jpg and 1 more (2 files) are done as one document: goodone.pdf in Done. "
+        "fake2.jpg couldn't be done: fake2.jpg couldn't be read as a picture.",
+        "2 documents done in watch folders."]
 
     (entry,) = watchfolders.load()
     assert entry["images"] and entry["batch"] and entry["do"] == {"tool": "ocr"} and entry["results"] == "done"
