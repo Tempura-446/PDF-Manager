@@ -26,8 +26,14 @@ Watch folders keep working with the window closed.
   before.
 - Unsaved work is never lost to this: it stays open in the hidden window,
   and Quit from the icon brings the window back to ask about it.
+- While ZPDF keeps watching, Settings → Watch folders also offers **quit
+  ZPDF now**, besides Quit in the icon's menu.
 - For now this needs Windows and ZPDF's own window (the normal installed
   app). Where it can't work, Settings says why.
+- Tried on a real PC: hiding to the icon and coming back, files done while
+  hidden, opening a file from outside, start at sign-in, the icon after
+  Explorer restarts. Not yet tried on one: the icon's right-click menu and
+  quitting with unsaved work.
 
 ## 0.45.0
 
