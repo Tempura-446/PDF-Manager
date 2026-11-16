@@ -131,7 +131,10 @@ export const MarkupEditing = (Base) => class extends Base {
     if (!sel || this.markDrag) return;
     // Found by its name, which it keeps through every change (its place in the list may not be the same).
     const index = (pages?.[sel.page] || []).findIndex((s) => s.name === sel.shape.name);
-    if (index >= 0) { sel.index = index; sel.shape = pages[sel.page][index]; this._markDraw(sel.page); } else this._markLetGo();
+    if (index >= 0) {
+      Object.assign(sel, { index, shape: pages[sel.page][index], version: this.activeTab?.version || 0 });
+      this._markDraw(sel.page);
+    } else this._markLetGo();
   }
 
   /** What waits for the markups to be listed again is done now: true when something did. */
@@ -144,8 +147,26 @@ export const MarkupEditing = (Base) => class extends Base {
 
   /** The annotate bar's tool changed, or the document did: have the markups ready. */
   _markReady() {
-    if (!EDIT_MODES.has(this.markupMode) || (this.markSel && this.markSel.tab !== this.activeTab)) this._markLetGo();
-    if (EDIT_MODES.has(this.markupMode)) this._markShapes();
+    const on = EDIT_MODES.has(this.markupMode), sel = this.markSel, tab = this.activeTab;
+    if (!on || (sel && sel.tab !== tab)) {
+      this._markLetGo();
+      // The tool goes off for a moment each time the document is shown again (Undo, Redo, another
+      // change): what was selected in this document is remembered, to be picked up again by its name.
+      if (sel && sel.tab === tab) this.markWas = { tab, page: sel.page, name: sel.shape.name, version: sel.version };
+    }
+    if (!on) return;
+    const was = this.markWas;
+    this.markWas = null;
+    // Only when the document was written again since (not when the tool was just put away and taken up again).
+    if (was && was.tab === tab && !this.markSel && (tab.version || 0) !== was.version) {
+      const again = () => {
+        const index = (this._markShapes()?.[was.page] || []).findIndex((shape) => shape.name === was.name);
+        if (index >= 0 && EDIT_MODES.has(this.markupMode) && this.activeTab === tab && !this.markSel) this.#select(was.page, index);
+      };
+      if (this._markShapes()) again(); else this.markAfter ||= again;
+      return;
+    }
+    this._markShapes();
   }
 
   #markAt(n, pt, scale) {
@@ -200,8 +221,13 @@ export const MarkupEditing = (Base) => class extends Base {
   #select(page, index) {
     const shape = this._markShapes()?.[page]?.[index];
     if (!shape) { this._markLetGo(); return; }
-    this.markSel = { page, index, shape, tab: this.activeTab };
+    this.markSel = { page, index, shape, tab: this.activeTab, version: this.activeTab?.version || 0 };
     if (this.deleteBtn) this.deleteBtn.disabled = false;   // the bar's bin removes it too
+    // Its keys go to the page, not to a button of the bar that still has the focus
+    // (where Up and Down would walk the bar's buttons).
+    if (document.activeElement?.closest?.(".rd-annotbar, .rd-toolbar, .rd-bar") && !document.querySelector("dialog[open]")) {
+      this.container?.focus?.({ preventScroll: true });
+    }
     this._markDraw(page);
     this._hint?.(shape.kind === "note" ? "Drag the note to move it. Delete removes it; Esc lets go."
       : "Drag a handle to reshape it, or the markup to move it. Delete removes it; Esc lets go.", 5000);
@@ -209,7 +235,7 @@ export const MarkupEditing = (Base) => class extends Base {
 
   _markLetGo() {
     const sel = this.markSel;
-    this.markSel = this.markDrag = null;
+    this.markSel = this.markDrag = this.markWas = null;
     document.querySelector(".rd-markedit")?.remove();
     if (sel) {
       this._endHint?.();

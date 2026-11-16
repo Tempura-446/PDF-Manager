@@ -91,3 +91,6 @@ def test_changing_markups_in_a_browser(app, tmp_path):
     assert out["afterDim"]["text"] == "12' 0\"" and abs(out["afterDim"]["line"][2] - 316) <= 2
     assert out["lineSelected"]["kind"] == "line" and out["afterDelete"] == 6
     assert out["letGo"] and out["afterDraw"] == 7                    # drawing still works beside it
+    # From the Windows re-check: keys in the page list aren't the markup's; Undo and Redo keep it selected.
+    assert out["pickedForKeys"] == "rect" and out["movedFromTheList"] == 0
+    assert out["afterUndo"] == {"selected": "rect", "x": 0} and out["afterRedo"] == {"selected": "rect", "x": 1}

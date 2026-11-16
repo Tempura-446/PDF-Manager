@@ -183,6 +183,32 @@ const { chromium } = require("playwright");
     await drag([380, 680], [460, 740]);
     await rewritten(v);
     out.afterDraw = (await annots()).length;
+
+    // A key pressed in the page list (the left sidebar) isn't the markup's.
+    {
+      const first = (await annots())[0].rect;
+      await click(first[0] + 1, (first[1] + first[3]) / 2);
+      out.pickedForKeys = (await selected())?.kind;
+      v = await version();
+      await page.evaluate(() => reader.thumbsList.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })));
+      await page.waitForTimeout(500);
+      out.movedFromTheList = (await version()) - v;
+
+      // Undo and Redo show the document again: the markup stays selected (found by its name).
+      await page.keyboard.press("ArrowRight");
+      await rewritten(v);
+      await page.waitForFunction(() => !reader.markBusy && !reader.markPending && !!reader.markSel, null, { timeout: 30000 });
+      v = await version();
+      await page.keyboard.press("Control+z");
+      await rewritten(v);
+      await page.waitForFunction(() => !!reader.markSel, null, { timeout: 10000 }).catch(() => {});
+      out.afterUndo = { selected: (await selected())?.kind, x: (await annots())[0].rect[0] - first[0] };
+      v = await version();
+      await page.keyboard.press("Control+y");
+      await rewritten(v);
+      await page.waitForFunction(() => !!reader.markSel, null, { timeout: 10000 }).catch(() => {});
+      out.afterRedo = { selected: (await selected())?.kind, x: (await annots())[0].rect[0] - first[0] };
+    }
   } catch (e) {
     out.errors.push(String(e.stack || e));
   } finally {

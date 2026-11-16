@@ -810,8 +810,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
     if (mod && e.key === "0") { e.preventDefault(); this.pdfViewer.currentScaleValue = "auto"; return; }
     if (mod || e.altKey || isTyping(e)) return;
     if (this.measureMode && this._measureKey(e)) { e.preventDefault(); return; }
-    // (Not a key another part already took, or one pressed in the side panel: Delete there removes pages.)
-    if (!e.defaultPrevented && !this.side?.contains(e.target) && this._markHasKeys() && this._markKey(e)) { e.preventDefault(); return; }   // a selected markup: Delete, Esc, the arrows
+    // (Not a key another part already took, or one pressed in a side panel: Delete in the page list removes pages.)
+    if (!e.defaultPrevented && !this.side?.contains(e.target) && !this.sidebar?.contains(e.target) && this._markHasKeys() && this._markKey(e)) { e.preventDefault(); return; }   // a selected markup: Delete, Esc, the arrows
     if (e.key === "Escape" && !this.findbar.hidden) { this.closeFind(); return; }
     if (this.markupMode === "IMAGES" && this.pickedImage && !isTyping(e) && (e.key === "Delete" || e.key === "Backspace")) {
       e.preventDefault();

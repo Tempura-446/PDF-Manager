@@ -40,8 +40,10 @@ Change a markup after you've placed it.
   one step for Undo; a comment written on a dimension no longer becomes
   its measurement when it's moved; a dimension keeps the scale it was
   drawn with when an end is dragged; comments brought in from a file
-  aren't offered for redrawing as ZPDF's own; Delete in the page list no
-  longer also removes the selected markup.
+  aren't offered for redrawing as ZPDF's own; keys pressed in the page
+  list are no longer also the selected markup's; a markup stays selected
+  through Undo and Redo; its keys work straight away when a button of the
+  bar still had the focus.
 - **Web page to PDF:** when the browser stalls and the page is tried
   again, the second try uses another installed browser (Chrome after Edge,
   say) when there is one.
