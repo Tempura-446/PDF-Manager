@@ -143,12 +143,16 @@ def test_every_way_online_is_stated():
     """Each place the code opens a connection has its line in ONLINE; a new
     one must be added there (and here)."""
     said = " ".join(o["what"].lower() for o in privacy.ONLINE)
-    for word in ("new version", "update", "language", "timestamp", "web page", "link"):
+    for word in ("new version", "update", "language", "timestamp", "web page", "link", "network scanner"):
         assert word in said
     root = Path(privacy.__file__).parent
     calling = sorted(p.name for p in root.glob("*.py")
                      if "urlopen(" in p.read_text(encoding="utf-8") and p.name != "privacy.py")
     # ocr.py: language data; update.py: versions and updates. (Timestamps go through pyHanko, in certsign.py.)
     assert calling == ["ocr.py", "update.py"], calling
+    # escl.py: a network scanner, on the local network only (0.44.0)
+    others = sorted(p.name for p in root.glob("*.py") if p.name != "privacy.py" and any(
+        mark in p.read_text(encoding="utf-8") for mark in ("http.client.HTTP", "socket.socket(")))
+    assert others == ["escl.py"], others
     page = (root / "gui.html").read_text(encoding="utf-8")
     assert "no telemetry" in page and 'id="set-clear-history"' in page and 'id="set-remember"' in page

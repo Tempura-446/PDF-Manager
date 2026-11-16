@@ -982,6 +982,8 @@ body.scan-mode main > :not(#scan-host, .page-head, #error) { display: none !impo
 .scan-field { display: flex; flex-direction: column; gap: 6px; border: 0; margin: 0; padding: 0; min-width: 0; }
 .scan-field > legend, .scan-field > label { padding: 0; margin-bottom: 6px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
 .scan-field select { width: 100%; }
+.scan-links { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; }
+#scan-add-row input { flex: 1; min-width: 0; }
 .scan-row { display: flex; gap: 6px; }
 .scan-row select { flex: 1; min-width: 0; }
 .scan-row .chip-btn { width: 38px; height: 38px; flex: none; }
@@ -3029,13 +3031,24 @@ function buildScan() {
     el("div", { class: "scan-field field" }, el("label", { for: "scan-device" }, "Scanner"),
       el("div", { class: "scan-row" }, el("select", { id: "scan-device" }, el("option", { value: "" }, "Looking for scanners…")),
         el("button", { type: "button", class: "chip-btn", id: "scan-refresh", title: "Look for scanners again", "aria-label": "Look for scanners again",
-          onclick: () => scanDevices(true) }, icon("rotate")))),
+          onclick: () => scanDevices(true) }, icon("rotate"))),
+      el("p", { class: "hint scan-links", id: "scan-device-hint" },
+        el("button", { type: "button", class: "link-btn", id: "scan-add-network", onclick: () => scanAddNetwork() }, "Add a network scanner…"),
+        el("button", { type: "button", class: "link-btn", id: "scan-forget-network", hidden: true, onclick: () => scanForgetNetwork() }, "Forget this one")),
+      el("div", { class: "scan-row", id: "scan-add-row", hidden: true },
+        el("input", { type: "text", id: "scan-address", placeholder: "192.168.1.40", spellcheck: "false", autocomplete: "off",
+          "aria-label": "The scanner’s address on your network", "aria-describedby": "scan-add-hint",
+          onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); scanAddNetworkGo(); } else if (e.key === "Escape") { e.stopPropagation(); scanAddNetwork(false); } } }),
+        el("button", { type: "button", class: "btn secondary pb-small", id: "scan-address-add", onclick: () => scanAddNetworkGo() }, "Add")),
+      el("p", { class: "hint", id: "scan-add-hint", hidden: true },
+        "The address its display or your router shows. Works with scanners and printers that offer AirScan (also called eSCL or Mopria Scan); no driver is needed.")),
     scanSeg("mode", "Colour", [["grey", "Greyscale"], ["colour", "Colour"], ["bw", "Black and white"]], prefs.mode),
     el("div", { class: "scan-field field" }, el("label", { for: "scan-dpi" }, "Resolution"),
       el("select", { id: "scan-dpi" }, ...[["150", "150 dpi: quick, smaller"], ["200", "200 dpi"], ["300", "300 dpi: best for documents"]]
         .map(([v, t]) => el("option", { value: v, selected: v === String(prefs.dpi) }, t)))),
     scanSeg("from", "Paper from", [["flatbed", "Glass (flatbed)"], ["feeder", "Document feeder"]], prefs.from, { describedBy: "scan-from-hint" }),
     el("p", { class: "hint", id: "scan-from-hint", hidden: true }),
+    el("div", { class: "scan-checks", id: "scan-duplex-row", hidden: true }, scanCheck("scan-duplex", "Both sides of each sheet", false)),
     el("button", { type: "button", class: "btn scan-go", id: "scan-go", onclick: () => scanAcquire() }, icon("scan"), el("span", { id: "scan-go-label" }, "Scan")));
   const photosPart = el("div", { class: "scan-part", id: "scan-photos-part", role: "group", "aria-label": "Photo settings" },
     drop, photoInput, replaceInput,
@@ -3100,6 +3113,9 @@ function scanShowParts() {
   if (feeder.disabled && feeder.checked) $("scan-from-flatbed").checked = true;
   hint.hidden = !(device && !device.feeder);
   hint.textContent = device && !device.feeder ? "This scanner has no document feeder." : "";
+  // Both sides: a network scanner whose feeder turns the sheet, with the feeder chosen.
+  $("scan-duplex-row").hidden = !(device && device.duplex && scanValue("from") === "feeder");
+  $("scan-forget-network").hidden = !(device && device.found === "added");
   $("scan-go").disabled = scanState.busy || !device;
   $("scan-go-label").textContent = scanState.pages.length && scanValue("from") === "flatbed" ? "Scan another page" : "Scan";
   $("scan-upright").disabled = !st?.upright;
@@ -3133,13 +3149,48 @@ async function scanDevices(again = false) {
     scanState.devices = devices;
     select.replaceChildren(...(devices.length ? devices.map((d) => el("option", { value: d.id, selected: d.id === was }, d.name))
       : [el("option", { value: "" }, "No scanner found")]));
-    if (!devices.length) scanSay("No scanner was found. Check that it is switched on and connected, then press ↻ to look again. Or use Photos.", true);
+    if (!devices.length) {
+      const wia = scanState.status?.scanner?.wia;
+      scanSay("No scanner was found. Check that it is switched on and connected, then press ↻ to look again; a network scanner can also be added by its address. Or use Photos."
+        + (wia && !wia.available ? ` (Scanners with a Windows driver can’t be used here: ${wia.reason})` : ""), true);
+    }
     else if (again) scanSay(`${plural(devices.length, "scanner")} found.`);
   } catch (e) {
     scanState.devices = [];
     select.replaceChildren(el("option", { value: "" }, "No scanner found"));
     scanSay(capital(e.message || e), true);
   } finally { $("scan-refresh").disabled = false; scanShowParts(); }
+}
+/** A network scanner that didn't answer the search: asked for by its address
+ *  (driverless scanning: AirScan / eSCL), remembered from then on. */
+function scanAddNetwork(show = $("scan-add-row").hidden) {
+  $("scan-add-row").hidden = $("scan-add-hint").hidden = !show;
+  if (show) $("scan-address").focus(); else $("scan-add-network").focus();
+}
+async function scanAddNetworkGo() {
+  const address = $("scan-address").value.trim();
+  if (!address) { scanSay("Type the scanner’s address first, for example 192.168.1.40.", true); return; }
+  scanSay("Asking the scanner what it can do…");
+  $("scan-address-add").disabled = true;
+  try {
+    const res = await api("/api/scan/add-network", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ address }) });
+    const { device } = await res.json();
+    scanState.devices = [...(scanState.devices || []).filter((d) => d.id !== device.id), device];
+    $("scan-device").replaceChildren(...scanState.devices.map((d) => el("option", { value: d.id, selected: d.id === device.id }, d.name)));
+    $("scan-address").value = "";
+    scanAddNetwork(false);
+    scanSay(`${device.name} was added.`);
+  } catch (e) { scanSay(capital(e.message || e), true); }
+  finally { $("scan-address-add").disabled = false; }
+  scanShowParts();
+}
+async function scanForgetNetwork() {
+  const device = $("scan-device").value;
+  if (!device) return;
+  try {
+    await api("/api/scan/forget-network", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ device }) });
+    await scanDevices();
+  } catch (e) { scanSay(capital(e.message || e), true); }
 }
 /** A line under the pages: what's happening, or (``bad``) what went wrong. */
 function scanSay(text, bad = false) {
@@ -3208,7 +3259,8 @@ async function scanAcquire(replace = null) {
   try {
     const box = await scanBox();
     const res = await runJob("/api/scan/acquire", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ box, device, mode: s.mode, dpi: Number(s.dpi), source: feeder ? "feeder" : "flatbed" }) }, scanJobUi);
+      body: JSON.stringify({ box, device, mode: s.mode, dpi: Number(s.dpi), source: feeder ? "feeder" : "flatbed",
+        duplex: feeder && !$("scan-duplex-row").hidden && $("scan-duplex").checked }) }, scanJobUi);
     if (!res) { await scanPoll(true); scanSay(`Stopped. ${scanState.pages.length > before ? "The pages scanned so far are kept." : "Nothing was scanned."}`); return; }
     const data = await res.json();
     if (replace) {

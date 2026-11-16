@@ -1148,12 +1148,19 @@ def cmd_scan(a):
     or every page in the feeder, then a searchable PDF."""
     from pdfmanager import scanner, scanpdf
 
-    found = scanner.list_scanners()
+    if a.add:
+        from pdfmanager import escl
+
+        device = escl.add(a.add)
+        print(f"added {device['name']}\n   {device['id']}")
+        if not a.output:
+            return 0
+    found = scanner.all_scanners()
     if a.list:
         if not found:
             print(scanner.NONE_FOUND)
         for s in found:
-            print(f"{s['name']}{' (feeder)' if s['feeder'] else ''}\n   {s['id']}")
+            print(f"{s['name']}{' (feeder' + (', both sides' if s.get('duplex') else '') + ')' if s['feeder'] else ''}\n   {s['id']}")
         return 0
     if not a.output:
         raise core.PdfManagerError("say where to save the PDF with -o (or use --list to see the scanners)")
@@ -1172,7 +1179,7 @@ def cmd_scan(a):
     pages = []
     print(f"Scanning with {device['name']} ({a.mode}, {a.dpi} dpi, {'document feeder' if a.feeder else 'flatbed'})")
     while True:
-        got = scanner.scan(device["id"], mode=a.mode, dpi=a.dpi, source=source)
+        got = scanner.scan_any(device["id"], mode=a.mode, dpi=a.dpi, source=source, duplex=a.duplex)
         pages += [scanpdf.Page(image, dpi) for image, dpi in got]
         print(f"   {len(pages)} page{'s' if len(pages) != 1 else ''} so far")
         if a.feeder or not sys.stdin.isatty():
@@ -1849,6 +1856,11 @@ def build_parser():
     sp.add_argument("--dpi", type=int, default=300, choices=[150, 200, 300], help="resolution (default 300)")
     sp.add_argument("--feeder", action="store_true",
                     help="scan every page in the document feeder (default: one page at a time from the glass)")
+    sp.add_argument("--duplex", action="store_true",
+                    help="with --feeder: both sides of each sheet (network scanners that can)")
+    sp.add_argument("--add", metavar="ADDRESS",
+                    help="remember a network scanner by its address (e.g. 192.168.1.40); it needs no driver "
+                         "(AirScan / eSCL)")
     scan_cleanup(sp)
 
     sp = other("photos-to-pdf", cmd_photos_to_pdf,

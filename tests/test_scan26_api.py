@@ -126,7 +126,8 @@ def test_status_without_wia(app):
         _, state, _ = _call(app, "/api/scan/status")
     finally:
         scanner.use(None)
-    assert not state["scanner"]["available"] and state["scanner"]["reason"]
+    # (0.44.0: network scanners can still be tried; Windows' own are said to be out, and why)
+    assert state["scanner"]["available"] and not state["scanner"]["wia"]["available"] and state["scanner"]["wia"]["reason"]
 
 
 def test_scan_is_a_tool_of_the_app():

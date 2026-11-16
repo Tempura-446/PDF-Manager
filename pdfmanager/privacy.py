@@ -43,6 +43,10 @@ ONLINE = [
     {"what": "Turning a web page into a PDF",
      "when": "only for the address you type (a saved web page may fetch the pictures it links to)",
      "sends": "what any browser sends when it opens that page"},
+    {"what": "Finding and using a network scanner",
+     "when": "only on the Scan page: a question to your own network asking which scanners are there, and the "
+             "scan itself from the one you choose",
+     "sends": "nothing beyond your local network: the question and the scan settings go to the scanner only"},
     {"what": "Opening a link in a PDF",
      "when": "only when you click it (ZPDF asks first and shows the real address)",
      "sends": "nothing from ZPDF: your browser opens the page"},

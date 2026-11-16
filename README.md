@@ -369,6 +369,15 @@ into a PDF in one place. The pages come from:
   feeder. The feeder gives every page in it; the glass one page each time
   you press **Scan another page**. An empty feeder, a busy or offline
   scanner are said plainly, and Cancel stops between pages.
+- **a network scanner, with no driver** (any computer): scanners and
+  multifunction printers on your network that offer AirScan (also called
+  eSCL or Mopria Scan: most network devices of the last ten years) are
+  found by themselves and listed with "(network)" after their name. If the
+  search finds nothing, **Add a network scanner…** takes its address (for
+  example 192.168.1.40) and remembers it. They scan the same way, and one
+  whose feeder turns the page offers **Both sides of each sheet**.
+  Everything stays on your network. (Written to the published protocol and
+  tested against a simulated device; not yet tried on a real scanner.)
 - **photos** taken with a phone (any computer): ZPDF finds the page's four
   edges in each photo, flattens it as if it had been scanned, crops and
   straightens it, and gives it a clean look: shadows evened out, the paper
