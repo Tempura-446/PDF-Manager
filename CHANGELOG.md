@@ -27,6 +27,13 @@ Change a markup after you've placed it.
   order, who made it and when, and the replies to it are kept.
 - Markups made by other programs, measurements and highlights aren't
   changed this way yet; ZPDF says so if you try through the command set.
+- **Fixed: a network scanner failing with "error 0x80190199".** Through
+  Windows' own driver for network scanners, that code is the scanner
+  answering "these settings conflict". ZPDF now tries once more with only
+  the settings that matter (in grey where the scanner has no black and
+  white, made black and white afterwards), and if the scanner still
+  refuses says so in words and points to its "(network)" entry in the
+  list, where ZPDF talks to the scanner directly.
 
 ## 0.46.0
 

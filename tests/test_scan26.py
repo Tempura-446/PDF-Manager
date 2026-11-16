@@ -139,6 +139,47 @@ def test_unknown_failure_names_its_code(wia):
         scanner.scan(s.id)
 
 
+def test_a_network_scanner_refusing_black_and_white_is_scanned_in_grey(wia):
+    """Windows' driver for network scanners passes on the scanner's own
+    answer: 0x80190199 is HTTP 409, "these settings conflict". Many such
+    scanners have no black and white: scanned in grey, made black and white."""
+    s = FakeScanner(refuses=lambda item: 0x80190199 if item[4104] == 1 else None)
+    wia.scanners = [s]
+    pages = scanner.scan(s.id, mode="bw", dpi=300)
+    assert len(pages) == 1 and pages[0][0].mode == "1"
+    assert s.item_props.values["4104"].Value == 8
+
+
+def test_a_scanner_refusing_the_full_settings_is_scanned_with_only_what_matters(wia):
+    s = FakeScanner(refuses=lambda item: 0x80190199 if item[6151] == 2550 else None)  # the whole area stretched
+    wia.scanners = [s]
+    assert len(scanner.scan(s.id, mode="grey")) == 1
+
+
+def test_windows_own_entry_of_a_network_scanner_points_to_the_network_one(wia):
+    s = FakeScanner(device_id="SWD\\Escl\\abc", refuses=lambda item: 0x80190199)
+    wia.scanners = [s]
+    with pytest.raises(scanner.ScannerError, match=r"\(network\)"):
+        scanner.scan(s.id)
+
+
+def test_a_scanner_that_keeps_refusing_says_so_in_words(wia):
+    s = FakeScanner(refuses=lambda item: 0x80190199)
+    wia.scanners = [s]
+    with pytest.raises(scanner.ScannerError) as err:
+        scanner.scan(s.id)
+    assert err.value.code == "refused" and "refused these settings" in str(err.value) and "409" in str(err.value)
+    assert err.value.hresult == 0x80190199
+
+
+def test_a_network_scanner_answering_busy(wia):
+    s = FakeScanner(transfer_error=0x801901F7)  # HTTP 503
+    wia.scanners = [s]
+    with pytest.raises(scanner.ScannerError) as err:
+        scanner.scan(s.id)
+    assert err.value.code == "busy"
+
+
 def test_gone_scanner(wia):
     wia.scanners = [FakeScanner()]
     with pytest.raises(scanner.ScannerError) as err:

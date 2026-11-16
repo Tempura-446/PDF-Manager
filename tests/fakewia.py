@@ -90,12 +90,14 @@ class FakeScanner:
     """One scanner. ``flatbed_pages``: what each press of Scan on the glass
     gives (the last one again when they run out); ``feeder_pages``: the
     pages in the feeder; ``connect_error`` / ``transfer_error``: an HRESULT
-    to fail with; ``delay``: seconds each page takes."""
+    to fail with; ``refuses``: settings it won't scan with; ``delay``: seconds
+    each page takes."""
 
     def __init__(self, name="Fake scanner", device_id=None, flatbed=True, feeder=True, flatbed_pages=None,
                  feeder_pages=None, connect_error=None, transfer_error=None, delay=0.0, png=True,
-                 reports_status=True):
+                 reports_status=True, refuses=None):
         self.name = name
+        self.refuses = refuses  # (item's values by number) -> an HRESULT to fail Transfer with, or None
         self.id = device_id or "{6BDD1FC6-810F-11D0-BEC7-08002BE2092F}\\" + name.replace(" ", "")
         self.flatbed, self.feeder = flatbed, feeder
         self.flatbed_pages = list(flatbed_pages or [text_page(1)])
@@ -160,6 +162,10 @@ class _Item:
             time.sleep(s.delay)
         if s.transfer_error:
             raise FakeComError(s.transfer_error)
+        if s.refuses:
+            refused = s.refuses({int(k): v.Value for k, v in s.item_props.values.items()})
+            if refused:
+                raise FakeComError(refused)
         feeder = s.device_props.values["3088"].Value == 1
         if feeder:
             if not s.feeder_pages:
