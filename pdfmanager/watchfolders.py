@@ -10,6 +10,11 @@ Each folder has
   originals: "keep" (left where they are) or "move" (to an Originals folder
              inside it)
   paused:    whether it's paused
+  images:    whether pictures are taken too (what a scanner saves: JPEG,
+             PNG, TIFF, BMP), each made a PDF first
+  batch:     whether files that arrive together (within BATCH_GAP seconds
+             of each other) become one document: a scanner that saves a
+             file per page then gives one PDF per stack of paper
 
 The folders are kept in watch-folders.json in the app's data folder, and
 which files of each were done in watch-processed/<id>.json, so a restart
@@ -38,6 +43,7 @@ SUFFIXES = {"ocr": " (searchable)", "compress": " (smaller)", "pdfa": " (PDF-A)"
 DONE_FOLDER, ORIGINALS_FOLDER = "Done", "Originals"
 INTERVAL = 3.0   # seconds between looks (a file must hold still for one)
 NEWS_KEPT = 50
+BATCH_GAP = 20.0  # seconds between the files of one batch, at most
 # Errors whose message is told as it is (the tools' own; see gui.EXPECTED_ERRORS).
 PLAIN_ERRORS = (core.PdfManagerError, PageRangeError, ValueError, FileNotFoundError, NotADirectoryError)
 # A tool's options as its form starts out: gui.default_options, handed in by
@@ -73,14 +79,15 @@ def describe(entry):
     where = f"{DONE_FOLDER} folder" if entry["results"] == "done" else \
         f"next to the original (“…{suffix(entry)}.pdf”)"
     originals = "originals kept" if entry["originals"] == "keep" else f"originals moved to {ORIGINALS_FOLDER}"
-    return f"{what} → {where}, {originals}"
+    extra = (", pictures too" if entry.get("images") else "") + (", pages that arrive together as one document" if entry.get("batch") else "")
+    return f"{what} → {where}, {originals}{extra}"
 
 
 def suffix(entry):
     return SUFFIXES[entry["do"].get("tool", "recipe")]
 
 
-def check(folder, do, results, originals, existing=()):
+def check(folder, do, results, originals, existing=(), images=False, batch=False):
     """The entry for a new watch folder, or PdfManagerError saying what's wrong."""
     from pdfmanager import recipes
 
@@ -114,8 +121,13 @@ def check(folder, do, results, originals, existing=()):
         raise core.PdfManagerError("choose where the results go")
     if originals not in ("keep", "move"):
         raise core.PdfManagerError("choose what happens to the originals")
-    return {"id": secrets.token_hex(6), "folder": str(folder), "do": do, "results": results,
-            "originals": originals, "paused": False}
+    entry = {"id": secrets.token_hex(6), "folder": str(folder), "do": do, "results": results,
+             "originals": originals, "paused": False}
+    if images:
+        entry["images"] = True
+    if batch:
+        entry["batch"] = True
+    return entry
 
 
 def steps(entry):
@@ -134,7 +146,8 @@ def settings_for(entry):
     return watch.WatchSettings(
         inbox=folder, dest=folder if beside else folder / DONE_FOLDER, recipe=steps(entry),
         originals="keep" if entry["originals"] == "keep" else "move",
-        originals_folder=ORIGINALS_FOLDER, suffix=suffix(entry) if beside else "")
+        originals_folder=ORIGINALS_FOLDER, suffix=suffix(entry) if beside else "",
+        images=bool(entry.get("images")), batch=BATCH_GAP if entry.get("batch") else 0)
 
 
 class _OneWatcher:
@@ -217,9 +230,9 @@ class WatchFolders:
         return {"state": state, "detail": status.get("detail", ""), "done": status.get("done", 0),
                 "failed": status.get("failed", 0), "last": status.get("last")}
 
-    def add(self, folder, do, results="done", originals="keep"):
+    def add(self, folder, do, results="done", originals="keep", images=False, batch=False):
         with self.lock:
-            entry = check(folder, do, results, originals, self.folders)
+            entry = check(folder, do, results, originals, self.folders, images=images, batch=batch)
             self.folders.append(entry)
             _save(self.folders)
         self.start()

@@ -12,6 +12,13 @@ A file is taken once its size and time are the same at two looks; a browser
 download still under way (``x.pdf`` beside ``x.pdf.crdownload``, ``.part``
 and the like), an Office lock file (``~$x.pdf``) and a hidden file are left
 alone.
+
+With ``images`` the pictures a scanner saves (JPEG, PNG, TIFF with one or
+many pages, BMP) are taken too: each becomes a PDF first, a page per
+picture at the scan's own size. With ``batch`` (seconds), files that
+arrive within that time of each other are one document: a scanner that
+saves a file per page gives one PDF per stack of paper, in the order the
+files are named. A batch is done once nothing new has come for that long.
 """
 
 import dataclasses
@@ -49,6 +56,8 @@ class WatchSettings:
     # Added to the result's name. With one, results can go into the inbox
     # itself (next to the originals): names ending in it aren't taken.
     suffix: str = ""
+    images: bool = False          # take pictures too (what a scanner saves): each becomes a PDF first
+    batch: float = 0              # seconds: files arriving within this of each other are one document
 
     def __post_init__(self):
         self.inbox, self.dest = Path(self.inbox), Path(self.dest)
@@ -92,6 +101,66 @@ def _in_use(exc):
 
 # Beside a download that isn't finished yet (Chrome, Edge, Firefox, Safari, others).
 PARTIAL = (".crdownload", ".part", ".partial", ".download", ".tmp", ".opdownload")
+
+
+IMAGE_TYPES = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp")
+
+
+def candidates(settings):
+    """The files at the top level of the inbox that could be taken: PDFs,
+    and with ``images`` the pictures a scanner saves."""
+    found = organize.find_pdfs(settings.inbox)
+    if settings.images:
+        found += [p for p in settings.inbox.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_TYPES]
+    return sorted(found)
+
+
+def _picture_pages(path):
+    """[(image, dpi)] for a picture file: every page of a TIFF; the dpi it
+    was saved with, when that's a scanner's (else the page is fitted to
+    paper)."""
+    from PIL import Image, ImageSequence
+
+    pages = []
+    try:
+        with Image.open(path) as im:
+            for frame in ImageSequence.Iterator(im):
+                dpi = frame.info.get("dpi") or im.info.get("dpi") or (0, 0)
+                try:
+                    dpi = float(dpi[0])
+                except (TypeError, ValueError, IndexError):
+                    dpi = 0
+                page = frame.convert("RGB" if frame.mode not in ("1", "L", "RGB") else frame.mode)
+                pages.append((page.copy(), round(dpi) if 50 <= dpi <= 1200 else None))
+    except PermissionError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - whatever Pillow says of a file that isn't a picture
+        raise core.PdfManagerError(f"{path.name} couldn't be read as a picture ({type(exc).__name__})") from None
+    if not pages:
+        raise core.PdfManagerError(f"{path.name} has no pages")
+    return pages
+
+
+def _gather(paths, work):
+    """One PDF at ``work`` from the files of a document, in order: pictures
+    a page each, PDFs as they are."""
+    from pdfmanager import scanpdf
+
+    if len(paths) == 1 and paths[0].suffix.lower() == ".pdf":
+        shutil.copy2(paths[0], work)
+        return
+    parts = []
+    for n, path in enumerate(paths):
+        if path.suffix.lower() == ".pdf":
+            parts.append(path)
+            continue
+        part = work.with_name(f"part{n}.pdf")
+        scanpdf._write_pdf(_picture_pages(path), part, "auto")
+        parts.append(part)
+    if len(parts) == 1:
+        shutil.move(str(parts[0]), str(work))
+    else:
+        core.merge(parts, work, bookmarks=False)
 
 
 def _skipped(path, settings):
@@ -168,16 +237,25 @@ def _ready(path, state):
 
 
 def process_file(path, settings, known_hashes=None):
-    """Run the configured steps on one PDF. Returns the final path, or None
+    """Run the configured steps on one file. Returns the final path, or None
     if it was skipped as a duplicate."""
-    path = Path(path)
-    digest = organize.file_hash(path) if known_hashes is not None else None
+    return process_files([Path(path)], settings, known_hashes)
+
+
+def process_files(paths, settings, known_hashes=None):
+    """Run the configured steps on the files of one document (one file, or
+    a batch that becomes one PDF, named after the first). Returns the final
+    path, or None if it was skipped as a duplicate."""
+    paths = [Path(p) for p in paths]
+    path = paths[0]
+    single_pdf = len(paths) == 1 and path.suffix.lower() == ".pdf"
+    digest = organize.file_hash(path) if known_hashes is not None and single_pdf else None
     if settings.skip_duplicates and digest is not None and digest in known_hashes:
         _retire(path, settings)
         return None
     with tempfile.TemporaryDirectory() as tmp:
-        work = Path(tmp) / path.name
-        shutil.copy2(path, work)
+        work = Path(tmp) / (path.stem + ".pdf")
+        _gather(paths, work)
         if settings.remove_blank or settings.auto_rotate:
             scan.clean(work, work, remove_blank=settings.remove_blank,
                        auto_rotate=settings.auto_rotate)
@@ -192,7 +270,8 @@ def process_file(path, settings, known_hashes=None):
             raise core.PdfManagerError(f"can't be read: {record['error']}")
         record["path"] = path  # {stem} refers to the original name
         # The date comes from the original: the processed copy was written just now.
-        record["date"] = organize.describe(path)["date"]
+        if single_pdf:
+            record["date"] = organize.describe(path)["date"]
         name = (organize.format_name(record, settings.rename) if settings.rename
                 else path.stem) + settings.suffix + ".pdf"
         folder = settings.dest / organize.group_name(record, settings.by) if settings.by \
@@ -201,7 +280,8 @@ def process_file(path, settings, known_hashes=None):
         target = organize._unique(folder / name, set())
         shutil.move(str(work), str(target))
     try:
-        _retire(path, settings)
+        for each in paths:
+            _retire(each, settings)
     except OSError:
         # The original is still in the inbox (locked, perhaps) and will be
         # picked up again, so don't leave a copy behind to be duplicated.
@@ -223,26 +303,49 @@ def _retire(path, settings):
         path.unlink()
 
 
+def _documents(pending, settings, state, now):
+    """The files to take now, as documents (lists of files). Without
+    ``batch`` each ready file is its own. With it, files whose times are
+    within ``batch`` seconds of the next one's belong together, and a
+    document is taken only once nothing new has come for that long (and
+    nothing in the folder is still being written)."""
+    if not settings.batch:
+        return [[p] for p in pending if _ready(p, state)]
+    ready = [_ready(p, state) for p in pending]   # (every file looked at: each needs two looks)
+    if not all(ready):
+        return []
+    ordered = sorted(pending, key=lambda p: (state.sizes[p][1], p.name))
+    groups = []
+    for path in ordered:
+        if groups and state.sizes[path][1] - state.sizes[groups[-1][-1]][1] <= settings.batch:
+            groups[-1].append(path)
+        else:
+            groups.append([path])
+    closed = [g for g in groups if now - state.sizes[g[-1]][1] >= settings.batch]
+    return [sorted(g, key=lambda p: p.name) for g in closed]   # (pages in the order they're named)
+
+
 def poll(settings, state, known_hashes=None, log=print, memory=None, report=None, stop=None):
-    """Process every ready PDF at the top level of the inbox once.
-    ``memory``: a ProcessedFiles, to skip files done before and remember
-    those done now. ``report(path, result, error)`` is told of each file
-    done or failed. ``stop()``: checked between files; true stops the pass."""
+    """Process every ready file at the top level of the inbox once (PDFs,
+    and pictures with ``settings.images``; a batch as one document with
+    ``settings.batch``). ``memory``: a ProcessedFiles, to skip files done
+    before and remember those done now. ``report(path, result, error)`` is
+    told of each document done or failed (by its first file). ``stop()``:
+    checked between documents; true stops the pass."""
     done = []
-    present = organize.find_pdfs(settings.inbox)
-    for path in present:
+    pending = [p for p in candidates(settings)
+               if not _skipped(p, settings) and not (memory is not None and memory.knows(p))]
+    # A failure is remembered for that version of the file: a replaced or
+    # rewritten file gets another go.
+    documents = [d for d in _documents(pending, settings, state, time.time())
+                 if not any((p, *state.sizes[p]) in state.failed for p in d)]
+    for paths in documents:
+        path = paths[0]
+        said = path.name if len(paths) == 1 else f"{path.name} and {len(paths) - 1} more"
         if stop and stop():
             break
-        if _skipped(path, settings) or (memory is not None and memory.knows(path)):
-            continue
-        if not _ready(path, state):
-            continue
-        # A failure is remembered for that version of the file: a replaced
-        # or rewritten file gets another go.
-        if (path, *state.sizes[path]) in state.failed:
-            continue
         try:
-            result = process_file(path, settings, known_hashes)
+            result = process_files(paths, settings, known_hashes)
         except PermissionError as exc:
             if not _in_use(exc):
                 raise
@@ -251,28 +354,29 @@ def poll(settings, state, known_hashes=None, log=print, memory=None, report=None
             since = state.busy.setdefault(path, time.monotonic())
             if time.monotonic() - since >= IN_USE_NOTE and path not in state.told:
                 state.told.add(path)
-                log(f"in use: {path.name}")
+                log(f"in use: {said}")
                 if report:
-                    report(path, None, FileInUse(f"{path.name} is open in another program; "
+                    report(path, None, FileInUse(f"{said} is open in another program; "
                                                  "ZPDF will do it once it's closed"))
             continue
         except Exception as exc:  # keep watching even if one file is bad
-            state.failed.add((path, *state.sizes[path]))
-            log(f"failed: {path.name}: {exc}")
-            if memory is not None:
-                memory.remember(path, "failed")
+            for each in paths:
+                state.failed.add((each, *state.sizes[each]))
+                if memory is not None:
+                    memory.remember(each, "failed")
+            log(f"failed: {said}: {exc}")
             if report:
                 report(path, None, exc)
             continue
-        state.sizes.pop(path, None)
         state.busy.pop(path, None)
         state.told.discard(path)
-        log(f"skipped duplicate: {path.name}" if result is None else f"{path.name} -> {result}")
-        if memory is not None:
-            if path.exists():  # (kept where it was)
-                memory.remember(path, "done")
-            if result is not None and result.parent.resolve() == settings.inbox.resolve():
-                memory.remember(result, "result")
+        log(f"skipped duplicate: {said}" if result is None else f"{said} -> {result}")
+        for each in paths:
+            state.sizes.pop(each, None)
+            if memory is not None and each.exists():  # (kept where it was)
+                memory.remember(each, "done")
+        if memory is not None and result is not None and result.parent.resolve() == settings.inbox.resolve():
+            memory.remember(result, "result")
         if report:
             report(path, result, None)
         done.append((path, result))
