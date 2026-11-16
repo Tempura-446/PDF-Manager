@@ -982,6 +982,7 @@ body.scan-mode main > :not(#scan-host, .page-head, #error) { display: none !impo
 .scan-field { display: flex; flex-direction: column; gap: 6px; border: 0; margin: 0; padding: 0; min-width: 0; }
 .scan-field > legend, .scan-field > label { padding: 0; margin-bottom: 6px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
 .scan-field select { width: 100%; }
+.watch-behind { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 14px; }
 .scan-links { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; }
 #scan-add-row input { flex: 1; min-width: 0; }
 .scan-guide { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2, transparent); }
@@ -1308,6 +1309,15 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
     <p class="dlg-hint">PDFs put in a watched folder are done one by one while ZPDF is open, each once. A note
       shows when a file is done or couldn't be. Files still downloading or being copied are left until they're complete.</p>
     <ul class="watch-list" id="watch-list" aria-label="Watched folders"></ul>
+    <div class="watch-behind" id="watch-behind" role="group" aria-label="Watching with the window closed">
+      <label class="dlg-field"><span>When I close the window while a folder is being watched</span><select id="set-background">
+        <option value="ask">Ask me</option>
+        <option value="yes">Keep watching in the background (ZPDF stays as an icon by the clock)</option>
+        <option value="no">Close ZPDF (folders are watched again next time it's open)</option></select></label>
+      <label class="dlg-check"><input type="checkbox" id="set-login"> Start ZPDF in the background when I sign in to Windows, to keep watching</label>
+      <p class="dlg-hint" id="watch-behind-why" hidden></p>
+      <p class="dlg-status" id="behind-status" aria-live="polite"></p>
+    </div>
     <div class="watch-add" id="watch-add" role="group" aria-labelledby="watch-add-title">
       <b id="watch-add-title">Watch a folder</b>
       <div class="dlg-field"><label for="watch-folder"><span>Folder</span></label>
@@ -4528,6 +4538,8 @@ async function openSettings() {
     ({ source: " (running from a source folder: update it with git pull)", frozen: " (the standalone app: download a new one to update it)" }[s.how] || ".");
   $("set-check").checked = s.check;
   showPrivacy(s);
+  showBehind(s);
+  updateStatus("behind-status", "");
   updateStatus("privacy-status", "");
   $("set-online").replaceChildren(...(s.online || []).map((o) => {
     const li = document.createElement("li"), b = document.createElement("b");
@@ -4645,6 +4657,34 @@ function forgetPlaces() {
   } catch (e) { /* storage unavailable */ }
   return n;
 }
+// Watching with the window closed: what closing does, and starting at sign-in
+// (where this copy can do it; else the reason is said and the choices are off).
+function showBehind(s) {
+  const b = s.background || { available: false, reason: "" };
+  $("set-background").value = b.keep || "ask";
+  $("set-login").checked = !!b.login;
+  $("set-background").disabled = $("set-login").disabled = !b.available;
+  $("watch-behind-why").hidden = b.available || !b.reason;
+  $("watch-behind-why").textContent = b.available ? "" : b.reason;
+}
+$("set-background").addEventListener("change", async (e) => {
+  try {
+    const s = await jsonApi("/api/settings", { background: e.target.value });
+    showBehind(s);
+    updateStatus("behind-status", { ask: "ZPDF will ask the next time you close it while a folder is watched.",
+      yes: "Closing the window will keep ZPDF watching; its icon by the clock opens or quits it.",
+      no: "Closing the window will close ZPDF." }[s.background.keep]);
+  } catch (err) { updateStatus("behind-status", capital(err.message), true); openSettings().catch(() => {}); }
+});
+$("set-login").addEventListener("change", async (e) => {
+  try {
+    const s = await jsonApi("/api/settings", { login: e.target.checked });
+    showBehind(s);
+    updateStatus("behind-status", s.background.login
+      ? "ZPDF will start in the background when you sign in. Windows lists it under Settings → Apps → Startup."
+      : "ZPDF won't start by itself when you sign in.");
+  } catch (err) { e.target.checked = !e.target.checked; updateStatus("behind-status", capital(err.message), true); }
+});
 // What's remembered, said under the switch; the reader keeps (or not) where you were.
 function showPrivacy(s) {
   $("set-remember").checked = s.remember;

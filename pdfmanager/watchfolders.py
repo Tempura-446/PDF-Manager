@@ -217,6 +217,7 @@ class WatchFolders:
         self.stopping = threading.Event()
         self.wake = threading.Event()
         self.owner = _OneWatcher()
+        self.on_news = None   # on_news(message, ok): told of each file done or not, as it happens
 
     # -- the list Settings shows ----------------------------------------------------------
 
@@ -380,3 +381,9 @@ class WatchFolders:
                               "result": str(result) if ok and result is not None else None})
             self.news = self.news[-NEWS_KEPT:]
             self.last = n
+        told = self.on_news
+        if told is not None:   # (the notification-area icon says it while the window is hidden)
+            try:
+                told(message, ok)
+            except Exception:  # noqa: BLE001 - telling is a courtesy
+                pass

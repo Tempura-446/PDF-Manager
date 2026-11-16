@@ -62,6 +62,7 @@ foreach ($key in @("HKCU:\Software\Classes\{prog_id}", "HKCU:\{app_key}", "HKCU:
 }}
 Remove-ItemProperty -Path "HKCU:\Software\Classes\.pdf\OpenWithProgids" -Name "{prog_id}" -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path "HKCU:\Software\RegisteredApplications" -Name "{name}" -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "{name}" -ErrorAction SilentlyContinue
 {remove_files}Start-Sleep -Seconds 4
 """
 
@@ -371,6 +372,7 @@ def remove():
     _delete_value(rf"{CLASSES}\.pdf\OpenWithProgids", PROG_ID)
     _delete_tree(APP_KEY)
     _delete_value(r"Software\RegisteredApplications", NAME)
+    _delete_value(r"Software\Microsoft\Windows\CurrentVersion\Run", NAME)  # (start at sign-in: background.py)
     _delete_tree(UNINSTALL_KEY)
     _notify_shell()
 
