@@ -220,7 +220,9 @@ class InBackground:
     def started_hidden(self):
         """ZPDF was started with no window (at sign-in): just the icon."""
         self.hidden = True
-        if not self._tray().start():
+        shown = self._tray().start()
+        self.log(f"background: started with no window, icon {'shown' if shown else 'not shown'}")
+        if not shown:
             self.open()
 
     def open(self):

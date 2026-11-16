@@ -54,7 +54,9 @@
 - [x] **One copy:** a start at sign-in while ZPDF is open asks quietly whether a copy is running and does nothing more (`forward_to_running_app(quiet=True)`); an ordinary second start (a double-clicked PDF) shows the hidden window again.
 - [x] **Said, not silent:** a watched file done or failed is said from the icon while the window is hidden (`WatchFolders.on_news`).
 - [x] **Tests:** `tests/test_background.py` (fakes for the window, the icon and the registry; the real icon's Win32 calls on the Windows CI job).
-- [ ] **Not seen on a real PC yet** (the window, the icon and the registry are fakes in the tests): pywebview's `hidden=True`, `hide()` and `show()`; the balloon; the icon after Explorer restarts; memory used by the hidden window (the page stays loaded).
+- [x] **Seen on the owner's PC (check of d3ef2c3):** hiding to the icon and coming back, a file done while hidden, a file opened from outside while hidden, the settings, the Run entry and a start with `--background`, a second such start doing nothing, the icon back after Explorer restarts. Memory while hidden is the same as open (about 610 MB with WebView2's processes).
+- [ ] **Still not seen:** the icon's right-click menu (Open, Pause/Resume, Quit) and Quit with unsaved work (the check couldn't right-click the notification area); the notes from the icon (Do not disturb was on); signing out and in; a restart for an update while hidden.
+- [ ] Earlier list, for reference: pywebview's `hidden=True`, `hide()` and `show()`; the balloon; the icon after Explorer restarts; memory used by the hidden window (the page stays loaded).
 - [ ] Left for later: the Edge app-window and browser modes (no window of their own to hide); unloading the page while hidden to save memory; updates restarting the background copy; Linux (an autostart `.desktop` file) and macOS (a LaunchAgent).
 
 ## Phase 4 (release D): PDF thumbnails in File Explorer

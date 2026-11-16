@@ -174,7 +174,8 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 /* Skip link: the first Tab stop, out of sight until it has focus. */
 .skip-link { position: fixed; top: 10px; left: 74px; z-index: 100; padding: 8px 14px; border-radius: var(--radius-sm); background: var(--surface); color: var(--text);
   box-shadow: var(--float); font-weight: 600; text-decoration: none; }
-.skip-link:not(:focus) { width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; box-shadow: none; }
+/* (Shown when reached with the keyboard, not when the window merely gets the focus.) */
+.skip-link:not(:focus-visible) { width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; box-shadow: none; }
 main:focus { outline: none; }  /* the skip link's target: the page itself needs no ring */
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
@@ -1315,6 +1316,8 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
         <option value="yes">Keep watching in the background (ZPDF stays as an icon by the clock)</option>
         <option value="no">Close ZPDF (folders are watched again next time it's open)</option></select></label>
       <label class="dlg-check"><input type="checkbox" id="set-login"> Start ZPDF in the background when I sign in to Windows, to keep watching</label>
+      <p class="dlg-hint" id="watch-behind-quit" hidden>While ZPDF keeps watching, closing the window doesn't quit it. To quit for good: right-click its icon by the clock, or
+        <button type="button" class="link-btn" id="set-quit">quit ZPDF now</button>.</p>
       <p class="dlg-hint" id="watch-behind-why" hidden></p>
       <p class="dlg-status" id="behind-status" aria-live="polite"></p>
     </div>
@@ -4609,7 +4612,7 @@ async function addWatch() {
   const ok = await watchCall("/api/watch/add", { folder, [kind]: rest.join(":"), results: $("watch-results").value, originals: $("watch-originals").value,
       images: $("watch-images").checked, batch: $("watch-batch").checked },
     `Watching ${folder}. ${$("watch-images").checked ? "PDFs and pictures" : "PDFs"} put there from now on, and those there already, are done one by one.`);
-  if (ok) { $("watch-folder").value = ""; scheduleWatchNews(1500); }
+  if (ok) { $("watch-folder").value = ""; $("watch-images").checked = $("watch-batch").checked = false; scheduleWatchNews(1500); }
 }
 $("watch-add-btn").addEventListener("click", addWatch);
 $("watch-folder").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addWatch(); } });  // (not Save)
@@ -4666,7 +4669,12 @@ function showBehind(s) {
   $("set-background").disabled = $("set-login").disabled = !b.available;
   $("watch-behind-why").hidden = b.available || !b.reason;
   $("watch-behind-why").textContent = b.available ? "" : b.reason;
+  $("watch-behind-quit").hidden = !(b.available && b.keep === "yes");
 }
+$("set-quit").addEventListener("click", async () => {
+  try { await jsonApi("/api/quit", {}); updateStatus("behind-status", "Quitting ZPDF…"); }
+  catch (err) { updateStatus("behind-status", capital(err.message), true); }
+});
 $("set-background").addEventListener("change", async (e) => {
   try {
     const s = await jsonApi("/api/settings", { background: e.target.value });

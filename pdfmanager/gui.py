@@ -2605,6 +2605,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._access_check(body)
             if path == "/api/settings":
                 return self._save_settings(body)
+            if path == "/api/quit":  # Settings: quit for good, also while folders are watched
+                behind = type(self).background
+                if behind is None:
+                    raise UserError("close the window to quit ZPDF")
+                threading.Timer(0.4, behind.quit).start()  # once this answer has been sent
+                return self._send(HTTPStatus.OK, {"quitting": True})
             if path == "/api/history/clear":
                 return self._send(HTTPStatus.OK, {"cleared": privacy.clear_history(),
                                                   **_settings_for_page(type(self).instance_mode)})

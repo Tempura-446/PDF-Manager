@@ -270,6 +270,20 @@ def test_settings_through_the_server(windows, monkeypatch):
         assert call({"background": "yes"})[1]["background"]["keep"] == "yes"
         assert call({"login": True})[1]["background"]["login"] is True
         assert call({"background": "sometimes"})[0] == 400
+        # Quit from Settings: the same quit as the icon's menu (which a person may not find)
+        quits = []
+        post = lambda path: urllib.request.urlopen(urllib.request.Request(  # noqa: E731
+            base.rstrip("/") + path, data=b"{}", headers={"X-Pdfm-Token": token, "Content-Type": "application/json"}), timeout=30)
+        with pytest.raises(urllib.error.HTTPError):                          # no window of its own: nothing to quit this way
+            post("/api/quit")
+        srv.RequestHandlerClass.background = type("B", (), {"quit": lambda self: quits.append(True)})()
+        assert json.loads(post("/api/quit").read()) == {"quitting": True}
+        for _ in range(30):
+            if quits:
+                break
+            time.sleep(0.1)
+        assert quits == [True]
+        srv.RequestHandlerClass.background = None
         srv.RequestHandlerClass.instance_mode = "browser"                    # no window of its own to hide
         status, said = call({"background": "no"})
         assert status == 400 and "own window" in said["error"]
@@ -311,7 +325,7 @@ def test_the_page_and_the_command_line_offer_it():
     from pdfmanager.cli import build_parser
 
     page = (Path(gui.__file__).parent / "gui.html").read_text(encoding="utf-8")
-    assert 'id="set-background"' in page and 'id="set-login"' in page and "by the clock" in page
+    assert 'id="set-background"' in page and 'id="set-login"' in page and "by the clock" in page and 'id="set-quit"' in page
     args = build_parser().parse_args(["gui", "--background"])
     assert args.background is True
 
