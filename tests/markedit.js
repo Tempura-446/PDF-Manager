@@ -93,11 +93,13 @@ const { chromium } = require("playwright");
       await ready();
     };
     const scrollBefore = await page.evaluate(() => reader.container.scrollTop);
+    const stepsBefore = await page.evaluate(() => reader.activeTab.undoDepth);
     for (let i = 0; i < 12; i++) { await page.keyboard.down("ArrowRight"); await page.waitForTimeout(15); }
     await page.keyboard.up("ArrowRight");
     await page.waitForTimeout(200);
     await settled();
     out.afterHold = (await annots())[0].rect;
+    out.holdSteps = (await page.evaluate(() => reader.activeTab.undoDepth)) - stepsBefore;
     out.scrolled = (await page.evaluate(() => reader.container.scrollTop)) - scrollBefore;
     out.binReady = await page.evaluate(() => !reader.deleteBtn.disabled);
 
@@ -131,9 +133,22 @@ const { chromium } = require("playwright");
     await rewritten(v);
     out.afterDim = (await annots()).find((a) => a.line && a.text);
 
-    // The plain line: selected and deleted.
+    // A drag that starts on a markup that isn't selected draws a new shape
+    // (a rectangle here) and leaves that markup where it is.
     await page.waitForFunction(() => !!reader.markSel, null, { timeout: 10000 });
-    await click(200, 420);
+    await page.keyboard.press("Escape");
+    {
+      const plain = async () => (await annots()).find((a) => a.line && !a.text).line.map((n) => Math.round(n));
+      const count = (await annots()).length, was = await plain();
+      v = await version();
+      await drag([150, 420], [190, 470]);
+      await rewritten(v);
+      out.drawnFromAMarkup = (await annots()).length - count;
+      out.lineStayed = JSON.stringify(await plain()) === JSON.stringify(was);
+    }
+
+    // The plain line: selected and deleted.
+    await click(250, 420);
     out.lineSelected = await selected();
     v = await version();
     await page.keyboard.press("Delete");

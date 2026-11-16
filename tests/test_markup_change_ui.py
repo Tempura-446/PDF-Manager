@@ -81,10 +81,13 @@ def test_changing_markups_in_a_browser(app, tmp_path):
     assert out["afterHold"][0] == out["afterNudge"][0] + 12 and out["scrolled"] == 0
     # Esc while the key is held: let go for good; the presses after it move nothing and scroll nothing.
     assert out["escLetGo"] and 1 <= out["afterEsc"][0] - out["afterHold"][0] <= 4 and out["escScrolled"] == 0
+    assert out["holdSteps"] <= 1                                     # ...and they are one step for Undo
+    # A drag that starts on a markup that isn't selected draws a new shape; the markup stays where it was.
+    assert out["drawnFromAMarkup"] == 1 and out["lineStayed"]
     assert out["binReady"] and out["cloudByItsBumps"] == "cloud"
     assert out["wordsBox"] and out["afterWords"] == "Wall moved"       # a double-click opens the callout's words
     assert out["afterColour"] == [31, 79, 216]                       # the bar's blue
     assert out["dimSelected"] == {"kind": "dimension", "index": 1, "grips": 2}
     assert out["afterDim"]["text"] == "12' 0\"" and abs(out["afterDim"]["line"][2] - 316) <= 2
-    assert out["lineSelected"]["kind"] == "line" and out["afterDelete"] == 5
-    assert out["letGo"] and out["afterDraw"] == 6                    # drawing still works beside it
+    assert out["lineSelected"]["kind"] == "line" and out["afterDelete"] == 6
+    assert out["letGo"] and out["afterDraw"] == 7                    # drawing still works beside it

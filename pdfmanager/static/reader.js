@@ -810,7 +810,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
     if (mod && e.key === "0") { e.preventDefault(); this.pdfViewer.currentScaleValue = "auto"; return; }
     if (mod || e.altKey || isTyping(e)) return;
     if (this.measureMode && this._measureKey(e)) { e.preventDefault(); return; }
-    if (this._markHasKeys() && this._markKey(e)) { e.preventDefault(); return; }   // a selected markup: Delete, Esc, the arrows
+    // (Not a key another part already took, or one pressed in the side panel: Delete there removes pages.)
+    if (!e.defaultPrevented && !this.side?.contains(e.target) && this._markHasKeys() && this._markKey(e)) { e.preventDefault(); return; }   // a selected markup: Delete, Esc, the arrows
     if (e.key === "Escape" && !this.findbar.hidden) { this.closeFind(); return; }
     if (this.markupMode === "IMAGES" && this.pickedImage && !isTyping(e) && (e.key === "Delete" || e.key === "Backspace")) {
       e.preventDefault();
@@ -2436,7 +2437,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
   /** Replace the open document with what ``make(bytes, tab)`` gets back from
    *  the server, keeping the old bytes for Undo. In the queue: a save or a tab
    *  switch asked for meanwhile waits for it. */
-  _changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false, kind = "page" } = {}) {
+  _changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false, kind = "page", merge = null } = {}) {
     return this._serial(async () => {
       const tab = this.activeTab;
       if (!tab || !this.doc) return;
@@ -2455,7 +2456,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
         if (!this.tabs.includes(tab)) return;
         if (kind === "redact") tab.redactionsApplied(bytes, changed);
         else if (kind === "text") tab.textEdited(bytes, changed);
-        else tab.pageEdited(bytes, changed);
+        else tab.pageEdited(bytes, changed, { merge });
         if (tab === this.activeTab) { tab.aim(goto ? goto(this.#view()) : this.#view()); await this.#reloadEditing(tab); }
         after?.(res);
       } catch (e) {

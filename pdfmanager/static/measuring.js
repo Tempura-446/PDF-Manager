@@ -460,8 +460,8 @@ export const Measuring = (Base) => class extends Base {
   /** The real length between two points of page ``n`` as the Scale bar
    *  says it, and the sheet's scale (null: none set, the length is in
    *  inches on paper). */
-  _dimensionOf(n, a, b) {
-    const scale = this.#pageScale(n);
+  _dimensionOf(n, a, b, own = undefined) {
+    const scale = own === undefined ? this.#pageScale(n) : own;   // (``own``: the scale a dimension was drawn with)
     const uu = this.pdfViewer.getPageView(n - 1)?.pdfPage?.userUnit || 1;
     const length = measure.distance(a, b) * uu;
     return { value: scale ? measure.formatLength(length, scale, this.units) : `${(length / 72).toFixed(2)} in`, scale };

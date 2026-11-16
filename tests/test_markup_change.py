@@ -186,3 +186,53 @@ def test_the_file_holds_no_spare_copy(tmp_path):
     again, _ = changed(tmp_path, out, {"id": ident(page_annots(out)[0][0]), "move": [10, 10]}, name="again.pdf")
     data = again.read_bytes()
     assert data.count(b"/Subtype /Square") == 1 and len(page_annots(again)[0]) == 1
+
+
+# -- from the code review of 0.47.0 ---------------------------------------------------------
+
+def test_a_comment_on_a_dimension_doesnt_become_its_words(tmp_path):
+    src, (dim,) = placed(tmp_path, {"kind": "dimension", "points": [[100, 300], [244, 300]], "value": "8' 0\"",
+                                    "scale": QUARTER})
+    noted = tmp_path / "noted.pdf"
+    markup.apply(src, noted, [{"op": "text", "page": 1, "id": dim, "text": "ask the engineer"}], author="Bob")
+    shape = markup.describe_all(noted)[1][0]
+    assert shape["value"] == "8' 0\""                          # its words, not the comment
+    out, (line,) = changed(tmp_path, noted, {"id": shape["id"], "move": [10, 0]})
+    assert "8' 0" in drawn(line) and "engineer" not in drawn(line)
+    assert line["/Contents"] == "ask the engineer"             # and the comment stays its comment
+    assert markup.describe_all(out)[1][0]["value"] == "8' 0\""
+
+
+def test_a_dimension_can_take_a_scale_it_didnt_have(tmp_path):
+    src, (dim,) = placed(tmp_path, {"kind": "dimension", "points": [[100, 300], [244, 300]], "value": "2.00 in"})
+    assert markup.describe_all(src)[1][0]["scale"] is None
+    out, _ = changed(tmp_path, src, {"id": dim, "points": [[100, 300], [316, 300]], "value": "12' 0\"", "scale": QUARTER})
+    assert markup.describe_all(out)[1][0]["scale"]["units"] == "ft"
+
+
+def test_comments_brought_in_from_a_file_arent_redrawn_as_zpdfs_own(tmp_path):
+    from pdfmanager import comments
+
+    src, _ = placed(tmp_path, {"kind": "rect", "rect": [100, 500, 200, 560]},
+                    {"kind": "dimension", "points": [[100, 300], [244, 300]], "value": "8' 0\"", "scale": QUARTER})
+    xfdf, bare, back = tmp_path / "c.xfdf", sheet(tmp_path / "bare.pdf"), tmp_path / "back.pdf"
+    comments.export_xfdf(src, xfdf)
+    comments.import_xfdf(bare, xfdf, back)
+    assert len(page_annots(back)[0]) == 2
+    assert markup.describe_all(back) == {}                     # they carry ZPDF's kind of name, but aren't its drawings
+    refs, _ = page_annots(back)
+    with pytest.raises(core.PdfManagerError, match="only markups made with ZPDF's own tools"):
+        markup.apply(back, tmp_path / "no.pdf", [{"op": "change", "page": 1, "id": ident(refs[0]), "move": [5, 5]}])
+
+
+@pytest.mark.parametrize("change,words", [({"move": {}}, "a move is two numbers"), ({"move": [1]}, "a move is two numbers")])
+def test_a_malformed_move_is_said_in_words(tmp_path, change, words):
+    src, (box,) = placed(tmp_path, {"kind": "rect", "rect": [100, 500, 200, 560]})
+    with pytest.raises(core.PdfManagerError, match=words):
+        markup.apply(src, tmp_path / "no.pdf", [{"op": "change", "page": 1, "id": box, **change}])
+
+
+def test_a_note_given_a_malformed_place_is_said_in_words(tmp_path):
+    src, ids = placed(tmp_path, {"kind": "note", "at": [300, 600], "text": "Hello"})
+    with pytest.raises(core.PdfManagerError, match="two numbers"):
+        markup.apply(src, tmp_path / "no.pdf", [{"op": "change", "page": 1, "id": ids[0], "at": 5}])

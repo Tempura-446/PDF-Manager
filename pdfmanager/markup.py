@@ -616,6 +616,7 @@ def _drawing_markup(writer, page, page_ref, change, author):
         NameObject("/LE"): ArrayObject([NameObject("/ClosedArrow"), NameObject("/ClosedArrow")]),
         NameObject("/IC"): floats(color), NameObject("/IT"): NameObject("/LineDimension"),
         NameObject("/Cap"): BooleanObject(True), NameObject("/CP"): NameObject("/Top"),
+        NameObject("/ZPDFWords"): TextStringObject(value),
         NameObject("/BS"): DictionaryObject({NameObject("/W"): FloatObject(width)}),
         NameObject("/AP"): _appearance(writer, rect, content, _helvetica())})
     measure = _measure_dict(change.get("scale")) if isinstance(change.get("scale"), dict) else None
@@ -863,8 +864,8 @@ def describe(annot):
     "value"/"scale", "arrow"}. None for anything else (another program's
     annotation, a measurement, a highlight, a link)."""
     annot = annot.get_object()
-    if not str(annot.get("/NM", "")).startswith("zpdf-"):
-        return None
+    if not str(annot.get("/NM", "")).startswith("zpdf-") or annot.get("/ZPDFImported"):
+        return None  # (comments brought in from a file carry ZPDF's kind of name too)
     subtype, intent = annot.get("/Subtype"), annot.get("/IT")
     text = str(annot.get("/Contents", ""))
     rect = [float(v) for v in annot.get("/Rect", [0, 0, 0, 0])]
@@ -889,7 +890,10 @@ def describe(annot):
             if "/Cap" not in annot:
                 return None  # a measurement put in the PDF, not a dimension markup
             measure = annot.get("/Measure")
-            return {**out, "kind": "dimension", "points": pts, "value": text, "text": "",
+            # Its words: as drawn (kept apart since 0.47.0: the comments panel can
+            # put a comment in /Contents, which mustn't become the measurement).
+            words = annot.get("/ZPDFWords")
+            return {**out, "kind": "dimension", "points": pts, "value": str(words) if words is not None else text, "text": "",
                     "scale": _scale_of(measure.get_object()) if measure is not None else None}
         ends = [str(e) for e in annot.get("/LE", [])]
         return {**out, "kind": "arrow" if "/ClosedArrow" in ends else "line", "points": pts}
@@ -968,14 +972,14 @@ def change_markup(writer, page, ref, change, author):
     if "move" in change:
         try:
             dx, dy = (_num(v) for v in change["move"][:2])
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, KeyError, IndexError):
             raise core.PdfManagerError("a move is two numbers") from None
         shape = _moved(shape, dx, dy)
     if "points" in change and kind == "cloud":
         kind = shape["kind"] = "polycloud"   # a box-shaped cloud given corners of its own
     if kind == "cloud":
         shape.pop("points", None)
-    for key in ("rect", "points", "tip", "at", "color", "width", "text", "value", "arrow"):
+    for key in ("rect", "points", "tip", "at", "color", "width", "text", "value", "arrow", "scale"):
         if key in change and change[key] is not None:
             shape[key] = change[key]
     if kind == "dimension" and "points" in change and "value" not in change:
@@ -990,7 +994,10 @@ def change_markup(writer, page, ref, change, author):
                 raise core.PdfManagerError("draw the stamp bigger")
             new = [x0, y0, x1, y1]
         else:
-            x, y = (_num(v) for v in shape["at"][:2])
+            try:
+                x, y = (_num(v) for v in shape["at"][:2])
+            except (TypeError, ValueError, KeyError, IndexError):
+                raise core.PdfManagerError("a note's place is two numbers") from None
             new = [x, y - NOTE_SIZE, x + NOTE_SIZE, y]
             # Its popup goes with it: the one it names, and (files from before
             # 0.47.0) the copy of it written into the page's list.
@@ -1016,6 +1023,8 @@ def change_markup(writer, page, ref, change, author):
     made = _add(writer, page, page.indirect_reference, {**shape, "op": "add", "kind": kind}, author)
     new = made.get_object()
     kept = {key: annot.raw_get(key) for key in ("/NM", "/T", "/CreationDate", "/Popup", "/Subj") if key in annot}
+    if kind == "dimension" and str(annot.get("/Contents", "")) != describe(annot)["value"]:
+        kept["/Contents"] = annot.raw_get("/Contents")   # a comment written on it stays its comment
     for key in list(annot.keys()):
         del annot[key]
     annot.update(new)

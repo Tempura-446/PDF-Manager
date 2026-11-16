@@ -253,10 +253,13 @@ export const Annotating = (Base) => class extends Base {
   }
 
   /** Send ``changes`` (see markup.py) to be written into the document. */
-  _applyMarkup(changes, failure = "Could not add that: ") {
+  _applyMarkup(changes, failure = "Could not add that: ", { merge = null } = {}) {
     return this._changeDocument((bytes, tab) => this._post("/api/markup", bytes, tab, {
-      changes: JSON.stringify(changes), author: this.authorInput.value.trim() }), { failure });
+      changes: JSON.stringify(changes), author: this.authorInput.value.trim() }), { failure, merge });
   }
+
+  /** Whether the chosen shape is dragged out (not placed click by click). */
+  _shapeIsDragged() { return !POLY_SHAPES.has(this.shapeSelect.value); }
 
   #cancelMarkup() {
     this.shapeDraft?.el.remove();

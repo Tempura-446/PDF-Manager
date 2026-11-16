@@ -98,19 +98,29 @@ export const MarkupEditing = (Base) => class extends Base {
     const version = tab.version || 0;
     if (this.markCache?.tab === tab && this.markCache.version === version) return this.markCache.pages;
     if (this.markAsking?.tab === tab && this.markAsking.version === version) return null;
+    // (It couldn't be listed: not asked again for the same version, which would send the whole file each time.)
+    if (this.markFailed?.tab === tab && this.markFailed.version === version) return null;
     const asking = this.markAsking = { tab, version };
     (async () => {
+      let pages = null, stale = false;
       try {
         const res = await this._post("/api/markup/describe", await this._currentBytes(), tab);
-        if (!res.ok) return;
-        const { pages } = await res.json();
-        if (this.activeTab !== tab || (tab.version || 0) !== version) return;
-        this.markCache = { tab, version, pages };
-        if (this.markAfter) { const again = this.markAfter; this.markAfter = null; again(pages); }
-        else this.#refreshSelection(pages);
-      } catch (e) { /* asked again at the next press */ } finally {
+        if (res.ok) ({ pages } = await res.json());
+        stale = this.activeTab === tab && (tab.version || 0) !== version;   // written again meanwhile
+      } catch (e) { pages = null; } finally {
         if (this.markAsking === asking) this.markAsking = null;
       }
+      if (stale) { this._markShapes(); return; }         // ask for how it is now
+      if (this.activeTab !== tab || !pages) {
+        // Another document is shown, or the list didn't come: nothing is picked up again.
+        if (!pages && this.activeTab === tab) this.markFailed = { tab, version };
+        this.markAfter = null;
+        if (this.markPending) this.#settled(false);
+        return;
+      }
+      this.markCache = { tab, version, pages };
+      if (this.markAfter) { const again = this.markAfter; this.markAfter = null; again(pages); }
+      else this.#refreshSelection(pages);
     })();
     return null;
   }
@@ -164,8 +174,18 @@ export const MarkupEditing = (Base) => class extends Base {
       if (grip) { this.#beginDrag(e, at, grip.key); return true; }
     }
     const hit = this.#markAt(at.n, at.pt, scale);
+    this.markClick = null;
     if (!hit) { if (sel) this._markLetGo(); return false; }
-    this.#select(at.n, hit.index);
+    const selected = sel && sel.page === at.n && sel.index === hit.index;
+    // With a shape that's dragged out, a press on a markup that isn't selected may be the
+    // start of a new one (a dimension continued from another's end, an arrow from a cloud):
+    // a click selects it, a drag draws. Moving it takes selecting it first.
+    if (!selected && this.markupMode === "SHAPE" && this._shapeIsDragged?.()) {
+      if (sel) this._markLetGo();
+      this.markClick = { page: at.n, index: hit.index, x: e.clientX, y: e.clientY, pointer: e.pointerId };
+      return false;
+    }
+    if (!selected) this.#select(at.n, hit.index);
     this.#beginDrag(e, at, null);
     return true;
   }
@@ -223,26 +243,40 @@ export const MarkupEditing = (Base) => class extends Base {
   }
 
   _markEditUp(e) {
-    const d = this.markDrag;
+    const d = this.markDrag, c = this.markClick;
+    if (!d && c && e.pointerId === c.pointer) {
+      // The press on a markup ended where it began: it's selected (the shape begun there is too small to keep).
+      this.markClick = null;
+      if (Math.hypot(e.clientX - c.x, e.clientY - c.y) < 4 && EDIT_MODES.has(this.markupMode)) this.#select(c.page, c.index);
+      return false;
+    }
     if (!d || e.pointerId !== d.pointer) return false;
     this.markDrag = null;
     if (!d.moved || !d.now) return true;      // a click: selected, nothing changed
     const change = changeFor(d.shape, d.now, d.key, d.by);
-    if (d.shape.kind === "dimension" && change.points) change.value = this._dimensionOf(d.page, change.points[0], change.points[1]).value;
+    if (d.shape.kind === "dimension" && change.points) {
+      // Its words in the scale it was drawn with (the sheet's own, if it had none then, which it then takes).
+      const { value, scale } = this._dimensionOf(d.page, change.points[0], change.points[1], d.shape.scale || undefined);
+      change.value = value;
+      if (!d.shape.scale && scale) change.scale = scale;
+    }
     this._markChange(change);
     return true;
   }
 
   /** Send a change to the selected markup; it stays selected afterwards. */
-  async _markChange(change, failure = "Could not change that: ") {
+  async _markChange(change, failure = "Could not change that: ", nudge = false) {
     const sel = this.markSel;
     if (!sel || this.markBusy) return;      // (one change at a time: a held arrow key doesn't pile them up)
     const { page, index } = sel, tab = this.activeTab, version = tab?.version || 0;
+    this.markPage = page;
+    // Nudges made one after another are one step for Undo.
+    const merge = nudge ? `nudge:${page}:${index}` : null;
     // From here until the markup is picked up again its keys are still its own
     // (markPending): the selection is gone for a moment while the page is redrawn.
     this.markBusy = this.markPending = true;
     try {
-      await this._applyMarkup([{ op: "change", page, id: sel.shape.id, ...change }], failure);
+      await this._applyMarkup([{ op: "change", page, id: sel.shape.id, ...change }], failure, { merge });
     } finally { this.markBusy = false; }
     if (this.activeTab !== tab) { this.#settled(false); return; }
     if ((tab.version || 0) === version) { this._markDraw(page); this.#settled(false); return; }   // it didn't work (and said so)
@@ -262,13 +296,24 @@ export const MarkupEditing = (Base) => class extends Base {
     this.markPending = this.markDropped = false;
     const by = this.markQueued;
     this.markQueued = null;
-    if (on && by && (by[0] || by[1]) && this.markSel) this._markChange({ move: by });
+    if (on && by && (by[0] || by[1]) && this.markSel) this._markChange({ move: by }, undefined, true);
+  }
+
+  /** ``step`` points left, right, up or down as the page is seen (it may be
+   *  turned), in the page's own directions. */
+  #nudgeBy(key, step) {
+    const seen = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[key];
+    if (!seen) return null;
+    const vp = this.pdfViewer?.getPageView((this.markSel?.page || this.markPage || 1) - 1)?.viewport;
+    if (!vp) return [seen[0], -seen[1]];
+    const a = vp.convertToPdfPoint(0, 0), b = vp.convertToPdfPoint(seen[0] * vp.scale, seen[1] * vp.scale);
+    return [Math.round((b[0] - a[0]) * 1e4) / 1e4, Math.round((b[1] - a[1]) * 1e4) / 1e4];
   }
 
   /** Whether a key may be the selected markup's (also just after a change,
    *  while it is being picked up again). */
   _markHasKeys() {
-    if (this.markPending && !this.markBusy && !this.markAfter && !this.markAsking) this.#settled(false);   // (it never came back)
+    if (this.markPending && !this.markBusy && !this.markAsking) { this.markAfter = null; this.#settled(false); }   // (it never came back)
     return !!this.markSel || !!this.markPending || !!this.markHush;
   }
 
@@ -284,8 +329,7 @@ export const MarkupEditing = (Base) => class extends Base {
     }
     // (While the page is shown again after a change the tool reads as off for a moment: markPending says it's still ours.)
     if (!this.markPending && (!sel || !EDIT_MODES.has(this.markupMode))) return false;
-    const step = e.shiftKey ? 10 : 1;
-    const by = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
+    const by = this.#nudgeBy(e.key, e.shiftKey ? 10 : 1);
     if (e.key === "Escape") {
       // Also while a change is being written: the markup isn't picked up again after it.
       this.markQueued = null;
@@ -298,7 +342,7 @@ export const MarkupEditing = (Base) => class extends Base {
       return true;                                                   // (and no key scrolls the page meanwhile)
     }
     if (e.key === "Delete" || e.key === "Backspace") return this._markDelete();
-    if (by) { this._markChange({ move: by }); return true; }
+    if (by) { this._markChange({ move: by }, undefined, true); return true; }
     if (e.key === "Enter" && sel.shape.kind === "callout") { this._markEditText(); return true; }
     return false;
   }

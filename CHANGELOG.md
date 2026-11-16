@@ -33,6 +33,15 @@ Change a markup after you've placed it.
   (Enter does too); the bar's bin removes the selected markup; a cloud is
   taken by a press on its bumps, however thick its line; Esc while an
   arrow key is held lets go for good.
+- **From a review of the code:** a drag that starts on a markup that
+  isn't selected draws a new shape (a dimension continued from another's
+  end), and a click selects it; the arrow keys move a markup the way the
+  page is seen, also on a turned page; nudges made one after another are
+  one step for Undo; a comment written on a dimension no longer becomes
+  its measurement when it's moved; a dimension keeps the scale it was
+  drawn with when an end is dragged; comments brought in from a file
+  aren't offered for redrawing as ZPDF's own; Delete in the page list no
+  longer also removes the selected markup.
 - **Web page to PDF:** when the browser stalls and the page is tried
   again, the second try uses another installed browser (Chrome after Edge,
   say) when there is one.
