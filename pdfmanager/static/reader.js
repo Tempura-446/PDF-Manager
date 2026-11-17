@@ -2437,7 +2437,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
   /** Replace the open document with what ``make(bytes, tab)`` gets back from
    *  the server, keeping the old bytes for Undo. In the queue: a save or a tab
    *  switch asked for meanwhile waits for it. */
-  _changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false, kind = "page", merge = null } = {}) {
+  _changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false, kind = "page", edited = null } = {}) {
     return this._serial(async () => {
       const tab = this.activeTab;
       if (!tab || !this.doc) return;
@@ -2456,7 +2456,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
         if (!this.tabs.includes(tab)) return;
         if (kind === "redact") tab.redactionsApplied(bytes, changed);
         else if (kind === "text") tab.textEdited(bytes, changed);
-        else tab.pageEdited(bytes, changed, { merge });
+        else tab.pageEdited(bytes, changed);
+        edited?.(res, tab);   // (before it is shown again: what the answer says about the new document)
         if (tab === this.activeTab) { tab.aim(goto ? goto(this.#view()) : this.#view()); await this.#reloadEditing(tab); }
         after?.(res);
       } catch (e) {

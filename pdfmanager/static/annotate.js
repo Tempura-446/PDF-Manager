@@ -255,9 +255,10 @@ export const Annotating = (Base) => class extends Base {
   }
 
   /** Send ``changes`` (see markup.py) to be written into the document. */
-  _applyMarkup(changes, failure = "Could not add that: ", { merge = null } = {}) {
+  _applyMarkup(changes, failure = "Could not add that: ") {
     return this._changeDocument((bytes, tab) => this._post("/api/markup", bytes, tab, {
-      changes: JSON.stringify(changes), author: this.authorInput.value.trim() }), { failure, merge });
+      changes: JSON.stringify(changes), author: this.authorInput.value.trim() }),
+    { failure, edited: (res, tab) => this._markSeed(res, tab) });
   }
 
   /** Whether the chosen shape is dragged out (not placed click by click). */

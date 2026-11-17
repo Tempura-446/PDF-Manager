@@ -16,6 +16,8 @@ const { chromium } = require("playwright");
   try {
     const page = await (await browser.newContext({ viewport: { width: 1400, height: 1000 } })).newPage();
     page.on("pageerror", (e) => out.errors.push(String(e.message || e)));
+    let describes = 0;      // times the whole file was sent just to list its markups
+    page.on("request", (r) => { if (r.url().includes("/api/markup/describe")) describes++; });
     page.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource/.test(m.text())) out.errors.push(m.text()); });
     await page.goto(url + "&open=" + id);
     await page.waitForSelector(".page canvas", { timeout: 60000 });
@@ -89,7 +91,7 @@ const { chromium } = require("playwright");
     // The arrow key held: twelve key-downs faster than the file is written.
     // Every one counts, and the page stays where it is.
     const settled = async () => {
-      await page.waitForFunction(() => !reader.markBusy && !reader.markPending && !reader.markQueued && !!reader.markSel, null, { timeout: 30000 });
+      await page.waitForFunction(() => !reader.markNudge && !reader.markBusy && !reader.markPending && !reader.markQueued && !!reader.markSel, null, { timeout: 30000 });
       await ready();
     };
     const scrollBefore = await page.evaluate(() => reader.container.scrollTop);
@@ -109,7 +111,7 @@ const { chromium } = require("playwright");
     await page.keyboard.press("Escape");
     for (let i = 0; i < 8; i++) { await page.keyboard.down("ArrowRight"); await page.waitForTimeout(15); }
     await page.keyboard.up("ArrowRight");
-    await page.waitForFunction(() => !reader.markBusy && !reader.markPending, null, { timeout: 30000 });
+    await page.waitForFunction(() => !reader.markNudge && !reader.markBusy && !reader.markPending, null, { timeout: 30000 });
     await page.waitForTimeout(400);
     await ready();
     out.escLetGo = (await selected()) === null;
@@ -184,6 +186,8 @@ const { chromium } = require("playwright");
     await rewritten(v);
     out.afterDraw = (await annots()).length;
 
+    out.describes = describes;   // (so far: only changes of markups, each of which says how they are now)
+
     // A key pressed in the page list (the left sidebar) isn't the markup's.
     {
       const first = (await annots())[0].rect;
@@ -199,7 +203,7 @@ const { chromium } = require("playwright");
       // Undo and Redo show the document again: the markup stays selected (found by its name).
       await page.keyboard.press("ArrowRight");
       await rewritten(v);
-      await page.waitForFunction(() => !reader.markBusy && !reader.markPending && !!reader.markSel, null, { timeout: 30000 });
+      await page.waitForFunction(() => !reader.markNudge && !reader.markBusy && !reader.markPending && !!reader.markSel, null, { timeout: 30000 });
       v = await version();
       await page.keyboard.press("Control+z");
       await rewritten(v);

@@ -16,6 +16,7 @@ const POINT_KINDS = new Set(["line", "arrow", "dimension", "polyline", "polyclou
 const NEAR = 7;       // px: how close a press must be to a markup's outline
 const GRIP = 9;       // px: how close to a handle
 const TWICE = 500;    // ms: two presses this close together are a double-click
+const NUDGE_REST = 350;  // ms without an arrow key before the nudges made are written
 
 /** How far ``p`` is from the segment a-b. */
 function fromSegment(p, a, b) {
@@ -123,6 +124,15 @@ export const MarkupEditing = (Base) => class extends Base {
     return null;
   }
 
+  /** The answer to a change of markups says how they are now (``X-Pdfm-Markups``):
+   *  kept for the document's new version, so the whole file isn't sent again to ask. */
+  _markSeed(res, tab) {
+    try {
+      const said = res.headers.get("X-Pdfm-Markups");
+      if (said) tab.markShapes = { version: tab.version || 0, pages: JSON.parse(said) };
+    } catch (e) { /* asked for the usual way */ }
+  }
+
   /** The document was written again some other way (Undo, another tool)
    *  with a markup selected: it is picked up as it is now, or let go if it
    *  isn't there any more. */
@@ -148,6 +158,7 @@ export const MarkupEditing = (Base) => class extends Base {
   /** The annotate bar's tool changed, or the document did: have the markups ready. */
   _markReady() {
     const on = EDIT_MODES.has(this.markupMode), sel = this.markSel, tab = this.activeTab;
+    if (!on && this.markNudge && !this.markBusy) this._markFlush();   // (the tool is put away: the presses made are written)
     if (!on || (sel && sel.tab !== tab)) {
       this._markLetGo();
       // The tool goes off for a moment each time the document is shown again (Undo, Redo, another
@@ -186,6 +197,7 @@ export const MarkupEditing = (Base) => class extends Base {
     const scale = at.view.viewport.scale;
     const sel = this.markSel;
     // While a change is being written (or the markups asked for again), a press waits its turn.
+    if (this.markNudge) this._markFlush();   // (arrow presses not written yet: written before anything else)
     if (this.markBusy || (sel && !this._markShapes())) return true;
     // A second press on the selected callout soon after the first: its words.
     // (Counted here: a pointerdown doesn't say it's the second of two.)
@@ -253,6 +265,7 @@ export const MarkupEditing = (Base) => class extends Base {
     const sel = this.markSel;
     if (!sel || !EDIT_MODES.has(this.markupMode)) return false;
     if (this.markBusy || this.markPending) return true;
+    this.#takeNudge();                      // (moved a little, then removed: only the removing is written)
     const { page } = sel, id = sel.shape.id;
     this._markLetGo();
     this._applyMarkup([{ op: "delete", page, id }], "Could not remove that: ");
@@ -306,18 +319,19 @@ export const MarkupEditing = (Base) => class extends Base {
   }
 
   /** Send a change to the selected markup; it stays selected afterwards. */
-  async _markChange(change, failure = "Could not change that: ", nudge = false) {
+  async _markChange(change, failure = "Could not change that: ") {
     const sel = this.markSel;
-    if (!sel || this.markBusy) return;      // (one change at a time: a held arrow key doesn't pile them up)
+    if (!sel || this.markBusy) return;      // (one change at a time)
+    // Arrow presses not written yet go with this change, as one.
+    const waiting = this.#takeNudge();
+    if (waiting && !change.move) change = { ...change, move: waiting };
     const { page, index } = sel, { name } = sel.shape, tab = this.activeTab, version = tab?.version || 0;
     this.markPage = page;
-    // Nudges made one after another are one step for Undo.
-    const merge = nudge ? `nudge:${page}:${index}` : null;
     // From here until the markup is picked up again its keys are still its own
     // (markPending): the selection is gone for a moment while the page is redrawn.
     this.markBusy = this.markPending = true;
     try {
-      await this._applyMarkup([{ op: "change", page, id: sel.shape.id, ...change }], failure, { merge });
+      await this._applyMarkup([{ op: "change", page, id: sel.shape.id, ...change }], failure);
     } finally { this.markBusy = false; }
     if (this.activeTab !== tab) { this.#settled(false); return; }
     if ((tab.version || 0) === version) { this._markDraw(page); this.#settled(false); return; }   // it didn't work (and said so)
@@ -334,13 +348,40 @@ export const MarkupEditing = (Base) => class extends Base {
   }
 
   /** A change is over and the markup picked up again (or not: ``on``). The
-   *  arrow keys pressed meanwhile are sent as one move, so a held key ends
-   *  where its presses say. */
+   *  arrow keys pressed meanwhile count from here, so a held key ends where
+   *  its presses say. */
   #settled(on) {
     this.markPending = this.markDropped = false;
     const by = this.markQueued;
     this.markQueued = null;
-    if (on && by && (by[0] || by[1]) && this.markSel) this._markChange({ move: by }, undefined, true);
+    if (on && by && this.markSel) this.#nudge(by);
+  }
+
+  /** The arrow keys move the markup like a drag does: its outline goes at
+   *  once, press after press, and the file is written once the keys have
+   *  rested for a moment. So a held key, or a run of presses, is one change
+   *  and one step for Undo. */
+  #nudge(by) {
+    const sel = this.markSel, was = this.markNudge?.by || [0, 0];
+    clearTimeout(this.markNudge?.timer);
+    this.markNudge = { by: [was[0] + by[0], was[1] + by[1]], timer: setTimeout(() => this._markFlush(), NUDGE_REST) };
+    this._markDraw(sel.page, reshaped(sel.shape, null, null, this.markNudge.by));
+  }
+
+  /** The presses not written yet, taken (so they are written once): [dx, dy] or null. */
+  #takeNudge() {
+    const nudge = this.markNudge;
+    this.markNudge = null;
+    clearTimeout(nudge?.timer);
+    return nudge && (nudge.by[0] || nudge.by[1]) ? nudge.by : null;
+  }
+
+  /** Write the arrow presses made so far, now (the keys rested; or something
+   *  else is about to happen to the document: a save, another change). */
+  _markFlush() {
+    if (!this.markNudge) return;
+    if (!this.markSel || this.markBusy) { this.#takeNudge(); if (this.markSel) this._markDraw(this.markSel.page); return; }
+    this._markChange({ move: this.#takeNudge() || [0, 0] });
   }
 
   /** ``step`` points left, right, up or down as the page is seen (it may be
@@ -375,8 +416,11 @@ export const MarkupEditing = (Base) => class extends Base {
     if (!this.markPending && (!sel || !EDIT_MODES.has(this.markupMode))) return false;
     const by = this.#nudgeBy(e.key, e.shiftKey ? 10 : 1);
     if (e.key === "Escape") {
-      // Also while a change is being written: the markup isn't picked up again after it.
+      // The presses made so far are written; the markup is then let go (also when
+      // a change is being written: it isn't picked up again after it), and a key
+      // still held does nothing more.
       this.markQueued = null;
+      if (this.markNudge) this._markFlush();
       if (this.markPending) this.markDropped = this.markHush = true;
       this._markLetGo();
       return true;
@@ -386,8 +430,8 @@ export const MarkupEditing = (Base) => class extends Base {
       return true;                                                   // (and no key scrolls the page meanwhile)
     }
     if (e.key === "Delete" || e.key === "Backspace") return this._markDelete();
-    if (by) { this._markChange({ move: by }, undefined, true); return true; }
-    if (e.key === "Enter" && sel.shape.kind === "callout") { this._markEditText(); return true; }
+    if (by) { this.#nudge(by); return true; }
+    if (e.key === "Enter" && sel.shape.kind === "callout") { this._markFlush(); this._markEditText(); return true; }
     return false;
   }
 

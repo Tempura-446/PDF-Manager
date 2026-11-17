@@ -70,8 +70,8 @@ Asked for after 0.38.0, whose "Not yet" list this is.
 
 **From the audit of 0.47.0 (2026-11-16), left for a follow-up release:**
 - [ ] Keep the selection through a rewrite in the reader's own reload (`#reloadEditing`, as it already does for a picked picture), instead of markedit.js picking it up again with `markPending` / `markAfter` and the keyboard branch for the moment without a document.
-- [ ] Nudge like a drag: add the presses up, show the outline, write once when the key goes up. One Undo step by construction; the Undo merge key, the key queue and the relative `"move"` (with `_moved` on the server) can then go.
-- [ ] `/api/markup` answers with the markups as they are now (a header, like the fonts of a text edit), so the whole file isn't sent a second time to `/api/markup/describe` after each change.
+- [x] Done in 0.49.0: nudge like a drag. The presses are added up and shown as the outline (`#nudge`), written once the keys have rested 350 ms or something else is about to happen to the document (`_markFlush`, also from `_serial`). One Undo step by construction: the Undo merge key is gone. (The relative `"move"` and `_moved` stay: a move is still sent as one.)
+- [x] Done in 0.49.0: `/api/markup` answers with the markups as they are now (`X-Pdfm-Markups`, up to 16,000 characters; more and the reader asks as before), kept for the new version before the page is shown again (`_markSeed`). Undo and Redo still ask.
 - [ ] A positive mark on what ZPDF draws (`/ZPDFKind`) when it's made; `describe` then reads it, with today's reading of the annotation (name, `/Cap`, `/BE`, the words) only for files from before. `quantities.py` should use the same test.
 - [ ] `_add` split into building an annotation and adding it to the page, so `change_markup` doesn't add a spare one and take it out again (pypdf's private `_objects`); a stamp resized to another shape is then drawn again, not stretched.
 - [ ] While dragging, keep one overlay and change its attributes (and at most once a frame) instead of rebuilding it on every pointer move.
