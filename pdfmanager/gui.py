@@ -2814,7 +2814,10 @@ class Handler(BaseHTTPRequestHandler):
         if what == "status":
             # (A scanner can always be tried: network ones need nothing from Windows.)
             wia = scanner.status()
+            from pdfmanager import naps2
+
             return self._send(HTTPStatus.OK, {"scanner": {"available": True, "reason": "", "wia": wia},
+                                              "naps2": naps2.installed(),
                                               "ocr": scanpdf.ocr_engine(),
                                               "upright": scanpdf.can_turn_upright(),
                                               "modes": list(scanner.MODES),

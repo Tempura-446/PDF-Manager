@@ -40,6 +40,23 @@ def test_lists_scanners_only(wia):
     assert wia.threads  # in a COM apartment
 
 
+def test_a_scanner_that_is_slow_to_answer_doesnt_hold_up_the_list(wia, monkeypatch):
+    """Seen on a PC: 52 seconds for every list, because the list waited for a
+    scanner that was switched off to say whether it has a feeder."""
+    slow = FakeScanner("Asleep", feeder=False)
+    slow.connect_delay = 1.0
+    wia.scanners = [FakeScanner("Desk scanner", feeder=False), slow]
+    monkeypatch.setattr(scanner, "LEARN_WAIT", 0.2)
+    started = time.monotonic()
+    found = scanner.list_scanners()
+    assert time.monotonic() - started < 0.8                  # not the second the slow one takes
+    assert [s["name"] for s in found] == ["Desk scanner", "Asleep"]
+    assert not found[0]["feeder"]                             # the quick one has said it has none
+    assert found[1]["feeder"] and found[1]["flatbed"]         # not known yet: both are offered
+    time.sleep(1.2)
+    assert not scanner.list_scanners()[1]["feeder"]           # it has answered meanwhile
+
+
 def test_no_scanner(wia):
     assert scanner.list_scanners() == []
     assert scanner.status() == {"available": True, "reason": ""}
