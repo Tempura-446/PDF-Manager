@@ -172,11 +172,13 @@ def read(path, password=None):
             except Exception:  # noqa: BLE001 - a damaged entry
                 continue
             zpdf = _str(annot.get("/NM")).startswith("zpdf-")
+            # (A markup drawn with Shapes says so: whatever its comment looks like, it isn't a count's mark or an angle.)
+            drawn = "/ZPDFKind" in annot
             words = _str(annot.get("/Contents")).strip()
             base = {"page": number, "sheet": sheet, "colour": _hex(annot.get("/C")), "by": _str(annot.get("/T")),
                     "when": _date(annot.get("/M") or annot.get("/CreationDate")), "perimeter": None,
                     "perimeter_unit": ""}
-            if subtype == "/Circle" and zpdf and _COUNT.match(words):   # one mark of a count
+            if subtype == "/Circle" and zpdf and not drawn and _COUNT.match(words):   # one mark of a count
                 text, _, total = _COUNT.match(words).groups()
                 group, name = _names(annot, True)
                 entry = counts.setdefault(text, {**base, "kind": "Count", "group": group, "name": name, "quantity": 0,
@@ -188,7 +190,7 @@ def read(path, password=None):
                 continue
             points = _pairs(_nums(annot.get("/L") if subtype == "/Line" else annot.get("/Vertices")))
             # (The reader's angle: a three-point line with no intent; it needs no scale.)
-            angle = zpdf and subtype == "/PolyLine" and intent is None and len(points) == 3 \
+            angle = zpdf and not drawn and subtype == "/PolyLine" and intent is None and len(points) == 3 \
                 and "/LE" not in annot and "°" in words
             if len(points) < 2 or (measure is None and intent not in DIMENSIONS and not angle):
                 continue

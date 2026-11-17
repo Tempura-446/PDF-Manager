@@ -297,7 +297,12 @@ export const MarkupEditing = (Base) => class extends Base {
     if (d.key && d.shape.kind === "dimension" && !e.altKey) pt = this._snapNear(d.page, pt, d.view.viewport.scale);
     d.by = [pt[0] - d.start[0], pt[1] - d.start[1]];
     d.now = reshaped(d.shape, d.key, pt, d.by);
-    this._markDraw(d.page, d.now);
+    // Drawn once a frame at most, however many moves the pointer reports in it.
+    this.markFrame ||= requestAnimationFrame(() => {
+      this.markFrame = 0;
+      const drag = this.markDrag;
+      if (drag?.now) this._markDraw(drag.page, drag.now);
+    });
     return true;
   }
 
