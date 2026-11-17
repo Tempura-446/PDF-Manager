@@ -146,6 +146,88 @@ def _set_calc(field, op, names):
         + ", ".join(_js_string(n) for n in names) + "));")
 
 
+_NUMBER = re.compile(r"\s*AFNumber_Format\(\s*(\d+)\s*,\s*(\d+)\s*,\s*\d+\s*,\s*\d+\s*,\s*(\"(?:[^\"\\]|\\.)*\")\s*,\s*(true|false)\s*\)\s*;?\s*")
+_PERCENT = re.compile(r"\s*AFPercent_Format\(\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*(?:true|false)\s*)?\)\s*;?\s*")
+_DATE = re.compile(r"\s*AFDate_FormatEx\(\s*(\"(?:[^\"\\]|\\.)*\")\s*\)\s*;?\s*")
+_SPECIAL = re.compile(r"\s*AFSpecial_Format\(\s*(\d+)\s*\)\s*;?\s*")
+_RANGE = re.compile(r"\s*AFRange_Validate\(\s*(true|false)\s*,\s*(-?[\d.eE+-]+)\s*,\s*(true|false)\s*,\s*(-?[\d.eE+-]+)\s*\)\s*;?\s*")
+_OPERATIONS = {code: name for name, code in CALCULATIONS.items()}
+
+
+def _script(field, key):
+    """The script a field runs for ``key`` ("/F" to show its value, "/V" to
+    check it, "/C" to work it out), or None."""
+    try:
+        action = field["/AA"][key].get_object()
+        script = action["/JS"].get_object()
+    except (KeyError, TypeError, AttributeError):
+        return None
+    if isinstance(script, str):
+        return str(script)
+    try:
+        return script.get_data().decode("latin-1")  # (a script kept as a stream)
+    except Exception:  # noqa: BLE001 - not a script that can be read
+        return ""
+
+
+def _format_of(field):
+    """What a text field takes, read back from Acrobat's form scripts into
+    the choices ``add_fields`` offers: {"format": "number" | "amount" |
+    "currency" | "percent" | "date" | "phone" | "zip", ...} with "decimals",
+    "separators", "currency", "currency_after" or "date" where they apply;
+    {"format": "custom"} for a script that is none of these; None without one."""
+    script = _script(field, "/F")
+    if script is None:
+        return None
+    try:
+        match = _NUMBER.fullmatch(script)
+        if match:
+            decimals, sep, symbol = int(match.group(1)), int(match.group(2)), json.loads(match.group(3))
+            out = {"format": "currency" if symbol.strip() else "amount" if decimals else "number",
+                   "decimals": decimals, "separators": "1.234,56" if sep in (2, 3) else "1,234.56"}
+            if symbol.strip():
+                out.update(currency=symbol, currency_after=match.group(4) == "false")
+            return out
+        match = _PERCENT.fullmatch(script)
+        if match:
+            return {"format": "percent", "decimals": int(match.group(1)),
+                    "separators": "1.234,56" if int(match.group(2)) in (2, 3) else "1,234.56"}
+        match = _DATE.fullmatch(script)
+        if match:
+            return {"format": "date", "date": json.loads(match.group(1))}
+        match = _SPECIAL.fullmatch(script)
+        if match and int(match.group(1)) in (0, 2):
+            return {"format": "zip" if int(match.group(1)) == 0 else "phone"}
+    except ValueError:
+        pass
+    return {"format": "custom"}
+
+
+def _range_of(field):
+    """(smallest, largest) a field checks its number against with
+    AFRange_Validate, each None when not set."""
+    match = _RANGE.fullmatch(_script(field, "/V") or "")
+    if not match:
+        return None, None
+    try:
+        return (float(match.group(2)) if match.group(1) == "true" else None,
+                float(match.group(4)) if match.group(3) == "true" else None)
+    except ValueError:
+        return None, None
+
+
+def _total_of(field):
+    """How a field is worked out: {"op": "sum" | "average" | "product" |
+    "min" | "max", "fields": [names]}, "custom" for a script of its own,
+    None when it's typed."""
+    if _script(field, "/C") is None:
+        return None
+    calc = _calc_of(field)
+    if not calc or calc[0] not in _OPERATIONS:
+        return "custom"
+    return {"op": _OPERATIONS[calc[0]], "fields": list(calc[1])}
+
+
 def _value_of(field, kind):
     value = _inherited(field, "/V")
     value = value.get_object() if value is not None else None
@@ -178,7 +260,10 @@ def field_details(path, password=None):
     ``edit_fields`` takes), "tooltip", "required", "readonly", "value",
     "options" (a dropdown's or list's), "widgets" (how many places the field
     is shown: a radio group's buttons, or one box repeated), "calculated",
-    "used_by" (the fields worked out from it) and "signed"."""
+    "format", "min", "max" and "calculate" (what a text box takes and how it
+    is worked out, read back from Acrobat's form scripts: see ``_format_of``,
+    ``_range_of`` and ``_total_of``), "used_by" (the fields worked out from
+    it) and "signed"."""
     reader = core.open_pdf(path, password)
     rows = list(_widgets(reader.pages))
     shown, users = {}, {}
@@ -203,6 +288,8 @@ def field_details(path, password=None):
             "value": _value_of(field, kind), "options": _choices_of(field),
             "widgets": shown[_key(field)],
             "calculated": "/C" in (field.get("/AA") or {}),
+            "format": _format_of(field), "min": _range_of(field)[0], "max": _range_of(field)[1],
+            "calculate": _total_of(field),
             "used_by": users.get(name, []),
             "signed": kind == "signature" and _inherited(field, "/V") is not None})
     return found
@@ -717,6 +804,99 @@ def _retype(writer, acroform, field, shown, kind, wanted, change, number):
     return note
 
 
+def _unset(field, *keys):
+    """Take actions out of a field's /AA (and /AA itself when empty)."""
+    actions = field.get("/AA")
+    actions = actions.get_object() if actions is not None else None
+    if actions is None:
+        return
+    for key in keys:
+        if key in actions:
+            del actions[key]
+    if not len(actions):
+        del field["/AA"]
+
+
+def _rules(field, change, taken, calculated):
+    """Set what a text box takes and how it's worked out, from a change's
+    "format", "min"/"max" and "calculate" (as ``add_fields`` takes them; ""
+    takes each away). Returns notes for the user."""
+    notes, name = [], _qualified_name(field)
+    if "/AA" in field:   # (its own, not one shared with another field)
+        field[NameObject("/AA")] = DictionaryObject(field["/AA"].get_object())
+
+    def actions():
+        return _child(field, "/AA", DictionaryObject)
+
+    if change.get("format") is not None:
+        if str(change["format"]).strip().lower() in ("", "none", "text"):
+            _unset(field, "/F", "/K")
+        else:
+            shows, typed = _format_scripts(change)
+            actions()[NameObject("/F")], actions()[NameObject("/K")] = _js(shows), _js(typed)
+    if change.get("min") is not None or change.get("max") is not None:
+        low, high = _range_of(field)
+        check = _validation({"min": change.get("min", low) if change.get("min") is not None else low,
+                             "max": change.get("max", high) if change.get("max") is not None else high})
+        if check:
+            actions()[NameObject("/V")] = _js(check)
+        else:
+            _unset(field, "/V")
+    if change.get("calculate") is not None:
+        flags = int(_inherited(field, "/Ff", 0))
+        if not change["calculate"] or (isinstance(change["calculate"], str) and not change["calculate"].strip()):
+            if _script(field, "/C") is not None:
+                _unset(field, "/C")
+                field[NameObject("/Ff")] = NumberObject(flags & ~READ_ONLY)  # typed again
+                calculated.append(field)
+        else:
+            op, sources = _calculation({**change, "name": name})
+            if name in sources:
+                raise core.PdfManagerError(f"{name} can't be worked out from itself")
+            missing = [n for n in sources if n not in taken]
+            if missing:
+                notes.append(f"{name} is worked out from {', '.join(missing)}, which this form "
+                             "doesn't have: check the name" + ("s." if len(missing) > 1 else "."))
+            actions()[NameObject("/C")] = _js("")
+            _set_calc(field, op, sources)
+            field[NameObject("/Ff")] = NumberObject(flags | READ_ONLY)  # worked out, not typed
+            calculated.append(field)
+    return notes
+
+
+def _reorder(acroform, fields, touched):
+    """/CO after totals were set or taken away: every calculated field once,
+    each after the ones it's worked out from; the order the form had is kept
+    where that allows."""
+    co = _child(acroform, "/CO", ArrayObject)
+    listed = [ref.get_object() for ref in co]
+    for field in touched:
+        if _script(field, "/C") is None:
+            listed = [f for f in listed if f is not field]
+        elif not any(f is field for f in listed):
+            listed.append(field)
+    by_name = {_qualified_name(f): f for f in listed}
+    done, order = [], []
+
+    def visit(field, path=()):
+        if any(f is field for f in done) or any(f is field for f in path):
+            return
+        calc = _calc_of(field)
+        for used in calc[1] if calc else ():
+            if used in by_name:
+                visit(by_name[used], path + (field,))
+        done.append(field)
+        order.append(field)
+
+    for field in listed:
+        visit(field)
+    co.clear()
+    for field in order:
+        co.append(field.indirect_reference if field.indirect_reference else field)
+    if not len(co):
+        del acroform["/CO"]
+
+
 def _to_page(writer, annot, number, target):
     """Take a field's widget from page ``number`` to page ``target`` (both
     1-based): it leaves one page's list for the end of the other's (so it
@@ -805,7 +985,11 @@ def edit_fields(path, output, changes, password=None):
     to, keeping its place on the paper unless "rect" says another), "name",
     "tooltip", "required", "readonly", "type" ("text", "multiline",
     "dropdown" or "list": a field that holds words can become another kind
-    that does), "options" (a dropdown's or list's choices) and "delete".
+    that does), "options" (a dropdown's or list's choices) and "delete". A
+    text box also takes what ``add_fields`` does for one: "format" (with
+    "decimals", "separators", "currency", "currency_after", "date"; "" or
+    "none" for any text), "min" and "max" ("" for none), and "calculate"
+    ({"op", "fields"} or "sum: Price, Tax"; "" to have it typed again).
 
     A name is kept unique, and the calculations that used the old name use
     the new one. A deleted field is taken out of the calculations that used
@@ -846,6 +1030,7 @@ def edit_fields(path, output, changes, password=None):
         targets.append((spot[0], *where[spot], change))
 
     deleted, changed = [], 0
+    calculated = []  # fields whose total was set or taken away
     for number, annot, field, change in targets:
         if change.get("delete"):
             deleted.append((number, annot, field))
@@ -954,6 +1139,15 @@ def edit_fields(path, output, changes, password=None):
             field[NameObject("/Ff")] = NumberObject(flags)
             touched = True
 
+        if any(change.get(k) is not None for k in ("format", "min", "max", "calculate")):
+            if kind not in ("text", "multiline"):
+                raise core.PdfManagerError(
+                    f"{_qualified_name(field)} on page {number} is a {kind} field: only a text box "
+                    "has a format, a smallest and largest value, or a total")
+            said = _rules(field, change, taken, calculated)
+            notes.extend(said)
+            redraw = touched = True
+
         if change.get("options") is not None and kind in ("dropdown", "list"):
             options = _options(change)
             if not options and not flags & EDIT:
@@ -1014,6 +1208,8 @@ def edit_fields(path, output, changes, password=None):
             if order is not None:
                 _drop(order, other)
 
+    if calculated:
+        _reorder(acroform, fields, calculated)
     if redraw:
         acroform[NameObject("/NeedAppearances")] = BooleanObject(True)
     names = {}
