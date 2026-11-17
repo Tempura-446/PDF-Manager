@@ -157,6 +157,7 @@ class Com:
         return out
 
     def _invoke(self, obj, name, flag, values):
+        _some(obj)
         return obj.GetType().InvokeMember(name, flag, None, obj, self._args(values))
 
     def get(self, obj, name, *index):
@@ -252,8 +253,34 @@ def status():
     return {"available": True, "reason": ""}
 
 
+NO_ANSWER = ("The scanner's driver didn't answer as expected. Switch the scanner off and on again, "
+             "then try again.")
+
+
+def _some(value):
+    """``value``, which a driver should have given: some hand back nothing
+    (no device, no item, no picture) instead of failing."""
+    if value is None:
+        raise ScannerError(NO_ANSWER, "noanswer")
+    return value
+
+
+def _open(com, info):
+    """Connect to a scanner: (the device, its item to scan with)."""
+    device = _some(com.call(info, "Connect"))
+    return device, _some(com.get(_some(com.get(device, "Items")), "Item", 1))
+
+
 def _short(exc):
     return " ".join(str(exc).split())[:160] or type(exc).__name__
+
+
+def _http_answer(code):
+    """The HTTP status inside an HRESULT of Windows' HTTP kind (0x8019....),
+    or None. Windows' own driver for network scanners (eSCL) passes on what
+    the scanner answered this way: 0x80190199 is 409, "these settings
+    conflict"."""
+    return code & 0xFFFF if code and code >> 16 == 0x8019 else None
 
 
 def _failure(com, exc, while_doing=""):
@@ -266,6 +293,15 @@ def _failure(com, exc, while_doing=""):
         if reason == "none":
             message = NONE_FOUND
         return ScannerError(message, reason, code)
+    answer = _http_answer(code)
+    if answer in (400, 409):
+        return ScannerError(f"The scanner refused these settings (it answered {answer}). Try another resolution "
+                            "or colour setting.", "refused", code)
+    if answer == 503:
+        return ScannerError(ERRORS[BUSY][1], "busy", code)
+    if answer:
+        return ScannerError(f"The scanner failed{while_doing} (it answered {answer}). Switch it off and on again, "
+                            "then try again.", "general", code)
     said = f" (error 0x{code:08X})" if code else f" ({_short(exc)})"
     return ScannerError(f"The scanner failed{while_doing}{said}. Switch it off and on again, then "
                         "try again.", "general", code)
@@ -360,8 +396,12 @@ def list_scanners():
     return out
 
 
-def _configure(com, device, item, mode, dpi, source):
-    """Put the device and its item in the asked mode."""
+def _configure(com, device, item, mode, dpi, source, before=None):
+    """Put the device and its item in the asked mode. Returns what the
+    intent and the area were before. Given that as ``before`` (a scanner
+    refused the full set), only what is needed is set (the source, the kind
+    of picture, the resolution) and the intent and area are put back as the
+    driver had them."""
     handling = _read(com, device, DOCUMENT_HANDLING_CAPABILITIES)
     if source == "feeder":
         if handling is not None and not _int(handling) & FEEDER:
@@ -372,12 +412,21 @@ def _configure(com, device, item, mode, dpi, source):
         if not _int(handling) & FLATBED:
             raise ScannerError("This scanner has no glass to scan on. Choose Document feeder.", "noflatbed")
         _write(com, device, DOCUMENT_HANDLING_SELECT, FLATBED)
+    if before is not None:
+        for pid, value in before.items():
+            if value is not None:
+                _write(com, item, pid, value)
+    # (Read only the first time: the second try has what it needs already.)
+    was = None if before is not None else {pid: _read(com, item, pid) for pid in (CUR_INTENT, XPOS, YPOS, XEXTENT, YEXTENT)}
     # The intent first: drivers reset the type, depth and resolution from it.
-    _write(com, item, CUR_INTENT, INTENT[mode])
+    if before is None:
+        _write(com, item, CUR_INTENT, INTENT[mode])
     _write(com, item, DATATYPE, DATA_TYPE[mode])
     _write(com, item, DEPTH, BITS[mode])
     _write(com, item, XRES, dpi, needed=True)
     _write(com, item, YRES, dpi, needed=True)
+    if before is not None:
+        return was
     # The whole glass or page: some drivers keep a smaller area from last time.
     _write(com, item, XPOS, 0)
     _write(com, item, YPOS, 0)
@@ -388,6 +437,7 @@ def _configure(com, device, item, mode, dpi, source):
                 com.put(prop, "Value", _int(com.get(prop, "SubTypeMax")))
             except Exception:
                 pass
+    return was
 
 
 def _transfer(com, item, folder, number):
@@ -395,12 +445,12 @@ def _transfer(com, item, folder, number):
     from PIL import Image
 
     try:
-        picture = com.call(item, "Transfer", FORMAT_PNG)
+        picture = _some(com.call(item, "Transfer", FORMAT_PNG))
     except Exception as exc:
         code = com.hresult(exc)
         if code in ERRORS and code not in (0x8021000B, 0x8021000C):
             raise
-        picture = com.call(item, "Transfer", FORMAT_BMP)  # drivers that only give bitmaps
+        picture = _some(com.call(item, "Transfer", FORMAT_BMP))  # drivers that only give bitmaps
     target = Path(folder) / f"page{number:04d}.scan"
     if target.exists():
         target.unlink()
@@ -437,9 +487,8 @@ def scan(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", on_pag
                 raise ScannerError("That scanner isn't connected any more. Check that it is switched on, "
                                    "then choose it again.", "gone")
             try:
-                device = com.call(match[0], "Connect")
-                item = com.get(com.get(device, "Items"), "Item", 1)
-                _configure(com, device, item, mode, dpi, source)
+                device, item = _open(com, match[0])
+                before = _configure(com, device, item, mode, dpi, source)
             except Exception as exc:
                 raise _failure(com, exc, " to start") from None
             feeder = source == "feeder"
@@ -453,7 +502,25 @@ def scan(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", on_pag
                     failure = _failure(com, exc, f" on page {number}")
                     if feeder and pages and failure.code == "empty":
                         break  # every page in the feeder is done
-                    raise failure from None
+                    if failure.code not in ("refused", "noanswer") or pages:
+                        raise failure from None
+                    # Refused (or nothing given) before the first page: once more with only the
+                    # settings that matter, in grey where black and white was
+                    # asked (made black and white here afterwards).
+                    plainer = "grey" if mode == "bw" else mode
+                    try:
+                        device, item = _open(com, match[0])
+                        _configure(com, device, item, plainer, dpi, source, before=before)
+                        image = _transfer(com, item, folder, number)
+                    except Exception as again:
+                        second = _failure(com, again, f" on page {number}")
+                        last = second if second.code != "general" else failure
+                        if last.code in ("refused", "noanswer") and "\\escl\\" in str(device_id).lower():
+                            last = ScannerError(f"{last} Or choose this scanner's \"(network)\" entry in the "
+                                                "list, where ZPDF talks to it directly.", last.code, last.hresult)
+                        raise last from None
+                if mode == "bw" and image.mode != "1":
+                    image = image.convert("L").point(lambda v: 255 if v >= 160 else 0).convert("1")
                 image.info["dpi"] = (dpi, dpi)
                 pages.append((image, dpi))
                 if on_page is not None:

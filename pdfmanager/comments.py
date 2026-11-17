@@ -373,6 +373,9 @@ def import_xfdf(path, xfdf, output, password=None):
         if annot is None:
             skipped.append(tag)
             continue
+        # Brought in from elsewhere (whatever its name says): the reader doesn't
+        # offer to redraw it with ZPDF's own tools (markup.describe).
+        annot[NameObject("/ZPDFImported")] = BooleanObject(True)
         ref = writer._add_object(annot)
         if "/Annots" not in page:
             page[NameObject("/Annots")] = ArrayObject()

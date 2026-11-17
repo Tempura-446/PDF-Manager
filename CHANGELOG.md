@@ -4,6 +4,61 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.47.0
+
+Change a markup after you've placed it.
+
+- **Select, move and reshape.** With Shapes, Stamps or Note on in the
+  annotate bar, press on a markup you made with ZPDF: handles appear on its
+  corners, ends or points. Drag a handle to reshape it, or the markup
+  itself to move it. It works for rectangles, ellipses, clouds (also the
+  ones through clicked points), lines, arrows, lines with corners,
+  callouts (the point it's about and its box), dimensions, stamps and
+  notes.
+- **A dimension follows its ends:** drag an end and its length is worked
+  out again from the sheet's scale; the end snaps onto the drawing's lines
+  as when you drew it (hold Alt to put it exactly where you let go).
+- **Keys:** Delete removes the selected markup, the arrow keys nudge it (a
+  point at a time, ten with Shift), Esc lets go. Each change is one step
+  for Undo.
+- **Colour and thickness** from the bar change the selected markup.
+  Double-click a callout (or press Enter) to change its words.
+- A changed markup is still the same annotation: its place in the page's
+  order, who made it and when, and the replies to it are kept.
+- Markups made by other programs, measurements and highlights aren't
+  changed this way yet; ZPDF says so if you try through the command set.
+- **From the check on Windows:** an arrow key held down moves the markup
+  by every press (they're added up while the file is written) and no
+  longer scrolls the page; a double-click on a callout opens its words
+  (Enter does too); the bar's bin removes the selected markup; a cloud is
+  taken by a press on its bumps, however thick its line; Esc while an
+  arrow key is held lets go for good.
+- **From a review of the code:** a drag that starts on a markup that
+  isn't selected draws a new shape (a dimension continued from another's
+  end), and a click selects it; the arrow keys move a markup the way the
+  page is seen, also on a turned page; nudges made one after another are
+  one step for Undo; a comment written on a dimension no longer becomes
+  its measurement when it's moved; a dimension keeps the scale it was
+  drawn with when an end is dragged; comments brought in from a file
+  aren't offered for redrawing as ZPDF's own; keys pressed in the page
+  list are no longer also the selected markup's; a markup stays selected
+  through Undo and Redo; its keys work straight away wherever the focus
+  was before it was pressed (a button of the bar, the page list).
+- **Web page to PDF:** when the browser stalls and the page is tried
+  again, the second try uses another installed browser (Chrome after Edge,
+  say) when there is one.
+- **Fixed: a network scanner failing with "error 0x80190199".** Through
+  Windows' own driver for network scanners, that code is the scanner
+  answering "these settings conflict". ZPDF now tries once more with only
+  the settings that matter (in grey where the scanner has no black and
+  white, made black and white afterwards), and if the scanner still
+  refuses says so in words and points to its "(network)" entry in the
+  list, where ZPDF talks to the scanner directly.
+- **Fixed: a scan failing with "'NoneType' object has no attribute
+  'GetType'".** A scanner's driver sometimes hands back nothing (no
+  picture, no error). ZPDF now tries once more, and if that gives nothing
+  either says so in plain words.
+
 ## 0.46.0
 
 Watch folders keep working with the window closed.

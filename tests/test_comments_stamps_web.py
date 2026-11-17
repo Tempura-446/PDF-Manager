@@ -207,7 +207,9 @@ def test_saved_web_page_to_pdf(tmp_path, capsys):
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><title>T</title><h1>Hello web</h1>"
                     "<p>A <a href='https://example.com/'>link</a>.</p>", encoding="utf-8")
-    out, program = office.html_to_pdf(page, tmp_path / "page.pdf", timeout=60)
+    # (The time the app itself allows: a cold browser on a busy CI machine has needed more than
+    # two tries of 30 seconds.)
+    out, program = office.html_to_pdf(page, tmp_path / "page.pdf")
     reader = PdfReader(out)
     assert "Hello web" in reader.pages[0].extract_text()
     uris = [a.get_object()["/A"].get("/URI") for a in reader.pages[0].get("/Annots") or []]

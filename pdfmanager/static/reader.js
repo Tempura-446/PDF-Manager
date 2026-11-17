@@ -28,6 +28,7 @@ import { COLORS, el, fadeOut, heldTimer, ICON, isTyping, MIN_ZOOM, MAX_ZOOM, pdf
 import { Annotating } from "./annotate.js";
 import { Finding } from "./find.js";
 import { Layering } from "./layers.js";
+import { MarkupEditing } from "./markedit.js";
 import { Measuring } from "./measuring.js";
 import { Signing } from "./sign.js";
 import { Tabs } from "./tabs.js";
@@ -188,7 +189,7 @@ const header = (res, name) => { try { return decodeURIComponent(res.headers.get(
  *  t, e and m are the reader's own: next, previous, rotate, panel, edit text, measure). */
 const ANNOT_KEYS = { h: "HIGHLIGHT", c: "NOTE", a: "FREETEXT", d: "INK", s: "SIGN" };
 
-export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measuring(Layering(Object))))))) {
+export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEditing(Measuring(Layering(Object)))))))) {
   constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onRepair, onForgetRecent, onSaveTab, onUnsaved, onBrokenWhy, onOpenWithId } = {}) {
     super();
     this.host = host;
@@ -684,7 +685,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     this.sizeSelect.addEventListener("change", () => this._setSize(+this.sizeSelect.value));
     this.undoBtn.addEventListener("click", () => this._undo());
     this.redoBtn.addEventListener("click", () => this._undo(true));
-    this.deleteBtn.addEventListener("click", () => this.uiManager?.delete());
+    this.deleteBtn.addEventListener("click", () => { if (!this._markDelete()) this.uiManager?.delete(); });
     this.annotSaveBtn.addEventListener("click", () => this.save());
     this.annotCloseBtn.addEventListener("click", () => this.closeAnnotate());
 
@@ -787,7 +788,11 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     if (mod && e.key.toLowerCase() === "o") { e.preventDefault(); this.chooseFile(); return; }
     if (e.key === "Escape" && !this.menu.hidden) { this.#closeMenu(); this.moreBtn.focus(); return; }
     if (e.key === "Escape" && !this.zoomMenu.hidden) { this.#closeZoomMenu(); this.zoomMenuBtn.focus(); return; }
-    if (!this.doc) return;
+    if (!this.doc) {
+      // (The document is being shown again after a markup changed: its keys are still its own.)
+      if (!mod && !e.altKey && !isTyping(e) && this.markPending && this._markKey(e)) e.preventDefault();
+      return;
+    }
     if (e.key === "Escape" && this.panelOpen && !this.#panelDocked()) { e.preventDefault(); this.setPanel(false, { focus: true }); return; }
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
     if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); this.print(); return; }
@@ -805,6 +810,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
     if (mod && e.key === "0") { e.preventDefault(); this.pdfViewer.currentScaleValue = "auto"; return; }
     if (mod || e.altKey || isTyping(e)) return;
     if (this.measureMode && this._measureKey(e)) { e.preventDefault(); return; }
+    // (Not a key another part already took, or one pressed in a side panel: Delete in the page list removes pages.)
+    if (!e.defaultPrevented && !this.side?.contains(e.target) && !this.sidebar?.contains(e.target) && this._markHasKeys() && this._markKey(e)) { e.preventDefault(); return; }   // a selected markup: Delete, Esc, the arrows
     if (e.key === "Escape" && !this.findbar.hidden) { this.closeFind(); return; }
     if (this.markupMode === "IMAGES" && this.pickedImage && !isTyping(e) && (e.key === "Delete" || e.key === "Backspace")) {
       e.preventDefault();
@@ -1338,7 +1345,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
       this.annotRedo = !!details.hasSomethingToRedo;
       this.#compareAnnotations();
       this._refresh({ notify: false });
-      this.deleteBtn.disabled = !details.hasSelectedEditor;
+      this.deleteBtn.disabled = !details.hasSelectedEditor && !this.markSel;
     });
 
     eventBus.on("pagesinit", () => {
@@ -1387,6 +1394,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
       this._drawMeasures(pageNumber);
       if (this.markupMode === "IMAGES" || this.markupMode === "LINKS") this._drawObjectBoxes(pageNumber);
       this._drawRedactions(pageNumber);
+      this._markReady();          // (the document may have been written again: its markups, and the selected one's handles)
+      this._markDraw(pageNumber);
       if (this.overlay) this.overlay.draw(this.pdfViewer.getPageView(pageNumber - 1), pageNumber).catch(() => {});
     });
     eventBus.on("scalechanging", ({ scale, presetValue }) => {
@@ -2428,7 +2437,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
   /** Replace the open document with what ``make(bytes, tab)`` gets back from
    *  the server, keeping the old bytes for Undo. In the queue: a save or a tab
    *  switch asked for meanwhile waits for it. */
-  _changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false, kind = "page" } = {}) {
+  _changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false, kind = "page", merge = null } = {}) {
     return this._serial(async () => {
       const tab = this.activeTab;
       if (!tab || !this.doc) return;
@@ -2447,7 +2456,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(TextEditing(Measurin
         if (!this.tabs.includes(tab)) return;
         if (kind === "redact") tab.redactionsApplied(bytes, changed);
         else if (kind === "text") tab.textEdited(bytes, changed);
-        else tab.pageEdited(bytes, changed);
+        else tab.pageEdited(bytes, changed, { merge });
         if (tab === this.activeTab) { tab.aim(goto ? goto(this.#view()) : this.#view()); await this.#reloadEditing(tab); }
         after?.(res);
       } catch (e) {

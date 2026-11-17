@@ -22,6 +22,7 @@
 
 let tabSeq = 0;
 const UNDO_KEPT = 30;  // page and text changes Undo can take back
+const MERGE_WITHIN = 2000;  // ms: nudges this close together are one Undo step
 
 export class TabState {
   // Which file, and the bytes.
@@ -223,10 +224,16 @@ export class TabState {
 
   /** pageEdited: the server rewrote it (pages arranged, a picture or link
    *  changed, signed with an ID, ...). ``before``: the bytes before, for Undo. */
-  pageEdited(before, after, { redacted = false } = {}) {
+  pageEdited(before, after, { redacted = false, merge = null } = {}) {
     this.#redo = [];
-    this.#undo.push({ bytes: before, redacted: this.#redacted, saved: !this.#dirty });
-    if (this.#undo.length > UNDO_KEPT) this.#undo.shift();
+    // ``merge``: changes with the same key made soon after one another (a markup nudged
+    // with the arrow keys) are one step for Undo: the bytes from before the first are kept.
+    const last = this.#undo[this.#undo.length - 1], now = performance.now();
+    if (merge && last?.merge === merge && now - last.at < MERGE_WITHIN) last.at = now;
+    else {
+      this.#undo.push({ bytes: before, redacted: this.#redacted, saved: !this.#dirty, merge, at: now });
+      if (this.#undo.length > UNDO_KEPT) this.#undo.shift();
+    }
     this.#bytes = this.#afterEdit = after;
     this.#edited = true;
     this.#dirty = true;

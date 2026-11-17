@@ -123,6 +123,7 @@ export const Annotating = (Base) => class extends Base {
     this.textEditMode = editText;
     this.markupMode = markup ? name : null;
     this.#cancelMarkup();
+    this._markReady();
     if (name === "SHAPE") this._shapeChosen(false);  // how the chosen shape is drawn, if it isn't a plain drag
     this.root.classList.toggle("rd-edittext", editText);
     this.root.classList.toggle("rd-markup", markup);
@@ -217,7 +218,7 @@ export const Annotating = (Base) => class extends Base {
       this.uiManager.updateParams(P.INK_COLOR, ink);
       this.uiManager.updateParams(P.HIGHLIGHT_COLOR, mark);
     }
-    if (remember) { this.annotParams.color = index; store.set("pdfm-annot", this.annotParams); }
+    if (remember) { this.annotParams.color = index; store.set("pdfm-annot", this.annotParams); this._markRestyle({ color: ink }); }
   }
 
   _setSize(value, key = { FREETEXT: "text", INK: "ink", HIGHLIGHT: "mark", SHAPE: "shape" }[this.editMode], remember = true) {
@@ -225,7 +226,11 @@ export const Annotating = (Base) => class extends Base {
     const P = pdfjs.AnnotationEditorParamsType;
     const type = { text: P.FREETEXT_SIZE, ink: P.INK_THICKNESS, mark: P.HIGHLIGHT_THICKNESS }[key];
     if (this.uiManager && type !== undefined) this.uiManager.updateParams(type, value);
-    if (remember) { this.annotParams.size[key] = value; store.set("pdfm-annot", this.annotParams); }
+    if (remember) {
+      this.annotParams.size[key] = value;
+      store.set("pdfm-annot", this.annotParams);
+      if (key === "shape") this._markRestyle({ width: value });
+    }
   }
 
   // ---- notes, underline, strikeout, shapes and comments (markup.py) ---------------
@@ -248,10 +253,13 @@ export const Annotating = (Base) => class extends Base {
   }
 
   /** Send ``changes`` (see markup.py) to be written into the document. */
-  _applyMarkup(changes, failure = "Could not add that: ") {
+  _applyMarkup(changes, failure = "Could not add that: ", { merge = null } = {}) {
     return this._changeDocument((bytes, tab) => this._post("/api/markup", bytes, tab, {
-      changes: JSON.stringify(changes), author: this.authorInput.value.trim() }), { failure });
+      changes: JSON.stringify(changes), author: this.authorInput.value.trim() }), { failure, merge });
   }
+
+  /** Whether the chosen shape is dragged out (not placed click by click). */
+  _shapeIsDragged() { return !POLY_SHAPES.has(this.shapeSelect.value); }
 
   #cancelMarkup() {
     this.shapeDraft?.el.remove();
@@ -270,6 +278,8 @@ export const Annotating = (Base) => class extends Base {
     if (!at) return;
     e.preventDefault();
     e.stopPropagation();
+    // A markup already on the page: selected, moved or reshaped (markedit.js), not a new one begun.
+    if (!this.polyDraft && !this.shapeDraft && this._markEditDown(e, at)) return;
     if (mode === "NOTE") { this.#openNoteBox(at); return; }
     if (mode === "LINKS") { this.#drawLinkBox(e, at); return; }
     if (mode === "CERTSIGN") { this.#dragBox(at, "Drag a box where the signature goes.", (rect) => this._signWithId(at.n, rect)); return; }
@@ -293,6 +303,7 @@ export const Annotating = (Base) => class extends Base {
   }
 
   _markupMove(e) {
+    if (this._markEditMove(e)) return;
     if (this.polyDraft) { this.#polyMove(e); return; }
     const d = this.shapeDraft;
     if (!d || e.pointerId !== d.pointer) return;
@@ -334,6 +345,7 @@ export const Annotating = (Base) => class extends Base {
   _markupUp(e) {
     const mode = this.markupMode;
     if (!mode) return;
+    if (this._markEditUp(e)) return;
     if (mode === "UNDERLINE" || mode === "STRIKEOUT") {
       if (e.target.closest?.(".rd-container")) setTimeout(() => this.#markSelection(), 0);
       return;
