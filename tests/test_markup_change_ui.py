@@ -55,6 +55,24 @@ def test_the_server_lists_what_can_be_changed(app, tmp_path):
     assert shapes[1]["scale"]["units"] == "ft"
 
 
+def test_a_change_answers_with_the_markups_as_they_are_now(app, tmp_path, monkeypatch):
+    """So the reader doesn't send the whole file a second time to ask."""
+    _, url = app
+    base, token = url.split("#token=")
+    base = base.rstrip("/")
+    src = marked(tmp_path)
+    ident = markup.describe_all(src)[1][0]["id"]
+    change = json.dumps([{"op": "change", "page": 1, "id": ident, "move": [10, 0]}])
+    body, headers = multipart({"changes": change}, [("file", src)])
+    status, answer, _ = call(base, token, "/api/markup", body, headers)
+    shapes = json.loads(answer["X-Pdfm-Markups"])["1"]
+    assert status == 200 and shapes[0]["kind"] == "rect" and shapes[0]["rect"][0] == 110.0
+    assert [s["kind"] for s in shapes] == ["rect", "dimension", "line", "callout", "cloud"]
+    monkeypatch.setattr(gui, "MARKUPS_IN_HEADER", 10)           # too much for a header: left out, the reader asks
+    status, answer, _ = call(base, token, "/api/markup", body, headers)
+    assert status == 200 and "X-Pdfm-Markups" not in answer
+
+
 def test_changing_markups_in_a_browser(app, tmp_path):
     node = shutil.which("node")
     if not node or subprocess.run([node, "-e", "require('playwright')"], capture_output=True, cwd=tmp_path).returncode:
@@ -81,7 +99,8 @@ def test_changing_markups_in_a_browser(app, tmp_path):
     assert out["afterHold"][0] == out["afterNudge"][0] + 12 and out["scrolled"] == 0
     # Esc while the key is held: let go for good; the presses after it move nothing and scroll nothing.
     assert out["escLetGo"] and 1 <= out["afterEsc"][0] - out["afterHold"][0] <= 4 and out["escScrolled"] == 0
-    assert out["holdSteps"] <= 1                                     # ...and they are one step for Undo
+    assert out["holdSteps"] == 1                                     # ...written once, as one step for Undo
+    assert out["describes"] == 1                                     # the markups were asked for once; each change says them anew
     # A drag that starts on a markup that isn't selected draws a new shape; the markup stays where it was.
     assert out["drawnFromAMarkup"] == 1 and out["lineStayed"]
     assert out["binReady"] and out["cloudByItsBumps"] == "cloud"
@@ -95,3 +114,8 @@ def test_changing_markups_in_a_browser(app, tmp_path):
     assert out["pickedForKeys"] == "rect" and out["movedFromTheList"] == 0
     assert out["focusOnPage"]                                        # a press on a markup brings the keys to the page
     assert out["afterUndo"] == {"selected": "rect", "x": 0} and out["afterRedo"] == {"selected": "rect", "x": 1}
+    # From the Windows check of 0.49.0: presses not written yet, then at once something else.
+    assert out["thenAClick"] == {"moved": 3, "selected": None, "drawn": 0, "versions": 1}
+    assert out["thenATool"] == {"moved": 3, "mode": "NOTE", "bar": True, "versions": 1}
+    assert out["thenASave"] == {"moved": 3, "versions": 1}
+    assert out["heldNotWritten"] == 0 and out["held"] == {"moved": 6, "versions": 1}   # the pause before a key repeats

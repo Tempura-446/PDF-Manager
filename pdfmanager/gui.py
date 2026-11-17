@@ -3385,7 +3385,16 @@ class Handler(BaseHTTPRequestHandler):
             if password and core.open_pdf(src, password).is_encrypted:
                 core.encrypt(out, out, password)  # stays protected
             data = out.read_bytes()
-        return self._send(HTTPStatus.OK, data, "application/pdf", {"X-Pdfm-Added": json.dumps(added)})
+            # How its changeable markups are now, for the reader (which then doesn't send the
+            # whole file again to ask); left out when it's too much for a header.
+            headers = {"X-Pdfm-Added": json.dumps(added)}
+            try:
+                now = json.dumps(markup.describe_all(out, password), ensure_ascii=True, separators=(",", ":"))
+                if len(now) <= MARKUPS_IN_HEADER:
+                    headers["X-Pdfm-Markups"] = now
+            except Exception:  # noqa: BLE001 - the reader asks for them the usual way
+                pass
+        return self._send(HTTPStatus.OK, data, "application/pdf", headers)
 
     def _quantities(self, body):
         """The reader's Measurements panel: one schedule of what's measured in
@@ -3613,6 +3622,9 @@ class _Server(ThreadingHTTPServer):
         watcher = getattr(handler, "watcher", None)
         if watcher is not None:
             watcher.stop()
+
+
+MARKUPS_IN_HEADER = 16000   # characters of markups sent along with a change (more: the reader asks)
 
 
 def _settings_for_page(mode=None):

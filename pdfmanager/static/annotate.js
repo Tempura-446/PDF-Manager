@@ -114,6 +114,13 @@ export const Annotating = (Base) => class extends Base {
    *  or STAMP; or EDITTEXT, this reader's own tool for changing words. */
   _setEditMode(name, create = false, pick = null) {
     if (!this.pdfViewer || !this.doc) return;
+    if (this.markNudge) {
+      // A markup's arrow presses not written yet: written first, and the tool changed
+      // once the document is shown again (changing it in the middle would be undone by that).
+      this._markFlush();
+      this._serial(() => this._setEditMode(name, create, pick));
+      return;
+    }
     const editText = name === "EDITTEXT";
     this._endHint();  // the last tool's hint goes with it
     if (editText && !this.textEditHinted) {
@@ -255,9 +262,10 @@ export const Annotating = (Base) => class extends Base {
   }
 
   /** Send ``changes`` (see markup.py) to be written into the document. */
-  _applyMarkup(changes, failure = "Could not add that: ", { merge = null } = {}) {
+  _applyMarkup(changes, failure = "Could not add that: ") {
     return this._changeDocument((bytes, tab) => this._post("/api/markup", bytes, tab, {
-      changes: JSON.stringify(changes), author: this.authorInput.value.trim() }), { failure, merge });
+      changes: JSON.stringify(changes), author: this.authorInput.value.trim() }),
+    { failure, edited: (res, tab) => this._markSeed(res, tab) });
   }
 
   /** Whether the chosen shape is dragged out (not placed click by click). */

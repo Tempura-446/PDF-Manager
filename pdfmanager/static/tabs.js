@@ -21,6 +21,8 @@ function sameBytes(a, b) {
 export const Tabs = (Base) => class extends Base {
   /** Run ``fn`` after the document changes started before it. */
   _serial(fn) {
+    // (A markup's arrow presses not written yet are written first: markedit.js.)
+    if (this.markNudge) this._markFlush();
     const run = this.chain.then(() => fn());
     this.chain = run.catch(() => {});
     return run;

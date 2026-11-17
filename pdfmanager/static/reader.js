@@ -780,6 +780,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
     window.addEventListener("pointerup", (e) => this._markupUp(e));
 
     document.addEventListener("keydown", (e) => this.#onKey(e));
+    document.addEventListener("keyup", (e) => this._markKeyUp(e));
   }
 
   #onKey(e) {
@@ -2437,7 +2438,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
   /** Replace the open document with what ``make(bytes, tab)`` gets back from
    *  the server, keeping the old bytes for Undo. In the queue: a save or a tab
    *  switch asked for meanwhile waits for it. */
-  _changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false, kind = "page", merge = null } = {}) {
+  _changeDocument(make, { failure = "Could not change the document: ", goto = null, after = null, signing = false, kind = "page", edited = null } = {}) {
     return this._serial(async () => {
       const tab = this.activeTab;
       if (!tab || !this.doc) return;
@@ -2456,7 +2457,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
         if (!this.tabs.includes(tab)) return;
         if (kind === "redact") tab.redactionsApplied(bytes, changed);
         else if (kind === "text") tab.textEdited(bytes, changed);
-        else tab.pageEdited(bytes, changed, { merge });
+        else tab.pageEdited(bytes, changed);
+        edited?.(res, tab);   // (before it is shown again: what the answer says about the new document)
         if (tab === this.activeTab) { tab.aim(goto ? goto(this.#view()) : this.#view()); await this.#reloadEditing(tab); }
         after?.(res);
       } catch (e) {
@@ -2596,6 +2598,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
    *  computer (Ctrl+S); otherwise as a copy. */
   async save({ replace = false } = {}) {
     this.noteCommit?.();  // a note typed but not added yet goes in first
+    this._markFlush();   // (a markup's arrow presses not written yet go in first)
     await this.chain;  // a text change still on its way is included
     this._finishEditing();  // a stroke or note still being made counts (Ctrl+S straight after drawing)
     const tab = this.activeTab;
@@ -2690,6 +2693,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
    *  original's folder (a download in a plain browser). */
   async saveRedacted() {
     this.noteCommit?.();
+    this._markFlush();   // (a markup's arrow presses not written yet go in first)
     await this.chain;
     this._finishEditing();
     if (!this.doc) return;
@@ -2710,6 +2714,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
   }
 
   async saveTab(tab, near = null) {
+    this._markFlush();   // (a markup's arrow presses not written yet go in first)
     await this.chain;
     if (!tab || !this.tabs.includes(tab)) return null;
     const version = tab.version;
@@ -2725,6 +2730,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
 
   /** Save as a new file, starting in the document's own folder (Ctrl+Shift+S). */
   async saveCopy() {
+    this._markFlush();   // (a markup's arrow presses not written yet go in first)
     await this.chain;  // a text change still on its way is included
     this._finishEditing();
     if (!this.doc) return;
@@ -2893,6 +2899,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
   }
   /** Save the pages as a PDF of their own; the document stays as it is. */
   async extractPages(pages) {
+    this._markFlush();   // (a markup's arrow presses not written yet go in first)
     await this.chain;
     if (!this.doc || !pages.length) return;
     const tab = this.activeTab;
@@ -3095,6 +3102,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
   }
 
   async #edit(toolId) {
+    this._markFlush();   // (a markup's arrow presses not written yet go in first)
     await this.chain;
     if (!this.doc || !this.onEdit) return;
     const bytes = await this._currentBytes();

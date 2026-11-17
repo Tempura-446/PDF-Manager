@@ -4,6 +4,20 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.49.0
+
+Nudging a markup is quicker and tidier.
+
+- **The arrow keys move a markup the way a drag does.** Its outline moves
+  at once with every press; the file is written once, when the keys have
+  rested for a moment. A held key, or a run of presses, is one change and
+  one step for Undo, however long the file takes to write
+  (also through the pause before a held key starts repeating).
+- Anything else you do meanwhile (a colour, Save, another tool, a press on
+  the page, Esc) writes the presses made so far first.
+- **Less waiting on large files:** after a markup is changed, the file is
+  no longer sent a second time just to list its markups again.
+
 ## 0.48.0
 
 Stamps of your own.
