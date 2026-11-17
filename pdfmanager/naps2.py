@@ -76,8 +76,10 @@ def _run(command, timeout, said=None):
     when the job is cancelled. ``said(line)``: called for each line as it comes."""
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
+        # (A group of its own where there are groups: it is stopped with what it started, see _stop.)
         proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                text=True, encoding="utf-8", errors="replace", creationflags=flags)
+                                text=True, encoding="utf-8", errors="replace", creationflags=flags,
+                                start_new_session=os.name != "nt")
     except OSError as exc:
         raise Naps2Error(f"NAPS2 couldn't be started ({exc.strerror or exc}). Install it again from naps2.com.",
                          "unavailable") from None
@@ -102,13 +104,31 @@ def _run(command, timeout, said=None):
             time.sleep(0.2)
     finally:
         if proc.poll() is None:
-            proc.kill()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                pass
+            _stop(proc)
         reader.join(timeout=5)
     return "\n".join(lines)
+
+
+def _stop(proc):
+    """End NAPS2 and what it started: NAPS2.Console.exe only starts
+    NAPS2.exe and waits for it, so ending the first alone would leave the
+    scan running."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=15,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        else:
+            import signal
+
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if proc.poll() is None:
+        proc.kill()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def devices(fresh=False):

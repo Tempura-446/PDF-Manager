@@ -108,7 +108,12 @@ def test_cancelling_stops_naps2(program, monkeypatch):
     job.cancel()
     job.thread.join(timeout=8)
     assert not job.thread.is_alive() and job.state == "cancelled"
-    assert time.monotonic() - started < 6                 # not the ten seconds the scan would have taken
+    assert time.monotonic() - started < 5                 # not the ten seconds the scan would have taken
+    # ...and what NAPS2's console program started is stopped with it (on Windows it only starts
+    # NAPS2.exe and waits): nothing of it is still running, so nothing more is written to its log.
+    before = program.read_text(encoding="utf-8")
+    time.sleep(0.5)
+    assert program.read_text(encoding="utf-8") == before
 
 
 def test_the_scan_page_is_told_whether_naps2_is_there(program):
