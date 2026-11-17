@@ -77,8 +77,8 @@ Asked for after 0.38.0, whose "Not yet" list this is.
 - [ ] While dragging, keep one overlay and change its attributes (and at most once a frame) instead of rebuilding it on every pointer move.
 
 **Seen in the Windows checks of 0.49.0 (2026-11-17), there since 0.48.0 or before; to look at:**
-- [ ] In Highlight mode a callout shows only its words: no box border, no leader line. The pointer tool and Shapes draw it in full.
-- [ ] Opening Annotate & sign and choosing Highlight, with no edit made, marks the file as changed (the version goes up by one, Save turns red).
+- [ ] In Highlight mode a callout shows only its words: no box border, no leader line. The pointer tool and Shapes draw it in full. The same cause: while one of pdf.js's tools is on, pdf.js shows the callout as one of its own editable text boxes, which have neither. Stopping that takes either the annotation's Locked flags (which would also lock it in Acrobat) or a change in the vendored pdf.js (not ours to edit); to decide. If its words are changed in that box and saved, pdf.js writes it back as a plain text box.
+- [x] Fixed in 0.50.0: choosing Highlight (or Text, Draw) with no edit made marked the file as changed. pdf.js takes the page's own text boxes into its storage to edit them when one of its tools goes on; `Reader.#storageChanged` doesn't count that as a change (nothing of it would be saved). `tests/test_adopted_ui.py`.
 
 **Task 2b.2: stamps of your own** (done in 0.48.0)
 - [x] Done in 0.48.0. `stamps.py` keeps them in the settings (`stamps`: words, colour, dated; 30 at most), `/api/stamps` lists and saves them; the Stamp list has them under "Yours" and "Your stamps…" opens the box to add, change and remove them (`annotate.js`).
