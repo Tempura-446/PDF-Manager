@@ -4,6 +4,20 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.54.0
+
+Send a form field to another page.
+
+- **A field a form already has can go to another page.** In **Make
+  fillable**, click the field and choose its new page in the bar ("Page").
+  It keeps its place on the paper, its name, its look and what it's set
+  to; a total that adds it up still does. If the new page is smaller and
+  the field wouldn't be on it, it is moved just far enough to be, and ZPDF
+  says so. On its new page it comes last when tabbing through the fields.
+- One button of a group of radio buttons can go by itself: the group then
+  spans two pages.
+- On the command line, a change in the `--edit` file takes `"to_page"`.
+
 ## 0.53.0
 
 Scanners that only have a TWAIN driver, through NAPS2.

@@ -386,3 +386,62 @@ def test_an_encrypted_form(tmp_path):
     if reader.is_encrypted:
         reader.decrypt("secret")
     assert "Net" in reader.get_fields()
+
+
+# -- 0.54.0: a field moved to another page ---------------------------------------------------
+
+def test_a_field_goes_to_another_page(tmp_path):
+    src, out = made(tmp_path), tmp_path / "out.pdf"
+    look = widget(src, 1, 0)["/AP"]["/N"].get_data()
+    result = forms.edit_fields(src, out, [{"page": 1, "index": 0, "to_page": 2}])
+    assert result["changed"] == 1 and result["notes"] == []
+    found = forms.field_details(out)
+    assert [f["name"] for f in found[1]] == ["Tax", "Total", "Agree", "Size", "Size"]
+    assert [f["name"] for f in found[2]] == ["Country", "Price"]          # last on its new page (tab order)
+    moved = widget(out, 2, 1)
+    reader = PdfReader(str(out))
+    assert moved.raw_get("/P").idnum == reader.pages[1].indirect_reference.idnum   # it names its new page
+    assert [float(v) for v in moved["/Rect"]] == [72, 700, 200, 720]      # the same place on the paper
+    assert moved["/AP"]["/N"].get_data() == look                          # and the same look
+    assert by_name(out)["Total"]["calculated"] and by_name(out)["Price"]["used_by"] == ["Total"]   # the total still adds it up
+    assert len(reader.trailer["/Root"]["/AcroForm"]["/Fields"]) == len(
+        PdfReader(str(src)).trailer["/Root"]["/AcroForm"]["/Fields"])     # the same fields, nothing doubled
+
+
+def test_moved_and_placed_and_renamed_in_one_change(tmp_path):
+    src, out = made(tmp_path), tmp_path / "out.pdf"
+    forms.edit_fields(src, out, [{"page": 1, "index": 3, "to_page": 2, "rect": [300, 300, 320, 320], "name": "Accept"}])
+    tick = by_name(out)["Accept"]
+    assert tick["rect"] == [300, 300, 320, 320] and [f["name"] for f in forms.field_details(out)[2]] == ["Country", "Accept"]
+
+
+def test_one_button_of_a_group_can_go_alone(tmp_path):
+    src, out = made(tmp_path), tmp_path / "out.pdf"
+    forms.edit_fields(src, out, [{"page": 1, "index": 5, "to_page": 2}])
+    found = forms.field_details(out)
+    assert [f["name"] for f in found[1]].count("Size") == 1 and [f["name"] for f in found[2]] == ["Country", "Size"]
+    sizes = [f for fields in found.values() for f in fields if f["name"] == "Size"]
+    assert len(sizes) == 2 and {f["type"] for f in sizes} == {"radio"}   # still one group, on two pages
+
+
+def test_a_field_that_wouldnt_be_on_the_new_page_is_brought_onto_it(tmp_path):
+    src = tmp_path / "two-sizes.pdf"
+    c = canvas.Canvas(str(src), pagesize=A4)
+    c.showPage()
+    c.setPageSize((300, 200))
+    c.showPage()
+    c.save()
+    form, out = tmp_path / "form.pdf", tmp_path / "out.pdf"
+    forms.add_fields(src, form, [{"page": 1, "rect": [400, 700, 520, 720], "type": "text", "name": "Far"}])
+    result = forms.edit_fields(form, out, [{"page": 1, "index": 0, "to_page": 2}])
+    assert forms.field_details(out)[2][0]["rect"] == [180, 180, 300, 200]
+    assert "didn't fit page 2" in result["notes"][0]
+
+
+def test_a_page_that_isnt_there_is_said(tmp_path):
+    src = made(tmp_path)
+    for bad in (3, 0, "two"):
+        with pytest.raises(core.PdfManagerError, match="this PDF has 2 pages"):
+            forms.edit_fields(src, tmp_path / "no.pdf", [{"page": 1, "index": 0, "to_page": bad}])
+    same = forms.edit_fields(src, tmp_path / "same.pdf", [{"page": 1, "index": 0, "to_page": 1}])
+    assert same["changed"] == 0                                           # already there: nothing changes

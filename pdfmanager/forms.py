@@ -664,6 +664,33 @@ def _drop(array, obj):
             del array[i]
 
 
+def _to_page(writer, annot, number, target):
+    """Take a field's widget from page ``number`` to page ``target`` (both
+    1-based): it leaves one page's list for the end of the other's (so it
+    comes last when tabbing through that page) and names its new page. Its
+    place on the paper stays, unless that isn't on the new page: then it is
+    moved just far enough to be on it. Returns True if it had to be."""
+    source, page = writer.pages[number - 1], writer.pages[target - 1]
+    ref = next((r for r in source.get("/Annots") or [] if r.get_object() is annot), None)
+    if ref is None:
+        return False  # (asked for twice: it has gone already)
+    _drop(source["/Annots"], annot)
+    if "/Annots" not in page:
+        page[NameObject("/Annots")] = ArrayObject()
+    page["/Annots"].get_object().append(ref)
+    annot[NameObject("/P")] = page.indirect_reference
+    box = [float(v) for v in page.mediabox]
+    left, bottom, right, top = min(box[0], box[2]), min(box[1], box[3]), max(box[0], box[2]), max(box[1], box[3])
+    x0, y0, x1, y1 = (float(v) for v in annot["/Rect"])
+    x0, y0, x1, y1 = min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)
+    dx = max(left - x0, 0) or min(right - x1, 0)
+    dy = max(bottom - y0, 0) or min(top - y1, 0)
+    if not dx and not dy:
+        return False
+    annot[NameObject("/Rect")] = ArrayObject(_num(v) for v in (x0 + dx, y0 + dy, x1 + dx, y1 + dy))
+    return True
+
+
 def _remake(writer, acroform, annot, field, kind, width, height):
     """Draw a resized widget's appearance again at its new size, with its
     own border and background. Returns True if readers should redraw the
@@ -721,9 +748,10 @@ def edit_fields(path, output, changes, password=None):
     """Change form fields a PDF already has. Each change names a field by
     its "page" (1-based) and "index" (its place among that page's fields, as
     ``field_details`` lists them) and carries any of: "rect" [x0, y0, x1,
-    y1] in PDF points (move or resize), "name", "tooltip", "required",
-    "readonly", "type" ("text" or "multiline", for a text box), "options"
-    (a dropdown's or list's choices) and "delete".
+    y1] in PDF points (move or resize), "to_page" (the 1-based page it goes
+    to, keeping its place on the paper unless "rect" says another), "name",
+    "tooltip", "required", "readonly", "type" ("text" or "multiline", for a
+    text box), "options" (a dropdown's or list's choices) and "delete".
 
     A name is kept unique, and the calculations that used the old name use
     the new one. A deleted field is taken out of the calculations that used
@@ -785,6 +813,23 @@ def edit_fields(path, output, changes, password=None):
             if resized:
                 redraw = _remake(writer, acroform, annot, field, kind, width, height) or redraw
             touched = True
+
+        if change.get("to_page") is not None:
+            try:
+                target = int(change["to_page"])
+            except (TypeError, ValueError):
+                target = 0
+            if not 1 <= target <= len(writer.pages):
+                count = len(writer.pages)
+                raise core.PdfManagerError(
+                    f"{_qualified_name(field)} can't go to page {change['to_page']}: this PDF has "
+                    f"{count} page{'' if count == 1 else 's'}")
+            if target != number:
+                moved = _to_page(writer, annot, number, target)
+                if moved:
+                    notes.append(f"{_qualified_name(field)} didn't fit page {target} where it was: "
+                                 "it was moved onto the page.")
+                touched = True
 
         if change.get("name") is not None:
             current = _qualified_name(field)

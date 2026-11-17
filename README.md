@@ -209,7 +209,8 @@ closed.
   move, resize or rename it, make it required, or delete it (marked in red
   until you run; its ↶ keeps it). A total that added up a renamed field
   follows the new name. The fields work in any PDF reader, including the
-  one here.
+  one here. One of the file's own fields can also be sent to another page
+  (**Page** in the bar): it keeps its place on the paper.
 - **Digital ID** (the certificate tool) signs PDFs with your certificate (a .pfx or
   .p12 file), like Acrobat: visible in a corner of a page (showing your
   name, the date and the reason) or invisible, optionally with a time from
