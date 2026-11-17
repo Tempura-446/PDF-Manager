@@ -9,6 +9,8 @@ import { COLORS, el, isTyping, pdfjs, store, svg } from "./readerkit.js";
 
 // Notes, underline, strikeout and shapes: the reader's own tools, written into
 // the file by the server (markup.py) as standard annotations.
+const OWN = "own:";          // the Stamp list's value for one of your own stamps: own:WORDS
+const MANAGE = "manage";     // ... and for "Your stamps…"
 const MARKUP = new Set(["NOTE", "UNDERLINE", "STRIKEOUT", "SHAPE", "IMAGES", "LINKS", "CERTSIGN", "STAMPS", "REDACT"]);
 const POLY_SHAPES = new Set(["polycloud", "polyline", "polyarrow"]);  // drawn click by click
 const KIND_NAMES = { Text: "Note", FreeText: "Text", Highlight: "Highlight", Underline: "Underline", StrikeOut: "Strikeout",
@@ -549,7 +551,9 @@ export const Annotating = (Base) => class extends Base {
         const w = 160 * s, h = (dated ? 50 : 42) * s;
         a = [at.x - w / 2, at.y - h / 2]; b = [at.x + w / 2, at.y + h / 2];
       }
-      let label = this.stampSelect.value;
+      let label = this.stampSelect.value, color;
+      const own = this._ownStamp(label);
+      if (own) ({ label, color } = own);     // one of your own: its words and its colour
       if (!label) {
         const words = el("input", { type: "text", value: store.get("pdfm-stamp-own", ""), placeholder: "e.g. PAID", "aria-label": "Stamp words", maxlength: "60" });
         setTimeout(() => words.focus(), 0);
@@ -562,10 +566,90 @@ export const Annotating = (Base) => class extends Base {
       store.set("pdfm-stamp-dated", dated);
       const p = view.viewport.convertToPdfPoint(...a), q = view.viewport.convertToPdfPoint(...b);
       const rect = [Math.min(p[0], q[0]), Math.min(p[1], q[1]), Math.max(p[0], q[0]), Math.max(p[1], q[1])];
-      this._applyMarkup([{ op: "add", page: at.n, kind: "stamp", rect, label, dated }], "Could not stamp the page: ");
+      this._applyMarkup([{ op: "add", page: at.n, kind: "stamp", rect, label, dated, color }], "Could not stamp the page: ");
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up, { once: true });
+  }
+  // The stamps of your own (stamps.py keeps them in the settings): listed
+  // under the built-in ones, and added, changed and removed from "Your stamps…".
+  _ownStamp(value) {
+    return String(value).startsWith(OWN) ? (this.ownStamps || []).find((s) => s.label === value.slice(OWN.length)) || null : null;
+  }
+
+  /** The Stamp list: the built-in ones, yours, words typed for once, and the way to yours. */
+  _fillStamps(choose = this.stampSelect.value) {
+    const name = (v) => v[0] + v.slice(1).toLowerCase(), own = this.ownStamps || [];
+    this.stampSelect.replaceChildren(
+      ...this.stampNames.usual.map((v) => el("option", { value: v }, name(v))),
+      el("optgroup", { label: "Drawing review" }, ...this.stampNames.review.map((v) => el("option", { value: v }, name(v)))),
+      ...(own.length ? [el("optgroup", { label: "Yours" }, ...own.map((s) => el("option", { value: OWN + s.label }, name(s.label))))] : []),
+      el("option", { value: "" }, "Your own words…"),
+      el("option", { value: MANAGE }, "Your stamps…"));
+    this.stampSelect.value = choose;
+    if (this.stampSelect.value !== choose || choose === MANAGE) this.stampSelect.value = "APPROVED";   // (one that's gone)
+    this.stampChoice = this.stampSelect.value;
+  }
+
+  async _loadStamps() {
+    try {
+      const res = await fetch("/api/stamps", { headers: { "X-Pdfm-Token": this.token } });
+      if (!res.ok) return;
+      this.ownStamps = (await res.json()).stamps || [];
+      // (The one chosen last time may be one of these, which the list didn't have until now.)
+      this._fillStamps(this.stampTouched ? undefined : store.get("pdfm-stamp", "APPROVED"));
+      const own = this._ownStamp(this.stampSelect.value);
+      if (own && !this.stampTouched) this.stampDated.checked = own.dated;
+    } catch (e) { /* the built-in ones are there all the same */ }
+  }
+
+  /** A stamp was chosen in the list. */
+  _stampChosen() {
+    if (this.stampSelect.value === MANAGE) {
+      this.stampSelect.value = this.stampChoice || "APPROVED";   // (the list shows what's chosen, not the way to the box)
+      this.#manageStamps();
+      return;
+    }
+    this.stampChoice = this.stampSelect.value;
+    this.stampTouched = true;
+    const own = this._ownStamp(this.stampChoice);
+    if (own) this.stampDated.checked = own.dated;                 // as it was saved: with or without name and date
+  }
+
+  /** "Your stamps…": the box where they are added, changed and removed. */
+  async #manageStamps() {
+    const list = el("ol", { class: "rd-ownstamps" });
+    const row = (stamp = { label: "", color: "#1f8a3b", dated: true }) => {
+      const words = el("input", { type: "text", value: stamp.label, placeholder: "e.g. CHECKED", maxlength: "60", "aria-label": "Words on the stamp" });
+      const color = el("input", { type: "color", value: stamp.color, "aria-label": "Colour" });
+      const dated = el("input", { type: "checkbox", checked: stamp.dated });
+      const li = el("li", {}, words, color, el("label", { class: "rd-check" }, dated, "Name and date"),
+        el("button", { type: "button", class: "rd-btn", "aria-label": "Remove this stamp", title: "Remove this stamp", html: svg("trash"), onclick: () => li.remove() }));
+      li.read = () => ({ label: words.value.trim(), color: color.value, dated: dated.checked });
+      return li;
+    };
+    list.append(...(this.ownStamps || []).map(row));
+    const add = el("button", { type: "button", class: "rd-btn rd-ownstamp-add", onclick: () => { const li = row(); list.append(li); li.querySelector("input").focus(); } },
+      "Add a stamp");
+    if (!list.children.length) list.append(row());
+    const answer = await this._dialog("Your stamps", [
+      el("p", {}, "Stamps with your own words. They show in the Stamp list under Yours."), list, add],
+    [["cancel", "Cancel"], ["ok", "Save", true]]);
+    if (answer !== "ok") return;
+    const stamps = [...list.children].map((li) => li.read()).filter((s) => s.label);
+    try {
+      const res = await fetch("/api/stamps", { method: "POST", headers: { "X-Pdfm-Token": this.token, "Content-Type": "application/json" },
+        body: JSON.stringify({ stamps }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      const first = stamps.find((s) => !(this.ownStamps || []).some((o) => o.label === s.label.toUpperCase()));
+      this.ownStamps = data.stamps || [];
+      // A stamp just added is the one chosen: it was made to be used.
+      this._fillStamps(first && this.ownStamps.some((s) => s.label === first.label.toUpperCase()) ? OWN + first.label.toUpperCase() : this.stampChoice);
+      this._stampChosen();
+    } catch (e) {
+      this.toast("Your stamps couldn't be saved: " + (e.message || e));
+    }
   }
   // -- end of stamps --
 

@@ -515,6 +515,9 @@ the engine behind Firefox's PDF viewer, bundled with the app so it works offline
   words, with your name and the date if you like; and for drawing reviews
   Approved as noted, Revise and resubmit, Rejected, For information and
   Not for construction. Click where it goes, or drag its size.
+  **Your stamps…** in the list keeps stamps of your own (their words,
+  colour, and with or without name and date); they show under Yours and
+  are there every time ZPDF starts.
 - **Comments tab**: every comment with its replies; **Summary** makes a
   PDF listing them page by page (with the words each highlight or
   strike-out marks), **Export** saves them as an XFDF file to send, and

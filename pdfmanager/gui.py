@@ -2295,6 +2295,10 @@ class Handler(BaseHTTPRequestHandler):
                                               "on": available and winsetup.context_menu_registered()})
         if path == "/api/settings":
             return self._send(HTTPStatus.OK, _settings_for_page(type(self).instance_mode))
+        if path == "/api/stamps":  # the stamps of your own (stamps.py)
+            from pdfmanager import stamps
+
+            return self._send(HTTPStatus.OK, {"stamps": stamps.saved(), "most": stamps.MOST})
         if path == "/api/update":
             return self._send(HTTPStatus.OK, {**update.check(), "can_restart": self._can_restart()})
         if path == "/api/diagnostics":
@@ -2607,6 +2611,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._access_check(body)
             if path == "/api/settings":
                 return self._save_settings(body)
+            if path == "/api/stamps":
+                from pdfmanager import stamps
+
+                return self._send(HTTPStatus.OK, {"stamps": stamps.save(json.loads(body or b"{}").get("stamps")),
+                                                  "most": stamps.MOST})
             if path == "/api/quit":  # Settings: quit for good, also while folders are watched
                 behind = type(self).background
                 if behind is None:

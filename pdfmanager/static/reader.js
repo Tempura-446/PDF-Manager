@@ -304,11 +304,9 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
     tip("IMAGES", "Edit the pictures on the page: drag to move, drag a corner to resize (Shift: freely), replace or delete");
     tip("LINKS", "Edit links: click one to change where it goes or delete it; drag a box to add one");
     tip("STAMPS", "Stamp the page (Approved, Draft…): click where it goes, or drag its size");
-    this.stampSelect = el("select", { class: "rd-zoom rd-wide", "aria-label": "Stamp", hidden: true },
-      ...STAMPS.map((v) => el("option", { value: v }, v[0] + v.slice(1).toLowerCase())),
-      el("optgroup", { label: "Drawing review" }, ...REVIEW_STAMPS.map((v) => el("option", { value: v }, v[0] + v.slice(1).toLowerCase()))),
-      el("option", { value: "" }, "Your own words…"));
-    this.stampSelect.value = store.get("pdfm-stamp", "APPROVED");
+    this.stampSelect = el("select", { class: "rd-zoom rd-wide", "aria-label": "Stamp", hidden: true });
+    this.stampNames = { usual: STAMPS, review: REVIEW_STAMPS };
+    this._fillStamps(store.get("pdfm-stamp", "APPROVED"));   // (the stamps of your own come in a moment: _loadStamps)
     this.stampDated = el("input", { type: "checkbox", checked: store.get("pdfm-stamp-dated", true) });
     this.stampDatedLabel = el("label", { class: "rd-check", hidden: true, title: "Add your name and the date and time under the words" },
       this.stampDated, "Name and date");
@@ -652,6 +650,8 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
     this.commentsTab.addEventListener("click", () => this.#showTab("comments"));
     this.authorInput.addEventListener("change", () => store.set("pdfm-author", this.authorInput.value.trim()));
     this.shapeSelect.addEventListener("change", () => { store.set("pdfm-shape", this.shapeSelect.value); this._shapeChosen(); });
+    this.stampSelect.addEventListener("change", () => this._stampChosen());
+    this._loadStamps();
 
     this._wireFind();
 

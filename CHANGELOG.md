@@ -4,6 +4,21 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.48.0
+
+Stamps of your own.
+
+- **Your stamps.** In the reader's Stamp list, "Your stamps…" opens a box
+  where you add stamps with your own words (CHECKED, PAID, ISSUED FOR
+  TENDER…), each with its colour and with or without your name and the
+  date under it. Change or remove them there too.
+- They show in the Stamp list under **Yours**, next to the built-in ones,
+  and are still there the next time ZPDF starts. Choosing one sets "Name
+  and date" the way it was saved; a stamp you just added is the one
+  chosen.
+- "Your own words…" is still there for words you need once.
+- ZPDF keeps up to 30 stamps of your own, in its settings on this PC.
+
 ## 0.47.0
 
 Change a markup after you've placed it.

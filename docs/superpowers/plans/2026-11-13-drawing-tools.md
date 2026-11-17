@@ -76,9 +76,10 @@ Asked for after 0.38.0, whose "Not yet" list this is.
 - [ ] `_add` split into building an annotation and adding it to the page, so `change_markup` doesn't add a spare one and take it out again (pypdf's private `_objects`); a stamp resized to another shape is then drawn again, not stretched.
 - [ ] While dragging, keep one overlay and change its attributes (and at most once a frame) instead of rebuilding it on every pointer move.
 
-**Task 2b.2: stamps of your own**
-- [ ] A list of the user's own stamps, kept in the app's settings: words, colour, with or without name and date. Add, change and remove them from the Stamp list ("Your stamps…"); they show in the list under the built-in ones.
-- [ ] Test: a saved green "CHECKED" stamp is offered after a restart and places a `/Stamp` in that colour.
+**Task 2b.2: stamps of your own** (done in 0.48.0)
+- [x] Done in 0.48.0. `stamps.py` keeps them in the settings (`stamps`: words, colour, dated; 30 at most), `/api/stamps` lists and saves them; the Stamp list has them under "Yours" and "Your stamps…" opens the box to add, change and remove them (`annotate.js`).
+- [x] Tests: `tests/test_own_stamps.py` + `tests/ownstamps.js` (a green CHECKED saved, offered after the page is loaded again, placed as a `/Stamp` in that colour, removed).
+- [ ] Left for later: a picture as a stamp (a signature, a company seal); sharing a set of stamps between PCs (export / import); the stamp's shape and border.
 
 **Task 2b.3: a quantity schedule (takeoff) from dimensions and measurements** (done in 0.43.0)
 - [x] `pdfmanager/quantities.py`: `read` (the reader's dimensions and measurements in the PDF, and other programs' `/Measure` / `/IT …Dimension` annotations, each worked out from its points and scale), `schedule` (plus the reader's list, with `totals` per group, kind and unit), `write_csv`, `write_xlsx` (sheets Quantities and Totals, numbers as numbers).
