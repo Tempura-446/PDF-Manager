@@ -43,7 +43,8 @@ def test_changing_a_forms_own_fields_in_a_browser(app, tmp_path):
     assert "already in the file: 7" in out["status0"]
     # the bar shows the picked field; its type is fixed, but a text box can take several lines
     assert out["price"]["shown"] and out["price"]["name"] == "Price" and out["price"]["type"] == "text"
-    assert out["price"]["types"] == ["text", "multiline"] and not out["price"]["typeOff"]
+    assert out["price"]["types"] == ["text", "multiline", "dropdown"] and not out["price"]["typeOff"]
+    assert out["priceNow"]["type"] == "dropdown" and out["priceNow"]["types"] == ["text", "multiline", "dropdown"]
     assert out["agree"]["typeOff"] and out["agree"]["type"] == "checkbox" and out["agree"]["requiredShown"]
     assert out["radio"]["typeOff"] and out["radio"]["name"] == "Size"
     assert abs(out["movedBy"][0] - 150) <= 2 and abs(out["movedBy"][1] - 24) <= 2
@@ -60,6 +61,7 @@ def test_changing_a_forms_own_fields_in_a_browser(app, tmp_path):
     assert set(edits) == {0, 1, 2, 3}
     assert edits[1] == {"page": 1, "index": 1, "to_page": 2}     # Tax: put back where it was, then sent to page 2
     assert edits[0]["name"] == "Net price" and "rect" in edits[0]
+    assert edits[0]["type"] == "dropdown" and edits[0]["options"] == "5, 10, 20"
     assert edits[2] == {"page": 1, "index": 2, "type": "multiline", "required": True}
     assert edits[3] == {"page": 1, "index": 3, "delete": True}
     assert json.loads(out["sent"]["edits"]) == out["edits"] and json.loads(out["sent"]["fields"])["1"]
@@ -72,6 +74,7 @@ def test_changing_a_forms_own_fields_in_a_browser(app, tmp_path):
     assert set(fields) == {"Net price", "Total", "Size"}
     assert [f["name"] for f in forms.field_details(done)[2]] == ["Country", "Tax"]
     assert fields["Total"]["type"] == "multiline" and fields["Total"]["required"]
+    assert fields["Net price"]["type"] == "dropdown" and fields["Net price"]["options"] == ["5", "10", "20"]
     moved, was = fields["Net price"]["rect"], [72.0, 700.0, 200.0, 720.0]
     assert moved[0] > was[0] + 50 and moved[1] < was[1] - 5
     assert abs((moved[2] - moved[0]) - 128) < 0.5 and abs((moved[3] - moved[1]) - 20) < 0.5

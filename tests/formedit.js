@@ -87,6 +87,11 @@ const { chromium } = require("playwright");
     out.total = await bar();
     await page.check(".re-required input");
     await page.selectOption(".re-name-box select.re-name", "multiline");
+    // Price (renamed above): from a box to type in to a dropdown, with its choices.
+    await pick(0);
+    await page.selectOption(".re-name-box select.re-name", "dropdown");
+    await page.fill('.re-name-box input[aria-label="Choices, separated by commas"]', "5, 10, 20");
+    out.priceNow = await bar();
     // Tax: sent to page 2 (it keeps its place on the paper).
     await pick(1);
     out.pageChoice = await page.$eval(".re-topage select", (el) => ({ shown: !el.closest("label").hidden, value: el.value, pages: el.options.length }));

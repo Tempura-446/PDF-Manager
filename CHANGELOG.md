@@ -4,6 +4,26 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.55.0
+
+Turn a form's text box into a dropdown, and back.
+
+- **A field that holds words can become another kind that does.** In
+  **Make fillable**, click one of the file's own text boxes and choose
+  Dropdown under Type (and give it its choices), or turn a dropdown into a
+  text box, or a text box into several lines. It keeps its name, place,
+  tooltip and whether it's required, and a total that adds it up still
+  does.
+- What it's set to is kept when the new kind can hold it: a text box
+  filled with "10" stays 10 as a dropdown offering 10. If it isn't one of
+  the choices, the field is emptied and ZPDF says so.
+- A text box that only took numbers or dates loses that rule when it
+  becomes a dropdown: its choices are the rule now.
+- On the command line the `--edit` file's `"type"` also takes `"list"` (a
+  list that stays open on the page).
+- Tick boxes, radio buttons, buttons and signature fields still can't
+  become another type.
+
 ## 0.54.0
 
 Send a form field to another page.

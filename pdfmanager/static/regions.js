@@ -92,6 +92,7 @@ export const FIELD_TYPES = {
   dropdown: ["Dropdown", 140, 20], signature: ["Signature", 180, 40],
 };
 const FIELD_LABEL = { text: "Text", multiline: "Text", checkbox: "Checkbox", radio: "Group", dropdown: "Dropdown", signature: "Signature" };
+const WORD_TYPES = ["text", "multiline", "dropdown", "list"];   // the kinds of field that hold words
 const AUTO_NAME = /^(Text|Checkbox|Group|Dropdown|Signature) \d+$/;
 
 export class RegionEditor {
@@ -750,10 +751,12 @@ export class RegionEditor {
     if (old && !FIELD_TYPES[old.type]) {
       this.typeSelect.append(el("option", { value: old.type, "data-other": true }, { list: "List", button: "Button" }[old.type] || "Other"));
     }
-    const swap = old && (old.type === "text" || old.type === "multiline");
-    for (const o of this.typeSelect.options) o.disabled = !!old && !(swap && (o.value === "text" || o.value === "multiline"));
+    // One of the file's own fields that holds words can become another kind that does
+    // (a box to type in, several lines, a dropdown, a list): what it was in the file decides.
+    const swap = old && WORD_TYPES.includes(old.was.type);
+    for (const o of this.typeSelect.options) o.disabled = !!old && !(swap && WORD_TYPES.includes(o.value));
     this.typeSelect.disabled = !!old && !swap;
-    this.typeSelect.title = old && !swap ? "The type of a field already in the file can't be changed: delete it and draw a new one" : "";
+    this.typeSelect.title = old && !swap ? "A tick box, radio button, button or signature already in the file can't become another type: delete it and draw a new one" : "";
     this.typeSelect.value = kind.type;
     this.requiredLabel.hidden = !old || old.type === "button" || old.type === "signature";
     this.requiredInput.checked = !!old?.required;
