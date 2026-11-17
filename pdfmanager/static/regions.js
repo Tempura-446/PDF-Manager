@@ -233,6 +233,7 @@ export class RegionEditor {
       if (e.type) f.type = e.type;
       if (e.required != null) f.required = e.required;
       if (e.options != null) f.options = e.options;
+      if (e.to_page && e.to_page !== e.page) f.toPage = e.to_page;
     }
     if (editable && picked >= 0 && picked < (this.existing[this.pageIndex] || []).length) this.selectedOld = picked;
     this.#draw();
@@ -329,7 +330,8 @@ export class RegionEditor {
         const chosen = i === this.selectedOld;
         const box = el("div", { class: "re-rect re-existing re-old" + (chosen ? " selected" : "") + (f.deleted ? " deleted" : "") + (this.#changed(f) ? " changed" : ""),
           "data-old": i, "data-type": f.type, style: `left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`,
-          title: f.deleted ? `${f.name}: will be deleted` : `Already in the file: ${f.name} (click to change it)` });
+          title: f.deleted ? `${f.name}: will be deleted` : f.toPage ? `${f.name}: goes to page ${f.toPage}`
+            : `Already in the file: ${f.name} (click to change it)` });
         // (A filled-in field shows its value on the page: no name over it.)
         if (!["checkbox", "radio"].includes(f.type) && !(f.value && !f.deleted)) box.append(el("span", { class: "re-field-label" }, f.short));
         if (chosen && !f.deleted) for (const h of HANDLES[this.mode]) box.append(el("span", { class: `re-handle re-${h}`, "data-handle": h }));
@@ -517,7 +519,7 @@ export class RegionEditor {
 
   /** One of the file's own fields differs from how it is in the file. */
   #changed(f) {
-    return f.deleted || f.short !== f.was.short || f.type !== f.was.type || f.required !== f.was.required
+    return f.deleted || !!f.toPage || f.short !== f.was.short || f.type !== f.was.type || f.required !== f.was.required
       || f.options !== f.was.options || f.rect.some((v, i) => Math.abs(v - f.was.rect[i]) > 0.05);
   }
 
@@ -545,6 +547,7 @@ export class RegionEditor {
     const f = this.existing[this.pageIndex]?.[index];
     if (!f) return;
     f.rect = [...f.was.rect];
+    f.toPage = null;
     const full = f.name;
     for (const list of Object.values(this.existing)) {
       for (const g of list) {
@@ -600,6 +603,7 @@ export class RegionEditor {
           if (f.type !== f.was.type) change.type = f.type;
           if (f.required !== f.was.required) change.required = f.required;
           if (f.options !== f.was.options) change.options = f.options;
+          if (f.toPage) change.to_page = f.toPage;
         }
         out.push(change);
       }
@@ -664,9 +668,21 @@ export class RegionEditor {
     this.optionsLabel = el("label", { title: "The choices in the list, separated by commas" }, el("span", {}, "Choices"), this.optionsInput);
     this.requiredInput = el("input", { type: "checkbox", onchange: () => this.#changeSelected({ required: this.requiredInput.checked }) });
     this.requiredLabel = el("label", { class: "re-required", title: "The form can't be sent or finished with this field left empty" }, this.requiredInput, el("span", {}, "Required"));
+    // One of the file's own fields can be sent to another page (it keeps its place on the paper).
+    this.pageSelect = el("select", { class: "re-name re-short", "aria-label": "The page this field is on",
+      onchange: () => {
+        const f = this.#old();
+        if (!f) return;
+        const to = Number(this.pageSelect.value);
+        f.toPage = to === this.pageIndex + 1 ? null : to;
+        this.#draw();
+        this.#emit();
+      } });
+    this.toPageLabel = el("label", { class: "re-topage", title: "Send this field to another page; it keeps its place on the paper", hidden: true },
+      el("span", {}, "Page"), this.pageSelect);
     // One slot for a radio button's value or a dropdown's choices, which
     // keeps its space: the page mustn't move while a field is clicked.
-    this.extraSlot = el("div", { class: "re-extra" }, this.valueLabel, this.optionsLabel, this.textLabel, this.requiredLabel);
+    this.extraSlot = el("div", { class: "re-extra" }, this.valueLabel, this.optionsLabel, this.textLabel, this.requiredLabel, this.toPageLabel);
     this.nameBox = el("div", { class: "re-name-box" },
       el("label", {}, this.nameLabel, this.nameInput), el("label", {}, el("span", {}, "Type"), this.typeSelect),
       this.extraSlot);
@@ -723,7 +739,7 @@ export class RegionEditor {
     this.nameBox.inert = !kind;
     if (!kind) {
       // One row tall while hidden too, or the page jumps at the first click.
-      if (!this.nameBox.dataset.used) this.valueLabel.hidden = this.optionsLabel.hidden = this.textLabel.hidden = this.requiredLabel.hidden = true;
+      if (!this.nameBox.dataset.used) this.valueLabel.hidden = this.optionsLabel.hidden = this.textLabel.hidden = this.requiredLabel.hidden = this.toPageLabel.hidden = true;
       return;
     }
     this.nameBox.dataset.used = "1";
@@ -741,6 +757,13 @@ export class RegionEditor {
     this.typeSelect.value = kind.type;
     this.requiredLabel.hidden = !old || old.type === "button" || old.type === "signature";
     this.requiredInput.checked = !!old?.required;
+    this.toPageLabel.hidden = !old || old.deleted || !(this.total > 1);
+    if (!this.toPageLabel.hidden) {
+      if (this.pageSelect.options.length !== this.total) {
+        this.pageSelect.replaceChildren(...Array.from({ length: this.total }, (_, i) => el("option", { value: i + 1 }, String(i + 1))));
+      }
+      this.pageSelect.value = String(old.toPage || this.pageIndex + 1);
+    }
     if (old) {
       this.nameLabel.textContent = old.type === "radio" ? "Group" : "Name";
       this.nameInput.setAttribute("aria-label", "Field name");

@@ -53,21 +53,24 @@ def test_changing_a_forms_own_fields_in_a_browser(app, tmp_path):
     assert not out["afterDelete"]["bar"]                 # nothing to set on a field that's going
     assert out["radioDeleted"] and out["radioKept"]
     assert out["newFields"] == 1
-    assert "(2 changed)" in out["status"] and "(1 to delete)" in out["status"]
+    assert "(3 changed)" in out["status"] and "(1 to delete)" in out["status"]
+    assert out["pageChoice"] == {"shown": True, "value": "1", "pages": 2} and out["taxGoes"]
 
     edits = {e["index"]: e for e in out["edits"]}
-    assert set(edits) == {0, 2, 3}                       # Tax was put back
+    assert set(edits) == {0, 1, 2, 3}
+    assert edits[1] == {"page": 1, "index": 1, "to_page": 2}     # Tax: put back where it was, then sent to page 2
     assert edits[0]["name"] == "Net price" and "rect" in edits[0]
     assert edits[2] == {"page": 1, "index": 2, "type": "multiline", "required": True}
     assert edits[3] == {"page": 1, "index": 3, "delete": True}
     assert json.loads(out["sent"]["edits"]) == out["edits"] and json.loads(out["sent"]["fields"])["1"]
-    assert "added 1 field" in out["result"] and "changed 2 and deleted 1" in out["result"]
+    assert "added 1 field" in out["result"] and "changed 3 and deleted 1" in out["result"]
 
     # what was sent does what was meant
     done = tmp_path / "done.pdf"
     forms.edit_fields(src, done, out["edits"])
     fields = {f["name"]: f for f in forms.field_details(done)[1]}
-    assert set(fields) == {"Net price", "Tax", "Total", "Size"}
+    assert set(fields) == {"Net price", "Total", "Size"}
+    assert [f["name"] for f in forms.field_details(done)[2]] == ["Country", "Tax"]
     assert fields["Total"]["type"] == "multiline" and fields["Total"]["required"]
     moved, was = fields["Net price"]["rect"], [72.0, 700.0, 200.0, 720.0]
     assert moved[0] > was[0] + 50 and moved[1] < was[1] - 5

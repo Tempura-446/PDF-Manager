@@ -87,6 +87,11 @@ const { chromium } = require("playwright");
     out.total = await bar();
     await page.check(".re-required input");
     await page.selectOption(".re-name-box select.re-name", "multiline");
+    // Tax: sent to page 2 (it keeps its place on the paper).
+    await pick(1);
+    out.pageChoice = await page.$eval(".re-topage select", (el) => ({ shown: !el.closest("label").hidden, value: el.value, pages: el.options.length }));
+    await page.selectOption(".re-topage select", "2");
+    out.taxGoes = (await olds())[1].cls.includes("changed");
     // Agree: deleted with its button.
     await pick(3);
     out.agree = await bar();
