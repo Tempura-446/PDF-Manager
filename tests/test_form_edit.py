@@ -445,3 +445,67 @@ def test_a_page_that_isnt_there_is_said(tmp_path):
             forms.edit_fields(src, tmp_path / "no.pdf", [{"page": 1, "index": 0, "to_page": bad}])
     same = forms.edit_fields(src, tmp_path / "same.pdf", [{"page": 1, "index": 0, "to_page": 1}])
     assert same["changed"] == 0                                           # already there: nothing changes
+
+
+# -- 0.55.0: a field that holds words becomes another kind that does ---------------------------
+
+def kind_of(path, name):
+    return by_name(path)[name]["type"]
+
+
+def test_a_text_box_becomes_a_dropdown_and_keeps_what_fits(tmp_path):
+    src, filled, out = made(tmp_path), tmp_path / "filled.pdf", tmp_path / "out.pdf"
+    writer = PdfWriter(clone_from=str(src))
+    writer.update_page_form_field_values(writer.pages[0], {"Price": "10"}, auto_regenerate=False)
+    writer.write(str(filled))
+    before = by_name(filled)["Price"]
+    result = forms.edit_fields(filled, out, [{"page": 1, "index": 0, "type": "dropdown", "options": "5, 10, 20"}])
+    after = by_name(out)["Price"]
+    assert result["changed"] == 1 and result["notes"] == []
+    assert after["type"] == "dropdown" and after["options"] == ["5", "10", "20"] and after["value"] == "10"
+    assert (after["rect"], after["tooltip"], after["index"]) == (before["rect"], before["tooltip"], before["index"])
+    assert by_name(out)["Total"]["calculated"] and after["used_by"] == ["Total"]      # the total still adds it up
+    field = widget(out, 1, 0)
+    assert field["/FT"] == "/Ch" and int(field["/Ff"]) & forms.COMBO and "/AP" in field
+
+
+def test_a_value_that_isnt_a_choice_is_cleared_and_said(tmp_path):
+    src, filled, out = made(tmp_path), tmp_path / "filled.pdf", tmp_path / "out.pdf"
+    writer = PdfWriter(clone_from=str(src))
+    writer.update_page_form_field_values(writer.pages[0], {"Price": "12.50"}, auto_regenerate=False)
+    writer.write(str(filled))
+    result = forms.edit_fields(filled, out, [{"page": 1, "index": 0, "type": "list", "options": ["5", "10"]}])
+    assert by_name(out)["Price"]["type"] == "list" and by_name(out)["Price"]["value"] == ""
+    assert "isn't one of its choices" in result["notes"][0]
+
+
+def test_a_dropdown_becomes_a_list_a_text_box_and_several_lines(tmp_path):
+    src = made(tmp_path)
+    for wanted in ("list", "text", "multiline"):
+        out = tmp_path / f"{wanted}.pdf"
+        forms.edit_fields(src, out, [{"page": 2, "index": 0, "type": wanted}])
+        country = by_name(out)["Country"]
+        assert country["type"] == wanted and country["rect"] == by_name(src)["Country"]["rect"]
+        assert country["options"] == (["France", "Spain"] if wanted == "list" else [])
+        field = widget(out, 2, 0)
+        assert field["/FT"] == ("/Ch" if wanted == "list" else "/Tx") and ("/Opt" in field) == (wanted == "list")
+    assert int(widget(tmp_path / "multiline.pdf", 2, 0)["/Ff"]) & forms.MULTILINE
+    back = tmp_path / "back.pdf"                           # there and back: a dropdown again, with new choices
+    forms.edit_fields(tmp_path / "text.pdf", back, [{"page": 2, "index": 0, "type": "dropdown", "options": "Italy, Peru"}])
+    assert by_name(back)["Country"]["options"] == ["Italy", "Peru"]
+
+
+def test_a_list_needs_choices_and_other_kinds_cant_be_switched(tmp_path):
+    src = made(tmp_path)
+    with pytest.raises(core.PdfManagerError, match="needs choices to become a dropdown"):
+        forms.edit_fields(src, tmp_path / "no.pdf", [{"page": 1, "index": 0, "type": "dropdown"}])
+    for index, wanted in ((3, "text"), (0, "checkbox"), (4, "dropdown")):
+        with pytest.raises(core.PdfManagerError, match="can't be turned into"):
+            forms.edit_fields(src, tmp_path / "no.pdf", [{"page": 1, "index": index, "type": wanted}])
+
+
+def test_required_and_a_new_name_go_with_the_switch(tmp_path):
+    src, out = made(tmp_path), tmp_path / "out.pdf"
+    forms.edit_fields(src, out, [{"page": 1, "index": 1, "type": "dropdown", "options": "0, 5", "required": True, "name": "VAT"}])
+    vat = by_name(out)["VAT"]
+    assert vat["type"] == "dropdown" and vat["required"] and by_name(out)["Total"]["calculated"]

@@ -82,7 +82,11 @@ export const Signing = (Base) => class extends Base {
       });
       this._setEditMode("STAMP");
       await on;
-      if (!this.uiManager || !layer.div) return null;
+      if (!this.uiManager) return null;
+      // (Turning the tool on can draw the page again, just after the file opened, and
+      // with it replace the layer its pictures go on: the page's layer as it is now.)
+      if (!layer.div) layer = await this.#editorLayer(layer.pageIndex);
+      if (!layer?.div) return null;
       if (this.uiManager.getMode() !== mode) await this.uiManager.updateMode(mode);  // (the viewer didn't answer: as pdf.js's paste)
     }
     layer.updateToolbar({ mode });

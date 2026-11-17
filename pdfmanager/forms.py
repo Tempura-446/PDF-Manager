@@ -664,6 +664,59 @@ def _drop(array, obj):
             del array[i]
 
 
+def _retype(writer, acroform, field, shown, kind, wanted, change, number):
+    """Turn a field that holds words into another kind that does: a box to
+    type in (text, multiline) into a list to choose from (dropdown, list) or
+    back, or one kind of list into the other. It keeps its name, its place
+    and what goes with them; what it is set to is kept when the new kind can
+    hold it. Returns a note for the user, or None."""
+    name, note = _qualified_name(field), None
+    value = _inherited(field, "/V")
+    if isinstance(value, ArrayObject):        # (a list with several chosen: the first)
+        value = value[0] if len(value) else None
+    value = None if value is None else str(value)
+    flags = int(_inherited(field, "/Ff", 0)) & (REQUIRED | READ_ONLY | 1 << 2)   # what any field can be
+    if wanted in ("dropdown", "list"):
+        options = _options(change) if change.get("options") is not None else [str(o[1] if isinstance(o, ArrayObject) else o)
+                                                                              for o in _inherited(field, "/Opt") or []]
+        if not options and value:
+            options = [value]
+        if not options:
+            raise core.PdfManagerError(f"{name} on page {number} needs choices to become a {wanted}: "
+                                       "add them, separated by commas")
+        field[NameObject("/FT")] = NameObject("/Ch")
+        field[NameObject("/Opt")] = ArrayObject(TextStringObject(o) for o in options)
+        flags |= COMBO if wanted == "dropdown" else 0
+        if value is not None and value not in options:
+            note, value = f"{name} was set to \"{value}\", which isn't one of its choices: it's now empty.", None
+        for key in ("/MaxLen", "/I"):
+            if key in field:
+                del field[key]
+        actions = field["/AA"].get_object() if "/AA" in field else None
+        if actions is not None:               # (what could be typed: a number, a date... doesn't apply to a list)
+            for key in ("/F", "/K", "/V"):
+                if key in actions:
+                    del actions[key]
+            if not len(actions):
+                del field["/AA"]
+    else:
+        field[NameObject("/FT")] = NameObject("/Tx")
+        for key in ("/Opt", "/I", "/TI"):
+            if key in field:
+                del field[key]
+        flags |= MULTILINE if wanted == "multiline" else 0
+    field[NameObject("/Ff")] = NumberObject(flags)
+    for key in ("/V", "/DV"):
+        if key in field:
+            del field[key]
+    if value is not None:
+        field[NameObject("/V")] = TextStringObject(value)
+    for annot in shown:                        # drawn again as what it now is; readers fill in the words
+        x0, y0, x1, y1 = (float(v) for v in annot["/Rect"])
+        _remake(writer, acroform, annot, field, wanted, abs(x1 - x0), abs(y1 - y0))
+    return note
+
+
 def _to_page(writer, annot, number, target):
     """Take a field's widget from page ``number`` to page ``target`` (both
     1-based): it leaves one page's list for the end of the other's (so it
@@ -750,8 +803,9 @@ def edit_fields(path, output, changes, password=None):
     ``field_details`` lists them) and carries any of: "rect" [x0, y0, x1,
     y1] in PDF points (move or resize), "to_page" (the 1-based page it goes
     to, keeping its place on the paper unless "rect" says another), "name",
-    "tooltip", "required", "readonly", "type" ("text" or "multiline", for a
-    text box), "options" (a dropdown's or list's choices) and "delete".
+    "tooltip", "required", "readonly", "type" ("text", "multiline",
+    "dropdown" or "list": a field that holds words can become another kind
+    that does), "options" (a dropdown's or list's choices) and "delete".
 
     A name is kept unique, and the calculations that used the old name use
     the new one. A deleted field is taken out of the calculations that used
@@ -868,10 +922,26 @@ def edit_fields(path, output, changes, password=None):
         wanted = change.get("type")
         if wanted is not None and str(wanted).lower() != kind:
             wanted = str(wanted).lower()
-            if kind not in ("text", "multiline") or wanted not in ("text", "multiline"):
+            typed = ("text", "multiline", "dropdown", "list")   # the kinds that hold words
+            if kind not in typed or wanted not in typed:
                 raise core.PdfManagerError(
                     f"a {kind} field can't be turned into a {wanted} field: delete it and draw "
                     "a new one")
+            if (kind in ("dropdown", "list")) != (wanted in ("dropdown", "list")) or wanted in ("dropdown", "list"):
+                # Between a box to type in and a list to choose from (or one kind of list and the other).
+                shown = [a for _, _, a, f in rows if f is field]
+                said = _retype(writer, acroform, field, shown, kind, wanted, change, number)
+                if said:
+                    notes.append(said)
+                flags = int(_inherited(field, "/Ff", 0))
+                for key, bit in (("required", REQUIRED), ("readonly", READ_ONLY)):
+                    if change.get(key) is not None:
+                        flags = flags | bit if change[key] else flags & ~bit
+                before, redraw, touched = int(_inherited(field, "/Ff", 0)), True, True
+                # (Several lines: the size of its letters is seen to just below, as for a text box.)
+                kind, wanted = ("text", wanted) if wanted == "multiline" else (wanted, None)
+                change = {k: v for k, v in change.items() if k != "options"}   # (its choices are set)
+        if wanted is not None and wanted != kind:
             flags = flags | MULTILINE if wanted == "multiline" else flags & ~MULTILINE
             if wanted == "multiline":
                 # Text fitted to the box (size 0) would shrink as lines are added.
