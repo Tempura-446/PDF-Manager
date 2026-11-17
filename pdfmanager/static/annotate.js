@@ -114,6 +114,13 @@ export const Annotating = (Base) => class extends Base {
    *  or STAMP; or EDITTEXT, this reader's own tool for changing words. */
   _setEditMode(name, create = false, pick = null) {
     if (!this.pdfViewer || !this.doc) return;
+    if (this.markNudge) {
+      // A markup's arrow presses not written yet: written first, and the tool changed
+      // once the document is shown again (changing it in the middle would be undone by that).
+      this._markFlush();
+      this._serial(() => this._setEditMode(name, create, pick));
+      return;
+    }
     const editText = name === "EDITTEXT";
     this._endHint();  // the last tool's hint goes with it
     if (editText && !this.textEditHinted) {

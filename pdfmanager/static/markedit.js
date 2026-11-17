@@ -17,6 +17,7 @@ const NEAR = 7;       // px: how close a press must be to a markup's outline
 const GRIP = 9;       // px: how close to a handle
 const TWICE = 500;    // ms: two presses this close together are a double-click
 const NUDGE_REST = 350;  // ms without an arrow key before the nudges made are written
+const HELD_FOR = 1500;   // ms a key counts as still held after its last key-down (if its key-up never came)
 
 /** How far ``p`` is from the segment a-b. */
 function fromSegment(p, a, b) {
@@ -158,7 +159,6 @@ export const MarkupEditing = (Base) => class extends Base {
   /** The annotate bar's tool changed, or the document did: have the markups ready. */
   _markReady() {
     const on = EDIT_MODES.has(this.markupMode), sel = this.markSel, tab = this.activeTab;
-    if (!on && this.markNudge && !this.markBusy) this._markFlush();   // (the tool is put away: the presses made are written)
     if (!on || (sel && sel.tab !== tab)) {
       this._markLetGo();
       // The tool goes off for a moment each time the document is shown again (Undo, Redo, another
@@ -197,7 +197,15 @@ export const MarkupEditing = (Base) => class extends Base {
     const scale = at.view.viewport.scale;
     const sel = this.markSel;
     // While a change is being written (or the markups asked for again), a press waits its turn.
-    if (this.markNudge) this._markFlush();   // (arrow presses not written yet: written before anything else)
+    if (this.markNudge) {
+      // Arrow presses not written yet are written first. A press on the markup waits its turn;
+      // one beside it lets go, as it would have (the markup isn't picked up again after the write).
+      const beside = sel && !(sel.page === at.n && (distanceTo(sel.shape, at.pt) * scale <= NEAR
+        || handlesOf(sel.shape).some((h) => dist(h.pt, at.pt) * scale <= GRIP)));
+      this._markFlush();
+      if (beside && this.markPending) { this.markDropped = true; this._markLetGo(); }
+      return true;
+    }
     if (this.markBusy || (sel && !this._markShapes())) return true;
     // A second press on the selected callout soon after the first: its words.
     // (Counted here: a pointerdown doesn't say it's the second of two.)
@@ -364,8 +372,23 @@ export const MarkupEditing = (Base) => class extends Base {
   #nudge(by) {
     const sel = this.markSel, was = this.markNudge?.by || [0, 0];
     clearTimeout(this.markNudge?.timer);
-    this.markNudge = { by: [was[0] + by[0], was[1] + by[1]], timer: setTimeout(() => this._markFlush(), NUDGE_REST) };
+    this.markNudge = { by: [was[0] + by[0], was[1] + by[1]], timer: setTimeout(() => this.#rested(), NUDGE_REST) };
+    this.markHeld = performance.now();
     this._markDraw(sel.page, reshaped(sel.shape, null, null, this.markNudge.by));
+  }
+
+  /** The keys have rested: written, unless an arrow key is still held down
+   *  (the pause before a held key starts repeating is longer than the rest). */
+  #rested() {
+    const nudge = this.markNudge;
+    if (!nudge) return;
+    if (this.markHeld && performance.now() - this.markHeld < HELD_FOR) nudge.timer = setTimeout(() => this.#rested(), NUDGE_REST);
+    else this._markFlush();
+  }
+
+  /** An arrow key was let go: the rest before writing counts from its last press. */
+  _markKeyUp(e) {
+    if (e.key?.startsWith("Arrow")) this.markHeld = null;
   }
 
   /** The presses not written yet, taken (so they are written once): [dx, dy] or null. */

@@ -188,6 +188,60 @@ const { chromium } = require("playwright");
 
     out.describes = describes;   // (so far: only changes of markups, each of which says how they are now)
 
+    // Arrow presses not written yet, and then at once something else:
+    {
+      const quiet = () => page.waitForFunction(() => !reader.markNudge && !reader.markBusy && !reader.markPending && reader.loading.hidden, null, { timeout: 30000 });
+      const pick = async () => { const r = (await annots())[0].rect; await click(r[0] + 1, (r[1] + r[3]) / 2); return r; };
+      const three = async () => { for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowRight"); };
+
+      // a click beside the markup: the presses are written, and it is let go; nothing is drawn.
+      let was = await pick(), count = (await annots()).length;
+      v = await version();
+      await three();
+      { const [sx, sy] = await at(520, 760); await page.mouse.click(sx, sy); }
+      await rewritten(v);
+      await quiet();
+      out.thenAClick = { moved: (await annots())[0].rect[0] - was[0], selected: await selected(), drawn: (await annots()).length - count, versions: (await version()) - v };
+
+      // another tool: the presses are written, the bar stays, and the tool is the one chosen.
+      was = await pick();
+      v = await version();
+      await three();
+      await page.evaluate(() => reader._setEditMode("NOTE"));
+      await rewritten(v);
+      await quiet();
+      await page.waitForFunction(() => reader.markupMode === "NOTE", null, { timeout: 10000 }).catch(() => {});
+      out.thenATool = { moved: (await annots())[0].rect[0] - was[0], mode: await page.evaluate(() => reader.markupMode),
+        bar: await page.evaluate(() => !reader.annotbar.hidden), versions: (await version()) - v };
+      await page.evaluate(() => { reader._setEditMode("SHAPE"); });
+      await page.waitForTimeout(300);
+
+      // a save: the presses are in what is saved (the document is written before its bytes are taken).
+      was = await pick();
+      v = await version();
+      await three();
+      out.thenASave = await page.evaluate(async () => {
+        reader._markFlush();
+        await reader.chain;
+        return { versions: reader.activeTab.version };
+      });
+      out.thenASave.versions -= v;
+      await quiet();
+      out.thenASave.moved = (await annots())[0].rect[0] - was[0];
+
+      // a key held through the pause before it repeats (longer than the rest): still written once.
+      was = await pick();
+      v = await version();
+      await page.keyboard.down("ArrowRight");
+      await page.waitForTimeout(600);
+      out.heldNotWritten = (await version()) - v;
+      for (let i = 0; i < 5; i++) { await page.keyboard.down("ArrowRight"); await page.waitForTimeout(30); }
+      await page.keyboard.up("ArrowRight");
+      await rewritten(v);
+      await quiet();
+      out.held = { moved: (await annots())[0].rect[0] - was[0], versions: (await version()) - v };
+    }
+
     // A key pressed in the page list (the left sidebar) isn't the markup's.
     {
       const first = (await annots())[0].rect;

@@ -114,3 +114,8 @@ def test_changing_markups_in_a_browser(app, tmp_path):
     assert out["pickedForKeys"] == "rect" and out["movedFromTheList"] == 0
     assert out["focusOnPage"]                                        # a press on a markup brings the keys to the page
     assert out["afterUndo"] == {"selected": "rect", "x": 0} and out["afterRedo"] == {"selected": "rect", "x": 1}
+    # From the Windows check of 0.49.0: presses not written yet, then at once something else.
+    assert out["thenAClick"] == {"moved": 3, "selected": None, "drawn": 0, "versions": 1}
+    assert out["thenATool"] == {"moved": 3, "mode": "NOTE", "bar": True, "versions": 1}
+    assert out["thenASave"] == {"moved": 3, "versions": 1}
+    assert out["heldNotWritten"] == 0 and out["held"] == {"moved": 6, "versions": 1}   # the pause before a key repeats
