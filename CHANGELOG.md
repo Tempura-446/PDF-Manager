@@ -4,6 +4,17 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.52.0
+
+- **Fixed: ZPDF could close by itself when a PDF with web links was
+  opened.** The check for links that show one address and go to another
+  read the page's words at the same moment as something else in ZPDF used
+  the same part (a thumbnail, another file), which can end the whole app.
+  It now waits its turn like everything else.
+- **Fixed: with Links on, a click on a link sometimes asked "Open this
+  link?"** instead of opening the box to change it: on pages with many
+  annotations before the link.
+
 ## 0.51.0
 
 Sturdier markups, from the review of the code.
