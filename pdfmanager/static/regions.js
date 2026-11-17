@@ -93,6 +93,8 @@ export const FIELD_TYPES = {
 };
 const FIELD_LABEL = { text: "Text", multiline: "Text", checkbox: "Checkbox", radio: "Group", dropdown: "Dropdown", signature: "Signature" };
 const WORD_TYPES = ["text", "multiline", "dropdown", "list"];   // the kinds of field that hold words
+// The kinds that take a format (a number, money, a date) and can be a total.
+const TEXT_TYPES = ["text", "multiline"];
 const AUTO_NAME = /^(Text|Checkbox|Group|Dropdown|Signature) \d+$/;
 
 export class RegionEditor {
@@ -221,7 +223,10 @@ export class RegionEditor {
         const dot = f.name.lastIndexOf(".");
         const field = { ...f, index: f.index ?? i, rect: [...f.rect], options: (f.options || []).join(", "),
           prefix: f.name.slice(0, dot + 1), short: f.name.slice(dot + 1), deleted: false };
-        field.was = { rect: [...f.rect], short: field.short, type: f.type, required: !!f.required, options: field.options };
+        // What a text box takes and adds up, as the bar's choices (see #rulesOf).
+        Object.assign(field, this.#rulesOf(f));
+        field.was = { rect: [...f.rect], short: field.short, type: f.type, required: !!f.required, options: field.options,
+          fmt: field.fmt, sum: field.sum };
         return field;
       });
     }
@@ -235,10 +240,42 @@ export class RegionEditor {
       if (e.required != null) f.required = e.required;
       if (e.options != null) f.options = e.options;
       if (e.to_page && e.to_page !== e.page) f.toPage = e.to_page;
+      if (e.format != null) f.fmt = Object.keys(this.formats || {}).find((k) => k && this.formats[k].format === e.format) || "";
+      if (e.calculate != null) f.sum = String(e.calculate).replace(/^\s*sum\s*:\s*/i, "");
     }
     if (editable && picked >= 0 && picked < (this.existing[this.pageIndex] || []).length) this.selectedOld = picked;
     this.#draw();
     if (editable) this.#emit();
+  }
+
+  /** What one of the file's own text boxes takes and adds up, as the bar
+   * shows it: ``fmt`` is one of the Format choices, or "keep" when the file
+   * has it another way (other decimals, another currency or date pattern,
+   * a script of its own), said in ``fmtLabel``; ``sum`` is the names it
+   * adds up, and ``sumKeep`` says how it's worked out when that isn't a sum. */
+  #rulesOf(f) {
+    const out = { fmt: "", fmtLabel: "", sum: "", sumKeep: "" };
+    const format = f.format;
+    if (format) {
+      const plain = (format.separators || "1,234.56") === "1,234.56";
+      const preset = this.formats?.[format.format];
+      const same = { number: plain && format.decimals === 0, amount: plain && format.decimals === 2,
+        currency: plain && format.decimals === 2 && !format.currency_after && format.currency === preset?.currency,
+        percent: plain && format.decimals === 0, date: format.date === preset?.date, phone: true, zip: true }[format.format];
+      out.fmt = same ? format.format : "keep";
+      if (!same) {
+        const n = (1234.5).toFixed(format.decimals || 0);
+        out.fmtLabel = "As in the file: " + ({ number: `number (${n})`, amount: `number (${n})`,
+          currency: `money (${format.currency_after ? n + format.currency : format.currency + n})`,
+          percent: `percent, ${format.decimals} decimal${format.decimals === 1 ? "" : "s"}`,
+          date: `date (${format.date})` }[format.format] || "its own script")
+          + (!plain && format.format !== "date" ? ", 1.234,56" : "");
+      }
+    }
+    const total = f.calculate;
+    if (total && total !== "custom" && total.op === "sum") out.sum = total.fields.join(", ");
+    else if (total) out.sumKeep = total === "custom" ? "Worked out by its own script" : `Now the ${total.op} of ${total.fields.join(", ")}`;
+    return out;
   }
 
   setMatches(matches) {
@@ -521,7 +558,7 @@ export class RegionEditor {
   /** One of the file's own fields differs from how it is in the file. */
   #changed(f) {
     return f.deleted || !!f.toPage || f.short !== f.was.short || f.type !== f.was.type || f.required !== f.was.required
-      || f.options !== f.was.options || f.rect.some((v, i) => Math.abs(v - f.was.rect[i]) > 0.05);
+      || f.options !== f.was.options || (TEXT_TYPES.includes(f.type) && (f.fmt !== f.was.fmt || f.sum.trim() !== f.was.sum)) || f.rect.some((v, i) => Math.abs(v - f.was.rect[i]) > 0.05);
   }
 
   /** Mark one of the file's own fields to be deleted, or keep it after all. */
@@ -553,7 +590,8 @@ export class RegionEditor {
     for (const list of Object.values(this.existing)) {
       for (const g of list) {
         if (g.name !== full) continue;
-        Object.assign(g, { short: g.was.short, name: g.prefix + g.was.short, type: g.was.type, required: g.was.required, options: g.was.options });
+        Object.assign(g, { short: g.was.short, name: g.prefix + g.was.short, type: g.was.type, required: g.was.required, options: g.was.options,
+          fmt: g.was.fmt, sum: g.was.sum });
       }
     }
     this.findNote = "";
@@ -605,6 +643,10 @@ export class RegionEditor {
           if (f.required !== f.was.required) change.required = f.required;
           if (f.options !== f.was.options) change.options = f.options;
           if (f.toPage) change.to_page = f.toPage;
+          if (TEXT_TYPES.includes(f.type)) {
+            if (f.fmt !== f.was.fmt) Object.assign(change, f.fmt ? this.formats[f.fmt] : { format: "" });
+            if (f.sum.trim() !== f.was.sum) change.calculate = f.sum.trim() ? "sum: " + f.sum : "";
+          }
         }
         out.push(change);
       }
@@ -719,6 +761,9 @@ export class RegionEditor {
         if (changes[key] == null) continue;
         for (const list of Object.values(this.existing)) for (const f of list) if (f.name === old.name) f[key] = changes[key];
       }
+      // (A text box's format and total: what the bar shows now.)
+      const rules = { ...("format" in changes ? { fmt: this.formatSelect.value } : {}), ...("calculate" in changes ? { sum: this.sumInput.value } : {}) };
+      for (const list of Object.values(this.existing)) for (const f of list) if (f.name === old.name) Object.assign(f, rules);
       this.#draw();
       this.#emit();
       return;
@@ -733,6 +778,9 @@ export class RegionEditor {
   #syncFieldBar() {
     if (!this.fieldBar) return;
     const old = this.#old();
+    // Room for a second row kept while the file's own text boxes can be picked: their
+    // Format and Sum of don't fit beside Required and Page, and the page mustn't jump.
+    this.nameBox.classList.toggle("re-tworows", this.editable && Object.values(this.existing).some((l) => l.some((f) => TEXT_TYPES.includes(f.type))));
     const kind = old ? { type: old.type, name: old.short, options: old.options } : this.kinds[this.pageIndex]?.[this.selected];
     for (const b of this.typeBtns) b.setAttribute("aria-pressed", String(b.dataset.type === this.fieldType));
     // Hidden but keeping its space, so the page doesn't jump while drawing.
@@ -758,6 +806,10 @@ export class RegionEditor {
     this.typeSelect.disabled = !!old && !swap;
     this.typeSelect.title = old && !swap ? "A tick box, radio button, button or signature already in the file can't become another type: delete it and draw a new one" : "";
     this.typeSelect.value = kind.type;
+    // (A choice only one of the file's own text boxes has: its format as the file has it.)
+    this.formatSelect.querySelector("option[data-keep]")?.remove();
+    this.sumInput.placeholder = "Price, Tax";
+    this.sumInput.title = "";
     this.requiredLabel.hidden = !old || old.type === "button" || old.type === "signature";
     this.requiredInput.checked = !!old?.required;
     this.toPageLabel.hidden = !old || old.deleted || !(this.total > 1);
@@ -770,7 +822,14 @@ export class RegionEditor {
     if (old) {
       this.nameLabel.textContent = old.type === "radio" ? "Group" : "Name";
       this.nameInput.setAttribute("aria-label", "Field name");
-      this.valueLabel.hidden = this.textLabel.hidden = true;
+      this.valueLabel.hidden = true;
+      this.textLabel.hidden = !TEXT_TYPES.includes(old.type);
+      if (!this.textLabel.hidden) {
+        if (old.was.fmt === "keep") this.formatSelect.append(el("option", { value: "keep", "data-keep": true }, old.fmtLabel));
+        this.formatSelect.value = old.fmt;
+        if (document.activeElement !== this.sumInput) this.sumInput.value = old.sum;
+        if (old.sumKeep) { this.sumInput.placeholder = old.sumKeep; this.sumInput.title = old.sumKeep + ". Type names here to make it their sum instead."; }
+      }
       this.optionsLabel.hidden = !(old.type === "dropdown" || old.type === "list");
       this.extraSlot.style.visibility = "";
       if (document.activeElement !== this.optionsInput) this.optionsInput.value = old.options;

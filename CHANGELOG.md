@@ -4,6 +4,32 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.56.0
+
+See and change what a form's own text boxes take and add up.
+
+- **Format and Sum of work on text boxes the file already has.** In **Make
+  fillable**, click one of the file's own text boxes: the bar shows what it
+  takes (a number, an amount, money, a percentage, a date, a phone number,
+  a ZIP code) and which fields it adds up, read from the file whichever
+  program made the form. Change either, or choose **Any text** or empty
+  **Sum of** to take it away.
+- A format the file has in a way ZPDF's own choices don't cover (three
+  decimals, another currency or date pattern, a script of its own) is
+  shown as "As in the file: …" and left exactly as it is unless you choose
+  another.
+- A box made a total can't be typed in any more, and one that stops being
+  a total can; totals are worked out in the right order whatever uses
+  what.
+- A total that isn't a plain sum (an average, a product, a script of its
+  own) is said in the **Sum of** box and left alone unless you type names
+  there.
+- On the command line the `--edit` file takes, for a text box, `"format"`
+  (with `"decimals"`, `"currency"`, `"date"`), `"min"`, `"max"` and
+  `"calculate"`.
+- Not yet: formulas such as Qty × Price, and setting the smallest and
+  largest value in the app (the command line does).
+
 ## 0.55.0
 
 Turn a form's text box into a dropdown, and back.

@@ -211,7 +211,10 @@ closed.
   until you run; its ↶ keeps it). A total that added up a renamed field
   follows the new name. The fields work in any PDF reader, including the
   one here. One of the file's own fields can also be sent to another page
-  (**Page** in the bar): it keeps its place on the paper.
+  (**Page** in the bar): it keeps its place on the paper. A text box the
+  file already has shows what it takes (**Format**: a number, money, a
+  date…) and what it adds up (**Sum of**), read from the file whichever
+  program made it, and both can be changed.
 - **Digital ID** (the certificate tool) signs PDFs with your certificate (a .pfx or
   .p12 file), like Acrobat: visible in a corner of a page (showing your
   name, the date and the reason) or invisible, optionally with a time from
