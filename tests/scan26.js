@@ -96,9 +96,13 @@ const { chromium } = require("playwright");
       out.removed = await state();
       out.removedThird = !out.removed.ids.includes(third);
       // Keyboard: Alt+Right moves the focused page.
+      // (Once the strip has settled after the removal: drawn again meanwhile, the focused tile would be gone.)
+      await idle();
+      await page.waitForFunction((n) => document.querySelectorAll("#scan-strip .scan-tile").length === n, out.removed.count, { timeout: 5000 }).catch(() => {});
       await page.focus("#scan-strip .scan-tile:nth-child(1)");
       const firstId = (await state()).ids[0];
       await page.keyboard.press("Alt+ArrowRight");
+      await page.waitForFunction((id) => scanState.pages.findIndex((p) => p.id === id) === 1, firstId, { timeout: 5000 }).catch(() => {});
       out.keyMoved = (await state()).ids.indexOf(firstId);
       await page.waitForFunction((id) => document.activeElement?.dataset?.id === id, firstId, { timeout: 5000 }).catch(() => {});
       out.keyFocus = await page.evaluate(() => document.activeElement?.dataset?.id || null);
