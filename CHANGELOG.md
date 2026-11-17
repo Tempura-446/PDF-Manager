@@ -4,6 +4,21 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.51.0
+
+Sturdier markups, from the review of the code.
+
+- **A comment can't make a markup unselectable any more.** An ellipse with
+  a comment ending like "(2 of 3)", or a line with corners whose comment
+  had a degree sign, looked like one of ZPDF's measurements and couldn't
+  be selected or changed. Markups drawn from now on say what drew them,
+  so their comments don't matter; the quantity schedule uses the same
+  mark. Files from before are read as they were.
+- Dragging a markup redraws its outline once a frame at most, which is
+  smoother on busy pages.
+- Inside: one place puts a new annotation on its page, and changing a
+  markup no longer adds a spare one and takes it out again.
+
 ## 0.50.0
 
 - **Fixed: choosing Highlight, Text or Draw marked the file as changed.**

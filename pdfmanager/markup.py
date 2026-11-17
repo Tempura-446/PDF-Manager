@@ -165,9 +165,27 @@ def _base(writer, page_ref, subtype, rect, color, author, text):
 
 
 def _add(writer, page, page_ref, change, author):
+    """Make the annotation ``change`` asks for and put it on ``page``: a
+    reference to it (what goes with it, a note's popup, is put there too)."""
     kind = change.get("kind")
     if kind not in KINDS:
         raise core.PdfManagerError(f"unknown kind of annotation: {kind!r}")
+    added = _build(writer, page, page_ref, change, author, kind)
+    annots = page.get("/Annots")
+    if annots is None:
+        page[NameObject("/Annots")] = ArrayObject()
+        annots = page["/Annots"]
+    annots.get_object().extend(added)
+    if kind in CHANGEABLE:
+        # What drew it, said in so many words: describe() then needn't work it out from how
+        # it looks (a comment written on it later can't make it look like something else).
+        added[0].get_object()[NameObject("/ZPDFKind")] = TextStringObject(kind)
+    return added[0]
+
+
+def _build(writer, page, page_ref, change, author, kind):
+    """The annotation of ``kind`` that ``change`` asks for, as objects of
+    ``writer`` not yet on any page: [a reference to it, and to what goes with it]."""
     if kind == "link":
         annot = DictionaryObject({
             NameObject("/Type"): NameObject("/Annot"), NameObject("/Subtype"): NameObject("/Link"),
@@ -175,37 +193,13 @@ def _add(writer, page, page_ref, change, author):
             NameObject("/Border"): ArrayObject([NumberObject(0), NumberObject(0), NumberObject(0)]),
             NameObject("/F"): NumberObject(PRINT), NameObject("/P"): page_ref})
         _set_target(writer, annot, change)
-        ref = writer._add_object(annot)
-        annots = page.get("/Annots")
-        if annots is None:
-            page[NameObject("/Annots")] = ArrayObject()
-            annots = page["/Annots"]
-        annots.get_object().append(ref)
-        return ref
+        return [writer._add_object(annot)]
     if kind == "stamp":
-        added = [_stamp(writer, page, page_ref, change, author)]
-        annots = page.get("/Annots")
-        if annots is None:
-            page[NameObject("/Annots")] = ArrayObject()
-            annots = page["/Annots"]
-        annots.get_object().extend(added)
-        return added[0]
+        return [_stamp(writer, page, page_ref, change, author)]
     if kind == "measure":
-        added = _measure(writer, page_ref, change, author)
-        annots = page.get("/Annots")
-        if annots is None:
-            page[NameObject("/Annots")] = ArrayObject()
-            annots = page["/Annots"]
-        annots.get_object().extend(added)
-        return added[0]
+        return _measure(writer, page_ref, change, author)
     if kind in DRAWING_KINDS:
-        ref = writer._add_object(_drawing_markup(writer, page, page_ref, change, author))
-        annots = page.get("/Annots")
-        if annots is None:
-            page[NameObject("/Annots")] = ArrayObject()
-            annots = page["/Annots"]
-        annots.get_object().append(ref)
-        return ref
+        return [writer._add_object(_drawing_markup(writer, page, page_ref, change, author))]
     color = _color(change.get("color"), DEFAULT_COLORS.get(kind, "#d52b1e"))
     text = str(change.get("text") or "")
     width = max(0.25, min(_num(change.get("width", 2)), 50))
@@ -295,13 +289,7 @@ def _add(writer, page, page_ref, change, author):
             content += f"{_fmt(ax)} {_fmt(ay)} m {_fmt(bx)} {_fmt(by)} l S"
         annot[NameObject("/AP")] = _appearance(writer, rect, content)
         added = [writer._add_object(annot)]
-    annots = page.get("/Annots")
-    if annots is None:
-        page[NameObject("/Annots")] = ArrayObject()
-        annots = page["/Annots"]
-    annots = annots.get_object()
-    annots.extend(added)
-    return added[0]
+    return added
 
 
 # ---- rubber stamps ----------------------------------------------------------------
@@ -866,13 +854,16 @@ def describe(annot):
     if not str(annot.get("/NM", "")).startswith("zpdf-") or annot.get("/ZPDFImported"):
         return None  # (comments brought in from a file carry ZPDF's kind of name too)
     subtype, intent = annot.get("/Subtype"), annot.get("/IT")
+    # Since 0.51.0 a markup says what drew it (/ZPDFKind); files from before are told from
+    # the measurements ZPDF also puts in a PDF by how they look (their words, /Cap).
+    unmarked = "/ZPDFKind" not in annot
     text = str(annot.get("/Contents", ""))
     rect = [float(v) for v in annot.get("/Rect", [0, 0, 0, 0])]
     style = annot.get("/BS")
     width = float(style.get_object().get("/W", 1.5)) if style is not None else 1.5
     out = {"color": _hex(annot), "width": width, "text": text, "name": str(annot["/NM"])}
     if subtype in ("/Square", "/Circle"):
-        if subtype == "/Circle" and re.search(r"\(\d+ of \d+\)$", text):
+        if unmarked and subtype == "/Circle" and re.search(r"\(\d+ of \d+\)$", text):
             return None  # one mark of a count (a measurement)
         inset = [float(v) for v in annot.get("/RD", [width / 2] * 4)]
         return {**out, "kind": "rect" if subtype == "/Square" else "ellipse",
@@ -886,7 +877,7 @@ def describe(annot):
     if subtype == "/Line":
         pts = _pairs(annot.get("/L", []))
         if intent == "/LineDimension":
-            if "/Cap" not in annot:
+            if unmarked and "/Cap" not in annot:
                 return None  # a measurement put in the PDF, not a dimension markup
             measure = annot.get("/Measure")
             # Its words: as drawn (kept apart since 0.47.0: the comments panel can
@@ -896,7 +887,7 @@ def describe(annot):
                     "scale": _scale_of(measure.get_object()) if measure is not None else None}
         ends = [str(e) for e in annot.get("/LE", [])]
         return {**out, "kind": "arrow" if "/ClosedArrow" in ends else "line", "points": pts}
-    if subtype == "/PolyLine" and intent is None and "/Measure" not in annot and "°" not in text:
+    if subtype == "/PolyLine" and intent is None and "/Measure" not in annot and not (unmarked and "°" in text):
         ends = [str(e) for e in annot.get("/LE", [])]
         arrow = "both" if ends[:1] == ["/ClosedArrow"] else "end" if "/ClosedArrow" in ends else "none"
         return {**out, "kind": "polyline", "points": _pairs(annot.get("/Vertices", [])), "arrow": arrow}
@@ -1023,20 +1014,18 @@ def change_markup(writer, page, ref, change, author):
                 del annot["/Contents"]
         annot[NameObject("/M")] = now
         return
-    # Drawn again by the tool that drew it, as a new annotation, whose
-    # contents then take the old one's place.
-    annots = page["/Annots"].get_object()
-    made = _add(writer, page, page.indirect_reference, {**shape, "op": "add", "kind": kind}, author)
-    new = made.get_object()
+    # Drawn again by the tool that drew it (never put on the page: only made),
+    # and what it is then takes the old one's place.
+    made = _build(writer, page, page.indirect_reference, {**shape, "op": "add", "kind": kind}, author, kind)[0]
     kept = {key: annot.raw_get(key) for key in ("/NM", "/T", "/CreationDate", "/Popup", "/Subj") if key in annot}
     if kind == "dimension" and str(annot.get("/Contents", "")) != drawn_words:
         kept["/Contents"] = annot.raw_get("/Contents")   # a comment written on it stays its comment
     for key in list(annot.keys()):
         del annot[key]
-    annot.update(new)
+    annot.update(made.get_object())
     annot.update(kept)
+    annot[NameObject("/ZPDFKind")] = TextStringObject(kind)
     annot[NameObject("/M")] = now
-    annots.remove(made)
     writer._objects[made.idnum - 1] = NullObject()   # (the spare copy isn't written)
 
 

@@ -236,3 +236,38 @@ def test_a_note_given_a_malformed_place_is_said_in_words(tmp_path):
     src, ids = placed(tmp_path, {"kind": "note", "at": [300, 600], "text": "Hello"})
     with pytest.raises(core.PdfManagerError, match="two numbers"):
         markup.apply(src, tmp_path / "no.pdf", [{"op": "change", "page": 1, "id": ids[0], "at": 5}])
+
+
+# -- 0.51.0: a markup says what drew it -------------------------------------------------------
+
+def test_a_comment_cant_make_a_markup_look_like_a_measurement(tmp_path):
+    """An ellipse commented "(2 of 3)" looked like one mark of a count, a line with
+    corners commented with a degree sign like an angle: neither could be selected."""
+    src, (oval, bent) = placed(tmp_path, {"kind": "ellipse", "rect": [100, 500, 200, 560]},
+                               {"kind": "polyline", "points": [[100, 400], [200, 430], [300, 400]]})
+    refs, annots = page_annots(src)
+    assert [str(a["/ZPDFKind"]) for a in annots] == ["ellipse", "polyline"]
+    noted = tmp_path / "noted.pdf"
+    markup.apply(src, noted, [{"op": "text", "page": 1, "id": oval, "text": "see detail (2 of 3)"},
+                              {"op": "text", "page": 1, "id": bent, "text": "about 30°"}], author="Bob")
+    shapes = markup.describe_all(noted)[1]
+    assert [s["kind"] for s in shapes] == ["ellipse", "polyline"]
+    out, (moved, _) = changed(tmp_path, noted, {"id": shapes[0]["id"], "move": [10, 0]})
+    assert moved["/ZPDFKind"] == "ellipse" and moved["/Contents"] == "see detail (2 of 3)"
+
+
+def test_files_from_before_are_still_told_apart(tmp_path):
+    """Without the mark (a file from 0.50.0 or before), a count's mark and an angle are left alone."""
+    from pypdf import PdfWriter
+    from pypdf.generic import NameObject, TextStringObject
+
+    src, _ = placed(tmp_path, {"kind": "ellipse", "rect": [100, 500, 200, 560]},
+                    {"kind": "polyline", "points": [[100, 400], [200, 430], [300, 400]]})
+    writer = PdfWriter(clone_from=str(src))
+    for annot, words in zip(writer.pages[0]["/Annots"], ["Doors (2 of 3)", "30°"]):
+        annot = annot.get_object()
+        del annot["/ZPDFKind"]
+        annot[NameObject("/Contents")] = TextStringObject(words)
+    old = tmp_path / "old.pdf"
+    writer.write(str(old))
+    assert markup.describe_all(old) == {}
