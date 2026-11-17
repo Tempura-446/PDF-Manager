@@ -4,6 +4,13 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.50.0
+
+- **Fixed: choosing Highlight, Text or Draw marked the file as changed.**
+  On a document that already has a text box (a callout, typed text),
+  turning on one of these tools made Save turn red although nothing was
+  changed. It no longer does; a real change is still noticed.
+
 ## 0.49.0
 
 Nudging a markup is quicker and tidier.

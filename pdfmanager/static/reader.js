@@ -1214,7 +1214,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
       clearTimeout(timer);
       this.doc = doc;
       this.activeTab = tab;
-      doc.annotationStorage.onSetModified = () => tab.annotationChanged();
+      doc.annotationStorage.onSetModified = () => this.#storageChanged(tab, doc);
       // (Undo can bring it back to how it was opened or saved: see #compareAnnotations.)
       doc.annotationStorage.onResetModified = () => this.#compareAnnotations(tab);
       tab.loaded(doc);
@@ -2568,7 +2568,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
 
   // ---- saving, printing, editing ------------------------------------------------
   /** Filled-in form fields or annotations that aren't in the file yet. */
-  _changed() { return !!(this.doc && this.doc.annotationStorage.size > 0); }
+  _changed() { return !!(this.doc && this.doc.annotationStorage.size > 0 && this.#annotPrint()); }
   #edited() { return this._changed() || !!this.activeTab?.edited; }
 
   async _currentBytes() {
@@ -2948,6 +2948,20 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
       if (said) parts.push(key + ":" + JSON.stringify(said));
     }
     return parts.join("\n");
+  }
+
+  /** pdf.js's storage says it was changed. Turning on one of pdf.js's tools
+   *  makes it take the page's own text boxes, drawings and highlights into
+   *  its storage, as they are, to be able to edit them: that alone is not a
+   *  change (nothing of it would be saved), so the document stays as opened
+   *  or saved, and the next real change is still noticed. */
+  #storageChanged(tab, doc) {
+    const clean = tab.clean;
+    if (clean && clean.doc === doc && this.#annotPrint(doc) === clean.print) {
+      try { doc.annotationStorage.resetModified(); } catch (e) { /* (so the next change is noticed) */ }
+      return;
+    }
+    tab.annotationChanged();
   }
 
   /** pdf.js's Undo and Redo don't say when the document is back as it was
