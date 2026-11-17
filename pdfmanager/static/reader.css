@@ -642,8 +642,8 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
 .rd-mval em { display: block; font-style: normal; font-weight: 600; font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* "Your stamps": one row a stamp (its words, its colour, name and date, remove). */
 .rd-ownstamps { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 8px; max-height: 50vh; overflow: auto; }
-.rd-ownstamps li { display: flex; align-items: center; gap: 8px; }
-.rd-ownstamps input[type=text] { flex: 1; min-width: 0; margin: 0; text-transform: uppercase; }
+.rd-ownstamps li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }  /* (narrow: the rest goes under the words) */
+.rd-ownstamps input[type=text] { flex: 1 1 170px; min-width: 0; margin: 0; text-transform: uppercase; }
 .rd-ownstamps input[type=color] { width: 36px; height: 32px; padding: 2px; border: 1px solid var(--input-border); border-radius: var(--radius-xs); background: var(--surface); }
 .rd-ownstamps .rd-check { white-space: nowrap; }
 .rd-ownstamp-add { margin: 0 0 14px; height: 32px; padding: 0 12px; border: 1px solid var(--input-border); border-radius: var(--radius-xs); }

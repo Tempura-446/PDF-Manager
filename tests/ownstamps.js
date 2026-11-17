@@ -61,12 +61,23 @@ const { chromium } = require("playwright");
     await open();
     out.afterReload = { yours: await yours(), chosen: await page.evaluate(() => reader.stampSelect.value) };
 
-    // Removed in the box: gone from the list.
+    // "Your own words…" chosen, the box opened and cancelled: still "Your own words…".
+    await page.selectOption('select[aria-label="Stamp"]', "");
+    await manage();
+    await page.click("dialog[open] button:has-text('Cancel')");
+    await page.waitForFunction(() => !document.querySelector("dialog[open]"));
+    out.ownWordsKept = await page.evaluate(() => reader.stampSelect.value === "");
+    await page.selectOption('select[aria-label="Stamp"]', "own:CHECKED");
+
+    // Removed in the box: gone from the list. The focus goes on to what's next
+    // (here Add a stamp), and Name and date is back at its own choice.
     await manage();
     await page.click('dialog[open] .rd-ownstamps li button[aria-label="Remove this stamp"]');
+    out.focusAfterBin = await page.evaluate(() => document.activeElement?.classList.contains("rd-ownstamp-add"));
     await page.click("dialog[open] button:has-text('Save')");
     await page.waitForFunction(() => reader.ownStamps.length === 0 && !document.querySelector("dialog[open]"), null, { timeout: 10000 });
     out.afterRemove = await yours();
+    out.afterRemoveChoice = await page.evaluate(() => [reader.stampSelect.value, reader.stampDated.checked]);
   } catch (e) {
     out.errors.push(String(e.stack || e));
   } finally {

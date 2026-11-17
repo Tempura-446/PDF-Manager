@@ -547,10 +547,7 @@ export const Annotating = (Base) => class extends Base {
       draft.remove();
       const dated = this.stampDated.checked, s = view.viewport.scale;
       let a = [at.x, at.y], b = end;
-      if (Math.abs(end[0] - at.x) < 12 || Math.abs(end[1] - at.y) < 8) {  // a click: the usual size, centred there
-        const w = 160 * s, h = (dated ? 50 : 42) * s;
-        a = [at.x - w / 2, at.y - h / 2]; b = [at.x + w / 2, at.y + h / 2];
-      }
+      const clicked = Math.abs(end[0] - at.x) < 12 || Math.abs(end[1] - at.y) < 8;
       let label = this.stampSelect.value, color;
       const own = this._ownStamp(label);
       if (own) ({ label, color } = own);     // one of your own: its words and its colour
@@ -562,8 +559,12 @@ export const Annotating = (Base) => class extends Base {
         label = words.value.trim();
         store.set("pdfm-stamp-own", label);
       }
+      if (clicked) {  // a click: the usual size, centred there; wider for many words, so they can be read
+        const w = Math.max(160, Math.min(440, label.length * 11 + 40)) * s, h = (dated ? 50 : 42) * s;
+        a = [at.x - w / 2, at.y - h / 2]; b = [at.x + w / 2, at.y + h / 2];
+      }
       store.set("pdfm-stamp", this.stampSelect.value);
-      store.set("pdfm-stamp-dated", dated);
+      if (!own) store.set("pdfm-stamp-dated", dated);   // (one of your own has its own; the box's own choice is for the others)
       const p = view.viewport.convertToPdfPoint(...a), q = view.viewport.convertToPdfPoint(...b);
       const rect = [Math.min(p[0], q[0]), Math.min(p[1], q[1]), Math.max(p[0], q[0]), Math.max(p[1], q[1])];
       this._applyMarkup([{ op: "add", page: at.n, kind: "stamp", rect, label, dated, color }], "Could not stamp the page: ");
@@ -606,7 +607,7 @@ export const Annotating = (Base) => class extends Base {
   /** A stamp was chosen in the list. */
   _stampChosen() {
     if (this.stampSelect.value === MANAGE) {
-      this.stampSelect.value = this.stampChoice || "APPROVED";   // (the list shows what's chosen, not the way to the box)
+      this.stampSelect.value = this.stampChoice ?? "APPROVED";   // (the list shows what's chosen, not the way to the box)
       this.#manageStamps();
       return;
     }
@@ -624,7 +625,13 @@ export const Annotating = (Base) => class extends Base {
       const color = el("input", { type: "color", value: stamp.color, "aria-label": "Colour" });
       const dated = el("input", { type: "checkbox", checked: stamp.dated });
       const li = el("li", {}, words, color, el("label", { class: "rd-check" }, dated, "Name and date"),
-        el("button", { type: "button", class: "rd-btn", "aria-label": "Remove this stamp", title: "Remove this stamp", html: svg("trash"), onclick: () => li.remove() }));
+        el("button", { type: "button", class: "rd-btn", "aria-label": "Remove this stamp", title: "Remove this stamp", html: svg("trash"),
+          onclick: () => {
+            // The focus goes to the row that takes its place (or the one before, or Add a stamp), not nowhere.
+            const next = li.nextElementSibling || li.previousElementSibling;
+            li.remove();
+            (next?.querySelector("input") || add).focus();
+          } }));
       li.read = () => ({ label: words.value.trim(), color: color.value, dated: dated.checked });
       return li;
     };
@@ -645,8 +652,11 @@ export const Annotating = (Base) => class extends Base {
       const first = stamps.find((s) => !(this.ownStamps || []).some((o) => o.label === s.label.toUpperCase()));
       this.ownStamps = data.stamps || [];
       // A stamp just added is the one chosen: it was made to be used.
-      this._fillStamps(first && this.ownStamps.some((s) => s.label === first.label.toUpperCase()) ? OWN + first.label.toUpperCase() : this.stampChoice);
+      const was = this.stampChoice;
+      this._fillStamps(first && this.ownStamps.some((s) => s.label === first.label.toUpperCase()) ? OWN + first.label.toUpperCase() : was);
       this._stampChosen();
+      // The chosen one was removed: the list is back at a built-in stamp, and Name and date at its own choice.
+      if (String(was).startsWith(OWN) && !this._ownStamp(this.stampSelect.value)) this.stampDated.checked = store.get("pdfm-stamp-dated", true);
     } catch (e) {
       this.toast("Your stamps couldn't be saved: " + (e.message || e));
     }

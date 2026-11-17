@@ -18,6 +18,8 @@ Stamps of your own.
   chosen.
 - "Your own words…" is still there for words you need once.
 - ZPDF keeps up to 30 stamps of your own, in its settings on this PC.
+- A stamp with many words is placed wider with a click, so the words can
+  be read.
 
 ## 0.47.0
 

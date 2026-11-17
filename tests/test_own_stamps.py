@@ -100,3 +100,6 @@ def test_your_stamps_in_a_browser(app, tmp_path):
     assert out["placed"] == {"subtype": "Stamp", "color": [31, 138, 59]}
     assert out["afterReload"] == {"yours": ["Checked"], "chosen": "own:CHECKED"}    # there again when ZPDF starts again
     assert out["afterRemove"] == [] and stamps.saved() == []
+    # From the check on Windows.
+    assert out["ownWordsKept"] and out["focusAfterBin"]
+    assert out["afterRemoveChoice"] == ["APPROVED", True]          # back at a built-in stamp, dated as those are
