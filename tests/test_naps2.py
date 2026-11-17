@@ -81,6 +81,7 @@ def test_a_scan_asks_naps2_and_gives_the_pages(program, mode, source, duplex, as
     ("empty", "feeder", "empty", "feeder is empty"),
     ("empty", "flatbed", "empty", "sent no page"),
     ("gone", "flatbed", "gone", "couldn't find that scanner"),
+    ("offline", "flatbed", "offline", "scanner is offline"),
 ])
 def test_what_went_wrong_is_said_in_words(program, monkeypatch, how, source, code, words):
     monkeypatch.setenv("FAKE_NAPS2", how)

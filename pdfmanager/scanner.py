@@ -216,6 +216,8 @@ def use(com):
     """Use ``com`` as the COM layer (None: the real one again). For tests."""
     global _com, _com_error
     _com, _com_error = com, None
+    with _caps_lock:   # (what the scanners of the layer before said doesn't hold for this one's)
+        _caps.clear()
 
 
 def _layer():
@@ -371,29 +373,63 @@ def _devices(com):
     return found
 
 
+_caps = {}                    # scanner id -> (has a feeder, has a glass), as the scanner itself said
+_asking = set()               # ids being asked right now
+_caps_lock = threading.Lock()
+LEARN_WAIT = 2.0              # seconds a list of scanners waits for them to say what they have
+
+
 def list_scanners():
     """The scanners Windows knows: [{"id", "name", "feeder", "flatbed"}].
-    Whether one has a feeder is read from the device when it can be
-    connected to; a busy or offline scanner is still listed."""
+    Windows names them at once; whether one has a feeder it has to be asked
+    itself, and a scanner that is off or asleep takes Windows most of a
+    minute to give up on. So the asking is done beside the list: what a
+    scanner has said before is used, one that answers within a moment is
+    waited for, and until one has answered both the glass and the feeder
+    are offered (scanning says so if it has no feeder)."""
     com = _layer()
-    out = []
     with com.apartment():
         try:
-            found = _devices(com)
+            found = [(device_id, name) for device_id, name, _ in _devices(com)]
         except Exception as exc:
             raise _failure(com, exc, " to list scanners") from None
-        for device_id, name, info in found:
-            feeder, flatbed = False, True
-            try:
-                device = com.call(info, "Connect")
-                handling = _read(com, device, DOCUMENT_HANDLING_CAPABILITIES)
-                if handling is not None:
-                    feeder = bool(_int(handling) & FEEDER)
-                    flatbed = bool(_int(handling) & FLATBED)
-            except Exception:
-                pass  # listed anyway; scanning says what's wrong
-            out.append({"id": device_id, "name": name, "feeder": feeder, "flatbed": flatbed or not feeder})
+    with _caps_lock:
+        unknown = [device_id for device_id, _ in found if device_id not in _caps and device_id not in _asking]
+        _asking.update(unknown)
+    if unknown:
+        asker = threading.Thread(target=_learn, args=(com, unknown), daemon=True)
+        asker.start()
+        asker.join(LEARN_WAIT)
+    out = []
+    for device_id, name in found:
+        feeder, flatbed = _caps.get(device_id, (True, True))
+        out.append({"id": device_id, "name": name, "feeder": feeder, "flatbed": flatbed or not feeder})
     return out
+
+
+def _learn(com, ids):
+    """Ask the scanners ``ids`` what they have (a feeder, a glass), for the
+    next list. One that can't be reached now is asked again next time."""
+    try:
+        with com.apartment():
+            for device_id, _, info in _devices(com):
+                if device_id not in ids:
+                    continue
+                try:
+                    device = com.call(info, "Connect")
+                    handling = _read(com, device, DOCUMENT_HANDLING_CAPABILITIES)
+                except Exception:
+                    continue
+                feeder, flatbed = False, True
+                if handling is not None:
+                    feeder, flatbed = bool(_int(handling) & FEEDER), bool(_int(handling) & FLATBED)
+                with _caps_lock:
+                    _caps[device_id] = (feeder, flatbed)
+    except Exception:  # noqa: BLE001 - the list does without
+        pass
+    finally:
+        with _caps_lock:
+            _asking.difference_update(ids)
 
 
 def _configure(com, device, item, mode, dpi, source, before=None):

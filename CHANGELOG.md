@@ -19,8 +19,14 @@ Scanners that only have a TWAIN driver, through NAPS2.
   changes. "My scanner isn't listed…" on the Scan page says how to get it.
 - Pages scanned this way come in together when NAPS2 has finished, not one
   by one.
-- **Not tried on a real TWAIN scanner yet:** it is built from NAPS2's own
-  description of its command line and tested with a stand-in.
+- **Not tried on a real TWAIN scanner yet.** It was checked on a PC with
+  NAPS2 8.6.0 installed (found where its installer puts it; its words for
+  a scanner that's missing or offline are understood), but that PC has no
+  TWAIN scanner.
+- **The list of scanners no longer waits most of a minute** when a scanner
+  Windows knows is switched off or asleep. Windows names its scanners at
+  once; asking each whether it has a feeder is now done beside the list.
+  Until a scanner has answered, both the glass and the feeder are offered.
 
 ## 0.52.0
 

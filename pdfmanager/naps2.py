@@ -158,7 +158,11 @@ def devices(fresh=False):
 def _why(printed, source):
     """What NAPS2 printed when no pages came, as a reason and words for the user."""
     low = printed.lower()
-    if "not found" in low or "no device" in low or "offline" in low:
+    # (NAPS2 8.6.0's own words, seen on a PC: "The selected scanner could not be found.",
+    # "The selected scanner is offline.", "No scanned pages to export.")
+    if "offline" in low:
+        return "offline", "The scanner is offline. Check that it is switched on and connected, then try again."
+    if "not found" in low or "not be found" in low or "no device" in low:
         return "gone", "NAPS2 couldn't find that scanner. Check that it is switched on and connected, then try again."
     if "feeder" in low and ("empty" in low or "no paper" in low or "no documents" in low):
         return "empty", "The document feeder is empty. Put the pages in and scan again."

@@ -126,6 +126,8 @@ class _Info:
         self.Properties = Props({"Name": scanner.name})
 
     def Connect(self):
+        if getattr(self.s, "connect_delay", 0):   # (a scanner that is off: Windows takes long to give up on it)
+            time.sleep(self.s.connect_delay)
         if self.s.connect_error:
             raise FakeComError(self.s.connect_error)
         return _Device(self.s)

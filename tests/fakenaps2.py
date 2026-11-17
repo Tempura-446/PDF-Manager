@@ -1,11 +1,13 @@
 # Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """A stand-in for NAPS2.Console.exe, for test_naps2.py: it takes the options
-naps2.py gives it and answers the way NAPS2's source says it does.
+naps2.py gives it and answers the way NAPS2 8.6.0 does (its words for a missing and an offline
+scanner are the ones seen on a PC).
 ``FAKE_NAPS2`` says what kind of scanner is behind it:
 
     ok (default)   three pages in the feeder, one on the glass
     empty          the feeder is empty: no file is written
     gone           the device isn't found
+    offline        the device doesn't answer
     slow           takes ten seconds (to be cancelled)
 
 What it was asked is written to the file named by ``FAKE_NAPS2_LOG``."""
@@ -35,14 +37,23 @@ def main(argv):
         print("No device specified.")
         return 0
     if how == "gone":
-        print("Device not found.")
-        return 0
+        print("The selected scanner could not be found.")
+        return 1
+    if how == "offline":
+        print("Beginning scan...")
+        print("Starting scan 1 of 1...")
+        print("The selected scanner is offline.")
+        print("0 page(s) scanned.")
+        print("No scanned pages to export.")
+        return 1
     if how == "slow":
         time.sleep(10)
     if how == "empty":
+        print("Beginning scan...")
         print("Starting scan 1 of 1...")
+        print("0 page(s) scanned.")
         print("No scanned pages to export.")
-        return 0
+        return 1
     count = {"glass": 1, "feeder": 3, "duplex": 6}[get("--source")]
     mode = {"color": "RGB", "gray": "L", "bw": "L"}[get("--bitdepth")]
     dpi = int(get("--dpi"))
