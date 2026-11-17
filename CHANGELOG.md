@@ -23,6 +23,10 @@ Turn a form's text box into a dropdown, and back.
   list that stays open on the page).
 - Tick boxes, radio buttons, buttons and signature fields still can't
   become another type.
+- Fixed: **Sign** used just after a file opened sometimes placed nothing
+  and said "The signature couldn't be placed": turning the picture tool on
+  could redraw the page, and the signature was aimed at the page as it was
+  before.
 
 ## 0.54.0
 
