@@ -401,3 +401,28 @@ def test_making_a_signed_file_safe_says_what_happens_to_the_signature(tmp_path):
     plain_risky.write(str(tmp_path / "risky.pdf"))
     gui._run_file_op("makesafe", tmp_path / "risky.pdf", out_dir, {}, None, [], notes)
     assert risks.SIGNED_NOTE not in notes
+
+
+def test_reading_a_links_words_holds_the_pdfium_lock(tmp_path, monkeypatch):
+    """pdfium is not thread-safe. Looking at a link's words without the lock,
+    while the server did something else with pdfium, ended the whole app
+    (seen as an abort in a browser test of 0.52.0)."""
+    import pypdfium2 as pdfium
+
+    src = tmp_path / "link.pdf"
+    c = canvas.Canvas(str(src), pagesize=A4)
+    c.drawString(100, 700, "www.example.com")
+    c.save()
+    writer = PdfWriter(clone_from=str(src))
+    link(writer, [95, 690, 260, 715], DictionaryObject({NameObject("/S"): NameObject("/URI"),
+                                                         NameObject("/URI"): TextStringObject("https://other.example.org/")}))
+    writer.write(str(src))
+    held, real = [], pdfium.PdfDocument
+
+    def opened(*args, **kwargs):
+        held.append(core.PDFIUM_LOCK.locked())
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pdfium, "PdfDocument", opened)
+    assert risks.check(src)["risks"]
+    assert held == [True] and not core.PDFIUM_LOCK.locked()

@@ -324,32 +324,34 @@ def _misleading(path, password, reader):
         return []
     import pypdfium2 as pdfium
 
-    found = []
-    try:
-        pdf = pdfium.PdfDocument(str(path), password=password or None)
-    except Exception:
-        return []
-    try:
-        pages = {}
-        for number, (x0, y0, x1, y1), target in wanted[:LINKS]:
-            if number not in pages:
-                pages[number] = pdf[number].get_textpage()
-            try:
-                shown = pages[number].get_text_bounded(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
-            except Exception:
-                continue
-            goes = _host(target)
-            for match in ADDRESS.finditer(shown or ""):
-                says = _host(match.group(1))
-                if says.rsplit(".", 1)[-1] in NOT_SITES or "." not in says:
+    # (pdfium isn't thread-safe: the server looks at several files at once, and draws pages meanwhile.)
+    with core.PDFIUM_LOCK:
+        found = []
+        try:
+            pdf = pdfium.PdfDocument(str(path), password=password or None)
+        except Exception:
+            return []
+        try:
+            pages = {}
+            for number, (x0, y0, x1, y1), target in wanted[:LINKS]:
+                if number not in pages:
+                    pages[number] = pdf[number].get_textpage()
+                try:
+                    shown = pages[number].get_text_bounded(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+                except Exception:
                     continue
-                if says == goes or goes.endswith("." + says) or says.endswith("." + goes):
-                    continue
-                found.append(f"shows {match.group(0)}, goes to {goes}")
-                break
-    finally:
-        pdf.close()
-    return found
+                goes = _host(target)
+                for match in ADDRESS.finditer(shown or ""):
+                    says = _host(match.group(1))
+                    if says.rsplit(".", 1)[-1] in NOT_SITES or "." not in says:
+                        continue
+                    if says == goes or goes.endswith("." + says) or says.endswith("." + goes):
+                        continue
+                    found.append(f"shows {match.group(0)}, goes to {goes}")
+                    break
+        finally:
+            pdf.close()
+        return found
 
 
 def check(path, password=None):

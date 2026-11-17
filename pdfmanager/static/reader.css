@@ -706,6 +706,10 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
 /* Pictures and Links modes: outlines over the page's pictures and links */
 .rd-markup[data-markup="images"] .annotationLayer, .rd-markup[data-markup="links"] .annotationLayer,
 .rd-markup[data-markup="images"] .textLayer, .rd-markup[data-markup="links"] .textLayer { pointer-events: none; }
+/* ...and what is in the annotation layer too: pdf.js gives each annotation its own pointer
+   events and a z-index that grows down the page, so on a page with many of them a link's own
+   <a> lay above the box for editing it and took the click ("Open this link?"). */
+.rd-markup[data-markup="images"] .annotationLayer :is(section, a), .rd-markup[data-markup="links"] .annotationLayer :is(section, a) { pointer-events: none; }
 .rd-markup[data-markup="links"] .page { cursor: crosshair; }
 .rd-objbox {
   position: absolute; z-index: 24; box-sizing: border-box; cursor: move; touch-action: none;
