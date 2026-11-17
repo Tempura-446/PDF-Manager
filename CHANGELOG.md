@@ -42,8 +42,8 @@ Change a markup after you've placed it.
   drawn with when an end is dragged; comments brought in from a file
   aren't offered for redrawing as ZPDF's own; keys pressed in the page
   list are no longer also the selected markup's; a markup stays selected
-  through Undo and Redo; its keys work straight away when a button of the
-  bar still had the focus.
+  through Undo and Redo; its keys work straight away wherever the focus
+  was before it was pressed (a button of the bar, the page list).
 - **Web page to PDF:** when the browser stalls and the page is tried
   again, the second try uses another installed browser (Chrome after Edge,
   say) when there is one.

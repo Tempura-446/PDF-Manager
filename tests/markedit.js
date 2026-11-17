@@ -187,8 +187,10 @@ const { chromium } = require("playwright");
     // A key pressed in the page list (the left sidebar) isn't the markup's.
     {
       const first = (await annots())[0].rect;
+      await page.evaluate(() => reader.moreToolsBtn.focus());      // the focus somewhere else than the page
       await click(first[0] + 1, (first[1] + first[3]) / 2);
       out.pickedForKeys = (await selected())?.kind;
+      out.focusOnPage = await page.evaluate(() => document.activeElement === reader.container);
       v = await version();
       await page.evaluate(() => reader.thumbsList.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })));
       await page.waitForTimeout(500);

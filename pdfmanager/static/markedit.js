@@ -199,7 +199,7 @@ export const MarkupEditing = (Base) => class extends Base {
     }
     if (sel && sel.page === at.n) {
       const grip = handlesOf(sel.shape).find((h) => dist(h.pt, at.pt) * scale <= GRIP);
-      if (grip) { this.#beginDrag(e, at, grip.key); return true; }
+      if (grip) { this.#focusPage(); this.#beginDrag(e, at, grip.key); return true; }
     }
     const hit = this.#markAt(at.n, at.pt, scale);
     this.markClick = null;
@@ -214,6 +214,7 @@ export const MarkupEditing = (Base) => class extends Base {
       return false;
     }
     if (!selected) this.#select(at.n, hit.index);
+    this.#focusPage();
     this.#beginDrag(e, at, null);
     return true;
   }
@@ -223,14 +224,18 @@ export const MarkupEditing = (Base) => class extends Base {
     if (!shape) { this._markLetGo(); return; }
     this.markSel = { page, index, shape, tab: this.activeTab, version: this.activeTab?.version || 0 };
     if (this.deleteBtn) this.deleteBtn.disabled = false;   // the bar's bin removes it too
-    // Its keys go to the page, not to a button of the bar that still has the focus
-    // (where Up and Down would walk the bar's buttons).
-    if (document.activeElement?.closest?.(".rd-annotbar, .rd-toolbar, .rd-bar") && !document.querySelector("dialog[open]")) {
-      this.container?.focus?.({ preventScroll: true });
-    }
+
     this._markDraw(page);
     this._hint?.(shape.kind === "note" ? "Drag the note to move it. Delete removes it; Esc lets go."
       : "Drag a handle to reshape it, or the markup to move it. Delete removes it; Esc lets go.", 5000);
+  }
+
+  /** A press on the page took a markup: its keys go to the page from then on, not to
+   *  whatever had the focus (a button of the bar, where Up and Down walk the buttons; a
+   *  page in the list, where the arrows turn pages). */
+  #focusPage() {
+    if (document.activeElement === this.container || document.querySelector("dialog[open]")) return;
+    this.container?.focus?.({ preventScroll: true });
   }
 
   _markLetGo() {
@@ -280,7 +285,10 @@ export const MarkupEditing = (Base) => class extends Base {
     if (!d && c && e.pointerId === c.pointer) {
       // The press on a markup ended where it began: it's selected (the shape begun there is too small to keep).
       this.markClick = null;
-      if (Math.hypot(e.clientX - c.x, e.clientY - c.y) < 4 && EDIT_MODES.has(this.markupMode)) this.#select(c.page, c.index);
+      if (Math.hypot(e.clientX - c.x, e.clientY - c.y) < 4 && EDIT_MODES.has(this.markupMode)) {
+        this.#select(c.page, c.index);
+        if (this.markSel) this.#focusPage();
+      }
       return false;
     }
     if (!d || e.pointerId !== d.pointer) return false;
