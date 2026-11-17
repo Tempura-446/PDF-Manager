@@ -552,6 +552,13 @@ def all_scanners(network=True, look=True):
     if network:
         out += [{k: d[k] for k in ("id", "name", "feeder", "flatbed", "duplex", "network", "found")}
                 for d in escl.devices(look=look)]
+    # Scanners that only have a TWAIN driver, when NAPS2 is installed to drive them (naps2.py).
+    from pdfmanager import naps2
+
+    try:
+        out += naps2.devices()
+    except Exception:  # noqa: BLE001 - the others are listed all the same
+        pass
     return out
 
 
@@ -560,6 +567,17 @@ def scan_any(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", du
     ``duplex``: both sides, from a network scanner's feeder that can."""
     from pdfmanager import escl
 
+    from pdfmanager import naps2
+
+    if str(device_id).startswith(naps2.PREFIX):
+        if not _scan_lock.acquire(blocking=False):
+            raise ScannerError("A scan is already running. Wait for it to finish.", "busy")
+        try:
+            return naps2.scan(device_id, mode=mode, dpi=dpi, source=source, duplex=duplex, on_page=on_page)
+        except naps2.Naps2Error as exc:
+            raise ScannerError(str(exc), exc.code) from None
+        finally:
+            _scan_lock.release()
     if not str(device_id).startswith("escl:"):
         return scan(device_id, mode=mode, dpi=dpi, source=source, on_page=on_page)
     if mode not in MODES:

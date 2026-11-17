@@ -3078,7 +3078,9 @@ function buildScan() {
         "For a scanner that saves a file per page: the files of one stack, arriving within a few seconds of each other, make one PDF.")),
       el("div", { class: "scan-row" }, el("button", { type: "button", class: "btn secondary", id: "scan-folder-add", onclick: () => scanFolderAdd() }, "Watch this folder"),
         el("button", { type: "button", class: "link-btn", onclick: () => { scanFolderGuide(false); $("settings-btn").click(); } }, "All watch folders…")),
-      el("p", { class: "hint", id: "scan-folder-said", "aria-live": "polite" })),
+      el("p", { class: "hint", id: "scan-folder-said", "aria-live": "polite" }),
+      // The second way, for a scanner that only has a TWAIN driver: NAPS2 drives it, ZPDF asks NAPS2.
+      el("p", { class: "hint", id: "scan-naps2-hint" })),
     scanSeg("mode", "Colour", [["grey", "Greyscale"], ["colour", "Colour"], ["bw", "Black and white"]], prefs.mode),
     el("div", { class: "scan-field field" }, el("label", { for: "scan-dpi" }, "Resolution"),
       el("select", { id: "scan-dpi" }, ...[["150", "150 dpi: quick, smaller"], ["200", "200 dpi"], ["300", "300 dpi: best for documents"]]
@@ -3211,6 +3213,9 @@ async function scanFolderGuide(show = $("scan-folder-guide").hidden) {
     if ($("scan-folder-guide").hidden || $("scan-host").hidden) { clearInterval(scanFolderTimer); return; }
     try { scanFolderShow(await jsonApi("/api/watch")); } catch (e) { /* next time */ }
   }, 4000);
+  $("scan-naps2-hint").textContent = scanState.status?.naps2
+    ? "NAPS2 is installed: scanners that only have a TWAIN driver are in the list above, marked “through NAPS2”."
+    : "Or scan from ZPDF itself: install NAPS2 (free, naps2.com), and scanners that only have a TWAIN driver show in the list above the next time you open this page.";
   $("scan-folder-browse").hidden = !(isDesktop() && window.pywebview.api.pick_folder);
   $("scan-folder").focus();
   try { scanFolderShow(await jsonApi("/api/watch")); } catch (e) { /* the list is a nicety */ }

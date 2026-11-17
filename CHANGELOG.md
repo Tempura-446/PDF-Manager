@@ -4,6 +4,24 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.53.0
+
+Scanners that only have a TWAIN driver, through NAPS2.
+
+- **If NAPS2 is installed, ZPDF scans with it.** NAPS2 (free, naps2.com)
+  drives scanners that only come with a TWAIN driver, older 32-bit ones
+  too. With it on the PC, those scanners show in the Scan page's list
+  marked "through NAPS2", and Scan takes their pages: the glass, the
+  feeder, both sides, colour, grey or black and white, at the resolution
+  you choose. The pages then go through ZPDF's own clean-up and OCR like
+  any other scan. Cancel stops NAPS2.
+- ZPDF doesn't contain NAPS2 and installs nothing: without it, nothing
+  changes. "My scanner isn't listed…" on the Scan page says how to get it.
+- Pages scanned this way come in together when NAPS2 has finished, not one
+  by one.
+- **Not tried on a real TWAIN scanner yet:** it is built from NAPS2's own
+  description of its command line and tested with a stand-in.
+
 ## 0.52.0
 
 - **Fixed: ZPDF could close by itself when a PDF with web links was
