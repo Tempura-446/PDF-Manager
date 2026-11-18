@@ -648,3 +648,44 @@ def test_add_list_and_button_fields(tmp_path):
     assert int(btn_w["/Ff"]) & forms.PUSHBUTTON
 
 
+def test_field_properties_roundtrip(tmp_path):
+    src = blank(tmp_path / "blank.pdf")
+    added = tmp_path / "added.pdf"
+    forms.add_fields(src, added, [
+        {"page": 1, "rect": [72, 700, 220, 722], "type": "text", "name": "Code"},
+        {"page": 1, "rect": [72, 660, 220, 682], "type": "dropdown", "name": "Country", "options": ["France", "Spain"]},
+        {"page": 1, "rect": [72, 620, 90, 638], "type": "checkbox", "name": "Agree"},
+        {"page": 1, "rect": [72, 580, 90, 598], "type": "radio", "name": "Size", "value": "Small"},
+        {"page": 1, "rect": [110, 580, 128, 598], "type": "radio", "name": "Size", "value": "Large"},
+    ])
+    out = tmp_path / "edited.pdf"
+    forms.edit_fields(added, out, [
+        {"page": 1, "index": 0, "visibility": "noprint", "font": "Times", "font_size": 14,
+         "text_color": "#112233", "fill_color": "#eef2ff", "border_color": "#334455",
+         "border_width": 2, "align": "center", "default_value": "AB12", "max_length": 6,
+         "comb": True, "pattern": "[A-Z]{2}\\d{2,4}"},
+        {"page": 1, "index": 1, "choices": [{"label": "United Kingdom", "value": "UK"},
+         {"label": "France", "value": "FR"}], "default_choice": "FR", "allow_custom": True},
+        {"page": 1, "index": 2, "tick_style": "cross", "export_value": "Accepted", "default_checked": True},
+        {"page": 1, "index": 4, "group": "Tier", "tick_style": "square", "default_checked": True},
+    ])
+    details = forms.field_details(out)[1]
+    code = details[0]
+    assert code["visibility"] == "noprint"
+    assert code["font"] == "Times" and code["font_size"] == 14
+    assert code["text_color"] == "#112233" and code["fill_color"] == "#eef2ff"
+    assert code["border_color"] == "#334455" and code["border_width"] == 2
+    assert code["align"] == "center" and code["default_value"] == "AB12"
+    assert code["max_length"] == 6 and code["comb"] is True
+    assert code["pattern"] == "[A-Z]{2}\\d{2,4}"
+
+    country = details[1]
+    assert country["choices"] == [{"label": "United Kingdom", "value": "UK"}, {"label": "France", "value": "FR"}]
+    assert country["default_choice"] == "FR" and country["allow_custom"] is True
+
+    agree = details[2]
+    assert agree["tick_style"] == "cross" and agree["export_value"] == "Accepted" and agree["default_checked"] is True
+
+    tier = details[4]
+    assert tier["name"] == "Tier" and tier["group"] == "Tier"
+    assert tier["tick_style"] == "square" and tier["default_checked"] is True

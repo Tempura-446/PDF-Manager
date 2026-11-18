@@ -25,6 +25,18 @@ Draw, move, resize and arrange form fields directly on the page in the reader.
 - **List boxes and push buttons.** Form creation now also supports open
   **List** boxes and **Button** fields in both the reader and the Python/CLI
   engine.
+- **Field properties panel.** Selecting one or more fields in **Prepare
+  form** opens their properties in the right-hand panel: **General** (name,
+  tooltip, required, read-only, visibility), **Look** (font, size or auto,
+  text, fill and border colours, border width, alignment), **Text field**
+  (default value, max length, comb boxes, multi-line, password, scroll),
+  **Choices** (shown and export values, drag to reorder, default choice,
+  allow typing or selecting several), **Checkbox / Radio** (tick style,
+  export value, checked by default, radio group), **Format** (numbers,
+  currency, percentages, dates, times, phone, ZIP/postcode, custom masks),
+  **Validation** (number range or regex pattern), and **Calculation** (sum,
+  product, average, min, max with **Pick fields on page**, or a formula).
+  Selecting several fields edits what they share.
 
 ## 0.56.0
 

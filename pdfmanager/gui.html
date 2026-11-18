@@ -953,6 +953,24 @@ body.form-folded #options-card { display: none; }
 .fp-save { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .fp-save .btn { height: 34px; padding: 0 14px; }
 .fp-save { align-items: center; }
+.fp-formprops { display: flex; flex-direction: column; gap: 10px; }
+.fp-prop-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fp-prop-sec { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.fp-prop-head { padding: 8px 12px; font-weight: 600; font-size: var(--fs-sm); cursor: pointer; user-select: none; background: color-mix(in srgb, var(--bg) 35%, var(--surface)); }
+.fp-prop-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); }
+.fp-prop-row { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: center; gap: 8px; font-size: var(--fs-sm); }
+.fp-prop-lbl { color: var(--muted); }
+.fp-prop-in { width: 100%; min-width: 0; height: 28px; padding: 2px 8px; border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--bg); color: var(--text); font: inherit; font-size: var(--fs-sm); }
+.fp-prop-checks { display: flex; flex-direction: column; gap: 6px; }
+.fp-prop-check { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); cursor: pointer; }
+.fp-prop-inline { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.fp-prop-color { width: 32px; height: 26px; padding: 1px; border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--bg); cursor: pointer; }
+.fp-prop-choicehdr { display: grid; grid-template-columns: 14px minmax(0, 1fr) minmax(0, 1fr) 24px; gap: 4px; font-size: var(--fs-xs); color: var(--muted); }
+.fp-prop-choices { display: flex; flex-direction: column; gap: 4px; }
+.fp-prop-choicerow { display: grid; grid-template-columns: 14px minmax(0, 1fr) minmax(0, 1fr) 24px; gap: 4px; align-items: center; }
+.fp-prop-choicerow.dragging { opacity: 0.45; }
+.fp-prop-drag { cursor: grab; color: var(--muted); user-select: none; text-align: center; }
+.fp-prop-calcfields { display: flex; flex-direction: column; gap: 4px; max-height: 150px; overflow: auto; padding: 4px 0; }
 .fp-unsaved { font-size: var(--fs-sm); color: var(--muted); }
 .fp-saved { color: var(--muted); overflow-wrap: anywhere; flex-basis: 100%; outline: none; }
 .fp-more { display: grid; grid-template-columns: 1fr 1fr; grid-auto-flow: row dense; gap: 6px; }
@@ -1697,7 +1715,7 @@ async function ensureReader() {
   if (reader) return reader;
   const host = $("reader-host");
   host.replaceChildren(el("div", { class: "reader-loading" }, "Loading the reader…"));
-  const { Reader } = await import("/static/reader.js");
+  const [{ Reader }, { renderFormProps }] = await Promise.all([import("/static/reader.js"), import("/static/formprops.js")]);
   host.replaceChildren();
   reader = new Reader(host, {
     token, isDesktop, api: () => (window.pywebview ? window.pywebview.api : null),
@@ -1717,6 +1735,7 @@ async function ensureReader() {
     onUnsaved: (names) => jsonApi("/api/unsaved", { page: pageId, names }).catch(() => {}),
     recent: (host) => fillRecent(host, { onEmpty: () => { const box = host.closest(".rd-recent"); if (box) box.hidden = true; } }),
     onFormHint: (tab) => { if (fp.tab === tab) fpSuggest(); },
+    onFormSelect: (selected, pages, tab) => fpFormSelect(selected, pages, tab, renderFormProps),
     onRepair: (tab) => repairInReader(tab),
     onBrokenWhy: (tab) => brokenFacts(tab),
     onOpenWithId: (tab, id, password) => openWithIdInReader(tab, id, password),
@@ -1851,9 +1870,27 @@ function fpRender(tab) {
     onclick: () => toggleFlyout("all") }, `All ${count} tools`, icon("right"));
   const common = el("section", { class: "fp-sec", "aria-labelledby": "fp-more-h" },
     el("h3", { class: "lbl", id: "fp-more-h" }, "Or do something else"), grid, all);
+  fp.common = common;
+  fp.formProps = el("section", { class: "fp-sec fp-formprops", hidden: true });
   reader.side.replaceChildren(el("div", { class: "fp" },
-    el("div", { class: "fp-head" }, fp.name, fp.chips), fp.note, fp.chosen, fp.sug, common));
+    el("div", { class: "fp-head" }, fp.name, fp.chips), fp.formProps, fp.note, fp.chosen, fp.sug, common));
   fpShowNote(tab);
+}
+
+function fpFormSelect(selected, pages, tab, renderFormProps) {
+  if (!fp.formProps || (tab && fp.tab !== tab)) return;
+  const active = !!(selected && selected.length);
+  fp.formProps.hidden = !active;
+  if (fp.common) fp.common.hidden = active;
+  if (fp.note) fp.note.hidden = active;
+  if (fp.chosen) fp.chosen.hidden = active || !fp.chosen.querySelector(".fp-list")?.children.length;
+  if (fp.sug) fp.sug.hidden = active || !fp.sug.querySelector(".fp-list")?.children.length;
+  if (active) {
+    renderFormProps(fp.formProps, selected, pages, reader);
+    if (reader.side.hidden) reader.setPanel?.(true);
+  } else {
+    fp.formProps.replaceChildren();
+  }
 }
 
 function fpShowFacts(facts) {
