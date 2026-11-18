@@ -971,6 +971,8 @@ body.form-folded #options-card { display: none; }
 .fp-prop-choicerow.dragging { opacity: 0.45; }
 .fp-prop-drag { cursor: grab; color: var(--muted); user-select: none; text-align: center; }
 .fp-prop-calcfields { display: flex; flex-direction: column; gap: 4px; max-height: 150px; overflow: auto; padding: 4px 0; }
+.fp-prop-btngrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+.fp-prop-btngrid .rd-btn { justify-content: center; padding: 4px 6px; font-size: var(--fs-xs); }
 .fp-unsaved { font-size: var(--fs-sm); color: var(--muted); }
 .fp-saved { color: var(--muted); overflow-wrap: anywhere; flex-basis: 100%; outline: none; }
 .fp-more { display: grid; grid-template-columns: 1fr 1fr; grid-auto-flow: row dense; gap: 6px; }

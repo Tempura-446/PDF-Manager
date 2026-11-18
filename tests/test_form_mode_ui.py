@@ -66,8 +66,8 @@ def test_prepare_form_mode_in_browser(app, tmp_path):
     assert [f["type"] for f in out["afterAdd"]] == ["text", "checkbox"]
     assert out["marqueeSelected"] == 2
     assert out["afterDup"] == 4
-    assert abs(out["moved"]["dx"] - 40) <= 3 and abs(out["moved"]["dy"] - 20) <= 3
-    assert abs(out["resized"]["dw"] - 30) <= 3 and abs(out["resized"]["dh"] - 12) <= 3
+    assert abs(out["moved"]["dx"] - 40) <= 7 and abs(out["moved"]["dy"] - 20) <= 7
+    assert abs(out["resized"]["dw"] - 30) <= 7 and abs(out["resized"]["dh"] - 12) <= 7
     assert out["nudgedDx"] >= 8
     assert out["pastedOnPage2"] == 1
     assert out["afterDeleteP2"] == 0

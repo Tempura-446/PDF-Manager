@@ -127,6 +127,7 @@ export const FormMode = (Base) => class extends Base {
     this._stepAside();
     this._formUndoButtons();
     this._drawFormOverlays();
+    this._geometry?.(this.pdfViewer.currentPageNumber || 1);
   }
 
   closeFormMode() {
@@ -281,9 +282,10 @@ export const FormMode = (Base) => class extends Base {
         const idx = Number(fieldEl.dataset.index);
         const f = (this._formFields()?.[String(page)] || []).find((x) => x.index === idx);
         if (!f) return;
+        const guides = this.#formGuides(page, view, new Set([idx]));
         this._formDrag = {
-          kind: "resize", page, view, pr, fieldEl, field: f, handle: handleEl.dataset.handle,
-          orig: viewRectFromPdf(view.viewport, f.rect),
+          kind: "resize", page, pageEl, view, pr, fieldEl, field: f, handle: handleEl.dataset.handle,
+          orig: viewRectFromPdf(view.viewport, f.rect), guides,
           startX: e.clientX, startY: e.clientY, dx: 0, dy: 0,
         };
         return;
@@ -304,6 +306,7 @@ export const FormMode = (Base) => class extends Base {
           this._drawFormOverlays();
           return;
         }
+        const narrowTo = (this.formPicked.has(key) && this.formPicked.size > 1) ? key : null;
         if (!this.formPicked.has(key)) {
           this.formPicked = new Set([key]);
           this._drawFormOverlays();
@@ -314,7 +317,8 @@ export const FormMode = (Base) => class extends Base {
           el: pageEl.querySelector(`.rd-formfield[data-index="${f.index}"]`),
           orig: viewRectFromPdf(view.viewport, f.rect),
         })).filter((m) => m.el);
-        this._formDrag = { kind: "move", page: fPage, view, els, startX: e.clientX, startY: e.clientY, dx: 0, dy: 0 };
+        const guides = this.#formGuides(fPage, view, new Set(moving.map((f) => f.index)));
+        this._formDrag = { kind: "move", page: fPage, pageEl, view, els, guides, narrowTo, startX: e.clientX, startY: e.clientY, dx: 0, dy: 0 };
         return;
       }
 
@@ -340,20 +344,24 @@ export const FormMode = (Base) => class extends Base {
         box.style.width = `${Math.abs(d.curX - d.startX)}px`;
         box.style.height = `${Math.abs(d.curY - d.startY)}px`;
       } else if (d.kind === "move") {
-        d.dx = e.clientX - d.startX;
-        d.dy = e.clientY - d.startY;
+        let dx = e.clientX - d.startX, dy = e.clientY - d.startY;
+        const snapped = (!e.altKey && d.els.length) ? this.#snapMove(d, dx, dy) : { dx, dy, gx: null, gy: null };
+        d.dx = snapped.dx; d.dy = snapped.dy;
         for (const m of d.els) {
           m.el.style.left = `${m.orig.left + d.dx}px`;
           m.el.style.top = `${m.orig.top + d.dy}px`;
         }
+        this.#showGuides(d.pageEl, snapped.gx, snapped.gy);
       } else if (d.kind === "resize") {
-        d.dx = e.clientX - d.startX;
-        d.dy = e.clientY - d.startY;
+        let dx = e.clientX - d.startX, dy = e.clientY - d.startY;
+        const snapped = !e.altKey ? this.#snapResize(d, dx, dy) : { dx, dy, gx: null, gy: null };
+        d.dx = snapped.dx; d.dy = snapped.dy;
         const r = this.#resizedBox(d.orig, d.handle, d.dx, d.dy);
         d.fieldEl.style.left = `${r.left}px`;
         d.fieldEl.style.top = `${r.top}px`;
         d.fieldEl.style.width = `${r.width}px`;
         d.fieldEl.style.height = `${r.height}px`;
+        this.#showGuides(d.pageEl, snapped.gx, snapped.gy);
       }
     });
 
@@ -361,6 +369,7 @@ export const FormMode = (Base) => class extends Base {
       const d = this._formDrag;
       if (!d) return;
       this._formDrag = null;
+      this.#showGuides(d.pageEl, null, null);
       if (d.kind === "add") {
         d.draft.remove();
         const w = Math.abs(d.curX - d.startX), h = Math.abs(d.curY - d.startY);
@@ -392,7 +401,10 @@ export const FormMode = (Base) => class extends Base {
         }
         this._drawFormOverlays();
       } else if (d.kind === "move") {
-        if (Math.hypot(d.dx, d.dy) < 2) return;
+        if (Math.hypot(d.dx, d.dy) < 2) {
+          if (d.narrowTo) { this.formPicked = new Set([d.narrowTo]); this._drawFormOverlays(); }
+          return;
+        }
         const changes = d.els.map((m) => {
           const l = m.orig.left + d.dx, t = m.orig.top + d.dy;
           const rect = pdfRectFromView(d.view.viewport, l, t, l + m.orig.width, t + m.orig.height);
@@ -406,6 +418,76 @@ export const FormMode = (Base) => class extends Base {
         this._editFormFields([{ page: d.page, index: d.field.index, rect }], { keepNames: [d.field.name] });
       }
     });
+  }
+
+  #formGuides(page, view, excludeIdx) {
+    const xs = [], ys = [];
+    for (const f of (this._formFields()?.[String(page)] || [])) {
+      if (excludeIdx.has(f.index)) continue;
+      const r = viewRectFromPdf(view.viewport, f.rect);
+      xs.push(r.left, r.left + r.width / 2, r.left + r.width);
+      ys.push(r.top, r.top + r.height / 2, r.top + r.height);
+    }
+    const geom = this._geometry?.(page);
+    if (geom?.segments) {
+      const s = geom.segments;
+      const limit = Math.min(geom.count || 0, 2000);
+      for (let i = 0; i < limit; i++) {
+        if (geom.visible && !geom.visible(i)) continue;
+        const x1 = s[i * 4], y1 = s[i * 4 + 1], x2 = s[i * 4 + 2], y2 = s[i * 4 + 3];
+        if (Math.abs(x1 - x2) < 0.5 && Math.abs(y1 - y2) > 4) {
+          const [vx] = view.viewport.convertToViewportPoint(x1, y1);
+          xs.push(vx);
+        } else if (Math.abs(y1 - y2) < 0.5 && Math.abs(x1 - x2) > 4) {
+          const [, vy] = view.viewport.convertToViewportPoint(x1, y1);
+          ys.push(vy);
+        }
+      }
+    }
+    return { x: xs, y: ys };
+  }
+
+  #nearestGuide(vals, targets, tol = 6) {
+    let best = null, bestDelta = tol + 1;
+    for (const v of vals) {
+      for (const t of targets) {
+        const d = t - v;
+        if (Math.abs(d) < Math.abs(bestDelta)) { bestDelta = d; best = t; }
+      }
+    }
+    return Math.abs(bestDelta) <= tol ? { delta: bestDelta, pos: best } : { delta: 0, pos: null };
+  }
+
+  #snapMove(d, dx, dy) {
+    const b = d.els[0].orig;
+    let l = b.left + dx, t = b.top + dy, r = l + b.width, bt = t + b.height;
+    for (let i = 1; i < d.els.length; i++) {
+      const o = d.els[i].orig;
+      l = Math.min(l, o.left + dx); t = Math.min(t, o.top + dy);
+      r = Math.max(r, o.left + o.width + dx); bt = Math.max(bt, o.top + o.height + dy);
+    }
+    const sx = this.#nearestGuide([l, (l + r) / 2, r], d.guides.x);
+    const sy = this.#nearestGuide([t, (t + bt) / 2, bt], d.guides.y);
+    return { dx: dx + sx.delta, dy: dy + sy.delta, gx: sx.pos, gy: sy.pos };
+  }
+
+  #snapResize(d, dx, dy) {
+    const r = this.#resizedBox(d.orig, d.handle, dx, dy);
+    let sx = { delta: 0, pos: null }, sy = { delta: 0, pos: null };
+    if (d.handle.includes("w")) sx = this.#nearestGuide([r.left], d.guides.x);
+    else if (d.handle.includes("e")) sx = this.#nearestGuide([r.left + r.width], d.guides.x);
+    if (d.handle.includes("n")) sy = this.#nearestGuide([r.top], d.guides.y);
+    else if (d.handle.includes("s")) sy = this.#nearestGuide([r.top + r.height], d.guides.y);
+    return { dx: dx + sx.delta, dy: dy + sy.delta, gx: sx.pos, gy: sy.pos };
+  }
+
+  #showGuides(pageEl, gx, gy) {
+    if (!pageEl) return;
+    const layer = pageEl.querySelector(".rd-formlayer");
+    if (!layer) return;
+    for (const old of layer.querySelectorAll(".rd-formguide")) old.remove();
+    if (gx !== null) layer.append(el("div", { class: "rd-formguide x", style: `left:${gx}px` }));
+    if (gy !== null) layer.append(el("div", { class: "rd-formguide y", style: `top:${gy}px` }));
   }
 
   #resizedBox(orig, handle, dx, dy) {
@@ -434,6 +516,34 @@ export const FormMode = (Base) => class extends Base {
   }
 
   editFormFields(changes, opts = {}) { return this._editFormFields(changes, opts); }
+
+  copyFieldToPages(page, index, pages, sameName = true) {
+    if (!this.doc) return;
+    return this._changeDocument((bytes, tab) => this._post("/api/form/copy", bytes, tab, {
+      page: String(page), index: String(index), pages: String(pages), same_name: sameName ? "1" : "0",
+    }), {
+      failure: "Couldn't copy field to pages: ",
+      edited: (_res, tab) => { tab.formFields = null; },
+      after: () => this._drawFormOverlays(),
+    });
+  }
+
+  makeFieldTable(page, index, rows, cols, rowGap = 4, colGap = 4) {
+    if (!this.doc) return;
+    return this._changeDocument((bytes, tab) => this._post("/api/form/table", bytes, tab, {
+      page: String(page), index: String(index), rows: String(rows), cols: String(cols),
+      row_gap: String(rowGap), col_gap: String(colGap),
+    }), {
+      failure: "Couldn't make table of fields: ",
+      edited: (res, tab) => {
+        tab.formFields = null;
+        let names = [];
+        try { names = JSON.parse(res.headers.get("X-Pdfm-Names") || "[]"); } catch (e) {}
+        this._formPickByNames = names;
+      },
+      after: () => this._selectFieldsByName(this._formPickByNames),
+    });
+  }
 
   _editFormFields(changes, { keepNames = null, keepSelection = false } = {}) {
     if (!changes?.length || !this.doc) return;

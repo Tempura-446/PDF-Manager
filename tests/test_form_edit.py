@@ -689,3 +689,43 @@ def test_field_properties_roundtrip(tmp_path):
     tier = details[4]
     assert tier["name"] == "Tier" and tier["group"] == "Tier"
     assert tier["tick_style"] == "square" and tier["default_checked"] is True
+
+
+def test_copy_to_pages_and_make_table(tmp_path):
+    raw = tmp_path / "three.pdf"
+    c = canvas.Canvas(str(raw))
+    for p in (1, 2, 3):
+        c.drawString(72, 740, f"Page {p}")
+        c.showPage()
+    c.save()
+
+    added = tmp_path / "added.pdf"
+    forms.add_fields(raw, added, [
+        {"page": 1, "rect": [72, 700, 172, 722], "type": "text", "name": "Header"},
+        {"page": 1, "rect": [72, 620, 140, 642], "type": "text", "name": "Qty"},
+    ])
+
+    # Copy Header to pages 2-3 with same name (one shared field).
+    copied_same = tmp_path / "copied_same.pdf"
+    names = forms.copy_to_pages(added, copied_same, 1, 0, "2-3", same_name=True)
+    assert names == ["Header", "Header"]
+    d_same = forms.field_details(copied_same)
+    assert d_same[1][0]["name"] == "Header" and d_same[1][0]["widgets"] == 3
+    assert d_same[2][0]["name"] == "Header" and d_same[3][0]["name"] == "Header"
+
+    # Copy Qty to page 2 with numbered name.
+    copied_num = tmp_path / "copied_num.pdf"
+    names2 = forms.copy_to_pages(copied_same, copied_num, 1, 1, "2", same_name=False)
+    assert names2 == ["Qty 2"]
+    assert forms.field_details(copied_num)[2][1]["name"] == "Qty 2"
+
+    # Make a 2x3 table from Qty on page 1.
+    tabled = tmp_path / "tabled.pdf"
+    t_names = forms.make_table(added, tabled, 1, 1, 2, 3, row_gap=4, col_gap=6)
+    assert t_names == ["Qty 1", "Qty 2", "Qty 3", "Qty 4", "Qty 5", "Qty 6"]
+    p1 = forms.field_details(tabled)[1]
+    assert [f["name"] for f in p1[1:]] == ["Qty 1", "Qty 2", "Qty 3", "Qty 4", "Qty 5", "Qty 6"]
+    # Check row 1 col 2 x0 == 72 + 68 + 6 == 146
+    assert abs(p1[2]["rect"][0] - 146) < 0.2
+    # Check row 2 col 1 y1 == 642 - 22 - 4 == 616
+    assert abs(p1[4]["rect"][3] - 616) < 0.2

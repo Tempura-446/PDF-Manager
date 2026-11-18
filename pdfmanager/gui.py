@@ -2593,6 +2593,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._form_add(body)
             if path == "/api/form/edit":
                 return self._form_edit(body)
+            if path == "/api/form/copy":
+                return self._form_copy(body)
+            if path == "/api/form/table":
+                return self._form_table(body)
             if path in ("/api/comments/summary", "/api/comments/export", "/api/comments/import"):
                 return self._comments(path.rsplit("/", 1)[1], body)
             if path == "/api/text/edit":
@@ -3275,6 +3279,45 @@ class Handler(BaseHTTPRequestHandler):
             data = out.read_bytes()
         return self._send(HTTPStatus.OK, data, "application/pdf",
                           {"X-Pdfm-Result": json.dumps(result, ensure_ascii=True)})
+
+    def _form_copy(self, body):
+        """Copy a form field to other pages from Prepare form mode."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        password = fields.get("password") or None
+        same_name = str(fields.get("same_name", "1")).lower() not in ("0", "false", "no")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "copied.pdf"
+            src.write_bytes(uploads[0][2])
+            names = forms.copy_to_pages(
+                src, out, int(fields.get("page", 1)), int(fields.get("index", 0)),
+                fields.get("pages", "all"), same_name=same_name, password=password)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf",
+                          {"X-Pdfm-Names": json.dumps(names, ensure_ascii=True)})
+
+    def _form_table(self, body):
+        """Turn a form field into a grid of numbered fields."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "table.pdf"
+            src.write_bytes(uploads[0][2])
+            names = forms.make_table(
+                src, out, int(fields.get("page", 1)), int(fields.get("index", 0)),
+                int(fields.get("rows", 2)), int(fields.get("cols", 2)),
+                float(fields.get("row_gap", 4)), float(fields.get("col_gap", 4)),
+                password=password)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf",
+                          {"X-Pdfm-Names": json.dumps(names, ensure_ascii=True)})
 
     def _save_settings(self, body):
         data = json.loads(body or b"{}")

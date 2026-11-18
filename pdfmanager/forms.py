@@ -2069,3 +2069,191 @@ def edit_fields(path, output, changes, password=None):
         acroform[NameObject("/NeedAppearances")] = BooleanObject(True)
     core._write(writer, output)
     return {"changed": changed, "deleted": len(deleted), "names": names, "notes": notes}
+
+
+def _clone_pdf_obj(obj):
+    if hasattr(obj, "get_object"):
+        obj = obj.get_object()
+    if isinstance(obj, DecodedStreamObject):
+        s = DecodedStreamObject()
+        for k, v in obj.items():
+            s[NameObject(k)] = _clone_pdf_obj(v)
+        s.set_data(obj.get_data())
+        return s
+    if isinstance(obj, DictionaryObject):
+        d = DictionaryObject()
+        for k, v in obj.items():
+            if k in ("/Parent", "/P", "/Kids"):
+                continue
+            d[NameObject(k)] = _clone_pdf_obj(v)
+        return d
+    if isinstance(obj, ArrayObject):
+        return ArrayObject(_clone_pdf_obj(v) for v in obj)
+    return obj
+
+
+def _parse_pages_spec(spec, total):
+    if isinstance(spec, (list, tuple)):
+        return sorted({int(p) for p in spec if 1 <= int(p) <= total})
+    text = str(spec or "").strip().lower()
+    if not text or text == "all":
+        return list(range(1, total + 1))
+    out = set()
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, _, b = part.partition("-")
+            try:
+                lo, hi = int(a.strip()), int(b.strip())
+            except ValueError:
+                raise core.PdfManagerError(f"invalid page range {part!r}; use e.g. 2-5 or 2,4,6") from None
+            for p in range(max(1, min(lo, hi)), min(total, max(lo, hi)) + 1):
+                out.add(p)
+        else:
+            try:
+                p = int(part)
+            except ValueError:
+                raise core.PdfManagerError(f"invalid page number {part!r}") from None
+            if 1 <= p <= total:
+                out.add(p)
+    return sorted(out)
+
+
+def copy_to_pages(path, output, page, index, pages, same_name=True, password=None):
+    """Copy a field from ``page`` (1-based) and ``index`` to ``pages`` (e.g.
+    '2-5', '1,3,5', or 'all'). When ``same_name`` is True, all copies share
+    the same field (one value everywhere); when False, each copy gets a
+    numbered name."""
+    reader = core.open_pdf(path, password)
+    writer = core.clone_document(reader)
+    acroform = _child(writer._root_object, "/AcroForm", DictionaryObject)
+    field_list = _child(acroform, "/Fields", ArrayObject)
+    rows = list(_widgets(writer.pages))
+    where = {(n, i): (a, f) for n, i, a, f in rows}
+    spot = (int(page), int(index))
+    if spot not in where:
+        raise core.PdfManagerError(f"page {page} has no field number {index}")
+    orig_annot, field = where[spot]
+    targets = [p for p in _parse_pages_spec(pages, len(writer.pages)) if p != spot[0]]
+    if not targets:
+        raise core.PdfManagerError("no other pages in that range to copy to")
+    taken = {_qualified_name(f) for _, _, _, f in rows}
+    base_name = _qualified_name(field)
+    created_names = []
+
+    if same_name:
+        if field is orig_annot:
+            orig_ref = _ref_of(orig_annot, writer.pages)
+            parent = DictionaryObject({NameObject("/Kids"): ArrayObject([orig_ref])})
+            for k in ("/FT", "/Ff", "/T", "/TU", "/V", "/DV", "/DA", "/Q", "/Opt", "/AA", "/MaxLen"):
+                if k in orig_annot:
+                    parent[NameObject(k)] = orig_annot.pop(k)
+            parent_ref = writer._add_object(parent)
+            orig_annot[NameObject("/Parent")] = parent_ref
+            for idx_fl, ref in enumerate(field_list):
+                if ref.get_object() is orig_annot:
+                    field_list[idx_fl] = parent_ref
+                    break
+            else:
+                field_list.append(parent_ref)
+            field = parent
+        parent_ref = _ref_of(field, writer.pages) or field.indirect_reference
+        if parent_ref is None:
+            parent_ref = writer._add_object(field)
+            field_list.append(parent_ref)
+        for p in targets:
+            pg = writer.pages[p - 1]
+            clone = _clone_pdf_obj(orig_annot)
+            for k in ("/FT", "/Ff", "/T", "/TU", "/V", "/DV", "/Opt", "/AA", "/MaxLen"):
+                if k in clone:
+                    del clone[k]
+            clone[NameObject("/Parent")] = parent_ref
+            clone[NameObject("/P")] = pg.indirect_reference
+            ref = writer._add_object(clone)
+            _child(field, "/Kids", ArrayObject).append(ref)
+            if "/Annots" not in pg:
+                pg[NameObject("/Annots")] = ArrayObject()
+            pg["/Annots"].get_object().append(ref)
+            created_names.append(base_name)
+    else:
+        for p in targets:
+            pg = writer.pages[p - 1]
+            clone = _clone_pdf_obj(orig_annot)
+            for k in ("/FT", "/Ff", "/T", "/TU", "/V", "/DV", "/DA", "/Q", "/Opt", "/AA", "/MaxLen"):
+                if k not in clone and k in field:
+                    clone[NameObject(k)] = _clone_pdf_obj(field[k])
+            new_name = _unique(f"{base_name} {p}", taken, base_name)
+            clone[NameObject("/T")] = TextStringObject(new_name)
+            if "/TU" in clone:
+                clone[NameObject("/TU")] = TextStringObject(new_name)
+            clone[NameObject("/P")] = pg.indirect_reference
+            ref = writer._add_object(clone)
+            field_list.append(ref)
+            if "/Annots" not in pg:
+                pg[NameObject("/Annots")] = ArrayObject()
+            pg["/Annots"].get_object().append(ref)
+            created_names.append(new_name)
+
+    core._write(writer, output)
+    return created_names
+
+
+def make_table(path, output, page, index, rows_count, cols_count, row_gap=4, col_gap=4, password=None):
+    """Turn a selected field into a ``rows_count`` x ``cols_count`` grid of
+    fields with numbered names (``Name 1``, ``Name 2``, ...)."""
+    rows_n = max(1, min(50, int(rows_count)))
+    cols_n = max(1, min(20, int(cols_count)))
+    if rows_n == 1 and cols_n == 1:
+        raise core.PdfManagerError("a table needs at least 2 cells")
+    reader = core.open_pdf(path, password)
+    writer = core.clone_document(reader)
+    acroform = _child(writer._root_object, "/AcroForm", DictionaryObject)
+    field_list = _child(acroform, "/Fields", ArrayObject)
+    rows = list(_widgets(writer.pages))
+    where = {(n, i): (a, f) for n, i, a, f in rows}
+    spot = (int(page), int(index))
+    if spot not in where:
+        raise core.PdfManagerError(f"page {page} has no field number {index}")
+    orig_annot, field = where[spot]
+    pg = writer.pages[spot[0] - 1]
+    if "/Annots" not in pg:
+        pg[NameObject("/Annots")] = ArrayObject()
+    annots = pg["/Annots"].get_object()
+    x0, y0, x1, y1 = _rect_of(orig_annot)
+    w, h = x1 - x0, y1 - y0
+    rg, cg = float(row_gap), float(col_gap)
+    taken = {_qualified_name(f) for _, _, _, f in rows}
+    base = _qualified_name(field)
+    taken.discard(base)
+    first_name = _unique(f"{base} 1", taken, "Field")
+    field[NameObject("/T")] = TextStringObject(first_name)
+    created_names = [first_name]
+    cell = 1
+    for r in range(rows_n):
+        for c in range(cols_n):
+            if r == 0 and c == 0:
+                continue
+            cell += 1
+            nx0 = x0 + c * (w + cg)
+            ny1 = y1 - r * (h + rg)
+            nx1 = nx0 + w
+            ny0 = ny1 - h
+            clone = _clone_pdf_obj(orig_annot)
+            for k in ("/FT", "/Ff", "/T", "/TU", "/V", "/DV", "/DA", "/Q", "/Opt", "/AA", "/MaxLen"):
+                if k not in clone and k in field:
+                    clone[NameObject(k)] = _clone_pdf_obj(field[k])
+            cname = _unique(f"{base} {cell}", taken, "Field")
+            clone[NameObject("/T")] = TextStringObject(cname)
+            if "/TU" in clone:
+                clone[NameObject("/TU")] = TextStringObject(cname)
+            clone[NameObject("/Rect")] = ArrayObject(_num(v) for v in (nx0, ny0, nx1, ny1))
+            clone[NameObject("/P")] = pg.indirect_reference
+            ref = writer._add_object(clone)
+            field_list.append(ref)
+            annots.append(ref)
+            created_names.append(cname)
+    core._write(writer, output)
+    return created_names
+
