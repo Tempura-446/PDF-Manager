@@ -52,14 +52,14 @@
 - [x] **Find fields** runs from the bar and adds what it finds as ordinary, editable fields.
 
 **Task 2.2: the properties panel** (the file panel on the right, when a field is selected)
-- [ ] **General:** name, tooltip, required, read-only, hidden / visible but not printed.
-- [ ] **Look:** font (the document's, standard, installed: the text editor's font list), size or auto, text colour, fill, border colour and width, alignment.
-- [ ] **Text fields:** default value, max length, comb (one box per character), multi-line, password, scroll.
-- [ ] **Choices:** the list with a shown value and an export value each, reorder by dragging, default choice, allow typing a new value (dropdown), allow several (list).
-- [ ] **Checkbox and radio:** tick style (check, cross, dot, square), export value, checked by default, the group a radio belongs to.
-- [ ] **Format:** none, number (decimals, separator, currency, negative style), percent, date (pattern), time, phone, postcode, a custom mask. **Validation:** a range, or a pattern. **Calculation:** sum, product, average, minimum, maximum of chosen fields (picked by clicking them on the page), or a simple formula over field names (`Qty * Price`), checked before it's written.
-- [ ] With several fields selected, the panel changes what they share.
-- [ ] Test (browser): each property set in the panel reads back from the saved file and behaves when filling in (required marks, a comb field, a currency format, a sum).
+- [x] **General:** name, tooltip, required, read-only, hidden / visible but not printed.
+- [x] **Look:** font (the document's, standard, installed: the text editor's font list), size or auto, text colour, fill, border colour and width, alignment.
+- [x] **Text fields:** default value, max length, comb (one box per character), multi-line, password, scroll.
+- [x] **Choices:** the list with a shown value and an export value each, reorder by dragging, default choice, allow typing a new value (dropdown), allow several (list).
+- [x] **Checkbox and radio:** tick style (check, cross, dot, square), export value, checked by default, the group a radio belongs to.
+- [x] **Format:** none, number (decimals, separator, currency, negative style), percent, date (pattern), time, phone, postcode, a custom mask. **Validation:** a range, or a pattern. **Calculation:** sum, product, average, minimum, maximum of chosen fields (picked by clicking them on the page), or a simple formula over field names (`Qty * Price`), checked before it's written.
+- [x] With several fields selected, the panel changes what they share.
+- [x] Test (browser): each property set in the panel reads back from the saved file and behaves when filling in (required marks, a comb field, a currency format, a sum).
 
 **Task 2.2b: what 0.37.0 left out for fields a form already has** (asked for after 0.37.0; the designer and the tool page both get these, through `forms.edit_fields`)
 - [x] (Done in 0.54.0 for the engine, the tool page (a "Page" choice on the selected field) and the command line; the reader's designer, with cut and paste or a drag onto a thumbnail, comes with Phase 2.) **Move a field to another page:** a change takes `"to_page"`. The widget leaves one page's `/Annots` for the other's, its `/P` follows, and its place in the tab order is set on the new page. In the designer: cut and paste, or drag onto another page's thumbnail. In the tool page: a "Move to page…" choice on the selected field.

@@ -19,14 +19,19 @@ from pdfmanager import core
 TYPES = {"text": "Text", "multiline": "Text", "checkbox": "Checkbox", "radio": "Group",
          "dropdown": "Dropdown", "list": "List", "signature": "Signature", "button": "Button"}
 MULTILINE, REQUIRED = 1 << 12, 1 << 1     # text field flags
+PASSWORD = 1 << 13                        # text field: mask characters
+DO_NOT_SCROLL = 1 << 23                   # text field: no scrolling
+COMB = 1 << 24                            # text field: one box per character
 NO_TOGGLE_OFF, RADIO, PUSHBUTTON = 1 << 14, 1 << 15, 1 << 16  # button field flags
-COMBO, EDIT = 1 << 17, 1 << 18            # choice field flags
+COMBO, EDIT, MULTI_SELECT = 1 << 17, 1 << 18, 1 << 21         # choice field flags
 READ_ONLY = 1
 
 # Formats for text fields, as Acrobat's form scripts (pdf.js runs them too).
 # The number styles: separators "1,234.56" (0) or "1.234,56" (2).
-FORMATS = ("number", "amount", "currency", "percent", "date", "phone", "zip")
+FORMATS = ("number", "amount", "currency", "percent", "date", "time", "phone", "zip", "mask")
 CALCULATIONS = {"sum": "SUM", "average": "AVG", "product": "PRD", "min": "MIN", "max": "MAX"}
+TICK_STYLES = {"check": "4", "cross": "8", "dot": "l", "square": "n"}
+TICK_NAMES = {v: k for k, v in TICK_STYLES.items()}
 BORDER = (0.45, 0.45, 0.45)
 TICK = "4"                                # ✔ in ZapfDingbats
 DOT = "l"                                 # ● in ZapfDingbats
@@ -122,13 +127,17 @@ _JS_STR = r'(?:"(?:[^"\\\n\r]|\\.)*"|\'(?:[^\'\\\n\r]|\\.)*\')'
 _SIMPLE_CALC = re.compile(
     rf"\s*\ufeff*AFSimple_Calculate\(\s*({_JS_STR})\s*,\s*new\s+Array\s*\((.*?)\)\s*\)\s*;?\s*", re.S)
 _NUMBER_FMT = re.compile(
-    rf"\s*\ufeff*AFNumber_Format\(\s*(\d+)\s*,\s*(\d+)\s*,\s*\d+\s*,\s*\d+\s*,\s*({_JS_STR})\s*,\s*(true|false)\s*\)\s*;?\s*", re.S)
+    rf"\s*\ufeff*AFNumber_Format\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*\d+\s*,\s*({_JS_STR})\s*,\s*(true|false)\s*\)\s*;?\s*", re.S)
 _PERCENT_FMT = re.compile(rf"\s*\ufeff*AFPercent_Format\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*;?\s*", re.S)
 _DATE_FMT = re.compile(rf"\s*\ufeff*AFDate_Format(?:Ex)?\(\s*({_JS_STR})\s*\)\s*;?\s*", re.S)
+_TIME_FMT = re.compile(rf"\s*\ufeff*AFTime_FormatEx\(\s*({_JS_STR})\s*\)\s*;?\s*", re.S)
 _SPECIAL_FMT = re.compile(r"\s*\ufeff*AFSpecial_Format\(\s*(\d+)\s*\)\s*;?\s*", re.S)
+_MASK_FMT = re.compile(rf"\s*\ufeff*/\*mask:({_JS_STR})\*/\s*AFSpecial_FormatEx\(\s*\1\s*\)\s*;?\s*", re.S)
 _RANGE_VAL = re.compile(
     r"\s*\ufeff*AFRange_Validate\(\s*(true|false)\s*,\s*([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*,"
     r"\s*(true|false)\s*,\s*([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*\)\s*;?\s*", re.S)
+_PATTERN_VAL = re.compile(
+    rf"\s*\ufeff*/\*pattern:({_JS_STR})\*/\s*if\s*\(\s*event\.value\s*\)\s*\{{\s*event\.rc\s*=\s*new\s+RegExp\(", re.S)
 _EVENT_CALC = re.compile(r"\s*\ufeff*event\.value\s*=\s*(.+?)\s*;?\s*", re.S)
 _GET_FIELD = re.compile(
     rf"(?:Number\s*\(\s*)?this\.getField\(\s*({_JS_STR})\s*\)\.value(?:\s*\))?")
@@ -300,17 +309,17 @@ def _format_of(field):
     m = _NUMBER_FMT.fullmatch(script)
     if m:
         try:
-            decimals, sep_code = int(m.group(1)), int(m.group(2))
-            symbol = _unquote_js(m.group(3))
+            decimals, sep_code, neg_style = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            symbol = _unquote_js(m.group(4))
         except ValueError:
             return {"format": "custom"}
         sep = "1.234,56" if sep_code in (2, 3) else "1,234.56"
-        before = m.group(4) == "true"
+        before = m.group(5) == "true"
         if symbol:
-            return {"format": "currency", "decimals": decimals, "separators": sep,
+            return {"format": "currency", "decimals": decimals, "separators": sep, "neg_style": neg_style,
                     "currency": symbol, "currency_after": not before}
         return {"format": "amount" if decimals == 2 else "number",
-                "decimals": decimals, "separators": sep}
+                "decimals": decimals, "separators": sep, "neg_style": neg_style}
     m = _PERCENT_FMT.fullmatch(script)
     if m:
         return {"format": "percent", "decimals": int(m.group(1)),
@@ -319,6 +328,18 @@ def _format_of(field):
     if m:
         try:
             return {"format": "date", "date": _unquote_js(m.group(1))}
+        except ValueError:
+            return {"format": "custom"}
+    m = _TIME_FMT.fullmatch(script)
+    if m:
+        try:
+            return {"format": "time", "time": _unquote_js(m.group(1))}
+        except ValueError:
+            return {"format": "custom"}
+    m = _MASK_FMT.fullmatch(script)
+    if m:
+        try:
+            return {"format": "mask", "mask": _unquote_js(m.group(1))}
         except ValueError:
             return {"format": "custom"}
     m = _SPECIAL_FMT.fullmatch(script)
@@ -334,10 +355,17 @@ def _clean_number(text):
 
 def _range_of(field):
     """{"min": ..., "max": ...} of a field checked with AFRange_Validate,
-    {"validate": "custom"} for another validation script, or {}."""
+    {"pattern": ...} for regex validation, {"validate": "custom"} for
+    another validation script, or {}."""
     script = _action_js(field, "/V")
     if not script:
         return {}
+    pm = _PATTERN_VAL.match(script)
+    if pm:
+        try:
+            return {"pattern": _unquote_js(pm.group(1))}
+        except ValueError:
+            return {"validate": "custom"}
     m = _RANGE_VAL.fullmatch(script)
     if not m:
         return {"validate": "custom"}
@@ -387,6 +415,138 @@ def _calc_detail(field):
     return None
 
 
+def _choices_detail(field):
+    out = []
+    for option in _inherited(field, "/Opt") or []:
+        option = option.get_object()
+        if isinstance(option, (list, tuple)) and option:
+            val = str(option[0].get_object())
+            lbl = str(option[-1].get_object())
+            out.append({"label": lbl, "value": val})
+        else:
+            s = str(option)
+            out.append({"label": s, "value": s})
+    return out
+
+
+def _hex_of_colour(colour, default=""):
+    try:
+        parts = [float(v) for v in colour or []]
+    except (TypeError, ValueError):
+        return default
+    if len(parts) == 1:
+        g = max(0, min(255, round(parts[0] * 255)))
+        return f"#{g:02x}{g:02x}{g:02x}"
+    if len(parts) == 3:
+        r, g, b = (max(0, min(255, round(v * 255))) for v in parts)
+        return f"#{r:02x}{g:02x}{b:02x}"
+    if len(parts) == 4:
+        c, m, y, k = parts
+        r = max(0, min(255, round(255 * (1 - c) * (1 - k))))
+        g = max(0, min(255, round(255 * (1 - m) * (1 - k))))
+        b = max(0, min(255, round(255 * (1 - y) * (1 - k))))
+        return f"#{r:02x}{g:02x}{b:02x}"
+    return default
+
+
+def _rgb_of_hex(color):
+    s = str(color or "").strip()
+    if not s:
+        return None
+    if s.startswith("#"):
+        s = s[1:]
+    if len(s) == 3:
+        s = "".join(c * 2 for c in s)
+    if len(s) != 6:
+        raise core.PdfManagerError(f"invalid colour {color!r}; use #rrggbb")
+    try:
+        return [int(s[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
+    except ValueError:
+        raise core.PdfManagerError(f"invalid colour {color!r}; use #rrggbb") from None
+
+
+_STANDARD_REV = {
+    "Helv": "Helvetica", "Helvetica": "Helvetica",
+    "HeBo": "Helvetica-Bold", "Helvetica-Bold": "Helvetica-Bold",
+    "HeOb": "Helvetica-Oblique", "Helvetica-Oblique": "Helvetica-Oblique",
+    "TiRo": "Times", "Times-Roman": "Times", "Times": "Times",
+    "TiBo": "Times-Bold", "Times-Bold": "Times-Bold",
+    "TiIt": "Times-Italic", "Times-Italic": "Times-Italic",
+    "Cour": "Courier", "Courier": "Courier",
+    "CoBo": "Courier-Bold", "Courier-Bold": "Courier-Bold",
+    "CoOb": "Courier-Oblique", "Courier-Oblique": "Courier-Oblique",
+    "ZaDb": "ZapfDingbats", "ZapfDingbats": "ZapfDingbats",
+}
+
+_STANDARD_MAP = {
+    "helvetica": ("/Helv", "/Helvetica"),
+    "helvetica-bold": ("/HeBo", "/Helvetica-Bold"),
+    "helvetica-oblique": ("/HeOb", "/Helvetica-Oblique"),
+    "times": ("/TiRo", "/Times-Roman"),
+    "times-roman": ("/TiRo", "/Times-Roman"),
+    "times-bold": ("/TiBo", "/Times-Bold"),
+    "times-italic": ("/TiIt", "/Times-Italic"),
+    "courier": ("/Cour", "/Courier"),
+    "courier-bold": ("/CoBo", "/Courier-Bold"),
+    "courier-oblique": ("/CoOb", "/Courier-Oblique"),
+}
+
+
+def _da_info(annot, field, acroform):
+    da = str(_inherited(annot, "/DA") or _inherited(field, "/DA")
+             or (acroform.get("/DA") if acroform else "") or "/Helv 0 Tf 0 g")
+    font_name, font_size, text_color = "Helvetica", 0, "#000000"
+    tf = re.search(r"/([^\s/]+)\s+([0-9.]+)\s+Tf", da)
+    if tf:
+        alias = tf.group(1)
+        try:
+            sz = float(tf.group(2))
+            font_size = int(sz) if sz.is_integer() else sz
+        except ValueError:
+            font_size = 0
+        if alias in _STANDARD_REV:
+            font_name = _STANDARD_REV[alias]
+        else:
+            dr_fonts = ((acroform.get("/DR") or {}).get("/Font") or {}) if acroform else {}
+            fobj = dr_fonts.get("/" + alias)
+            fobj = fobj.get_object() if fobj is not None else None
+            base = str(fobj.get("/BaseFont", ""))[1:] if isinstance(fobj, DictionaryObject) and "/BaseFont" in fobj else alias
+            if "+" in base:
+                base = base.split("+", 1)[1]
+            font_name = _STANDARD_REV.get(base, base or "Helvetica")
+    rg = re.search(r"([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+rg\b", da)
+    g = re.search(r"([0-9.]+)\s+g\b", da)
+    k = re.search(r"([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+k\b", da)
+    if rg:
+        text_color = _hex_of_colour([rg.group(1), rg.group(2), rg.group(3)], "#000000")
+    elif k:
+        text_color = _hex_of_colour([k.group(1), k.group(2), k.group(3), k.group(4)], "#000000")
+    elif g:
+        text_color = _hex_of_colour([g.group(1)], "#000000")
+    return font_name, font_size, text_color
+
+
+def _visibility_of(annot):
+    f = int(annot.get("/F", 4) or 0)
+    if f & 2:
+        return "hidden"
+    if f & 32:
+        return "printonly"
+    if not (f & 4):
+        return "noprint"
+    return "visible"
+
+
+def _export_value_of(annot):
+    try:
+        states = [str(k)[1:] for k in annot["/AP"]["/N"].keys() if k != "/Off"]
+        if states:
+            return states[0]
+    except (KeyError, AttributeError, TypeError):
+        pass
+    return "Yes"
+
+
 def field_details(path, password=None):
     """Like ``existing_fields``, with what the form tool needs to change a
     field: its "index" (its place among the page's fields, which
@@ -397,6 +557,8 @@ def field_details(path, password=None):
     "calculated", "calculate", "used_by" (the fields worked out from it) and
     "signed"."""
     reader = core.open_pdf(path, password)
+    acroform = reader.trailer["/Root"].get("/AcroForm")
+    acroform = acroform.get_object() if acroform is not None else {}
     rows = list(_widgets(reader.pages))
     shown, users = {}, {}
     seen = set()
@@ -416,10 +578,36 @@ def field_details(path, password=None):
         fmt = _format_of(field) if kind in ("text", "multiline") else {}
         bounds = _range_of(field) if kind in ("text", "multiline") else {}
         calc_info = _calc_detail(field)
+        font_name, font_size, text_color = _da_info(annot, field, acroform)
+        mk = annot.get("/MK") or {}
+        fill_color = _hex_of_colour(mk.get("/BG"), "")
+        border_color = _hex_of_colour(mk.get("/BC"), "")
+        try:
+            border_width = float((annot.get("/BS") or {}).get("/W", 1 if border_color else 0))
+        except (TypeError, ValueError):
+            border_width = 1 if border_color else 0
+        if border_width.is_integer() if isinstance(border_width, float) else False:
+            border_width = int(border_width)
+        q_val = int(_inherited(annot, "/Q", _inherited(field, "/Q", 0)) or 0)
+        align = {0: "left", 1: "center", 2: "right"}.get(q_val, "left")
+        dv = _inherited(field, "/DV")
+        dv_obj = dv.get_object() if dv is not None else None
+        if isinstance(dv_obj, NameObject):
+            dv_str = "" if dv_obj == "/Off" else str(dv_obj)[1:]
+        elif isinstance(dv_obj, (list, tuple)):
+            dv_str = [str(v) for v in dv_obj]
+        elif dv_obj is not None:
+            dv_str = str(dv_obj)
+        else:
+            dv_str = ""
         info = {
             "index": index, "rect": _rect_of(annot), "name": name, "type": kind,
             "tooltip": str(tooltip) if tooltip is not None else "",
             "required": bool(flags & REQUIRED), "readonly": bool(flags & READ_ONLY),
+            "visibility": _visibility_of(annot),
+            "font": font_name, "font_size": font_size, "text_color": text_color,
+            "fill_color": fill_color, "border_color": border_color, "border_width": border_width,
+            "align": align,
             "value": _value_of(field, kind), "options": _choices_of(field),
             "widgets": shown[_key(field)],
             "format": fmt.get("format", ""),
@@ -427,10 +615,31 @@ def field_details(path, password=None):
             "calculate": calc_info,
             "used_by": users.get(name, []),
             "signed": kind == "signature" and _inherited(field, "/V") is not None}
-        for k in ("decimals", "separators", "currency", "currency_after", "date"):
+        if kind in ("text", "multiline"):
+            ml = _inherited(field, "/MaxLen")
+            info["default_value"] = dv_str if isinstance(dv_str, str) else ""
+            info["max_length"] = int(ml) if ml is not None else 0
+            info["comb"] = bool(flags & COMB)
+            info["password"] = bool(flags & PASSWORD)
+            info["scroll"] = not bool(flags & DO_NOT_SCROLL)
+        elif kind in ("dropdown", "list"):
+            info["choices"] = _choices_detail(field)
+            info["default_choice"] = dv_str
+            info["allow_custom"] = bool(flags & EDIT)
+            info["multiselect"] = bool(flags & MULTI_SELECT)
+        elif kind in ("checkbox", "radio"):
+            ca = str(mk.get("/CA", DOT if kind == "radio" else TICK))[:1]
+            exp = _export_value_of(annot)
+            info["tick_style"] = TICK_NAMES.get(ca, "dot" if kind == "radio" else "check")
+            info["export_value"] = exp
+            info["default_checked"] = (dv_str == exp) if dv is not None else (
+                str(annot.get("/AS", "/Off")) == "/" + exp)
+            if kind == "radio":
+                info["group"] = name
+        for k in ("decimals", "separators", "neg_style", "currency", "currency_after", "date", "time", "mask"):
             if k in fmt:
                 info[k] = fmt[k]
-        for k in ("min", "max", "validate"):
+        for k in ("min", "max", "pattern", "validate"):
             if k in bounds:
                 info[k] = bounds[k]
         found.setdefault(number, []).append(info)
@@ -478,9 +687,10 @@ def _format_scripts(field):
     sep = 2 if str(field.get("separators") or "") in ("1.234,56", "comma", "2") else 0
     if kind in ("number", "amount", "currency"):
         decimals = int(field.get("decimals", 0 if kind == "number" else 2))
+        neg = max(0, min(3, int(field.get("neg_style", 0))))
         symbol = str(field.get("currency") or ("€" if kind == "currency" else "")) if kind == "currency" else ""
         before = "true" if not field.get("currency_after") else "false"
-        args = f"{decimals}, {sep}, 0, 0, {_js_string(symbol)}, {before}"
+        args = f"{decimals}, {sep}, {neg}, 0, {_js_string(symbol)}, {before}"
         return f"AFNumber_Format({args});", f"AFNumber_Keystroke({args});"
     if kind == "percent":
         decimals = int(field.get("decimals", 0))
@@ -491,6 +701,19 @@ def _format_scripts(field):
             raise core.PdfManagerError(f"unknown date pattern {pattern!r}; e.g. dd/mm/yyyy")
         return (f"AFDate_FormatEx({_js_string(pattern)});",
                 f"AFDate_KeystrokeEx({_js_string(pattern)});")
+    if kind == "time":
+        pattern = str(field.get("time") or "HH:MM")
+        if not re.fullmatch(r"[HhMmsStT: .]+", pattern):
+            raise core.PdfManagerError(f"unknown time pattern {pattern!r}; e.g. HH:MM")
+        return (f"AFTime_FormatEx({_js_string(pattern)});",
+                f"AFTime_KeystrokeEx({_js_string(pattern)});")
+    if kind == "mask":
+        mask = str(field.get("mask") or "")
+        if not mask:
+            raise core.PdfManagerError("a custom mask needs a pattern (e.g. 999-99-9999)")
+        q = _js_string(mask)
+        return (f"/*mask:{q}*/ AFSpecial_FormatEx({q});",
+                f"/*mask:{q}*/ AFSpecial_KeystrokeEx({q});")
     special = {"zip": 0, "phone": 2}[kind]
     return f"AFSpecial_Format({special});", f"AFSpecial_Keystroke({special});"
 
@@ -534,6 +757,16 @@ def _calculation(field):
 
 
 def _validation(field):
+    pattern = field.get("pattern")
+    if pattern not in (None, ""):
+        pat = str(pattern)
+        try:
+            re.compile(pat)
+        except re.error:
+            raise core.PdfManagerError(f"invalid validation pattern {pat!r}") from None
+        q = _js_string(pat)
+        anchored = _js_string(f"^(?:{pat})$")
+        return f"/*pattern:{q}*/ if (event.value) {{ event.rc = new RegExp({anchored}).test(event.value); }}"
     low, high = field.get("min"), field.get("max")
     if low in (None, "") and high in (None, ""):
         return None
@@ -1204,6 +1437,142 @@ def _remake(writer, acroform, annot, field, kind, width, height):
     return False
 
 
+def _ensure_font_alias(writer, acroform, font_name):
+    """Ensure ``font_name`` has a /Font entry in /AcroForm /DR /Font and
+    return its resource name (e.g. '/Helv' or '/TiRo')."""
+    fonts = _fonts(writer, acroform)
+    key = str(font_name or "Helvetica").strip().lower()
+    if key in _STANDARD_MAP:
+        alias, base = _STANDARD_MAP[key]
+        if alias not in fonts:
+            fobj = DictionaryObject({
+                NameObject("/Type"): NameObject("/Font"),
+                NameObject("/Subtype"): NameObject("/Type1"),
+                NameObject("/BaseFont"): NameObject(base),
+                NameObject("/Encoding"): NameObject("/WinAnsiEncoding"),
+            })
+            fonts[NameObject(alias)] = writer._add_object(fobj)
+        return alias
+    # Reuse a matching document font if already present in /DR /Font or any page.
+    for existing_alias, ref in list(fonts.items()):
+        obj = ref.get_object()
+        base = str(obj.get("/BaseFont", ""))[1:].split("+", 1)[-1].lower()
+        if base == key or base.replace("-", " ") == key.replace("-", " "):
+            return str(existing_alias)
+    for page in writer.pages[:50]:
+        res = page.get("/Resources")
+        pfonts = (res.get_object().get("/Font") if res is not None else None) or {}
+        if hasattr(pfonts, "get_object"):
+            pfonts = pfonts.get_object()
+        for _, ref in (pfonts.items() if isinstance(pfonts, DictionaryObject) else ()):
+            obj = ref.get_object()
+            base = str(obj.get("/BaseFont", ""))[1:].split("+", 1)[-1].lower()
+            if base == key or base.replace("-", " ") == key.replace("-", " "):
+                alias = "/F" + re.sub(r"[^A-Za-z0-9]", "", font_name)[:16]
+                if alias not in fonts:
+                    fonts[NameObject(alias)] = ref
+                return alias
+    # Fall back to Helvetica if an unknown/unembedded font is requested.
+    return "/Helv"
+
+
+def _set_visibility(annot, visibility):
+    vis = str(visibility or "visible").lower()
+    f = int(annot.get("/F", 4) or 0)
+    f &= ~(2 | 4 | 32)
+    if vis == "hidden":
+        f |= 2
+    elif vis == "noprint":
+        pass
+    elif vis == "printonly":
+        f |= 4 | 32
+    else:
+        f |= 4
+    annot[NameObject("/F")] = NumberObject(f)
+
+
+def _options_array(items):
+    out = ArrayObject()
+    for item in items:
+        if isinstance(item, dict):
+            lbl = str(item.get("label") or item.get("value") or "")
+            val = str(item.get("value") if item.get("value") is not None else lbl)
+            if val == lbl:
+                out.append(TextStringObject(lbl))
+            else:
+                out.append(ArrayObject([TextStringObject(val), TextStringObject(lbl)]))
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            val, lbl = str(item[0]), str(item[1])
+            if val == lbl:
+                out.append(TextStringObject(lbl))
+            else:
+                out.append(ArrayObject([TextStringObject(val), TextStringObject(lbl)]))
+        else:
+            out.append(TextStringObject(str(item)))
+    return out
+
+
+def _rename_export_state(annot, field, new_state):
+    clean = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(new_state or "Yes").strip()) or "Yes"
+    old_state = _export_value_of(annot)
+    if clean == old_state:
+        return clean
+    try:
+        normal = annot["/AP"]["/N"].get_object()
+        if "/" + old_state in normal:
+            normal[NameObject("/" + clean)] = normal.pop("/" + old_state)
+    except (KeyError, AttributeError, TypeError):
+        pass
+    if annot.get("/AS") == "/" + old_state:
+        annot[NameObject("/AS")] = NameObject("/" + clean)
+    if _inherited(field, "/V") == "/" + old_state:
+        field[NameObject("/V")] = NameObject("/" + clean)
+    if _inherited(field, "/DV") == "/" + old_state:
+        field[NameObject("/DV")] = NameObject("/" + clean)
+    return clean
+
+
+def _move_radio_group(writer, field_list, rows, annot, old_field, group_name, taken, fields, first_names):
+    """Move a radio widget ``annot`` to a radio group named ``group_name``."""
+    target_name = " ".join(str(group_name or "").replace(".", " ").split())
+    if not target_name or target_name == _qualified_name(old_field):
+        return old_field
+    annot_ref = _ref_of(annot, writer.pages)
+    target_field = next((f for f in fields.values()
+                         if _kind(f) == "radio" and _qualified_name(f) == target_name), None)
+    if old_field is not annot and "/Kids" in old_field:
+        _drop(old_field["/Kids"], annot)
+        if not len(old_field["/Kids"]):
+            old_parent = old_field["/Parent"].get_object() if "/Parent" in old_field else None
+            _drop(old_parent["/Kids"] if old_parent and "/Kids" in old_parent else field_list, old_field)
+            old_q = _qualified_name(old_field)
+            taken.discard(old_q)
+            fields.pop(_key(old_field), None)
+            first_names.pop(_key(old_field), None)
+    if target_field is None:
+        parent = DictionaryObject({
+            NameObject("/FT"): NameObject("/Btn"),
+            NameObject("/Ff"): NumberObject(int(_inherited(old_field, "/Ff", RADIO | NO_TOGGLE_OFF))),
+            NameObject("/T"): TextStringObject(target_name),
+            NameObject("/TU"): TextStringObject(target_name),
+            NameObject("/V"): NameObject("/Off"),
+            NameObject("/Kids"): ArrayObject([annot_ref] if annot_ref is not None else []),
+        })
+        parent_ref = writer._add_object(parent)
+        field_list.append(parent_ref)
+        taken.add(target_name)
+        fields[_key(parent)] = parent
+        first_names[_key(parent)] = target_name
+        target_field = parent
+    else:
+        parent_ref = _ref_of(target_field, writer.pages) or target_field.indirect_reference
+        if annot_ref is not None:
+            _child(target_field, "/Kids", ArrayObject).append(annot_ref)
+    if parent_ref is not None:
+        annot[NameObject("/Parent")] = parent_ref
+    return target_field
+
+
 def edit_fields(path, output, changes, password=None):
     """Change form fields a PDF already has. Each change names a field by
     its "page" (1-based) and "index" (its place among that page's fields, as
@@ -1380,24 +1749,197 @@ def edit_fields(path, output, changes, password=None):
             field[NameObject("/Ff")] = NumberObject(flags)
             touched = True
 
-        if change.get("options") is not None and kind in ("dropdown", "list"):
-            options = _options(change)
-            if not options and not flags & EDIT:
-                raise core.PdfManagerError(
-                    f"{_qualified_name(field)} on page {number} has no choices: add them, "
-                    "separated by commas")
-            field[NameObject("/Opt")] = ArrayObject(TextStringObject(o) for o in options)
-            value = _inherited(field, "/V")
-            if value is not None and str(value) not in options and not flags & EDIT:
-                for key in ("/V", "/DV", "/I"):
-                    if key in field:
-                        del field[key]
-                notes.append(f"{_qualified_name(field)} was set to \"{value}\", which is no "
-                             "longer a choice: it's now empty.")
-                redraw = True
+        if change.get("visibility") is not None:
+            _set_visibility(annot, change["visibility"])
             touched = True
 
-        fmt_keys = ("format", "decimals", "separators", "currency", "currency_after", "date")
+        if any(change.get(k) is not None for k in ("font", "font_size", "text_color")) and kind != "signature":
+            cur_font, cur_size, cur_color = _da_info(annot, field, acroform)
+            new_font = change["font"] if change.get("font") is not None else cur_font
+            new_size = float(change["font_size"]) if change.get("font_size") is not None else float(cur_size)
+            new_color = change["text_color"] if change.get("text_color") is not None else cur_color
+            alias = _ensure_font_alias(writer, acroform, new_font)
+            rgb = _rgb_of_hex(new_color) or [0, 0, 0]
+            color_op = "0 g" if all(c == 0 for c in rgb) else f"{rgb[0]:g} {rgb[1]:g} {rgb[2]:g} rg"
+            size_str = f"{int(new_size) if new_size.is_integer() else new_size:g}"
+            holder = annot if "/DA" in annot else field
+            holder[NameObject("/DA")] = TextStringObject(f"{alias} {size_str} Tf {color_op}")
+            redraw = True
+            touched = True
+
+        look_remake = False
+        if "fill_color" in change and change["fill_color"] is not None:
+            mk = _child(annot, "/MK", DictionaryObject)
+            rgb = _rgb_of_hex(change["fill_color"])
+            if rgb is None:
+                if "/BG" in mk:
+                    del mk["/BG"]
+            else:
+                mk[NameObject("/BG")] = ArrayObject(_num(c) for c in rgb)
+            look_remake = True
+            touched = True
+        if "border_color" in change and change["border_color"] is not None:
+            mk = _child(annot, "/MK", DictionaryObject)
+            rgb = _rgb_of_hex(change["border_color"])
+            if rgb is None:
+                if "/BC" in mk:
+                    del mk["/BC"]
+            else:
+                mk[NameObject("/BC")] = ArrayObject(_num(c) for c in rgb)
+            look_remake = True
+            touched = True
+        if "border_width" in change and change["border_width"] is not None:
+            bw = max(0.0, float(change["border_width"]))
+            bs = _child(annot, "/BS", DictionaryObject)
+            bs[NameObject("/W")] = _num(bw)
+            if "/S" not in bs:
+                bs[NameObject("/S")] = NameObject("/S")
+            look_remake = True
+            touched = True
+        if look_remake:
+            x0, y0, x1, y1 = (float(v) for v in annot["/Rect"])
+            redraw = _remake(writer, acroform, annot, field, kind, abs(x1 - x0), abs(y1 - y0)) or redraw
+
+        if change.get("align") is not None and kind in ("text", "multiline", "dropdown", "list"):
+            q_map = {"left": 0, "center": 1, "right": 2}
+            q_val = q_map.get(str(change["align"]).lower(), 0)
+            field[NameObject("/Q")] = NumberObject(q_val)
+            if "/Q" in annot and annot is not field:
+                del annot["/Q"]
+            redraw = True
+            touched = True
+
+        if kind in ("text", "multiline"):
+            tflags = tbefore = int(_inherited(field, "/Ff", 0))
+            if "default_value" in change and change["default_value"] is not None:
+                dv_txt = str(change["default_value"])
+                if dv_txt:
+                    field[NameObject("/DV")] = TextStringObject(dv_txt)
+                    if not _inherited(field, "/V"):
+                        field[NameObject("/V")] = TextStringObject(dv_txt)
+                else:
+                    if "/DV" in field:
+                        del field["/DV"]
+                redraw = True
+                touched = True
+            if "max_length" in change:
+                ml = int(change["max_length"] or 0)
+                if ml > 0:
+                    field[NameObject("/MaxLen")] = NumberObject(ml)
+                elif "/MaxLen" in field:
+                    del field["/MaxLen"]
+                if ml <= 0:
+                    tflags &= ~COMB
+                touched = True
+            if "password" in change and change["password"] is not None:
+                tflags = tflags | PASSWORD if change["password"] else tflags & ~PASSWORD
+            if "scroll" in change and change["scroll"] is not None:
+                tflags = tflags & ~DO_NOT_SCROLL if change["scroll"] else tflags | DO_NOT_SCROLL
+            if "comb" in change and change["comb"] is not None:
+                if change["comb"]:
+                    tflags = (tflags | COMB) & ~(MULTILINE | PASSWORD)
+                    if "/MaxLen" not in field or int(field["/MaxLen"]) <= 0:
+                        field[NameObject("/MaxLen")] = NumberObject(10)
+                    kind = "text"
+                else:
+                    tflags &= ~COMB
+            if tflags != tbefore:
+                field[NameObject("/Ff")] = NumberObject(tflags)
+                flags = tflags
+                redraw = True
+                touched = True
+
+        if kind in ("dropdown", "list"):
+            cflags = cbefore = int(_inherited(field, "/Ff", 0))
+            if "allow_custom" in change and change["allow_custom"] is not None and kind == "dropdown":
+                cflags = cflags | EDIT if change["allow_custom"] else cflags & ~EDIT
+            if "multiselect" in change and change["multiselect"] is not None and kind == "list":
+                cflags = cflags | MULTI_SELECT if change["multiselect"] else cflags & ~MULTI_SELECT
+            if cflags != cbefore:
+                field[NameObject("/Ff")] = NumberObject(cflags)
+                flags = cflags
+                touched = True
+            if change.get("choices") is not None or change.get("options") is not None:
+                raw_items = change.get("choices") if change.get("choices") is not None else _options(change)
+                if not raw_items and not flags & EDIT:
+                    raise core.PdfManagerError(
+                        f"{_qualified_name(field)} on page {number} has no choices: add them, "
+                        "separated by commas")
+                opt_arr = _options_array(raw_items)
+                field[NameObject("/Opt")] = opt_arr
+                valid_vals = {str(o[0].get_object()) if isinstance(o, ArrayObject) else str(o) for o in opt_arr}
+                valid_lbls = {str(o[-1].get_object()) if isinstance(o, ArrayObject) else str(o) for o in opt_arr}
+                value = _inherited(field, "/V")
+                if value is not None and str(value) not in (valid_vals | valid_lbls) and not flags & EDIT:
+                    for key in ("/V", "/DV", "/I"):
+                        if key in field:
+                            del field[key]
+                    notes.append(f"{_qualified_name(field)} was set to \"{value}\", which is no "
+                                 "longer a choice: it's now empty.")
+                    redraw = True
+                touched = True
+            if "default_choice" in change and change["default_choice"] is not None:
+                dc = change["default_choice"]
+                if isinstance(dc, (list, tuple)):
+                    arr = ArrayObject(TextStringObject(str(v)) for v in dc if str(v) != "")
+                    if len(arr):
+                        field[NameObject("/DV")] = arr
+                        if not _inherited(field, "/V"):
+                            field[NameObject("/V")] = arr
+                    elif "/DV" in field:
+                        del field["/DV"]
+                elif str(dc):
+                    field[NameObject("/DV")] = TextStringObject(str(dc))
+                    if not _inherited(field, "/V"):
+                        field[NameObject("/V")] = TextStringObject(str(dc))
+                else:
+                    if "/DV" in field:
+                        del field["/DV"]
+                redraw = True
+                touched = True
+
+        if kind in ("checkbox", "radio"):
+            btn_remake = False
+            if change.get("group") is not None and kind == "radio":
+                field = _move_radio_group(writer, field_list, rows, annot, field, change["group"],
+                                          taken, fields, first_names)
+                rows = list(_widgets(writer.pages))
+                touched = True
+            if change.get("export_value") is not None:
+                _rename_export_state(annot, field, change["export_value"])
+                btn_remake = True
+                touched = True
+            if change.get("tick_style") is not None:
+                ts = str(change["tick_style"]).lower()
+                glyph = TICK_STYLES.get(ts, TICK if kind == "checkbox" else DOT)
+                mk = _child(annot, "/MK", DictionaryObject)
+                mk[NameObject("/CA")] = TextStringObject(glyph)
+                btn_remake = True
+                touched = True
+            if "default_checked" in change and change["default_checked"] is not None:
+                exp = _export_value_of(annot)
+                if change["default_checked"]:
+                    val_obj = NameObject("/" + exp)
+                    field[NameObject("/DV")] = val_obj
+                    field[NameObject("/V")] = val_obj
+                    annot[NameObject("/AS")] = val_obj
+                    if kind == "radio" and "/Kids" in field:
+                        for kid_ref in field["/Kids"]:
+                            kid = kid_ref.get_object()
+                            if kid is not annot:
+                                kid[NameObject("/AS")] = NameObject("/Off")
+                else:
+                    if str(_inherited(field, "/DV", "")) == "/" + exp or kind == "checkbox":
+                        field[NameObject("/DV")] = NameObject("/Off")
+                    if str(_inherited(field, "/V", "")) == "/" + exp or kind == "checkbox":
+                        field[NameObject("/V")] = NameObject("/Off")
+                    annot[NameObject("/AS")] = NameObject("/Off")
+                touched = True
+            if btn_remake:
+                x0, y0, x1, y1 = (float(v) for v in annot["/Rect"])
+                _remake(writer, acroform, annot, field, kind, abs(x1 - x0), abs(y1 - y0))
+
+        fmt_keys = ("format", "decimals", "separators", "neg_style", "currency", "currency_after", "date", "time", "mask")
         if any(change.get(k) is not None for k in fmt_keys) and kind in ("text", "multiline"):
             if "format" in change and not change["format"]:
                 if "/AA" in field:
@@ -1417,6 +1959,7 @@ def edit_fields(path, output, changes, password=None):
                 merged = {**cur_fmt, **{k: change[k] for k in fmt_keys if change.get(k) is not None}}
                 if not merged.get("format"):
                     merged["format"] = ("currency" if merged.get("currency") else "date" if merged.get("date")
+                                        else "time" if merged.get("time") else "mask" if merged.get("mask")
                                         else "amount" if merged.get("decimals") == 2 else "number")
                 scripts = _format_scripts(merged)
                 if scripts:
@@ -1424,10 +1967,13 @@ def edit_fields(path, output, changes, password=None):
                     aa[NameObject("/F")], aa[NameObject("/K")] = _js(scripts[0]), _js(scripts[1])
                     touched = True
 
-        if ("min" in change or "max" in change) and kind in ("text", "multiline"):
+        if ("min" in change or "max" in change or "pattern" in change) and kind in ("text", "multiline"):
             cur_range = _range_of(field)
-            spec = {"min": change["min"] if "min" in change else cur_range.get("min"),
-                    "max": change["max"] if "max" in change else cur_range.get("max")}
+            if "pattern" in change:
+                spec = {"pattern": change["pattern"]}
+            else:
+                spec = {"min": change["min"] if "min" in change else cur_range.get("min"),
+                        "max": change["max"] if "max" in change else cur_range.get("max")}
             check = _validation(spec)
             if check:
                 aa = _child(field, "/AA", DictionaryObject)

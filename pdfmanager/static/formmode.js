@@ -132,13 +132,15 @@ export const FormMode = (Base) => class extends Base {
   closeFormMode() {
     if (!this.formMode) return;
     this._formFlushNudge();
+    this._formPickCb = null;
     this.formMode = false;
     this.formTool = "select";
     this.formPicked = new Set();
-    this.root.classList.remove("rd-formmode", "rd-form-placing");
+    this.root.classList.remove("rd-formmode", "rd-form-placing", "rd-form-picking");
     this.formmodebar.hidden = true;
     for (const layer of this.viewerEl.querySelectorAll(".rd-formlayer")) layer.remove();
     this._stepAside();
+    this._notifyFormSelect();
   }
 
   _setFormTool(tool) {
@@ -210,6 +212,32 @@ export const FormMode = (Base) => class extends Base {
       layer.replaceChildren(...nodes);
     }
     this._formUndoButtons();
+    this._notifyFormSelect();
+  }
+
+  _notifyFormSelect() {
+    this.onFormSelect?.(this.formMode ? this._selectedFields() : [], this.activeTab?.formFields?.pages || {}, this.activeTab);
+  }
+
+  setFormPickMode(cb) {
+    this._formPickCb = cb || null;
+    this.root.classList.toggle("rd-form-picking", !!this._formPickCb);
+  }
+
+  async formFonts() {
+    const tab = this.activeTab;
+    if (!tab || !this.doc) return null;
+    const version = tab.version || 0;
+    if (tab.formFonts?.version === version) return tab.formFonts.choices;
+    try {
+      const res = await this._post("/api/text/fonts", await this._currentBytes(), tab);
+      if (res.ok) {
+        const choices = await res.json();
+        if ((tab.version || 0) === version) tab.formFonts = { version, choices };
+        return choices;
+      }
+    } catch (e) { /* ignored */ }
+    return null;
   }
 
   _selectedFields() {
@@ -264,6 +292,11 @@ export const FormMode = (Base) => class extends Base {
       if (fieldEl) {
         e.preventDefault(); e.stopPropagation();
         const fPage = Number(fieldEl.dataset.page), fIdx = Number(fieldEl.dataset.index);
+        if (this._formPickCb) {
+          const f = (this._formFields()?.[String(fPage)] || []).find((x) => x.index === fIdx);
+          if (f) this._formPickCb({ page: fPage, ...f });
+          return;
+        }
         const key = fieldKey(fPage, fIdx);
         if (e.shiftKey) {
           if (this.formPicked.has(key)) this.formPicked.delete(key);
@@ -400,8 +433,11 @@ export const FormMode = (Base) => class extends Base {
     });
   }
 
-  _editFormFields(changes, { keepNames = null } = {}) {
+  editFormFields(changes, opts = {}) { return this._editFormFields(changes, opts); }
+
+  _editFormFields(changes, { keepNames = null, keepSelection = false } = {}) {
     if (!changes?.length || !this.doc) return;
+    const savedKeys = keepSelection ? new Set(this.formPicked) : null;
     return this._changeDocument((bytes, tab) => this._post("/api/form/edit", bytes, tab, { changes: JSON.stringify(changes) }), {
       failure: "Couldn't update form fields: ",
       edited: (_res, tab) => {
@@ -410,6 +446,7 @@ export const FormMode = (Base) => class extends Base {
       },
       after: () => {
         if (keepNames) this._selectFieldsByName(this._formPickByNames);
+        else if (savedKeys) { this.formPicked = savedKeys; this._drawFormOverlays(); }
         else { this.formPicked = new Set(); this._drawFormOverlays(); }
       },
     });
