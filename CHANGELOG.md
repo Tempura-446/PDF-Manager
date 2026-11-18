@@ -37,6 +37,13 @@ Draw, move, resize and arrange form fields directly on the page in the reader.
   **Validation** (number range or regex pattern), and **Calculation** (sum,
   product, average, min, max with **Pick fields on page**, or a formula).
   Selecting several fields edits what they share.
+- **Layout help, guides, and field tables.** Dragging or resizing a field
+  snaps to other fields' edges and centres as well as the page's own lines
+  (hold `Alt` to move freely). With several fields selected, align edges or
+  centres, match width, height, or size, or distribute evenly. With one
+  field selected, **Copy to pages** duplicates it across pages (keeping one
+  shared name or numbering each copy) and **Make a table** turns it into a
+  grid of numbered fields.
 
 ## 0.56.0
 

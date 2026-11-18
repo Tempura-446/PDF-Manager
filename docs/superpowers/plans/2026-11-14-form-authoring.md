@@ -68,10 +68,10 @@
 - [x] (Done in 0.56.0.) Tests: a field moved from page 1 to page 2 is listed, tabbed to and filled there; each type switch reads back as the new type with name and place unchanged; an Acrobat-made amount field's format is reported and changed to a date; a total's list of fields is edited and still adds up in the reader.
 
 **Task 2.3: layout help**
-- [ ] Guides while dragging: edges and centres of other fields, and the page's own lines (the snapping geometry measuring uses).
-- [ ] Align left, right, top, bottom, centre; same width, height or both; distribute evenly; with several selected.
-- [ ] "Copy to pages…": the same field on a range of pages (same name: one value everywhere; or numbered names).
-- [ ] A table of fields: select a field, "Make a table" with rows and columns, names numbered (`Qty.1`, `Qty.2`).
+- [x] Guides while dragging: edges and centres of other fields, and the page's own lines (the snapping geometry measuring uses).
+- [x] Align left, right, top, bottom, centre; same width, height or both; distribute evenly; with several selected.
+- [x] "Copy to pages…": the same field on a range of pages (same name: one value everywhere; or numbered names).
+- [x] A table of fields: select a field, "Make a table" with rows and columns, names numbered (`Qty 1`, `Qty 2`).
 
 ### Phase 3 (release C): order, trying it out, and data
 

@@ -883,4 +883,7 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
   position: absolute; pointer-events: none; box-sizing: border-box;
   border: 1.5px dashed var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
+.rd-formguide { position: absolute; pointer-events: none; z-index: 30; background: #e11d48; }
+.rd-formguide.x { top: 0; bottom: 0; width: 1px; }
+.rd-formguide.y { left: 0; right: 0; height: 1px; }
 

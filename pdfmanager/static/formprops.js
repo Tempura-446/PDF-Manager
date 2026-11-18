@@ -520,5 +520,116 @@ export function renderFormProps(host, selected, allPages, reader) {
     }
   }
 
+  // ---- Layout (Align / Size / Distribute / Copy to pages / Make a table) ----
+  const lay = [];
+  if (multi) {
+    const alignFields = (mode) => {
+      const xs0 = selected.map((f) => f.rect[0]), ys0 = selected.map((f) => f.rect[1]);
+      const xs1 = selected.map((f) => f.rect[2]), ys1 = selected.map((f) => f.rect[3]);
+      const minX = Math.min(...xs0), maxX = Math.max(...xs1), midX = (minX + maxX) / 2;
+      const minY = Math.min(...ys0), maxY = Math.max(...ys1), midY = (minY + maxY) / 2;
+      const changes = selected.map((f) => {
+        let [x0, y0, x1, y1] = f.rect;
+        const w = x1 - x0, h = y1 - y0;
+        if (mode === "left") { x0 = minX; x1 = minX + w; }
+        else if (mode === "right") { x1 = maxX; x0 = maxX - w; }
+        else if (mode === "center") { x0 = midX - w / 2; x1 = midX + w / 2; }
+        else if (mode === "top") { y1 = maxY; y0 = maxY - h; }
+        else if (mode === "bottom") { y0 = minY; y1 = minY + h; }
+        else if (mode === "middle") { y0 = midY - h / 2; y1 = midY + h / 2; }
+        return { page: f.page, index: f.index, rect: [x0, y0, x1, y1] };
+      });
+      reader.editFormFields(changes, { keepSelection: true });
+    };
+    const sameSize = (which) => {
+      const aw = first.rect[2] - first.rect[0], ah = first.rect[3] - first.rect[1];
+      const changes = selected.map((f) => {
+        const [x0, y0, x1, y1] = f.rect;
+        const nw = (which === "w" || which === "both") ? aw : (x1 - x0);
+        const nh = (which === "h" || which === "both") ? ah : (y1 - y0);
+        return { page: f.page, index: f.index, rect: [x0, y1 - nh, x0 + nw, y1] };
+      });
+      reader.editFormFields(changes, { keepSelection: true });
+    };
+    const distribute = (axis) => {
+      if (selected.length < 3) return;
+      const sorted = [...selected].sort((a, b) => axis === "h" ? a.rect[0] - b.rect[0] : b.rect[3] - a.rect[3]);
+      if (axis === "h") {
+        const totalSpan = sorted[sorted.length - 1].rect[2] - sorted[0].rect[0];
+        const sumW = sorted.reduce((acc, f) => acc + (f.rect[2] - f.rect[0]), 0);
+        const gap = (totalSpan - sumW) / (sorted.length - 1);
+        let curX = sorted[0].rect[2] + gap;
+        const changes = [];
+        for (let i = 1; i < sorted.length - 1; i++) {
+          const f = sorted[i], w = f.rect[2] - f.rect[0];
+          changes.push({ page: f.page, index: f.index, rect: [curX, f.rect[1], curX + w, f.rect[3]] });
+          curX += w + gap;
+        }
+        reader.editFormFields(changes, { keepSelection: true });
+      } else {
+        const totalSpan = sorted[0].rect[3] - sorted[sorted.length - 1].rect[1];
+        const sumH = sorted.reduce((acc, f) => acc + (f.rect[3] - f.rect[1]), 0);
+        const gap = (totalSpan - sumH) / (sorted.length - 1);
+        let curY = sorted[0].rect[1] - gap;
+        const changes = [];
+        for (let i = 1; i < sorted.length - 1; i++) {
+          const f = sorted[i], h = f.rect[3] - f.rect[1];
+          changes.push({ page: f.page, index: f.index, rect: [f.rect[0], curY - h, f.rect[2], curY] });
+          curY -= h + gap;
+        }
+        reader.editFormFields(changes, { keepSelection: true });
+      }
+    };
+    const mkBtn = (label, fn) => {
+      const b = el("button", { class: "rd-btn", type: "button" }, label);
+      b.addEventListener("click", fn);
+      return b;
+    };
+    lay.push(el("div", { class: "fp-prop-btngrid" },
+      mkBtn("Align left", () => alignFields("left")),
+      mkBtn("Align center", () => alignFields("center")),
+      mkBtn("Align right", () => alignFields("right")),
+      mkBtn("Align top", () => alignFields("top")),
+      mkBtn("Align middle", () => alignFields("middle")),
+      mkBtn("Align bottom", () => alignFields("bottom")),
+      mkBtn("Same width", () => sameSize("w")),
+      mkBtn("Same height", () => sameSize("h")),
+      mkBtn("Same size", () => sameSize("both")),
+    ));
+    if (selected.length >= 3) {
+      lay.push(el("div", { class: "fp-prop-btngrid" },
+        mkBtn("Distribute across", () => distribute("h")),
+        mkBtn("Distribute down", () => distribute("v")),
+      ));
+    }
+  } else {
+    const pagesIn = el("input", { class: "fp-prop-in", type: "text", value: "all", placeholder: "e.g. 2-5 or all" });
+    const sameCb = el("input", { type: "checkbox", checked: true });
+    const copyBtn = el("button", { class: "rd-btn", type: "button" }, "Copy to pages");
+    copyBtn.addEventListener("click", () => reader.copyFieldToPages?.(first.page, first.index, pagesIn.value || "all", sameCb.checked));
+    lay.push(
+      row("Pages", pagesIn),
+      el("label", { class: "fp-prop-check" }, sameCb, el("span", {}, "Same name (one value everywhere)")),
+      copyBtn,
+    );
+    const rowsIn = el("input", { class: "fp-prop-in", type: "number", min: "1", max: "50", value: "2" });
+    const colsIn = el("input", { class: "fp-prop-in", type: "number", min: "1", max: "20", value: "2" });
+    const gapIn = el("input", { class: "fp-prop-in", type: "number", min: "0", max: "100", value: "4" });
+    const tblBtn = el("button", { class: "rd-btn", type: "button" }, "Make a table");
+    tblBtn.addEventListener("click", () => reader.makeFieldTable?.(
+      first.page, first.index,
+      Math.max(1, parseInt(rowsIn.value || "2", 10) || 2),
+      Math.max(1, parseInt(colsIn.value || "2", 10) || 2),
+      parseFloat(gapIn.value || "4") || 0,
+      parseFloat(gapIn.value || "4") || 0,
+    ));
+    lay.push(
+      row("Rows × Cols", el("span", { class: "fp-prop-inline" }, rowsIn, el("span", {}, "×"), colsIn)),
+      row("Gap (pt)", gapIn),
+      tblBtn,
+    );
+  }
+  frag.append(section("Layout", ...lay));
+
   host.replaceChildren(frag);
 }
