@@ -117,33 +117,236 @@ def existing_fields(path, password=None):
     return found
 
 
-_SIMPLE_CALC = re.compile(r"\s*AFSimple_Calculate\(\s*(\"[^\"]*\")\s*,\s*new Array\s*\((.*)\)\s*\)\s*;?\s*", re.S)
+CALC_NAMES = {v: k for k, v in CALCULATIONS.items()}
+_JS_STR = r'(?:"(?:[^"\\\n\r]|\\.)*"|\'(?:[^\'\\\n\r]|\\.)*\')'
+_SIMPLE_CALC = re.compile(
+    rf"\s*\ufeff*AFSimple_Calculate\(\s*({_JS_STR})\s*,\s*new\s+Array\s*\((.*?)\)\s*\)\s*;?\s*", re.S)
+_NUMBER_FMT = re.compile(
+    rf"\s*\ufeff*AFNumber_Format\(\s*(\d+)\s*,\s*(\d+)\s*,\s*\d+\s*,\s*\d+\s*,\s*({_JS_STR})\s*,\s*(true|false)\s*\)\s*;?\s*", re.S)
+_PERCENT_FMT = re.compile(rf"\s*\ufeff*AFPercent_Format\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*;?\s*", re.S)
+_DATE_FMT = re.compile(rf"\s*\ufeff*AFDate_Format(?:Ex)?\(\s*({_JS_STR})\s*\)\s*;?\s*", re.S)
+_SPECIAL_FMT = re.compile(r"\s*\ufeff*AFSpecial_Format\(\s*(\d+)\s*\)\s*;?\s*", re.S)
+_RANGE_VAL = re.compile(
+    r"\s*\ufeff*AFRange_Validate\(\s*(true|false)\s*,\s*([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*,"
+    r"\s*(true|false)\s*,\s*([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*\)\s*;?\s*", re.S)
+_EVENT_CALC = re.compile(r"\s*\ufeff*event\.value\s*=\s*(.+?)\s*;?\s*", re.S)
+_GET_FIELD = re.compile(
+    rf"(?:Number\s*\(\s*)?this\.getField\(\s*({_JS_STR})\s*\)\.value(?:\s*\))?")
+_FORMULA_TOKEN = re.compile(
+    rf"\s*(?:(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|([+\-*/()])|\[([^\[\]\n\r]+)\]|({_JS_STR})|"
+    r"([A-Za-z_][A-Za-z0-9_.]*(?: +[A-Za-z_][A-Za-z0-9_.]*)*))")
+
+
+def _unquote_js(token):
+    token = token.strip()
+    if token.startswith("'") and token.endswith("'"):
+        inner = token[1:-1].replace("\\'", "'").replace('"', '\\"')
+        token = f'"{inner}"'
+    return str(json.loads(token))
+
+
+def _action_js(field, key):
+    aa = _inherited(field, "/AA")
+    aa = aa.get_object() if aa is not None else None
+    if not isinstance(aa, DictionaryObject) or key not in aa:
+        return None
+    act = aa[key].get_object()
+    js = act.get("/JS") if isinstance(act, DictionaryObject) else None
+    js = js.get_object() if js is not None else None
+    return str(js) if isinstance(js, str) else None
+
+
+def _parse_formula(expr, rename=None):
+    """Check a simple arithmetic formula over field names (e.g. ``Qty * Price``
+    or ``([Net price] - Discount) * 1.2``) and return ``(clean_formula,
+    field_names, js_code)``."""
+    text = str(expr or "").strip()
+    if not text:
+        raise core.PdfManagerError("invalid calculation formula: give an expression such as Qty * Price")
+    pos, tokens = 0, []
+    while pos < len(text):
+        m = _FORMULA_TOKEN.match(text, pos)
+        if not m or m.end() == pos:
+            raise core.PdfManagerError(f"invalid calculation formula {expr!r}")
+        pos = m.end()
+        num, op, bracketed, quoted, bare = m.groups()
+        if num is not None:
+            tokens.append(("num", num))
+        elif op is not None:
+            tokens.append(("op", op))
+        elif bracketed is not None:
+            name = " ".join(bracketed.split())
+            if not name:
+                raise core.PdfManagerError(f"invalid calculation formula {expr!r}")
+            tokens.append(("field", name))
+        elif quoted is not None:
+            try:
+                name = " ".join(_unquote_js(quoted).split())
+            except ValueError:
+                raise core.PdfManagerError(f"invalid calculation formula {expr!r}") from None
+            if not name:
+                raise core.PdfManagerError(f"invalid calculation formula {expr!r}")
+            tokens.append(("field", name))
+        elif bare is not None:
+            tokens.append(("field", " ".join(bare.split())))
+    want_operand, depth = True, 0
+    fields, seen, js_parts, disp_parts = [], set(), [], []
+    for i, (kind, val) in enumerate(tokens):
+        if want_operand:
+            if kind == "op" and val == "(":
+                depth += 1
+                js_parts.append("(")
+                disp_parts.append("(")
+            elif kind == "op" and val in ("+", "-"):
+                js_parts.append(val)
+                disp_parts.append(val)
+            elif kind == "num":
+                js_parts.append(val)
+                disp_parts.append(val)
+                want_operand = False
+            elif kind == "field":
+                if i + 1 < len(tokens) and tokens[i + 1] == ("op", "("):
+                    raise core.PdfManagerError(f"invalid calculation formula {expr!r}")
+                name = rename.get(val, val) if rename else val
+                if name not in seen:
+                    seen.add(name)
+                    fields.append(name)
+                js_parts.append(f"Number(this.getField({_js_string(name)}).value)")
+                simple = bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", name))
+                disp_parts.append(name if simple else f"[{name}]")
+                want_operand = False
+            else:
+                raise core.PdfManagerError(f"invalid calculation formula {expr!r}")
+        else:
+            if kind == "op" and val == ")":
+                depth -= 1
+                if depth < 0:
+                    raise core.PdfManagerError(f"invalid calculation formula {expr!r}")
+                js_parts.append(")")
+                disp_parts.append(")")
+            elif kind == "op" and val in ("+", "-", "*", "/"):
+                js_parts.append(f" {val} ")
+                disp_parts.append(f" {val} ")
+                want_operand = True
+            else:
+                raise core.PdfManagerError(f"invalid calculation formula {expr!r}")
+    if want_operand or depth != 0 or not fields:
+        raise core.PdfManagerError(f"invalid calculation formula {expr!r}")
+    return "".join(disp_parts), fields, "event.value = " + "".join(js_parts) + ";"
+
+
+def _formula_of(script):
+    """(formula, [names]) of an ``event.value = ...`` calculation over field
+    names, else None."""
+    match = _EVENT_CALC.fullmatch(script) if isinstance(script, str) else None
+    if not match:
+        return None
+    body = match.group(1)
+    outside = _GET_FIELD.sub("", body)
+    if not re.fullmatch(r"[0-9.+\-*/() \t\r\n]*", outside):
+        return None
+    try:
+        rebuilt = _GET_FIELD.sub(lambda m: f"[{_unquote_js(m.group(1))}]", body)
+        formula, fields, _ = _parse_formula(rebuilt)
+    except (core.PdfManagerError, ValueError):
+        return None
+    return formula, fields
 
 
 def _calc_of(field):
     """(operation, [names]) of a field worked out with AFSimple_Calculate
-    (the way this app and Acrobat's "value is the sum of" write it), else
-    None."""
-    try:
-        script = field["/AA"]["/C"]["/JS"]
-    except (KeyError, TypeError):
+    (the way this app and Acrobat's "value is the sum of" write it) or a
+    simple formula over field names ("=formula"), else None."""
+    script = _action_js(field, "/C")
+    if not script:
         return None
-    match = _SIMPLE_CALC.fullmatch(str(script)) if isinstance(script, str) else None
-    if not match:
-        return None
-    try:
-        names = json.loads("[" + match.group(2) + "]")
-    except ValueError:
-        return None
-    if not all(isinstance(n, str) for n in names):
-        return None
-    return json.loads(match.group(1)), names
+    match = _SIMPLE_CALC.fullmatch(script)
+    if match:
+        try:
+            op = _unquote_js(match.group(1))
+            items = re.findall(_JS_STR, match.group(2))
+            rest = re.sub(_JS_STR, "", match.group(2))
+            if not re.fullmatch(r"[\s,]*", rest):
+                return None
+            names = [_unquote_js(s) for s in items]
+        except ValueError:
+            return None
+        return (op, names) if names else None
+    formula = _formula_of(script)
+    if formula:
+        return "=" + formula[0], formula[1]
+    return None
+
+
+def _calc_script(op, names):
+    if op.startswith("="):
+        return _parse_formula(op[1:])[2]
+    return (f"AFSimple_Calculate({_js_string(op)}, new Array("
+            + ", ".join(_js_string(n) for n in names) + "));")
 
 
 def _set_calc(field, op, names):
-    field["/AA"]["/C"][NameObject("/JS")] = TextStringObject(
-        f"AFSimple_Calculate({_js_string(op)}, new Array("
-        + ", ".join(_js_string(n) for n in names) + "));")
+    actions = _child(field, "/AA", DictionaryObject)
+    actions[NameObject("/C")] = _js(_calc_script(op, names))
+
+
+def _format_of(field):
+    """The format of a text field as ``add_fields`` takes it ({"format":
+    "amount", "decimals": 2, ...}), {"format": "custom"} for another script,
+    or {} when it has none."""
+    script = _action_js(field, "/F")
+    if not script:
+        return {}
+    m = _NUMBER_FMT.fullmatch(script)
+    if m:
+        try:
+            decimals, sep_code = int(m.group(1)), int(m.group(2))
+            symbol = _unquote_js(m.group(3))
+        except ValueError:
+            return {"format": "custom"}
+        sep = "1.234,56" if sep_code in (2, 3) else "1,234.56"
+        before = m.group(4) == "true"
+        if symbol:
+            return {"format": "currency", "decimals": decimals, "separators": sep,
+                    "currency": symbol, "currency_after": not before}
+        return {"format": "amount" if decimals == 2 else "number",
+                "decimals": decimals, "separators": sep}
+    m = _PERCENT_FMT.fullmatch(script)
+    if m:
+        return {"format": "percent", "decimals": int(m.group(1)),
+                "separators": "1.234,56" if int(m.group(2)) in (2, 3) else "1,234.56"}
+    m = _DATE_FMT.fullmatch(script)
+    if m:
+        try:
+            return {"format": "date", "date": _unquote_js(m.group(1))}
+        except ValueError:
+            return {"format": "custom"}
+    m = _SPECIAL_FMT.fullmatch(script)
+    if m and int(m.group(1)) in (0, 2):
+        return {"format": "zip" if int(m.group(1)) == 0 else "phone"}
+    return {"format": "custom"}
+
+
+def _clean_number(text):
+    val = float(text)
+    return int(val) if val.is_integer() else val
+
+
+def _range_of(field):
+    """{"min": ..., "max": ...} of a field checked with AFRange_Validate,
+    {"validate": "custom"} for another validation script, or {}."""
+    script = _action_js(field, "/V")
+    if not script:
+        return {}
+    m = _RANGE_VAL.fullmatch(script)
+    if not m:
+        return {"validate": "custom"}
+    out = {}
+    if m.group(1) == "true":
+        out["min"] = _clean_number(m.group(2))
+    if m.group(3) == "true":
+        out["max"] = _clean_number(m.group(4))
+    return out
 
 
 def _value_of(field, kind):
@@ -172,13 +375,27 @@ def _key(obj):
     return id(obj)
 
 
+def _calc_detail(field):
+    calc = _calc_of(field)
+    if calc:
+        op, names = calc
+        if op.startswith("="):
+            return {"op": "formula", "formula": op[1:], "fields": names}
+        return {"op": CALC_NAMES.get(op, op.lower()), "fields": names}
+    if _action_js(field, "/C") is not None:
+        return {"op": "custom", "fields": []}
+    return None
+
+
 def field_details(path, password=None):
     """Like ``existing_fields``, with what the form tool needs to change a
     field: its "index" (its place among the page's fields, which
     ``edit_fields`` takes), "tooltip", "required", "readonly", "value",
     "options" (a dropdown's or list's), "widgets" (how many places the field
-    is shown: a radio group's buttons, or one box repeated), "calculated",
-    "used_by" (the fields worked out from it) and "signed"."""
+    is shown: a radio group's buttons, or one box repeated), "format" (and
+    its "decimals", "separators", "currency", "date"), "min", "max",
+    "calculated", "calculate", "used_by" (the fields worked out from it) and
+    "signed"."""
     reader = core.open_pdf(path, password)
     rows = list(_widgets(reader.pages))
     shown, users = {}, {}
@@ -196,15 +413,27 @@ def field_details(path, password=None):
         kind, name = _kind(field), _qualified_name(field)
         flags = int(_inherited(field, "/Ff", 0))
         tooltip = _inherited(field, "/TU")
-        found.setdefault(number, []).append({
+        fmt = _format_of(field) if kind in ("text", "multiline") else {}
+        bounds = _range_of(field) if kind in ("text", "multiline") else {}
+        calc_info = _calc_detail(field)
+        info = {
             "index": index, "rect": _rect_of(annot), "name": name, "type": kind,
             "tooltip": str(tooltip) if tooltip is not None else "",
             "required": bool(flags & REQUIRED), "readonly": bool(flags & READ_ONLY),
             "value": _value_of(field, kind), "options": _choices_of(field),
             "widgets": shown[_key(field)],
-            "calculated": "/C" in (field.get("/AA") or {}),
+            "format": fmt.get("format", ""),
+            "calculated": calc_info is not None,
+            "calculate": calc_info,
             "used_by": users.get(name, []),
-            "signed": kind == "signature" and _inherited(field, "/V") is not None})
+            "signed": kind == "signature" and _inherited(field, "/V") is not None}
+        for k in ("decimals", "separators", "currency", "currency_after", "date"):
+            if k in fmt:
+                info[k] = fmt[k]
+        for k in ("min", "max", "validate"):
+            if k in bounds:
+                info[k] = bounds[k]
+        found.setdefault(number, []).append(info)
     return found
 
 
@@ -268,13 +497,30 @@ def _format_scripts(field):
 
 def _calculation(field):
     """(operation, [field names]) of a calculated field, or None. Takes
-    {"op": "sum", "fields": [...]} or "sum: Price, Tax"."""
+    {"op": "sum", "fields": [...]}, "sum: Price, Tax", {"formula":
+    "Qty * Price"}, or "Qty * Price"."""
     calc = field.get("calculate")
     if not calc:
         return None
+    if isinstance(calc, dict) and ("formula" in calc or str(calc.get("op") or "").strip().lower() == "formula"):
+        formula, names, _ = _parse_formula(calc.get("formula") if "formula" in calc else calc.get("fields", ""))
+        return "=" + formula, names
     if isinstance(calc, str):
-        op, _, names = calc.partition(":")
-        calc = {"op": op, "fields": names}
+        text = calc.strip()
+        if text.startswith("="):
+            formula, names, _ = _parse_formula(text[1:])
+            return "=" + formula, names
+        if ":" in text:
+            op, _, names = text.partition(":")
+            if op.strip().lower() == "formula":
+                formula, names, _ = _parse_formula(names)
+                return "=" + formula, names
+            calc = {"op": op, "fields": names}
+        elif any(ch in text for ch in "+-*/"):
+            formula, names, _ = _parse_formula(text)
+            return "=" + formula, names
+        else:
+            calc = {"op": text, "fields": ""}
     op = str(calc.get("op") or "sum").strip().lower()
     if op not in CALCULATIONS:
         raise core.PdfManagerError(f"unknown calculation {op!r}; use one of {', '.join(CALCULATIONS)}")
@@ -573,9 +819,7 @@ def add_fields(path, output, fields, border=True, font_size=0, password=None):
                 calc = _calculation(field)
                 if calc:
                     op, sources = calc
-                    actions[NameObject("/C")] = _js(
-                        f"AFSimple_Calculate({_js_string(op)}, new Array("
-                        + ", ".join(_js_string(n) for n in sources) + "));")
+                    actions[NameObject("/C")] = _js(_calc_script(op, sources))
                     flags |= READ_ONLY  # worked out, not typed
                     calculated.append((name, sources, widget))
                 if actions:
@@ -664,19 +908,41 @@ def _drop(array, obj):
             del array[i]
 
 
+def _ref_of(annot, pages):
+    if annot.indirect_reference is not None:
+        return annot.indirect_reference
+    return next((r for p in pages for r in p.get("/Annots") or [] if r.get_object() is annot), None)
+
+
 def _retype(writer, acroform, field, shown, kind, wanted, change, number):
-    """Turn a field that holds words into another kind that does: a box to
-    type in (text, multiline) into a list to choose from (dropdown, list) or
-    back, or one kind of list into the other. It keeps its name, its place
-    and what goes with them; what it is set to is kept when the new kind can
-    hold it. Returns a note for the user, or None."""
+    """Turn a field that holds words or an unsigned signature into another
+    kind in that family (text, multiline, dropdown, list, signature). It
+    keeps its name, its place and what goes with them; what it is set to is
+    kept when the new kind can hold it. Returns a note for the user, or None."""
     name, note = _qualified_name(field), None
-    value = _inherited(field, "/V")
+    if kind == "signature" and _inherited(field, "/V") is not None:
+        raise core.PdfManagerError(f"{name} is signed and can't be turned into a {wanted} field")
+    value = None if kind == "signature" else _inherited(field, "/V")
     if isinstance(value, ArrayObject):        # (a list with several chosen: the first)
         value = value[0] if len(value) else None
     value = None if value is None else str(value)
     flags = int(_inherited(field, "/Ff", 0)) & (REQUIRED | READ_ONLY | 1 << 2)   # what any field can be
-    if wanted in ("dropdown", "list"):
+    if kind == "signature" and wanted != "signature":
+        _fonts(writer, acroform)
+        if "/DA" not in field and not any("/DA" in a for a in shown):
+            field[NameObject("/DA")] = TextStringObject(f"/Helv {10 if wanted == 'multiline' else 0} Tf 0 g")
+    if wanted == "signature":
+        field[NameObject("/FT")] = NameObject("/Sig")
+        acroform[NameObject("/SigFlags")] = NumberObject(int(acroform.get("/SigFlags", 0)) | 1)
+        for key in ("/Opt", "/I", "/TI", "/MaxLen", "/AA"):
+            if key in field:
+                del field[key]
+        if "/CO" in acroform:
+            _drop(acroform["/CO"], field)
+        if value:
+            note, value = f"{name} was set to \"{value}\": a signature field starts empty.", None
+        flags &= (REQUIRED | READ_ONLY)
+    elif wanted in ("dropdown", "list"):
         options = _options(change) if change.get("options") is not None else [str(o[1] if isinstance(o, ArrayObject) else o)
                                                                               for o in _inherited(field, "/Opt") or []]
         if not options and value:
@@ -715,6 +981,126 @@ def _retype(writer, acroform, field, shown, kind, wanted, change, number):
         x0, y0, x1, y1 = (float(v) for v in annot["/Rect"])
         _remake(writer, acroform, annot, field, wanted, abs(x1 - x0), abs(y1 - y0))
     return note
+
+
+def _retype_button(writer, acroform, field_list, rows, annot, field, kind, wanted, change,
+                   taken, fields, first_names):
+    """Switch a tick box into a radio button (a group of one) or a radio
+    group's buttons into separate tick boxes (named from their values when
+    there are several). Keeps the name, place, tooltip, required flag and
+    whether a button is chosen. Returns ``(new_field_for_annot,
+    converted_widget_ids)``."""
+    shown = [a for _, _, a, f in rows if f is field]
+    base_flags = int(_inherited(field, "/Ff", 0)) & (REQUIRED | READ_ONLY)
+    if wanted == "radio":
+        flags = base_flags | RADIO | NO_TOGGLE_OFF
+        cur_v = _inherited(field, "/V")
+        checked = (cur_v is not None and str(cur_v) != "/Off") or annot.get("/AS", "/Off") != "/Off"
+        old_state = next((str(k)[1:] for k in (annot.get("/AP", {}).get("/N") or {}) if k != "/Off"), "Yes")
+        used = set()
+        state = _state_name(change.get("value") or old_state, used)
+        val_obj = NameObject("/" + state) if checked else NameObject("/Off")
+        if field is annot:
+            annot_ref = _ref_of(annot, writer.pages)
+            parent = DictionaryObject({
+                NameObject("/FT"): NameObject("/Btn"),
+                NameObject("/Ff"): NumberObject(flags),
+                NameObject("/T"): TextStringObject(str(field.get("/T", ""))),
+                NameObject("/V"): val_obj,
+                NameObject("/Kids"): ArrayObject([annot_ref]),
+            })
+            if "/TU" in field:
+                parent[NameObject("/TU")] = TextStringObject(str(field["/TU"]))
+            if "/Parent" in field:
+                parent[NameObject("/Parent")] = field["/Parent"]
+            parent_ref = writer._add_object(parent)
+            holder = field["/Parent"].get_object()["/Kids"] if "/Parent" in field else field_list
+            for idx, ref in enumerate(holder):
+                if ref.get_object() is field:
+                    holder[idx] = parent_ref
+                    break
+            else:
+                holder.append(parent_ref)
+            for k in ("/T", "/TU", "/FT", "/Ff", "/V", "/DV", "/DA"):
+                if k in annot:
+                    del annot[k]
+            annot[NameObject("/Parent")] = parent_ref
+            old_first = first_names.pop(_key(field), _qualified_name(parent))
+            fields.pop(_key(field), None)
+            fields[_key(parent)] = parent
+            first_names[_key(parent)] = old_first
+            field = parent
+        else:
+            field[NameObject("/FT")] = NameObject("/Btn")
+            field[NameObject("/Ff")] = NumberObject(flags)
+            field[NameObject("/V")] = val_obj
+        for i, w in enumerate(shown):
+            w_state = state if i == 0 else _state_name(
+                next((str(k)[1:] for k in (w.get("/AP", {}).get("/N") or {}) if k != "/Off"), "Choice"), used)
+            w_on = checked if len(shown) == 1 else (w.get("/AS", "/Off") != "/Off")
+            w[NameObject("/AS")] = NameObject("/" + w_state) if w_on else NameObject("/Off")
+            mk = _child(w, "/MK", DictionaryObject)
+            mk[NameObject("/CA")] = TextStringObject(DOT)
+            w[NameObject("/AP")] = DictionaryObject({NameObject("/N"): DictionaryObject({
+                NameObject("/" + w_state): DictionaryObject(), NameObject("/Off"): DictionaryObject()})})
+            x0, y0, x1, y1 = (float(v) for v in w["/Rect"])
+            _remake(writer, acroform, w, field, "radio", abs(x1 - x0), abs(y1 - y0))
+        return field, {id(w) for w in shown}
+
+    full_name = _qualified_name(field)
+    short_name = str(field.get("/T", ""))
+    prefix = full_name[:-len(short_name)] if short_name else ""
+    tooltip = str(field["/TU"]) if "/TU" in field else None
+    group_val = _inherited(field, "/V")
+    group_parent_ref = field.get("/Parent") if field is not annot else None
+    holder = group_parent_ref.get_object()["/Kids"] if group_parent_ref is not None else field_list
+    taken.discard(full_name)
+    old_first = first_names.pop(_key(field), full_name)
+    fields.pop(_key(field), None)
+    _fonts(writer, acroform)
+    for w in shown:
+        state = next((str(k)[1:] for k in (w.get("/AP", {}).get("/N") or {}) if k != "/Off"), "Yes")
+        is_on = (w.get("/AS") not in (None, "/Off")) or (group_val is not None and str(group_val) == "/" + state)
+        if len(shown) == 1:
+            asked = short_name or state
+        elif w is annot and change.get("name"):
+            asked = " ".join(str(change["name"]).replace(".", " ").split()) or state
+        else:
+            asked = " ".join(state.replace(".", " ").split()) or "Checkbox"
+        candidate, n = asked, 2
+        while prefix + candidate in taken:
+            candidate, n = f"{asked} {n}", n + 1
+        taken.add(prefix + candidate)
+        if group_parent_ref is not None:
+            w[NameObject("/Parent")] = group_parent_ref
+        elif "/Parent" in w:
+            del w["/Parent"]
+        for k in ("/Kids", "/Opt", "/I", "/TI"):
+            if k in w:
+                del w[k]
+        w[NameObject("/FT")] = NameObject("/Btn")
+        w[NameObject("/Ff")] = NumberObject(base_flags)
+        w[NameObject("/T")] = TextStringObject(candidate)
+        w[NameObject("/TU")] = TextStringObject(
+            candidate if tooltip in (None, short_name, full_name) else tooltip)
+        w[NameObject("/DA")] = TextStringObject("/ZaDb 0 Tf 0 g")
+        val_obj = NameObject("/Yes") if is_on else NameObject("/Off")
+        w[NameObject("/V")] = val_obj
+        w[NameObject("/AS")] = val_obj
+        mk = _child(w, "/MK", DictionaryObject)
+        mk[NameObject("/CA")] = TextStringObject(TICK)
+        w[NameObject("/AP")] = DictionaryObject({NameObject("/N"): DictionaryObject({
+            NameObject("/Yes"): DictionaryObject(), NameObject("/Off"): DictionaryObject()})})
+        x0, y0, x1, y1 = (float(v) for v in w["/Rect"])
+        _remake(writer, acroform, w, w, "checkbox", abs(x1 - x0), abs(y1 - y0))
+        w_ref = _ref_of(w, writer.pages)
+        if w is not field and w_ref is not None:
+            holder.append(w_ref)
+        fields[_key(w)] = w
+        first_names[_key(w)] = old_first if len(shown) == 1 else prefix + candidate
+    if field is not annot:
+        _drop(holder, field)
+    return annot, {id(w) for w in shown}
 
 
 def _to_page(writer, annot, number, target):
@@ -804,8 +1190,9 @@ def edit_fields(path, output, changes, password=None):
     y1] in PDF points (move or resize), "to_page" (the 1-based page it goes
     to, keeping its place on the paper unless "rect" says another), "name",
     "tooltip", "required", "readonly", "type" ("text", "multiline",
-    "dropdown" or "list": a field that holds words can become another kind
-    that does), "options" (a dropdown's or list's choices) and "delete".
+    "dropdown", "list", "signature", "checkbox" or "radio"), "options" (a
+    dropdown's or list's choices), "format" (with "decimals", "separators",
+    "currency", "date"), "min", "max", "calculate" and "delete".
 
     A name is kept unique, and the calculations that used the old name use
     the new one. A deleted field is taken out of the calculations that used
@@ -829,7 +1216,7 @@ def edit_fields(path, output, changes, password=None):
         fields.setdefault(_key(field), field)
     first_names = {key: _qualified_name(field) for key, field in fields.items()}
     taken = set(first_names.values())
-    notes, redraw = [], False
+    notes, redraw, calc_changed = [], False, False
     if any(_kind(f) == "signature" and _inherited(f, "/V") is not None for f in fields.values()):
         notes.append("This file is signed: changing its fields makes the signature show as "
                      "no longer valid.")
@@ -845,12 +1232,13 @@ def edit_fields(path, output, changes, password=None):
                 f"page {change.get('page', 1)} has no field number {change.get('index')}")
         targets.append((spot[0], *where[spot], change))
 
-    deleted, changed = [], 0
+    deleted, changed, retyped_buttons = [], 0, set()
     for number, annot, field, change in targets:
+        field = _field_of(annot)
         if change.get("delete"):
             deleted.append((number, annot, field))
             continue
-        kind, touched = _kind(field), False
+        kind, touched = _kind(field), id(annot) in retyped_buttons
 
         if change.get("rect") is not None:
             try:
@@ -885,6 +1273,20 @@ def edit_fields(path, output, changes, password=None):
                                  "it was moved onto the page.")
                 touched = True
 
+        wanted = change.get("type")
+        if wanted is not None and str(wanted).lower() != kind and kind in ("checkbox", "radio"):
+            wanted_btn = str(wanted).lower()
+            if wanted_btn not in ("checkbox", "radio"):
+                raise core.PdfManagerError(
+                    f"a {kind} field can't be turned into a {wanted_btn} field: delete it and draw "
+                    "a new one")
+            field, converted = _retype_button(
+                writer, acroform, field_list, rows, annot, field, kind, wanted_btn, change,
+                taken, fields, first_names)
+            retyped_buttons.update(converted)
+            rows = list(_widgets(writer.pages))
+            kind, wanted, touched = wanted_btn, None, True
+
         if change.get("name") is not None:
             current = _qualified_name(field)
             prefix = current[:-len(str(field.get("/T", "")))] if "/T" in field else ""
@@ -899,11 +1301,15 @@ def edit_fields(path, output, changes, password=None):
                 field[NameObject("/T")] = TextStringObject(candidate)
                 if str(field.get("/TU", "")) in (short, current) and "/TU" in field:
                     field[NameObject("/TU")] = TextStringObject(candidate)
-                for other in fields.values():  # the sums that added it up
+                for other in fields.values():  # the sums or formulas that used it
                     calc = _calc_of(other)
                     if calc and current in calc[1]:
-                        _set_calc(other, calc[0], [prefix + candidate if n == current else n
-                                                   for n in calc[1]])
+                        if calc[0].startswith("="):
+                            formula, updated, _ = _parse_formula(calc[0][1:], rename={current: prefix + candidate})
+                            _set_calc(other, "=" + formula, updated)
+                        else:
+                            _set_calc(other, calc[0], [prefix + candidate if n == current else n
+                                                       for n in calc[1]])
                 touched = True
 
         if change.get("tooltip") is not None:
@@ -919,16 +1325,15 @@ def edit_fields(path, output, changes, password=None):
             if change.get(key) is not None:
                 flags = flags | bit if change[key] else flags & ~bit
 
-        wanted = change.get("type")
         if wanted is not None and str(wanted).lower() != kind:
             wanted = str(wanted).lower()
-            typed = ("text", "multiline", "dropdown", "list")   # the kinds that hold words
+            typed = ("text", "multiline", "dropdown", "list", "signature")
             if kind not in typed or wanted not in typed:
                 raise core.PdfManagerError(
                     f"a {kind} field can't be turned into a {wanted} field: delete it and draw "
                     "a new one")
-            if (kind in ("dropdown", "list")) != (wanted in ("dropdown", "list")) or wanted in ("dropdown", "list"):
-                # Between a box to type in and a list to choose from (or one kind of list and the other).
+            if ({kind, wanted} & {"dropdown", "list", "signature"}):
+                # Between a box to type in, a list to choose from and an unsigned signature.
                 shown = [a for _, _, a, f in rows if f is field]
                 said = _retype(writer, acroform, field, shown, kind, wanted, change, number)
                 if said:
@@ -937,7 +1342,7 @@ def edit_fields(path, output, changes, password=None):
                 for key, bit in (("required", REQUIRED), ("readonly", READ_ONLY)):
                     if change.get(key) is not None:
                         flags = flags | bit if change[key] else flags & ~bit
-                before, redraw, touched = int(_inherited(field, "/Ff", 0)), True, True
+                before, redraw, touched = int(_inherited(field, "/Ff", 0)), wanted != "signature", True
                 # (Several lines: the size of its letters is seen to just below, as for a text box.)
                 kind, wanted = ("text", wanted) if wanted == "multiline" else (wanted, None)
                 change = {k: v for k, v in change.items() if k != "options"}   # (its choices are set)
@@ -970,6 +1375,66 @@ def edit_fields(path, output, changes, password=None):
                              "longer a choice: it's now empty.")
                 redraw = True
             touched = True
+
+        fmt_keys = ("format", "decimals", "separators", "currency", "currency_after", "date")
+        if any(change.get(k) is not None for k in fmt_keys) and kind in ("text", "multiline"):
+            if "format" in change and not change["format"]:
+                if "/AA" in field:
+                    aa = field["/AA"].get_object()
+                    for k in ("/F", "/K"):
+                        if k in aa:
+                            del aa[k]
+                    if not len(aa):
+                        del field["/AA"]
+                touched = True
+            else:
+                cur_fmt = _format_of(field)
+                if cur_fmt.get("format") in ("", "custom"):
+                    cur_fmt = {}
+                elif change.get("format") and str(change["format"]).lower() != cur_fmt.get("format"):
+                    cur_fmt = {k: v for k, v in cur_fmt.items() if k == "separators"}
+                merged = {**cur_fmt, **{k: change[k] for k in fmt_keys if change.get(k) is not None}}
+                if not merged.get("format"):
+                    merged["format"] = ("currency" if merged.get("currency") else "date" if merged.get("date")
+                                        else "amount" if merged.get("decimals") == 2 else "number")
+                scripts = _format_scripts(merged)
+                if scripts:
+                    aa = _child(field, "/AA", DictionaryObject)
+                    aa[NameObject("/F")], aa[NameObject("/K")] = _js(scripts[0]), _js(scripts[1])
+                    touched = True
+
+        if ("min" in change or "max" in change) and kind in ("text", "multiline"):
+            cur_range = _range_of(field)
+            spec = {"min": change["min"] if "min" in change else cur_range.get("min"),
+                    "max": change["max"] if "max" in change else cur_range.get("max")}
+            check = _validation(spec)
+            if check:
+                aa = _child(field, "/AA", DictionaryObject)
+                aa[NameObject("/V")] = _js(check)
+                touched = True
+            elif "/AA" in field and "/V" in field["/AA"].get_object():
+                del field["/AA"].get_object()["/V"]
+                if not len(field["/AA"].get_object()):
+                    del field["/AA"]
+                touched = True
+
+        if "calculate" in change and kind in ("text", "multiline"):
+            if not change["calculate"]:
+                if "/AA" in field and "/C" in field["/AA"].get_object():
+                    del field["/AA"].get_object()["/C"]
+                    if not len(field["/AA"].get_object()):
+                        del field["/AA"]
+                if change.get("readonly") is None:
+                    flags &= ~READ_ONLY
+                    field[NameObject("/Ff")] = NumberObject(flags)
+                calc_changed = touched = True
+            else:
+                op, sources = _calculation({**change, "name": _qualified_name(field)})
+                _set_calc(field, op, sources)
+                if change.get("readonly") is None:
+                    flags |= READ_ONLY
+                    field[NameObject("/Ff")] = NumberObject(flags)
+                calc_changed = touched = True
         changed += touched
 
     gone = []  # names of fields deleted altogether
@@ -1001,7 +1466,7 @@ def edit_fields(path, output, changes, password=None):
             calc = _calc_of(other)
             if not calc or name not in calc[1]:
                 continue
-            left = [n for n in calc[1] if n != name]
+            left = [] if calc[0].startswith("=") else [n for n in calc[1] if n != name]
             notes.append(f"{_qualified_name(other)} was worked out from {name}, which is "
                          "deleted" + ("." if left else ": it's now an ordinary box to type in."))
             if left:
@@ -1014,11 +1479,26 @@ def edit_fields(path, output, changes, password=None):
             if order is not None:
                 _drop(order, other)
 
-    if redraw:
-        acroform[NameObject("/NeedAppearances")] = BooleanObject(True)
     names = {}
     for key, field in fields.items():
-        if _qualified_name(field) != first_names[key]:
+        if key in first_names and _qualified_name(field) != first_names[key]:
             names[first_names[key]] = _qualified_name(field)
+    if calc_changed and names:
+        for other in fields.values():
+            calc = _calc_of(other)
+            if calc and any(n in names for n in calc[1]):
+                if calc[0].startswith("="):
+                    formula, updated, _ = _parse_formula(calc[0][1:], rename=names)
+                    _set_calc(other, "=" + formula, updated)
+                else:
+                    _set_calc(other, calc[0], [names.get(n, n) for n in calc[1]])
+    if calc_changed:
+        acroform[NameObject("/CO")] = ArrayObject()
+        calc_fields = [(_qualified_name(f), (_calc_of(f) or ("", []))[1], f)
+                       for f in fields.values() if _action_js(f, "/C") is not None]
+        if calc_fields:
+            _calculation_order(acroform, calc_fields, writer)
+    if redraw:
+        acroform[NameObject("/NeedAppearances")] = BooleanObject(True)
     core._write(writer, output)
     return {"changed": changed, "deleted": len(deleted), "names": names, "notes": notes}

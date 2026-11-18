@@ -9,7 +9,7 @@
 const { chromium } = require("playwright");
 
 (async () => {
-  const [url, formPath, otherPath, shots] = process.argv.slice(2);
+  const [url, formPath, otherPath, editedId, shots] = process.argv.slice(2);
   const out = { errors: [] };
   const browser = await chromium.launch();
   try {
@@ -36,8 +36,11 @@ const { chromium } = require("playwright");
     const olds = () => page.$$eval(".re-old", (list) => list.map((b) => ({ cls: b.className, label: b.textContent, type: b.dataset.type })));
     const bar = () => page.evaluate(() => {
       const box = document.querySelector(".re-name-box"), type = box.querySelector("select.re-name");
+      const textOpts = box.querySelector(".re-textopts");
       return { shown: box.style.visibility !== "hidden", name: box.querySelector("input.re-name").value, type: type.value,
         typeOff: type.disabled, types: [...type.options].filter((o) => !o.disabled).map((o) => o.value),
+        format: !textOpts.hidden ? textOpts.querySelector("select").value : null,
+        sum: !textOpts.hidden ? textOpts.querySelector("input").value : null,
         required: !box.querySelector(".re-required").hidden && box.querySelector(".re-required input").checked,
         requiredShown: !box.querySelector(".re-required").hidden };
     });
@@ -82,9 +85,10 @@ const { chromium } = require("playwright");
     out.taxMoved = (await olds())[1].cls.includes("changed");
     await page.click(".re-old.selected .re-revert");
     out.taxBack = !(await olds())[1].cls.includes("changed");
-    // Total: required, and several lines.
+    // Total: format, required, and several lines.
     await pick(2);
     out.total = await bar();
+    await page.selectOption(".re-textopts select", "amount");
     await page.check(".re-required input");
     await page.selectOption(".re-name-box select.re-name", "multiline");
     // Price (renamed above): from a box to type in to a dropdown, with its choices.
@@ -128,6 +132,34 @@ const { chromium } = require("playwright");
     await page.setInputFiles("#file-input", otherPath);
     await page.waitForFunction(() => !document.querySelector(".re-old") && document.querySelector(".re-existing"), null, { timeout: 30000 });
     out.two = { edits: await page.inputValue("#f-edits"), striped: await page.$$eval(".re-existing", (l) => l.length) };
+
+    if (editedId) {
+      const rpage = await context.newPage();
+      rpage.on("pageerror", (e) => out.errors.push(String(e.message || e)));
+      await rpage.goto(url + "&open=" + editedId);
+      await rpage.waitForSelector(".page canvas", { timeout: 60000 });
+      await rpage.waitForFunction(() => reader.doc && reader.loading.hidden, null, { timeout: 30000 });
+      await rpage.waitForSelector('.page[data-page-number="1"] .annotationLayer input[name="Price"]', { timeout: 30000 });
+      await rpage.evaluate(() => document.querySelector('.page[data-page-number="2"]')?.scrollIntoView());
+      await rpage.waitForSelector('.page[data-page-number="2"] .annotationLayer input[name="Tax"]', { timeout: 30000 });
+      await rpage.waitForTimeout(1500);  // scripting sandbox ready
+      await rpage.focus('.page[data-page-number="2"] .annotationLayer select[name="Country"]');
+      await rpage.keyboard.press("Tab");
+      const tabbedTo = await rpage.evaluate(() => document.activeElement?.getAttribute("name") || "");
+      await rpage.keyboard.type("15", { delay: 100 });
+      await rpage.evaluate(() => document.querySelector('.page[data-page-number="1"]')?.scrollIntoView());
+      await rpage.click('.page[data-page-number="1"] .annotationLayer input[name="Price"]');
+      await rpage.keyboard.type("20", { delay: 100 });
+      await rpage.keyboard.press("Tab");
+      await rpage.waitForTimeout(800);
+      out.reader = await rpage.evaluate((tabbed) => ({
+        tabbed,
+        page2Fields: [...document.querySelectorAll('.page[data-page-number="2"] .annotationLayer [name]')].map((e) => e.getAttribute("name")),
+        price: document.querySelector('.page[data-page-number="1"] .annotationLayer input[name="Price"]').value,
+        tax: document.querySelector('.page[data-page-number="2"] .annotationLayer input[name="Tax"]').value,
+        total: document.querySelector('.page[data-page-number="1"] .annotationLayer input[name="Total"]').value,
+      }), tabbedTo);
+    }
   } catch (e) {
     out.errors.push(String(e.stack || e));
   } finally {

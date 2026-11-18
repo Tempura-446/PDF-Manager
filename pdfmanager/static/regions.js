@@ -92,7 +92,8 @@ export const FIELD_TYPES = {
   dropdown: ["Dropdown", 140, 20], signature: ["Signature", 180, 40],
 };
 const FIELD_LABEL = { text: "Text", multiline: "Text", checkbox: "Checkbox", radio: "Group", dropdown: "Dropdown", signature: "Signature" };
-const WORD_TYPES = ["text", "multiline", "dropdown", "list"];   // the kinds of field that hold words
+const WORD_TYPES = ["text", "multiline", "dropdown", "list", "signature"];  // fields that can switch with one another when unsigned
+const BUTTON_TYPES = ["checkbox", "radio"];
 const AUTO_NAME = /^(Text|Checkbox|Group|Dropdown|Signature) \d+$/;
 
 export class RegionEditor {
@@ -219,9 +220,12 @@ export class RegionEditor {
     for (const [page, list] of Object.entries(fields || {})) {
       this.existing[Number(page) - 1] = list.map((f, i) => {
         const dot = f.name.lastIndexOf(".");
+        const format = f.format || "";
+        const sum = f.calculate?.op === "sum" ? (f.calculate.fields || []).join(", ") : "";
         const field = { ...f, index: f.index ?? i, rect: [...f.rect], options: (f.options || []).join(", "),
-          prefix: f.name.slice(0, dot + 1), short: f.name.slice(dot + 1), deleted: false };
-        field.was = { rect: [...f.rect], short: field.short, type: f.type, required: !!f.required, options: field.options };
+          format, sum, prefix: f.name.slice(0, dot + 1), short: f.name.slice(dot + 1), deleted: false };
+        field.was = { rect: [...f.rect], short: field.short, type: f.type, required: !!f.required, options: field.options,
+          format, currency: f.currency, date: f.date, sum };
         return field;
       });
     }
@@ -234,6 +238,8 @@ export class RegionEditor {
       if (e.type) f.type = e.type;
       if (e.required != null) f.required = e.required;
       if (e.options != null) f.options = e.options;
+      if (e.format != null) { f.format = e.format; f.currency = e.currency; f.date = e.date; }
+      if (e.calculate != null) f.sum = String(e.calculate).replace(/^\s*sum\s*:\s*/i, "");
       if (e.to_page && e.to_page !== e.page) f.toPage = e.to_page;
     }
     if (editable && picked >= 0 && picked < (this.existing[this.pageIndex] || []).length) this.selectedOld = picked;
@@ -521,7 +527,8 @@ export class RegionEditor {
   /** One of the file's own fields differs from how it is in the file. */
   #changed(f) {
     return f.deleted || !!f.toPage || f.short !== f.was.short || f.type !== f.was.type || f.required !== f.was.required
-      || f.options !== f.was.options || f.rect.some((v, i) => Math.abs(v - f.was.rect[i]) > 0.05);
+      || f.options !== f.was.options || f.format !== f.was.format || f.sum !== f.was.sum
+      || f.rect.some((v, i) => Math.abs(v - f.was.rect[i]) > 0.05);
   }
 
   /** Mark one of the file's own fields to be deleted, or keep it after all. */
@@ -553,7 +560,8 @@ export class RegionEditor {
     for (const list of Object.values(this.existing)) {
       for (const g of list) {
         if (g.name !== full) continue;
-        Object.assign(g, { short: g.was.short, name: g.prefix + g.was.short, type: g.was.type, required: g.was.required, options: g.was.options });
+        Object.assign(g, { short: g.was.short, name: g.prefix + g.was.short, type: g.was.type, required: g.was.required,
+          options: g.was.options, format: g.was.format, currency: g.was.currency, date: g.was.date, sum: g.was.sum });
       }
     }
     this.findNote = "";
@@ -604,6 +612,12 @@ export class RegionEditor {
           if (f.type !== f.was.type) change.type = f.type;
           if (f.required !== f.was.required) change.required = f.required;
           if (f.options !== f.was.options) change.options = f.options;
+          if (f.format !== f.was.format) {
+            change.format = f.format;
+            if (f.currency) change.currency = f.currency;
+            if (f.date) change.date = f.date;
+          }
+          if (f.sum !== f.was.sum) change.calculate = f.sum.trim() ? "sum: " + f.sum : "";
           if (f.toPage) change.to_page = f.toPage;
         }
         out.push(change);
@@ -653,7 +667,7 @@ export class RegionEditor {
       currency: { format: "currency", currency: symbol }, percent: { format: "percent" },
       date: { format: "date", date: datePattern }, phone: { format: "phone" }, zip: { format: "zip" } };
     this.formatSelect = el("select", { class: "re-name", "aria-label": "What can be typed in this field",
-      onchange: () => this.#changeSelected({ format: undefined, currency: undefined, date: undefined, ...this.formats[this.formatSelect.value] }),
+      onchange: () => this.#changeSelected({ format: "", currency: undefined, date: undefined, ...this.formats[this.formatSelect.value] }),
     }, ...[["", "Any text"], ["number", "Number"], ["amount", "Amount (1,234.56)"], ["currency", `Money (${symbol})`],
       ["percent", "Percent"], ["date", `Date (${datePattern})`], ["phone", "Phone number (US)"], ["zip", "ZIP code (US)"]]
       .map(([v, label]) => el("option", { value: v }, label)));
@@ -670,7 +684,7 @@ export class RegionEditor {
     this.requiredInput = el("input", { type: "checkbox", onchange: () => this.#changeSelected({ required: this.requiredInput.checked }) });
     this.requiredLabel = el("label", { class: "re-required", title: "The form can't be sent or finished with this field left empty" }, this.requiredInput, el("span", {}, "Required"));
     // One of the file's own fields can be sent to another page (it keeps its place on the paper).
-    this.pageSelect = el("select", { class: "re-name re-short", "aria-label": "The page this field is on",
+    this.pageSelect = el("select", { class: "re-name", "aria-label": "The page this field is on",
       onchange: () => {
         const f = this.#old();
         if (!f) return;
@@ -715,6 +729,15 @@ export class RegionEditor {
         const short = changes.name.replace(/\./g, " "), full = old.name;
         for (const list of Object.values(this.existing)) for (const f of list) if (f.name === full) { f.short = short; f.name = f.prefix + short; }
       }
+      if ("format" in changes) {
+        for (const list of Object.values(this.existing)) for (const f of list) if (f.name === old.name) {
+          f.format = changes.format || ""; f.currency = changes.currency; f.date = changes.date;
+        }
+      }
+      if (changes.calculate != null) {
+        const sum = String(changes.calculate).replace(/^\s*sum\s*:\s*/i, "");
+        for (const list of Object.values(this.existing)) for (const f of list) if (f.name === old.name) f.sum = sum;
+      }
       for (const key of ["type", "required", "options"]) {
         if (changes[key] == null) continue;
         for (const list of Object.values(this.existing)) for (const f of list) if (f.name === old.name) f[key] = changes[key];
@@ -745,18 +768,16 @@ export class RegionEditor {
     }
     this.nameBox.dataset.used = "1";
     if (document.activeElement !== this.nameInput) this.nameInput.value = kind.name;
-    // One of the file's own fields keeps its type, except a text box, which
-    // can take one line or several.
     this.typeSelect.querySelector("option[data-other]")?.remove();
     if (old && !FIELD_TYPES[old.type]) {
       this.typeSelect.append(el("option", { value: old.type, "data-other": true }, { list: "List", button: "Button" }[old.type] || "Other"));
     }
-    // One of the file's own fields that holds words can become another kind that does
-    // (a box to type in, several lines, a dropdown, a list): what it was in the file decides.
-    const swap = old && WORD_TYPES.includes(old.was.type);
-    for (const o of this.typeSelect.options) o.disabled = !!old && !(swap && WORD_TYPES.includes(o.value));
+    const swap = old && (WORD_TYPES.includes(old.was.type) && !old.signed ? WORD_TYPES
+      : BUTTON_TYPES.includes(old.was.type) ? BUTTON_TYPES : null);
+    for (const o of this.typeSelect.options) o.disabled = !!old && !(swap && swap.includes(o.value));
     this.typeSelect.disabled = !!old && !swap;
-    this.typeSelect.title = old && !swap ? "A tick box, radio button, button or signature already in the file can't become another type: delete it and draw a new one" : "";
+    this.typeSelect.title = old && !swap ? (old.signed ? "A signed signature field can't become another type"
+      : "A button already in the file can't become another type: delete it and draw a new one") : "";
     this.typeSelect.value = kind.type;
     this.requiredLabel.hidden = !old || old.type === "button" || old.type === "signature";
     this.requiredInput.checked = !!old?.required;
@@ -767,12 +788,23 @@ export class RegionEditor {
       }
       this.pageSelect.value = String(old.toPage || this.pageIndex + 1);
     }
+    this.formatSelect.querySelector("option[data-other]")?.remove();
     if (old) {
       this.nameLabel.textContent = old.type === "radio" ? "Group" : "Name";
       this.nameInput.setAttribute("aria-label", "Field name");
-      this.valueLabel.hidden = this.textLabel.hidden = true;
+      const text = old.type === "text" || old.type === "multiline";
+      this.valueLabel.hidden = true;
+      this.textLabel.hidden = !text;
       this.optionsLabel.hidden = !(old.type === "dropdown" || old.type === "list");
       this.extraSlot.style.visibility = "";
+      if (text) {
+        if (old.format && !this.formats[old.format]) {
+          this.formatSelect.append(el("option", { value: old.format, "data-other": true },
+            { custom: "Custom script", time: "Time", ssn: "Social Security (US)", "zip+4": "ZIP+4 (US)" }[old.format] || old.format));
+        }
+        this.formatSelect.value = old.format || "";
+        if (document.activeElement !== this.sumInput) this.sumInput.value = old.sum || "";
+      }
       if (document.activeElement !== this.optionsInput) this.optionsInput.value = old.options;
       return;
     }

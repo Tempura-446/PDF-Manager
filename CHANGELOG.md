@@ -4,6 +4,38 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.56.0
+
+Switch a form's checkboxes, radio buttons and signature fields, and change
+a text field's format and total.
+
+- **More type switches on a form's own fields.** In **Make fillable**, a
+  tick box can become a group of radio buttons (one button to start with,
+  keeping its name, place, whether it's required and whether it's ticked),
+  and a group of radio buttons can become separate tick boxes named from
+  their values. An unsigned signature field and a text box, multi-line
+  text box, dropdown or list can also become one another (a filled field
+  is emptied when it becomes a signature, and ZPDF says so; a signed
+  signature field stays locked).
+- **Format, range and total of an existing text field.** **Make fillable**
+  now reads a text field's format (numbers, amounts, money, percentages,
+  dates, US phone numbers and ZIP codes), its minimum and maximum, and its
+  calculation (sum, product, average, minimum, maximum or a simple formula
+  over field names such as `Qty * Price`), shows **Format** and **Sum of**
+  when the field is clicked, and writes changes to them with the form's
+  calculation order kept right. A custom script that isn't one of these is
+  labelled *Custom script* and left untouched unless replaced.
+- On the command line, a change in the `--edit` file also takes `"format"`,
+  `"decimals"`, `"separators"`, `"currency"`, `"currency_after"`, `"date"`,
+  `"min"`, `"max"` and `"calculate"`.
+- **Feeder scanning that finishes the stack without stopping after a page or
+  two.** **Scan** no longer lets its background scanner check open a
+  Windows driver while a scan is starting, reconnects between sheets when a
+  driver closes its session after each page, remembers when a driver only
+  gives bitmaps, and treats `404` / `409` / `500` or an empty answer after
+  the last sheet in the feeder as the end of the stack rather than a
+  failure.
+
 ## 0.55.0
 
 Turn a form's text box into a dropdown, and back.

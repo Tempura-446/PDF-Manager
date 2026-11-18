@@ -215,8 +215,9 @@ def scan(device_id, mode="grey", dpi=300, source="flatbed", duplex=False, on_pag
     seen = [0]
 
     def said(line):
-        # (-v: a line for each page as it is scanned; the words differ by language, the count goes up.)
-        if any(ch.isdigit() for ch in line):
+        # (-v: a line for each page as it is scanned; ignore "Starting scan 1 of 1" and "N page(s) scanned.")
+        low = line.lower()
+        if any(ch.isdigit() for ch in line) and "1 of 1" not in low and "(s)" not in low:
             seen[0] += 1
             progress.say(f"scanning page {seen[0]}" if source == "feeder" else "scanning")
 

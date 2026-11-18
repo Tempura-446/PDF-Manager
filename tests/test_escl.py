@@ -60,6 +60,8 @@ class Fake:
         self.busy_first = 0          # NextDocument answers 503 this many times first
         self.jam_after = None        # the feeder jams after this many pages
         self.refuse_job = None       # a status for POST ScanJobs instead of 201
+        self.refuse_regions = False  # 409 when ScanRegions is sent
+        self.empty_status = 404      # status returned on NextDocument once the feeder is empty
         self.jobs, self.deleted, self.settings, self.sent = 0, [], [], 0
         self.location_host = None    # the scanner's own name for itself in a job's address
         self.caps = None             # other bytes to answer ScannerCapabilities with
@@ -99,7 +101,7 @@ def scanner(tmp_path, monkeypatch):
                     return self.answer(500)
                 if fake.sent >= limit:
                     fake.adf = "ScannerAdfEmpty"
-                    return self.answer(404)
+                    return self.answer(fake.empty_status)
                 fake.sent += 1
                 return self.answer(200, jpeg(fake.sent * 20), "image/jpeg")
             return self.answer(404)
@@ -109,6 +111,8 @@ def scanner(tmp_path, monkeypatch):
             if self.path != "/eSCL/ScanJobs":
                 return self.answer(404)
             fake.settings.append(body)
+            if fake.refuse_regions and b"<pwg:ScanRegions>" in body:
+                return self.answer(409)
             if fake.refuse_job:
                 return self.answer(fake.refuse_job)
             fake.jobs, fake.sent = fake.jobs + 1, 0
@@ -159,6 +163,19 @@ def test_every_page_in_the_feeder_and_both_sides(scanner):
     pages = escl.scan(scanner.id, source="feeder", duplex=True, pause=0.01)
     assert len(pages) == 6 and "<scan:Duplex>true</scan:Duplex>" in scanner.settings[-1].decode()
     assert "<pwg:Height>4200</pwg:Height>" in scanner.settings[-1].decode()
+
+
+def test_feeder_answering_500_or_refusing_regions_keeps_scanned_pages(scanner):
+    """Some eSCL firmwares reject explicit ScanRegions on the feeder with 409
+    and answer 500 or 204 (with ScannerAdfEmpty in ScannerStatus) instead of
+    404 after the last sheet in the feeder."""
+    scanner.sheets = 2
+    scanner.refuse_regions = True
+    for code in (500, 409, 204):
+        scanner.adf = "ScannerAdfLoaded"
+        scanner.empty_status = code
+        pages = escl.scan(scanner.id, source="feeder", pause=0.01)
+        assert len(pages) == 2
 
 
 def test_a_job_named_by_the_scanners_own_host_name_still_goes_to_that_scanner(scanner):

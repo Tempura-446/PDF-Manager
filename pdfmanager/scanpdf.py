@@ -109,15 +109,15 @@ def _prepared(page, straighten, look):
 
 
 def _write_pdf(images, output, paper):
-    """One page per (image, dpi): at the scan's size when the dpi is known,
-    else fitted to the paper and centred."""
+    """One page per (image, dpi): at the scan's size when the dpi is known
+    and ``paper`` is "auto", else fitted to the paper and centred."""
     from reportlab.lib.utils import ImageReader
 
     c = core.pdf_canvas(str(output))
     for image, dpi in images:
         if image.mode == "1":
             image = image.convert("L")  # (compression turns black-and-white pages back into one bit a pixel)
-        if dpi:
+        if dpi and paper == "auto":
             w, h = image.width * 72 / dpi, image.height * 72 / dpi
             pw, ph, x, y = w, h, 0, 0
         else:
@@ -220,7 +220,7 @@ def make_pdf(pages, output, straighten=True, remove_blank=True, upright=True, re
         if compress:
             with progress.section(steps.index("compress"), len(steps), "making it smaller"):
                 small = work / "small.pdf"
-                core.compress(current, small, level="medium", sharp_scans=True)
+                core.compress(current, small, level="medium", sharp_scans=look != "photo")
                 if small.stat().st_size < current.stat().st_size:
                     current = small
         shutil.copyfile(current, output)

@@ -59,11 +59,16 @@ FORM_FUNCTIONS = ("AFNumber_Format", "AFNumber_Keystroke", "AFPercent_Format", "
 # pattern the same way: their \\s and \\d differ on unusual characters.)
 _S = r"[ \t\n\r]*"
 _TEXT = r'''(?:"(?:[^"\\\n\r]|\\[^\n\r])*"|'(?:[^'\\\n\r]|\\[^\n\r])*')'''
-_VALUE = (r"(?:" + _TEXT + r"|-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|new[ \t\n\r]+Array" + _S + r"\(" + _S
+_NUM = r"-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?"
+_VALUE = (r"(?:" + _TEXT + r"|" + _NUM + r"|true|false|new[ \t\n\r]+Array" + _S + r"\(" + _S
           + r"(?:" + _TEXT + r"(?:" + _S + "," + _S + _TEXT + r")*)?" + _S + r"\))")
 _CALL = (r"(?:" + "|".join(FORM_FUNCTIONS) + r")" + _S + r"\(" + _S + r"(?:" + _VALUE + r"(?:" + _S + "," + _S + _VALUE
          + r")*)?" + _S + r"\)")
-FORM_SCRIPT_SOURCE = _S + _CALL + r"(?:" + _S + ";" + _S + _CALL + r")*" + _S + ";?" + _S
+_ATOM = (r"(?:\(" + _S + r")*[+-]?" + _S
+         + r"(?:Number" + _S + r"\(" + _S + r"this\.getField" + _S + r"\(" + _S + _TEXT + _S + r"\)\.value" + _S + r"\)|" + _NUM + r")"
+         + r"(?:" + _S + r"\))*")
+_STEP = r"(?:" + _CALL + r"|event\.value" + _S + "=" + _S + _ATOM + r"(?:" + _S + r"[+*/-]" + _S + _ATOM + r")*)"
+FORM_SCRIPT_SOURCE = _S + _STEP + r"(?:" + _S + ";" + _S + _STEP + r")*" + _S + ";?" + _S
 FORM_SCRIPT = re.compile(FORM_SCRIPT_SOURCE)
 FORM_SCRIPT_MAX = 2000
 ADDRESS = re.compile(r"(?<![@\w.-])(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,24})(?![\w-])", re.I)
