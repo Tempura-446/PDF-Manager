@@ -509,3 +509,125 @@ def test_required_and_a_new_name_go_with_the_switch(tmp_path):
     forms.edit_fields(src, out, [{"page": 1, "index": 1, "type": "dropdown", "options": "0, 5", "required": True, "name": "VAT"}])
     vat = by_name(out)["VAT"]
     assert vat["type"] == "dropdown" and vat["required"] and by_name(out)["Total"]["calculated"]
+
+
+def test_a_checkbox_and_a_radio_button_switch_into_one_another(tmp_path):
+    src, ticked, as_radio, back, split = (
+        made(tmp_path), tmp_path / "ticked.pdf", tmp_path / "radio.pdf", tmp_path / "back.pdf", tmp_path / "split.pdf")
+    writer = PdfWriter(clone_from=str(src))
+    writer.update_page_form_field_values(writer.pages[0], {"Agree": "/Yes", "Size": "/Large"}, auto_regenerate=False)
+    writer.write(str(ticked))
+
+    # A lone checkbox becomes a radio group of one, keeping its name, place, required flag and state.
+    forms.edit_fields(ticked, as_radio, [{"page": 1, "index": 3, "type": "radio", "required": True}])
+    agree = by_name(as_radio)["Agree"]
+    assert agree["type"] == "radio" and agree["widgets"] == 1 and agree["required"] and agree["value"] == "Yes"
+    assert agree["rect"] == by_name(src)["Agree"]["rect"]
+
+    # A radio group of one button becomes a checkbox with its group's name.
+    forms.edit_fields(as_radio, back, [{"page": 1, "index": 3, "type": "checkbox"}])
+    again = by_name(back)["Agree"]
+    assert again["type"] == "checkbox" and again["required"] and again["value"] == "Yes"
+
+    # A radio group of several buttons splits into separate checkboxes named from their values.
+    forms.edit_fields(ticked, split, [{"page": 1, "index": 4, "type": "checkbox"}])
+    fields = by_name(split)
+    assert "Size" not in fields
+    assert fields["Small"]["type"] == "checkbox" and fields["Small"]["value"] == ""
+    assert fields["Large"]["type"] == "checkbox" and fields["Large"]["value"] == "Yes"
+    assert fields["Small"]["rect"] == [72.0, 570.0, 86.0, 584.0]
+    assert fields["Large"]["rect"] == [100.0, 570.0, 114.0, 584.0]
+
+
+def test_a_text_box_and_a_signature_field_switch_when_unsigned(tmp_path):
+    src, sig, back = made(tmp_path), tmp_path / "sig.pdf", tmp_path / "back.pdf"
+    forms.edit_fields(src, sig, [{"page": 1, "index": 0, "type": "signature"}])
+    price = by_name(sig)["Price"]
+    assert price["type"] == "signature" and not price["signed"] and price["rect"] == by_name(src)["Price"]["rect"]
+    assert widget(sig, 1, 0)["/FT"] == "/Sig"
+    assert int(PdfReader(str(sig)).trailer["/Root"]["/AcroForm"]["/SigFlags"]) & 1
+
+    forms.edit_fields(sig, back, [{"page": 1, "index": 0, "type": "text"}])
+    assert by_name(back)["Price"]["type"] == "text" and widget(back, 1, 0)["/FT"] == "/Tx"
+
+    # A filled text box has its value cleared with a note when turned into a signature field.
+    filled, cleared = tmp_path / "filled.pdf", tmp_path / "cleared.pdf"
+    writer = PdfWriter(clone_from=str(src))
+    writer.update_page_form_field_values(writer.pages[0], {"Price": "25"}, auto_regenerate=False)
+    writer.write(str(filled))
+    res = forms.edit_fields(filled, cleared, [{"page": 1, "index": 0, "type": "signature"}])
+    assert by_name(cleared)["Price"]["type"] == "signature" and "starts empty" in res["notes"][0]
+
+    # A signed signature field is refused.
+    signed = tmp_path / "signed.pdf"
+    w = PdfWriter(clone_from=str(sig))
+    w.pages[0]["/Annots"][0].get_object()[NameObject("/V")] = DictionaryObject({NameObject("/Type"): NameObject("/Sig")})
+    w.write(str(signed))
+    assert by_name(signed)["Price"]["signed"]
+    with pytest.raises(core.PdfManagerError, match="signed"):
+        forms.edit_fields(signed, tmp_path / "no.pdf", [{"page": 1, "index": 0, "type": "text"}])
+
+
+def test_format_and_range_of_an_existing_field_are_read_and_changed(tmp_path):
+    src = tmp_path / "acrobat.pdf"
+    forms.add_fields(blank(tmp_path / "blank.pdf"), src, [
+        {"page": 1, "rect": [72, 700, 200, 720], "type": "text", "name": "Amount",
+         "format": "amount", "decimals": 2, "min": 0, "max": 1000},
+        {"page": 1, "rect": [72, 670, 200, 690], "type": "text", "name": "Fee",
+         "format": "currency", "currency": "£", "currency_after": True, "decimals": 2},
+        {"page": 1, "rect": [72, 640, 200, 660], "type": "text", "name": "Phone", "format": "phone"},
+    ])
+    info = by_name(src)
+    assert info["Amount"]["format"] == "amount" and info["Amount"]["decimals"] == 2 and info["Amount"]["separators"]
+    assert info["Amount"]["min"] == 0 and info["Amount"]["max"] == 1000
+    assert info["Fee"]["format"] == "currency" and info["Fee"]["currency"] == "£" and info["Fee"]["currency_after"]
+    assert info["Phone"]["format"] == "phone"
+
+    # Change the Acrobat-made amount field's format to a date, and clear Fee's format.
+    dated = tmp_path / "dated.pdf"
+    forms.edit_fields(src, dated, [
+        {"page": 1, "index": 0, "format": "date", "date": "yyyy-mm-dd", "min": None, "max": None},
+        {"page": 1, "index": 1, "format": ""},
+    ])
+    after = by_name(dated)
+    assert after["Amount"]["format"] == "date" and after["Amount"]["date"] == "yyyy-mm-dd"
+    assert "min" not in after["Amount"] and "max" not in after["Amount"]
+    assert after["Fee"]["format"] == "" and "/AA" not in widget(dated, 1, 1)
+
+    # A custom script is reported as "custom" and left untouched unless replaced.
+    custom = tmp_path / "custom.pdf"
+    w = PdfWriter(clone_from=str(dated))
+    w.pages[0]["/Annots"][1].get_object()[NameObject("/AA")] = DictionaryObject({
+        NameObject("/F"): forms._js("event.value = event.value.toUpperCase();")})
+    w.write(str(custom))
+    assert by_name(custom)["Fee"]["format"] == "custom"
+    untouched = tmp_path / "untouched.pdf"
+    forms.edit_fields(custom, untouched, [{"page": 1, "index": 1, "required": True}])
+    assert by_name(untouched)["Fee"]["format"] == "custom" and by_name(untouched)["Fee"]["required"]
+
+
+def test_total_and_formula_of_an_existing_field_are_read_and_changed(tmp_path):
+    src = made(tmp_path)
+    info = by_name(src)
+    assert info["Total"]["calculate"] == {"op": "sum", "fields": ["Price", "Tax"]}
+
+    # Edit Total's list of fields and add a formula on Tax (Price * 0.2), checking /CO order.
+    edited = tmp_path / "edited.pdf"
+    forms.edit_fields(src, edited, [
+        {"page": 1, "index": 1, "calculate": {"op": "formula", "formula": "Price * 0.2"}},
+        {"page": 1, "index": 2, "calculate": "sum: Price, Tax"},
+    ])
+    after = by_name(edited)
+    assert after["Tax"]["calculate"] == {"op": "formula", "formula": "Price * 0.2", "fields": ["Price"]}
+    assert after["Tax"]["readonly"] and after["Price"]["used_by"] == ["Tax", "Total"]
+    co = [o.get_object()["/T"] for o in PdfReader(str(edited)).trailer["/Root"]["/AcroForm"]["/CO"]]
+    assert co == ["Tax", "Total"]  # Tax is worked out before Total, which adds Price and Tax
+
+    # Clear a calculation: read-only is cleared and /CO drops the field.
+    cleared = tmp_path / "cleared.pdf"
+    forms.edit_fields(edited, cleared, [{"page": 1, "index": 1, "calculate": ""}])
+    gone = by_name(cleared)
+    assert not gone["Tax"]["calculated"] and not gone["Tax"]["readonly"]
+    co2 = [o.get_object()["/T"] for o in PdfReader(str(cleared)).trailer["/Root"]["/AcroForm"]["/CO"]]
+    assert co2 == ["Total"]
+

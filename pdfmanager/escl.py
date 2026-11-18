@@ -176,6 +176,42 @@ def _device(url, name, flatbed=True, feeder=False, duplex=False, found="network"
             "duplex": duplex, "network": True, "found": found}
 
 
+def _local_ipv4s():
+    """Local IPv4 addresses to send mDNS multicast out of (so virtual
+    adapters on Windows don't swallow the only query)."""
+    addrs = []
+    for target in (("10.255.255.255", 1), ("192.168.1.1", 1)):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+                probe.connect(target)
+                ip = probe.getsockname()[0]
+                if ip and not ip.startswith("127.") and ip not in addrs:
+                    addrs.append(ip)
+        except OSError:
+            pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127.") and ip not in addrs:
+                addrs.append(ip)
+    except OSError:
+        pass
+    return addrs
+
+
+def _send_query(sock, packet, interfaces):
+    try:
+        sock.sendto(packet, MDNS)
+    except OSError:
+        pass
+    for ip in interfaces:
+        try:
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(ip))
+            sock.sendto(packet, MDNS)
+        except OSError:
+            continue
+
+
 def discover(wait=2.5):
     """Ask the local network which scanners offer eSCL and listen for
     ``wait`` seconds. Returns their devices ([] when none answer, or when
@@ -188,9 +224,16 @@ def discover(wait=2.5):
     try:
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)   # (this network only)
         sock.settimeout(0.3)
-        sock.sendto(_question(SERVICES), MDNS)
-        until = time.monotonic() + wait
+        packet = _question(SERVICES)
+        interfaces = _local_ipv4s()
+        _send_query(sock, packet, interfaces)
+        started = time.monotonic()
+        until = started + wait
+        resent = wait < 0.8
         while time.monotonic() < until:
+            if not resent and not merged["ptr"] and time.monotonic() - started >= 0.5:
+                _send_query(sock, packet, interfaces)
+                resent = True
             try:
                 data, _ = sock.recvfrom(9000)
             except socket.timeout:
@@ -369,17 +412,18 @@ def _state(parts):
     return None
 
 
-def _settings(caps, mode, dpi, source, duplex):
+def _settings(caps, mode, dpi, source, duplex, regions=True):
     feeder = source == "feeder"
     width, height = caps["max"].get("duplex" if feeder and duplex else source) or caps["max"].get("flatbed") or (2550, 3508)
+    region_xml = ("<pwg:ScanRegions><pwg:ScanRegion>"
+                  "<pwg:ContentRegionUnits>escl:ThreeHundredthsOfInches</pwg:ContentRegionUnits>"
+                  f"<pwg:XOffset>0</pwg:XOffset><pwg:YOffset>0</pwg:YOffset><pwg:Width>{width}</pwg:Width><pwg:Height>{height}</pwg:Height>"
+                  "</pwg:ScanRegion></pwg:ScanRegions>") if regions else ""
     return ('<?xml version="1.0" encoding="UTF-8"?>'
             f'<scan:ScanSettings xmlns:scan="{SCAN_NS}" xmlns:pwg="{PWG_NS}">'
             "<pwg:Version>2.0</pwg:Version>"
-            "<pwg:ScanRegions><pwg:ScanRegion>"
-            "<pwg:ContentRegionUnits>escl:ThreeHundredthsOfInches</pwg:ContentRegionUnits>"
-            f"<pwg:XOffset>0</pwg:XOffset><pwg:YOffset>0</pwg:YOffset><pwg:Width>{width}</pwg:Width><pwg:Height>{height}</pwg:Height>"
-            "</pwg:ScanRegion></pwg:ScanRegions>"
-            f"<pwg:InputSource>{'Feeder' if feeder else 'Platen'}</pwg:InputSource>"
+            + region_xml
+            + f"<pwg:InputSource>{'Feeder' if feeder else 'Platen'}</pwg:InputSource>"
             f"<scan:ColorMode>{COLOUR[mode]}</scan:ColorMode>"
             f"<scan:XResolution>{dpi}</scan:XResolution><scan:YResolution>{dpi}</scan:YResolution>"
             "<pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>"
@@ -410,6 +454,9 @@ def scan(device_id, mode="grey", dpi=300, source="flatbed", duplex=False, on_pag
     if mode not in caps["modes"]:
         mode = "grey" if "grey" in caps["modes"] else caps["modes"][0]
     status, headers, _ = _request(parts, "POST", "ScanJobs", _settings(caps, mode, dpi, source, duplex))
+    if status in (400, 409) and _state(parts) is None:
+        # Some feeder firmwares reject explicit ScanRegions because the feeder measures paper length itself.
+        status, headers, _ = _request(parts, "POST", "ScanJobs", _settings(caps, mode, dpi, source, duplex, regions=False))
     if status == 503:
         raise _state(parts) or EsclError("The scanner is busy. Wait for it to finish, then try again.", "busy")
     if status == 409:
@@ -422,24 +469,49 @@ def scan(device_id, mode="grey", dpi=300, source="flatbed", duplex=False, on_pag
         while len(pages) < MAX_PAGES:
             progress.check()
             progress.say(f"scanning page {len(pages) + 1}" if source == "feeder" else "scanning")
-            status, headers, data = _request(parts, "GET", job.rstrip("/") + "/NextDocument", timeout=PAGE_TIMEOUT,
-                                             limit=MAX_PAGE)
+            try:
+                status, headers, data = _request(parts, "GET", job.rstrip("/") + "/NextDocument", timeout=PAGE_TIMEOUT,
+                                                 limit=MAX_PAGE)
+            except EsclError as exc:
+                if pages and exc.code == "offline":
+                    why = _state(parts)
+                    if why is not None and why.code == "empty":
+                        break
+                    if why is not None:
+                        raise why from None
+                    if busy < 3:
+                        busy += 1
+                        time.sleep(pause)
+                        continue
+                raise
             if status == 503:               # not ready yet: the paper is still moving
                 busy += 1
                 if busy > BUSY_TRIES:
-                    raise _state(parts) or EsclError("The scanner took too long to send the page.", "busy")
+                    why = _state(parts)
+                    if pages and why is not None and why.code == "empty":
+                        break
+                    raise why or EsclError("The scanner took too long to send the page.", "busy")
                 time.sleep(pause)
                 continue
-            busy = 0
-            if status in (404, 410):        # no more pages
+            if status in (204, 404, 410) or (status == 200 and not data):   # no more pages
                 if not pages:
                     raise _state(parts) or EsclError(
                         "The document feeder is empty. Put the pages in and scan again." if source == "feeder"
                         else "The scanner sent no page. Try again.", "empty")
                 break
             if status != 200:
-                raise _state(parts) or EsclError(f"The scanner stopped on page {len(pages) + 1} (it answered {status}).",
-                                                 "general")
+                why = _state(parts)
+                if pages and why is not None and why.code == "empty":
+                    break  # the feeder ran out after scanning the pages in the tray
+                if pages and why is None and status == 409:
+                    if busy < 2:
+                        busy += 1
+                        time.sleep(pause)
+                        continue
+                    break
+                raise why or EsclError(f"The scanner stopped on page {len(pages) + 1} (it answered {status}).",
+                                       "general")
+            busy = 0
             try:
                 image = Image.open(io.BytesIO(data))
                 image.load()

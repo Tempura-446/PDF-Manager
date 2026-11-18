@@ -206,12 +206,14 @@ closed.
   group (each with its own value); a dropdown takes its choices separated by
   commas. Click a field to move, resize, rename or remove it. Fields already
   in the file are shown striped, and are changed the same way: click one to
-  move, resize or rename it, make it required, turn a text box into a
-  dropdown or back (Type), or delete it (marked in red
-  until you run; its ↶ keeps it). A total that added up a renamed field
-  follows the new name. The fields work in any PDF reader, including the
-  one here. One of the file's own fields can also be sent to another page
-  (**Page** in the bar): it keeps its place on the paper.
+  move, resize or rename it, make it required, change its format or total
+  (**Format** and **Sum of**), switch its type (a text box, multi-line box,
+  dropdown and unsigned signature field into one another; a tick box into a
+  radio button or a radio group into separate tick boxes), or delete it
+  (marked in red until you run; its ↶ keeps it). A total that added up a
+  renamed field follows the new name. The fields work in any PDF reader,
+  including the one here. One of the file's own fields can also be sent to
+  another page (**Page** in the bar): it keeps its place on the paper.
 - **Digital ID** (the certificate tool) signs PDFs with your certificate (a .pfx or
   .p12 file), like Acrobat: visible in a corner of a page (showing your
   name, the date and the reason) or invisible, optionally with a time from

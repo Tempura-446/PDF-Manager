@@ -31,7 +31,13 @@ def test_changing_a_forms_own_fields_in_a_browser(app, tmp_path):
         pytest.skip("needs Node.js with Playwright")
     src = made(tmp_path)
     other = blank(tmp_path / "other.pdf")
-    run = subprocess.run([node, str(HERE / "formedit.js"), app[1], str(src), str(other)],
+    edited = tmp_path / "edited.pdf"
+    forms.edit_fields(src, edited, [
+        {"page": 1, "index": 1, "to_page": 2},
+        {"page": 1, "index": 2, "format": "amount", "calculate": "sum: Price, Tax"},
+    ])
+    edited_id = app[0].RequestHandlerClass.opened.add(edited)
+    run = subprocess.run([node, str(HERE / "formedit.js"), app[1], str(src), str(other), edited_id],
                          capture_output=True, text=True, encoding="utf-8", timeout=300)
     if run.returncode and "Executable doesn't exist" in run.stderr:
         pytest.skip("Playwright's browser isn't installed")
@@ -43,10 +49,11 @@ def test_changing_a_forms_own_fields_in_a_browser(app, tmp_path):
     assert "already in the file: 7" in out["status0"]
     # the bar shows the picked field; its type is fixed, but a text box can take several lines
     assert out["price"]["shown"] and out["price"]["name"] == "Price" and out["price"]["type"] == "text"
-    assert out["price"]["types"] == ["text", "multiline", "dropdown"] and not out["price"]["typeOff"]
-    assert out["priceNow"]["type"] == "dropdown" and out["priceNow"]["types"] == ["text", "multiline", "dropdown"]
-    assert out["agree"]["typeOff"] and out["agree"]["type"] == "checkbox" and out["agree"]["requiredShown"]
-    assert out["radio"]["typeOff"] and out["radio"]["name"] == "Size"
+    assert out["price"]["types"] == ["text", "multiline", "dropdown", "signature"] and not out["price"]["typeOff"]
+    assert out["priceNow"]["type"] == "dropdown" and out["priceNow"]["types"] == ["text", "multiline", "dropdown", "signature"]
+    assert out["total"]["format"] == "" and out["total"]["sum"] == "Price, Tax"
+    assert not out["agree"]["typeOff"] and out["agree"]["types"] == ["checkbox", "radio"] and out["agree"]["type"] == "checkbox" and out["agree"]["requiredShown"]
+    assert not out["radio"]["typeOff"] and out["radio"]["types"] == ["checkbox", "radio"] and out["radio"]["name"] == "Size"
     assert abs(out["movedBy"][0] - 150) <= 2 and abs(out["movedBy"][1] - 24) <= 2
     assert "to delete" in out["afterDelete"]["status"] and "Agree will be deleted" in out["afterDelete"]["note"]
     assert len(set(out["tops"])) == 1, out["tops"]      # the page stays put under the pointer
@@ -62,7 +69,7 @@ def test_changing_a_forms_own_fields_in_a_browser(app, tmp_path):
     assert edits[1] == {"page": 1, "index": 1, "to_page": 2}     # Tax: put back where it was, then sent to page 2
     assert edits[0]["name"] == "Net price" and "rect" in edits[0]
     assert edits[0]["type"] == "dropdown" and edits[0]["options"] == "5, 10, 20"
-    assert edits[2] == {"page": 1, "index": 2, "type": "multiline", "required": True}
+    assert edits[2] == {"page": 1, "index": 2, "type": "multiline", "required": True, "format": "amount"}
     assert edits[3] == {"page": 1, "index": 3, "delete": True}
     assert json.loads(out["sent"]["edits"]) == out["edits"] and json.loads(out["sent"]["fields"])["1"]
     assert "added 1 field" in out["result"] and "changed 3 and deleted 1" in out["result"]
@@ -73,10 +80,13 @@ def test_changing_a_forms_own_fields_in_a_browser(app, tmp_path):
     fields = {f["name"]: f for f in forms.field_details(done)[1]}
     assert set(fields) == {"Net price", "Total", "Size"}
     assert [f["name"] for f in forms.field_details(done)[2]] == ["Country", "Tax"]
-    assert fields["Total"]["type"] == "multiline" and fields["Total"]["required"]
+    assert fields["Total"]["type"] == "multiline" and fields["Total"]["required"] and fields["Total"]["format"] == "amount"
     assert fields["Net price"]["type"] == "dropdown" and fields["Net price"]["options"] == ["5", "10", "20"]
     moved, was = fields["Net price"]["rect"], [72.0, 700.0, 200.0, 720.0]
     assert moved[0] > was[0] + 50 and moved[1] < was[1] - 5
     assert abs((moved[2] - moved[0]) - 128) < 0.5 and abs((moved[3] - moved[1]) - 20) < 0.5
 
     assert out["two"] == {"edits": "", "striped": 6}
+    assert out["reader"]["page2Fields"] == ["Country", "Tax"] and out["reader"]["tabbed"] == "Tax"
+    assert out["reader"]["tax"] == "15" and out["reader"]["price"] == "20"
+    assert out["reader"]["total"] in ("35", "35.00"), out["reader"]

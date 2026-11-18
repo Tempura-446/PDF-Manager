@@ -222,10 +222,42 @@ def test_gone_scanner(wia):
 
 
 def test_bitmap_only_driver(wia):
-    s = FakeScanner(png=False)
+    s = FakeScanner(png=False, feeder_pages=[text_page(1), text_page(2)])
     wia.scanners = [s]
-    assert len(scanner.scan(s.id)) == 1
-    assert [f[:9] for f in s.formats] == ["{B96B3CAF", "{B96B3CAB"]  # PNG asked, then BMP
+    assert len(scanner.scan(s.id, source="feeder")) == 2
+    # PNG is tried once on page 1, then BMP is remembered for the rest of the batch.
+    assert [f[:9] for f in s.formats] == ["{B96B3CAF", "{B96B3CAB", "{B96B3CAB"]
+
+
+def test_feeder_driver_needing_reconnect_between_pages(wia, monkeypatch):
+    """Drivers that close the scan session after PAGES=1 fail on the second
+    Transfer on the same Item: reconnecting scans the rest of the feeder."""
+    monkeypatch.setattr(scanner, "FEEDER_RETRY_WAIT", 0.0)
+    s = FakeScanner(feeder_pages=[text_page(1), text_page(2), text_page(3)], one_per_connect=True)
+    wia.scanners = [s]
+    pages = scanner.scan(s.id, source="feeder", dpi=200)
+    assert len(pages) == 3 and s.scanned == 3 and s.connects >= 3
+
+
+@pytest.mark.parametrize("empty_hresult", [0x80190194, 0x8019019A, 0x80190199, None])
+def test_feeder_ending_with_http_or_noanswer_keeps_scanned_pages(wia, monkeypatch, empty_hresult):
+    """When a feeder without live status runs out after 2 pages and the
+    driver answers 404, 410, 409 or None, the 2 pages are returned cleanly."""
+    monkeypatch.setattr(scanner, "FEEDER_RETRY_WAIT", 0.0)
+    s = FakeScanner(feeder_pages=[text_page(1), text_page(2)], reports_status=False, empty_hresult=empty_hresult)
+    wia.scanners = [s]
+    pages = scanner.scan(s.id, source="feeder")
+    assert len(pages) == 2
+
+
+def test_feeder_whose_status_stays_zero_still_scans_all_pages(wia):
+    """Some WIA drivers leave DOCUMENT_HANDLING_STATUS at 0 even when sheets
+    are in the feeder: scanning doesn't stop after page 1."""
+    s = FakeScanner(feeder_pages=[text_page(1), text_page(2), text_page(3)], reports_status="zero")
+    s.device_props.values["3087"].Value = 0
+    wia.scanners = [s]
+    pages = scanner.scan(s.id, source="feeder")
+    assert len(pages) == 3
 
 
 def test_refused_resolution(wia):

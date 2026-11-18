@@ -39,6 +39,7 @@ import contextlib
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from pdfmanager import core, progress
@@ -48,6 +49,7 @@ RESOLUTIONS = (150, 200, 300)
 SOURCES = ("flatbed", "feeder")
 DEFAULT_MODE, DEFAULT_DPI = "grey", 300
 MAX_PAGES = 500  # a feeder that never says it's empty stops here
+FEEDER_RETRY_WAIT = 0.25  # seconds before reconnecting when a driver balks between feeder pages
 
 SCANNER_DEVICE = 1  # WiaDeviceType.ScannerDeviceType
 
@@ -58,8 +60,10 @@ DOCUMENT_HANDLING_SELECT = 3088
 PAGES = 3096
 FEEDER, FLATBED = 1, 2            # select / capabilities bits
 FEED_READY = 1                    # status bit
+FEED_EMPTY = 8                    # status bit on drivers that mark an empty tray explicitly
 
 # Item properties (WIA_IPA_*, WIA_IPS_*)
+ITEM_NAME = 4098
 DATATYPE = 4103
 DEPTH = 4104
 CUR_INTENT = 6146
@@ -96,7 +100,7 @@ ERRORS = {
     0x8021000F: ("driver", "The scanner's driver failed. Switch the scanner off and on again; if it keeps "
                            "failing, reinstall its driver."),
     0x80210015: ("none", "No scanner was found."),
-    0x80210016: ("cover", "The scanner's cover or door is open. Close it, then scan again."),
+    0x80210016: ("cover", "The scanner's cover or door is open. Close it, then try again."),
     0x80210017: ("lamp", "The scanner's lamp is off. Switch the scanner off and on again, then try again."),
     0x80210020: ("attention", "The scanner needs attention: look at its display or lights, then try again."),
     0x80210021: ("multifeed", "The feeder took several sheets at once. Put the pages back and scan again."),
@@ -210,6 +214,27 @@ class Com:
 _com = None          # the COM layer in use (tests put a fake one here with use())
 _com_error = None    # why it couldn't be made
 _scan_lock = threading.Lock()
+_scanning = False    # True while a real scan() / scan_any() holds _scan_lock
+
+
+@contextlib.contextmanager
+def _exclusive_scan():
+    """Hold ``_scan_lock`` for a scan. Fails at once if another scan is
+    running, but waits briefly if ``_learn`` is finishing a capability probe."""
+    global _scanning
+    if _scanning:
+        raise ScannerError("A scan is already running. Wait for it to finish.", "busy")
+    if not _scan_lock.acquire(timeout=2.5):
+        raise ScannerError("A scan is already running. Wait for it to finish.", "busy")
+    if _scanning:
+        _scan_lock.release()
+        raise ScannerError("A scan is already running. Wait for it to finish.", "busy")
+    _scanning = True
+    try:
+        yield
+    finally:
+        _scanning = False
+        _scan_lock.release()
 
 
 def use(com):
@@ -267,10 +292,36 @@ def _some(value):
     return value
 
 
-def _open(com, info):
-    """Connect to a scanner: (the device, its item to scan with)."""
+def _open(com, info, source="flatbed"):
+    """Connect to a scanner: (the device, its item to scan with). Some WIA 2.0
+    drivers keep one Item for the glass and another for the feeder; when there
+    is more than one, the one matching ``source`` is chosen."""
     device = _some(com.call(info, "Connect"))
-    return device, _some(com.get(_some(com.get(device, "Items")), "Item", 1))
+    items = _some(com.get(device, "Items"))
+    first = _some(com.get(items, "Item", 1))
+    try:
+        count = _int(com.get(items, "Count"), 1)
+    except Exception:
+        count = 1
+    if count <= 1:
+        return device, first
+    wanted_bit = FEEDER if source == "feeder" else FLATBED
+    wanted_words = ("feeder", "adf", "sheet") if source == "feeder" else ("flatbed", "glass", "platen")
+    for i in range(1, count + 1):
+        try:
+            candidate = com.get(items, "Item", i)
+        except Exception:
+            continue
+        if candidate is None:
+            continue
+        for pid in (DOCUMENT_HANDLING_CAPABILITIES, DOCUMENT_HANDLING_SELECT):
+            val = _read(com, candidate, pid)
+            if val is not None and (_int(val) & wanted_bit):
+                return device, candidate
+        name = str(_read(com, candidate, ITEM_NAME) or _read(com, candidate, "Item Name") or "").lower()
+        if any(w in name for w in wanted_words):
+            return device, candidate
+    return device, first
 
 
 def _short(exc):
@@ -296,6 +347,8 @@ def _failure(com, exc, while_doing=""):
             message = NONE_FOUND
         return ScannerError(message, reason, code)
     answer = _http_answer(code)
+    if answer in (404, 410):
+        return ScannerError(ERRORS[PAPER_EMPTY][1], "empty", code)
     if answer in (400, 409):
         return ScannerError(f"The scanner refused these settings (it answered {answer}). Try another resolution "
                             "or colour setting.", "refused", code)
@@ -356,6 +409,16 @@ def _write(com, obj, pid, value, needed=False):
         return False
 
 
+def _feeder_status(com, device, item=None):
+    """The feeder's DOCUMENT_HANDLING_STATUS (3087), read from the item or
+    the device (some WIA 2.0 drivers put it on the feeder item)."""
+    if item is not None:
+        val = _read(com, item, DOCUMENT_HANDLING_STATUS)
+        if val is not None:
+            return val
+    return _read(com, device, DOCUMENT_HANDLING_STATUS)
+
+
 def _devices(com):
     manager = com.create("WIA.DeviceManager")
     infos = com.get(manager, "DeviceInfos")
@@ -396,7 +459,7 @@ def list_scanners():
     with _caps_lock:
         unknown = [device_id for device_id, _ in found if device_id not in _caps and device_id not in _asking]
         _asking.update(unknown)
-    if unknown:
+    if unknown and not _scanning:
         asker = threading.Thread(target=_learn, args=(com, unknown), daemon=True)
         asker.start()
         asker.join(LEARN_WAIT)
@@ -409,17 +472,33 @@ def list_scanners():
 
 def _learn(com, ids):
     """Ask the scanners ``ids`` what they have (a feeder, a glass), for the
-    next list. One that can't be reached now is asked again next time."""
+    next list. One that can't be reached now is asked again next time. Yields
+    to any running scan so the driver is never opened from two threads at once."""
     try:
         with com.apartment():
             for device_id, _, info in _devices(com):
                 if device_id not in ids:
                     continue
+                if _scanning or not _scan_lock.acquire(blocking=False):
+                    break
                 try:
+                    if _scanning:
+                        break
                     device = com.call(info, "Connect")
                     handling = _read(com, device, DOCUMENT_HANDLING_CAPABILITIES)
+                    if handling is None:
+                        try:
+                            items = com.get(device, "Items")
+                            for i in range(1, _int(com.get(items, "Count"), 1) + 1):
+                                item_caps = _read(com, com.get(items, "Item", i), DOCUMENT_HANDLING_CAPABILITIES)
+                                if item_caps is not None:
+                                    handling = (handling or 0) | _int(item_caps)
+                        except Exception:
+                            pass
                 except Exception:
                     continue
+                finally:
+                    _scan_lock.release()
                 feeder, flatbed = False, True
                 if handling is not None:
                     feeder, flatbed = bool(_int(handling) & FEEDER), bool(_int(handling) & FLATBED)
@@ -439,15 +518,22 @@ def _configure(com, device, item, mode, dpi, source, before=None):
     of picture, the resolution) and the intent and area are put back as the
     driver had them."""
     handling = _read(com, device, DOCUMENT_HANDLING_CAPABILITIES)
+    if handling is None:
+        handling = _read(com, item, DOCUMENT_HANDLING_CAPABILITIES)
     if source == "feeder":
         if handling is not None and not _int(handling) & FEEDER:
             raise ScannerError("This scanner has no document feeder. Choose Flatbed (the glass).", "nofeeder")
-        _write(com, device, DOCUMENT_HANDLING_SELECT, FEEDER, needed=handling is not None)
+        set_dev = _write(com, device, DOCUMENT_HANDLING_SELECT, FEEDER)
+        set_item = _write(com, item, DOCUMENT_HANDLING_SELECT, FEEDER)
+        if handling is not None and not (set_dev or set_item):
+            _write(com, device, DOCUMENT_HANDLING_SELECT, FEEDER, needed=True)
         _write(com, device, PAGES, 1)  # one page each Transfer
+        _write(com, item, PAGES, 1)
     elif handling is not None:
         if not _int(handling) & FLATBED:
             raise ScannerError("This scanner has no glass to scan on. Choose Document feeder.", "noflatbed")
         _write(com, device, DOCUMENT_HANDLING_SELECT, FLATBED)
+        _write(com, item, DOCUMENT_HANDLING_SELECT, FLATBED)
     if before is not None:
         for pid, value in before.items():
             if value is not None:
@@ -476,17 +562,29 @@ def _configure(com, device, item, mode, dpi, source, before=None):
     return was
 
 
-def _transfer(com, item, folder, number):
-    """Scan one page: a PIL image."""
+def _transfer(com, item, folder, number, formats=None):
+    """Scan one page: a PIL image. ``formats`` remembers when a driver only
+    gives bitmaps so later pages in the feeder don't ask for PNG again."""
     from PIL import Image
 
+    if formats is None:
+        formats = [FORMAT_PNG, FORMAT_BMP]
     try:
-        picture = _some(com.call(item, "Transfer", FORMAT_PNG))
+        picture = _some(com.call(item, "Transfer", formats[0]))
     except Exception as exc:
         code = com.hresult(exc)
-        if code in ERRORS and code not in (0x8021000B, 0x8021000C):
+        can_try_bmp = (
+            len(formats) > 1
+            and number == 1
+            and (
+                code in (0x8021000B, 0x8021000C, 0x80070057, 0x80004001)
+                or (isinstance(exc, ScannerError) and exc.code == "noanswer")
+            )
+        )
+        if not can_try_bmp:
             raise
-        picture = _some(com.call(item, "Transfer", FORMAT_BMP))  # drivers that only give bitmaps
+        picture = _some(com.call(item, "Transfer", formats[1]))  # drivers that only give bitmaps
+        formats[:] = [formats[1]]
     target = Path(folder) / f"page{number:04d}.scan"
     if target.exists():
         target.unlink()
@@ -494,6 +592,40 @@ def _transfer(com, item, folder, number):
     with Image.open(target) as image:
         image.load()
         return image.copy()
+
+
+def _reconnect_feeder_page(com, info, mode, dpi, source, before, folder, number, formats,
+                           status_tracks_ready, first_failure):
+    """When a feeder transfer fails on page 2+, reconnect and either scan the
+    next sheet (many WIA drivers end the session after PAGES=1 or stay busy
+    while ejecting the sheet) or recognise that the feeder is now empty."""
+    last_failure = first_failure
+    for attempt in range(3):
+        progress.check()
+        if FEEDER_RETRY_WAIT:
+            time.sleep(FEEDER_RETRY_WAIT * (attempt + 1))
+        try:
+            device, item = _open(com, info, source)
+            fresh_status = _feeder_status(com, device, item)
+            if fresh_status is not None:
+                bits = _int(fresh_status)
+                if not (bits & FEED_READY) and (status_tracks_ready or (bits & FEED_EMPTY)):
+                    return device, item, None
+            _configure(com, device, item, mode, dpi, source, before=before)
+            image = _transfer(com, item, folder, number, formats)
+            return device, item, image
+        except Exception as exc:
+            last_failure = _failure(com, exc, f" on page {number}")
+            if last_failure.code == "empty":
+                return None, None, None
+            if last_failure.code in ("jam", "cover", "lamp", "multifeed", "offline", "gone"):
+                raise last_failure from None
+    # After 1+ pages have already been scanned, drivers that report an empty
+    # feeder as HTTP 409 ("refused"), E_FAIL / driver error, or None ("noanswer")
+    # have simply finished the stack in the tray.
+    if last_failure.code in ("empty", "noanswer", "refused", "paper"):
+        return None, None, None
+    raise last_failure from None
 
 
 def scan(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", on_page=None):
@@ -509,10 +641,8 @@ def scan(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", on_pag
     if not 50 <= dpi <= 1200:
         raise ScannerError("choose a resolution between 50 and 1200 dpi", "refused")
     com = _layer()
-    if not _scan_lock.acquire(blocking=False):
-        raise ScannerError("A scan is already running. Wait for it to finish.", "busy")
     pages = []
-    try:
+    with _exclusive_scan():
         with com.apartment(), tempfile.TemporaryDirectory(prefix="pdfm-scan-") as folder:
             progress.say("connecting to the scanner")
             try:
@@ -523,38 +653,60 @@ def scan(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", on_pag
                 raise ScannerError("That scanner isn't connected any more. Check that it is switched on, "
                                    "then choose it again.", "gone")
             try:
-                device, item = _open(com, match[0])
+                device, item = _open(com, match[0], source)
                 before = _configure(com, device, item, mode, dpi, source)
             except Exception as exc:
                 raise _failure(com, exc, " to start") from None
             feeder = source == "feeder"
+            used_mode = mode
+            used_before = None
+            formats = [FORMAT_PNG, FORMAT_BMP]
+            initial_status = _feeder_status(com, device, item) if feeder else None
+            status_tracks_ready = initial_status is not None and bool(_int(initial_status) & FEED_READY)
             while True:
                 number = len(pages) + 1
                 progress.check()
                 progress.say(f"scanning page {number}" if feeder else "scanning")
+                if feeder and pages:
+                    # Re-assert PAGES=1 for drivers that decrement it to 0 on each Transfer.
+                    _write(com, device, DOCUMENT_HANDLING_SELECT, FEEDER)
+                    _write(com, item, DOCUMENT_HANDLING_SELECT, FEEDER)
+                    _write(com, device, PAGES, 1)
+                    _write(com, item, PAGES, 1)
                 try:
-                    image = _transfer(com, item, folder, number)
+                    image = _transfer(com, item, folder, number, formats)
                 except Exception as exc:
                     failure = _failure(com, exc, f" on page {number}")
                     if feeder and pages and failure.code == "empty":
                         break  # every page in the feeder is done
-                    if failure.code not in ("refused", "noanswer") or pages:
-                        raise failure from None
-                    # Refused (or nothing given) before the first page: once more with only the
-                    # settings that matter, in grey where black and white was
-                    # asked (made black and white here afterwards).
-                    plainer = "grey" if mode == "bw" else mode
-                    try:
-                        device, item = _open(com, match[0])
-                        _configure(com, device, item, plainer, dpi, source, before=before)
-                        image = _transfer(com, item, folder, number)
-                    except Exception as again:
-                        second = _failure(com, again, f" on page {number}")
-                        last = second if second.code != "general" else failure
-                        if last.code in ("refused", "noanswer") and "\\escl\\" in str(device_id).lower():
-                            last = ScannerError(f"{last} Or choose this scanner's \"(network)\" entry in the "
-                                                "list, where ZPDF talks to it directly.", last.code, last.hresult)
-                        raise last from None
+                    if feeder and pages:
+                        if failure.code in ("jam", "cover", "lamp", "multifeed", "offline", "gone"):
+                            raise failure from None
+                        device, item, image = _reconnect_feeder_page(
+                            com, match[0], used_mode, dpi, source, used_before, folder, number,
+                            formats, status_tracks_ready, failure)
+                        if image is None:
+                            break
+                    else:
+                        if failure.code not in ("refused", "noanswer"):
+                            raise failure from None
+                        # Refused (or nothing given) before the first page: once more with only the
+                        # settings that matter, in grey where black and white was
+                        # asked (made black and white here afterwards).
+                        plainer = "grey" if mode == "bw" else mode
+                        try:
+                            device, item = _open(com, match[0], source)
+                            _configure(com, device, item, plainer, dpi, source, before=before)
+                            image = _transfer(com, item, folder, number, formats)
+                            used_mode = plainer
+                            used_before = before
+                        except Exception as again:
+                            second = _failure(com, again, f" on page {number}")
+                            last = second if second.code != "general" else failure
+                            if last.code in ("refused", "noanswer") and "\\escl\\" in str(device_id).lower():
+                                last = ScannerError(f"{last} Or choose this scanner's \"(network)\" entry in the "
+                                                    "list, where ZPDF talks to it directly.", last.code, last.hresult)
+                            raise last from None
                 if mode == "bw" and image.mode != "1":
                     image = image.convert("L").point(lambda v: 255 if v >= 160 else 0).convert("1")
                 image.info["dpi"] = (dpi, dpi)
@@ -563,11 +715,13 @@ def scan(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", on_pag
                     on_page(image, dpi)
                 if not feeder or len(pages) >= MAX_PAGES:
                     break
-                status_value = _read(com, device, DOCUMENT_HANDLING_STATUS)
-                if status_value is not None and not _int(status_value) & FEED_READY:
-                    break  # the feeder says it has no more
-    finally:
-        _scan_lock.release()
+                status_value = _feeder_status(com, device, item)
+                if status_value is not None:
+                    bits = _int(status_value)
+                    if bits & FEED_READY:
+                        status_tracks_ready = True
+                    elif status_tracks_ready or (bits & FEED_EMPTY):
+                        break  # the feeder says it has no more
     return pages
 
 
@@ -601,28 +755,21 @@ def all_scanners(network=True, look=True):
 def scan_any(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", duplex=False, on_page=None):
     """scan(), for either kind of scanner (a network one by its "escl:" id).
     ``duplex``: both sides, from a network scanner's feeder that can."""
-    from pdfmanager import escl
-
-    from pdfmanager import naps2
+    from pdfmanager import escl, naps2
 
     if str(device_id).startswith(naps2.PREFIX):
-        if not _scan_lock.acquire(blocking=False):
-            raise ScannerError("A scan is already running. Wait for it to finish.", "busy")
-        try:
-            return naps2.scan(device_id, mode=mode, dpi=dpi, source=source, duplex=duplex, on_page=on_page)
-        except naps2.Naps2Error as exc:
-            raise ScannerError(str(exc), exc.code) from None
-        finally:
-            _scan_lock.release()
+        with _exclusive_scan():
+            try:
+                return naps2.scan(device_id, mode=mode, dpi=dpi, source=source, duplex=duplex, on_page=on_page)
+            except naps2.Naps2Error as exc:
+                raise ScannerError(str(exc), exc.code) from None
     if not str(device_id).startswith("escl:"):
         return scan(device_id, mode=mode, dpi=dpi, source=source, on_page=on_page)
     if mode not in MODES:
         raise ScannerError(f"choose a colour setting: {', '.join(MODES)}", "refused")
-    if not _scan_lock.acquire(blocking=False):
-        raise ScannerError("A scan is already running. Wait for it to finish.", "busy")
-    try:
-        return escl.scan(device_id, mode=mode, dpi=dpi, source=source, duplex=duplex, on_page=on_page)
-    except escl.EsclError as exc:
-        raise ScannerError(str(exc), exc.code) from None
-    finally:
-        _scan_lock.release()
+    with _exclusive_scan():
+        try:
+            return escl.scan(device_id, mode=mode, dpi=dpi, source=source, duplex=duplex, on_page=on_page)
+        except escl.EsclError as exc:
+            raise ScannerError(str(exc), exc.code) from None
+

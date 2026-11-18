@@ -1680,7 +1680,9 @@ def build_parser():
                     help='change the fields the form has, from a JSON file: [{"page", "index" '
                          '(the field\'s place on its page, from 0, in the order listed without '
                          '--field), and any of "rect", "name", "tooltip", "required", '
-                         '"readonly", "type" (text, multiline, dropdown or list), "options", "to_page", "delete"}]')
+                         '"readonly", "type", "options", "format", "decimals", "separators", '
+                         '"currency", "currency_after", "date", "min", "max", "calculate", '
+                         '"to_page", "delete"}]')
     sp.add_argument("--font-size", type=float, default=0,
                     help="text size in the fields (default: fit single-line fields to the box)")
     sp.add_argument("--no-border", action="store_true", help="don't draw a border around fields")

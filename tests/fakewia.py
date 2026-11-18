@@ -95,10 +95,13 @@ class FakeScanner:
 
     def __init__(self, name="Fake scanner", device_id=None, flatbed=True, feeder=True, flatbed_pages=None,
                  feeder_pages=None, connect_error=None, transfer_error=None, delay=0.0, png=True,
-                 reports_status=True, refuses=None, gives_nothing=0):
+                 reports_status=True, refuses=None, gives_nothing=0, one_per_connect=False,
+                 empty_hresult=0x80210003):
         self.name = name
         self.gives_nothing = gives_nothing  # Transfers that hand back nothing, without failing
         self.refuses = refuses  # (item's values by number) -> an HRESULT to fail Transfer with, or None
+        self.one_per_connect = one_per_connect  # driver that faults if Transfer is called twice on one Connect
+        self.empty_hresult = empty_hresult
         self.id = device_id or "{6BDD1FC6-810F-11D0-BEC7-08002BE2092F}\\" + name.replace(" ", "")
         self.flatbed, self.feeder = flatbed, feeder
         self.flatbed_pages = list(flatbed_pages or [text_page(1)])
@@ -108,6 +111,7 @@ class FakeScanner:
         self.png = png
         self.reports_status = reports_status
         self.scanned = 0
+        self.connects = 0
         self.formats = []
         caps = (1 if feeder else 0) | (2 if flatbed else 0)
         device = {3086: caps, 3088: 2, 3096: 0}
@@ -130,6 +134,7 @@ class _Info:
             time.sleep(self.s.connect_delay)
         if self.s.connect_error:
             raise FakeComError(self.s.connect_error)
+        self.s.connects += 1
         return _Device(self.s)
 
 
@@ -155,6 +160,7 @@ class _Item:
     def __init__(self, scanner):
         self.s = scanner
         self.Properties = scanner.item_props
+        self.transfers = 0
 
     def Transfer(self, fmt):
         s = self.s
@@ -165,6 +171,8 @@ class _Item:
             time.sleep(s.delay)
         if s.transfer_error:
             raise FakeComError(s.transfer_error)
+        if s.one_per_connect and self.transfers >= 1:
+            raise FakeComError(0x8021000E)  # driver ends session after PAGES=1
         if s.gives_nothing:
             s.gives_nothing -= 1
             return None
@@ -175,12 +183,17 @@ class _Item:
         feeder = s.device_props.values["3088"].Value == 1
         if feeder:
             if not s.feeder_pages:
-                raise FakeComError(0x80210003)  # WIA_ERROR_PAPER_EMPTY
+                if s.empty_hresult is None:
+                    return None
+                raise FakeComError(s.empty_hresult)
             page = s.feeder_pages.pop(0)
-            if "3087" in s.device_props.values:
+            if "3087" in s.device_props.values and s.reports_status == "live":
+                s.device_props.values["3087"].Value = 1 if s.feeder_pages else 0
+            elif "3087" in s.device_props.values and s.reports_status is True:
                 s.device_props.values["3087"].Value = 1 if s.feeder_pages else 0
         else:
             page = s.flatbed_pages.pop(0) if len(s.flatbed_pages) > 1 else s.flatbed_pages[0]
+        self.transfers += 1
         s.scanned += 1
         dpi = s.item_props.values["6147"].Value
         image = page.copy()
