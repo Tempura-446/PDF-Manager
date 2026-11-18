@@ -46,10 +46,10 @@
 ### Phase 2 (release B): the designer in the reader
 
 **Task 2.1: Form mode**
-- [ ] "Prepare form" in the reader (Tools, the command palette, and the "Make fillable" bar): a mode like Annotate, with a bar of field types (text, multi-line, checkbox, radio, dropdown, list, date, signature, button) and the fields drawn over the page with their names.
-- [ ] Click or drag to add; click to select; drag to move; handles to resize; arrow keys nudge (Shift: larger steps); Delete removes; Ctrl+D duplicates; Ctrl+C and Ctrl+V copy, also to another page; Shift+click and a drag box select several.
-- [ ] Each change goes through the reader's change path, so Undo, Redo, the unsaved dot and Save work as everywhere else. Changes are batched: a drag is one request when the pointer is released.
-- [ ] **Find fields** runs from the bar and adds what it finds as ordinary, editable fields.
+- [x] "Prepare form" in the reader (Tools, the command palette, and the "Make fillable" bar): a mode like Annotate, with a bar of field types (text, multi-line, checkbox, radio, dropdown, list, date, signature, button) and the fields drawn over the page with their names.
+- [x] Click or drag to add; click to select; drag to move; handles to resize; arrow keys nudge (Shift: larger steps); Delete removes; Ctrl+D duplicates; Ctrl+C and Ctrl+V copy, also to another page; Shift+click and a drag box select several.
+- [x] Each change goes through the reader's change path, so Undo, Redo, the unsaved dot and Save work as everywhere else. Changes are batched: a drag is one request when the pointer is released.
+- [x] **Find fields** runs from the bar and adds what it finds as ordinary, editable fields.
 
 **Task 2.2: the properties panel** (the file panel on the right, when a field is selected)
 - [ ] **General:** name, tooltip, required, read-only, hidden / visible but not printed.

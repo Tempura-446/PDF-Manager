@@ -2589,6 +2589,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._form_detect(body)
             if path == "/api/form/fillable":
                 return self._form_fillable(body)
+            if path == "/api/form/add":
+                return self._form_add(body)
+            if path == "/api/form/edit":
+                return self._form_edit(body)
             if path in ("/api/comments/summary", "/api/comments/export", "/api/comments/import"):
                 return self._comments(path.rsplit("/", 1)[1], body)
             if path == "/api/text/edit":
@@ -3231,6 +3235,46 @@ class Handler(BaseHTTPRequestHandler):
             data = out.read_bytes()
         places = sum(len(items) for items in found.values())  # (a radio group: each button)
         return self._send(HTTPStatus.OK, data, "application/pdf", {"X-Pdfm-Fields": str(places)})
+
+    def _form_add(self, body):
+        """Add form fields to a PDF from the reader's Prepare form mode."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        try:
+            items = json.loads(fields.get("fields") or "[]")
+        except ValueError:
+            raise UserError("invalid fields") from None
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "added.pdf"
+            src.write_bytes(uploads[0][2])
+            names = forms.add_fields(src, out, items, password=password)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf",
+                          {"X-Pdfm-Names": json.dumps(names, ensure_ascii=True)})
+
+    def _form_edit(self, body):
+        """Move, resize, rename or delete form fields from the reader's Prepare form mode."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        try:
+            changes = json.loads(fields.get("changes") or "[]")
+        except ValueError:
+            raise UserError("invalid changes") from None
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "edited.pdf"
+            src.write_bytes(uploads[0][2])
+            result = forms.edit_fields(src, out, changes, password=password)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf",
+                          {"X-Pdfm-Result": json.dumps(result, ensure_ascii=True)})
 
     def _save_settings(self, body):
         data = json.loads(body or b"{}")

@@ -229,6 +229,11 @@ export const Tabs = (Base) => class extends Base {
     this.annotSaveBtn.classList.toggle("seal", ui.annotSave.main);
     this.annotSaveBtn.classList.toggle("primary", ui.annotSave.main);
     this.annotSaveBtn.title = ui.annotSave.title;
+    if (this.formSaveBtn) {
+      this.formSaveBtn.classList.toggle("seal", ui.annotSave.main);
+      this.formSaveBtn.classList.toggle("primary", ui.annotSave.main);
+      this.formSaveBtn.title = ui.annotSave.title;
+    }
     // The app keeps the server told what's unsaved: closing the desktop
     // window asks from there (it can't ask the page then).
     const unsaved = JSON.stringify(ui.unsaved);
