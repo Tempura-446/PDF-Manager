@@ -44,6 +44,11 @@ Draw, move, resize and arrange form fields directly on the page in the reader.
   field selected, **Copy to pages** duplicates it across pages (keeping one
   shared name or numbering each copy) and **Make a table** turns it into a
   grid of numbered fields.
+- **Tab order and the Fields list.** In **Prepare form**, every field shows
+  its tab-order number, and a **Fields** tab in the left sidebar lists all
+  fields page by page. Click a field to select it, double-click to rename
+  it in place, drag rows to change the tab order, or reset a page with
+  **Order by rows** or **Order by columns**.
 
 ## 0.56.0
 

@@ -2597,6 +2597,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._form_copy(body)
             if path == "/api/form/table":
                 return self._form_table(body)
+            if path == "/api/form/reorder":
+                return self._form_reorder(body)
             if path in ("/api/comments/summary", "/api/comments/export", "/api/comments/import"):
                 return self._comments(path.rsplit("/", 1)[1], body)
             if path == "/api/text/edit":
@@ -3313,6 +3315,25 @@ class Handler(BaseHTTPRequestHandler):
                 int(fields.get("rows", 2)), int(fields.get("cols", 2)),
                 float(fields.get("row_gap", 4)), float(fields.get("col_gap", 4)),
                 password=password)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf",
+                          {"X-Pdfm-Names": json.dumps(names, ensure_ascii=True)})
+
+    def _form_reorder(self, body):
+        """Reorder form fields on a page (tab order) and set /Tabs."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        password = fields.get("password") or None
+        mode = str(fields.get("mode", "custom"))
+        order = json.loads(fields.get("order") or "null")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "reordered.pdf"
+            src.write_bytes(uploads[0][2])
+            names = forms.reorder_fields(
+                src, out, int(fields.get("page", 1)), order=order, mode=mode, password=password)
             if password and core.open_pdf(src, password).is_encrypted:
                 core.encrypt(out, out, password)
             data = out.read_bytes()

@@ -386,9 +386,11 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
     this.thumbsPanel = el("div", { class: "rd-panel", role: "tabpanel" }, this.pageBar, this.thumbsList);
     this.outlinePanel = el("div", { class: "rd-panel", role: "tabpanel", hidden: true }, this.outlineList);
     this._buildLayers();  // (the Layers tab: shown for a document with layers, see layers.js)
-    this.sidebar = el("aside", { class: "rd-sidebar", hidden: true, "aria-label": "Pages, bookmarks, comments and layers" },
-      el("div", { class: "rd-tabs", role: "tablist" }, this.thumbsTab, this.outlineTab, this.commentsTab, this.layersTab),
-      this.thumbsPanel, this.outlinePanel, this.commentsPanel, this.layersPanel);
+    this.fieldsTab = el("button", { class: "rd-tab rd-fieldstab", type: "button", role: "tab", "aria-selected": "false", hidden: true }, "Fields");
+    this.fieldsPanel = el("div", { class: "rd-panel rd-fieldspanel", role: "tabpanel", hidden: true });
+    this.sidebar = el("aside", { class: "rd-sidebar", hidden: true, "aria-label": "Pages, bookmarks, comments, layers and fields" },
+      el("div", { class: "rd-tabs", role: "tablist" }, this.thumbsTab, this.outlineTab, this.commentsTab, this.layersTab, this.fieldsTab),
+      this.thumbsPanel, this.outlinePanel, this.commentsPanel, this.layersPanel, this.fieldsPanel);
 
     // Viewer
     this.viewerEl = el("div", { class: "pdfViewer" });
@@ -654,6 +656,7 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
     this.thumbsTab.addEventListener("click", () => this.#showTab("thumbs"));
     this.outlineTab.addEventListener("click", () => this.#showTab("outline"));
     this.commentsTab.addEventListener("click", () => this.#showTab("comments"));
+    this.fieldsTab.addEventListener("click", () => this.#showTab("fields"));
     this.authorInput.addEventListener("change", () => store.set("pdfm-author", this.authorInput.value.trim()));
     this.shapeSelect.addEventListener("change", () => { store.set("pdfm-shape", this.shapeSelect.value); this._shapeChosen(); });
     this.stampSelect.addEventListener("change", () => this._stampChosen());
@@ -1396,9 +1399,19 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
     // What's typed into one PDF's form isn't offered in another's: the
     // browser's own memory of form entries is turned off for the fields.
     eventBus.on("annotationlayerrendered", ({ source }) => {
-      for (const field of source?.div?.querySelectorAll(".annotationLayer input, .annotationLayer textarea, .annotationLayer select") || []) {
+      const layer = source?.div?.querySelector(".annotationLayer");
+      for (const field of layer?.querySelectorAll("input, textarea, select") || []) {
         field.setAttribute("autocomplete", "off");
       }
+      if (!layer || !source?.pdfPage?.getAnnotations) return;
+      source.pdfPage.getAnnotations().then((annots) => {
+        if (!layer.isConnected) return;
+        const byId = new Map([...layer.children].map((el) => [el.dataset.annotationId, el]));
+        for (const a of annots) {
+          const sec = byId.get(a.id);
+          if (sec) layer.append(sec);
+        }
+      }).catch(() => {});
     });
     eventBus.on("pagerendered", ({ pageNumber }) => {
       this._drawMeasures(pageNumber);
@@ -1575,9 +1588,11 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
     this.sidebarBtn.setAttribute("aria-pressed", String(open));
     if (open) { this.#updatePage(); this.#showThumbs(); }
   }
+  _setSidebar(open) { this.#setSidebar(open); }
   #showTab(which) {
     for (const [name, tab, panel] of [["thumbs", this.thumbsTab, this.thumbsPanel], ["outline", this.outlineTab, this.outlinePanel],
-      ["comments", this.commentsTab, this.commentsPanel], ["layers", this.layersTab, this.layersPanel]]) {
+      ["comments", this.commentsTab, this.commentsPanel], ["layers", this.layersTab, this.layersPanel],
+      ["fields", this.fieldsTab, this.fieldsPanel]]) {
       tab.setAttribute("aria-selected", String(name === which));
       panel.hidden = name !== which;
     }
@@ -2568,11 +2583,15 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
   async #reloadEditing(tab) {
     const editing = this.textEditMode ? "EDITTEXT" : this.markupMode, picked = this.pickedImage;
     const wasForm = this.formMode, formTool = this.formTool;
+    const wasSidebar = wasForm && !this.sidebar.hidden;
+    const wasFields = wasForm && this.fieldsTab?.getAttribute("aria-selected") === "true";
     await this._load(tab);
     this._refresh();
     if (tab !== this.activeTab) return;
     if (wasForm) {
       this.openFormMode(formTool);
+      if (wasSidebar) this.#setSidebar(true);
+      if (wasFields) this.#showTab("fields");
     } else if (editing) {
       this.openAnnotate();
       this._setEditMode(editing);

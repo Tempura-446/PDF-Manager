@@ -123,6 +123,7 @@ export const FormMode = (Base) => class extends Base {
     this.formPicked = new Set();
     this.root.classList.add("rd-formmode");
     this.formmodebar.hidden = false;
+    if (this.fieldsTab) this.fieldsTab.hidden = false;
     this._setFormTool(tool);
     this._stepAside();
     this._formUndoButtons();
@@ -139,6 +140,10 @@ export const FormMode = (Base) => class extends Base {
     this.formPicked = new Set();
     this.root.classList.remove("rd-formmode", "rd-form-placing", "rd-form-picking");
     this.formmodebar.hidden = true;
+    if (this.fieldsTab) {
+      if (this.fieldsTab.getAttribute("aria-selected") === "true") this._showSidebarTab?.("thumbs");
+      this.fieldsTab.hidden = true;
+    }
     for (const layer of this.viewerEl.querySelectorAll(".rd-formlayer")) layer.remove();
     this._stepAside();
     this._notifyFormSelect();
@@ -194,17 +199,18 @@ export const FormMode = (Base) => class extends Base {
       }
       const list = pages[String(n)] || [];
       const nodes = [];
-      for (const f of list) {
+      for (let i = 0; i < list.length; i++) {
+        const f = list[i];
         const r = viewRectFromPdf(view.viewport, f.rect);
         const key = fieldKey(n, f.index);
         const sel = this.formPicked.has(key);
         const box = el("div", {
           class: "rd-formfield" + (sel ? " selected" : "") + (f.signed ? " signed" : ""),
           "data-page": String(n), "data-index": String(f.index),
-          "data-type": f.type, "data-name": f.name,
+          "data-type": f.type, "data-name": f.name, "data-order": String(i + 1),
           style: `left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px`,
-          title: `${f.name} (${f.type})`,
-        }, el("span", { class: "rd-formlabel" }, f.name));
+          title: `${i + 1}. ${f.name} (${f.type})`,
+        }, el("span", { class: "rd-formlabel" }, f.name), el("span", { class: "rd-formbadge" }, String(i + 1)));
         if (sel && this.formPicked.size === 1 && !f.signed) {
           for (const h of ["nw", "ne", "sw", "se"]) box.append(el("div", { class: `rd-formhandle ${h}`, "data-handle": h }));
         }
@@ -213,7 +219,111 @@ export const FormMode = (Base) => class extends Base {
       layer.replaceChildren(...nodes);
     }
     this._formUndoButtons();
+    this._renderFieldsSidebar();
     this._notifyFormSelect();
+  }
+
+  _renderFieldsSidebar() {
+    if (!this.fieldsPanel) return;
+    if (!this.formMode || !this.doc) { this.fieldsPanel.replaceChildren(); return; }
+    const pages = this._formFields() || {};
+    const frag = document.createDocumentFragment();
+    const curPage = this.pdfViewer.currentPageNumber || 1;
+    const rowsBtn = el("button", { class: "rd-btn", type: "button" }, "Order by rows");
+    rowsBtn.addEventListener("click", () => this.reorderFormFields(this.pdfViewer.currentPageNumber || curPage, null, "rows"));
+    const colsBtn = el("button", { class: "rd-btn", type: "button" }, "Order by columns");
+    colsBtn.addEventListener("click", () => this.reorderFormFields(this.pdfViewer.currentPageNumber || curPage, null, "cols"));
+    frag.append(el("div", { class: "rd-fields-actions" }, rowsBtn, colsBtn));
+
+    const pageNums = Object.keys(pages).map(Number).filter((n) => (pages[String(n)] || []).length).sort((a, b) => a - b);
+    if (!pageNums.length) {
+      frag.append(el("p", { style: "color:var(--muted);margin:8px 2px" }, "No fields yet. Pick a tool above and click or drag on a page."));
+    }
+    for (const pno of pageNums) {
+      const list = pages[String(pno)] || [];
+      const tabKind = list[0]?.tab_order || "rows";
+      const tabLabel = { rows: "Rows", cols: "Columns", structure: "Structure", custom: "Custom" }[tabKind] || "Rows";
+      const ol = el("ol", { class: "rd-fields-list", "data-page": String(pno) });
+      let dragIdx = -1;
+      list.forEach((f, pos) => {
+        const key = fieldKey(pno, f.index);
+        const nameSpan = el("span", { class: "rd-fielditem-name", title: "Click to select, double-click to rename" }, f.name);
+        const li = el("li", {
+          class: "rd-fielditem" + (this.formPicked.has(key) ? " selected" : ""),
+          draggable: "true", "data-page": String(pno), "data-index": String(f.index),
+        },
+          el("span", { class: "rd-fielditem-num" }, String(pos + 1)),
+          nameSpan,
+          el("span", { class: "rd-fielditem-type" }, f.type));
+
+        li.addEventListener("click", (e) => {
+          if (e.target.tagName === "INPUT") return;
+          if (!e.shiftKey && this.formPicked.size === 1 && this.formPicked.has(key)) return;
+          if (e.shiftKey) {
+            if (this.formPicked.has(key)) this.formPicked.delete(key);
+            else this.formPicked.add(key);
+          } else {
+            this.formPicked = new Set([key]);
+          }
+          if (this.pdfViewer.currentPageNumber !== pno) this.pdfViewer.currentPageNumber = pno;
+          this._drawFormOverlays();
+        });
+
+        nameSpan.addEventListener("dblclick", (e) => {
+          e.stopPropagation();
+          const inp = el("input", { class: "rd-fielditem-edit", type: "text", value: f.name });
+          nameSpan.replaceWith(inp);
+          inp.focus();
+          inp.select();
+          let done = false;
+          const finish = (save) => {
+            if (done) return;
+            done = true;
+            const next = inp.value.trim();
+            if (save && next && next !== f.name) {
+              this._editFormFields([{ page: pno, index: f.index, name: next }], { keepSelection: true });
+            } else {
+              inp.replaceWith(nameSpan);
+            }
+          };
+          inp.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter") { ev.preventDefault(); finish(true); }
+            else if (ev.key === "Escape") { ev.preventDefault(); finish(false); }
+          });
+          inp.addEventListener("blur", () => finish(true));
+        });
+
+        li.addEventListener("dragstart", (e) => { dragIdx = pos; e.dataTransfer?.setData("text/plain", String(pos)); });
+        li.addEventListener("dragenter", (e) => e.preventDefault());
+        li.addEventListener("dragover", (e) => e.preventDefault());
+        li.addEventListener("drop", (e) => {
+          e.preventDefault();
+          const from = dragIdx >= 0 ? dragIdx : parseInt(e.dataTransfer?.getData("text/plain") || "-1", 10);
+          dragIdx = -1;
+          if (from < 0 || Number.isNaN(from) || from === pos) return;
+          const order = list.map((x) => x.index);
+          const [moved] = order.splice(from, 1);
+          order.splice(pos, 0, moved);
+          this.reorderFormFields(pno, order, "custom");
+        });
+        ol.append(li);
+      });
+      frag.append(el("div", { class: "rd-fields-page" },
+        el("div", { class: "rd-fields-pagehead" }, el("span", {}, `Page ${pno}`), el("span", {}, tabLabel)),
+        ol));
+    }
+    this.fieldsPanel.replaceChildren(frag);
+  }
+
+  reorderFormFields(page, order, mode = "custom") {
+    if (!this.doc) return;
+    return this._changeDocument((bytes, tab) => this._post("/api/form/reorder", bytes, tab, {
+      page: String(page), mode: String(mode), order: JSON.stringify(order ?? null),
+    }), {
+      failure: "Couldn't reorder fields: ",
+      edited: (_res, tab) => { tab.formFields = null; },
+      after: () => this._drawFormOverlays(),
+    });
   }
 
   _notifyFormSelect() {
