@@ -4,6 +4,28 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.57.0
+
+Draw, move, resize and arrange form fields directly on the page in the reader.
+
+- **Prepare form mode in the reader.** Open **Prepare form** from the
+  reader's **More** menu, the command palette (`Ctrl+K`), or the
+  "Make it fillable" bar on a printed form. A toolbar opens with nine field
+  types — **Text**, **Multi-line**, **Checkbox**, **Radio**, **Dropdown**,
+  **List**, **Date**, **Signature**, and **Button** — and every field on the
+  page is shown with its name and corner handles.
+- **Draw and arrange fields directly on the page.** Click or drag to add a
+  field, click to select (`Shift+click` or drag a box to select several),
+  drag to move, drag a corner handle to resize, nudge with the arrow keys
+  (`Shift` for larger steps), `Ctrl+D` to duplicate, `Ctrl+C` / `Ctrl+V` to
+  copy and paste (including onto another page), and `Delete` to remove.
+- **Find fields from the bar.** **Find fields** runs ZPDF's automatic field
+  finder and adds what it discovers as ordinary, editable fields. Every edit
+  supports **Undo**, **Redo**, the unsaved dot, and **Save**.
+- **List boxes and push buttons.** Form creation now also supports open
+  **List** boxes and **Button** fields in both the reader and the Python/CLI
+  engine.
+
 ## 0.56.0
 
 Switch a form's checkboxes, radio buttons and signature fields, and change

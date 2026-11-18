@@ -27,6 +27,7 @@ import { Overlay } from "./overlay.js";
 import { COLORS, el, fadeOut, heldTimer, ICON, isTyping, MIN_ZOOM, MAX_ZOOM, pdfjs, store, svg, viewer, loadPdfjs } from "./readerkit.js";
 import { Annotating } from "./annotate.js";
 import { Finding } from "./find.js";
+import { FormMode } from "./formmode.js";
 import { Layering } from "./layers.js";
 import { MarkupEditing } from "./markedit.js";
 import { Measuring } from "./measuring.js";
@@ -189,7 +190,7 @@ const header = (res, name) => { try { return decodeURIComponent(res.headers.get(
  *  t, e and m are the reader's own: next, previous, rotate, panel, edit text, measure). */
 const ANNOT_KEYS = { h: "HIGHLIGHT", c: "NOTE", a: "FREETEXT", d: "INK", s: "SIGN" };
 
-export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEditing(Measuring(Layering(Object)))))))) {
+export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditing(TextEditing(Measuring(Layering(Object))))))))) {
   constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onRepair, onForgetRecent, onSaveTab, onUnsaved, onBrokenWhy, onOpenWithId } = {}) {
     super();
     this.host = host;
@@ -353,6 +354,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
       el("span", { style: "flex:1" }), this.annotSaveBtn, this.annotCloseBtn);
 
     this._buildScaleBar();
+    this._buildFormBar();
 
     // Sidebar
     this.thumbsTab = el("button", { class: "rd-tab", type: "button", role: "tab", "aria-selected": "true" }, "Pages");
@@ -447,11 +449,13 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
     sigClose.addEventListener("click", () => { this.sigbar.hidden = true; });
     // A printed form with nothing to type in: offer to add its fields.
     const formMake = el("button", { class: "rd-btn primary", type: "button", html: svg("fillable") + "<span>Make it fillable</span>" });
+    const formPrep = el("button", { class: "rd-btn", type: "button", html: svg("fillable") + "<span>Prepare form</span>" });
     const formClose = el("button", { class: "rd-btn", type: "button", title: "Hide", "aria-label": "Hide", html: svg("x") });
     this.formText = el("span", { class: "rd-sigstatus" });
     this.formbar = el("div", { class: "rd-findbar rd-formbar", hidden: true, role: "status" }, el("span", { class: "rd-sigicon", html: svg("fillable") }),
-      this.formText, formMake, el("span", { style: "flex:1" }), formClose);
+      this.formText, formMake, formPrep, el("span", { style: "flex:1" }), formClose);
     formMake.addEventListener("click", () => this.makeFillable());
+    formPrep.addEventListener("click", () => this.openFormMode());
     formClose.addEventListener("click", () => {
       this.formbar.hidden = true;
       if (this.activeTab) { this.activeTab.formHint = "hidden"; this.onFormHint?.(this.activeTab); }
@@ -473,11 +477,11 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
     overlayClose.addEventListener("click", () => this.closeCompare());
     // Skip link: past the bars, to the pages (out of sight until it has focus).
     this.skipLink = el("a", { class: "skip-link rd-skip", href: "#", onclick: (e) => { e.preventDefault(); this.container.focus(); } }, "Skip to the page");
-    this.root.append(this.skipLink, toolbar, this.tabbar, this.findbar, this.annotbar, this.scalebar, this.overlaybar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.moreToolsMenu, this.fileInput);
+    this.root.append(this.skipLink, toolbar, this.tabbar, this.findbar, this.annotbar, this.formmodebar, this.scalebar, this.overlaybar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.moreToolsMenu, this.fileInput);
     // A drawing in progress takes every click in the window as the next
     // stroke; end it first when the tabs, toolbar or menu are used. This
     // listens on the window before pdf.js does, so it runs first.
-    const outside = [this.tabbar, toolbar, this.side, this.scalebar, this.menu, this.ctxMenu];
+    const outside = [this.tabbar, toolbar, this.side, this.scalebar, this.formmodebar, this.menu, this.ctxMenu];
     window.addEventListener("pointerdown", (e) => {
       if (!outside.some((area) => area.contains(e.target))) return;
       this._finishEditing();
@@ -519,6 +523,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
       this.#menuItem("save", this.activeTab?.fileId ? "Save as…" : this.#edited() ? "Save a copy with your changes…" : "Save a copy…", () => this.saveCopy()),
       this.#menuItem("layers", this.overlay ? "Stop comparing revisions" : "Compare with another revision…", () => (this.overlay ? this.closeCompare() : this.compareRevision())),
       this.#menuItem("badge", "Digital ID…", () => this.useTool("CERTSIGN")),
+      this.#menuItem("fillable", "Prepare form (add or edit form fields)", () => this.openFormMode()),
       this.#menuItem("fillable", "Make it fillable (find the form's fields)", () => this.makeFillable()),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
       this.#menuItem("access", "Check accessibility", () => this.checkAccessibility()),  // -- accessibility --
@@ -803,8 +808,11 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
     // Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z): what the Undo and Redo buttons do, with
     // any tool on or none (with Select, pdf.js has no keys of its own; with
     // its tools on, it doesn't hear them as well: stopPropagation).
-    if (mod && !e.altKey && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y") && !isTyping(e)
-        && this._undo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); e.stopPropagation(); return; }
+    if (mod && !e.altKey && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y") && !isTyping(e)) {
+      this._formFlushNudge();
+      if (this._undo(e.key.toLowerCase() === "y" || e.shiftKey)) { e.preventDefault(); e.stopPropagation(); return; }
+    }
+    if (this.formMode && this._formKeyDown(e)) return;
     if (e.key === "Escape" && !this.ctxMenu.hidden) { this.#closeContextMenu(); return; }
     if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); this.pdfViewer.increaseScale(); return; }
     if (mod && e.key === "-") { e.preventDefault(); this.pdfViewer.decreaseScale(); return; }
@@ -1397,6 +1405,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
       this._drawRedactions(pageNumber);
       this._markReady();          // (the document may have been written again: its markups, and the selected one's handles)
       this._markDraw(pageNumber);
+      if (this.formMode) this._drawFormOverlays();
       if (this.overlay) this.overlay.draw(this.pdfViewer.getPageView(pageNumber - 1), pageNumber).catch(() => {});
     });
     eventBus.on("scalechanging", ({ scale, presetValue }) => {
@@ -1407,9 +1416,9 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
       this.#showZoom(scale);
       this._syncViewAt();
       this.#remember();
-      requestAnimationFrame(() => this._drawAllMeasures());
+      requestAnimationFrame(() => { this._drawAllMeasures(); if (this.formMode) this._drawFormOverlays(); });
     });
-    eventBus.on("rotationchanging", () => { this.#remember(); requestAnimationFrame(() => this._drawAllMeasures()); });
+    eventBus.on("rotationchanging", () => { this.#remember(); requestAnimationFrame(() => { this._drawAllMeasures(); if (this.formMode) this._drawFormOverlays(); }); });
     eventBus.on("updatefindmatchescount", ({ matchesCount }) => this._findResult(null, matchesCount));
     eventBus.on("updatefindcontrolstate", ({ state, matchesCount }) => this._findResult(state, matchesCount));
   }
@@ -1421,6 +1430,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
     this.closeFind();
     await this.closeCompare();
     this.closeAnnotate();
+    this.closeFormMode();
     this.measureTool(null);
     this.uiManager = null;
     this.annotUndo = this.annotRedo = false;
@@ -2533,7 +2543,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
   _undoKind(redo = false) {
     const page = !!(redo ? this.activeTab?.redoDepth : this.activeTab?.undoDepth);
     const annot = !!this.uiManager && !!(redo ? this.annotRedo : this.annotUndo);
-    if (this.textEditMode || this.markupMode) return page ? "page" : annot ? "annot" : null;
+    if (this.textEditMode || this.markupMode || this.formMode) return page ? "page" : annot ? "annot" : null;
     return annot ? "annot" : page ? "page" : null;
   }
 
@@ -2550,15 +2560,19 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
     if (!this.undoBtn) return;
     this.undoBtn.disabled = !this._undoKind();
     this.redoBtn.disabled = !this._undoKind(true);
+    this._formUndoButtons();
   }
 
   /** Show the tab's changed bytes, staying in the Edit text tool if it was on. */
   async #reloadEditing(tab) {
     const editing = this.textEditMode ? "EDITTEXT" : this.markupMode, picked = this.pickedImage;
+    const wasForm = this.formMode, formTool = this.formTool;
     await this._load(tab);
     this._refresh();
     if (tab !== this.activeTab) return;
-    if (editing) {
+    if (wasForm) {
+      this.openFormMode(formTool);
+    } else if (editing) {
       this.openAnnotate();
       this._setEditMode(editing);
       if (editing === "IMAGES" && picked) this.pickedImage = picked;  // the picture just moved stays picked
@@ -3057,6 +3071,7 @@ export class Reader extends Tabs(Finding(Signing(Annotating(MarkupEditing(TextEd
       tool("Stamp the page", "STAMPS", "approved draft confidential final received reviewed rubber stamp", "stamp"),
       tool("Edit pictures", "IMAGES", "image photo move resize replace delete logo", "imgedit"),
       tool("Edit links", "LINKS", "hyperlink url web address page add change remove", "link"),
+      { icon: "fillable", label: "Prepare form", words: "form fields fillable design edit add text checkbox radio dropdown signature button", run: () => this.openFormMode() },
       tool("Digital ID", "CERTSIGN", "sign with a digital id certificate pfx p12 digital signature sign", "badge"),
       tool("Redact this document", "REDACT", "redaction black out for good remove hide censor private confidential", "redact"),
       { icon: "badge", label: "Check the signatures", words: "verify valid certificate signed", run: () => this.#signatureDetails() },

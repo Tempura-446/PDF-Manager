@@ -17,7 +17,7 @@ from pypdf.generic import (ArrayObject, BooleanObject, DecodedStreamObject, Dict
 from pdfmanager import core
 
 TYPES = {"text": "Text", "multiline": "Text", "checkbox": "Checkbox", "radio": "Group",
-         "dropdown": "Dropdown", "signature": "Signature"}
+         "dropdown": "Dropdown", "list": "List", "signature": "Signature", "button": "Button"}
 MULTILINE, REQUIRED = 1 << 12, 1 << 1     # text field flags
 NO_TOGGLE_OFF, RADIO, PUSHBUTTON = 1 << 14, 1 << 15, 1 << 16  # button field flags
 COMBO, EDIT = 1 << 17, 1 << 18            # choice field flags
@@ -830,8 +830,9 @@ def add_fields(path, output, fields, border=True, font_size=0, password=None):
                     NameObject("/AP"): DictionaryObject({NameObject("/N"): _stream(
                         writer, width, height, frame + "/Tx BMC EMC\n", rotation)}),
                 })
-            elif kind == "dropdown":
-                flags |= COMBO | (EDIT if field.get("editable") else 0)
+            elif kind in ("dropdown", "list"):
+                if kind == "dropdown":
+                    flags |= COMBO | (EDIT if field.get("editable") else 0)
                 widget.update({
                     NameObject("/FT"): NameObject("/Ch"),
                     NameObject("/Opt"): ArrayObject(TextStringObject(o) for o in _options(field)),
@@ -854,6 +855,26 @@ def add_fields(path, output, fields, border=True, font_size=0, password=None):
                                                     tick_resources),
                         NameObject("/Off"): _stream(writer, width, height, frame, rotation),
                     })}),
+                })
+            elif kind == "button":
+                flags |= PUSHBUTTON
+                label = str(field.get("label") or name)
+                mk[NameObject("/CA")] = TextStringObject(label)
+                mk[NameObject("/BG")] = ArrayObject(_num(c) for c in (0.93, 0.93, 0.93))
+                size = min(font_size or 10, max(6.0, height * 0.55))
+                cap = label.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+                tx = max(4.0, (width - len(label) * size * 0.48) / 2)
+                ty = max(3.0, (height - size * 0.72) / 2)
+                bg = f"q 0.93 g 0 0 {width:.2f} {height:.2f} re f Q\n"
+                txt = f"q BT 0 g /Helv {size:.2f} Tf {tx:.2f} {ty:.2f} Td ({cap}) Tj ET Q\n"
+                btn_res = DictionaryObject({NameObject("/Font"): DictionaryObject(
+                    {NameObject("/Helv"): fonts["/Helv"]})})
+                widget.update({
+                    NameObject("/FT"): NameObject("/Btn"),
+                    NameObject("/H"): NameObject("/P"),
+                    NameObject("/DA"): TextStringObject(f"/Helv {size:g} Tf 0 g"),
+                    NameObject("/AP"): DictionaryObject({NameObject("/N"): _stream(
+                        writer, width, height, bg + frame + txt, rotation, btn_res)}),
                 })
             else:  # signature
                 widget.update({

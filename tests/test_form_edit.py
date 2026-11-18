@@ -631,3 +631,20 @@ def test_total_and_formula_of_an_existing_field_are_read_and_changed(tmp_path):
     co2 = [o.get_object()["/T"] for o in PdfReader(str(cleared)).trailer["/Root"]["/AcroForm"]["/CO"]]
     assert co2 == ["Total"]
 
+
+def test_add_list_and_button_fields(tmp_path):
+    src = blank(tmp_path / "blank.pdf")
+    out = tmp_path / "out.pdf"
+    names = forms.add_fields(src, out, [
+        {"page": 1, "rect": [72, 620, 220, 680], "type": "list", "name": "Items", "options": ["One", "Two"]},
+        {"page": 1, "rect": [72, 570, 160, 596], "type": "button", "name": "Reset", "label": "Clear"},
+    ])
+    assert names == ["Items", "Reset"]
+    info = by_name(out)
+    assert info["Items"]["type"] == "list" and info["Items"]["options"] == ["One", "Two"]
+    assert info["Reset"]["type"] == "button"
+    btn_w = widget(out, 1, 1)
+    assert str(btn_w["/MK"]["/CA"]) == "Clear"
+    assert int(btn_w["/Ff"]) & forms.PUSHBUTTON
+
+
