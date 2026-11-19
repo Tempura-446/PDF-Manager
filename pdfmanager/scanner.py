@@ -749,14 +749,28 @@ def all_scanners(network=True, look=True):
         out += naps2.devices()
     except Exception:  # noqa: BLE001 - the others are listed all the same
         pass
+    # SANE scanners on Linux / macOS when scanimage is installed (sane.py).
+    if sys.platform != "win32":
+        from pdfmanager import sane
+
+        try:
+            out += sane.devices()
+        except Exception:  # noqa: BLE001
+            pass
     return out
 
 
 def scan_any(device_id, mode=DEFAULT_MODE, dpi=DEFAULT_DPI, source="flatbed", duplex=False, on_page=None):
-    """scan(), for either kind of scanner (a network one by its "escl:" id).
-    ``duplex``: both sides, from a network scanner's feeder that can."""
-    from pdfmanager import escl, naps2
+    """scan(), for any scanner backend (WIA, eSCL, NAPS2, or SANE).
+    ``duplex``: both sides, from a feeder that supports it."""
+    from pdfmanager import escl, naps2, sane
 
+    if str(device_id).startswith(sane.PREFIX):
+        with _exclusive_scan():
+            try:
+                return sane.scan(device_id, mode=mode, dpi=dpi, source=source, duplex=duplex, on_page=on_page)
+            except sane.SaneError as exc:
+                raise ScannerError(str(exc), exc.code) from None
     if str(device_id).startswith(naps2.PREFIX):
         with _exclusive_scan():
             try:
