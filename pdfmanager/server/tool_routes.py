@@ -9,7 +9,7 @@ import time
 from http import HTTPStatus
 from pathlib import Path
 
-from pdfmanager import accessibility, applog, certsign, core, filefacts, progress, redact
+from pdfmanager import accessibility, applog, certsign, core, filefacts, preflight, progress, redact
 from pdfmanager.server.common import (
     EXPECTED_ERRORS, UserError, _bool, _file_mentions, _parse_multipart,
     _safe_name, gui_hook,
@@ -207,6 +207,47 @@ class ToolRoutesMixin:
             result = accessibility.check(path, fields.get("password") or None)
         result.pop("file", None)
         return self._send(HTTPStatus.OK, result)
+
+    def _preflight_check(self, body):
+        """Print preflight check: returns preflight.check() JSON report."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        min_dpi = float(fields.get("min_dpi") or 300)
+        error_dpi = float(fields.get("error_dpi") or 150)
+        min_bleed = float(fields.get("min_bleed_mm") or 3.0)
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            result = preflight.check(
+                path,
+                fields.get("password") or None,
+                min_dpi=min_dpi,
+                error_dpi=error_dpi,
+                min_bleed_mm=min_bleed,
+            )
+        return self._send(HTTPStatus.OK, result)
+
+    def _preflight_fix(self, body):
+        """Apply safe print preflight fixes and return the updated PDF bytes."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "in.pdf"
+            dst = Path(tmp) / "out.pdf"
+            src.write_bytes(uploads[0][2])
+            preflight.fix(
+                src,
+                dst,
+                password=fields.get("password") or None,
+                normalize_size=(fields.get("normalize_size") == "true"),
+                add_bleed_mm=float(fields.get("add_bleed_mm") or 0.0),
+                add_crop_marks=(fields.get("add_crop_marks") == "true"),
+                color_strategy=(fields.get("color_strategy") or None),
+                flatten_transparency=(fields.get("flatten_transparency") == "true"),
+            )
+            return self._send_bytes(dst.read_bytes(), "application/pdf", "preflight-fixed.pdf")
 
     def _facts(self, body):
         """What a file the page holds is (see filefacts), and what to offer for it."""

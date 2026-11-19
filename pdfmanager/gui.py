@@ -326,6 +326,10 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._scan_post(path[len("/api/scan/"):], body)
             if path == "/api/accessibility/check":  # -- accessibility --
                 return self._access_check(body)
+            if path == "/api/preflight/check":
+                return self._preflight_check(body)
+            if path == "/api/preflight/fix":
+                return self._preflight_fix(body)
             if path == "/api/settings":
                 return self._save_settings(body)
             if path == "/api/stamps":
