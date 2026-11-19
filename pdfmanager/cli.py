@@ -708,6 +708,24 @@ def run_to_html(a, src, out, pw):
 # -- end of pptx and html --
 
 
+def run_to_md(a, src, out, pw):
+    from pdfmanager import markdown_export
+
+    made = markdown_export.pdf_to_markdown(
+        src, out, password=pw, pages=a.pages,
+        extract_images=a.images, page_breaks=a.page_breaks, front_matter=a.front_matter,
+    )
+    n = made["pages"]
+    parts = [f"{n} page{'s' if n != 1 else ''}"]
+    if made["tables"]:
+        parts.append(f"{made['tables']} table{'s' if made['tables'] != 1 else ''}")
+    if made["images"]:
+        parts.append(f"{made['images']} image{'s' if made['images'] != 1 else ''}")
+    if made["textless"]:
+        parts.append("no text found — scanned pages need OCR first")
+    return f"{made['output']}  ({', '.join(parts)})"
+
+
 def cmd_from_office(a):
     failures = 0
     files = _expand(a.inputs)
@@ -932,7 +950,7 @@ OUTPUTS.update({"attach": ("attached", "pdf"), "labels": ("labelled", "pdf"),
 OUTPUTS["comments"] = ("comments", "pdf")
 OUTPUTS["flatten-layers"] = ("flat", "pdf")
 # -- pptx and html --
-OUTPUTS.update({"to-pptx": (None, "pptx"), "to-html": (None, "html")})
+OUTPUTS.update({"to-pptx": (None, "pptx"), "to-html": (None, "html"), "to-md": (None, "md")})
 # -- end of pptx and html --
 OUTPUTS["tag"] = ("tagged", "pdf")  # -- accessibility --
 OUTPUTS["to-dxf"] = (None, "dxf")  # -- drawing tools --
@@ -1011,7 +1029,7 @@ KEEP_UNENCRYPTED.update({"encrypt-for", "open-with-id"})  # protected for people
 KEEP_UNENCRYPTED.add("upgrade-protection")  # protects its own output, with both passwords
 KEEP_UNENCRYPTED.add("comments")  # a summary, CSV or XFDF; an import protects itself
 KEEP_UNENCRYPTED.add("sign-cert")  # stays protected inside the signed file; re-saving breaks it
-KEEP_UNENCRYPTED |= {"to-pptx", "to-html"}  # -- pptx and html -- (not PDFs)
+KEEP_UNENCRYPTED |= {"to-pptx", "to-html", "to-md"}  # -- pptx, html and markdown -- (not PDFs)
 
 
 def _reencrypt(out, password):
@@ -1907,6 +1925,16 @@ def build_parser():
                     help="keep each page as it looks, text over a picture of the page "
                          "(default: flowing text with headings, lists, tables and pictures)")
     # -- end of pptx and html --
+
+    sp = per_file("to-md", run_to_md, "convert PDFs to structured Markdown (.md)",
+                  out_help="output .md (default: <input>.md); with several inputs, a folder")
+    sp.add_argument("-p", "--pages", help=PAGES_HELP)
+    sp.add_argument("--images", action="store_true",
+                    help="extract page pictures as PNGs into <name>_assets/ and link them")
+    sp.add_argument("--page-breaks", action="store_true",
+                    help="insert page separator comments and horizontal rules between pages")
+    sp.add_argument("--front-matter", action="store_true",
+                    help="prepend YAML metadata front matter (title, author, pages, source)")
 
     sp = other("from-office", cmd_from_office,
                "convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF "

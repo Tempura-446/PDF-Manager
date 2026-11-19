@@ -549,6 +549,13 @@ OPERATIONS = [
                    hint="Flowing text fits any screen: headings, paragraphs, lists, tables and "
                         "pictures. Exact layout keeps each page as it looks."),
                 _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
+    {"id": "to-md", "group": "Convert", "label": "PDF → Markdown", "files": "pdf",
+     "help": "Convert PDFs to clean, structured Markdown (.md) with headings, lists, links, "
+             "and pipe tables — ready for notes, docs, and AI tools.",
+     "fields": [_f("pages", "Pages (blank = all)", "text", "", placeholder="all"),
+                _f("images", "Extract pictures to an assets folder", "check", False),
+                _f("page_breaks", "Insert page separators", "check", False),
+                _f("front_matter", "Include YAML metadata front matter", "check", False)]},
     # Quantities: a schedule of what was measured on a drawing (pdfmanager/quantities.py)
     {"id": "quantities", "group": "Convert", "label": "Quantities from a drawing", "files": "pdf",
      "help": "A schedule (takeoff) of everything measured on a drawing: the dimensions and measurements "
@@ -1111,6 +1118,24 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             raise UserError(f"unknown layout {mode!r}")
         out = out_dir / f"{src.stem}.html"
         webpage.pdf_to_html(src, out, password, _pages(opts), mode=mode)
+    elif op == "to-md":
+        from pdfmanager import markdown_export
+
+        out = out_dir / f"{src.stem}.md"
+        made = markdown_export.pdf_to_markdown(
+            src, out, password=password, pages=_pages(opts),
+            extract_images=bool(opts.get("images")),
+            page_breaks=bool(opts.get("page_breaks")),
+            front_matter=bool(opts.get("front_matter")),
+        )
+        summary = f"{made['pages']} page{'s' if made['pages'] != 1 else ''}"
+        if made["tables"]:
+            summary += f", {made['tables']} table{'s' if made['tables'] != 1 else ''}"
+        if made["images"]:
+            summary += f", {made['images']} image{'s' if made['images'] != 1 else ''}"
+        if made["textless"]:
+            summary += " (no text found — run OCR first)"
+        notes.append(f"{src.name}: {summary}")
     # -- end of pptx and html --
     elif op == "from-office":
         out = out_dir / f"{src.stem}.pdf"
