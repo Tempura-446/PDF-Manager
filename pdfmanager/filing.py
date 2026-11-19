@@ -418,3 +418,26 @@ def save_rules(path, rules):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({"rules": list(rules)}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return p
+
+
+def app_rules_path():
+    """Default location of the user's saved filing rules in app data."""
+    return appdata.data_dir() / "filing-rules.json"
+
+
+def load_app_rules():
+    """Return the user's saved filing rules, or a copy of ``STARTER_RULES`` if none saved yet."""
+    path = app_rules_path()
+    if not path.is_file():
+        return [json.loads(json.dumps(r)) for r in STARTER_RULES]
+    try:
+        return load_rules(path)
+    except (OSError, ValueError, core.PdfManagerError):
+        return [json.loads(json.dumps(r)) for r in STARTER_RULES]
+
+
+def save_app_rules(rules):
+    """Persist the user's filing rules list to app data."""
+    if not isinstance(rules, list):
+        raise core.PdfManagerError("filing rules must be a list")
+    return save_rules(app_rules_path(), rules)
