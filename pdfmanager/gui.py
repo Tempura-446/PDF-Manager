@@ -336,6 +336,8 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._preflight_fix(body)
             if path == "/api/crop":
                 return self._crop(body)
+            if path == "/api/translate/page":
+                return self._translate_page(body)
             if path == "/api/settings":
                 return self._save_settings(body)
             if path == "/api/stamps":

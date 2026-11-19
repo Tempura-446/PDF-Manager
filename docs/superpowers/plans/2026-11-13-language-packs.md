@@ -65,32 +65,32 @@ English stays built in.
 ### Phase 1 (release A): the app ready for other languages
 
 **Task 1.1: one place for every string**
-- [ ] Extract every user-visible string, building `locales/en.json` with stable keys:
+- [x] Extract every user-visible string, building `locales/en.json` with stable keys:
   - `gui.html` and `static/*.js`: use a `t("key", {vars})` helper; attributes like `title`, `aria-label` and `placeholder` go through `data-i18n` markup;
   - the server's messages and notes: Python `t("key", **vars)`;
   - tool names and descriptions in `OPERATIONS`;
   - the command palette's search words.
-- [ ] English output must be byte-identical to today's. A test compares rendered pages and API messages before and after.
-- [ ] A test fails if a new user-visible string is added without going through `t()`. For JavaScript and HTML, it scans for literal text in `el(...)` calls and `textContent` assignments. For Python, it scans `PdfManagerError("...")` and notes. Known exceptions are allow-listed.
+- [x] English output must be byte-identical to today's. A test compares rendered pages and API messages before and after.
+- [x] A test fails if a new user-visible string is added without going through `t()`. For JavaScript and HTML, it scans for literal text in `el(...)` calls and `textContent` assignments. For Python, it scans `PdfManagerError("...")` and notes. Known exceptions are allow-listed.
 
 **Task 1.2: language switch**
-- [ ] Settings → Language: "Same as Windows" (default), English, then installed packs. Changing it reloads the interface without restarting.
-- [ ] Set `lang` and `dir` on `<html>`. Use logical CSS (`margin-inline-start` and similar) wherever left/right matters, so RTL mirrors. The reader's page view itself never mirrors.
-- [ ] Test: a fake "xx" locale with all strings wrapped in brackets shows no unbracketed text on the start screen, a tool page, the reader, Settings or the palette, in light and dark. An "ar" test locale mirrors the rail and panels.
+- [x] Settings → Language: "Same as Windows" (default), English, then installed packs. Changing it reloads the interface without restarting.
+- [x] Set `lang` and `dir` on `<html>`. Use logical CSS (`margin-inline-start` and similar) wherever left/right matters, so RTL mirrors. The reader's page view itself never mirrors.
+- [x] Test: a fake "xx" locale with all strings wrapped in brackets shows no unbracketed text on the start screen, a tool page, the reader, Settings or the palette, in light and dark. An "ar" test locale mirrors the rail and panels.
 
 ### Phase 2 (release B): the first interface packs
 
-- [ ] A pack's format: `manifest.json` (code, name in its own language, app versions it fits, contents, checksums) plus `ui.json` (strings).
-- [ ] Translations follow "Translating the interface without a native reviewer" above. Languages: zh-Hans, es, fr, de.
-- [ ] Download and install from Settings, with checksum verification and an "install from file" option. Removing a pack deletes its folder.
-- [ ] Test: install a pack from a file, switch language, update the app version (the pack still loads, missing keys show in English), remove the pack.
+- [x] A pack's format: `manifest.json` (code, name in its own language, app versions it fits, contents, checksums) plus `ui.json` (strings).
+- [x] Translations follow "Translating the interface without a native reviewer" above. Languages: zh-Hans, es, fr, de.
+- [x] Download and install from Settings, with checksum verification and an "install from file" option. Removing a pack deletes its folder.
+- [x] Test: install a pack from a file, switch language, update the app version (the pack still loads, missing keys show in English), remove the pack.
 
 ### Phase 3 (release C): translate a PDF
 
 **Task 3.1: the translation engine**
-- [ ] `pdfmanager/translate.py` runs CTranslate2 with an OPUS-MT or Argos model from an installed pack. Text is split into sentences (keeping numbers, codes, URLs and emails as they are) and translated in batches on the CPU, off the UI thread, with progress and Cancel.
-- [ ] Without a pack for the language pair, the message says which pack to install, with the size.
-- [ ] Test: with a tiny test model (or the engine faked), sentences come back in order, and placeholders such as numbers and "INV-2026-118" pass through unchanged.
+- [x] `pdfmanager/translate.py` runs CTranslate2 with an OPUS-MT or Argos model from an installed pack. Text is split into sentences (keeping numbers, codes, URLs and emails as they are) and translated in batches on the CPU, off the UI thread, with progress and Cancel.
+- [x] Without a pack for the language pair, the message says which pack to install, with the size.
+- [x] Test: with a tiny test model (or the engine faked), sentences come back in order, and placeholders such as numbers and "INV-2026-118" pass through unchanged.
 
 **Task 3.2: the Translate tool (three outputs)**
 1. **Translated copy, same layout:**
@@ -99,9 +99,9 @@ English stays built in.
    - Scanned pages: OCR first.
 2. **Side by side:** each page with its translation next to it or on a facing page. Simplest to read, and never loses layout.
 3. **Text or Word:** the translated text as .txt or .docx, using the PDF to Word engine for structure.
-- [ ] Tables, form field values and annotations' text are translated too. Headers and footers are translated once per distinct text.
-- [ ] In the reader: "Translate this page" shows the translation in the file panel, without changing the file.
-- [ ] Test: an English invoice and letter translated to French (with a test model, or the engine faked to reverse words), using output 1. Every paragraph is replaced, nothing overlaps its neighbours, and numbers are unchanged.
+- [x] Tables, form field values and annotations' text are translated too. Headers and footers are translated once per distinct text.
+- [x] In the reader: "Translate this page" shows the translation in the file panel, without changing the file.
+- [x] Test: an English invoice and letter translated to French (with a test model, or the engine faked to reverse words), using output 1. Every paragraph is replaced, nothing overlaps its neighbours, and numbers are unchanged.
 
 ### Phase 4 (release D): OCR and search by meaning in the pack's language
 
