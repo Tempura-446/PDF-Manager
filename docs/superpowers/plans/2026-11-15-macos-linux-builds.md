@@ -23,13 +23,13 @@
 Linux first: CI already runs there, so every step can be checked without new hardware.
 
 - [ ] **A real Linux run-through of the app**, not only the tests: the pywebview window (GTK WebKit, else Qt), falling back to a Chrome/Chromium app window, then a browser tab. File dialogs, Save as, drag and drop, opening a PDF given on the command line, a second launch handing its file to the running copy, closing.
-- [ ] **Packages:** an AppImage (one file, runs anywhere) built by `build-app.yml` from the PyInstaller build, and a `.deb`. Each carries a `.desktop` entry (name, icon, `MimeType=application/pdf`) so ZPDF appears in the menu and under "Open with".
-- [ ] **Outside programs:** find LibreOffice, Tesseract, Ghostscript and Chrome/Chromium in their usual Linux places and say plainly how to install the missing one (`apt install …`, `dnf install …`).
-- [ ] **Scanning:** SANE (`scanimage`) behind the same `scanner.py` interface as WIA: list devices, flatbed or feeder, resolution, colour.
-- [ ] **File manager actions:** the right-click actions as a Nautilus script / KDE service menu, written by Settings like the Explorer menu is.
+- [x] **Packages:** an AppImage (one file, runs anywhere) built by `build-app.yml` from the PyInstaller build, and a `.deb`. Each carries a `.desktop` entry (name, icon, `MimeType=application/pdf`) so ZPDF appears in the menu and under "Open with".
+- [x] **Outside programs:** find LibreOffice, Tesseract, Ghostscript and Chrome/Chromium in their usual Linux places and say plainly how to install the missing one (`apt install …`, `dnf install …`).
+- [x] **Scanning:** SANE (`scanimage`) behind the same `scanner.py` interface as WIA: list devices, flatbed or feeder, resolution, colour.
+- [x] **File manager actions:** the right-click actions as a Nautilus script / KDE service menu, written by Settings like the Explorer menu is.
 - [ ] **Updates:** the Update button replaces the AppImage in place (it's one file); a `.deb` install says to update through the package.
-- [ ] **CI:** the Linux build job smoke-tests the built app (starts, opens a PDF, runs one tool, closes) the way `windows-e2e.yml` does.
-- [ ] **Tests:** the platform paths (`winsetup`'s Linux counterpart, SANE, the `.desktop` file) with fakes; the smoke test above.
+- [x] **CI:** the Linux build job smoke-tests the built app (starts, opens a PDF, runs one tool, closes) the way `windows-e2e.yml` does.
+- [x] **Tests:** the platform paths (`winsetup`'s Linux counterpart, SANE, the `.desktop` file) with fakes; the smoke test above.
 
 ## Phase 2 (release B): macOS
 
