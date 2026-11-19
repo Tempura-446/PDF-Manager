@@ -4,6 +4,36 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.60.0
+
+Full offline Language Packs & Translation suite (UI internationalization,
+starter locales, offline PDF translation in three output modes, and
+language-pack OCR models and multilingual Search by Meaning), plus a CAD
+form-detection fix.
+
+- **Starter UI locales & language pack builder.** Added built-in starter
+  locales for Simplified Chinese (`zh-Hans`), Spanish (`es`), French (`fr`),
+  and German (`de`), catalog validation (`validate_catalog()`), RTL layout
+  support, and `packaging/build_langpack.py` to build SHA-256 verified
+  `ZPDF-lang-<code>-<version>.zip` packs with optional OCR and meaning-search
+  assets.
+- **Offline PDF translation engine.** Translate PDFs completely offline via
+  CTranslate2 / SentencePiece or Argos Translate models in installed language
+  packs using `pdfm translate <input.pdf> --to <lang>` or `POST /api/translate/page`
+  for single-page reader translation. Supports three output modes:
+  `side-by-side` (double-width facing pages), `text` (`.txt`), and `in-place`
+  (translated PDF with annotation/widget text translation), while preserving
+  URLs, emails, dates, numbers, and reference codes (e.g. `INV-2026-118`)
+  verbatim.
+- **Multilingual OCR & Search by Meaning via language packs.** OCR now resolves
+  offline recognition models bundled inside installed language packs
+  (`<data_dir>/locales/<code>/ocr/*.onnx`) before attempting any download, and
+  accepts both BCP-47 and Tesseract language codes. Search by Meaning merges
+  multilingual `words.npz` tables from installed packs and automatically
+  refreshes cached page vectors when packs are installed or removed.
+- **Bug fix: CAD drawing form banner.** Suppressed the false *"This looks like
+  a form to fill in"* banner on plain CAD drawings in `formdetect.py`.
+
 ## 0.59.0
 
 Compare documents side by side in the reader, crop pages visually, run print
