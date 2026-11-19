@@ -31,6 +31,7 @@ _PROTECT_RE = re.compile(
 )
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s+")
 _APPROX_PACK_MB = 45
+MODES = ("side-by-side", "text", "in-place")
 
 
 def protect_tokens(text):

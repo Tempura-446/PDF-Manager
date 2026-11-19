@@ -457,6 +457,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       this.#menuItem("edittext", "Check OCR (fix unsure words)", () => this.openCheckOcr()),
       this.#menuItem("rect", "Crop pages visually…", () => this.openCropMode(), this.cropMode),
       this.#menuItem("print", "Print preflight check…", () => this.checkPreflight()),
+      this.#menuItem("edittext", "Translate this page…", () => this.translateCurrentPage()),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
       this.#menuItem("access", "Check accessibility", () => this.checkAccessibility()),  // -- accessibility --
       this.#menuItem("x", "Close this document", () => this.closeTab()),
@@ -1070,6 +1071,74 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     }
   }
 
+  /** Translate the currently visible page offline without modifying the PDF. */
+  async translateCurrentPage() {
+    const tab = this.activeTab;
+    if (!tab?.doc) return;
+    const langs = [
+      ["en", "English"],
+      ["es", "Español (Spanish)"],
+      ["fr", "Français (French)"],
+      ["de", "Deutsch (German)"],
+      ["zh-Hans", "简体中文 (Chinese)"],
+    ];
+    const mkSel = (def) => {
+      const sel = el("select");
+      for (const [code, label] of langs) {
+        const opt = el("option", { value: code }, label);
+        if (code === def) opt.selected = true;
+        sel.append(opt);
+      }
+      return sel;
+    };
+    const fromSel = mkSel("en");
+    const toSel = mkSel("es");
+    const form = el("div", { class: "rd-translate-pick" },
+      el("label", { class: "dlg-field" }, el("span", {}, "From language"), fromSel),
+      el("label", { class: "dlg-field" }, el("span", {}, "To language"), toSel),
+    );
+    const go = await this._dialog(`Translate page ${this.currentPage}`, [form], [
+      ["cancel", "Cancel", false],
+      ["go", "Translate", true],
+    ]);
+    if (go !== "go") return;
+    this.toast("Translating page offline…");
+    let data;
+    try {
+      const bytes = await this._currentBytes();
+      const fd = new FormData();
+      fd.append("file", new Blob([bytes], { type: "application/pdf" }), tab.name || "document.pdf");
+      fd.append("page", String(this.currentPage));
+      fd.append("from", fromSel.value);
+      fd.append("to", toSel.value);
+      if (tab.password) fd.append("password", tab.password);
+      const res = await fetch("/api/translate/page", {
+        method: "POST",
+        headers: this.token ? { "X-Pdfm-Token": this.token } : {},
+        body: fd,
+      });
+      data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+    } catch (e) {
+      await this._dialog("Offline translation", [el("p", {}, e?.message || String(e))], [["ok", "Close", true]]);
+      return;
+    }
+    const out = el("textarea", {
+      readonly: "readonly",
+      rows: "14",
+      style: "width:100%;font:inherit;padding:8px;box-sizing:border-box;",
+    });
+    out.value = data.translated || "(No extractable text on this page — run OCR first.)";
+    const choice = await this._dialog(
+      `Page ${data.page} (${data.src_lang} → ${data.dst_lang})`,
+      [out],
+      [["copy", "Copy text", false], ["ok", "Close", true]],
+    );
+    if (choice === "copy" && navigator.clipboard?.writeText) {
+      try { await navigator.clipboard.writeText(out.value); this.toast("Copied translation."); } catch (_) {}
+    }
+  }
+
   /** A toast that explains the tool just chosen: it goes when that tool or
    *  its bar does, or when another bar opens (see #endHint). */
   /** Open a link that leaves the document, in the browser: only web, mail
@@ -1221,6 +1290,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       { icon: "print", label: "Print", keys: "Ctrl+P", run: () => this.print() },
       { icon: "rect", label: "Crop pages visually", words: "trim margins box cut", run: () => this.openCropMode() },
       { icon: "print", label: "Print preflight check", words: "dpi cmyk rgb bleed fonts hairline press", run: () => this.checkPreflight() },
+      { icon: "edittext", label: "Translate this page", words: "translate language offline page spanish french german chinese", run: () => this.translateCurrentPage() },
       ...(this.activeTab?.fileId ? [{ icon: "save", label: "Save", keys: "Ctrl+S", words: "write file", run: () => this.save() }] : []),
       { icon: "save", label: this.activeTab?.fileId ? "Save as" : this._edited() ? "Save a copy with your changes" : "Save a copy",
         keys: this.activeTab?.fileId ? "Ctrl+Shift+S" : "Ctrl+S", words: "download export copy", run: () => this.saveCopy() },

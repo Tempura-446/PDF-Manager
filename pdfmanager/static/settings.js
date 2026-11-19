@@ -38,6 +38,8 @@ async function openSettings() {
   $("set-token-state").textContent = s.token_set ? "· saved" : "";
   $("set-token-clear").hidden = !s.token_set;
   updateStatus("set-status", "");
+  updateStatus("lang-status", "");
+  try { await loadLanguages(); } catch (e) { updateStatus("lang-status", e.message, true); }
   try { await loadWatch(); } catch (e) { updateStatus("watch-status", e.message, true); }
   updateStatus("watch-status", "");
   try {
@@ -47,6 +49,78 @@ async function openSettings() {
   } catch (e) { $("shell-menu").hidden = true; }
   $("settings-dialog").showModal();
 }
+
+function renderLanguageState(info) {
+  const sel = $("set-language");
+  if (!sel || !info) return;
+  const langs = info.languages || [{ code: "en", name: "English", automatic: false }];
+  sel.replaceChildren(...langs.map((l) => {
+    const opt = document.createElement("option");
+    opt.value = l.code;
+    opt.textContent = l.automatic ? `${l.name} (${l.code} — automatic)` : `${l.name} (${l.code})`;
+    return opt;
+  }));
+  sel.value = info.lang && info.lang !== "auto" ? info.lang : "en";
+  const list = $("set-packs-list");
+  const packs = info.packs || [];
+  if (!packs.length) {
+    const li = document.createElement("li");
+    li.className = "dlg-hint";
+    li.textContent = "No extra language packs installed yet.";
+    list.replaceChildren(li);
+    return;
+  }
+  list.replaceChildren(...packs.map((p) => {
+    const li = document.createElement("li");
+    li.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;";
+    const caps = [p.has_translate && "translate", p.has_ocr && "OCR", p.has_meaning && "search"].filter(Boolean);
+    const label = document.createElement("span");
+    label.textContent = `${p.name} (${p.code})` + (caps.length ? ` — ${caps.join(", ")}` : "");
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "link-btn";
+    rm.textContent = "Remove";
+    rm.addEventListener("click", async () => {
+      try {
+        await jsonApi("/api/i18n/packs/remove", { code: p.code });
+        await loadLanguages();
+        updateStatus("lang-status", `Removed ${p.code} language pack.`);
+      } catch (err) { updateStatus("lang-status", err.message, true); }
+    });
+    li.append(label, rm);
+    return li;
+  }));
+}
+
+async function loadLanguages() {
+  const info = await jsonApi("/api/i18n");
+  renderLanguageState(info);
+  return info;
+}
+
+$("set-language")?.addEventListener("change", async (e) => {
+  try {
+    const info = await jsonApi("/api/i18n/language", { language: e.target.value });
+    renderLanguageState(info);
+    if (window.ZpdfI18n?.load) await window.ZpdfI18n.load(TOKEN);
+    updateStatus("lang-status", `Language set to ${e.target.value}.`);
+  } catch (err) { updateStatus("lang-status", err.message, true); }
+});
+
+$("set-pack-install")?.addEventListener("click", () => $("set-pack-file")?.click());
+$("set-pack-file")?.addEventListener("change", async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = "";
+  if (!file) return;
+  try {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    const res = await api("/api/i18n/packs/install", { method: "POST", body: fd });
+    const data = await res.json();
+    await loadLanguages();
+    updateStatus("lang-status", `Installed language pack: ${data.installed?.name || data.installed?.code}.`);
+  } catch (err) { updateStatus("lang-status", err.message, true); }
+});
 $("set-shell-menu").addEventListener("change", async (e) => {
   const want = e.target.checked;
   try {
