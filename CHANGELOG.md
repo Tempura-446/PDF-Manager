@@ -73,6 +73,13 @@ Draw, move, resize and arrange form fields directly on the page in the reader.
   Convert `.dxf` drawings (and `.dwg` when the free ODA File Converter is
   installed) to layered, scaled PDFs with **Drawing → PDF**, `pdfm from-dxf`,
   or by opening a `.dxf` / `.dwg` directly in the reader.
+- **Drawing sheet sets.** Split a multi-sheet drawing PDF into one file per
+  sheet named from its title block (e.g. `A-101 Floor plan.pdf`), set PDF page
+  labels to the sheet numbers, automatically add clickable links from detail
+  references (`2/A-102`, `SEE A-201`) to the target sheet, and compare two
+  revisions of a set matched by sheet number rather than page order
+  (**Sheet sets**, **Compare sheet sets**, and `pdfm sheet-split` /
+  `sheet-name` / `sheet-link` / `sheet-compare`).
 
 ## 0.56.0
 

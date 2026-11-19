@@ -127,17 +127,17 @@ Asked for after 0.38.0, whose "Not yet" list this is.
 ### Phase 5 (release E): sheet sets
 
 **Task 5.1: split and name sheets**
-- [ ] Find each page's sheet number and title in the title block, bottom right by default, or where the user points once for the set, using pdfium text there and a pattern like "A-101" or "S2.03".
-- [ ] "Split into sheets" names each file `A-101 Floor plan.pdf`. "Name pages" sets page labels to the sheet numbers, so the reader's page box shows "A-101".
-- [ ] Test: a 3-page set with title blocks splits into three correctly named files.
+- [x] Find each page's sheet number and title in the title block, bottom right by default, or where the user points once for the set, using pdfium text there and a pattern like "A-101" or "S2.03".
+- [x] "Split into sheets" names each file `A-101 Floor plan.pdf`. "Name pages" sets page labels to the sheet numbers, so the reader's page box shows "A-101".
+- [x] Test: a 3-page set with title blocks splits into three correctly named files.
 
 **Task 5.2: links between sheets**
-- [ ] Find references like "3/A-501" or "SEE A-201" (detail/sheet) in the drawing text, and add link annotations to the page labelled with that sheet number.
-- [ ] Test: a reference "2/A-102" on sheet A-101 becomes a link that goes to the page labelled A-102.
+- [x] Find references like "3/A-501" or "SEE A-201" (detail/sheet) in the drawing text, and add link annotations to the page labelled with that sheet number.
+- [x] Test: a reference "2/A-102" on sheet A-101 becomes a link that goes to the page labelled A-102.
 
 **Task 5.3: compare sets**
-- [ ] Compare two versions of a set sheet by sheet, matched by sheet number, not page order. Use the existing overlay compare, and list which sheets changed (a pixel difference above a threshold), were added or were removed.
-- [ ] Test: set v2 with one changed sheet and one new sheet gives a list showing exactly those.
+- [x] Compare two versions of a set sheet by sheet, matched by sheet number, not page order. Use the existing overlay compare, and list which sheets changed (a pixel difference above a threshold), were added or were removed.
+- [x] Test: set v2 with one changed sheet and one new sheet gives a list showing exactly those.
 
 ---
 
