@@ -160,18 +160,18 @@ def _read_metadata(path, password):
     meta = reader.metadata or {}
     return {
         "title": (meta.get("/Title") or "").strip(),
-        "author": (meta.get("/Author") or "").strip(),
+        "creator": (meta.get("/Author") or "").strip(),
         "subject": (meta.get("/Subject") or "").strip(),
     }
 
 
 def _front_matter_block(source_name, meta, title, page_count):
     doc_title = (meta or {}).get("title") or title
-    author = (meta or {}).get("author") or ""
+    creator = (meta or {}).get("creator") or ""
     subject = (meta or {}).get("subject") or ""
     lines = ["---", f"title: {_yaml_quote(doc_title)}"]
-    if author:
-        lines.append(f"author: {_yaml_quote(author)}")
+    if creator:
+        lines.append(f"author: {_yaml_quote(creator)}")
     if subject:
         lines.append(f"subject: {_yaml_quote(subject)}")
     lines.append(f"pages: {page_count}")
