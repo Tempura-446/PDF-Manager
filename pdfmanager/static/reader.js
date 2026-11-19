@@ -34,6 +34,7 @@ import { ReaderNav } from "./reader-nav.js";
 import { BROKEN_WHY, ReaderRender } from "./reader-render.js";
 import { ReaderSave } from "./reader-save.js";
 import { Signing } from "./sign.js";
+import { SplitView } from "./splitview.js";
 import { Tabs } from "./tabs.js";
 import { TextEditing } from "./textedit-ui.js";
 export { heldTimer, loadPdfjs } from "./readerkit.js";
@@ -109,7 +110,7 @@ const ZOOM_PRESETS = [
  *  t, e and m are the reader's own: next, previous, rotate, panel, edit text, measure). */
 const ANNOT_KEYS = { h: "HIGHLIGHT", c: "NOTE", a: "FREETEXT", d: "INK", s: "SIGN" };
 
-export class Reader extends Tabs(CheckOcrMode(FormMode(Finding(Signing(Annotating(MarkupEditing(TextEditing(Measuring(Layering(ReaderNav(ReaderRender(ReaderSave(Object))))))))))))) {
+export class Reader extends Tabs(CheckOcrMode(FormMode(Finding(Signing(Annotating(MarkupEditing(TextEditing(Measuring(Layering(SplitView(ReaderNav(ReaderRender(ReaderSave(Object)))))))))))))) {
   constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onFormSelect, onFormCheck, onRepair, onForgetRecent, onSaveTab, onUnsaved, onBrokenWhy, onOpenWithId } = {}) {
     super();
     this.host = host;
@@ -347,11 +348,12 @@ export class Reader extends Tabs(CheckOcrMode(FormMode(Finding(Signing(Annotatin
         el("div", { class: "rd-broken-actions" }, this.brokenOpenId, this.brokenRepair, this.brokenForget, this.brokenClose),
         this.brokenSaid));
     this.main = el("div", { class: "rd-main" }, this.container, this.loading, this.empty, this.broken, this.measPanel);
+    this._buildSplitView();
     // The file panel: beside the pages in a wide window, over them (with a
     // scrim) in a narrow one. The app puts its content in.
     this.side = el("aside", { class: "rd-side", id: "rd-side", role: "region", "aria-label": "This file", hidden: true });
     this.sideScrim = el("div", { class: "rd-side-scrim", hidden: true });
-    this.body = el("div", { class: "rd-body" }, this.sidebar, this.main, this.sideScrim, this.side);
+    this.body = el("div", { class: "rd-body" }, this.sidebar, this.main, this.splitDivider, this.splitPane, this.sideScrim, this.side);
 
     this.menu = el("div", { class: "rd-menu", role: "menu", hidden: true });
     this.ctxMenu = el("div", { class: "rd-menu rd-ctxmenu", role: "menu", hidden: true, "aria-label": "Page" });
@@ -401,11 +403,11 @@ export class Reader extends Tabs(CheckOcrMode(FormMode(Finding(Signing(Annotatin
     overlayClose.addEventListener("click", () => this.closeCompare());
     // Skip link: past the bars, to the pages (out of sight until it has focus).
     this.skipLink = el("a", { class: "skip-link rd-skip", href: "#", onclick: (e) => { e.preventDefault(); this.container.focus(); } }, "Skip to the page");
-    this.root.append(this.skipLink, toolbar, this.tabbar, this.findbar, this.annotbar, this.formmodebar, this.checkocrbar, this.scalebar, this.overlaybar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.moreToolsMenu, this.fileInput);
+    this.root.append(this.skipLink, toolbar, this.tabbar, this.findbar, this.annotbar, this.formmodebar, this.checkocrbar, this.scalebar, this.overlaybar, this.splitBar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.moreToolsMenu, this.fileInput);
     // A drawing in progress takes every click in the window as the next
     // stroke; end it first when the tabs, toolbar or menu are used. This
     // listens on the window before pdf.js does, so it runs first.
-    const outside = [this.tabbar, toolbar, this.side, this.scalebar, this.formmodebar, this.checkocrbar, this.menu, this.ctxMenu];
+    const outside = [this.tabbar, toolbar, this.side, this.scalebar, this.formmodebar, this.checkocrbar, this.splitBar, this.menu, this.ctxMenu];
     window.addEventListener("pointerdown", (e) => {
       if (!outside.some((area) => area.contains(e.target))) return;
       this._finishEditing();
@@ -437,6 +439,7 @@ export class Reader extends Tabs(CheckOcrMode(FormMode(Finding(Signing(Annotatin
       this.#menuItem("cw", "Rotate the view clockwise", () => this.rotate(90)),
       this.#menuItem("ccw", "Rotate the view counter-clockwise", () => this.rotate(-90)),
       this.#menuItem("spread", "Two-page view", () => this.toggleSpread(), spread),
+      this.#menuItem("spread", "Split view (side by side)", () => this.toggleSplitView(), this.splitOpen),
       this.#menuItem("hand", "Hand tool (drag to scroll)", () => this.toggleHand(), this.container.classList.contains("hand")),
       this.#menuItem("moon", "Dark pages", () => this.toggleDarkPages(), this.container.classList.contains("dark")),
       this.#menuItem("link", "Ask before opening web links", () => store.set("pdfm-link-ask", !store.get("pdfm-link-ask", true)), store.get("pdfm-link-ask", true)),
@@ -740,6 +743,17 @@ export class Reader extends Tabs(CheckOcrMode(FormMode(Finding(Signing(Annotatin
     }
     if (this.formMode && this._formKeyDown(e)) return;
     if (e.key === "Escape" && !this.ctxMenu.hidden) { this._closeContextMenu(); return; }
+    if (mod && !e.altKey && (e.key === "\\" || e.code === "Backslash")) {
+      e.preventDefault();
+      if (e.shiftKey) this.switchSplitPane();
+      else this.toggleSplitView();
+      return;
+    }
+    if (e.key === "F6" && !mod && !e.altKey && this.splitOpen) {
+      e.preventDefault();
+      this.switchSplitPane();
+      return;
+    }
     if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); this.pdfViewer.increaseScale(); return; }
     if (mod && e.key === "-") { e.preventDefault(); this.pdfViewer.decreaseScale(); return; }
     if (mod && e.key === "0") { e.preventDefault(); this.pdfViewer.currentScaleValue = "auto"; return; }
@@ -1129,6 +1143,11 @@ export class Reader extends Tabs(CheckOcrMode(FormMode(Finding(Signing(Annotatin
       { icon: "up", label: "First page", keys: "Home", words: "start beginning", run: () => this.goToPage(1) },
       { icon: "down", label: "Last page", keys: "End", words: "end", run: () => this.goToPage(v.pagesCount) },
       { icon: "spread", label: "Two-page view", words: "spread book", run: () => this.toggleSpread() },
+      { icon: "spread", label: this.splitOpen ? "Close split view" : "Split view (side by side)", keys: "Ctrl+\\", words: "compare side by side two panes dual view", run: () => this.toggleSplitView() },
+      ...(this.splitOpen ? [
+        { icon: "spread", label: "Switch split pane", keys: "F6", words: "focus left right pane", run: () => this.switchSplitPane() },
+        { icon: "spread", label: this.splitSync.checked ? "Turn off sync scroll in split view" : "Turn on sync scroll in split view", words: "lock scroll compare", run: () => { this.splitSync.checked = !this.splitSync.checked; } },
+      ] : []),
       { icon: "moon", label: "Dark pages", words: "night invert", run: () => this.toggleDarkPages() },
       { icon: "hand", label: "Hand tool", words: "drag scroll pan", run: () => this.toggleHand() },
       { icon: "full", label: "Full screen", words: "presentation", run: () => this.toggleFullscreen() },

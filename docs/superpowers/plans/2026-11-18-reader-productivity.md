@@ -17,11 +17,11 @@
 
 ### Phase 1 (release A): Side-by-Side Split View in the Reader
 
-- [ ] **Split pane layout:** Toggle **Split view** from the reader toolbar / View menu / command palette (`Ctrl+\`) to show two independent document panes side by side with a draggable divider.
-- [ ] **Same-document or two-tab mode:** Open either a second tab in the right pane or a second independent view of the current tab (e.g., reading an appendix or legend alongside page 12).
-- [ ] **Synchronized scroll & zoom toggle:** Optional **Sync scroll** lock (matching page index + relative scroll offset, with a "Lock offset" option when revisions have an extra cover page).
-- [ ] **Keyboard & state:** `F6` / `Ctrl+Shift+\` switches active pane; closing split view returns cleanly to single-pane without losing unsaved edits.
-- [ ] **Tests (browser):** open two PDFs in split view, toggle sync scroll, verify both panes track and close cleanly.
+- [x] **Split pane layout:** Toggle **Split view** from the reader toolbar / View menu / command palette (`Ctrl+\`) to show two independent document panes side by side with a draggable divider.
+- [x] **Same-document or two-tab mode:** Open either a second tab in the right pane or a second independent view of the current tab (e.g., reading an appendix or legend alongside page 12).
+- [x] **Synchronized scroll & zoom toggle:** Optional **Sync scroll** lock (matching page index + relative scroll offset, with a "Lock offset" option when revisions have an extra cover page).
+- [x] **Keyboard & state:** `F6` / `Ctrl+Shift+\` switches active pane; closing split view returns cleanly to single-pane without losing unsaved edits.
+- [x] **Tests (browser):** open two PDFs in split view, toggle sync scroll, verify both panes track and close cleanly (`tests/test_splitview.py`).
 
 ---
 
