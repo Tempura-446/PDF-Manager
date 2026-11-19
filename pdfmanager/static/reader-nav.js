@@ -58,6 +58,7 @@ export const ReaderNav = (Base) => class extends Base {
   toggleHand() { this.container.classList.toggle("hand"); }
   toggleDarkPages() {
     const on = this.container.classList.toggle("dark");
+    this.splitContainer?.classList.toggle("dark", on);
     store.set("pdfm-reader-dark", on);
   }
   toggleFullscreen() {

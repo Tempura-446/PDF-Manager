@@ -261,6 +261,7 @@ export const ReaderRender = (Base) => class extends Base {
       this.zoomInput, this.zoomMenuBtn, this.findBtn, this.annotateBtn, this.scaleBtn]) c.disabled = true;
     this.zoomInput.value = "";
     this.sidebar.hidden = true;
+    if (this.splitOpen) this.closeSplitView();
     this.root.classList.remove("reading");
     setTimeout(() => { if (!this.doc && !this.opening) this.refreshRecent(); }, 0);  // (see show())
     this._refresh();
