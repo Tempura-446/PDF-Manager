@@ -619,6 +619,31 @@ def run_to_excel(a, src, out, pw):
     return f"{made['output']}  ({n} table{'s' if n != 1 else ''})"
 
 
+def run_to_dxf(a, src, out, pw):
+    from pdfmanager import dxf
+
+    pages = core.parse_pages(a.pages, core.open_pdf(src, pw).get_num_pages()) if a.pages else None
+    made = dxf.pdf_to_dxf(src, out, pages=pages, scale=a.scale, password=pw)
+    return f"{out}  ({made['entities']} entities, {made['units']})"
+
+
+def cmd_from_dxf(a):
+    from pdfmanager import dxf
+
+    inputs = _expand(a.inputs)
+    batch = _is_batch(a.inputs, inputs)
+    for src in inputs:
+        p = Path(src)
+        if a.output and not batch and not _is_folder(a.output):
+            out = Path(a.output)
+        else:
+            folder = Path(a.output) if a.output else p.parent
+            folder.mkdir(parents=True, exist_ok=True)
+            out = folder / f"{p.stem}.pdf"
+        made = dxf.drawing_to_pdf(p, out, layout=a.layout, paper=a.paper, scale=a.scale, monochrome=a.monochrome)
+        print(f"Wrote {out}  ({len(made['layers'])} layers, {made['paper']}, {made['scale']})")
+
+
 def run_quantities(a, src, out, pw):
     from pdfmanager import quantities
 
@@ -877,6 +902,7 @@ OUTPUTS["flatten-layers"] = ("flat", "pdf")
 OUTPUTS.update({"to-pptx": (None, "pptx"), "to-html": (None, "html")})
 # -- end of pptx and html --
 OUTPUTS["tag"] = ("tagged", "pdf")  # -- accessibility --
+OUTPUTS["to-dxf"] = (None, "dxf")  # -- drawing tools --
 
 
 def _is_batch(patterns, inputs):
@@ -1778,6 +1804,21 @@ def build_parser():
                         "per table)")
     g.add_argument("--csv", action="store_true",
                    help="write a CSV file per table instead of a workbook")
+
+    sp = per_file("to-dxf", run_to_dxf,
+                  "export vector drawings in PDFs to CAD DXF files (.dxf)",
+                  out_help="output .dxf (default: <input>.dxf); with several inputs, a folder")
+    sp.add_argument("-p", "--pages", help=PAGES_HELP)
+    sp.add_argument("--scale", help="drawing scale such as 1:100 (default: read from the PDF's /VP /Measure)")
+
+    sp = other("from-dxf", cmd_from_dxf,
+               "convert CAD drawings (.dxf, or .dwg with ODA File Converter) to layered, scaled PDFs")
+    sp.add_argument("inputs", nargs="+", metavar="drawing", help="DXF or DWG files")
+    sp.add_argument("-o", "--output", help="output .pdf; with several inputs, a folder")
+    sp.add_argument("--layout", default="Model", help="layout name (default: Model)")
+    sp.add_argument("--paper", default="A3", help="paper size (A4, A3, A2, A1, A0, Letter, Tabloid, Arch D)")
+    sp.add_argument("--scale", default="fit", help="plot scale: fit, 1:50, 1:100, etc. (default: fit)")
+    sp.add_argument("--monochrome", action="store_true", help="draw all lines and text in black")
 
     sp = per_file("comments", run_comments,
                   "list the comments in PDFs, or make a summary (PDF), a spreadsheet (CSV) or an "

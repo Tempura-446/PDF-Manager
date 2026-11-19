@@ -568,6 +568,20 @@ OPERATIONS = [
      "help": "Convert Word, Excel, PowerPoint, OpenDocument, RTF or text files to PDF. "
              "Uses Microsoft Office if installed, otherwise LibreOffice.",
      "fields": []},
+    {"id": "to-dxf", "group": "Convert", "label": "PDF → DXF", "files": "pdf",
+     "help": "Export vector lines, curves, solid fills, layers and text to a CAD DXF file, "
+             "preserving the drawing's scale.",
+     "fields": [_f("pages", "Pages (blank = all)", "text", "", placeholder="all"),
+                _f("scale", "Scale (blank = from PDF)", "text", "", placeholder="e.g. 1:100")]},
+    {"id": "from-drawing", "group": "Convert", "label": "Drawing → PDF", "files": "drawing",
+     "help": "Convert CAD drawings (.dxf, or .dwg if ODA File Converter is installed) to "
+             "layered, scaled PDFs.",
+     "fields": [_f("layout", "Layout", "text", "Model", placeholder="Model"),
+                _f("paper", "Paper size", "select", "A3",
+                   choices=[["A4", "A4"], ["A3", "A3"], ["A2", "A2"], ["A1", "A1"], ["A0", "A0"],
+                            ["Letter", "Letter"], ["Tabloid", "Tabloid"], ["Arch D", "Arch D"]]),
+                _f("scale", "Plot scale", "text", "fit", placeholder="fit or 1:100"),
+                _f("monochrome", "Monochrome (black lines)", "checkbox", False)]},
     {"id": "recipe", "group": "Automate", "label": "Recipes", "files": "pdf", "panel": "recipe",
      "help": "Run several tools one after another, e.g. clean up scans → OCR → compress. "
              "Save a recipe to use it again here, from the command line or in a watch folder.",
@@ -1093,6 +1107,27 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         out = out_dir / f"{src.stem}.pdf"
         _, program = office.html_to_pdf(src, out)
         notes.append(f"{src.name}: printed with {program}")
+    elif op == "to-dxf":
+        from pdfmanager import dxf
+
+        out = out_dir / f"{src.stem}.dxf"
+        pages = _pages(opts)
+        if pages:
+            pages = core.parse_pages(pages, core.open_pdf(src, password).get_num_pages())
+        made = dxf.pdf_to_dxf(src, out, pages=pages, scale=(opts.get("scale") or "").strip() or None, password=password)
+        notes.append(f"{src.name}: {made['entities']} entities ({made['units']})")
+    elif op == "from-drawing":
+        from pdfmanager import dxf
+
+        out = out_dir / f"{src.stem}.pdf"
+        made = dxf.drawing_to_pdf(
+            src, out,
+            layout=(opts.get("layout") or "Model").strip() or "Model",
+            paper=(opts.get("paper") or "A3").strip() or "A3",
+            scale=(opts.get("scale") or "fit").strip() or "fit",
+            monochrome=_bool(opts.get("monochrome")),
+        )
+        notes.append(f"{src.name}: {len(made['layers'])} layers, {made['paper']}, {made['scale']}")
     else:
         raise UserError(f"unknown operation {op!r}")
     return [out]
@@ -1500,6 +1535,7 @@ def _run_files(op, files, opts, password, extra_files, work, notes):
                  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml."
                           "presentation",
                  ".html": "text/html; charset=utf-8",
+                 ".dxf": "application/dxf",
                  # -- end of pptx and html --
                  }.get(path.suffix, "application/pdf")
         return path.name, path.read_bytes(), ctype
@@ -2625,6 +2661,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._form_export(body)
             if path == "/api/form/import":
                 return self._form_import(body)
+            if path == "/api/drawing/open":
+                return self._drawing_open(body)
             if path in ("/api/comments/summary", "/api/comments/export", "/api/comments/import"):
                 return self._comments(path.rsplit("/", 1)[1], body)
             if path == "/api/text/edit":
@@ -3454,9 +3492,37 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(HTTPStatus.OK, data, "application/pdf",
                           {"X-Pdfm-Fields": str(count)})
 
+    def _drawing_open(self, body):
+        """Convert an uploaded .dxf or .dwg drawing to a layered, scaled PDF for the reader."""
+        from pdfmanager import dxf
+
+        raw_name = self.headers.get("X-Pdfm-Filename") or "drawing.dxf"
+        try:
+            raw_name = urllib.parse.unquote(raw_name)
+        except Exception:
+            pass
+        name = Path(raw_name).name or "drawing.dxf"
+        ext = Path(name).suffix.lower()
+        if ext == ".dwg":
+            temp_name = "input.dwg"
+        elif ext == ".dxf":
+            temp_name = "input.dxf"
+        else:
+            raise UserError("choose a .dxf or .dwg drawing")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / temp_name
+            out = Path(tmp) / "output.pdf"
+            src.write_bytes(body)
+            dxf.drawing_to_pdf(src, out)
+            pdf_bytes = out.read_bytes()
+        return self._send(HTTPStatus.OK, pdf_bytes, "application/pdf",
+                          {"X-Pdfm-Filename": urllib.parse.quote(f"{Path(name).stem}.pdf")})
+
     def _save_settings(self, body):
         data = json.loads(body or b"{}")
         changes = {}
+        if "oda_converter" in data:
+            changes["oda_converter"] = str(data["oda_converter"] or "").strip()
         if "repo" in data:
             repo = str(data["repo"] or "").strip().strip("/")
             if repo and repo not in (update.RELEASES, update.REPO):
@@ -4472,7 +4538,7 @@ def _no_autofill(window):
 SAVE_TYPES = {".pdf": "PDF files (*.pdf)", ".zip": "ZIP archives (*.zip)", ".docx": "Word documents (*.docx)",
               ".xlsx": "Excel workbooks (*.xlsx)", ".pptx": "PowerPoint presentations (*.pptx)",
               ".html": "Web pages (*.html)", ".png": "PNG pictures (*.png)", ".jpg": "JPEG pictures (*.jpg)",
-              ".txt": "Text files (*.txt)", ".csv": "CSV files (*.csv)"}
+              ".txt": "Text files (*.txt)", ".csv": "CSV files (*.csv)", ".dxf": "DXF drawings (*.dxf)"}
 
 
 def _save_types(name):
