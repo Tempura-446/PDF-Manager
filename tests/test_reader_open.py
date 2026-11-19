@@ -175,10 +175,10 @@ def test_the_quick_look_leaves_drawing_sheets_alone(tmp_path, monkeypatch):
 
 
 def test_the_reader_asks_by_id_and_after_the_first_page():
-    js = (STATIC / "reader.js").read_text(encoding="utf-8")
+    js = (STATIC / "reader-render.js").read_text(encoding="utf-8")
     # No whole file turned into text on the page's own thread to look for a signature.
     assert "TextDecoder(\"latin1\").decode(bytes)" not in js
-    assert re.search(r"this\.#whenShown\(\(\) => \{ this\.#checkSignatures\(\); this\.#checkForm\(\); \}\)", js)
+    assert re.search(r"this\._whenShown\(\(\) => \{ this\._checkSignatures\(\); this\._checkForm\(\); \}\)", js)
     # The page starts the file and pdf.js before its stylesheets, and only when started with a file.
     html = GUI_HTML.read_text(encoding="utf-8")
     head = html[:html.index("</head>")] if "</head>" in html else html[:html.index("<body")]

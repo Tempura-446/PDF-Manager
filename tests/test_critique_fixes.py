@@ -109,7 +109,7 @@ def test_save_over_a_file_can_be_undone_unless_it_changed_since(app, tmp_path):
 
 
 def test_no_browser_confirm_or_alert_is_left():
-    for name in ("gui.html", "static/reader.js", "static/recipes.js"):
+    for name in ("gui.html", "static/reader.js", "static/reader-nav.js", "static/reader-render.js", "static/reader-save.js", "static/recipes.js"):
         text = (HERE.parent / "pdfmanager" / name).read_text(encoding="utf-8")
         code = "\n".join(line for line in text.splitlines() if not line.strip().startswith(("//", "*", "/*")))
         for call in ("confirm(", "alert("):
