@@ -97,6 +97,32 @@ export const FormMode = (Base) => class extends Base {
     this.formPreviewBtn = el("button", { class: "rd-btn", type: "button", "aria-pressed": "false", title: "Try filling in the form with scripts running" }, "Preview");
     this.formKeepDefaultsBtn = el("button", { class: "rd-btn", type: "button", hidden: true, title: "Save what you entered in Preview as the fields' default values" }, "Keep as default values");
     this.formCheckBtn = el("button", { class: "rd-btn", type: "button", title: "Check for missing tooltips, overlaps, or broken calculations" }, "Check form");
+    this.formDataBtn = el("button", { class: "rd-btn", type: "button", "aria-haspopup": "menu", "aria-expanded": "false", title: "Clear, import, or export form data" }, "Data ▾");
+    const mkItem = (label, fn) => {
+      const b = el("button", { type: "button", role: "menuitem" }, label);
+      b.addEventListener("click", () => { this._closeFormDataMenu(); fn(); });
+      return b;
+    };
+    const pickDataFile = () => {
+      const input = el("input", { type: "file", accept: ".fdf,.xfdf,.xml,.csv,.json", hidden: true });
+      input.addEventListener("change", () => {
+        const f = input.files?.[0];
+        input.remove();
+        if (f) this.importFormData(f);
+      });
+      document.body.append(input);
+      input.click();
+    };
+    this.formDataMenu = el("div", { class: "rd-menu rd-formdatamenu", role: "menu", "aria-label": "Form data", hidden: true },
+      mkItem("Clear form", () => this.clearForm()),
+      mkItem("Import data…", pickDataFile),
+      el("hr"),
+      el("div", { class: "label" }, "Export data"),
+      mkItem("FDF (.fdf)", () => this.exportFormData("fdf")),
+      mkItem("XFDF (.xfdf)", () => this.exportFormData("xfdf")),
+      mkItem("CSV (.csv)", () => this.exportFormData("csv")),
+      mkItem("JSON (.json)", () => this.exportFormData("json")),
+    );
     this.formCloseBtn = el("button", { class: "rd-btn", type: "button", title: "Close Prepare form", "aria-label": "Close Prepare form", html: svg("x") });
     this.formUndoBtn.addEventListener("click", () => this._undo());
     this.formRedoBtn.addEventListener("click", () => this._undo(true));
@@ -104,12 +130,13 @@ export const FormMode = (Base) => class extends Base {
     this.formPreviewBtn.addEventListener("click", () => this.setFormPreview(!this.formPreview));
     this.formKeepDefaultsBtn.addEventListener("click", () => this.keepPreviewDefaults());
     this.formCheckBtn.addEventListener("click", () => this.checkForm());
+    this.formDataBtn.addEventListener("click", (e) => { e.stopPropagation(); this._toggleFormDataMenu(); });
     this.formSaveBtn.addEventListener("click", () => this.save());
     this.formCloseBtn.addEventListener("click", () => this.closeFormMode());
     this.formmodebar = el("div", { class: "rd-findbar rd-formmodebar", hidden: true, role: "toolbar", "aria-label": "Prepare form" },
       ...this.formToolBtns, el("span", { class: "rd-sep" }), this.formFindBtn,
       el("span", { class: "rd-sep" }), this.formUndoBtn, this.formRedoBtn, this.formDeleteBtn,
-      el("span", { class: "rd-sep" }), this.formPreviewBtn, this.formKeepDefaultsBtn, this.formCheckBtn,
+      el("span", { class: "rd-sep" }), this.formPreviewBtn, this.formKeepDefaultsBtn, this.formCheckBtn, this.formDataBtn,
       el("span", { style: "flex:1" }), this.formSaveBtn, this.formCloseBtn);
     this.formMode = false;
     this.formPreview = false;
@@ -148,6 +175,7 @@ export const FormMode = (Base) => class extends Base {
   closeFormMode() {
     if (!this.formMode) return;
     this._formFlushNudge();
+    this._closeFormDataMenu();
     const wasPreview = this.formPreview;
     this._formPickCb = null;
     this.formMode = false;
@@ -226,6 +254,81 @@ export const FormMode = (Base) => class extends Base {
     this._drawFormOverlays();
     const box = this.viewerEl.querySelector(`.rd-formfield[data-page="${page}"][data-index="${index}"]`);
     box?.scrollIntoView({ block: "center", inline: "nearest" });
+  }
+
+  _closeFormDataMenu() {
+    if (!this.formDataMenu || this.formDataMenu.hidden) return;
+    this.formDataMenu.hidden = true;
+    this.formDataBtn?.setAttribute("aria-expanded", "false");
+    if (this._formDataOutside) {
+      document.removeEventListener("pointerdown", this._formDataOutside, true);
+      this._formDataOutside = null;
+    }
+  }
+
+  _toggleFormDataMenu() {
+    if (!this.formDataMenu || !this.formDataBtn) return;
+    if (!this.formDataMenu.hidden) { this._closeFormDataMenu(); return; }
+    if (!this.formDataMenu.parentElement) this.root.append(this.formDataMenu);
+    const r = this.formDataBtn.getBoundingClientRect(), rr = this.root.getBoundingClientRect();
+    this.formDataMenu.style.left = `${Math.max(8, r.left - rr.left)}px`;
+    this.formDataMenu.style.right = "auto";
+    this.formDataMenu.style.top = `${r.bottom - rr.top + 4}px`;
+    this.formDataMenu.hidden = false;
+    this.formDataBtn.setAttribute("aria-expanded", "true");
+    this._formDataOutside = (e) => {
+      if (!this.formDataMenu.contains(e.target) && e.target !== this.formDataBtn) this._closeFormDataMenu();
+    };
+    document.addEventListener("pointerdown", this._formDataOutside, true);
+  }
+
+  clearForm() {
+    if (!this.formMode || !this.doc) return;
+    return this._changeDocument((bytes, tab) => this._post("/api/form/clear", bytes, tab), {
+      failure: "Couldn't clear form: ",
+      edited: (_res, tab) => { tab.formFields = null; },
+      after: (res) => {
+        const count = Number(res.headers.get("X-Pdfm-Fields") || 0);
+        this.toast(count ? `Cleared ${count} field${count === 1 ? "" : "s"}` : "Form cleared", 2000);
+      },
+    });
+  }
+
+  async exportFormData(fmt = "json") {
+    if (!this.formMode || !this.doc) return;
+    const tab = this.activeTab;
+    try {
+      const res = await this._post("/api/form/export", await this._currentBytes(), tab, { format: fmt });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+      const blob = await res.blob();
+      const stem = (this.name || "form").replace(/\.pdf$/i, "");
+      const filename = `${stem}.${fmt}`;
+      const api = this.api?.();
+      if (this.isDesktop?.() && api?.save_result) {
+        await this._saveBytes(new Uint8Array(await blob.arrayBuffer()), filename);
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = el("a", { href: url, download: filename, hidden: true });
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      this.toast("Couldn't export form data: " + (e.message || e));
+    }
+  }
+
+  importFormData(file) {
+    if (!this.formMode || !this.doc || !file) return;
+    return this._changeDocument((bytes, tab) => this._post("/api/form/import", bytes, tab, {}, [file]), {
+      failure: "Couldn't import form data: ",
+      edited: (_res, tab) => { tab.formFields = null; },
+      after: (res) => {
+        const count = Number(res.headers.get("X-Pdfm-Fields") || 0);
+        this.toast(count ? `Filled ${count} field${count === 1 ? "" : "s"}` : "Form data imported", 2000);
+      },
+    });
   }
 
   _setFormTool(tool) {

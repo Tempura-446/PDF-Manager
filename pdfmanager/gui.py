@@ -326,6 +326,14 @@ OPERATIONS = [
                             ["import", "Add comments from an XFDF file"]]),
                 _f("xfdf", "Comments file (.xfdf)", "file", None, accept=".xfdf,.xml",
                    show_if={"mode": "import"})]},
+    {"id": "fill-many", "group": "Stamp", "label": "Fill many (mail merge)", "files": "pdf",
+     "action": "Fill forms",
+     "help": "Make one filled PDF for each row of a spreadsheet (CSV, Excel, or JSON), "
+             "matching column names to form fields and optionally naming each file from a column.",
+     "fields": [_f("data", "Spreadsheet or data file (.csv, .xlsx, .json)", "file", None,
+                   accept=".csv,.xlsx,.json"),
+                _f("name_column", "Name each PDF from column (optional)", "text", "",
+                   placeholder="e.g. Name or ID")]},
     # -- end of comments --
     # -- file tools --
     {"id": "attach", "group": "Stamp", "label": "Attach files", "files": "pdf",
@@ -943,6 +951,14 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                 else:
                     comments.summary_pdf(found, out, src.name)
             notes.append(f"{src.name}: {n} comment{'s' if n != 1 else ''}")
+    elif op == "fill-many":
+        if not extra_files.get("data"):
+            raise UserError("choose a spreadsheet or data file (.csv, .xlsx, .json)")
+        made = forms.fill_many(src, extra_files["data"], out_dir / f"{src.stem}_filled",
+                               name_column=(opts.get("name_column") or "").strip() or None,
+                               password=password)
+        notes.append(f"{src.name}: filled {len(made)} cop{'y' if len(made) == 1 else 'ies'}")
+        return made
     # -- end of comments --
     # -- file tools --
     elif op == "attach":
@@ -2603,6 +2619,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._form_keep_defaults(body)
             if path == "/api/form/check":
                 return self._form_check(body)
+            if path == "/api/form/clear":
+                return self._form_clear(body)
+            if path == "/api/form/export":
+                return self._form_export(body)
+            if path == "/api/form/import":
+                return self._form_import(body)
             if path in ("/api/comments/summary", "/api/comments/export", "/api/comments/import"):
                 return self._comments(path.rsplit("/", 1)[1], body)
             if path == "/api/text/edit":
@@ -3371,6 +3393,66 @@ class Handler(BaseHTTPRequestHandler):
             src.write_bytes(uploads[0][2])
             issues = forms.check_form(src, password=password)
         return self._send(HTTPStatus.OK, json.dumps({"issues": issues}, ensure_ascii=False), "application/json")
+
+    def _form_clear(self, body):
+        """Reset all form fields to their default values (or clear them)."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "cleared.pdf"
+            src.write_bytes(uploads[0][2])
+            count = forms.clear_form(src, out, password=password)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf",
+                          {"X-Pdfm-Fields": str(count)})
+
+    def _form_export(self, body):
+        """Export filled form values as FDF, XFDF, CSV, or JSON."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        password = fields.get("password") or None
+        fmt = (fields.get("format") or "json").lower().lstrip(".")
+        mimes = {
+            "fdf": "application/vnd.fdf",
+            "xfdf": "application/vnd.adobe.xfdf",
+            "csv": "text/csv; charset=utf-8",
+            "json": "application/json; charset=utf-8",
+        }
+        if fmt not in mimes:
+            raise UserError(f"unsupported data format: {fmt}")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / f"data.{fmt}"
+            src.write_bytes(uploads[0][2])
+            forms.export_data(src, out, fmt=fmt, password=password)
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, mimes[fmt])
+
+    def _form_import(self, body):
+        """Fill form fields from an uploaded FDF, XFDF, CSV, or JSON file."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        pdf_up = next((u for u in uploads if u[0] == "file"), uploads[0] if uploads else None)
+        data_up = next((u for u in uploads if u[0] == "data"), uploads[1] if len(uploads) > 1 else None)
+        if not pdf_up or not data_up:
+            raise UserError("choose a data file to import")
+        password = fields.get("password") or None
+        data_name = Path(data_up[1] or "data.json").name
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            dpath = Path(tmp) / data_name
+            out = Path(tmp) / "filled.pdf"
+            src.write_bytes(pdf_up[2])
+            dpath.write_bytes(data_up[2])
+            count = forms.import_data(src, dpath, out, password=password)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf",
+                          {"X-Pdfm-Fields": str(count)})
 
     def _save_settings(self, body):
         data = json.loads(body or b"{}")

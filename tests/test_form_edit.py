@@ -835,3 +835,66 @@ def test_keep_defaults_and_check_form(tmp_path):
     }
 
 
+def test_form_data_export_import_clear_and_fill_many(tmp_path):
+    import csv
+    import openpyxl
+
+    raw = blank(tmp_path / "blank.pdf")
+    form = tmp_path / "form.pdf"
+    forms.add_fields(raw, form, [
+        {"page": 1, "rect": [72, 700, 220, 722], "type": "text", "name": "FullName"},
+        {"page": 1, "rect": [72, 660, 172, 682], "type": "text", "name": "Amount"},
+        {"page": 1, "rect": [72, 620, 88, 636], "type": "checkbox", "name": "Agree"},
+        {"page": 1, "rect": [72, 580, 172, 602], "type": "dropdown", "name": "Plan",
+         "options": ["Basic", "Pro", "Team"]},
+    ])
+
+    expected = {"FullName": "Ada Lovelace", "Amount": "42.50", "Agree": "Yes", "Plan": "Pro"}
+    filled = tmp_path / "filled.pdf"
+    assert forms.fill_form(form, filled, expected) == 4
+    assert forms.read_form_values(filled) == expected
+
+    # Export to FDF, XFDF, CSV, JSON, clear, then import each format back
+    cleared = tmp_path / "cleared.pdf"
+    forms.clear_form(filled, cleared)
+    assert forms.read_form_values(cleared) == {"FullName": "", "Amount": "", "Agree": "", "Plan": ""}
+
+    for fmt in ("fdf", "xfdf", "csv", "json"):
+        data_file = tmp_path / f"values.{fmt}"
+        forms.export_data(filled, data_file, fmt=fmt)
+        reimported = tmp_path / f"reimported_{fmt}.pdf"
+        forms.import_data(cleared, data_file, reimported)
+        assert forms.read_form_values(reimported) == expected, f"round-trip failed for {fmt}"
+
+    # Fill many (mail merge): 10 CSV rows -> 10 named PDFs
+    csv_path = tmp_path / "people.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=["FullName", "Amount", "Agree", "Plan"])
+        w.writeheader()
+        for i in range(1, 11):
+            w.writerow({
+                "FullName": f"Person {i}",
+                "Amount": str(i * 10),
+                "Agree": "Yes" if i % 2 else "",
+                "Plan": ["Basic", "Pro", "Team"][i % 3],
+            })
+    out_dir = tmp_path / "merged_csv"
+    made = forms.fill_many(form, csv_path, out_dir, name_column="FullName")
+    assert len(made) == 10
+    assert [p.name for p in made] == [f"Person {i}.pdf" for i in range(1, 11)]
+    assert forms.read_form_values(made[0]) == {"FullName": "Person 1", "Amount": "10", "Agree": "Yes", "Plan": "Pro"}
+    assert forms.read_form_values(made[9]) == {"FullName": "Person 10", "Amount": "100", "Agree": "", "Plan": "Pro"}
+
+    # Also verify XLSX mail merge
+    xlsx_path = tmp_path / "people.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["FullName", "Amount", "Agree", "Plan"])
+    ws.append(["Grace Hopper", "99", "Yes", "Team"])
+    wb.save(str(xlsx_path))
+    xlsx_made = forms.fill_many(form, xlsx_path, tmp_path / "merged_xlsx", name_column="FullName")
+    assert [p.name for p in xlsx_made] == ["Grace Hopper.pdf"]
+    assert forms.read_form_values(xlsx_made[0])["Amount"] == "99"
+
+
+
