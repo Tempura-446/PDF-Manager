@@ -20,13 +20,13 @@
 
 ### Phase 1 (release A): Rule Engine & Dry-Run Preview
 
-- [ ] **Rule format (`pdfmanager/filing.py`):** JSON/YAML-serializable rules stored in app data, each with:
+- [x] **Rule format (`pdfmanager/filing.py`):** JSON/YAML-serializable rules stored in app data, each with:
   - **Conditions:** filename glob, text contains / regex match (with named capture groups `(?P<vendor>...)`), page count, PDF metadata (author/title/subject), or date found on page 1.
   - **Built-in extractors:** `{date}` / `{year}` / `{month}` (ISO `YYYY-MM-DD` normalized from common date formats on page 1), `{first_line}`, `{title}`, `{pages}`, `{orig_name}`, plus any named regex capture group `{vendor}`, `{invoice_no}`, etc.
   - **Actions:** rename template (e.g., `{year}/{date}_{vendor}_{invoice_no}.pdf`), optional subfolder move, optional tag/metadata write, optional OCR-first if scanned.
-- [ ] **Dry-run & undo:** `plan_filing(files, rules)` returns `(src, dst, matched_rule, reason)` without touching disk; `apply_filing(plan)` writes an undo manifest so `undo_filing()` restores original paths.
-- [ ] **CLI:** `pdfm auto-file <folder-or-files> --rules rules.json [--apply] [--undo]`.
-- [ ] **Tests (`tests/test_filing.py`):** date extraction/normalization, named regex captures, collision avoidance, invalid-character sanitization, dry-run vs apply, and undo rollback.
+- [x] **Dry-run & undo:** `plan_filing(files, rules)` returns `(src, dst, matched_rule, reason)` without touching disk; `apply_filing(plan)` writes an undo manifest so `undo_filing()` restores original paths.
+- [x] **CLI:** `pdfm auto-file <folder-or-files> --rules rules.json [--apply] [--undo]`.
+- [x] **Tests (`tests/test_filing.py`):** date extraction/normalization, named regex captures, collision avoidance, invalid-character sanitization, dry-run vs apply, and undo rollback.
 
 ---
 
