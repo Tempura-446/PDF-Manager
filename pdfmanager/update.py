@@ -71,7 +71,9 @@ def public_settings():
     data = settings()
     return {"repo": data.get("update_repo") or RELEASES, "token_set": bool(data.get("github_token")),
             "check": data.get("check_updates", True), "how": how_installed(),
-            "ocr_quality": data.get("ocr_quality") or "standard"}
+            "ocr_quality": data.get("ocr_quality") or "standard",
+            "ocr_gpu": bool(data.get("ocr_gpu", False)),
+            "ocr_gpu_supported": sys.platform == "win32"}
 
 
 # ---- checking -------------------------------------------------------------------------

@@ -24,7 +24,7 @@ Master index of ZPDF's completed, in-progress, and planned feature tracks. Each 
 | Priority | Track | Current State | Plan |
 | --- | --- | --- | --- |
 | 1 | **Markdown & Review Exports** (PDF → Markdown, annotation/comment summary export) | Starting now | [`2026-11-18-markdown-and-exports.md`](superpowers/plans/2026-11-18-markdown-and-exports.md) |
-| 2 | **Better OCR** (Phase 2: hard pages, Phase 3: Check OCR UI, Phase 5: speed, Phase 4: tables/forms) | Phases 1–3 done | [`2026-11-14-ocr-improvements.md`](superpowers/plans/2026-11-14-ocr-improvements.md) |
+| 2 | **Better OCR** (Phase 2: hard pages, Phase 3: Check OCR UI, Phase 5: speed, Phase 4: tables/forms) | Phases 1–3 & 5 done | [`2026-11-14-ocr-improvements.md`](superpowers/plans/2026-11-14-ocr-improvements.md) |
 | 3 | **Architecture Modularization** (split `gui.py`, `gui.html`, `reader.js`, `textedit.py`, `forms.py` before i18n / new UI modes) | Planned | [`2026-11-18-architecture-modularization.md`](superpowers/plans/2026-11-18-architecture-modularization.md) |
 | 4 | **Security — Phase 5** (signed releases, lockfile verification, supply-chain hardening) | Phases 1–4 mostly done | [`2026-11-14-security.md`](superpowers/plans/2026-11-14-security.md) |
 | 5 | **Reader Productivity & Print Preflight** (split view with sync scroll, interactive visual crop, N-up/poster preview, print preflight) | Planned | [`2026-11-18-reader-productivity.md`](superpowers/plans/2026-11-18-reader-productivity.md) |

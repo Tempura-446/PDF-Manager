@@ -1332,6 +1332,10 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
         <option value="best">Best accuracy (larger models, fetched once, slower)</option>
       </select></label>
     <p class="dlg-hint">Default for Make searchable (OCR); you can still override it per file in the tool.</p>
+    <div id="ocr-gpu-wrap" hidden>
+      <label class="dlg-check"><input type="checkbox" id="set-ocr-gpu"> Use graphics card for OCR (DirectML, experimental)</label>
+      <p class="dlg-hint">Tries ONNX Runtime's DirectML provider on Windows; falls back to the CPU automatically if anything goes wrong.</p>
+    </div>
     <div id="shell-menu" hidden>
       <h3>Right-click menu</h3>
       <label class="dlg-check"><input type="checkbox" id="set-shell-menu"> Show ZPDF in the right-click menu</label>
@@ -4668,6 +4672,8 @@ async function openSettings() {
     ({ source: " (running from a source folder: update it with git pull)", frozen: " (the standalone app: download a new one to update it)" }[s.how] || ".");
   $("set-check").checked = s.check;
   $("set-ocr-quality").value = s.ocr_quality || "standard";
+  $("ocr-gpu-wrap").hidden = !s.ocr_gpu_supported;
+  $("set-ocr-gpu").checked = !!s.ocr_gpu;
   showPrivacy(s);
   showBehind(s);
   updateStatus("behind-status", "");
@@ -4860,9 +4866,14 @@ $("set-ocr-quality").addEventListener("change", async (e) => {
     await jsonApi("/api/settings", { ocr_quality: e.target.value });
   } catch (err) { updateStatus("set-status", err.message, true); }
 });
+$("set-ocr-gpu").addEventListener("change", async (e) => {
+  try {
+    await jsonApi("/api/settings", { ocr_gpu: e.target.checked });
+  } catch (err) { updateStatus("set-status", err.message, true); }
+});
 async function saveSettings() {
   const data = { check: $("set-check").checked, repo: $("set-repo").value.trim(),
-                 ocr_quality: $("set-ocr-quality").value };
+                 ocr_quality: $("set-ocr-quality").value, ocr_gpu: $("set-ocr-gpu").checked };
   if ($("set-token").value.trim()) data.token = $("set-token").value.trim();
   const s = await jsonApi("/api/settings", data);
   $("set-token").value = "";
