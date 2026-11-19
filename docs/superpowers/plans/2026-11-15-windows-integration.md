@@ -69,6 +69,8 @@
 
 ## Phase 4 (release D): PDF thumbnails in File Explorer
 
+*(Deferred / gated on code-signing decision: Windows 11 Smart App Control blocks unsigned Explorer shell-extension DLLs.)*
+
 - [ ] **How Windows does it:** a thumbnail handler is a COM object (`IThumbnailProvider` with `IInitializeWithStream`) that Explorer loads **inside its own process** (or `dllhost`). It must be native code: small, fast, and unable to crash Explorer. Python can't be it.
 - [ ] **The handler:** a small C++ DLL (`zpdf-thumb.dll`, 64-bit, plus ARM64 later) that renders page 1 with **PDFium** (the same library ZPDF already ships through pypdfium2, loaded from ZPDF's folder) to the size Explorer asks for, on a white background, honouring rotation. A password-protected or broken file gives no thumbnail (Explorer falls back to the icon). A time and memory limit per file.
 - [ ] **Registering it:** per user, without administrator rights (`HKCU\Software\Classes\.pdf\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}` → the handler's CLSID), by the installer and by a switch in Settings ("Show the first page as the icon in File Explorer"). It applies when ZPDF is the default app for PDFs, or for everyone's `.pdf` if the user chooses so; the uninstaller removes it. The preview pane (`IPreviewHandler`) is a possible follow-up, not in this release.

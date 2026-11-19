@@ -19,6 +19,10 @@ on:
         description: "Build release files and upload as artifact without publishing or tagging"
         type: boolean
         default: false
+      trigger_post_release:
+        description: "Trigger build-app.yml and lock.yml after publishing"
+        type: boolean
+        default: true
 
 concurrency:
   group: release
@@ -26,6 +30,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   release:
@@ -71,6 +76,17 @@ jobs:
           if ("${{ inputs.dry_run }}" -eq "true") { $args += "--dry-run" }
           python @args
           if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Trigger build-app and lock workflows
+        if: ${{ !inputs.dry_run && inputs.trigger_post_release }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = python -c "import packaging.release as r; print(r.read_version())"
+          $tag = "v$($version.Trim())"
+          gh workflow run build-app.yml --ref $tag
+          gh workflow run lock.yml --ref $tag
 
       - uses: actions/upload-artifact@v7
         if: always()
