@@ -15,6 +15,7 @@ The table knows English. Chinese, Japanese and Korean text is left out
 of the vector; search.py matches those by their characters instead.
 """
 
+import hashlib
 import json
 import re
 import threading
@@ -29,24 +30,97 @@ SIZE = 128
 PASSAGE = 90       # words in a passage of a page
 STEP = 60          # a passage starts every so many words, so they overlap
 
-# Scripts the table has no sense of.
+# Scripts the built-in English table has no sense of.
 CJK = re.compile("[⺀-鿿가-힯豈-﫿ｦ-ﾟ]")
 
 _lock = threading.Lock()
 _table = None
 
 
+def pack_table_paths():
+    """Return sorted ``words.npz`` Paths from installed language packs."""
+    try:
+        from pdfmanager import appdata
+        root = appdata.data_dir() / "locales"
+    except Exception:
+        return []
+    if not root.is_dir():
+        return []
+    found = []
+    for sub in sorted(root.iterdir()):
+        if not sub.is_dir():
+            continue
+        for cand in (sub / "meaning" / "words.npz", sub / "words.npz"):
+            if cand.is_file():
+                found.append(cand)
+                break
+    return found
+
+
+def table_version():
+    """Integer model version for ``search.sqlite`` vector caching.
+    Returns ``VERSION`` when only the built-in English table is active, or a
+    deterministic positive 31-bit integer incorporating installed pack tables."""
+    packs = pack_table_paths()
+    if not packs:
+        return VERSION
+    h = hashlib.sha256()
+    h.update(f"v{VERSION}".encode("ascii"))
+    for p in packs:
+        try:
+            st = p.stat()
+            h.update(f"|{p.parent.parent.name if p.parent.name == 'meaning' else p.parent.name}:{st.st_size}:{int(st.st_mtime)}".encode("utf-8"))
+        except OSError:
+            continue
+    return (int.from_bytes(h.digest()[:4], "big") & 0x7FFFFFFF) or (VERSION + 1)
+
+
+def reset():
+    """Clear the cached embedding table so newly installed/removed language packs take effect."""
+    global _table
+    with _lock:
+        _table = None
+    _pieces.cache_clear()
+
+
+def _read_npz(path):
+    with np.load(path) as data:
+        vectors = data["vectors"].astype(np.float32) * (data["scale"].astype(np.float32)[:, None] / 127)
+        pieces = json.loads(data["pieces"].tobytes().decode("utf-8"))
+        joins = json.loads(data["joins"].tobytes().decode("utf-8"))
+    return vectors, pieces, joins
+
+
 def _load():
     global _table
     with _lock:
         if _table is None:
-            with np.load(DATA) as data:
-                vectors = data["vectors"].astype(np.float32) * (data["scale"].astype(np.float32)[:, None] / 127)
-                pieces = json.loads(data["pieces"].tobytes().decode("utf-8"))
-                joins = json.loads(data["joins"].tobytes().decode("utf-8"))
+            vectors, pieces, joins = _read_npz(DATA)
             number = {piece: i for i, piece in enumerate(pieces)}
             order = {tuple(join.split(" ", 1)): i for i, join in enumerate(joins)}
-            _table = vectors, number, order
+            vec_chunks = [vectors]
+            next_idx = len(vectors)
+            has_cjk = False
+            for pack_path in pack_table_paths():
+                try:
+                    p_vecs, p_pieces, p_joins = _read_npz(pack_path)
+                except Exception:
+                    continue
+                if p_vecs.ndim != 2 or p_vecs.shape[1] != SIZE:
+                    continue
+                vec_chunks.append(p_vecs)
+                for offset, piece in enumerate(p_pieces):
+                    number[piece] = next_idx + offset
+                    if not has_cjk and CJK.search(piece):
+                        has_cjk = True
+                next_idx += len(p_vecs)
+                base_rank = len(order)
+                for offset, join in enumerate(p_joins):
+                    pair = tuple(join.split(" ", 1))
+                    if len(pair) == 2 and pair not in order:
+                        order[pair] = base_rank + offset
+            merged_vectors = vec_chunks[0] if len(vec_chunks) == 1 else np.vstack(vec_chunks)
+            _table = merged_vectors, number, order, has_cjk
     return _table
 
 
@@ -54,8 +128,11 @@ def _load():
 def _pieces(word):
     """The numbers of the pieces a word is made of (byte-pair encoding: the
     letters are joined pair by pair, the most common pair first)."""
-    _, number, order = _load()
-    parts = list("▁" + word)
+    _, number, order, _ = _load()
+    whole = "▁" + word
+    if whole in number:
+        return (number[whole],)
+    parts = list(whole)
     while len(parts) > 1:
         best, where = None, -1
         for i in range(len(parts) - 1):
@@ -69,6 +146,9 @@ def _pieces(word):
 
 
 def _words(text):
+    _, _, _, has_cjk = _load()
+    if has_cjk:
+        return text.split()
     return CJK.sub(" ", text).split()
 
 

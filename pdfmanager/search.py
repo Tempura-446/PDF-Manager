@@ -99,14 +99,15 @@ def _snippet(text, match, width=70):
 def _vectors(conn, path, texts):
     """{page number: one vector per passage} for a file, made once and kept."""
     key = str(path)
+    model_ver = meaning.table_version()
     kept = {page: meaning.unpack(data) for page, data in conn.execute(
-        "SELECT page, data FROM vectors WHERE path = ? AND model = ?", (key, meaning.VERSION))}
+        "SELECT page, data FROM vectors WHERE path = ? AND model = ?", (key, model_ver))}
     missing = [(number, text) for number, text in texts if number not in kept]
     if missing:
         made = [(number, meaning.pack(meaning.embed_page(text))) for number, text in missing]
         with conn:
             conn.executemany("INSERT OR REPLACE INTO vectors VALUES (?, ?, ?, ?)",
-                             [(key, number, meaning.VERSION, data) for number, data in made])
+                             [(key, number, model_ver, data) for number, data in made])
         kept.update((number, meaning.unpack(data)) for number, data in made)
     return kept
 

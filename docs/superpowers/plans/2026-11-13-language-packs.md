@@ -105,9 +105,9 @@ English stays built in.
 
 ### Phase 4 (release D): OCR and search by meaning in the pack's language
 
-- [ ] OCR: if the language's script isn't covered by the built-in engine, the pack carries a rapidocr recognition model for it (PaddleOCR's models are Apache-2.0: Latin, Cyrillic, Arabic, Japanese, Korean and others). OCR picks it by the document's or the user's language.
-- [ ] Search by meaning: the pack carries a word table for its language, built the same way as `words.npz`, from a multilingual static-embedding source with a redistributable licence. Search by meaning then works across languages: an English query finds a French page.
-- [ ] Test: a French scanned page OCRs with the pack's model. A Spanish query finds the right page in a Spanish document.
+- [x] OCR: if the language's script isn't covered by the built-in engine, the pack carries a rapidocr recognition model for it (PaddleOCR's models are Apache-2.0: Latin, Cyrillic, Arabic, Japanese, Korean and others). OCR picks it by the document's or the user's language.
+- [x] Search by meaning: the pack carries a word table for its language, built the same way as `words.npz`, from a multilingual static-embedding source with a redistributable licence. Search by meaning then works across languages: an English query finds a French page.
+- [x] Test: a French scanned page OCRs with the pack's model. A Spanish query finds the right page in a Spanish document.
 
 ---
 
