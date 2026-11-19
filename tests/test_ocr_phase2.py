@@ -184,6 +184,9 @@ def test_best_accuracy_choice_reaches_engine_with_faked_models(tmp_path, monkeyp
 
     monkeypatch.setattr(ocr, "_fetch", fake_fetch)
 
+    import sys
+    import types
+
     captured = []
     class FakeRapidOCR:
         def __init__(self, params=None):
@@ -191,8 +194,11 @@ def test_best_accuracy_choice_reaches_engine_with_faked_models(tmp_path, monkeyp
         def __call__(self, arr, **kwargs):
             return SimpleNamespace(txts=None, boxes=None, scores=None, word_results=None)
 
-    import rapidocr
-    monkeypatch.setattr(rapidocr, "RapidOCR", FakeRapidOCR)
+    fake_rapidocr = types.ModuleType("rapidocr")
+    fake_rapidocr.ModelType = SimpleNamespace(MOBILE="mobile", SERVER="server")
+    fake_rapidocr.OCRVersion = SimpleNamespace(PPOCRV5="PP-OCRv5")
+    fake_rapidocr.RapidOCR = FakeRapidOCR
+    monkeypatch.setitem(sys.modules, "rapidocr", fake_rapidocr)
 
     try:
         ocr.recognise(Image.new("L", (200, 200), 255), quality="best")
@@ -201,8 +207,8 @@ def test_best_accuracy_choice_reaches_engine_with_faked_models(tmp_path, monkeyp
         assert (models_root / "best_rec.onnx").is_file()
         assert len(captured) == 1
         params = captured[0]
-        assert params["Det.model_type"] == rapidocr.ModelType.SERVER
-        assert params["Rec.model_type"] == rapidocr.ModelType.SERVER
+        assert params["Det.model_type"] == fake_rapidocr.ModelType.SERVER
+        assert params["Rec.model_type"] == fake_rapidocr.ModelType.SERVER
         assert params["Det.model_path"] == str(models_root / "best_det.onnx")
         assert params["Rec.model_path"] == str(models_root / "best_rec.onnx")
         # Second call reuses the cached engine and never re-downloads.
