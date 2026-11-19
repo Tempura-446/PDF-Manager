@@ -46,6 +46,6 @@
 ### Phase 3: Split `reader.js`, `textedit.py`, and `forms.py`
 
 - [x] Extract remaining cohesive subsystems from `static/reader.js` (`reader-nav.js`, `reader-render.js`, `reader-save.js`).
-- [ ] Split `forms.py` into `pdfmanager/forms/` (`__init__.py` re-exporting public API, `fields.py`, `scripts.py`, `data.py`, `actions.py`, `check.py`).
+- [x] Split `forms.py` into `pdfmanager/forms/` (`__init__.py` re-exporting public API, `_base.py`, `fields.py`, `scripts.py`, `data.py`, `actions.py`, `check.py`).
 - [ ] Split `textedit.py` into `pdfmanager/textedit/` (`__init__.py`, `extract.py`, `rewrite.py`, `reflow_ops.py`).
 - [ ] Verify full test suite (`--perf`) and packaging.
