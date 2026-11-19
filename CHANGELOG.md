@@ -80,6 +80,13 @@ Draw, move, resize and arrange form fields directly on the page in the reader.
   revisions of a set matched by sheet number rather than page order
   (**Sheet sets**, **Compare sheet sets**, and `pdfm sheet-split` /
   `sheet-name` / `sheet-link` / `sheet-compare`).
+- **Paragraph shape when rewriting text.** Rewriting a bulleted or numbered
+  item now leaves the bullet or number in place and wraps continuation lines
+  under the text; first-line indents are preserved; `Shift+click` on a second
+  paragraph edits consecutive paragraphs together (with `Enter` starting a new
+  paragraph at the document's own spacing and `Shift+Enter` making a soft line
+  break); and unchanged leading lines before the first edited word are left
+  byte-identical in the page's content stream.
 
 ## 0.56.0
 

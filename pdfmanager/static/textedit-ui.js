@@ -111,7 +111,11 @@ function richField(label) {
     sel.addRange(range);
   };
   field.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); document.execCommand("insertLineBreak"); }
+    if (e.key === "Enter" && !(e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      document.execCommand("insertLineBreak");
+      if (!e.shiftKey) document.execCommand("insertLineBreak");
+    }
   });
   field.addEventListener("paste", (e) => {
     e.preventDefault();
@@ -164,7 +168,9 @@ export const TextEditing = (Base) => class extends Base {
       ? this.#lineOf(span, pageEl, e.clientX, e.clientY) : this.#lineOf(null, pageEl, e.clientX, e.clientY);
     if (line) {
       const at = line.spans.find((it) => it.r.left <= e.clientX && e.clientX <= it.r.right) || line.spans[0];
-      this._openTextEditor(at.s, pageEl, pageNumber, e.shiftKey ? "paragraph" : "line");
+      const extra = e.shiftKey && this._openPara?.pageNumber === pageNumber && this._openPara.span?.isConnected
+        ? this._openPara.span : null;
+      this._openTextEditor(at.s, pageEl, pageNumber, e.shiftKey ? "paragraph" : "line", extra);
     } else {
       this._openNewText(e, pageEl, pageNumber);  // an empty spot: new words there
     }
@@ -279,6 +285,32 @@ export const TextEditing = (Base) => class extends Base {
       // Its longest run of words, for the look (the first can be a bold "Note:").
       main: chosen.flatMap((l) => l.spans).reduce((a, b) => (b.s.textContent.length > a.s.textContent.length ? b : a)).s,
       lead: chosen.length > 1 ? (chosen.at(-1).top - chosen[0].top) / (chosen.length - 1) : lines[at].h * 1.2,
+    };
+  }
+
+  /** Consecutive paragraphs in one column between two clicked spans, joined with blank lines. */
+  #paragraphsBetween(spanA, spanB, pageEl) {
+    const pA = this.#paragraphOf(spanA, pageEl), pB = this.#paragraphOf(spanB, pageEl);
+    if (!pA || !pB) return pB || pA;
+    if (pA.first === pB.first) return pB;
+    const colLeft = Math.min(pA.left, pB.left), colRight = Math.max(pA.right, pB.right);
+    if (Math.min(pA.right, pB.right) <= Math.max(pA.left, pB.left)) return pB;  // different columns
+    const topY = Math.min(pA.top, pB.top), botY = Math.max(pA.bottom, pB.bottom);
+    const seen = new Set(), paras = [];
+    for (const l of this.#pageLines(pageEl)) {
+      if (l.top < topY - 2 || l.bottom > botY + 2) continue;
+      if (l.right <= colLeft || l.left >= colRight) continue;
+      const p = this.#paragraphOf(l.spans[0].s, pageEl);
+      if (p && !seen.has(p.first)) { seen.add(p.first); paras.push(p); }
+    }
+    if (paras.length < 2) return pB;
+    paras.sort((a, b) => a.top - b.top);
+    return {
+      text: paras.map((p) => p.text).join("\n\n"),
+      left: Math.min(...paras.map((p) => p.left)), right: Math.max(...paras.map((p) => p.right)),
+      top: paras[0].top, bottom: paras.at(-1).bottom,
+      h: paras[0].h, lines: paras.reduce((n, p) => n + p.lines, 0) + paras.length - 1,
+      first: paras[0].first, main: paras[0].main, lead: paras[0].lead,
     };
   }
 
@@ -504,12 +536,15 @@ export const TextEditing = (Base) => class extends Base {
     return [box, field];
   }
 
-  async _openTextEditor(span, pageEl, pageNumber, mode = "line") {
+  async _openTextEditor(span, pageEl, pageNumber, mode = "line", extraSpan = null) {
     this.#closeTextEditor(false);
     const ticket = (this.editTicket = (this.editTicket || 0) + 1);
     const viewport = this.pdfViewer.getPageView(pageNumber - 1).viewport;
     const sideways = viewport.rotation % 180 !== 0;
-    const paragraph = mode === "paragraph" && !sideways ? this.#paragraphOf(span, pageEl) : null;
+    const paragraph = mode === "paragraph" && !sideways
+      ? (extraSpan ? this.#paragraphsBetween(extraSpan, span, pageEl) : this.#paragraphOf(span, pageEl))
+      : null;
+    this._openPara = paragraph ? { pageNumber, span: paragraph.first } : null;
     const first = paragraph ? paragraph.first
       : (!sideways && this.#lineOf(span, pageEl, ...middle(span))?.spans[0].s) || span;
     const look = await this.#textLook(first, pageNumber);
@@ -657,7 +692,7 @@ export const TextEditing = (Base) => class extends Base {
     field.select();
   }
 
-  #closeTextEditor(keep) { this.textEditor?.finish(keep); }
+  #closeTextEditor(keep) { this._openPara = null; this.textEditor?.finish(keep); }
 
   // -- text font picker and reflow --
   /** The bar above the text editor to choose how the words look: font,

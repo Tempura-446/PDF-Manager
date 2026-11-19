@@ -102,19 +102,19 @@ Visual check: before/after renders of the untouched regions must be pixel-identi
 ### Phase 3 (release C): paragraph shape
 
 **Task 3.1: indents and bullets**
-- [ ] Find the first-line indent (the first line starts further right than the others) and the hanging indent: the first line starts with a bullet glyph (•, –, ▪, ◦) or a number or letter followed by `.` or `)`, and the next lines start under the text, not under the marker.
-- [ ] Keep the marker glyphs exactly where they are. Wrap the text to the indented left edge.
-- [ ] Test: a bulleted item that grows by a line wraps under its text, and the bullet doesn't move.
+- [x] Find the first-line indent (the first line starts further right than the others) and the hanging indent: the first line starts with a bullet glyph (•, –, ▪, ◦) or a number or letter followed by `.` or `)`, and the next lines start under the text, not under the marker.
+- [x] Keep the marker glyphs exactly where they are. Wrap the text to the indented left edge.
+- [x] Test: a bulleted item that grows by a line wraps under its text, and the bullet doesn't move.
 
 **Task 3.2: several paragraphs at once; Enter splits**
-- [ ] Shift+drag, or Shift+click a second paragraph, selects a run of consecutive paragraphs in one column. They are edited as one block.
-- [ ] Enter starts a new paragraph with the same space between paragraphs as the original. Joining two paragraphs (Backspace at the start) removes that space.
-- [ ] Test: two paragraphs edited together keep their gap. Splitting one into two adds a gap equal to the document's own.
+- [x] Shift+drag, or Shift+click a second paragraph, selects a run of consecutive paragraphs in one column. They are edited as one block.
+- [x] Enter starts a new paragraph with the same space between paragraphs as the original. Joining two paragraphs (Backspace at the start) removes that space.
+- [x] Test: two paragraphs edited together keep their gap. Splitting one into two adds a gap equal to the document's own.
 
 **Task 3.3: re-set only from the first change**
-- [ ] Lines before the first changed word are left as drawn, not taken out and written again. Breaking starts from the first changed line, carrying that line's start.
-- [ ] If the new breaks line up with the old ones again further down (same words at the start of a line, same width), stop: the rest of the paragraph stays as drawn.
-- [ ] Test: changing a word in the last line of a 10-line paragraph leaves the first 9 lines' glyphs byte-identical in the content stream.
+- [x] Lines before the first changed word are left as drawn, not taken out and written again. Breaking starts from the first changed line, carrying that line's start.
+- [x] If the new breaks line up with the old ones again further down (same words at the start of a line, same width), stop: the rest of the paragraph stays as drawn.
+- [x] Test: changing a word in the last line of a 10-line paragraph leaves the first 9 lines' glyphs byte-identical in the content stream.
 
 ### Phase 4 (release D): flow around and across
 
