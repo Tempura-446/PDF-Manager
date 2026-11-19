@@ -669,7 +669,7 @@ def _retry_low_confidence(image, lines, script=None, quality="standard"):
     whichever reading has higher confidence (never both)."""
     from PIL import Image, ImageOps
 
-    if not lines:
+    if not lines or not any(line.confidence < RETRY_CONFIDENCE for line in lines):
         return lines
     w_img, h_img = image.size
     engine = _engine(script, quality)
@@ -776,7 +776,7 @@ def recognise(image, script=None, quality="standard"):
             big_lines = _scale_lines(_lines(_with_quality(_read, enlarged, script, quality)), 0.5)
             if _lines_score(big_lines) > _lines_score(lines):
                 lines = reading_order(big_lines)
-    return lines
+    return _refine_tables(image, lines, script, quality)
 
 
 _ORIG_READ = _read
@@ -1578,15 +1578,29 @@ def _run_builtin(source, output, force, deskew, rotate=True, script=None, notes=
             stripped.unlink()
 
 
+def _refine_tables(image, lines, script=None, quality="standard"):
+    """Detect ruled/unruled tables on a scanned page, read/refine cells
+    individually with a digits-focused second pass on numeric cells, and
+    preserve strict row-by-row cell order."""
+    from pdfmanager import ocrtables
+
+    return ocrtables.refine_tables(
+        image,
+        lines,
+        read_crop_fn=lambda crop: _lines(_with_quality(_read, crop, script, quality)),
+    )
+
+
 def _refine_lines(image, lines, script=None, quality="standard"):
-    """Apply Phase 2 refinements (phone-photo perspective back-mapping and
-    low-confidence line retries) to an already-computed ``lines`` list."""
+    """Apply Phase 2 & 4 refinements (phone-photo perspective back-mapping,
+    low-confidence line retries, and scanned table cell refinement)."""
     flat, to_photo = _straighten_photo(image)
     if flat is not None:
         flat_lines = _lines(_with_quality(_read, flat, script, quality))
         if _lines_score(flat_lines) > _lines_score(lines):
             lines = reading_order(_map_lines(flat_lines, to_photo))
-    return _retry_low_confidence(image, lines, script, quality)
+    lines = _retry_low_confidence(image, lines, script, quality)
+    return _refine_tables(image, lines, script, quality)
 
 
 def _record_skip(report, reason, page_num):
