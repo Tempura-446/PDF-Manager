@@ -733,6 +733,26 @@ def _named(fields, taken):
     return fields
 
 
+_CAD_PRODUCERS = re.compile(
+    r"\b(autocad|autodesk|revit|bricscad|draftsight|solidworks|microstation|vectorworks|archicad|qcad|librecad|ezdxf)\b",
+    re.I,
+)
+
+
+def _is_cad_drawing(reader):
+    """True when ``reader`` carries clear CAD drawing markers (CAD producer/creator,
+    or PDF measurement viewports /VP), so the automatic ``quick`` form banner
+    does not false-trigger on architectural/engineering title blocks."""
+    meta = reader.metadata or {}
+    for key in ("/Creator", "/Producer"):
+        if _CAD_PRODUCERS.search(str(meta.get(key) or "")):
+            return True
+    for page in reader.pages[:5]:
+        if "/VP" in page or "/Measure" in page:
+            return True
+    return False
+
+
 def detect(path, password=None, pages=None, quick=False):
     """Fields a flat form should have: {1-based page: [{"rect": [x0, y0, x1, y1],
     "type": text/multiline/checkbox/signature/radio, "name", "value" (radio
@@ -740,7 +760,10 @@ def detect(path, password=None, pages=None, quick=False):
     ``quick`` leaves out pages that would take long and can't be forms."""
     import pypdfium2 as pdfium
 
-    if not core.open_pdf(path, password).pages:
+    reader = core.open_pdf(path, password)
+    if not reader.pages:
+        return {}
+    if quick and _is_cad_drawing(reader):
         return {}
     existing = forms.existing_fields(path, password)
     taken = {f["name"] for items in existing.values() for f in items}

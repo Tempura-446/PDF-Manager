@@ -37,6 +37,6 @@ Master index of ZPDF's completed, in-progress, and planned feature tracks. Each 
 ---
 
 ## Small Maintenance / Polish Tail
-- Suppress false "This looks like a form to fill in" banner on plain CAD drawings ([`2026-11-13-drawing-tools.md`](superpowers/plans/2026-11-13-drawing-tools.md)).
-- Keep [`release.yml`](../.github/workflows/release.yml) dispatching `build-app.yml` and `lock.yml` automatically on published tags.
+- ~~Suppress false "This looks like a form to fill in" banner on plain CAD drawings~~ (fixed in `formdetect.py`).
+- Keep [`release.yml`](../.github/workflows/release.yml) dispatching `build-app.yml` and `lock.yml` automatically on published tags (fixed in PR #105).
 - Close out remaining minor visual polish notes from paragraph reflow and drawing markups as those files are touched.
