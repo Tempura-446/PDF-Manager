@@ -132,13 +132,13 @@ Visual check: before/after renders of the untouched regions must be pixel-identi
 ### Phase 5 (release E): other scripts
 
 **Task 5.1: CJK**
-- [ ] Break between any two CJK characters, except where kinsoku forbids it: closing punctuation can't start a line, opening punctuation can't end one. Keep Latin words inside CJK text whole.
-- [ ] Justify CJK by spreading inter-character spacing (`Tc`), not word spacing.
-- [ ] Test: a Japanese paragraph rewraps with no line starting with 。, and fills the width when justified.
+- [x] Break between any two CJK characters, except where kinsoku forbids it: closing punctuation can't start a line, opening punctuation can't end one. Keep Latin words inside CJK text whole.
+- [x] Justify CJK by spreading inter-character spacing (`Tc`), not word spacing.
+- [x] Test: a Japanese paragraph rewraps with no line starting with 。, and fills the width when justified.
 
 **Task 5.2: right-to-left**
-- [ ] Use the Unicode bidi algorithm's paragraph level and runs, implemented in-house or with a small pure-Python helper if it's licensed compatibly. Lines are filled right to left, with numbers and Latin runs inside kept left to right.
-- [ ] Test: a Hebrew paragraph with an English word and a number rewraps with the right visual order.
+- [x] Use the Unicode bidi algorithm's paragraph level and runs, implemented in-house or with a small pure-Python helper if it's licensed compatibly. Lines are filled right to left, with numbers and Latin runs inside kept left to right.
+- [x] Test: a Hebrew paragraph with an English word and a number rewraps with the right visual order.
 
 ---
 

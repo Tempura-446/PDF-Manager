@@ -93,6 +93,12 @@ Draw, move, resize and arrange form fields directly on the page in the reader.
   page, the reader offers **Continue on the next page** (flowing overflow
   lines to the top of the next page's column and shifting its text down) or
   **Add a page** on the last page, alongside **Shrink to fit**.
+- **CJK and right-to-left paragraph reflow.** Chinese, Japanese, and Korean
+  paragraphs wrap between characters while keeping kinsoku punctuation rules
+  and Latin words intact, and justify by spreading inter-character spacing.
+  Right-to-left paragraphs (Hebrew and Arabic) fill lines right-to-left using
+  Unicode bidi visual ordering while keeping embedded Latin words and numbers
+  left-to-right.
 
 ## 0.56.0
 
