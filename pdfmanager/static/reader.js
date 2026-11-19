@@ -26,6 +26,7 @@ import * as files from "./files.js";
 import { Overlay } from "./overlay.js";
 import { COLORS, el, fadeOut, heldTimer, ICON, isTyping, MIN_ZOOM, MAX_ZOOM, pdfjs, store, svg, viewer, loadPdfjs } from "./readerkit.js";
 import { Annotating } from "./annotate.js";
+import { CheckOcrMode } from "./checkocr.js";
 import { Finding } from "./find.js";
 import { FormMode } from "./formmode.js";
 import { Layering } from "./layers.js";
@@ -190,7 +191,7 @@ const header = (res, name) => { try { return decodeURIComponent(res.headers.get(
  *  t, e and m are the reader's own: next, previous, rotate, panel, edit text, measure). */
 const ANNOT_KEYS = { h: "HIGHLIGHT", c: "NOTE", a: "FREETEXT", d: "INK", s: "SIGN" };
 
-export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditing(TextEditing(Measuring(Layering(Object))))))))) {
+export class Reader extends Tabs(CheckOcrMode(FormMode(Finding(Signing(Annotating(MarkupEditing(TextEditing(Measuring(Layering(Object)))))))))) {
   constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onFormSelect, onFormCheck, onRepair, onForgetRecent, onSaveTab, onUnsaved, onBrokenWhy, onOpenWithId } = {}) {
     super();
     this.host = host;
@@ -357,6 +358,7 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
 
     this._buildScaleBar();
     this._buildFormBar();
+    this._buildCheckOcrBar();
 
     // Sidebar
     this.thumbsTab = el("button", { class: "rd-tab", type: "button", role: "tab", "aria-selected": "true" }, "Pages");
@@ -481,11 +483,11 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
     overlayClose.addEventListener("click", () => this.closeCompare());
     // Skip link: past the bars, to the pages (out of sight until it has focus).
     this.skipLink = el("a", { class: "skip-link rd-skip", href: "#", onclick: (e) => { e.preventDefault(); this.container.focus(); } }, "Skip to the page");
-    this.root.append(this.skipLink, toolbar, this.tabbar, this.findbar, this.annotbar, this.formmodebar, this.scalebar, this.overlaybar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.moreToolsMenu, this.fileInput);
+    this.root.append(this.skipLink, toolbar, this.tabbar, this.findbar, this.annotbar, this.formmodebar, this.checkocrbar, this.scalebar, this.overlaybar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.moreToolsMenu, this.fileInput);
     // A drawing in progress takes every click in the window as the next
     // stroke; end it first when the tabs, toolbar or menu are used. This
     // listens on the window before pdf.js does, so it runs first.
-    const outside = [this.tabbar, toolbar, this.side, this.scalebar, this.formmodebar, this.menu, this.ctxMenu];
+    const outside = [this.tabbar, toolbar, this.side, this.scalebar, this.formmodebar, this.checkocrbar, this.menu, this.ctxMenu];
     window.addEventListener("pointerdown", (e) => {
       if (!outside.some((area) => area.contains(e.target))) return;
       this._finishEditing();
@@ -529,6 +531,7 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
       this.#menuItem("badge", "Digital ID…", () => this.useTool("CERTSIGN")),
       this.#menuItem("fillable", "Prepare form (add or edit form fields)", () => this.openFormMode()),
       this.#menuItem("fillable", "Make it fillable (find the form's fields)", () => this.makeFillable()),
+      this.#menuItem("edittext", "Check OCR (fix unsure words)", () => this.openCheckOcr()),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
       this.#menuItem("access", "Check accessibility", () => this.checkAccessibility()),  // -- accessibility --
       this.#menuItem("x", "Close this document", () => this.closeTab()),
@@ -834,6 +837,11 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
     }
     if (e.key === "Escape" && this.markupMode === "IMAGES" && this.pickedImage) { this._pickImage(null); return; }
     if (e.key === "Escape" && this.editMode && this.editMode !== "NONE") { this._setEditMode("NONE"); return; }
+    if (e.key === "Escape" && this.checkOcrMode) {
+      if (this._ocrPop) this._closeCheckOcrPop();
+      else this.closeCheckOcr();
+      return;
+    }
     // With no tool left on, Escape closes the annotate bar (focus back on its button).
     if (e.key === "Escape" && !this.annotbar.hidden) { this.closeAnnotate(); if (this.findbar.hidden) this.annotateBtn.focus(); return; }
     const v = this.pdfViewer;
@@ -1422,6 +1430,7 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
       this._markReady();          // (the document may have been written again: its markups, and the selected one's handles)
       this._markDraw(pageNumber);
       if (this.formMode) this._drawFormOverlays();
+      if (this.checkOcrMode) this._drawCheckOcrOverlays(pageNumber);
       if (this.overlay) this.overlay.draw(this.pdfViewer.getPageView(pageNumber - 1), pageNumber).catch(() => {});
     });
     eventBus.on("scalechanging", ({ scale, presetValue }) => {
@@ -1432,9 +1441,20 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
       this.#showZoom(scale);
       this._syncViewAt();
       this.#remember();
-      requestAnimationFrame(() => { this._drawAllMeasures(); if (this.formMode) this._drawFormOverlays(); });
+      requestAnimationFrame(() => {
+        this._drawAllMeasures();
+        if (this.formMode) this._drawFormOverlays();
+        if (this.checkOcrMode) this._drawCheckOcrOverlays();
+      });
     });
-    eventBus.on("rotationchanging", () => { this.#remember(); requestAnimationFrame(() => { this._drawAllMeasures(); if (this.formMode) this._drawFormOverlays(); }); });
+    eventBus.on("rotationchanging", () => {
+      this.#remember();
+      requestAnimationFrame(() => {
+        this._drawAllMeasures();
+        if (this.formMode) this._drawFormOverlays();
+        if (this.checkOcrMode) this._drawCheckOcrOverlays();
+      });
+    });
     eventBus.on("updatefindmatchescount", ({ matchesCount }) => this._findResult(null, matchesCount));
     eventBus.on("updatefindcontrolstate", ({ state, matchesCount }) => this._findResult(state, matchesCount));
   }
@@ -1447,6 +1467,7 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
     await this.closeCompare();
     this.closeAnnotate();
     this.closeFormMode();
+    this.closeCheckOcr();
     this.measureTool(null);
     this.uiManager = null;
     this.annotUndo = this.annotRedo = false;
@@ -2698,12 +2719,23 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
   async #reloadEditing(tab) {
     const editing = this.textEditMode ? "EDITTEXT" : this.markupMode, picked = this.pickedImage;
     const wasForm = this.formMode, formTool = this.formTool;
+    const wasCheckOcr = this.checkOcrMode;
+    const nextOcr = this._ocrNextAfterReload;
+    this._ocrNextAfterReload = null;
     const wasSidebar = wasForm && !this.sidebar.hidden;
     const wasFields = wasForm && this.fieldsTab?.getAttribute("aria-selected") === "true";
     await this._load(tab);
     this._refresh();
     if (tab !== this.activeTab) return;
-    if (wasForm) {
+    if (wasCheckOcr) {
+      await this.openCheckOcr(null, { autoOpen: false });
+      if (this.checkOcrMode) {
+        const list = this._allCheckOcrWords();
+        const found = nextOcr && list.find((it) => it.page === nextOcr.page && it.word.id === nextOcr.id);
+        const target = found || list[0] || null;
+        if (target) this._focusCheckOcrWord(target.page, target.word);
+      }
+    } else if (wasForm) {
       this.openFormMode(formTool);
       if (wasSidebar) this.#setSidebar(true);
       if (wasFields) this.#showTab("fields");
@@ -3179,7 +3211,8 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
   /** Switch on an annotation tool or Edit text (EDITTEXT); NONE goes back to reading. */
   useTool(name) {
     if (!this.doc) return;
-    if (name === "NONE") { this.closeAnnotate(); return; }
+    if (name === "NONE") { this.closeAnnotate(); this.closeCheckOcr(); return; }
+    if (name === "CHECKOCR") { this.openCheckOcr(); return; }
     this.openAnnotate();
     this._setEditMode(name, name === "STAMP");
   }
@@ -3198,6 +3231,7 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
     const tool = (label, mode, words = "", icon = "pen", keys = "") => ({ icon, label, words: "annotate " + words, run: () => this.useTool(mode), ...(keys ? { keys } : {}) });
     const list = [
       { icon: "edittext", label: "Edit text", keys: "E", words: "change words typo rewrite paragraph add text", run: () => this.useTool("EDITTEXT") },
+      { icon: "edittext", label: "Check OCR", words: "ocr unsure words fix recognised text scan mistakes", run: () => this.openCheckOcr() },
       { icon: "search", label: "Find in document", keys: "Ctrl+F", words: "search look for", run: () => this.openFind() },
       tool("Highlight text", "HIGHLIGHT", "mark marker", "highlight", "H"), tool("Add text", "FREETEXT", "text box note comment type", "text", "A"),
       tool("Draw", "INK", "pen ink freehand", "draw", "D"), tool("Add a picture", "STAMP", "image photo stamp", "image"),

@@ -106,12 +106,12 @@
 ### Phase 3 (release C): saying what it wasn't sure of, and fixing it
 
 **Task 3.1: a report**
-- [ ] After OCR: pages read, pages skipped and why, and the pages with many unsure words ("3 pages may have mistakes: 4, 9, 17"), with a link that opens the page.
-- [ ] Unsure words are kept in the text layer when their confidence is between 0.3 and 0.6, and marked as unsure in a private key of the file (not shown in other programs).
+- [x] After OCR: pages read, pages skipped and why, and the pages with many unsure words ("3 pages may have mistakes: 4, 9, 17"), with a link that opens the page.
+- [x] Unsure words are kept in the text layer when their confidence is between 0.3 and 0.6, and marked as unsure in a private key of the file (not shown in other programs).
 
 **Task 3.2: correct recognised text in the reader**
-- [ ] A "Check OCR" mode: unsure words are outlined on the page; click a word to see its picture beside what was read, type the right word, Tab to the next. Only the invisible text changes, never the picture.
-- [ ] Test (browser): correcting one word changes what Find and Copy give, and nothing drawn changes (pixel-identical page).
+- [x] A "Check OCR" mode: unsure words are outlined on the page; click a word to see its picture beside what was read, type the right word, Tab to the next. Only the invisible text changes, never the picture.
+- [x] Test (browser): correcting one word changes what Find and Copy give, and nothing drawn changes (pixel-identical page).
 
 ### Phase 4 (release D): tables and forms
 

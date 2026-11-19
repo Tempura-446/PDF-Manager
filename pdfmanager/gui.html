@@ -2236,9 +2236,29 @@ function fpShowNote(tab) {
   }
   const made = back ? [`: ${m.sizes}. Made from `, back, reader.tabs.includes(m.from) ? ", still open in its own tab." : "."]
     : [`: ${m.sizes}, cleaned up and made into this PDF.`];
+  const noteLine = (line) => {
+    const mOcr = /^(\d+\s+pages?\s+may have mistakes:\s*)([\d,\s]+)$/.exec(line);
+    if (!mOcr) return el("div", { class: "fp-line" + (/^Careful\b/.test(line) ? " careful" : "") }, line);
+    const nums = mOcr[2].split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => n > 0);
+    const parts = [mOcr[1]];
+    nums.forEach((n, idx) => {
+      if (idx > 0) parts.push(", ");
+      parts.push(el("button", {
+        type: "button", class: "link-btn",
+        title: `Open page ${n} in Check OCR`,
+        onclick: () => reader.openCheckOcr(n),
+      }, String(n)));
+    });
+    parts.push(" ", el("button", {
+      type: "button", class: "btn secondary",
+      style: "margin-left:6px;padding:2px 8px;font-size:12px",
+      onclick: () => reader.openCheckOcr(nums[0] || null),
+    }, "Check OCR"));
+    return el("div", { class: "fp-line" }, ...parts);
+  };
   fp.note.replaceChildren(el("div", { class: "fp-done" }, icon("check"), el("div", {},
     el("b", {}, m.label), ...made,
-    ...m.notes.map((line) => el("div", { class: "fp-line" + (/^Careful\b/.test(line) ? " careful" : "") }, line)), finish)));
+    ...m.notes.map(noteLine), finish)));
 }
 
 /** A file the reader can't show: run Repair on it (by its id when it's a

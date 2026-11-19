@@ -29,7 +29,8 @@ from pdfmanager import core, scan, textlayer
 from pdfmanager.textlayer import Word
 
 __all__ = ["Word", "Line", "ENGINES", "QUALITIES", "default_quality", "choose_engine",
-           "script_for", "recognise", "reading_order", "text_of", "skew_angle", "page_orientation"]
+           "script_for", "recognise", "reading_order", "text_of", "skew_angle", "page_orientation",
+           "format_report"]
 
 ENGINES = ("auto", "builtin", "tesseract")
 QUALITIES = ("standard", "best")
@@ -1169,8 +1170,44 @@ def _strip_layers(source, pages, target):
     return target
 
 
+UNSURE_PAGE_MIN = 3       # a page with at least this many unsure words (or >= 10% unsure) is flagged
+UNSURE_PAGE_SHARE = 0.10
+
+
+def _page_list(nums):
+    return ", ".join(str(n) for n in nums)
+
+
+def format_report(report):
+    """Human-readable summary lines from an OCR ``report`` dict: pages read,
+    pages skipped and why, and pages with many unsure words."""
+    if not report:
+        return []
+    lines = []
+    read = report.get("pages_read") or []
+    skipped = report.get("skipped") or {}
+    parts = []
+    if read:
+        parts.append(f"Read {len(read)} page{'s' if len(read) != 1 else ''}")
+    skip_bits = []
+    total_skipped = 0
+    for reason, pages in skipped.items():
+        if pages:
+            total_skipped += len(pages)
+            skip_bits.append(f"{reason}: {_page_list(pages)}")
+    if total_skipped:
+        parts.append(f"skipped {total_skipped} page{'s' if total_skipped != 1 else ''} ({'; '.join(skip_bits)})")
+    if parts:
+        lines.append("; ".join(parts) + ".")
+    flagged = report.get("flagged_pages") or []
+    if flagged:
+        n = len(flagged)
+        lines.append(f"{n} page{'s' if n != 1 else ''} may have mistakes: {_page_list(flagged)}")
+    return lines
+
+
 def run(path, output, language="eng", force=False, deskew=False, password=None, engine="auto",
-        rotate=True, quality=None):
+        rotate=True, quality=None, report=None):
     """Add a searchable text layer to the scanned pages of ``path``; see
     ``core.ocr``."""
     from pdfmanager import progress
@@ -1205,7 +1242,7 @@ def run(path, output, language="eng", force=False, deskew=False, password=None, 
         if chosen == "tesseract":
             _run_tesseract(source, tmp_out, language, force, deskew, rotate)
         else:
-            _run_builtin(source, tmp_out, force, deskew, rotate, script, quality=quality)
+            _run_builtin(source, tmp_out, force, deskew, rotate, script, quality=quality, report=report)
         os.replace(tmp_out, output)
     finally:
         for tmp in (tmp_in, tmp_out):
@@ -1271,13 +1308,24 @@ def render_scale(width_pt, height_pt, dpi=RENDER_DPI):
     return min(dpi / 72, MAX_RENDER_SIDE / longest)
 
 
-def _run_builtin(source, output, force, deskew, rotate=True, script=None, notes=None, quality="standard"):
+def _run_builtin(source, output, force, deskew, rotate=True, script=None, notes=None, quality="standard",
+                 report=None):
     """``notes`` (a list) is given what was done beyond reading plain scans:
-    a rubbish layer replaced, pictures read on a page of real text."""
+    a rubbish layer replaced, pictures read on a page of real text.
+    ``report`` (a dict, if passed) is filled with per-page OCR stats and
+    unsure-word counts."""
     import pypdfium2 as pdfium
     from pypdf import PdfReader
 
     from pdfmanager import progress
+
+    if report is not None:
+        report.setdefault("pages_read", [])
+        report.setdefault("skipped", {})
+        report.setdefault("replaced", [])
+        report.setdefault("pictures", {})
+        report.setdefault("unsure_pages", {})
+        report.setdefault("flagged_pages", [])
 
     def note(text):
         if notes is not None:
@@ -1318,9 +1366,11 @@ def _run_builtin(source, output, force, deskew, rotate=True, script=None, notes=
             _strip_layers(source, stale, stripped)
             source = stripped
             for i in stale:
+                if report is not None:
+                    report["replaced"].append(i + 1)
                 note(f"page {i + 1}: its text layer was unreadable and has been replaced")
     try:
-        _read_pages(source, output, force, deskew, rotate, script, note, quality=quality)
+        _read_pages(source, output, force, deskew, rotate, script, note, quality=quality, report=report)
     finally:
         if stripped is not None and stripped.exists():
             stripped.unlink()
@@ -1337,7 +1387,22 @@ def _refine_lines(image, lines, script=None, quality="standard"):
     return _retry_low_confidence(image, lines, script, quality)
 
 
-def _read_pages(source, output, force, deskew, rotate, script, note, quality="standard"):
+def _record_skip(report, reason, page_num):
+    if report is not None:
+        report["skipped"].setdefault(reason, []).append(page_num)
+
+
+def _record_unsure_stat(report, page_num, unsure_count, word_count):
+    if report is None or unsure_count <= 0:
+        return
+    report["unsure_pages"][page_num] = report["unsure_pages"].get(page_num, 0) + unsure_count
+    total_unsure = report["unsure_pages"][page_num]
+    if total_unsure >= UNSURE_PAGE_MIN or (total_unsure / max(word_count, 1) >= UNSURE_PAGE_SHARE):
+        if page_num not in report["flagged_pages"]:
+            report["flagged_pages"].append(page_num)
+
+
+def _read_pages(source, output, force, deskew, rotate, script, note, quality="standard", report=None):
     import pypdfium2 as pdfium
     import pypdfium2.raw as pdfium_raw
     from PIL import Image
@@ -1373,6 +1438,7 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
                     finally:
                         textpage.close()
                 if not boxes:
+                    _record_skip(report, "already had text", i + 1)
                     continue
                 words = []
                 for box in boxes:
@@ -1413,9 +1479,18 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
                         finally:
                             textpage.close()
                     if fresh:
+                        base_idx = textlayer._count_ocr_words_in_page(page, writer)
                         textlayer.add_text_layer(writer, page, fresh, image.size, scale * 72)
+                        unsure = textlayer.record_unsure_words(
+                            writer, page, fresh, image.size, scale * 72, base_index=base_idx)
                         read = len(boxes)
+                        if report is not None:
+                            report["pages_read"].append(i + 1)
+                            report["pictures"][i + 1] = read
+                        _record_unsure_stat(report, i + 1, unsure, len(fresh))
                         note(f"page {i + 1}: read the text in {read} picture{'s' if read != 1 else ''}")
+                        continue
+                _record_skip(report, "already had text", i + 1)
                 continue
             with core.PDFIUM_LOCK:
                 pdfium_page = core.show_whole_page(doc[i])
@@ -1469,10 +1544,19 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
                 raise core.PdfManagerError(f"OCR failed on page {i + 1}: {exc}") from None
             if force:
                 _rasterise(writer, page, image, scale)
+                textlayer._write_page_unsure_list(page, [])
                 rasterised = True
             words = [w for line in lines for w in line.words]
             if words:
+                base_idx = textlayer._count_ocr_words_in_page(page, writer)
                 textlayer.add_text_layer(writer, page, words, image.size, scale * 72)
+                unsure = textlayer.record_unsure_words(
+                    writer, page, words, image.size, scale * 72, base_index=base_idx)
+                if report is not None:
+                    report["pages_read"].append(i + 1)
+                _record_unsure_stat(report, i + 1, unsure, len(words))
+            else:
+                _record_skip(report, "no text found", i + 1)
     finally:
         with core.PDFIUM_LOCK:
             doc.close()

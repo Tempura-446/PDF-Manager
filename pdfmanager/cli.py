@@ -314,8 +314,15 @@ def run_number(a, src, out, pw):
 
 
 def run_ocr(a, src, out, pw):
-    return core.ocr(src, out, language=a.language, force=a.force, deskew=a.deskew, password=pw,
-                    engine=a.engine, rotate=not a.keep_orientation, quality=a.quality)
+    from pdfmanager import ocr
+
+    report = {}
+    res = core.ocr(src, out, language=a.language, force=a.force, deskew=a.deskew, password=pw,
+                   engine=a.engine, rotate=not a.keep_orientation, quality=a.quality, report=report)
+    summary = ocr.format_report(report)
+    if summary:
+        return f"{res}  ({' '.join(summary)})"
+    return res
 
 
 def run_clean(a, src, out, pw):

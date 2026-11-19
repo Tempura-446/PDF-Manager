@@ -214,3 +214,242 @@ def add_text_layer(writer, page, words, image_size, dpi):
         Font=_dict(**{GLYPHLESS_FONT_RESOURCE[1:]: _glyphless_font(writer)}))
     page.merge_transformed_page(layer, Transformation(image_to_page_matrix(page, image_size, dpi)))
     return written
+
+
+# -- unsure OCR words (private /PieceInfo metadata) and in-place correction -----
+
+UNSURE_CONFIDENCE = 0.6   # words with 0.3 <= confidence < 0.6 are kept and marked unsure
+_PIECE_APP = "/ZPDF"
+_PIECE_KEY = "/OCRUnsure"
+
+
+def _page_unsure_list(page):
+    """Read the list of unsure word dicts stored in ``page``'s /PieceInfo, or []."""
+    import json
+
+    piece = page.get("/PieceInfo")
+    if piece is None:
+        return []
+    piece = piece.get_object()
+    app = piece.get(_PIECE_APP)
+    if app is None:
+        return []
+    app = app.get_object()
+    priv = app.get("/Private")
+    if priv is None:
+        return []
+    priv = priv.get_object()
+    raw = priv.get(_PIECE_KEY)
+    if raw is None:
+        return []
+    try:
+        data = json.loads(str(raw.get_object()))
+        return data if isinstance(data, list) else []
+    except (ValueError, TypeError):
+        return []
+
+
+def _write_page_unsure_list(page, items):
+    """Store ``items`` in ``page``'s /PieceInfo /ZPDF /Private /OCRUnsure
+    (or remove the key when ``items`` is empty)."""
+    import datetime
+    import json
+
+    if not items:
+        piece = page.get("/PieceInfo")
+        if piece is not None:
+            piece = piece.get_object()
+            app = piece.get(_PIECE_APP)
+            if app is not None:
+                app = app.get_object()
+                priv = app.get("/Private")
+                if priv is not None:
+                    priv = priv.get_object()
+                    priv.pop(NameObject(_PIECE_KEY), None)
+        return
+    piece = page.get("/PieceInfo")
+    if piece is None:
+        piece = DictionaryObject()
+        page[NameObject("/PieceInfo")] = piece
+    else:
+        piece = piece.get_object()
+    app = piece.get(_PIECE_APP)
+    if app is None:
+        app = DictionaryObject()
+        piece[NameObject(_PIECE_APP)] = app
+    else:
+        app = app.get_object()
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("D:%Y%m%d%H%M%SZ")
+    app[NameObject("/LastModified")] = _text(stamp)
+    priv = app.get("/Private")
+    if priv is None:
+        priv = DictionaryObject()
+        app[NameObject("/Private")] = priv
+    else:
+        priv = priv.get_object()
+    priv[NameObject(_PIECE_KEY)] = _text(json.dumps(items, ensure_ascii=False, separators=(",", ":")))
+
+
+def _count_ocr_words_in_page(page, writer):
+    """How many glyphless-font words are already written on ``page``."""
+    from pypdf.generic import ContentStream
+
+    contents = page.get("/Contents")
+    if contents is None:
+        return 0
+    streams = list(contents.get_object()) if isinstance(contents.get_object(), ArrayObject) else [contents]
+    count = 0
+    font_name = NameObject(GLYPHLESS_FONT_RESOURCE)
+    for ref in streams:
+        obj = ref.get_object()
+        if GLYPHLESS_FONT_RESOURCE.encode() not in obj.get_data():
+            continue
+        cs = ContentStream(obj, writer)
+        in_ocr = False
+        for operands, operator in cs.operations:
+            if operator == b"Tf":
+                in_ocr = bool(operands) and operands[0] == font_name
+            elif operator == b"ET":
+                in_ocr = False
+            elif operator == b"Tj" and in_ocr and operands:
+                if _decode_tj(operands[0]) != " ":
+                    count += 1
+    return count
+
+
+def _decode_tj(operand):
+    raw = operand.original_bytes if hasattr(operand, "original_bytes") else bytes(operand)
+    try:
+        return raw.decode("utf-16-be")
+    except UnicodeDecodeError:
+        return ""
+
+
+def record_unsure_words(writer, page, words, image_size, dpi, max_confidence=UNSURE_CONFIDENCE, base_index=0):
+    """Record words whose confidence is below ``max_confidence`` in ``page``'s
+    private /PieceInfo dictionary (invisible to other PDF viewers). Returns
+    the number of unsure words recorded."""
+    display_w, display_h = _display_size(page)
+    scale = 72.0 / dpi
+    existing = _page_unsure_list(page)
+    items = list(existing)
+    idx = base_index
+    added = 0
+    for word in words:
+        if not word.text:
+            continue
+        if _word_matrices(word, scale, display_h) is None:
+            continue
+        if word.confidence < max_confidence:
+            xs = [x * scale for x, _ in word.quad]
+            ys = [y * scale for _, y in word.quad]
+            items.append({
+                "id": idx,
+                "text": word.text,
+                "confidence": round(float(word.confidence), 3),
+                "box": [round(min(xs), 2), round(min(ys), 2), round(max(xs), 2), round(max(ys), 2)],
+                "page_size": [round(display_w, 2), round(display_h, 2)],
+            })
+            added += 1
+        idx += 1
+    if added:
+        _write_page_unsure_list(page, items)
+    return added
+
+
+def read_unsure_words(path, password=None):
+    """Read all unsure OCR words stored in ``path``'s private /PieceInfo keys.
+    Returns ``{"pages": {"1": [...], ...}, "total": N}``."""
+    from pdfmanager import core
+
+    reader = core.open_pdf(path, password)
+    pages = {}
+    total = 0
+    for i, page in enumerate(reader.pages, start=1):
+        items = _page_unsure_list(page)
+        if items:
+            pages[str(i)] = items
+            total += len(items)
+    return {"pages": pages, "total": total}
+
+
+def correct_words(path, output, edits, password=None):
+    """Apply corrections to invisible OCR words in ``path`` and save to
+    ``output``. Only the invisible text layer and /PieceInfo metadata change;
+    no image or drawn content is touched (pixel-identical pages).
+
+    Each item in ``edits`` is a dict:
+    ``{"page": 1, "id": 12, "text": "right"}`` or
+    ``{"page": 1, "id": 12, "accept": True}`` (keeps the text, clears unsure).
+    """
+    from pathlib import Path
+    from pypdf import PdfWriter
+    from pypdf.generic import ByteStringObject, ContentStream, FloatObject
+
+    from pdfmanager import core
+
+    reader = core.open_pdf(path, password)
+    writer = PdfWriter()
+    writer.clone_document_from_reader(reader)
+
+    by_page = {}
+    for edit in edits or ():
+        page_num = int(edit["page"])
+        if not 1 <= page_num <= len(writer.pages):
+            raise core.PdfManagerError(f"page {page_num} is out of range (1–{len(writer.pages)})")
+        by_page.setdefault(page_num, {})[int(edit["id"])] = edit
+
+    font_name = NameObject(GLYPHLESS_FONT_RESOURCE)
+    for page_num, page_edits in by_page.items():
+        page = writer.pages[page_num - 1]
+        text_changes = {wid: str(ed["text"]) for wid, ed in page_edits.items()
+                        if not ed.get("accept") and "text" in ed}
+        if text_changes:
+            contents = page.get("/Contents")
+            if contents is not None:
+                cobj = contents.get_object()
+                streams = list(cobj) if isinstance(cobj, ArrayObject) else [contents]
+                word_idx = 0
+                for ref in streams:
+                    stream_obj = ref.get_object()
+                    if GLYPHLESS_FONT_RESOURCE.encode() not in stream_obj.get_data():
+                        continue
+                    cs = ContentStream(stream_obj, writer)
+                    in_ocr = False
+                    last_tm_pos = None
+                    modified = False
+                    for pos, (operands, operator) in enumerate(cs.operations):
+                        if operator == b"Tf":
+                            in_ocr = bool(operands) and operands[0] == font_name
+                        elif operator == b"ET":
+                            in_ocr = False
+                            last_tm_pos = None
+                        elif operator == b"Tm" and in_ocr:
+                            last_tm_pos = pos
+                        elif operator == b"Tj" and in_ocr and operands:
+                            old_text = _decode_tj(operands[0])
+                            if old_text == " ":
+                                continue
+                            if word_idx in text_changes:
+                                new_text = text_changes[word_idx]
+                                operands[0] = ByteStringObject(_encode(new_text))
+                                if last_tm_pos is not None and new_text:
+                                    tm_ops = cs.operations[last_tm_pos][0]
+                                    if len(tm_ops) == 6:
+                                        ratio = max(len(old_text), 1) / max(len(new_text), 1)
+                                        tm_ops[0] = FloatObject(round(float(tm_ops[0]) * ratio, 4))
+                                        tm_ops[1] = FloatObject(round(float(tm_ops[1]) * ratio, 4))
+                                modified = True
+                            word_idx += 1
+                    if modified:
+                        stream_obj.set_data(cs.get_data())
+
+        # Remove corrected / accepted word IDs from the page's unsure list.
+        remaining = [item for item in _page_unsure_list(page) if int(item.get("id", -1)) not in page_edits]
+        _write_page_unsure_list(page, remaining)
+
+    out = Path(output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "wb") as f:
+        writer.write(f)
+    return out
