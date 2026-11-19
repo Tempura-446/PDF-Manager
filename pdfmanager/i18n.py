@@ -131,14 +131,29 @@ def list_installed_packs():
             "automatic": bool(m.get("automatic", True)),
             "dir": language_dir(code),
             "path": str(sub),
+            "has_ocr": any((sub / "ocr").glob("*.onnx")) if (sub / "ocr").is_dir() else False,
+            "has_meaning": (sub / "meaning" / "words.npz").is_file() or (sub / "words.npz").is_file(),
+            "has_translate": (sub / "models").is_dir() and any((sub / "models").iterdir()),
         })
     return found
 
 
+_PACK_ASSET_DIRS = frozenset({"ocr", "meaning", "models"})
+
+
+def _reset_meaning_cache():
+    try:
+        from pdfmanager import meaning
+        meaning.reset()
+    except Exception:
+        pass
+
+
 def install_pack_from_zip(zip_path, expected_sha256=None):
-    """Install a language pack zip (containing ``manifest.json`` and ``ui.json``)
-    into the user's app data directory after verifying optional SHA-256 checksum
-    and blocking unsafe archive paths."""
+    """Install a language pack zip (containing ``manifest.json``, ``ui.json``,
+    and optional ``ocr/``, ``meaning/``, ``models/`` assets) into the user's
+    app data directory after verifying optional SHA-256 checksum and blocking
+    unsafe archive paths."""
     src = Path(zip_path)
     if not src.is_file():
         raise core.PdfManagerError(f"language pack file not found: {src}")
@@ -173,6 +188,30 @@ def install_pack_from_zip(zip_path, expected_sha256=None):
         (dest / "manifest.json").write_text(json.dumps({**manifest, "code": code}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         (dest / "ui.json").write_text(json.dumps(ui_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
+        # Safely extract optional asset folders (ocr/, meaning/, models/)
+        extracted_assets = []
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            member_norm = info.filename.replace("\\", "/").lstrip("/")
+            parts = [p for p in member_norm.split("/") if p]
+            if not parts or ".." in parts or "." in parts:
+                continue
+            # Support both top-level "ocr/..." and single-prefix "<pack>/ocr/..."
+            if parts[0] in _PACK_ASSET_DIRS:
+                rel_parts = parts
+            elif len(parts) >= 2 and parts[1] in _PACK_ASSET_DIRS:
+                rel_parts = parts[1:]
+            else:
+                continue
+            target = (dest.joinpath(*rel_parts)).resolve()
+            if dest not in target.parents:
+                raise core.PdfManagerError("unsafe asset path inside language pack")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(zf.read(info))
+            extracted_assets.append("/".join(rel_parts))
+
+    _reset_meaning_cache()
     return {
         "code": code,
         "name": manifest.get("name") or code,
@@ -180,6 +219,7 @@ def install_pack_from_zip(zip_path, expected_sha256=None):
         "automatic": bool(manifest.get("automatic", True)),
         "dir": language_dir(code),
         "strings": len(ui_data),
+        "assets": extracted_assets,
     }
 
 
@@ -196,6 +236,7 @@ def remove_pack(code):
         shutil.rmtree(dest)
     if get_language() == norm:
         set_language(DEFAULT_LANG)
+    _reset_meaning_cache()
     return {"removed": norm}
 
 

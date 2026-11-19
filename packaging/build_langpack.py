@@ -10,7 +10,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def build_pack(code, ui_json_path, out_dir, *, name=None, version=None, automatic=True):
+def build_pack(code, ui_json_path, out_dir, *, name=None, version=None, automatic=True,
+               ocr_dir=None, meaning_npz=None):
     """Validate ``ui_json_path`` against ``pdfmanager/locales/en.json`` and write
     ``ZPDF-lang-<code>-<version>.zip`` + ``.sha256`` into ``out_dir``."""
     sys.path.insert(0, str(ROOT))
@@ -41,6 +42,13 @@ def build_pack(code, ui_json_path, out_dir, *, name=None, version=None, automati
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         zf.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
         zf.writestr("ui.json", json.dumps(ui_data, indent=2, ensure_ascii=False) + "\n")
+        if ocr_dir:
+            ocr_root = Path(ocr_dir)
+            for asset in sorted(ocr_root.rglob("*")):
+                if asset.is_file():
+                    zf.write(asset, "ocr/" + asset.relative_to(ocr_root).as_posix())
+        if meaning_npz:
+            zf.write(Path(meaning_npz), "meaning/words.npz")
 
     digest = hashlib.sha256(zip_path.read_bytes()).hexdigest()
     sha_path = out_path / (zip_path.name + ".sha256")
@@ -54,11 +62,16 @@ def main(argv=None):
     parser.add_argument("--ui", help="path to ui.json (default: pdfmanager/locales/<code>.json)")
     parser.add_argument("--name", help="display name in that language")
     parser.add_argument("--version", help="ZPDF version tag (default: current pdfmanager.__version__)")
+    parser.add_argument("--ocr", help="optional directory of OCR model files to bundle under ocr/")
+    parser.add_argument("--meaning", help="optional words.npz table to bundle under meaning/words.npz")
     parser.add_argument("--out", default=str(ROOT / "dist" / "langpacks"), help="output directory")
     args = parser.parse_args(argv)
 
     ui_path = Path(args.ui) if args.ui else (ROOT / "pdfmanager" / "locales" / f"{args.code}.json")
-    zip_path, sha_path = build_pack(args.code, ui_path, args.out, name=args.name, version=args.version)
+    zip_path, sha_path = build_pack(
+        args.code, ui_path, args.out, name=args.name, version=args.version,
+        ocr_dir=args.ocr, meaning_npz=args.meaning,
+    )
     print(f"Built {zip_path}\n      {sha_path}")
     return 0
 

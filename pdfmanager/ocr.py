@@ -31,7 +31,7 @@ from pdfmanager import core, scan, textlayer
 from pdfmanager.textlayer import Word
 
 __all__ = ["Word", "Line", "ENGINES", "QUALITIES", "default_quality", "default_gpu", "default_workers",
-           "choose_engine", "script_for", "recognise", "reading_order", "text_of", "skew_angle",
+           "choose_engine", "script_for", "pack_ocr_model", "recognise", "reading_order", "text_of", "skew_angle",
            "page_orientation", "format_report"]
 
 ENGINES = ("auto", "builtin", "tesseract")
@@ -116,20 +116,25 @@ def _codes(language):
     return [code.strip() for code in (language or "").split("+") if code.strip()]
 
 
+def _tess_code(code):
+    return _BCP47_TO_TESS.get(code.lower(), code)
+
+
 def script_for(language):
     """Which reading model the built-in engine needs for ``language``
-    (Tesseract codes joined with '+'): None for the one it ships with, or
-    the name of a script model. ValueError when it has none for a language,
+    (Tesseract or BCP-47 codes joined with '+'): None for the one it ships with,
+    or the name of a script model. ValueError when it has none for a language,
     or the languages need two different script models (a page is read with
     one); English and the other languages of the shipped model mix with any
     script, as each script model reads Latin letters and digits too."""
     scripts = []
-    for code in _codes(language):
+    for raw in _codes(language):
+        code = _tess_code(raw)
         if code in BUILTIN_LANGUAGES:
             continue
         script = _SCRIPT_OF.get(code)
         if script is None:
-            raise ValueError(f"no built-in reading model for {code!r}")
+            raise ValueError(f"no built-in reading model for {raw!r}")
         if script not in scripts:
             scripts.append(script)
     if len(scripts) > 1:
@@ -143,7 +148,7 @@ def _best_script(language):
     try:
         return script_for(language)
     except ValueError:
-        return next((_SCRIPT_OF[c] for c in _codes(language) if c in _SCRIPT_OF), None)
+        return next((_SCRIPT_OF[_tess_code(c)] for c in _codes(language) if _tess_code(c) in _SCRIPT_OF), None)
 
 
 def choose_engine(engine, language="eng"):
@@ -322,8 +327,80 @@ def _download_model(label, url, digest, target, size_note="about 10 MB", fallbac
     return target
 
 
+_BCP47_TO_TESS = {
+    "en": "eng", "fr": "fra", "es": "spa", "de": "deu", "it": "ita", "pt": "por",
+    "nl": "nld", "pl": "pol", "tr": "tur", "vi": "vie", "zh": "chi_sim", "zh-hans": "chi_sim",
+    "zh-hant": "chi_tra", "ja": "jpn", "ko": "kor", "ru": "rus", "uk": "ukr", "ar": "ara",
+    "fa": "fas", "ur": "urd", "hi": "hin", "th": "tha", "el": "ell", "ta": "tam", "te": "tel",
+}
+_TESS_TO_BCP47 = {v: k for k, v in _BCP47_TO_TESS.items()}
+
+
+def _pick_onnx(ocr_dir, script=None):
+    """Return the best ``.onnx`` recognition model inside ``ocr_dir``, or None."""
+    if not ocr_dir.is_dir():
+        return None
+    if script:
+        exact = ocr_dir / f"{script}.onnx"
+        if exact.is_file():
+            return exact
+    rec = ocr_dir / "rec.onnx"
+    if rec.is_file():
+        return rec
+    found = sorted(ocr_dir.glob("*.onnx"))
+    return found[0] if found else None
+
+
+def pack_ocr_model(script=None, language=None):
+    """Return a Path to an offline OCR recognition model bundled in an installed
+    language pack (``<data_dir>/locales/<code>/ocr/*.onnx``), or None."""
+    from pdfmanager import appdata
+
+    locales_root = appdata.data_dir() / "locales"
+    if not locales_root.is_dir():
+        return None
+
+    # 1. Explicit language match (supports both BCP-47 like 'fr' and Tesseract like 'fra').
+    if language:
+        candidates = []
+        for raw in _codes(language):
+            low = raw.lower()
+            candidates.append(raw)
+            candidates.append(low)
+            if low in _TESS_TO_BCP47:
+                candidates.append(_TESS_TO_BCP47[low])
+            if "-" in low:
+                candidates.append(low.split("-", 1)[0])
+        for sub in sorted(locales_root.iterdir()):
+            if not sub.is_dir():
+                continue
+            if sub.name in candidates or sub.name.lower() in candidates:
+                hit = _pick_onnx(sub / "ocr", script=script)
+                if hit is not None:
+                    return hit
+
+    # 2. Script match across any installed pack (e.g. locales/ar/ocr/arabic.onnx or rec.onnx).
+    if script:
+        for sub in sorted(locales_root.iterdir()):
+            if not sub.is_dir():
+                continue
+            exact = sub / "ocr" / f"{script}.onnx"
+            if exact.is_file():
+                return exact
+            tess = _BCP47_TO_TESS.get(sub.name.lower())
+            if tess and _SCRIPT_OF.get(tess) == script:
+                hit = _pick_onnx(sub / "ocr", script=script)
+                if hit is not None:
+                    return hit
+    return None
+
+
 def _language_model(script):
-    """The path of a script's reading model, fetched and checked on first use."""
+    """The path of a script's reading model, preferring an installed language
+    pack (offline) before fetching and checking on first use."""
+    bundled = pack_ocr_model(script=script)
+    if bundled is not None:
+        return bundled
     name = SCRIPT_NAMES.get(script, script)
     url, digest = _model_source(script)
     return _download_model(f"{name} reading model", url, digest, models_dir() / f"{script}.onnx")
@@ -338,15 +415,16 @@ def _best_model(kind):
                            size_note="about 80 MB", fallback_hint="choose Standard accuracy")
 
 
-def _engine(script=None, quality="standard", use_gpu=None):
-    """The RapidOCR instance for a script and quality ('standard' or 'best').
-    Models take about a second to load, so each is made once. When DirectML
-    GPU acceleration is turned on in Settings (Windows), tries it and falls
-    back to the CPU at the first error."""
+def _engine(script=None, quality="standard", use_gpu=None, rec_model_path=None):
+    """The RapidOCR instance for a script, quality ('standard' or 'best'), and
+    optional language-pack recognition model path. Models take about a second to
+    load, so each is made once. When DirectML GPU acceleration is turned on in
+    Settings (Windows), tries it and falls back to the CPU at the first error."""
     global _directml_failed
     quality = _check_quality(quality)
     gpu = (default_gpu() if use_gpu is None else bool(use_gpu)) and _directml_available()
-    key = (script, quality, gpu)
+    rec_key = str(rec_model_path) if rec_model_path else None
+    key = (script, quality, gpu, rec_key) if rec_key else (script, quality, gpu)
     with _engine_lock:
         if key not in _engines:
             params = {"Global.return_word_box": True}
@@ -360,7 +438,7 @@ def _engine(script=None, quality="standard", use_gpu=None):
                     "Det.model_type": ModelType.SERVER,
                     "Det.model_path": str(_best_model("det")),
                 })
-                if script is None:
+                if script is None and not rec_key:
                     params.update({
                         "Rec.ocr_version": OCRVersion.PPOCRV5,
                         "Rec.model_type": ModelType.SERVER,
@@ -369,9 +447,17 @@ def _engine(script=None, quality="standard", use_gpu=None):
             if script is not None:
                 from rapidocr import ModelType, OCRVersion
 
+                model_path = rec_key or str(_language_model(script))
                 params.update({"Rec.ocr_version": OCRVersion.PPOCRV5, "Rec.lang_type": script,
                                "Rec.model_type": ModelType.MOBILE,
-                               "Rec.model_path": str(_language_model(script))})
+                               "Rec.model_path": model_path})
+            elif rec_key:
+                params["Rec.model_path"] = rec_key
+                for dict_name in ("dict.txt", "rec_keys.txt"):
+                    cand = Path(rec_key).parent / dict_name
+                    if cand.is_file():
+                        params["Rec.rec_keys_path"] = str(cand)
+                        break
             try:
                 from rapidocr import RapidOCR
 
@@ -381,7 +467,7 @@ def _engine(script=None, quality="standard", use_gpu=None):
                     logging.getLogger(__name__).warning("DirectML OCR engine failed (%s); falling back to CPU", exc)
                     _directml_failed = True
                     params.pop("EngineConfig.onnxruntime.use_dml", None)
-                    key = (script, quality, False)
+                    key = (script, quality, False, rec_key) if rec_key else (script, quality, False)
                     try:
                         from rapidocr import RapidOCR
 
