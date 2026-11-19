@@ -340,8 +340,6 @@ def _crop_cell(image, box):
 
 def _map_crop_lines(lines, box, scale):
     """Map lines recognised on a padded/scaled cell crop back to page coordinates."""
-    from pdfmanager.ocr import Line
-
     cx0, cy0, cx1, cy1 = box
     mapped = []
     for line in lines:
@@ -361,14 +359,12 @@ def _map_crop_lines(lines, box, scale):
             for w in line.words
         ]
         if words:
-            mapped.append(Line(line.text, quad, line.confidence, words))
+            mapped.append(type(line)(line.text, quad, line.confidence, words))
     return mapped
 
 
 def _normalise_line_numbers(line, strict_column=False):
     """Apply numeric-cell confusion fixes to words in ``line``."""
-    from pdfmanager.ocr import Line
-
     changed = False
     new_words = []
     for w in line.words:
@@ -380,7 +376,7 @@ def _normalise_line_numbers(line, strict_column=False):
             new_words.append(w)
     if not changed:
         return line
-    return Line(" ".join(w.text for w in new_words), line.quad, line.confidence, new_words)
+    return type(line)(" ".join(w.text for w in new_words), line.quad, line.confidence, new_words)
 
 
 def _column_is_numeric(cell_texts):
