@@ -61,6 +61,12 @@ Draw, move, resize and arrange form fields directly on the page in the reader.
   data** in any of those formats. A new **Fill many (mail merge)** tool fills
   one PDF per row of a CSV, Excel (`.xlsx`), or JSON file and names each
   output from a chosen column.
+- **Buttons, actions, and show/hide fields.** Give any **Button** field a
+  label and an action — **Reset form** (all or chosen fields), **Print**,
+  **Go to page**, **Open web link**, or **Send by email** (`mailto:` with
+  FDF data or PDF attachment choice) — and configure any **Checkbox** to show
+  or hide chosen fields when ticked. Both work live in the reader and are
+  saved as standard PDF actions.
 
 ## 0.56.0
 

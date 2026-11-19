@@ -897,4 +897,46 @@ def test_form_data_export_import_clear_and_fill_many(tmp_path):
     assert forms.read_form_values(xlsx_made[0])["Amount"] == "99"
 
 
+def test_button_actions_and_checkbox_show_hide(tmp_path):
+    raw = blank(tmp_path / "two.pdf", 2)
+    form = tmp_path / "form.pdf"
+    forms.add_fields(raw, form, [
+        {"page": 1, "rect": [72, 700, 200, 722], "type": "text", "name": "Name"},
+        {"page": 1, "rect": [72, 660, 200, 682], "type": "text", "name": "Details"},
+        {"page": 1, "rect": [72, 620, 88, 636], "type": "checkbox", "name": "ShowMore"},
+        {"page": 1, "rect": [72, 570, 152, 594], "type": "button", "name": "BtnReset"},
+        {"page": 1, "rect": [160, 570, 240, 594], "type": "button", "name": "BtnPrint"},
+        {"page": 1, "rect": [250, 570, 330, 594], "type": "button", "name": "BtnGoto"},
+        {"page": 1, "rect": [340, 570, 420, 594], "type": "button", "name": "BtnUrl"},
+        {"page": 1, "rect": [430, 570, 510, 594], "type": "button", "name": "BtnEmail"},
+    ])
+    edited = tmp_path / "edited.pdf"
+    forms.edit_fields(form, edited, [
+        {"page": 1, "index": 2, "show_hide": ["Details"]},
+        {"page": 1, "index": 3, "label": "Clear Name", "action": {"type": "reset", "fields": ["Name"]}},
+        {"page": 1, "index": 4, "action": {"type": "print"}},
+        {"page": 1, "index": 5, "action": {"type": "goto", "page": 2}},
+        {"page": 1, "index": 6, "action": {"type": "url", "url": "https://example.com"}},
+        {"page": 1, "index": 7, "action": {"type": "email", "to": "desk@example.com", "subject": "Form", "submit": "fdf"}},
+    ])
+    details = by_name(edited)
+    assert details["ShowMore"]["show_hide"] == ["Details"]
+    assert details["BtnReset"]["label"] == "Clear Name"
+    assert details["BtnReset"]["action"] == {"type": "reset", "fields": ["Name"]}
+    assert details["BtnPrint"]["action"] == {"type": "print"}
+    assert details["BtnGoto"]["action"] == {"type": "goto", "page": 2}
+    assert details["BtnUrl"]["action"] == {"type": "url", "url": "https://example.com"}
+    assert details["BtnEmail"]["action"] == {"type": "email", "to": "desk@example.com", "subject": "Form", "submit": "fdf"}
+
+    r = PdfReader(str(edited))
+    annots = [ref.get_object() for ref in r.pages[0]["/Annots"]]
+    assert "/U" in annots[2]["/AA"]
+    assert str(annots[3]["/A"]["/S"]) == "/ResetForm"
+    assert str(annots[4]["/A"]["/S"]) == "/Named" and str(annots[4]["/A"]["/N"]) == "/Print"
+    assert str(annots[5]["/A"]["/S"]) == "/GoTo"
+    assert str(annots[6]["/A"]["/S"]) == "/URI"
+    assert str(annots[7]["/A"]["/S"]) == "/SubmitForm"
+
+
+
 

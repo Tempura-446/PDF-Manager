@@ -84,6 +84,7 @@ export function renderFormProps(host, selected, allPages, reader) {
   const allText = [...types].every((t) => t === "text" || t === "multiline");
   const allChoice = [...types].every((t) => t === "dropdown" || t === "list");
   const allBtn = [...types].every((t) => t === "checkbox" || t === "radio");
+  const allPush = [...types].every((t) => t === "button");
   const allSig = [...types].every((t) => t === "signature");
 
   const apply = (patch, { keepNames = null } = {}) => {
@@ -364,7 +365,104 @@ export function renderFormProps(host, selected, allPages, reader) {
       });
       btn.push(row("Radio group", grpIn));
     }
+    if (!multi && first.type === "checkbox") {
+      const others = [];
+      const seenNames = new Set();
+      for (const flist of Object.values(allPages || {})) {
+        for (const f of flist) {
+          if (f.name && f.name !== first.name && !seenNames.has(f.name)) {
+            seenNames.add(f.name);
+            others.push(f.name);
+          }
+        }
+      }
+      if (others.length) {
+        const chosen = new Set(first.show_hide || []);
+        const boxList = el("div", { class: "fp-prop-calcfields" });
+        for (const fname of others) {
+          const cb = el("input", { type: "checkbox" });
+          cb.checked = chosen.has(fname);
+          cb.addEventListener("change", () => {
+            if (cb.checked) chosen.add(fname);
+            else chosen.delete(fname);
+            apply({ show_hide: [...chosen] });
+          });
+          boxList.append(el("label", { class: "fp-prop-check" }, cb, el("span", {}, fname)));
+        }
+        btn.push(el("div", { class: "fp-prop-lbl", style: "margin-top:4px" }, "When ticked, show"), boxList);
+      }
+    }
     frag.append(section(first.type === "radio" ? "Radio button" : "Checkbox", ...btn));
+  }
+
+  // ---- Button ----
+  if (allPush && !multi) {
+    const bsec = [];
+    const lblIn = el("input", { class: "fp-prop-in", type: "text", value: first.label || first.name || "" });
+    lblIn.addEventListener("change", () => apply({ label: lblIn.value }));
+    bsec.push(row("Label", lblIn));
+
+    const curAct = first.action || { type: "none" };
+    const actSel = selectEl([
+      ["none", "None"],
+      ["reset", "Reset form"],
+      ["print", "Print"],
+      ["goto", "Go to page"],
+      ["url", "Open web link"],
+      ["email", "Send by email"],
+    ], curAct.type || "none", false, () => renderActOpts());
+    bsec.push(row("Action", actSel));
+
+    const actBox = el("div", { style: "display:flex;flex-direction:column;gap:8px" });
+    const renderActOpts = (commit = true) => {
+      const t = actSel.value;
+      actBox.replaceChildren();
+      if (t === "none") {
+        if (commit) apply({ action: null });
+      } else if (t === "print") {
+        if (commit) apply({ action: { type: "print" } });
+      } else if (t === "reset") {
+        const fIn = el("input", {
+          class: "fp-prop-in", type: "text",
+          value: (curAct.type === "reset" ? (curAct.fields || []).join(", ") : ""),
+          placeholder: "All fields (or comma-separated)",
+        });
+        const send = () => apply({ action: { type: "reset", fields: fIn.value.split(",").map((s) => s.trim()).filter(Boolean) } });
+        fIn.addEventListener("change", send);
+        actBox.append(row("Fields", fIn));
+        if (commit) send();
+      } else if (t === "goto") {
+        const pIn = el("input", {
+          class: "fp-prop-in", type: "number", min: "1", step: "1",
+          value: String(curAct.type === "goto" ? (curAct.page || 1) : 1),
+        });
+        const send = () => apply({ action: { type: "goto", page: Math.max(1, parseInt(pIn.value || "1", 10) || 1) } });
+        pIn.addEventListener("change", send);
+        actBox.append(row("Page", pIn));
+        if (commit) send();
+      } else if (t === "url") {
+        const uIn = el("input", {
+          class: "fp-prop-in", type: "url", placeholder: "https://example.com",
+          value: curAct.type === "url" ? (curAct.url || "") : "",
+        });
+        const send = () => apply({ action: { type: "url", url: uIn.value.trim() } });
+        uIn.addEventListener("change", send);
+        actBox.append(row("Web link", uIn));
+        if (commit && uIn.value.trim()) send();
+      } else if (t === "email") {
+        const toIn = el("input", { class: "fp-prop-in", type: "email", placeholder: "name@example.com", value: curAct.type === "email" ? (curAct.to || "") : "" });
+        const subIn = el("input", { class: "fp-prop-in", type: "text", placeholder: "Form submission", value: curAct.type === "email" ? (curAct.subject || "") : "" });
+        const subSel = selectEl([["fdf", "Form data (FDF)"], ["pdf", "Whole PDF"]], curAct.type === "email" ? (curAct.submit || "fdf") : "fdf", false, () => send());
+        const send = () => apply({ action: { type: "email", to: toIn.value.trim(), subject: subIn.value.trim(), submit: subSel.value } });
+        toIn.addEventListener("change", send);
+        subIn.addEventListener("change", send);
+        actBox.append(row("To", toIn), row("Subject", subIn), row("Send", subSel));
+        if (commit && toIn.value.trim()) send();
+      }
+    };
+    renderActOpts(false);
+    bsec.push(actBox);
+    frag.append(section("Button", ...bsec));
   }
 
   // ---- Format, Validation, Calculation (text fields) ----

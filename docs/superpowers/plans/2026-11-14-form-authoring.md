@@ -90,10 +90,10 @@
 
 ### Phase 4 (release D): buttons and simple actions
 
-- [ ] Button fields with a label and look, and one of these actions: reset the form (all or chosen fields), print, go to a page, open a web link, send by email (`mailto:` with the form's data as FDF or the whole PDF; no server).
-- [ ] Show or hide fields: "when this box is ticked, show these fields", written as the standard field actions and checked in ZPDF's reader and pdf.js.
+- [x] Button fields with a label and look, and one of these actions: reset the form (all or chosen fields), print, go to a page, open a web link, send by email (`mailto:` with the form's data as FDF or the whole PDF; no server).
+- [x] Show or hide fields: "when this box is ticked, show these fields", written as the standard field actions and checked in ZPDF's reader and pdf.js.
 - [ ] Barcode of the form's data (a QR code field that updates in ZPDF and Acrobat) is a decision for the owner; left out unless asked for.
-- [ ] Test: each action type saved, reopened, and triggered in the reader.
+- [x] Test: each action type saved, reopened, and triggered in the reader.
 
 ---
 
