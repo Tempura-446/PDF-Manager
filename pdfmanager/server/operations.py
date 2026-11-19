@@ -412,10 +412,22 @@ OPERATIONS = [
                    choices=[[p, p.replace("-", " ").capitalize()] for p in certsign.POSITIONS]),
                 _f("size", "Size", "select", "medium", show_if={"appearance": "visible"},
                    choices=[["small", "Small"], ["medium", "Medium"], ["large", "Large"]]),
+                _f("pades_level", "PAdES level (ETSI EN 319 142)", "select", "B-B",
+                   choices=[["B-B", "B-B (basic, offline)"],
+                            ["B-T", "B-T (with RFC 3161 timestamp)"],
+                            ["B-LT", "B-LT (long-term validation data)"],
+                            ["B-LTA", "B-LTA (archival timestamp)"]]),
+                _f("certify", "Certification (DocMDP)", "select", "",
+                   choices=[["", "Approval signature (standard)"],
+                            ["no-changes", "Certify: no changes allowed"],
+                            ["fill-and-sign", "Certify: allow form filling & signing"],
+                            ["fill-sign-comment", "Certify: allow forms, signing & comments"]]),
+                _f("lock_fields", "Lock form fields after signing (FieldMDP, optional)", "text", "",
+                   placeholder="e.g. all, or Amount, Vendor",
+                   hint="Leave blank to leave fields unlocked, or type 'all' or field names."),
                 _f("timestamp_url", "Timestamp server (optional)", "text", "",
                    placeholder="http://timestamp.digicert.com",
-                   hint="A trusted clock vouches for the time of signing; needs the internet. "
-                        "Leave empty to use this computer's clock.")]},
+                   hint="A trusted clock vouches for the time of signing; required for PAdES B-T/B-LT/B-LTA.")]},
     {"id": "verify-sig", "group": "Security", "label": "Check signatures", "files": "pdf",
      "action": "Check",
      "help": "Check the digital signatures in PDFs: who signed, when, and whether the "
@@ -423,7 +435,11 @@ OPERATIONS = [
      "fields": [_f("trust", "Certificate you trust (optional)", "file", None,
                    accept=".cer,.crt,.pem,.der",
                    hint="e.g. your company's root certificate: signatures from it count as "
-                        "verified")]},
+                        "verified"),
+                _f("report_format", "Report format", "select", "txt",
+                   choices=[["txt", "Plain text (.txt)"],
+                            ["pdf", "PDF report (.pdf)"],
+                            ["xml", "ETSI XML report (.xml)"]])]},
     # -- end of digital ID signatures --
     {"id": "pdfa", "group": "Convert", "label": "PDF → PDF/A (archive)", "files": "pdf",
      "help": "Convert to PDF/A, the ISO standard for documents that must stay readable for "
@@ -903,10 +919,18 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         notes.append(f"{src.name}: {accessibility.summary(result)}")
     # -- end of accessibility --
     elif op == "verify-sig":
-        out = out.with_suffix(".txt")
         found = certsign.verify(src, password, [extra_files["trust"]]
                                 if extra_files.get("trust") else None)
-        out.write_text(certsign.report(found, src.name), encoding="utf-8")
+        fmt = (opts.get("report_format") or "txt").strip().lower()
+        if fmt == "xml":
+            out = out.with_suffix(".xml")
+            certsign.export_validation_xml(found, out, src.name)
+        elif fmt == "pdf":
+            out = out.with_suffix(".pdf")
+            certsign.export_validation_pdf(found, out, src.name)
+        else:
+            out = out.with_suffix(".txt")
+            out.write_text(certsign.report(found, src.name), encoding="utf-8")
         notes.extend([f"{src.name}: no digital signatures"] if not found else
                      [f"{src.name}, {e['field']}: {e['summary']}" + (f" {e['lasting']}" if e.get("lasting") else "")
                       for e in found])
@@ -1240,7 +1264,10 @@ def _sign_cert_op(src, out, opts, password, extra_files):
                          reason=(opts.get("reason") or "").strip() or None,
                          location=(opts.get("location") or "").strip() or None,
                          timestamp_url=(opts.get("timestamp_url") or "").strip() or None,
-                         password=password)
+                         password=password,
+                         pades_level=(opts.get("pades_level") or "B-B").strip(),
+                         certify=(opts.get("certify") or "").strip() or None,
+                         lock_fields=(opts.get("lock_fields") or "").strip() or None)
 
 
 def _to_excel(src, out_dir, opts, password, notes):

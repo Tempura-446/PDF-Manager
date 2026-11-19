@@ -31,6 +31,9 @@ from pdfmanager import core
 # Statuses of a checked signature.
 VALID, UNTRUSTED, MODIFIED, INVALID = "valid", "valid-untrusted", "modified", "invalid"
 
+PADES_LEVELS = ("B-B", "B-T", "B-LT", "B-LTA")
+CERTIFY_PERMISSIONS = ("no-changes", "fill-and-sign", "fill-sign-comment")
+
 POSITIONS = ("bottom-right", "bottom-left", "bottom-center", "top-right", "top-left",
              "top-center")
 # Width and height of a visible signature, in points.
@@ -435,7 +438,8 @@ def _visible(box):
 
 
 def sign(path, output, pfx, pfx_password=None, *, page=None, box=None, field=None, reason=None,
-         location=None, contact=None, timestamp_url=None, password=None):
+         location=None, contact=None, timestamp_url=None, password=None,
+         pades_level="B-B", certify=None, lock_fields=None, timestamper=None):
     """Sign ``path`` with the digital ID ``pfx`` (a .pfx/.p12 file or its
     bytes) and write the signed PDF to ``output``.
 
@@ -445,17 +449,63 @@ def sign(path, output, pfx, pfx_password=None, *, page=None, box=None, field=Non
         date and time and the reason;
       - ``field``: the name of an empty signature field already in the PDF
         (e.g. one added with the Add form fields tool);
-      - neither: an invisible signature (shown in a reader's signature panel).
+      - neither: an invisible signature (shown in a reader's signature list).
 
-    ``timestamp_url``: an RFC 3161 timestamp server to vouch for the time of
-    signing. If it can't be reached, nothing is written.
+    ``pades_level``: ETSI EN 319 142 baseline level: ``"B-B"``, ``"B-T"``,
+    ``"B-LT"``, or ``"B-LTA"``. Levels above B-B require ``timestamp_url``
+    (or ``timestamper``).
+    ``certify``: optional DocMDP certifying permission (``"no-changes"``,
+    ``"fill-and-sign"``, or ``"fill-sign-comment"``).
+    ``lock_fields``: optional FieldMDP lock — ``"all"`` or a list/tuple of
+    field names to lock when signed.
 
     Returns {"signer", "email", "field", "page", "box", "visible", "time",
-    "timestamp", "reason", "location"}."""
+    "timestamp", "reason", "location", "pades_level", "certify", "locked_fields"}."""
     _need_pyhanko()
     from pyhanko.pdf_utils.misc import PdfError
     from pyhanko.sign import fields, signers, timestamps
     from pyhanko.sign.general import SigningError
+
+    level = str(pades_level or "B-B").strip().upper()
+    if level not in PADES_LEVELS:
+        raise core.PdfManagerError(f"unknown PAdES level {pades_level!r}; choose {', '.join(PADES_LEVELS)}")
+    if level != "B-B" and not timestamp_url and timestamper is None:
+        raise core.PdfManagerError(
+            f"PAdES {level} requires a timestamp server URL (RFC 3161) to prove the signing time")
+
+    cert_perm = None
+    if certify:
+        certify_norm = str(certify).strip().lower()
+        if certify_norm not in CERTIFY_PERMISSIONS:
+            raise core.PdfManagerError(
+                f"unknown DocMDP certification permission {certify!r}; choose {', '.join(CERTIFY_PERMISSIONS)}")
+        cert_perm = {
+            "no-changes": fields.MDPPerm.NO_CHANGES,
+            "fill-and-sign": fields.MDPPerm.FILL_FORMS,
+            "fill-sign-comment": fields.MDPPerm.ANNOTATE,
+        }[certify_norm]
+        certify = certify_norm
+    else:
+        certify = None
+
+    lock_spec = None
+    locked_list = None
+    if lock_fields:
+        if isinstance(lock_fields, str):
+            raw_lock = lock_fields.strip()
+            if raw_lock.lower() == "all":
+                lock_spec = fields.FieldMDPSpec(fields.FieldMDPAction.ALL)
+                locked_list = ["*"]
+            else:
+                names = [n.strip() for n in raw_lock.split(",") if n.strip()]
+                if names:
+                    lock_spec = fields.FieldMDPSpec(fields.FieldMDPAction.INCLUDE, fields=names)
+                    locked_list = names
+        else:
+            names = [str(n).strip() for n in lock_fields if str(n).strip()]
+            if names:
+                lock_spec = fields.FieldMDPSpec(fields.FieldMDPAction.INCLUDE, fields=names)
+                locked_list = names
 
     name = Path(path).name
     signer, info = load_id(pfx, pfx_password)
@@ -505,7 +555,8 @@ def sign(path, output, pfx, pfx_password=None, *, page=None, box=None, field=Non
         field_name = f"Signature{n}"
         spec = fields.SigFieldSpec(
             field_name, on_page=(page - 1) if box else 0,
-            box=tuple(box) if box else None)
+            box=tuple(box) if box else None,
+            field_mdp_spec=lock_spec)
 
     visible = _visible(box)
     lines = [f"Digitally signed by {_latin(info['signer'])}", "Date: %(ts)s"]
@@ -519,11 +570,24 @@ def sign(path, output, pfx, pfx_password=None, *, page=None, box=None, field=Non
     style = _stamp_style([line.replace("%", "%%") if "%(ts)s" not in line else line
                           for line in lines], height, rotation)
 
-    meta = signers.PdfSignatureMetadata(
-        field_name=field_name, reason=reason or None, location=location or None,
-        contact_info=contact or None, name=info["signer"])
-    timestamper = None
-    if timestamp_url:
+    meta_kwargs = {
+        "field_name": field_name,
+        "reason": reason or None,
+        "location": location or None,
+        "contact_info": contact or None,
+        "name": info["signer"],
+        "subfilter": fields.SigSeedSubFilter.PADES,
+    }
+    if cert_perm is not None:
+        meta_kwargs["certify"] = True
+        meta_kwargs["docmdp_permissions"] = cert_perm
+    if level in ("B-LT", "B-LTA"):
+        meta_kwargs["embed_validation_info"] = True
+    if level == "B-LTA":
+        meta_kwargs["use_pades_lta"] = True
+
+    meta = signers.PdfSignatureMetadata(**meta_kwargs)
+    if timestamper is None and timestamp_url:
         if not str(timestamp_url).lower().startswith(("http://", "https://")):
             raise core.PdfManagerError("the timestamp server must be an http:// or https:// "
                                        "address")
@@ -552,8 +616,9 @@ def sign(path, output, pfx, pfx_password=None, *, page=None, box=None, field=Non
     return {"signer": info["signer"], "email": info["email"], "field": field_name,
             "page": page if visible else None, "box": box if visible else None,
             "visible": visible, "time": _when(_signing_time(signed, field_name, password)),
-            "timestamp": bool(timestamp_url), "reason": reason or None,
-            "location": location or None}
+            "timestamp": bool(timestamp_url or timestamper), "reason": reason or None,
+            "location": location or None, "pades_level": level,
+            "certify": certify, "locked_fields": locked_list}
 
 
 def _short(exc):
@@ -880,3 +945,251 @@ STATUS_WORDS = {
 def all_valid(results):
     """Whether there are signatures and all of them are valid (trusted or not)."""
     return bool(results) and all(e["status"] in (VALID, UNTRUSTED) for e in results)
+
+
+# --------------------------------------------------------------------------
+# DocMDP / FieldMDP inspection, detached CMS (.p7s), and ETSI validation reports
+# --------------------------------------------------------------------------
+
+_DOCMDP_P_MAP = {1: "no-changes", 2: "fill-and-sign", 3: "fill-sign-comment"}
+
+
+def docmdp_permissions(path, password=None):
+    """Inspect a PDF's DocMDP certifying signature permission level.
+    Returns ``'no-changes'``, ``'fill-and-sign'``, ``'fill-sign-comment'``, or ``None``."""
+    reader = core.open_pdf(Path(path), password=password)
+    root = reader.trailer.get("/Root")
+    if root is None:
+        return None
+    root = root.get_object()
+    perms = root.get("/Perms")
+    if perms is None:
+        return None
+    perms = perms.get_object()
+    docmdp = perms.get("/DocMDP")
+    if docmdp is None:
+        return None
+    sig = docmdp.get_object()
+    refs = sig.get("/Reference")
+    if not refs:
+        return "no-changes"
+    for ref in refs:
+        obj = ref.get_object()
+        if str(obj.get("/TransformMethod") or "") == "/DocMDP":
+            params = obj.get("/TransformParams")
+            if params is not None:
+                p_val = int(params.get_object().get("/P", 2))
+                return _DOCMDP_P_MAP.get(p_val, "no-changes")
+    return "no-changes"
+
+
+def check_edit_allowed(path, action="edit", password=None):
+    """Raise a clear ``PdfManagerError`` if a certified PDF forbids ``action``
+    (``'edit'``, ``'comment'``, or ``'fill'``)."""
+    perm = docmdp_permissions(path, password=password)
+    if perm is None:
+        return True
+    if perm == "no-changes":
+        raise core.PdfManagerError(
+            f"{Path(path).name} is certified with 'no changes allowed' (DocMDP P=1); "
+            "editing it would break its certifying signature")
+    if perm == "fill-and-sign" and action in ("edit", "comment"):
+        raise core.PdfManagerError(
+            f"{Path(path).name} is certified to allow only form filling and signing (DocMDP P=2); "
+            f"{action} is not permitted")
+    if perm == "fill-sign-comment" and action == "edit":
+        raise core.PdfManagerError(
+            f"{Path(path).name} is certified to allow only form filling, signing, and comments (DocMDP P=3)")
+    return True
+
+
+def locked_fields(path, password=None):
+    """Return a dict ``{signature_field_name: {"action": str, "fields": [...]}}``
+    for all signature fields carrying a FieldMDP ``/Lock`` dictionary."""
+    reader = core.open_pdf(Path(path), password=password)
+    acro = reader.trailer.get("/Root", {}).get_object().get("/AcroForm")
+    if acro is None:
+        return {}
+    fields_arr = acro.get_object().get("/Fields") or []
+    found = {}
+    for ref in fields_arr:
+        obj = ref.get_object()
+        lock = obj.get("/Lock")
+        if lock is None:
+            continue
+        lock_obj = lock.get_object()
+        name = str(obj.get("/T") or "Signature")
+        action = str(lock_obj.get("/Action") or "/All").lstrip("/")
+        f_list = [str(x) for x in (lock_obj.get("/Fields") or [])]
+        found[name] = {"action": action, "fields": f_list}
+    return found
+
+
+def sign_detached(path, output, pfx, pfx_password=None):
+    """Create a detached DER-encoded CMS/CAdES (``.p7s``) signature over ``path``."""
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.serialization import pkcs12, pkcs7
+
+    src = Path(path)
+    if not src.is_file():
+        raise core.PdfManagerError(f"file not found: {src}")
+    pfx_bytes = bytes(pfx) if isinstance(pfx, (bytes, bytearray, memoryview)) else Path(pfx).read_bytes()
+    if not _is_pfx(pfx_bytes):
+        raise core.PdfManagerError("digital ID must be a valid .pfx or .p12 file")
+    pwd = pfx_password.encode("utf-8") if isinstance(pfx_password, str) else pfx_password
+    key = cert = extra = None
+    for cand in dict.fromkeys([pwd or None, pwd or b""]):
+        try:
+            key, cert, extra = pkcs12.load_key_and_certificates(pfx_bytes, cand)
+            break
+        except ValueError:
+            continue
+    if key is None or cert is None:
+        raise IdPasswordError("wrong password or missing private key in digital ID")
+
+    data = src.read_bytes()
+    builder = pkcs7.PKCS7SignatureBuilder().set_data(data).add_signer(cert, key, hashes.SHA256())
+    for c in (extra or ()):
+        builder = builder.add_certificate(c)
+    der = builder.sign(
+        serialization.Encoding.DER,
+        [pkcs7.PKCS7Options.DetachedSignature, pkcs7.PKCS7Options.Binary],
+    )
+    out = Path(output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(der)
+    return {"output": str(out), "bytes": len(der), "algorithm": "SHA-256"}
+
+
+def verify_detached(path, p7s_path, trusted=None):
+    """Verify a detached CMS/CAdES (``.p7s``) signature against ``path``.
+    Returns ``{"status", "intact", "trusted", "signer", "issuer", "algorithm"}``."""
+    import hashlib
+    from asn1crypto import cms
+    from cryptography import x509
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
+
+    data = Path(path).read_bytes()
+    der = Path(p7s_path).read_bytes()
+    try:
+        ci = cms.ContentInfo.load(der)
+        sd = ci["content"]
+        si = sd["signer_infos"][0]
+        certs = [c.chosen for c in sd["certificates"]]
+    except Exception as exc:
+        raise core.PdfManagerError(f"invalid .p7s signature file: {exc}") from None
+
+    if not certs:
+        return {"status": INVALID, "intact": False, "trusted": False, "signer": "", "issuer": "", "algorithm": ""}
+    signer_asn1 = certs[0]
+    signer_cert = x509.load_der_x509_certificate(signer_asn1.dump())
+    signer_name = _name_of(signer_asn1)
+    issuer_name = _name_of_issuer(signer_asn1)
+    digest_alg = si["digest_algorithm"]["algorithm"].native
+    hash_cls = {"sha256": hashes.SHA256, "sha384": hashes.SHA384, "sha512": hashes.SHA512}.get(digest_alg)
+    if hash_cls is None:
+        return {"status": INVALID, "intact": False, "trusted": False, "signer": signer_name, "issuer": issuer_name, "algorithm": digest_alg}
+
+    # Verify messageDigest signed attribute matches actual file digest (when signed_attrs present)
+    signed_attrs = si["signed_attrs"]
+    actual_digest = getattr(hashlib, digest_alg)(data).digest()
+    if signed_attrs.native is not None:
+        attr_digest = None
+        for attr in signed_attrs:
+            if attr["type"].native == "message_digest":
+                attr_digest = attr["values"][0].native
+                break
+        if attr_digest != actual_digest:
+            return {"status": MODIFIED, "intact": False, "trusted": False, "signer": signer_name, "issuer": issuer_name, "algorithm": digest_alg}
+        # Re-encode implicitly-tagged [0] CMSAttributes as universal SET OF (0x31) per RFC 5652 §5.4
+        to_verify = cms.CMSAttributes(list(signed_attrs)).dump()
+    else:
+        to_verify = data
+
+    sig_bytes = si["signature"].native
+    pub = signer_cert.public_key()
+    intact = False
+    try:
+        if isinstance(pub, rsa.RSAPublicKey):
+            pub.verify(sig_bytes, to_verify, padding.PKCS1v15(), hash_cls())
+            intact = True
+        elif isinstance(pub, ec.EllipticCurvePublicKey):
+            pub.verify(sig_bytes, to_verify, ec.ECDSA(hash_cls()))
+            intact = True
+    except InvalidSignature:
+        intact = False
+
+    trusted_ok = False
+    if intact and trusted:
+        roots = _load_certs(trusted if isinstance(trusted, (list, tuple)) else [trusted])
+        root_fps = {r.sha256 for r in roots}
+        trusted_ok = signer_asn1.sha256 in root_fps or any(c.sha256 in root_fps for c in certs)
+
+    status = VALID if (intact and trusted_ok) else (UNTRUSTED if intact else INVALID)
+    return {
+        "status": status,
+        "intact": intact,
+        "trusted": trusted_ok,
+        "signer": signer_name,
+        "issuer": issuer_name,
+        "algorithm": digest_alg.upper(),
+    }
+
+
+def export_validation_xml(results, output, name=None):
+    """Export an ETSI-style XML signature validation report to ``output``."""
+    import xml.etree.ElementTree as ET
+
+    root = ET.Element("ValidationReport", {
+        "xmlns": "http://uri.etsi.org/19102/v1.2.1#",
+        "document": str(name or ""),
+        "generated": _when(dt.datetime.now(dt.timezone.utc)),
+    })
+    for entry in results or ():
+        rep = ET.SubElement(root, "SignatureValidationReport")
+        ET.SubElement(rep, "FieldName").text = str(entry.get("field") or "")
+        ET.SubElement(rep, "MainIndication").text = (
+            "TOTAL-PASSED" if entry.get("status") == VALID
+            else "INDETERMINATE" if entry.get("status") == UNTRUSTED
+            else "TOTAL-FAILED"
+        )
+        ET.SubElement(rep, "Status").text = str(entry.get("status") or "")
+        ET.SubElement(rep, "Signer").text = str(entry.get("signer") or "")
+        ET.SubElement(rep, "Issuer").text = str(entry.get("issuer") or "")
+        ET.SubElement(rep, "SigningTime").text = str(entry.get("time") or "")
+        ET.SubElement(rep, "Summary").text = str(entry.get("summary") or "")
+
+    tree = ET.ElementTree(root)
+    out = Path(output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    ET.indent(tree, space="  ")
+    tree.write(out, encoding="utf-8", xml_declaration=True)
+    return out
+
+
+def export_validation_pdf(results, output, name=None):
+    """Export a formatted PDF signature validation report to ``output``."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    out = Path(output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    c = canvas.Canvas(str(out), pagesize=letter)
+    _, h = letter
+    y = h - 54
+    c.setFont("Helvetica-Bold", 15)
+    c.drawString(54, y, f"Signature Validation Report — {name or 'Document'}")
+    y -= 24
+    c.setFont("Helvetica", 10)
+    for line in report(results, name=name).splitlines():
+        if y < 54:
+            c.showPage()
+            c.setFont("Helvetica", 10)
+            y = h - 54
+        c.drawString(54, y, line[:105])
+        y -= 14
+    c.save()
+    return out
+
