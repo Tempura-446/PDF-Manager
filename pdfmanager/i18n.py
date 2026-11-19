@@ -197,3 +197,56 @@ def remove_pack(code):
     if get_language() == norm:
         set_language(DEFAULT_LANG)
     return {"removed": norm}
+
+
+BUILTIN_LOCALES = {
+    "en": {"name": "English", "automatic": False},
+    "zh-Hans": {"name": "简体中文", "automatic": True},
+    "es": {"name": "Español", "automatic": True},
+    "fr": {"name": "Français", "automatic": True},
+    "de": {"name": "Deutsch", "automatic": True},
+}
+
+_PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z0-9_]+)\}")
+
+
+def validate_catalog(strings, reference=None):
+    """Validate a translated ``{key: text}`` catalog against English ``reference``.
+    Returns a list of error messages (empty list means valid)."""
+    ref = reference if reference is not None else _read_json(_BUILTIN_DIR / "en.json")
+    errors = []
+    if not isinstance(strings, dict):
+        return ["catalog must be a JSON object"]
+    for key, en_val in ref.items():
+        if key not in strings or not isinstance(strings[key], str) or not strings[key].strip():
+            errors.append(f"missing or empty translation for {key!r}")
+            continue
+        expected_vars = set(_PLACEHOLDER_RE.findall(en_val))
+        actual_vars = set(_PLACEHOLDER_RE.findall(strings[key]))
+        if expected_vars != actual_vars:
+            errors.append(f"placeholder mismatch for {key!r}: expected {sorted(expected_vars)}, got {sorted(actual_vars)}")
+    return errors
+
+
+def list_available_languages():
+    """List built-in languages plus any user-installed language packs."""
+    seen = {}
+    if _BUILTIN_DIR.is_dir():
+        for f in sorted(_BUILTIN_DIR.glob("*.json")):
+            code = f.stem
+            meta = BUILTIN_LOCALES.get(code, {"name": code, "automatic": code != DEFAULT_LANG})
+            seen[code] = {
+                "code": code,
+                "name": meta["name"],
+                "automatic": meta["automatic"],
+                "builtin": True,
+                "dir": language_dir(code),
+            }
+    for pack in list_installed_packs():
+        seen[pack["code"]] = {**pack, "builtin": False}
+    # Keep English first, then sorted by code
+    ordered = []
+    if DEFAULT_LANG in seen:
+        ordered.append(seen.pop(DEFAULT_LANG))
+    ordered.extend(seen[k] for k in sorted(seen))
+    return ordered
