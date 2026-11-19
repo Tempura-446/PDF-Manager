@@ -81,8 +81,8 @@
 - [x] Test: Tab in pdf.js and the order pdfium reports follow the list.
 
 **Task 3.2: Preview**
-- [ ] A "Preview" switch in Form mode fills the form in as a user would, with scripts running, without leaving the designer; values typed in a preview aren't kept unless "Keep as default values" is chosen.
-- [ ] A check list before finishing: fields without a tooltip, duplicate names with different types, fields off the page, overlapping fields, required fields that are read-only, calculations that name a missing field.
+- [x] A "Preview" switch in Form mode fills the form in as a user would, with scripts running, without leaving the designer; values typed in a preview aren't kept unless "Keep as default values" is chosen.
+- [x] A check list before finishing: fields without a tooltip, duplicate names with different types, fields off the page, overlapping fields, required fields that are read-only, calculations that name a missing field.
 
 **Task 3.3: data**
 - [ ] Clear the form; export what was filled in (FDF, XFDF, CSV, JSON); fill from such a file. A "Fill many" tool: one PDF per row of a spreadsheet (mail merge), named from a column.

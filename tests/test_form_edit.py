@@ -784,3 +784,54 @@ def test_reorder_fields_and_tabs(tmp_path):
     assert str(PdfReader(str(rows_pdf)).pages[0]["/Tabs"]) == "/R"
     assert forms.field_details(rows_pdf)[1][0]["tab_order"] == "rows"
 
+
+def test_keep_defaults_and_check_form(tmp_path):
+    raw = blank(tmp_path / "blank.pdf")
+    clean = tmp_path / "clean.pdf"
+    forms.add_fields(raw, clean, [
+        {"page": 1, "rect": [72, 700, 172, 722], "type": "text", "name": "Qty", "tooltip": "Quantity"},
+        {"page": 1, "rect": [72, 660, 172, 682], "type": "text", "name": "Price", "tooltip": "Unit price"},
+        {"page": 1, "rect": [72, 620, 172, 642], "type": "text", "name": "Total", "tooltip": "Total",
+         "readonly": True, "calculate": {"op": "product", "fields": ["Qty", "Price"]}},
+    ])
+    assert forms.check_form(clean) == []
+
+    # Simulate preview-filled values and promote them to /DV
+    filled = tmp_path / "filled.pdf"
+    w = PdfWriter(clone_from=str(clean))
+    w.update_page_form_field_values(w.pages[0], {"Qty": "3", "Price": "10", "Total": "30"}, auto_regenerate=False)
+    w.write(str(filled))
+    kept = tmp_path / "kept.pdf"
+    count = forms.keep_defaults(filled, kept)
+    assert count == 3
+    details = by_name(kept)
+    assert details["Qty"]["default_value"] == "3"
+    assert details["Price"]["default_value"] == "10"
+    assert details["Total"]["default_value"] == "30"
+
+    # Build a form with all 6 check_form issue kinds
+    bad = tmp_path / "bad.pdf"
+    forms.add_fields(raw, bad, [
+        {"page": 1, "rect": [72, 700, 172, 722], "type": "text", "name": "Dup"},  # missing_tooltip + duplicate_type
+        {"page": 1, "rect": [120, 705, 220, 727], "type": "checkbox", "name": "Dup", "tooltip": "Checkbox dup"},  # overlapping + duplicate_type
+        {"page": 1, "rect": [-10, 600, 80, 622], "type": "text", "name": "Off", "tooltip": "Off page",
+         "required": True, "readonly": True, "calculate": {"op": "sum", "fields": ["Ghost"]}},  # off_page + required_readonly + missing_calc_field
+    ])
+    # Force duplicate name on checkbox and remove tooltip on first field
+    bad_dup = tmp_path / "bad_dup.pdf"
+    w2 = PdfWriter(clone_from=str(bad))
+    del w2.pages[0]["/Annots"][0].get_object()[NameObject("/TU")]
+    w2.pages[0]["/Annots"][1].get_object()[NameObject("/T")] = TextStringObject("Dup")
+    w2.write(str(bad_dup))
+
+    kinds = {issue["kind"] for issue in forms.check_form(bad_dup)}
+    assert kinds == {
+        "missing_tooltip",
+        "duplicate_type",
+        "overlapping",
+        "off_page",
+        "required_readonly",
+        "missing_calc_field",
+    }
+
+

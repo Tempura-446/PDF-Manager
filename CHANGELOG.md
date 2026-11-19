@@ -49,6 +49,13 @@ Draw, move, resize and arrange form fields directly on the page in the reader.
   fields page by page. Click a field to select it, double-click to rename
   it in place, drag rows to change the tab order, or reset a page with
   **Order by rows** or **Order by columns**.
+- **Preview and Check form.** Switch on **Preview** in **Prepare form** to
+  try filling in the form with formatting, validation, and calculations
+  running live; values typed in Preview are discarded when you switch back
+  unless you choose **Keep as default values**. **Check form** scans for
+  missing tooltips, duplicate names with different types, off-page or
+  overlapping fields, required read-only fields, and calculations that name a
+  missing field, and clicking any item selects that field on the page.
 
 ## 0.56.0
 
