@@ -67,6 +67,12 @@ Draw, move, resize and arrange form fields directly on the page in the reader.
   FDF data or PDF attachment choice) — and configure any **Checkbox** to show
   or hide chosen fields when ticked. Both work live in the reader and are
   saved as standard PDF actions.
+- **PDF ↔ DXF and DWG drawings.** Export vector PDFs to CAD DXF (**PDF → DXF**
+  and `pdfm to-dxf`), preserving drawing scale (`/VP /Measure` or an explicit
+  scale), layers, colours, line weights, arcs/circles, solid fills, and text.
+  Convert `.dxf` drawings (and `.dwg` when the free ODA File Converter is
+  installed) to layered, scaled PDFs with **Drawing → PDF**, `pdfm from-dxf`,
+  or by opening a `.dxf` / `.dwg` directly in the reader.
 
 ## 0.56.0
 

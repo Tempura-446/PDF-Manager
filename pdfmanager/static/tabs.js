@@ -29,7 +29,28 @@ export const Tabs = (Base) => class extends Base {
   }
 
   async openFile(file, password = null) {
-    await this.openBytes(new Uint8Array(await file.arrayBuffer()), file.name || "document.pdf", password);
+    const name = file.name || "document.pdf";
+    if (/\.(dxf|dwg)$/i.test(name)) {
+      if (this.loading) this.loading.hidden = false;
+      try {
+        const res = await fetch("/api/drawing/open", {
+          method: "POST",
+          headers: { "X-Pdfm-Token": this.token, "X-Pdfm-Filename": encodeURIComponent(name) },
+          body: await file.arrayBuffer(),
+        });
+        if (!res.ok) {
+          const msg = (await res.json().catch(() => ({}))).error || res.statusText;
+          this.toast(msg);
+          return;
+        }
+        const pdfBytes = new Uint8Array(await res.arrayBuffer());
+        await this.openBytes(pdfBytes, name.replace(/\.(dxf|dwg)$/i, ".pdf"), password);
+      } finally {
+        if (this.loading) this.loading.hidden = true;
+      }
+      return;
+    }
+    await this.openBytes(new Uint8Array(await file.arrayBuffer()), name, password);
   }
 
   /** Open a PDF in a new tab, or switch to its tab if it's already open. */

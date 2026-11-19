@@ -29,17 +29,19 @@
 
 ### Phase 1 (release A): layers
 
+**Done in 0.32.0** (`layers.py`, `static/layers.js`, `tests/test_layers32.py`, `tests/test_layers32_browser.py`).
+
 **Task 1.1: layers panel in the reader**
-- [ ] Read the PDF's optional content groups (`/OCProperties`: `/OCGs`, `/D` with `/Order` and `/ON`/`/OFF`, `/Locked`, and `/RBGroups` for radio groups) through pdf.js's `optionalContentConfig`.
-- [ ] Show a "Layers" tab in the sidebar, next to Pages, Outline and Comments, only when the file has layers. It shows the nested order with checkboxes; locked layers can't be changed, and a radio group keeps only one layer on.
-- [ ] Toggling a layer redraws the pages (pdf.js `optionalContentConfigPromise`). The thumbnails follow.
-- [ ] Measuring and snapping only use the visible layers.
-- [ ] Test (browser): a two-layer PDF made with reportlab or pikepdf. Hiding the "Dimensions" layer hides its text, and snapping no longer finds its lines.
+- [x] Read the PDF's optional content groups (`/OCProperties`: `/OCGs`, `/D` with `/Order` and `/ON`/`/OFF`, `/Locked`, and `/RBGroups` for radio groups) through pdf.js's `optionalContentConfig`.
+- [x] Show a "Layers" tab in the sidebar, next to Pages, Outline and Comments, only when the file has layers. It shows the nested order with checkboxes; locked layers can't be changed, and a radio group keeps only one layer on.
+- [x] Toggling a layer redraws the pages (pdf.js `optionalContentConfigPromise`). The thumbnails follow.
+- [x] Measuring and snapping only use the visible layers.
+- [x] Test (browser): a two-layer PDF made with reportlab or pikepdf. Hiding the "Dimensions" layer hides its text, and snapping no longer finds its lines.
 
 **Task 1.2: print and save with chosen layers**
-- [ ] Print uses the layers currently shown.
-- [ ] Add a "Save layer visibility" choice that writes `/D /ON`/`/OFF` to the file. Add a "Flatten layers" tool that bakes the visible layers in and removes the hidden ones' content, using pikepdf and the existing content-stream code, for sending a clean set.
-- [ ] Test: after flattening with "Dimensions" hidden, its text is gone from pdfium's text and from the file.
+- [x] Print uses the layers currently shown.
+- [x] Add a "Save layer visibility" choice that writes `/D /ON`/`/OFF` to the file. Add a "Flatten layers" tool that bakes the visible layers in and removes the hidden ones' content, using pikepdf and the existing content-stream code, for sending a clean set.
+- [x] Test: after flattening with "Dimensions" hidden, its text is gone from pdfium's text and from the file.
 
 ### Phase 2 (release B): construction markups
 
@@ -103,24 +105,24 @@ Asked for after 0.38.0, whose "Not yet" list this is.
 ### Phase 3 (release C): PDF to DXF
 
 **Task 3.1: vector export**
-- [ ] For chosen pages, read the page's paths through the existing content-stream reader that snapping uses (`snap.js` / `pdfmanager` geometry). That covers lines, Bézier curves (straight runs become LINE, true arcs become ARC when they fit within tolerance, the rest become SPLINE or a polyline), rectangles, fills (HATCH with a solid pattern) and text (TEXT/MTEXT with the font's size and angle).
-- [ ] Coordinates use the drawing's real units: if the page has a scale (`/VP /Measure` or a calibration the user saved), 1 DXF unit = 1 real unit, and `$INSUNITS` is set. Otherwise points.
-- [ ] Each PDF layer becomes a DXF layer. Without layers, group by stroke colour and line width, as CAD exports usually map them. Colours go to true colour; line weights are kept.
-- [ ] A "PDF → DXF" tool in Convert, and `pdfm to-dxf`.
-- [ ] Test: a reportlab drawing (a rectangle, a circle, a line and text) at a 1:100 scale exports to a DXF that ezdxf reads back with the right entities, the right sizes in metres (±0.5 %) and the text in place.
+- [x] For chosen pages, read the page's paths through the existing content-stream reader that snapping uses (`snap.js` / `pdfmanager` geometry). That covers lines, Bézier curves (straight runs become LINE, true arcs become ARC when they fit within tolerance, the rest become SPLINE or a polyline), rectangles, fills (HATCH with a solid pattern) and text (TEXT/MTEXT with the font's size and angle).
+- [x] Coordinates use the drawing's real units: if the page has a scale (`/VP /Measure` or a calibration the user saved), 1 DXF unit = 1 real unit, and `$INSUNITS` is set. Otherwise points.
+- [x] Each PDF layer becomes a DXF layer. Without layers, group by stroke colour and line width, as CAD exports usually map them. Colours go to true colour; line weights are kept.
+- [x] A "PDF → DXF" tool in Convert, and `pdfm to-dxf`.
+- [x] Test: a reportlab drawing (a rectangle, a circle, a line and text) at a 1:100 scale exports to a DXF that ezdxf reads back with the right entities, the right sizes in metres (±0.5 %) and the text in place.
 
 ### Phase 4 (release D): DXF to PDF (and DWG through the user's converter)
 
 **Task 4.1: DXF to PDF**
-- [ ] Use ezdxf's drawing add-on with its PDF or SVG backend, or render to the existing reportlab canvas.
-- [ ] Choose the layout (model space or a paper-space layout), the paper size, and the plot scale (fit, or 1:50, 1:100 and so on). Line weights come from the DXF, and there's a monochrome choice.
-- [ ] DXF layers become PDF layers (optional content), so Phase 1's panel works on the result. Write `/VP /Measure` for the chosen scale, so ZPDF measures it at once.
-- [ ] Add DXF to the "Office → PDF" family as "Drawing → PDF", and add `.dxf` to the files the reader opens (converted on open).
-- [ ] Test: a DXF made with ezdxf (a 10 m wall on layer WALLS, text on TEXT) at 1:100 on A3 gives a PDF where the wall measures 10 m in ZPDF and both layers are listed.
+- [x] Use ezdxf's drawing add-on with its PDF or SVG backend, or render to the existing reportlab canvas.
+- [x] Choose the layout (model space or a paper-space layout), the paper size, and the plot scale (fit, or 1:50, 1:100 and so on). Line weights come from the DXF, and there's a monochrome choice.
+- [x] DXF layers become PDF layers (optional content), so Phase 1's panel works on the result. Write `/VP /Measure` for the chosen scale, so ZPDF measures it at once.
+- [x] Add DXF to the "Office → PDF" family as "Drawing → PDF", and add `.dxf` to the files the reader opens (converted on open).
+- [x] Test: a DXF made with ezdxf (a 10 m wall on layer WALLS, text on TEXT) at 1:100 on A3 gives a PDF where the wall measures 10 m in ZPDF and both layers are listed.
 
 **Task 4.2: DWG (only if the user installs the ODA File Converter)**
-- [ ] If `ODAFileConverter.exe` is found (standard install folders, or a path in Settings), DWG → DXF goes through it, and then Task 4.1 handles the rest. Otherwise DWG files are refused with a plain message saying how to get the converter (it's free from opendesign.com) or to export DXF from the CAD program.
-- [ ] Test: with the converter faked (a stub that copies a DXF), a `.dwg` goes through the path. Without it, the message is shown.
+- [x] If `ODAFileConverter.exe` is found (standard install folders, or a path in Settings), DWG → DXF goes through it, and then Task 4.1 handles the rest. Otherwise DWG files are refused with a plain message saying how to get the converter (it's free from opendesign.com) or to export DXF from the CAD program.
+- [x] Test: with the converter faked (a stub that copies a DXF), a `.dwg` goes through the path. Without it, the message is shown.
 
 ### Phase 5 (release E): sheet sets
 

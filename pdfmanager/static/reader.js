@@ -397,7 +397,7 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
     this.viewerEl = el("div", { class: "pdfViewer" });
     this.container = el("div", { class: "rd-container", tabindex: "0" }, this.viewerEl);
     this.loading = el("div", { class: "rd-loading", hidden: true }, el("div", { class: "rd-spinner", role: "progressbar", "aria-label": "Loading" }));
-    this.fileInput = el("input", { type: "file", accept: ".pdf,application/pdf", hidden: true });
+    this.fileInput = el("input", { type: "file", accept: ".pdf,application/pdf,.dxf,.dwg", hidden: true });
     this.emptyOpenBtn = el("button", { class: "rd-btn primary", type: "button", html: svg("open") + "Open a PDF" });
     this.empty = el("div", { class: "rd-empty" },
       el("div", { class: "rd-empty-card" },
@@ -707,9 +707,9 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
       this.empty.classList.remove("over");
       if (!hasFiles(e)) return;
       e.preventDefault(); e.stopPropagation();
-      const isPdf = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+      const isPdf = (f) => f.type === "application/pdf" || /\.(pdf|dxf|dwg)$/i.test(f.name);
       const file = [...e.dataTransfer.files].find(isPdf);
-      if (!file) { this.toast("That isn't a PDF."); return; }
+      if (!file) { this.toast("That isn't a PDF or drawing."); return; }
       // Remember dropped files for Recent (the handle must be asked for right away).
       const item = [...e.dataTransfer.items].find((i) => i.kind === "file" && i.getAsFile() && isPdf(i.getAsFile()));
       const handle = item && item.getAsFileSystemHandle ? item.getAsFileSystemHandle() : null;
