@@ -4,6 +4,38 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.58.0
+
+Export PDFs and review comments to Markdown, read hard scans and scanned tables
+more accurately and faster with Better OCR, and check OCR results directly in
+the reader.
+
+- **PDF to Markdown export.** Convert any PDF (including headings, lists,
+  tables, links, and extracted images) to clean Markdown from the **Convert**
+  tool or CLI (`pdfm to-md`), with an option to include page markers.
+- **Review summary export.** Export annotations and comments from a PDF as a
+  structured Markdown review summary, with filters by author, annotation type,
+  or page range.
+- **Better OCR on hard pages.** Built-in OCR now offers a **Best accuracy**
+  model tier alongside **Fast**, with automatic preprocessing (deskew,
+  denoise, adaptive contrast, de-shadowing, and resolution upscaling) and
+  low-confidence line retries for faint, skewed, or photographed scans.
+- **Check OCR mode in the reader.** Open **Check OCR** in the reader to review
+  an OCR confidence report, jump directly to low-confidence ("unsure") words
+  highlighted on the page, and fix misread text in place.
+- **Scanned tables & numeric refinement.** OCR now detects ruled and borderless
+  tables on scanned pages, reads cells individually, refines numeric/currency
+  cells, and feeds exact table grids into **PDF → Excel** and **PDF → Markdown**.
+- **Faster multi-page OCR.** Multi-page OCR runs across parallel worker
+  processes, skips blank or duplicate pages automatically, and uses DirectML
+  GPU acceleration when available with seamless CPU fallback.
+- **Architecture modularization.** Split ZPDF's largest monolithic files
+  (`gui.py` → `pdfmanager/server/`, `gui.html` → declarative HTML + `static/app.css`
+  and focused JS controllers, `static/reader.js` → `reader-nav.js` /
+  `reader-render.js` / `reader-save.js`, `forms.py` → `pdfmanager/forms/`,
+  `textedit.py` → `pdfmanager/textedit/`) with zero behaviour changes to keep
+  upcoming UI and security tracks clean and maintainable.
+
 ## 0.57.0
 
 Author and preview fillable forms in the reader, convert CAD drawings (DXF/DWG)
