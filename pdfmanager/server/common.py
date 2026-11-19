@@ -152,15 +152,22 @@ class OpenFiles:
         with self.lock:
             return self.items.get(key)
 
+    def find(self, path):
+        """Return the stored resolved Path matching ``path``, or None."""
+        try:
+            wanted = Path(path).expanduser().resolve()
+        except (OSError, ValueError, TypeError):
+            return None
+        with self.lock:
+            for known in self.items.values():
+                if known == wanted:
+                    return known
+        return None
+
     def knows(self, path):
         """Whether ``path`` is a file the app has open or has saved: only
         those may be shown in the file manager."""
-        try:
-            path = Path(path).expanduser().resolve()
-        except (OSError, ValueError, TypeError):
-            return False
-        with self.lock:
-            return path in self.items.values()
+        return self.find(path) is not None
 
 
 class UnsavedWork:
@@ -407,7 +414,7 @@ def _file_stamp(path):
 def _byte_range(header, size):
     """(first, last) byte of a one-range ``Range`` header for a file of
     ``size`` bytes; None if the range is outside the file or not one we serve."""
-    match = re.fullmatch(r"\s*bytes=(\d*)-(\d*)\s*", header or "")
+    match = re.fullmatch(r"bytes=(\d*)-(\d*)", (header or "").strip())
     if not match or not (match.group(1) or match.group(2)) or size == 0:
         return None
     if match.group(1):

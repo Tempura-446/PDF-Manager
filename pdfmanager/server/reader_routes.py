@@ -158,14 +158,17 @@ class ReaderRoutesMixin:
     def _reveal(self, data):
         """Show a file in Explorer / Finder / the file manager: only a file
         the app has open or has saved, never any path the page names."""
-        target = data.get("path")
-        if data.get("id") and self.opened is not None:
-            target = self.opened.get(str(data["id"]))
-        if not target or self.opened is None or not self.opened.knows(target):
+        known = None
+        if self.opened is not None:
+            if data.get("id"):
+                known = self.opened.get(str(data["id"]))
+            elif data.get("path"):
+                known = self.opened.find(data["path"])
+        if known is None:
             return self._error(HTTPStatus.FORBIDDEN, "not a file ZPDF has open")
-        if not Path(target).exists():
+        if not known.exists():
             raise UserError("that file is no longer there")
-        gui_hook("reveal_in_file_manager", reveal_in_file_manager)(Path(target).resolve())
+        gui_hook("reveal_in_file_manager", reveal_in_file_manager)(known)
         return self._send(HTTPStatus.OK, {"ok": True})
 
     def _recent(self):
