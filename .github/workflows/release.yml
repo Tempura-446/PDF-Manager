@@ -83,7 +83,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $version = python -c "import packaging.release as r; print(r.read_version())"
+          $version = python -c "import pdfmanager; print(pdfmanager.__version__)"
           $tag = "v$($version.Trim())"
           gh workflow run build-app.yml --ref $tag
           gh workflow run lock.yml --ref $tag
