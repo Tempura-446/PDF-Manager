@@ -17,7 +17,7 @@ from pypdf import PdfReader
 from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
                         forms, recipes, redact, scan, search)
 from pdfmanager import certsign, comments, filetools, formdetect, pdfacheck
-from pdfmanager import accessibility  # -- accessibility --
+from pdfmanager import accessibility, preflight  # -- accessibility --
 from pdfmanager import ocr  # the OCR engine ids
 from pdfmanager import risks  # what a PDF can do, and Make safe
 from pdfmanager import protection  # password strength, old encryption and its upgrade
@@ -542,6 +542,36 @@ def cmd_check_access(a):
     return 0 if ok else 1
 
 # -- end of accessibility --
+
+
+def cmd_preflight(a):
+    inputs = _expand(a.inputs)
+    passwords = _Passwords(a.password)
+    ok, records = True, []
+    for src in inputs:
+        try:
+            result = preflight.check(
+                src,
+                password=passwords.for_file(src),
+                min_dpi=a.min_dpi,
+                error_dpi=a.error_dpi,
+                min_bleed_mm=a.min_bleed,
+            )
+        except (core.PdfManagerError, OSError) as exc:
+            if len(inputs) == 1:
+                raise
+            ok = False
+            message = str(exc)
+            print(f"error: {message if str(src) in message else f'{src}: {message}'}", file=sys.stderr)
+            continue
+        ok = ok and result["passed"]
+        if a.json:
+            records.append({"file": str(src), **result})
+        else:
+            print(("\n" if src != inputs[0] else "") + preflight.report(result, str(src)), end="")
+    if a.json:
+        print(json.dumps(records[0] if len(records) == 1 else records, indent=2, ensure_ascii=False))
+    return 0 if ok else 1
 
 
 def run_bookmarks(a, src, out, pw):
@@ -1827,6 +1857,17 @@ def build_parser():
                                        f"prompt, or set {PASSWORD_ENV})")
     sp.add_argument("--json", action="store_true", help="print JSON")
     # -- end of accessibility --
+
+    sp = other("preflight", cmd_preflight,
+               "check PDFs for commercial print readiness (image DPI, unembedded fonts, RGB/CMYK, "
+               "transparency, bleed, page sizes, hairlines; exit code 0 when no errors)")
+    sp.add_argument("inputs", nargs="+", metavar="input", help="PDF(s) to check")
+    sp.add_argument("--min-dpi", type=float, default=300, help="warning DPI threshold for images (default: 300)")
+    sp.add_argument("--error-dpi", type=float, default=150, help="error DPI threshold for images (default: 150)")
+    sp.add_argument("--min-bleed", type=float, default=3.0, help="minimum bleed in mm when TrimBox is set (default: 3.0)")
+    sp.add_argument("--password", help=f"password for encrypted input (better: let pdfm "
+                                       f"prompt, or set {PASSWORD_ENV})")
+    sp.add_argument("--json", action="store_true", help="print JSON")
 
     sp = per_file("bookmarks", run_bookmarks,
                   "list, set or detect bookmarks (without options: list them)")
