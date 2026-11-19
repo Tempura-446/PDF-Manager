@@ -22,14 +22,15 @@
 
 ### Phase 1: Split `gui.py` HTTP routes by domain
 
-- [ ] Create `pdfmanager/server/` package (or `gui_routes/`):
+- [x] Create `pdfmanager/server/` package (or `gui_routes/`):
   - `common.py` (request parsing, auth/CSRF token, path safety, JSON/error helpers, temp-file lifecycle)
+  - `operations.py` (operation specs `OPERATIONS`, file/folder operation runners, preview & inspect helpers)
   - `reader_routes.py` (open, render, save, annotations, layers, text-edit, compare)
   - `form_routes.py` (fill, prepare-form CRUD, field properties, preview, check-form, import/export, fill-many)
   - `tool_routes.py` (merge, split, compress, OCR, convert, DXF, sheet sets, redact, sign, preflight)
   - `scan_watch_routes.py` (scanner discovery/scan, watch folders, recipes, settings, update)
-- [ ] Keep `gui.py` as the thin entry point (`main`, `main_app`, server startup, pywebview window bootstrap) that registers route tables.
-- [ ] Verify full test suite + PyInstaller build (`build_app.py --self-test`).
+- [x] Keep `gui.py` as the thin entry point (`main`, `main_app`, server startup, pywebview window bootstrap) that registers route tables.
+- [x] Verify full test suite + PyInstaller build (`build_app.py --self-test`).
 
 ---
 
