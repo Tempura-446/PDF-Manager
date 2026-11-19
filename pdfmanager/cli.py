@@ -17,7 +17,7 @@ from pypdf import PdfReader
 from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
                         forms, recipes, redact, scan, search)
 from pdfmanager import certsign, comments, filetools, formdetect, pdfacheck
-from pdfmanager import accessibility, preflight  # -- accessibility --
+from pdfmanager import accessibility, filing, preflight  # -- accessibility --
 from pdfmanager import ocr  # the OCR engine ids
 from pdfmanager import risks  # what a PDF can do, and Make safe
 from pdfmanager import protection  # password strength, old encryption and its upgrade
@@ -572,6 +572,48 @@ def cmd_preflight(a):
     if a.json:
         print(json.dumps(records[0] if len(records) == 1 else records, indent=2, ensure_ascii=False))
     return 0 if ok else 1
+
+
+def cmd_auto_file(a):
+    if a.undo:
+        res = filing.undo_filing(undo_path=a.undo_log)
+        if a.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print(f"Restored {res['restored']} file(s).")
+        return 0
+    if not a.inputs:
+        raise core.PdfManagerError("provide at least one PDF file or folder (or use --undo)")
+    pdf_files = []
+    for raw in a.inputs:
+        p = Path(raw)
+        if p.is_dir():
+            pdf_files.extend(sorted(p.glob("*.pdf")))
+        else:
+            pdf_files.append(p)
+    if not pdf_files:
+        raise core.PdfManagerError("no PDF files found")
+    rules = filing.load_rules(a.rules) if a.rules else filing.STARTER_RULES
+    plan = filing.plan_filing(pdf_files, rules, base_dir=a.out_dir, password=a.password)
+    if a.apply:
+        applied = filing.apply_filing(plan, undo_path=a.undo_log, password=a.password)
+        if a.json:
+            print(json.dumps({"plan": plan, **applied}, indent=2, ensure_ascii=False))
+        else:
+            for item in plan:
+                if item["matched"]:
+                    print(f"{item['src']} -> {item['dst']}  [{item['rule']}]")
+            print(f"Applied: moved {applied['moved']} file(s).")
+    else:
+        if a.json:
+            print(json.dumps({"dry_run": True, "plan": plan}, indent=2, ensure_ascii=False))
+        else:
+            for item in plan:
+                if item["matched"]:
+                    print(f"[DRY RUN] {item['src']} -> {item['dst']}  [{item['rule']}]")
+                else:
+                    print(f"[SKIP]    {item['src']}  ({item['reason']})")
+    return 0
 
 
 def run_bookmarks(a, src, out, pw):
@@ -1867,6 +1909,17 @@ def build_parser():
     sp.add_argument("--min-bleed", type=float, default=3.0, help="minimum bleed in mm when TrimBox is set (default: 3.0)")
     sp.add_argument("--password", help=f"password for encrypted input (better: let pdfm "
                                        f"prompt, or set {PASSWORD_ENV})")
+    sp.add_argument("--json", action="store_true", help="print JSON")
+
+    sp = other("auto-file", cmd_auto_file,
+               "automatically rename and file PDFs by content rules (dry-run by default; pass --apply to move)")
+    sp.add_argument("inputs", nargs="*", metavar="input", help="PDF file(s) or folder(s) to file")
+    sp.add_argument("--rules", metavar="FILE", help="JSON/YAML rules file (default: built-in starter rules)")
+    sp.add_argument("--out-dir", metavar="DIR", help="base destination folder (default: each file's folder)")
+    sp.add_argument("--apply", action="store_true", help="apply renames/moves (without this, prints dry-run preview)")
+    sp.add_argument("--undo", action="store_true", help="undo the last applied auto-file batch")
+    sp.add_argument("--undo-log", metavar="FILE", help="custom path for the undo manifest")
+    sp.add_argument("--password", help=f"password for encrypted input (or set {PASSWORD_ENV})")
     sp.add_argument("--json", action="store_true", help="print JSON")
 
     sp = per_file("bookmarks", run_bookmarks,
