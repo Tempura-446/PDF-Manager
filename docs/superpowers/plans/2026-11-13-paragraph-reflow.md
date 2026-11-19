@@ -119,26 +119,26 @@ Visual check: before/after renders of the untouched regions must be pixel-identi
 ### Phase 4 (release D): flow around and across
 
 **Task 4.1: around pictures**
-- [ ] The column's free shape per line: if a picture (image XObject or filled path larger than a rule) overlaps a line's band inside the column, that line's width is the part beside it (left or right, whichever is wider, if wide enough; else skip the band).
-- [ ] The breaker gets a width per line, which Knuth–Plass handles naturally.
-- [ ] Test: a paragraph beside a picture wraps shorter beside it and full width below it, and no letter overlaps the picture.
+- [x] The column's free shape per line: if a picture (image XObject or filled path larger than a rule) overlaps a line's band inside the column, that line's width is the part beside it (left or right, whichever is wider, if wide enough; else skip the band).
+- [x] The breaker gets a width per line, which Knuth–Plass handles naturally.
+- [x] Test: a paragraph beside a picture wraps shorter beside it and full width below it, and no letter overlaps the picture.
 
 **Task 4.2: on to the next page**
-- [ ] When a paragraph no longer fits in the page's last column, and "run on" is chosen, the overflow lines go to the top of the next page's matching column. That column's text moves down using the same `Flow` machinery.
-- [ ] Ask first: the reader offers "Continue on the next page" next to Shrink to fit.
-- [ ] Never move text off the last page. Offer "Add a page" instead.
-- [ ] Test: a two-page document. Growing the last paragraph of page 1 by three lines puts them at the top of page 2, and page 2's text moves down by three lines.
+- [x] When a paragraph no longer fits in the page's last column, and "run on" is chosen, the overflow lines go to the top of the next page's matching column. That column's text moves down using the same `Flow` machinery.
+- [x] Ask first: the reader offers "Continue on the next page" next to Shrink to fit.
+- [x] Never move text off the last page. Offer "Add a page" instead.
+- [x] Test: a two-page document. Growing the last paragraph of page 1 by three lines puts them at the top of page 2, and page 2's text moves down by three lines.
 
 ### Phase 5 (release E): other scripts
 
 **Task 5.1: CJK**
-- [ ] Break between any two CJK characters, except where kinsoku forbids it: closing punctuation can't start a line, opening punctuation can't end one. Keep Latin words inside CJK text whole.
-- [ ] Justify CJK by spreading inter-character spacing (`Tc`), not word spacing.
-- [ ] Test: a Japanese paragraph rewraps with no line starting with 。, and fills the width when justified.
+- [x] Break between any two CJK characters, except where kinsoku forbids it: closing punctuation can't start a line, opening punctuation can't end one. Keep Latin words inside CJK text whole.
+- [x] Justify CJK by spreading inter-character spacing (`Tc`), not word spacing.
+- [x] Test: a Japanese paragraph rewraps with no line starting with 。, and fills the width when justified.
 
 **Task 5.2: right-to-left**
-- [ ] Use the Unicode bidi algorithm's paragraph level and runs, implemented in-house or with a small pure-Python helper if it's licensed compatibly. Lines are filled right to left, with numbers and Latin runs inside kept left to right.
-- [ ] Test: a Hebrew paragraph with an English word and a number rewraps with the right visual order.
+- [x] Use the Unicode bidi algorithm's paragraph level and runs, implemented in-house or with a small pure-Python helper if it's licensed compatibly. Lines are filled right to left, with numbers and Latin runs inside kept left to right.
+- [x] Test: a Hebrew paragraph with an English word and a number rewraps with the right visual order.
 
 ---
 

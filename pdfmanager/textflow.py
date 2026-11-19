@@ -962,6 +962,74 @@ class Flow:
         nxt.update(top=top, baseline=baseline, x0=x0, x1=x1)
         return nxt
 
+    def obstacles(self, left, right, y_top, y_bot, size):
+        """Pictures and large filled shapes overlapping the vertical band
+        ``[y_bot, y_top]`` inside ``[left, right]``: [(x0, y0, x1, y1)]."""
+        content = self.content
+        if not content:
+            return []
+        min_dim = max(RULE, size * 1.2)
+        col_w = max(right - left, size * 4)
+        out = []
+        for b in content.things:
+            if b[2] - b[0] >= min_dim and b[3] - b[1] >= min_dim \
+                    and _overlaps(b[0], b[2], left, right) and _overlaps(b[1], b[3], y_bot, y_top):
+                if not (b[0] <= left + 2 and b[2] >= right - 2 and b[2] - b[0] >= col_w * 0.95):
+                    out.append(b)
+        for path in content.paths:
+            if not path["paint"] or not path["fill"] or path["clip"] or path["start"] in self.dropped:
+                continue
+            b = path["box"]
+            if b[2] - b[0] < min_dim or b[3] - b[1] < min_dim:
+                continue
+            if not (_overlaps(b[0], b[2], left, right) and _overlaps(b[1], b[3], y_bot, y_top)):
+                continue
+            # Ignore full-width background tints or cover boxes behind the text.
+            if b[0] <= left + 2 and b[2] >= right - 2:
+                continue
+            out.append(b)
+        return out
+
+    def top_column(self, col_left, col_right, lead):
+        """The top of the matching column on this page, for text running on
+        from the previous page: same dict as :meth:`next_column`, or None."""
+        level = [L for L in self.letters if L[4]]
+        if not level:
+            # Blank page: start at standard top margin with the source column's width.
+            top = self.crop[3] - MARGIN
+            margin = self.crop[1] + MARGIN
+            return {"lines": [], "letters": [], "rules": [], "covers": [],
+                    "limit": margin, "low": top, "bottom": top,
+                    "left": self.crop[0], "right": self.crop[2], "barrier": None,
+                    "top": top, "baseline": top - lead * 0.8, "x0": col_left, "x1": col_right}
+        size = statistics.median(L[3] for L in level)
+        strips = []
+        for a, b in sorted((L[1][0], L[1][2]) for L in level):
+            if strips and a <= strips[-1][1] + size:
+                strips[-1][1] = max(strips[-1][1], b)
+            else:
+                strips.append([a, b])
+        # Pick the strip with the largest horizontal overlap with [col_left, col_right], else leftmost.
+        best_idx = max(
+            range(len(strips)),
+            key=lambda k: min(strips[k][1], col_right) - max(strips[k][0], col_left),
+        )
+        x0, x1 = strips[best_idx]
+        gutter_l = strips[best_idx - 1][1] if best_idx > 0 else self.crop[0]
+        gutter_r = strips[best_idx + 1][0] if best_idx + 1 < len(strips) else self.crop[2]
+        mine = [L for L in level if gutter_l < (L[1][0] + L[1][2]) / 2 < gutter_r]
+        if not mine:
+            return None
+        first = _lines(mine)[0]
+        top, baseline = max(L[1][3] for L in first), first[0][2][1]
+        below = [L for L in self.letters if L[2][1] <= baseline + 0.01]
+        nxt = self._down(below, top + 0.5, gutter_l, gutter_r,
+                         max(x0 - gutter_l, 1.0), max(gutter_r - x1, 1.0), lead)
+        if not nxt["lines"] or abs(nxt["lines"][0][3] - top) > 0.5:
+            return None
+        nxt.update(top=top, baseline=baseline, x0=x0, x1=x1)
+        return nxt
+
     def _down(self, below, bottom, gutter_l, gutter_r, gap_l, gap_r, lead):
         """Walk down a column from ``bottom`` between the gutters: the lines
         (of ``below``) and rules that would move, until a big gap or

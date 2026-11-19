@@ -701,7 +701,7 @@ def _options(edit):
             if not low <= value <= high:
                 raise core.PdfManagerError(f"the {key} should be between {low:g} and {high:g}")
             opts[key] = value
-    for key in ("bold", "italic", "flow", "styles", "hyphens", "indent", "keep_unchanged"):
+    for key in ("bold", "italic", "flow", "styles", "hyphens", "indent", "keep_unchanged", "wrap_pictures"):
         if edit.get(key) is not None:
             opts[key] = bool(edit[key])
     if edit.get("color") is not None:
@@ -729,9 +729,9 @@ def _options(edit):
             raise core.PdfManagerError('breaks can only be "simple"')
         opts["breaks"] = "simple"
     if edit.get("fit") not in (None, ""):
-        if edit["fit"] != "shrink":
-            raise core.PdfManagerError('fit can only be "shrink"')
-        opts["fit"] = "shrink"
+        if edit["fit"] not in ("shrink", "next_page", "add_page"):
+            raise core.PdfManagerError('fit can only be "shrink", "next_page" or "add_page"')
+        opts["fit"] = edit["fit"]
     return opts
 
 
@@ -908,6 +908,144 @@ def _pieces_of(words, divide, justify, room, measure):
     return pieces, joins
 
 
+_KINSOKU_NO_START = frozenset("。、，．！？：；）」』】》〉〕］｝.,!?:;)]}ー々〜…・ゝゞヽヾ")
+_KINSOKU_NO_END = frozenset("（「『【《〈〔［｛([{")
+_BIDI_MIRROR = str.maketrans("()[]{}<>", ")(][}{><")
+
+
+def _is_cjk(ch):
+    """Whether ``ch`` is a CJK ideograph, kana, hangul, or CJK punctuation."""
+    o = ord(ch)
+    return (0x3000 <= o <= 0x30FF or 0x3400 <= o <= 0x4DBF or 0x4E00 <= o <= 0x9FFF
+            or 0xAC00 <= o <= 0xD7AF or 0xF900 <= o <= 0xFAFF or 0xFF00 <= o <= 0xFFEF)
+
+
+def _has_cjk(text):
+    return any(_is_cjk(ch) for ch in text)
+
+
+def _cjk_tokens(text):
+    """Break CJK/mixed text into atomic ``(token, space_before)`` pieces.
+
+    Breaks are allowed between CJK characters except where kinsoku forbids it
+    (closing punctuation stays attached to the preceding character; opening
+    punctuation stays attached to the following character). Runs of Latin/ASCII
+    letters and digits stay whole as single words.
+    """
+    raw = []
+    i, n = 0, len(text)
+    pending_space = False
+    while i < n:
+        ch = text[i]
+        if ch.isspace():
+            pending_space = True
+            i += 1
+            continue
+        if _is_cjk(ch):
+            raw.append((ch, pending_space))
+            pending_space = False
+            i += 1
+        else:
+            j = i + 1
+            while j < n and not text[j].isspace() and not _is_cjk(text[j]):
+                j += 1
+            raw.append((text[i:j], pending_space))
+            pending_space = False
+            i = j
+    if not raw:
+        return []
+    # Apply kinsoku: bind NO_END to the following token, NO_START to the preceding token.
+    merged = []
+    k = 0
+    while k < len(raw):
+        tok, sp = raw[k]
+        while tok and tok[-1] in _KINSOKU_NO_END and k + 1 < len(raw) and not raw[k + 1][1]:
+            k += 1
+            tok += raw[k][0]
+        if merged and not sp and tok and tok[0] in _KINSOKU_NO_START:
+            prev_tok, prev_sp = merged[-1]
+            merged[-1] = (prev_tok + tok, prev_sp)
+        else:
+            merged.append((tok, sp))
+        k += 1
+    return merged
+
+
+def _wrap_cjk(text, room, measure):
+    """Wrap CJK/mixed text into lines honoring kinsoku rules and keeping Latin words whole."""
+    tokens = _cjk_tokens(text)
+    if not tokens:
+        return [("", None)]
+    lines, line = [], ""
+    for tok, sp in tokens:
+        r = room(len(lines)) if callable(room) else room
+        sep = " " if (line and sp) else ""
+        trial = line + sep + tok
+        if line and measure(trial) > r + 1e-9:
+            lines.append(line)
+            line = tok
+        else:
+            line = trial
+    lines.append(line)
+    return [(ln, None) for ln in lines]
+
+
+def _bidi_visual(text, rtl=True):
+    """Reorder a single logical-order line into visual left-to-right order
+    following UAX #9 paragraph-level and run-reordering rules.
+
+    Inside an RTL paragraph (``rtl=True``), strong RTL runs (Hebrew, Arabic)
+    are ordered right-to-left while embedded LTR runs (Latin words, numbers)
+    remain left-to-right.
+    """
+    if not rtl or not text:
+        return text
+    n = len(text)
+    types = []
+    for ch in text:
+        bc = unicodedata.bidirectional(ch)
+        if bc in ("R", "AL"):
+            types.append("R")
+        elif bc == "L":
+            types.append("L")
+        elif bc in ("EN", "AN"):
+            types.append("EN")
+        elif bc in ("ES", "CS", "ET"):
+            types.append("SEP")
+        else:
+            types.append("N")
+    # Resolve numeric separators/terminators adjacent to digits.
+    for i in range(n):
+        if types[i] == "SEP":
+            prev_en = i > 0 and types[i - 1] == "EN"
+            next_en = i + 1 < n and types[i + 1] == "EN"
+            types[i] = "EN" if (prev_en and next_en) or (text[i] in "%$" and (prev_en or next_en)) else "N"
+    # Resolve neutrals: if bounded by LTR/number on both sides -> LTR, else paragraph direction R.
+    strong = [t if t in ("R", "L", "EN") else None for t in types]
+    for i in range(n):
+        if strong[i] is None:
+            left = next((strong[k] for k in range(i - 1, -1, -1) if strong[k] is not None), "R")
+            right = next((strong[k] for k in range(i + 1, n) if strong[k] is not None), "R")
+            types[i] = "L" if (left in ("L", "EN") and right in ("L", "EN")) else "R"
+    levels = [2 if t in ("L", "EN") else 1 for t in types]
+    # Mirror paired brackets on RTL (level 1) positions.
+    chars = [ch.translate(_BIDI_MIRROR) if lv == 1 else ch for ch, lv in zip(text, levels)]
+    # UAX #9 L2 for levels in {1, 2}: reverse the whole line, then reverse back each level-2 run.
+    chars.reverse()
+    levels.reverse()
+    i = 0
+    while i < n:
+        if levels[i] == 2:
+            j = i + 1
+            while j < n and levels[j] == 2:
+                j += 1
+            chars[i:j] = reversed(chars[i:j])
+            i = j
+        else:
+            i += 1
+    return "".join(chars)
+
+
 def _wrap_marked(text, room, measure, justify=False, greedy=False, divide=None):
     """Lines of one paragraph (no line breaks in it) no wider than ``room``:
     [(line, how it ends)], the end None (a space was there), "soft" (a word
@@ -915,6 +1053,8 @@ def _wrap_marked(text, room, measure, justify=False, greedy=False, divide=None):
     hyphen). Broken looking at the whole paragraph (see :func:`_fit`), or
     line by line with ``greedy`` (and for a very long paragraph).
     ``divide(word)`` gives a word's divisions (see :func:`_divisions`)."""
+    if _has_cjk(text):
+        return _wrap_cjk(text, room, measure)
     words = text.split(" ")
     if greedy or len(words) > FIT_LIMIT or len(words) < 2:
         lines, line = [], ""
@@ -1059,6 +1199,31 @@ def _split_seq(seq, sep):
 
 def _wrap_seq_marked(seq, room, measure, justify=False, greedy=False, divide=None):
     """:func:`_wrap_marked` for a list of (character, style)."""
+    plain = "".join(ch for ch, _ in seq)
+    if _has_cjk(plain):
+        tokens = _cjk_tokens(plain)
+        if not tokens:
+            return [([], None)]
+        # Map each token back to its slice of styled (ch, key) items.
+        pos, styled_tokens = 0, []
+        for tok, sp in tokens:
+            while pos < len(seq) and seq[pos][0].isspace():
+                pos += 1
+            chunk = seq[pos:pos + len(tok)]
+            pos += len(tok)
+            styled_tokens.append((chunk, sp))
+        lines, line = [], []
+        for chunk, sp in styled_tokens:
+            r = room(len(lines)) if callable(room) else room
+            sep = [(" ", chunk[0][1] if chunk else line[-1][1])] if (line and sp) else []
+            trial = line + sep + chunk
+            if line and measure(trial) > r + 1e-9:
+                lines.append(line)
+                line = list(chunk)
+            else:
+                line = trial
+        lines.append(line)
+        return [(ln, None) for ln in lines]
     words = _split_seq(seq, " ")
 
     def joined(some, spaced):
@@ -1285,6 +1450,31 @@ def _leading_unchanged(rows, text, marks=None):
     return keep, pos
 
 
+def _free_span(y_base, col_left, col_right, size, obstacles):
+    """Widest horizontal span inside ``[col_left, col_right]`` on the line at
+    ``y_base`` that stays clear of ``obstacles``: ``(span_left, span_right)``."""
+    pad_x = max(4.0, size * 0.4)
+    pad_y = size * 0.15
+    lo, hi = y_base - 0.25 * size - pad_y, y_base + 0.85 * size + pad_y
+    blocked = []
+    for ox0, oy0, ox1, oy1 in obstacles:
+        if oy1 > lo and oy0 < hi and ox1 + pad_x > col_left and ox0 - pad_x < col_right:
+            blocked.append((max(col_left, ox0 - pad_x), min(col_right, ox1 + pad_x)))
+    if not blocked:
+        return col_left, col_right
+    blocked.sort()
+    spans, cur = [], col_left
+    for bx0, bx1 in blocked:
+        if bx0 > cur:
+            spans.append((cur, bx0))
+        cur = max(cur, bx1)
+    if cur < col_right:
+        spans.append((cur, col_right))
+    if not spans:
+        return col_left, col_left
+    return max(spans, key=lambda s: s[1] - s[0])
+
+
 class _Page:
     """One page being changed: what pdfium reads of it and what gets drawn."""
 
@@ -1309,6 +1499,7 @@ class _Page:
         self.spots = None   # ... line by line, for a paragraph: [(place, the old line's first letter)]
         self.line_no = None  # the line of the paragraph being written
         self.legacy = False  # the change being made is done the old way (covered and drawn on top)
+        self.spills = []    # [(page_index, _Page_or_None, runs_for_new_page_or_None)] for cross-page overflow
 
     @property
     def flow(self):
@@ -1958,13 +2149,21 @@ class _Page:
         plain = not any(key in opts for key in ("font", "bold", "italic"))  # the old words' font
         was = font if plain else _choose(self.page, base, text)
         natural = _metrics(was[0], was[1], base)[1] + 2 * tc
+        is_rtl = _rtl(text)
         align = opts.get("align") or _alignment(
             align_rows, left, orig_right, word, natural, base["size"], first_indent=align_first_indent
         )
+        if is_rtl and not opts.get("align") and align == "left":
+            align = "right"
         top = max(L["loose"][3] for L in rows[0])
         ascent = (top - first["origin"][1]) if abs(down[1]) > 0.5 else base["size"] * 0.8
         old_span = ((rows[-1][0]["origin"][0] - first["origin"][0]) * down[0]
                     + (rows[-1][0]["origin"][1] - first["origin"][1]) * down[1])
+        obstacles = (
+            self.flow.obstacles(left, orig_right, top + base["size"], float(self.page.cropbox.bottom), base["size"])
+            if opts.get("wrap_pictures", True) and self.flow is not None and self.flow.content and abs(down[1]) > 0.5
+            else []
+        )
 
         simple = opts.get("breaks") == "simple"  # line by line, as before 0.34
         # Words are divided at line ends (English only) when every font here can draw the hyphen.
@@ -2002,8 +2201,23 @@ class _Page:
                 paras.append(cur or [[]])
             return paras
 
+        def _make_slot(y_start, lead_k, col_room, fi, sz, use_obs):
+            """Per-line (extra_x_offset, line_width) accounting for first-line indent and pictures."""
+            def slot(i):
+                s_off, s_room = 0.0, col_room
+                if use_obs:
+                    y_line = y_start - i * lead_k
+                    sl, sr = _free_span(y_line, left, left + col_room, sz, obstacles)
+                    if sr - sl >= sz * 3:
+                        s_off, s_room = sl - left, sr - sl
+                if i == 0 and fi > 0:
+                    s_off += fi
+                    s_room = max(s_room - fi, sz * 2)
+                return s_off, s_room
+            return slot
+
         def layout(style, text=content or text, room=room, tight=1.0, indent=True):
-            """The new lines: ([(text, word gap, offset, ends a part, y_off)],
+            """The new lines: ([(text, word gap, offset, ends a part, y_off, line_tc)],
             letter width, letter spacing, line spacing, drop, growth). With words
             in several styles, ``text`` and each line's text are lists of (letter, look)."""
             if isinstance(text, list):
@@ -2015,6 +2229,8 @@ class _Page:
             gap = space + 2 * tck if align == "justify" or word is None or not plain else word * k
             lead_k = lead * k * tight
             pgap_k = para_gap * k * tight
+            drop = (k - 1) * ascent  # a bigger size grows down from the old top
+            use_obs = bool(obstacles) and indent
 
             def measure(line):
                 return _place(line, 0.0, width, tck, gap)[1] - tck
@@ -2029,25 +2245,32 @@ class _Page:
                     fi = (first_indent * k
                           if indent and sp_idx == 0 and first_indent > 0 and align in ("left", "justify")
                           else 0.0)
-                    room_arg = (lambda i, r=room, f=fi: max(r - f, style["size"] * 2) if i == 0 else r) if fi > 0 else room
+                    slot = _make_slot(first["origin"][1] - drop - y_off, lead_k, room, fi, style["size"], use_obs)
+                    room_arg = (lambda i, sl=slot: sl(i)[1]) if (fi > 0 or use_obs) else room
                     wrapped = _wrap_marked(part, room_arg, measure, justify=align == "justify", greedy=simple, divide=divide)
                     for j, (line, end) in enumerate(wrapped):
-                        line, g = line.strip(), gap
-                        line_room = max(room - fi, style["size"] * 2) if (j == 0 and fi > 0) else room
-                        off = fi if (j == 0 and fi > 0) else 0.0
+                        line, g, line_tc = line.strip(), gap, tck
+                        if is_rtl:
+                            line = _bidi_visual(line, rtl=True)
+                        s_off, line_room = slot(j) if (fi > 0 or use_obs) else (0.0, room)
+                        off = s_off
                         spaces = line.count(" ")
-                        if align == "justify" and j < len(wrapped) - 1 and spaces:
-                            extra = (line_room - measure(line)) / spaces
-                            if 0 <= extra <= style["size"] * 2:
-                                g = gap + extra
-                        elif align in ("center", "right"):
+                        if align == "justify" and j < len(wrapped) - 1:
+                            if _has_cjk(line) and spaces == 0 and len(line) > 1:
+                                extra_tc = (line_room - measure(line)) / (len(line) - 1)
+                                if 0 <= extra_tc <= style["size"] * 1.5:
+                                    line_tc = tck + extra_tc
+                            elif spaces:
+                                extra = (line_room - measure(line)) / spaces
+                                if 0 <= extra <= style["size"] * 2:
+                                    g = gap + extra
+                        elif align in ("center", "right") or (is_rtl and align == "justify" and j == len(wrapped) - 1):
                             free = line_room - measure(line)
-                            off = free / 2 if align == "center" else free
+                            off = s_off + (free / 2 if align == "center" else free)
                         is_para_end = j == len(wrapped) - 1 and sp_idx == len(subparts) - 1 and p_idx < len(paras) - 1
                         end_mark = "para" if is_para_end else (True if j == len(wrapped) - 1 else end or False)
-                        lines.append((line, g, off, end_mark, y_off))
+                        lines.append((line, g, off, end_mark, y_off, line_tc))
                         y_off += lead_k
-            drop = (k - 1) * ascent  # a bigger size grows down from the old top
             grow = drop + (lines[-1][4] if lines else 0.0) - old_span + 0.22 * (style["size"] - base["size"])
             return lines, width, tck, lead_k, drop, grow
 
@@ -2059,6 +2282,8 @@ class _Page:
             gap = space + 2 * tck if align == "justify" or word is None else word * k
             lead_k = lead * k * tight
             pgap_k = para_gap * k * tight
+            drop = (k - 1) * ascent
+            use_obs = bool(obstacles) and indent
 
             def measure(line):
                 pen = 0.0
@@ -2075,25 +2300,31 @@ class _Page:
                     fi = (first_indent * k
                           if indent and sp_idx == 0 and first_indent > 0 and align in ("left", "justify")
                           else 0.0)
-                    room_arg = (lambda i, r=room, f=fi: max(r - f, style["size"] * 2) if i == 0 else r) if fi > 0 else room
+                    slot = _make_slot(first["origin"][1] - drop - y_off, lead_k, room, fi, style["size"], use_obs)
+                    room_arg = (lambda i, sl=slot: sl(i)[1]) if (fi > 0 or use_obs) else room
                     wrapped = _wrap_seq_marked(part, room_arg, measure, justify=align == "justify", greedy=simple, divide=divide)
                     for j, (line, end) in enumerate(wrapped):
-                        line, g = _strip_seq(line), gap
-                        line_room = max(room - fi, style["size"] * 2) if (j == 0 and fi > 0) else room
-                        off = fi if (j == 0 and fi > 0) else 0.0
+                        line, g, line_tc = _strip_seq(line), gap, tck
+                        s_off, line_room = slot(j) if (fi > 0 or use_obs) else (0.0, room)
+                        off = s_off
                         spaces = sum(1 for ch, _ in line if ch == " ")
-                        if align == "justify" and j < len(wrapped) - 1 and spaces:
-                            extra = (line_room - measure(line)) / spaces
-                            if 0 <= extra <= style["size"] * 2:
-                                g = gap + extra
+                        plain_line = "".join(ch for ch, _ in line)
+                        if align == "justify" and j < len(wrapped) - 1:
+                            if _has_cjk(plain_line) and spaces == 0 and len(line) > 1:
+                                extra_tc = (line_room - measure(line)) / (len(line) - 1)
+                                if 0 <= extra_tc <= style["size"] * 1.5:
+                                    line_tc = tck + extra_tc
+                            elif spaces:
+                                extra = (line_room - measure(line)) / spaces
+                                if 0 <= extra <= style["size"] * 2:
+                                    g = gap + extra
                         elif align in ("center", "right"):
                             free = line_room - measure(line)
-                            off = free / 2 if align == "center" else free
+                            off = s_off + (free / 2 if align == "center" else free)
                         is_para_end = j == len(wrapped) - 1 and sp_idx == len(subparts) - 1 and p_idx < len(paras) - 1
                         end_mark = "para" if is_para_end else (True if j == len(wrapped) - 1 else end or False)
-                        lines.append((line, g, off, end_mark, y_off))
+                        lines.append((line, g, off, end_mark, y_off, line_tc))
                         y_off += lead_k
-            drop = (k - 1) * ascent
             grow = drop + (lines[-1][4] if lines else 0.0) - old_span + 0.22 * (style["size"] - base["size"])
             return lines, width, tck, lead_k, drop, grow
 
@@ -2115,11 +2346,11 @@ class _Page:
                     out.append(("\n" if ln[3] else " ", key_ref))
             return _strip_seq(out)
 
-        def emit(line, start, width, tck, g, at):
+        def emit(line, start, width, tck, g, at, target=self):
             """Write one line from ``start`` along it; ``at(s)`` is the page point s along."""
             if not content:
                 placed, _ = _place(line, start, width, tck, g)
-                self.run(style, font, [(ch, *at(s)) for ch, s in placed])
+                target.run(style, font, [(ch, *at(s)) for ch, s in placed])
                 return
             k = style["size"] / base["size"]
             pen, group, current = start, [], None
@@ -2129,7 +2360,7 @@ class _Page:
                     pen += g - tck
                     continue
                 if key != current and current is not None:
-                    self.run(scaled(current, k)[0], fonts_by[current], group)
+                    target.run(scaled(current, k)[0], fonts_by[current], group)
                     group = []
                 current = key
                 px, py = at(pen)
@@ -2137,13 +2368,13 @@ class _Page:
                     px, py = px - down[0] * key[-2] * k, py - down[1] * key[-2] * k
                 group.append((ch, px, py))
                 st, w = scaled(key, k)
-                if key[-1] is not None:  # in links or markups: where their words are now
+                if target is self and key[-1] is not None:  # in links or markups: where their words are now
                     (x0, y0), (x1, _) = at(pen), at(pen + w(ch))
                     for index in key[-1]:
                         linked.setdefault(index, []).append((x0, y0, x1, st["size"]))
                 pen += w(ch) + tck
             if current is not None:
-                self.run(scaled(current, k)[0], fonts_by[current], group)
+                target.run(scaled(current, k)[0], fonts_by[current], group)
 
         def squeeze(found, style, current):
             """Nothing below can move, so the paragraph has to end above
@@ -2165,6 +2396,8 @@ class _Page:
             return *best, False
 
         lines, width, tck, lead_k, drop, grow = layout(style)
+        if obstacles:
+            self.notes["wrapped_picture"] = True
         more, nxt = [], None  # lines that run on at the top of the next column
         if flow and abs(grow) > 0.5:
             found = self.flow.column(rows, lead)
@@ -2188,6 +2421,83 @@ class _Page:
                     else:
                         more = []
                     break
+            if not fits and not found["lines"] and len(lines) > 1 and nxt is None and self.writer is not None:
+                has_next = self.number + 1 < len(self.writer.pages)
+                if has_next:
+                    self.notes["can_next_page"] = True
+                else:
+                    self.notes["add_page"] = True
+                if opts.get("fit") == "next_page" and has_next and self.doc is not None:
+                    for keep in range(len(lines) - 1, 0, -1):
+                        here = drop + lines[keep - 1][4] - old_span + 0.22 * (style["size"] - base["size"])
+                        if found["low"] - here < found["limit"] - 0.01:
+                            continue
+                        words = rejoin(lines[keep:])
+                        next_page = self.writer.pages[self.number + 1]
+                        next_work = _Page(self.doc[self.number + 1], next_page, self.doc,
+                                          self.number + 1, self.writer, self.pdfa)
+                        next_work.strict = False
+                        nxt_col = next_work.flow.top_column(left, orig_right, lead) if next_work.flow else None
+                        if nxt_col:
+                            col_w = max(nxt_col["x1"] - nxt_col["x0"], base["size"] * 4)
+                            more_next = layout(style, words, col_w, indent=False)[0]
+                            more_span = (more_next[-1][4] - more_next[0][4]) if more_next else 0.0
+                            push = more_span + 1.5 * lead_k
+                            moved_ok = (not nxt_col["lines"]) or (
+                                nxt_col["low"] - push >= nxt_col["limit"] - 0.01
+                                and next_work.flow.move(nxt_col, -push)
+                            )
+                            if more_next and moved_ok:
+                                base_y = more_next[0][4]
+                                for mn, (ml, mg, moff, _, my, mtc) in enumerate(more_next):
+                                    next_work.line_no = mn
+                                    emit(ml, moff, width, mtc, mg,
+                                         lambda s, dy=my - base_y, nc=nxt_col: (nc["x0"] + s, nc["baseline"] - dy),
+                                         target=next_work)
+                                next_work.line_no = None
+                                plain_more = words if isinstance(words, str) else "".join(ch for ch, _ in words)
+                                next_work.texts.append((None, plain_more))
+                                self.spills.append((self.number + 1, next_work, None))
+                                self.written_text = rejoin(lines[:keep])
+                                if isinstance(self.written_text, list):
+                                    self.written_text = "".join(ch for ch, _ in self.written_text)
+                                lines, grow, fits = lines[:keep], here, True
+                                self.notes["next_page"] = len(more_next)
+                                self.notes["moved_next_page"] = len(nxt_col["lines"])
+                                self.notes.pop("can_next_page", None)
+                                break
+                        next_work.close()
+                        break
+                elif opts.get("fit") == "add_page" and not has_next:
+                    for keep in range(len(lines) - 1, 0, -1):
+                        here = drop + lines[keep - 1][4] - old_span + 0.22 * (style["size"] - base["size"])
+                        if found["low"] - here < found["limit"] - 0.01:
+                            continue
+                        words = rejoin(lines[keep:])
+                        more_new = layout(style, words, room, indent=False)[0]
+                        if more_new:
+                            new_runs = []
+
+                            class _Collector:
+                                def run(self_, st, f, entries):
+                                    own, name = f[:2]
+                                    new_runs.append({"style": st, "own": own, "name": name, "entries": entries})
+
+                            top_y = float(self.page.cropbox.top) - 72.0 - lead_k * 0.8
+                            base_y = more_new[0][4]
+                            col_target = _Collector()
+                            for ml, mg, moff, _, my, mtc in more_new:
+                                emit(ml, left + moff, width, mtc, mg,
+                                     lambda s, dy=my - base_y: (s, top_y - dy),
+                                     target=col_target)
+                            self.spills.append((len(self.writer.pages), None, new_runs))
+                            self.written_text = rejoin(lines[:keep])
+                            if isinstance(self.written_text, list):
+                                self.written_text = "".join(ch for ch, _ in self.written_text)
+                            lines, grow, fits = lines[:keep], here, True
+                            self.notes["added_page"] = len(more_new)
+                            self.notes.pop("add_page", None)
+                        break
             if not fits and opts.get("fit") == "shrink":
                 for step in range(1, 11):  # down to three quarters of the size, a little at a time
                     smaller = _restyle(style, {"size": style["size"] * (1 - 0.025 * step)})
@@ -2221,16 +2531,16 @@ class _Page:
                     self.notes["size"] = round(style["size"], 2)
             self.notes["taller"] = True
             del fitted  # said either way: it takes more lines than it did
-        for n, (line, g, off, _, y_off) in enumerate(lines):
+        for n, (line, g, off, _, y_off, line_tc) in enumerate(lines):
             d = drop + y_off
             point = (first["origin"][0] + u[0] * (-first["s"]) + down[0] * d,
                      first["origin"][1] + u[1] * (-first["s"]) + down[1] * d)
             self.line_no = n
-            emit(line, left + off, width, tck, g, lambda s, p=point: (p[0] + u[0] * s, p[1] + u[1] * s))
+            emit(line, left + off, width, line_tc, g, lambda s, p=point: (p[0] + u[0] * s, p[1] + u[1] * s))
         more_base = more[0][4] if more else 0.0
-        for n, (line, g, off, _, y_off) in enumerate(more):  # level text only: the paragraph is level
+        for n, (line, g, off, _, y_off, line_tc) in enumerate(more):  # level text only: the paragraph is level
             self.line_no = len(lines) + n
-            emit(line, off, width, tck, g, lambda s, dy=y_off - more_base: (nxt["x0"] + s, nxt["baseline"] - dy))
+            emit(line, off, width, line_tc, g, lambda s, dy=y_off - more_base: (nxt["x0"] + s, nxt["baseline"] - dy))
         self.line_no = None
         if looks and links:
             self._move_links(links, linked)
@@ -2897,6 +3207,26 @@ def _edit(path, output, edits, password, report, old_way):
                     _draw(writer, page, work.covers, work.runs)
                     if old_way is not True:
                         expect[number - 1] = work.expected()
+                    for spill_idx, spill_work, new_runs in work.spills:
+                        if spill_work is not None:
+                            try:
+                                spill_page = writer.pages[spill_idx]
+                                core._own_contents(spill_page, shared)
+                                if spill_work.flow is not None and spill_work.flow.changed():
+                                    spill_work.ready()
+                                    spill_work.flow.write(writer, spill_page)
+                                    spill_work.runs += spill_work.flow.orphans
+                                _draw(writer, spill_page, spill_work.covers, spill_work.runs)
+                                if old_way is not True:
+                                    expect[spill_idx] = spill_work.expected()
+                            finally:
+                                spill_work.close()
+                        elif new_runs is not None:
+                            new_page = writer.add_blank_page(
+                                width=float(page.mediabox.width),
+                                height=float(page.mediabox.height),
+                            )
+                            _draw(writer, new_page, [], new_runs)
                 finally:
                     work.close()
         finally:
