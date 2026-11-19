@@ -45,14 +45,61 @@ async function addWatch() {
   const [kind, ...rest] = $("watch-do").value.split(":");
   const folder = $("watch-folder").value.trim();
   const ok = await watchCall("/api/watch/add", { folder, [kind]: rest.join(":"), results: $("watch-results").value, originals: $("watch-originals").value,
-      images: $("watch-images").checked, batch: $("watch-batch").checked },
+      images: $("watch-images").checked, batch: $("watch-batch").checked, auto_file: !!$("watch-auto-file")?.checked },
     `Watching ${folder}. ${$("watch-images").checked ? "PDFs and pictures" : "PDFs"} put there from now on, and those there already, are done one by one.`);
-  if (ok) { $("watch-folder").value = ""; $("watch-images").checked = $("watch-batch").checked = false; scheduleWatchNews(1500); }
+  if (ok) {
+    $("watch-folder").value = "";
+    $("watch-images").checked = $("watch-batch").checked = false;
+    if ($("watch-auto-file")) $("watch-auto-file").checked = false;
+    scheduleWatchNews(1500);
+  }
 }
 $("watch-add-btn").addEventListener("click", addWatch);
 $("watch-folder").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addWatch(); } });  // (not Save)
 $("watch-browse").addEventListener("click", async () => {
   try { const chosen = await window.pywebview.api.pick_folder(); if (chosen) $("watch-folder").value = chosen; } catch (e) { /* closed */ }
+});
+
+let filingState = { rules: [], starters: [] };
+async function loadFilingRules() {
+  const data = await jsonApi("/api/filing/rules");
+  filingState = data || { rules: [], starters: [] };
+  const n = (filingState.rules || []).length;
+  const sum = $("filing-rules-summary");
+  if (sum) {
+    sum.textContent = n
+      ? `${n} smart filing rule${n === 1 ? "" : "s"} active (used by Watch folders with auto-filing enabled and pdfm auto-file).`
+      : "No smart filing rules saved yet. Load starter rules (Invoices, Receipts, Contracts, Statements) or preview on a sample PDF.";
+  }
+  return filingState;
+}
+$("filing-load-starters")?.addEventListener("click", async () => {
+  try {
+    const data = await loadFilingRules();
+    const starters = data.starters || [];
+    if (!starters.length) return;
+    await jsonApi("/api/filing/rules", { rules: starters });
+    await loadFilingRules();
+    updateStatus("filing-status", `Loaded ${starters.length} starter filing rules.`);
+  } catch (err) { updateStatus("filing-status", err.message, true); }
+});
+$("filing-preview-btn")?.addEventListener("click", () => $("filing-preview-file")?.click());
+$("filing-preview-file")?.addEventListener("change", async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = "";
+  if (!file) return;
+  try {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    const res = await api("/api/filing/preview", { method: "POST", body: fd });
+    const data = await res.json();
+    const item = (data.plan || [])[0];
+    if (item && item.matched) {
+      updateStatus("filing-status", `Matched "${item.rule}": ${file.name} → ${item.target_name || item.destination}`);
+    } else {
+      updateStatus("filing-status", `No rule matched ${file.name}.`);
+    }
+  } catch (err) { updateStatus("filing-status", err.message, true); }
 });
 // A note when a watched file is done or couldn't be (with the plain reason).
 let watchNewsTimer = 0;
