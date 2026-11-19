@@ -27,21 +27,21 @@
 
 ### Phase 2 (release B): Interactive Visual Crop & Imposition Preview
 
-- [ ] **Interactive crop mode in the reader:** Drag a shaded crop rectangle directly over a page with live width/height readout (in pt / mm / in) and corner/edge handles.
-- [ ] **Apply scope:** Apply crop to **This page**, **Odd pages**, **Even pages**, **Page range**, or **All pages**; supports **Undo/Redo** and **Save** (updates `/CropBox` non-destructively, with an optional "Trim outside permanently" mode).
-- [ ] **N-up / Booklet / Poster preview:** Visual sheet preview in the N-up and Booklet tool panels showing page order, margins, gutters, and cut marks before writing the output PDF.
-- [ ] **Tests:** crop box coordinates across rotated pages (`/Rotate` 90/180/270), odd/even scope, undo/redo, and N-up preview layout.
+- [x] **Interactive crop mode in the reader:** Drag a shaded crop rectangle directly over a page with live width/height readout (in pt / mm / in) and corner/edge handles (`static/cropmode.js`).
+- [x] **Apply scope:** Apply crop to **This page**, **Odd pages**, **Even pages**, **Page range**, or **All pages**; supports **Undo/Redo** and **Save** (updates `/CropBox` non-destructively, with an optional "Trim outside permanently" mode via `pdfmanager/crop.py` and `/api/crop`).
+- [x] **N-up / Booklet / Poster preview:** Live first-sheet preview enabled for both N-up and Booklet tool panels before writing the output PDF.
+- [x] **Tests:** crop box coordinates across rotated pages (`/Rotate` 90/180/270), odd/even scope, permanent trim, `/api/crop`, and Booklet preview (`tests/test_crop.py`).
 
 ---
 
 ### Phase 3 (release C): Print Preflight Check
 
-- [ ] **Preflight engine (`pdfmanager/preflight.py`):**
+- [x] **Preflight engine (`pdfmanager/preflight.py`):**
   - Detect low-resolution images (configurable threshold, e.g., `< 150 DPI` error, `< 300 DPI` warning) using effective rendered DPI on the page (transform matrix + pixel dimensions).
   - Detect unembedded fonts and Type 3 / substitute fonts.
   - Inspect colour spaces (RGB vs CMYK vs Gray vs Spot/Separation) and transparency groups.
   - Check page box geometry (`/MediaBox`, `/TrimBox`, `/BleedBox`) and flag inconsistent page sizes or missing bleed (e.g., `< 3 mm`).
   - Detect hairline strokes (`< 0.25 pt`) and rich-black small text warnings.
-- [ ] **One-click fixes (where safe):** flatten transparency / convert to CMYK or grayscale (via Ghostscript when present), normalize page sizes, add standard bleed/crop marks.
-- [ ] **CLI & GUI:** `pdfm preflight <input.pdf> [--min-dpi 300] [--json]` and a **Print preflight** panel in the reader (clicking an issue jumps to the page and highlights the offending image/box).
-- [ ] **Tests:** synthetic PDFs with 72 DPI vs 300 DPI images, unembedded font, mixed page sizes, and RGB vs CMYK checks.
+- [x] **One-click fixes (where safe):** flatten transparency / convert to CMYK or grayscale (via Ghostscript when present), normalize page sizes, add standard bleed/crop marks.
+- [x] **CLI & GUI:** `pdfm preflight <input.pdf> [--min-dpi 300] [--json]` and a **Print preflight** dialog in the reader (clicking an issue jumps to the page, with one-click safe fixes).
+- [x] **Tests:** synthetic PDFs with 72 DPI vs 300 DPI images, unembedded font, mixed page sizes, and RGB vs CMYK checks (`tests/test_preflight.py`).
