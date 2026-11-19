@@ -141,6 +141,8 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
             return self._action(path[len("/api/action/"):])
         if path == "/api/watch":
             return self._watch_list()
+        if path == "/api/filing/rules":
+            return self._filing_rules_get()
         if path == "/api/watch/news":
             query = urllib.parse.parse_qs(self.path.partition("?")[2])
             try:
@@ -348,13 +350,17 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
             if path == "/api/history/clear":
                 return self._send(HTTPStatus.OK, {"cleared": privacy.clear_history(),
                                                   **_settings_for_page(type(self).instance_mode)})
+            if path == "/api/filing/rules":
+                return self._filing_rules_save(body)
+            if path == "/api/filing/preview":
+                return self._filing_preview(body)
             if path in ("/api/watch/add", "/api/watch/pause", "/api/watch/remove"):
                 data = json.loads(body or b"{}")
                 if path == "/api/watch/add":
                     do = {"recipe": data["recipe"]} if data.get("recipe") else {"tool": data.get("tool")}
                     self.watcher.add(data.get("folder"), do, data.get("results") or "done",
                                      data.get("originals") or "keep", images=_bool(data.get("images")),
-                                     batch=_bool(data.get("batch")))
+                                     batch=_bool(data.get("batch")), auto_file=_bool(data.get("auto_file")))
                 elif path == "/api/watch/pause":
                     self.watcher.set_paused(str(data.get("id")), data.get("paused"))
                 else:

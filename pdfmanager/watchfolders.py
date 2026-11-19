@@ -79,7 +79,11 @@ def describe(entry):
     where = f"{DONE_FOLDER} folder" if entry["results"] == "done" else \
         f"next to the original (“…{suffix(entry)}.pdf”)"
     originals = "originals kept" if entry["originals"] == "keep" else f"originals moved to {ORIGINALS_FOLDER}"
-    extra = (", pictures too" if entry.get("images") else "") + (", pages that arrive together as one document" if entry.get("batch") else "")
+    extra = (
+        (", pictures too" if entry.get("images") else "")
+        + (", pages that arrive together as one document" if entry.get("batch") else "")
+        + (", auto-filed by rules" if entry.get("auto_file") else "")
+    )
     return f"{what} → {where}, {originals}{extra}"
 
 
@@ -87,7 +91,7 @@ def suffix(entry):
     return SUFFIXES[entry["do"].get("tool", "recipe")]
 
 
-def check(folder, do, results, originals, existing=(), images=False, batch=False):
+def check(folder, do, results, originals, existing=(), images=False, batch=False, auto_file=False):
     """The entry for a new watch folder, or PdfManagerError saying what's wrong."""
     from pdfmanager import recipes
 
@@ -127,6 +131,8 @@ def check(folder, do, results, originals, existing=(), images=False, batch=False
         entry["images"] = True
     if batch:
         entry["batch"] = True
+    if auto_file:
+        entry["auto_file"] = True
     return entry
 
 
@@ -231,9 +237,9 @@ class WatchFolders:
         return {"state": state, "detail": status.get("detail", ""), "done": status.get("done", 0),
                 "failed": status.get("failed", 0), "last": status.get("last")}
 
-    def add(self, folder, do, results="done", originals="keep", images=False, batch=False):
+    def add(self, folder, do, results="done", originals="keep", images=False, batch=False, auto_file=False):
         with self.lock:
-            entry = check(folder, do, results, originals, self.folders, images=images, batch=batch)
+            entry = check(folder, do, results, originals, self.folders, images=images, batch=batch, auto_file=auto_file)
             self.folders.append(entry)
             _save(self.folders)
         self.start()
@@ -358,6 +364,18 @@ class WatchFolders:
                 self.last = n
             return
         ok = error is None
+        if ok and result is not None and entry.get("auto_file"):
+            try:
+                from pdfmanager import filing
+
+                rules = entry.get("filing_rules") or filing.load_app_rules()
+                plan = filing.plan_filing([result], rules, base_dir=result.parent)
+                if plan and plan[0].get("matched"):
+                    applied = filing.apply_filing(plan)
+                    if applied["moves"]:
+                        result = Path(applied["moves"][0]["dst"])
+            except Exception as exc:  # noqa: BLE001 - keep the processed PDF even if filing fails
+                self.log(f"watch auto-file skipped for {result.name}: {exc}")
         if ok:
             message = (f"{path.name}: skipped, the same as one done before" if result is None else
                        (f"{path.name} is done: " if files == 1 else

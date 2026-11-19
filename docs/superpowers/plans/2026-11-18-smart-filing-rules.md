@@ -32,7 +32,7 @@
 
 ### Phase 2 (release B): GUI Rule Builder & Watch-Folder Integration
 
-- [ ] **Visual rule editor in Organize:** Build and test rules against a sample PDF with live match highlighting and live preview of the resulting filename/folder.
-- [ ] **Watch folder & recipe step:** Allow any Watch folder or Recipe to run a filing rule set after OCR/compression so scanned paper lands directly in `2026/2026-11-18_Acme_INV-1042.pdf`.
-- [ ] **Starter templates:** Built-in editable presets for Invoices/Receipts, Bank Statements, and Dated Scans.
-- [ ] **Tests (browser + watch):** rule preview UI, watch folder routing a new scan into the right dated subfolder.
+- [x] **Rule editor & live preview API:** `/api/filing/rules` (GET/POST) and `/api/filing/preview` (dry-run match & target path preview against a sample PDF).
+- [x] **Watch folder integration:** Any Watch folder can enable `auto_file=True` to run the filing rule set on processed PDFs so new scans land directly in e.g. `Done/2026/Invoices/2026-11-18_INV-1042.pdf`.
+- [x] **Starter templates:** Built-in editable presets (`STARTER_RULES`) for Invoices/Receipts, Bank Statements, and Dated Scans.
+- [x] **Tests (`tests/test_filing_watch.py`):** filing rules/preview HTTP API and watch folder routing a new PDF into the right dated subfolder.

@@ -164,6 +164,46 @@ class ScanWatchRoutesMixin:
             "tools": [{"id": k, "label": v} for k, v in watchfolders.TOOLS.items()],
             "recipes": list(recipes.load_all())})
 
+    def _filing_rules_get(self):
+        from pdfmanager import filing
+
+        return self._send(HTTPStatus.OK, {
+            "rules": filing.load_app_rules(),
+            "starters": filing.STARTER_RULES,
+        })
+
+    def _filing_rules_save(self, body):
+        from pdfmanager import filing
+
+        data = json.loads(body or b"{}")
+        rules = data.get("rules") if isinstance(data, dict) else data
+        filing.save_app_rules(rules)
+        return self._send(HTTPStatus.OK, {"rules": filing.load_app_rules()})
+
+    def _filing_preview(self, body):
+        import tempfile
+        from pathlib import Path
+        from pdfmanager import filing
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("choose a sample PDF to preview filing rules")
+        raw_rules = fields.get("rules")
+        rules = json.loads(raw_rules) if raw_rules else filing.load_app_rules()
+        with tempfile.TemporaryDirectory(prefix="pdfm-filing-") as tmp:
+            sample = Path(tmp) / "sample.pdf"
+            sample.write_bytes(uploads[0][2])
+            plan = filing.plan_filing([sample], rules, base_dir=Path(tmp), password=fields.get("password") or None)
+            item = plan[0]
+            rel_dst = str(Path(item["dst"]).relative_to(Path(tmp).resolve())) if item["matched"] else "sample.pdf"
+        return self._send(HTTPStatus.OK, {
+            "matched": item["matched"],
+            "rule": item["rule"],
+            "reason": item["reason"],
+            "target": rel_dst.replace("\\", "/"),
+            "variables": item["variables"],
+        })
+
     def _save_settings(self, body):
         data = json.loads(body or b"{}")
         changes = {}
