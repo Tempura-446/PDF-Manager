@@ -25,6 +25,7 @@ doesn't describe, and a version that is already published.
 """
 import argparse
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -106,6 +107,27 @@ def make_zip(root, out_dir, version, notices):
     return zip_path, sha_path
 
 
+def sign_release(root, sha_path, sign_key):
+    """Sign ``sha_path`` with an Ed25519 private key (PEM text or file path)
+    and write the ``.sig`` file beside the release zip."""
+    sys.path.insert(0, str(root))
+    try:
+        from pdfmanager import relsign
+        sig_text = relsign.sign_checksum(Path(sha_path).read_bytes(), sign_key)
+    except Exception as exc:
+        raise ReleaseError(f"could not sign release ({exc})") from None
+    finally:
+        sys.path.remove(str(root))
+    sig_name = Path(sha_path).name
+    if sig_name.endswith(".sha256"):
+        sig_name = sig_name[:-len(".sha256")] + ".sig"
+    else:
+        sig_name += ".sig"
+    sig_path = Path(sha_path).with_name(sig_name)
+    sig_path.write_text(sig_text, encoding="ascii", newline="\n")
+    return sig_path
+
+
 def third_party_notices(root):
     sys.path.insert(0, str(root))
     try:
@@ -144,11 +166,13 @@ def check(root=ROOT):
             and _self_test(root))
 
 
-def publish(root, version, changelog, out_dir, checks=True, dry_run=False):
+def publish(root, version, changelog, out_dir, checks=True, dry_run=False, sign_key=None):
     """Make the release files and, unless ``dry_run``, publish them. Returns
-    the files: the zip, its checksum and the notes."""
+    the files: the zip, its checksum, optional signature, and the notes."""
     notes = changelog_section(changelog, version) + "\n" + INSTALL_NOTE.format(version=version)
     tag = f"v{version}"
+    if sign_key is None:
+        sign_key = os.environ.get("RELEASE_SIGNING_KEY", "").strip() or None
     if not dry_run:
         # Found out now, not after the checks: publishing needs gh, signed in.
         if not shutil.which("gh"):
@@ -175,16 +199,19 @@ def publish(root, version, changelog, out_dir, checks=True, dry_run=False):
     if checks and not check(root):
         raise ReleaseError("the checks failed (see above); nothing was published")
     zip_path, sha_path = make_zip(root, out_dir, version, third_party_notices(root))
+    assets = [zip_path, sha_path]
+    if sign_key:
+        assets.append(sign_release(root, sha_path, sign_key))
     notes_path = Path(out_dir) / f"ZPDF-{version}-notes.md"
     notes_path.write_text(notes, encoding="utf-8", newline="\n")
-    files = [zip_path, sha_path, notes_path]
+    files = [*assets, notes_path]
     if dry_run:
         return files
     # Tag first: it is local and can't half-succeed. The upload is the step
     # that makes the release public; only the push comes after it.
     run(["git", "tag", "-a", tag, "-m", f"ZPDF {version}"], cwd=root)
     try:
-        run(["gh", "release", "create", tag, str(zip_path), str(sha_path), "--repo", RELEASES,
+        run(["gh", "release", "create", tag, *[str(p) for p in assets], "--repo", RELEASES,
              "--title", f"ZPDF {version}", "--notes-file", str(notes_path)], cwd=root)
     except Exception as exc:
         run(["git", "tag", "-d", tag], cwd=root, check=False)
@@ -197,21 +224,46 @@ def publish(root, version, changelog, out_dir, checks=True, dry_run=False):
     return files
 
 
+def _keygen(out_path):
+    sys.path.insert(0, str(ROOT))
+    try:
+        from pdfmanager import relsign
+        priv_pem, pub_pem = relsign.generate_keypair()
+    finally:
+        sys.path.remove(str(ROOT))
+    dest = Path(out_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(priv_pem, encoding="ascii", newline="\n")
+    try:
+        os.chmod(dest, 0o600)
+    except OSError:
+        pass
+    print(f"Private key saved to {dest} (keep this secret; never commit it).\n")
+    print("Paste this public key into RELEASE_PUBLIC_KEY in pdfmanager/relsign.py:\n")
+    print(pub_pem.strip())
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--check", action="store_true", help="run the checks only")
     parser.add_argument("--dry-run", action="store_true", help="make the release files but don't publish")
     parser.add_argument("--skip-checks", action="store_true", help="don't run the checks first")
+    parser.add_argument("--sign-key", default=None, help="path to Ed25519 private key PEM (or set RELEASE_SIGNING_KEY)")
+    parser.add_argument("--keygen", metavar="PATH", help="generate a new Ed25519 release signing keypair and save private key to PATH")
     parser.add_argument("--out", default=str(ROOT / "dist" / "release"), help="where to put the files")
     args = parser.parse_args(argv)
     try:
+        if args.keygen:
+            return _keygen(args.keygen)
         if args.check:
             ok = check(ROOT)
             print("\nAll checks passed." if ok else "\nThe checks failed.")
             return 0 if ok else 1
         version = read_version(ROOT)
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        files = publish(ROOT, version, changelog, args.out, checks=not args.skip_checks, dry_run=args.dry_run)
+        files = publish(ROOT, version, changelog, args.out, checks=not args.skip_checks,
+                        dry_run=args.dry_run, sign_key=args.sign_key)
     except ReleaseError as exc:
         said = str(exc)
         print(("\n" if " is published on " in said else "\nNot released: ") + said, file=sys.stderr)
