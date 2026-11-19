@@ -297,15 +297,15 @@ def to_markdown(found, output=None, title="Comments", group_by="page"):
         order = []
         for c in found:
             if group_by == "page":
-                key = _page_heading(c)
+                bucket = _page_heading(c)
             elif group_by == "type":
-                key = c["kind"]
+                bucket = c["kind"]
             else:
-                key = c.get("author") or "Unattributed"
-            if key not in groups:
-                groups[key] = []
-                order.append(key)
-            groups[key].append(c)
+                bucket = c.get("author") or "Unattributed"
+            if bucket not in groups:
+                groups[bucket] = []
+                order.append(bucket)
+            groups[bucket].append(c)
 
         for heading in order:
             lines.extend(["", f"## {heading}"])
