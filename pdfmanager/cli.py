@@ -764,6 +764,16 @@ def run_comments(a, src, out, pw):
         n = comments.export_xfdf(src, target, pw)
         return f"{target}  ({n} comment{'s' if n != 1 else ''})"
     found = comments.collect(src, pw)
+    found = comments.filter_comments(
+        found,
+        author=getattr(a, "author", None),
+        kind=getattr(a, "kind", None),
+        pages=getattr(a, "pages", None),
+    )
+    if getattr(a, "markdown", False):
+        target = Path(a.output) if a.output and not _is_folder(a.output) else out.with_suffix(".md")
+        comments.to_markdown(found, target, title=Path(src).name, group_by=getattr(a, "group_by", "page"))
+        return f"{target}  ({comments.count(found)} comments)"
     if a.csv:
         target = Path(a.output) if a.output and not _is_folder(a.output) else out.with_suffix(".csv")
         comments.to_csv(found, target)
@@ -1887,13 +1897,20 @@ def build_parser():
     sp.add_argument("-P", "--password", help="password if the PDFs are encrypted")
 
     sp = per_file("comments", run_comments,
-                  "list the comments in PDFs, or make a summary (PDF), a spreadsheet (CSV) or an "
+                  "list the comments in PDFs, or make a summary (PDF, Markdown), a spreadsheet (CSV) or an "
                   "XFDF file of them; or add comments from an XFDF file")
     g = sp.add_mutually_exclusive_group()
     g.add_argument("--summary", action="store_true", help="a PDF listing the comments page by page")
+    g.add_argument("--markdown", "--md", dest="markdown", action="store_true",
+                   help="a Markdown (.md) review summary of the comments")
     g.add_argument("--csv", action="store_true", help="a spreadsheet of the comments")
     g.add_argument("--export", action="store_true", help="an XFDF file of the comments (Acrobat reads it)")
     g.add_argument("--import", dest="import_xfdf", metavar="XFDF", help="add the comments of an XFDF file")
+    sp.add_argument("--group-by", choices=comments.GROUP_MODES, default="page",
+                    help="how to group comments in --markdown (default: page)")
+    sp.add_argument("--author", help="only include comments whose author contains this text")
+    sp.add_argument("--kind", help="only include comments of this type (e.g. Highlight, Note, Cloud)")
+    sp.add_argument("-p", "--pages", help=PAGES_HELP)
 
     sp = other("privacy", cmd_privacy, "what ZPDF keeps on this computer and when it goes online; "
                                        "clear the history, or stop keeping one")
