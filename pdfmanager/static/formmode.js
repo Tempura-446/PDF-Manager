@@ -98,20 +98,24 @@ export const FormMode = (Base) => class extends Base {
     this.formKeepDefaultsBtn = el("button", { class: "rd-btn", type: "button", hidden: true, title: "Save what you entered in Preview as the fields' default values" }, "Keep as default values");
     this.formCheckBtn = el("button", { class: "rd-btn", type: "button", title: "Check for missing tooltips, overlaps, or broken calculations" }, "Check form");
     this.formDataBtn = el("button", { class: "rd-btn", type: "button", "aria-haspopup": "menu", "aria-expanded": "false", title: "Clear, import, or export form data" }, "Data ▾");
-    this.formDataInput = el("input", { type: "file", accept: ".fdf,.xfdf,.xml,.csv,.json", hidden: true });
-    this.formDataInput.addEventListener("change", () => {
-      const f = this.formDataInput.files?.[0];
-      this.formDataInput.value = "";
-      if (f) this.importFormData(f);
-    });
     const mkItem = (label, fn) => {
       const b = el("button", { type: "button", role: "menuitem" }, label);
       b.addEventListener("click", () => { this._closeFormDataMenu(); fn(); });
       return b;
     };
+    const pickDataFile = () => {
+      const input = el("input", { type: "file", accept: ".fdf,.xfdf,.xml,.csv,.json", hidden: true });
+      input.addEventListener("change", () => {
+        const f = input.files?.[0];
+        input.remove();
+        if (f) this.importFormData(f);
+      });
+      document.body.append(input);
+      input.click();
+    };
     this.formDataMenu = el("div", { class: "rd-menu rd-formdatamenu", role: "menu", "aria-label": "Form data", hidden: true },
       mkItem("Clear form", () => this.clearForm()),
-      mkItem("Import data…", () => this.formDataInput.click()),
+      mkItem("Import data…", pickDataFile),
       el("hr"),
       el("div", { class: "label" }, "Export data"),
       mkItem("FDF (.fdf)", () => this.exportFormData("fdf")),
@@ -132,7 +136,7 @@ export const FormMode = (Base) => class extends Base {
     this.formmodebar = el("div", { class: "rd-findbar rd-formmodebar", hidden: true, role: "toolbar", "aria-label": "Prepare form" },
       ...this.formToolBtns, el("span", { class: "rd-sep" }), this.formFindBtn,
       el("span", { class: "rd-sep" }), this.formUndoBtn, this.formRedoBtn, this.formDeleteBtn,
-      el("span", { class: "rd-sep" }), this.formPreviewBtn, this.formKeepDefaultsBtn, this.formCheckBtn, this.formDataBtn, this.formDataInput,
+      el("span", { class: "rd-sep" }), this.formPreviewBtn, this.formKeepDefaultsBtn, this.formCheckBtn, this.formDataBtn,
       el("span", { style: "flex:1" }), this.formSaveBtn, this.formCloseBtn);
     this.formMode = false;
     this.formPreview = false;
