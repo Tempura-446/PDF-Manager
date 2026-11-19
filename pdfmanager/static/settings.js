@@ -39,8 +39,10 @@ async function openSettings() {
   $("set-token-clear").hidden = !s.token_set;
   updateStatus("set-status", "");
   updateStatus("lang-status", "");
+  updateStatus("filing-status", "");
   try { await loadLanguages(); } catch (e) { updateStatus("lang-status", e.message, true); }
   try { await loadWatch(); } catch (e) { updateStatus("watch-status", e.message, true); }
+  try { if (typeof loadFilingRules === "function") await loadFilingRules(); } catch (e) { updateStatus("filing-status", e.message, true); }
   updateStatus("watch-status", "");
   try {
     const menu = await jsonApi("/api/shellmenu");
@@ -373,4 +375,5 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) ping
 
 // In the desktop window, re-render once pywebview's API is ready (adds Browse… buttons).
 window.addEventListener("pywebviewready", () => { if (current && current.fields) renderForm(); });
+window.ZpdfI18n?.load?.(TOKEN)?.catch?.(() => {});
 load();

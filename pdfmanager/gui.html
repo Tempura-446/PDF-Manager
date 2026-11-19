@@ -152,17 +152,17 @@
 
 <dialog class="app-dialog" id="settings-dialog" aria-labelledby="settings-title">
   <form method="dialog" id="settings-form" tabindex="-1">
-    <h2 id="settings-title">Settings</h2>
+    <h2 id="settings-title" data-i18n="nav.settings">Settings</h2>
     <p class="dlg-version" id="settings-version"></p>
     <h3>Appearance</h3>
     <label class="dlg-field inline"><span>Theme</span>
       <select id="theme" autofocus><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
-    <h3>Language &amp; offline packs</h3>
+    <h3 data-i18n="settings.language">Language</h3>
     <label class="dlg-field inline"><span>Interface language</span>
       <select id="set-language"><option value="en">English</option></select></label>
     <p class="dlg-hint">Starter locales are automatic translations. Language packs also carry offline translation, OCR, and search-by-meaning models.</p>
     <div class="dlg-row" style="display:flex;gap:8px;align-items:center;margin:6px 0;">
-      <button type="button" class="btn secondary" id="set-pack-install">Install language pack (.zip)…</button>
+      <button type="button" class="btn secondary" id="set-pack-install" data-i18n="settings.language.install_file">Install language pack from file…</button>
       <input type="file" id="set-pack-file" accept=".zip" hidden>
     </div>
     <ul class="watch-list" id="set-packs-list" aria-label="Installed language packs"></ul>
@@ -214,8 +214,19 @@
         <option value="move">Move to an “Originals” folder inside it</option></select></label>
       <label class="dlg-check"><input type="checkbox" id="watch-images"> Pictures too (scans saved as JPG, PNG or TIFF become PDFs)</label>
       <label class="dlg-check"><input type="checkbox" id="watch-batch"> Files that arrive together become one document (a scanner that saves a file per page)</label>
+      <label class="dlg-check"><input type="checkbox" id="watch-auto-file"> Auto-rename &amp; file results using Smart Filing Rules</label>
       <div><button type="button" class="btn secondary" id="watch-add-btn">Watch this folder</button></div>
       <p class="dlg-status" id="watch-status" aria-live="polite"></p>
+    </div>
+    <div id="filing-rules-box" style="margin-top:10px;">
+      <h3>Smart filing rules</h3>
+      <p class="dlg-hint" id="filing-rules-summary">Automatically rename and sort PDFs by date, vendor, or text rules.</p>
+      <div class="dlg-row" style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0;">
+        <button type="button" class="btn secondary" id="filing-load-starters">Load starter rules</button>
+        <button type="button" class="btn secondary" id="filing-preview-btn">Preview on a sample PDF…</button>
+        <input type="file" id="filing-preview-file" accept=".pdf,application/pdf" hidden>
+      </div>
+      <p class="dlg-status" id="filing-status" aria-live="polite"></p>
     </div>
     <h3>Privacy</h3>
     <label class="dlg-check"><input type="checkbox" id="set-remember"> Remember the files I open</label>
