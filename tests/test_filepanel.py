@@ -52,8 +52,8 @@ def text_pdf(path, pages=3):
 
 
 def test_the_common_tools_are_real_tools_and_the_tray_is_gone():
-    html = GUI_HTML.read_text(encoding="utf-8")
-    common = re.search(r"const COMMON_TOOLS = \[(.*?)\];", html, re.S).group(1)
+    js = (STATIC / "app-core.js").read_text(encoding="utf-8")
+    common = re.search(r"const COMMON_TOOLS = \[(.*?)\];", js, re.S).group(1)
     ids = re.findall(r'\["([a-z-]+)", "', common)
     # "sign" is the reader's own Sign (drawn or typed); the certificate tool, Digital ID, is in All tools.
     assert ids == ["split", "sign", "to-word", "pdfa", "to-excel", "encrypt"]

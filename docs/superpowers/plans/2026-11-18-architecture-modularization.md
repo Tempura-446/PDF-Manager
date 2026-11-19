@@ -36,10 +36,10 @@
 
 ### Phase 2: Extract inline CSS and JS out of `gui.html`
 
-- [ ] Move inline `<style>` blocks from `gui.html` into `pdfmanager/static/app.css`.
-- [ ] Move inline `<script>` tool-panel controllers from `gui.html` into focused static modules (`static/tools.js`, `static/settings.js`, `static/scan-ui.js`, `static/watch-ui.js`).
-- [ ] Keep `gui.html` strictly declarative markup so **Language Packs Phase 1 (i18n)** can annotate and translate UI strings cleanly without fighting mixed HTML/JS/CSS.
-- [ ] Verify all browser tests pass in light, dark, and forced-colors themes.
+- [x] Move inline `<style>` blocks from `gui.html` into `pdfmanager/static/app.css`.
+- [x] Move inline `<script>` tool-panel controllers from `gui.html` into focused static modules (`static/early-open.js`, `static/app-core.js`, `static/tools.js`, `static/settings.js`, `static/scan-ui.js`, `static/watch-ui.js`).
+- [x] Keep `gui.html` strictly declarative markup so **Language Packs Phase 1 (i18n)** can annotate and translate UI strings cleanly without fighting mixed HTML/JS/CSS.
+- [x] Verify all browser tests pass in light, dark, and forced-colors themes.
 
 ---
 

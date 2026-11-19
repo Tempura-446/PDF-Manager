@@ -420,7 +420,9 @@ def test_new_tools_are_in_the_app():
     assert ops["insert-blank"]["group"] == "Pages" and ops["insert-blank"]["board"]["mode"] == "select"
     assert [c[0] for c in next(f for f in ops["split"]["fields"] if f["key"] == "by")["choices"]] == \
         ["every", "ranges", "bookmarks", "size"]
-    html = Path(gui.__file__).with_name("gui.html").read_text(encoding="utf-8")
+    static = Path(gui.__file__).parent / "static"
+    core_js = (static / "app-core.js").read_text(encoding="utf-8")
+    tools_js = (static / "tools.js").read_text(encoding="utf-8")
     for op in ("insert-blank", "booklet", "autocrop"):
         key = f'"{op}"' if "-" in op else op
-        assert op in ops and f"{key}: '<" in html and f'{key}: "' in html  # an icon and a tagline
+        assert op in ops and f"{key}: '<" in core_js and f'{key}: "' in tools_js  # an icon and a tagline

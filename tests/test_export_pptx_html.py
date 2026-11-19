@@ -603,9 +603,11 @@ def test_tools_are_in_the_app(report, tmp_path):
         fields = {f["key"]: f for f in op["fields"]}
         assert set(fields) == {"mode", "pages"}
         assert [c[0] for c in fields["mode"]["choices"]] == list(modes)
-    html = Path(gui.__file__).with_name("gui.html").read_text(encoding="utf-8")
+    static = Path(gui.__file__).parent / "static"
+    core_js = (static / "app-core.js").read_text(encoding="utf-8")
+    tools_js = (static / "tools.js").read_text(encoding="utf-8")
     for op_id in ("to-pptx", "to-html"):
-        assert f"\"{op_id}\": '<" in html and f'"{op_id}": "' in html  # an icon and a tagline
+        assert f"\"{op_id}\": '<" in core_js and f'"{op_id}": "' in tools_js  # an icon and a tagline
 
     work = tmp_path / "w1"
     work.mkdir()

@@ -62,7 +62,8 @@ FACTS = [
 
 
 def test_the_facts_line_says_what_a_file_is_in_plain_words():
-    source = _function(GUI_HTML.read_text(encoding="utf-8"), "factsLine")
+    tools_js = (HERE.parent / "pdfmanager" / "static" / "tools.js").read_text(encoding="utf-8")
+    source = _function(tools_js, "factsLine")
     script = source + "\nconsole.log(JSON.stringify(JSON.parse(process.argv[1]).map(factsLine)));"
     run = subprocess.run([_node(), "-e", script, json.dumps([f for f, _ in FACTS])],
                          capture_output=True, text=True, encoding="utf-8", timeout=60)
@@ -71,25 +72,26 @@ def test_the_facts_line_says_what_a_file_is_in_plain_words():
 
 
 def test_two_files_of_one_name_are_told_apart_by_their_folder():
-    html = GUI_HTML.read_text(encoding="utf-8")
-    script = _function(html, "folderOf") + "\nconsole.log(JSON.stringify(JSON.parse(process.argv[1]).map(folderOf)));"
+    tools_js = (HERE.parent / "pdfmanager" / "static" / "tools.js").read_text(encoding="utf-8")
+    script = _function(tools_js, "folderOf") + "\nconsole.log(JSON.stringify(JSON.parse(process.argv[1]).map(folderOf)));"
     paths = ["C:\\Work\\2024\\invoice.pdf", "/home/me/taxes/invoice.pdf", "invoice.pdf", ""]
     run = subprocess.run([_node(), "-e", script, json.dumps(paths)],
                          capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert run.returncode == 0, run.stderr
     assert json.loads(run.stdout) == ["2024", "taxes", "", ""]
-    assert "names[e.name] > 1" in html, "the folder is shown only when a name repeats"
+    assert "names[e.name] > 1" in tools_js, "the folder is shown only when a name repeats"
 
 
 def test_the_page_keeps_what_tests_and_scripts_rely_on():
     html = GUI_HTML.read_text(encoding="utf-8")
+    css = (HERE.parent / "pdfmanager" / "static" / "app.css").read_text(encoding="utf-8")
     assert 'class="tools tool-index" id="tools"' in html          # .tools button[data-op] for every tool
     for group in ("read", "pages", "improve", "convert", "protect", "all"):
         assert f'data-group="{group}"' in html
     assert '<link rel="stylesheet" href="https://' not in html and "fonts.googleapis" not in html
     for font in ("instrument-sans-latin-400-normal", "source-serif-4-latin-500-normal",
                  "jetbrains-mono-latin-500-normal"):
-        assert f"/static/fonts/{font}.woff2" in html
+        assert f"/static/fonts/{font}.woff2" in css
         assert (HERE.parent / "pdfmanager" / "static" / "fonts" / f"{font}.woff2").is_file()
 
 
