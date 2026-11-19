@@ -17,7 +17,7 @@ from pypdf import PdfReader
 from pdfmanager import (__version__, archive, compare, core, imaging, office, organize, outline,
                         forms, recipes, redact, scan, search)
 from pdfmanager import certsign, comments, filetools, formdetect, pdfacheck
-from pdfmanager import accessibility, filing, preflight  # -- accessibility --
+from pdfmanager import accessibility, filing, preflight, translate  # -- accessibility --
 from pdfmanager import ocr  # the OCR engine ids
 from pdfmanager import risks  # what a PDF can do, and Make safe
 from pdfmanager import protection  # password strength, old encryption and its upgrade
@@ -613,6 +613,22 @@ def cmd_auto_file(a):
                     print(f"[DRY RUN] {item['src']} -> {item['dst']}  [{item['rule']}]")
                 else:
                     print(f"[SKIP]    {item['src']}  ({item['reason']})")
+    return 0
+
+
+def cmd_translate(a):
+    src = Path(a.input)
+    if not src.is_file():
+        raise core.PdfManagerError(f"file not found: {src}")
+    ext = ".txt" if a.mode == "text" else ".pdf"
+    out = Path(a.output) if a.output else src.with_name(f"{src.stem}_{a.to_lang}{ext}")
+    res = translate.translate_pdf(
+        src, out, a.from_lang, a.to_lang, mode=a.mode, password=a.password,
+    )
+    if a.json:
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+    else:
+        print(f"Translated {res['pages']} page(s) ({res['mode']}) -> {res['output']}")
     return 0
 
 
@@ -1919,6 +1935,17 @@ def build_parser():
     sp.add_argument("--apply", action="store_true", help="apply renames/moves (without this, prints dry-run preview)")
     sp.add_argument("--undo", action="store_true", help="undo the last applied auto-file batch")
     sp.add_argument("--undo-log", metavar="FILE", help="custom path for the undo manifest")
+    sp.add_argument("--password", help=f"password for encrypted input (or set {PASSWORD_ENV})")
+    sp.add_argument("--json", action="store_true", help="print JSON")
+
+    sp = other("translate", cmd_translate,
+               "translate a PDF offline using an installed language pack (side-by-side, text, or in-place)")
+    sp.add_argument("input", metavar="input.pdf", help="PDF to translate")
+    sp.add_argument("--from", dest="from_lang", default="en", help="source language code (default: en)")
+    sp.add_argument("--to", dest="to_lang", required=True, help="target language code (e.g. fr, es, de, zh-Hans)")
+    sp.add_argument("--mode", choices=("side-by-side", "text", "in-place"), default="side-by-side",
+                    help="output layout mode (default: side-by-side)")
+    sp.add_argument("-o", "--output", help="output file path")
     sp.add_argument("--password", help=f"password for encrypted input (or set {PASSWORD_ENV})")
     sp.add_argument("--json", action="store_true", help="print JSON")
 

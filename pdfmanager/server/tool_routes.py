@@ -249,6 +249,26 @@ class ToolRoutesMixin:
             )
             return self._send_bytes(dst.read_bytes(), "application/pdf", "preflight-fixed.pdf")
 
+    def _translate_page(self, body):
+        """Translate a single page of a PDF without modifying the document."""
+        from pdfmanager import translate
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        page_num = int(fields.get("page") or 1)
+        src_lang = fields.get("from") or "en"
+        dst_lang = fields.get("to") or ""
+        if not dst_lang:
+            raise UserError("choose a target language")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            path = Path(tmp) / "file.pdf"
+            path.write_bytes(uploads[0][2])
+            result = translate.translate_page(
+                path, page_num, src_lang, dst_lang, password=fields.get("password") or None,
+            )
+        return self._send(HTTPStatus.OK, result)
+
     def _facts(self, body):
         """What a file the page holds is (see filefacts), and what to offer for it."""
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
