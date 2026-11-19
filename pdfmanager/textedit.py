@@ -701,7 +701,7 @@ def _options(edit):
             if not low <= value <= high:
                 raise core.PdfManagerError(f"the {key} should be between {low:g} and {high:g}")
             opts[key] = value
-    for key in ("bold", "italic", "flow", "styles", "hyphens", "indent", "keep_unchanged"):
+    for key in ("bold", "italic", "flow", "styles", "hyphens", "indent", "keep_unchanged", "wrap_pictures"):
         if edit.get(key) is not None:
             opts[key] = bool(edit[key])
     if edit.get("color") is not None:
@@ -729,9 +729,9 @@ def _options(edit):
             raise core.PdfManagerError('breaks can only be "simple"')
         opts["breaks"] = "simple"
     if edit.get("fit") not in (None, ""):
-        if edit["fit"] != "shrink":
-            raise core.PdfManagerError('fit can only be "shrink"')
-        opts["fit"] = "shrink"
+        if edit["fit"] not in ("shrink", "next_page", "add_page"):
+            raise core.PdfManagerError('fit can only be "shrink", "next_page" or "add_page"')
+        opts["fit"] = edit["fit"]
     return opts
 
 
@@ -1285,6 +1285,31 @@ def _leading_unchanged(rows, text, marks=None):
     return keep, pos
 
 
+def _free_span(y_base, col_left, col_right, size, obstacles):
+    """Widest horizontal span inside ``[col_left, col_right]`` on the line at
+    ``y_base`` that stays clear of ``obstacles``: ``(span_left, span_right)``."""
+    pad_x = max(4.0, size * 0.4)
+    pad_y = size * 0.15
+    lo, hi = y_base - 0.25 * size - pad_y, y_base + 0.85 * size + pad_y
+    blocked = []
+    for ox0, oy0, ox1, oy1 in obstacles:
+        if oy1 > lo and oy0 < hi and ox1 + pad_x > col_left and ox0 - pad_x < col_right:
+            blocked.append((max(col_left, ox0 - pad_x), min(col_right, ox1 + pad_x)))
+    if not blocked:
+        return col_left, col_right
+    blocked.sort()
+    spans, cur = [], col_left
+    for bx0, bx1 in blocked:
+        if bx0 > cur:
+            spans.append((cur, bx0))
+        cur = max(cur, bx1)
+    if cur < col_right:
+        spans.append((cur, col_right))
+    if not spans:
+        return col_left, col_left
+    return max(spans, key=lambda s: s[1] - s[0])
+
+
 class _Page:
     """One page being changed: what pdfium reads of it and what gets drawn."""
 
@@ -1309,6 +1334,7 @@ class _Page:
         self.spots = None   # ... line by line, for a paragraph: [(place, the old line's first letter)]
         self.line_no = None  # the line of the paragraph being written
         self.legacy = False  # the change being made is done the old way (covered and drawn on top)
+        self.spills = []    # [(page_index, _Page_or_None, runs_for_new_page_or_None)] for cross-page overflow
 
     @property
     def flow(self):
@@ -1965,6 +1991,11 @@ class _Page:
         ascent = (top - first["origin"][1]) if abs(down[1]) > 0.5 else base["size"] * 0.8
         old_span = ((rows[-1][0]["origin"][0] - first["origin"][0]) * down[0]
                     + (rows[-1][0]["origin"][1] - first["origin"][1]) * down[1])
+        obstacles = (
+            self.flow.obstacles(left, orig_right, top + base["size"], float(self.page.cropbox.bottom), base["size"])
+            if opts.get("wrap_pictures", True) and self.flow is not None and self.flow.content and abs(down[1]) > 0.5
+            else []
+        )
 
         simple = opts.get("breaks") == "simple"  # line by line, as before 0.34
         # Words are divided at line ends (English only) when every font here can draw the hyphen.
@@ -2002,6 +2033,21 @@ class _Page:
                 paras.append(cur or [[]])
             return paras
 
+        def _make_slot(y_start, lead_k, col_room, fi, sz, use_obs):
+            """Per-line (extra_x_offset, line_width) accounting for first-line indent and pictures."""
+            def slot(i):
+                s_off, s_room = 0.0, col_room
+                if use_obs:
+                    y_line = y_start - i * lead_k
+                    sl, sr = _free_span(y_line, left, left + col_room, sz, obstacles)
+                    if sr - sl >= sz * 3:
+                        s_off, s_room = sl - left, sr - sl
+                if i == 0 and fi > 0:
+                    s_off += fi
+                    s_room = max(s_room - fi, sz * 2)
+                return s_off, s_room
+            return slot
+
         def layout(style, text=content or text, room=room, tight=1.0, indent=True):
             """The new lines: ([(text, word gap, offset, ends a part, y_off)],
             letter width, letter spacing, line spacing, drop, growth). With words
@@ -2015,6 +2061,8 @@ class _Page:
             gap = space + 2 * tck if align == "justify" or word is None or not plain else word * k
             lead_k = lead * k * tight
             pgap_k = para_gap * k * tight
+            drop = (k - 1) * ascent  # a bigger size grows down from the old top
+            use_obs = bool(obstacles) and indent
 
             def measure(line):
                 return _place(line, 0.0, width, tck, gap)[1] - tck
@@ -2029,12 +2077,13 @@ class _Page:
                     fi = (first_indent * k
                           if indent and sp_idx == 0 and first_indent > 0 and align in ("left", "justify")
                           else 0.0)
-                    room_arg = (lambda i, r=room, f=fi: max(r - f, style["size"] * 2) if i == 0 else r) if fi > 0 else room
+                    slot = _make_slot(first["origin"][1] - drop - y_off, lead_k, room, fi, style["size"], use_obs)
+                    room_arg = (lambda i, sl=slot: sl(i)[1]) if (fi > 0 or use_obs) else room
                     wrapped = _wrap_marked(part, room_arg, measure, justify=align == "justify", greedy=simple, divide=divide)
                     for j, (line, end) in enumerate(wrapped):
                         line, g = line.strip(), gap
-                        line_room = max(room - fi, style["size"] * 2) if (j == 0 and fi > 0) else room
-                        off = fi if (j == 0 and fi > 0) else 0.0
+                        s_off, line_room = slot(j) if (fi > 0 or use_obs) else (0.0, room)
+                        off = s_off
                         spaces = line.count(" ")
                         if align == "justify" and j < len(wrapped) - 1 and spaces:
                             extra = (line_room - measure(line)) / spaces
@@ -2042,12 +2091,11 @@ class _Page:
                                 g = gap + extra
                         elif align in ("center", "right"):
                             free = line_room - measure(line)
-                            off = free / 2 if align == "center" else free
+                            off = s_off + (free / 2 if align == "center" else free)
                         is_para_end = j == len(wrapped) - 1 and sp_idx == len(subparts) - 1 and p_idx < len(paras) - 1
                         end_mark = "para" if is_para_end else (True if j == len(wrapped) - 1 else end or False)
                         lines.append((line, g, off, end_mark, y_off))
                         y_off += lead_k
-            drop = (k - 1) * ascent  # a bigger size grows down from the old top
             grow = drop + (lines[-1][4] if lines else 0.0) - old_span + 0.22 * (style["size"] - base["size"])
             return lines, width, tck, lead_k, drop, grow
 
@@ -2059,6 +2107,8 @@ class _Page:
             gap = space + 2 * tck if align == "justify" or word is None else word * k
             lead_k = lead * k * tight
             pgap_k = para_gap * k * tight
+            drop = (k - 1) * ascent
+            use_obs = bool(obstacles) and indent
 
             def measure(line):
                 pen = 0.0
@@ -2075,12 +2125,13 @@ class _Page:
                     fi = (first_indent * k
                           if indent and sp_idx == 0 and first_indent > 0 and align in ("left", "justify")
                           else 0.0)
-                    room_arg = (lambda i, r=room, f=fi: max(r - f, style["size"] * 2) if i == 0 else r) if fi > 0 else room
+                    slot = _make_slot(first["origin"][1] - drop - y_off, lead_k, room, fi, style["size"], use_obs)
+                    room_arg = (lambda i, sl=slot: sl(i)[1]) if (fi > 0 or use_obs) else room
                     wrapped = _wrap_seq_marked(part, room_arg, measure, justify=align == "justify", greedy=simple, divide=divide)
                     for j, (line, end) in enumerate(wrapped):
                         line, g = _strip_seq(line), gap
-                        line_room = max(room - fi, style["size"] * 2) if (j == 0 and fi > 0) else room
-                        off = fi if (j == 0 and fi > 0) else 0.0
+                        s_off, line_room = slot(j) if (fi > 0 or use_obs) else (0.0, room)
+                        off = s_off
                         spaces = sum(1 for ch, _ in line if ch == " ")
                         if align == "justify" and j < len(wrapped) - 1 and spaces:
                             extra = (line_room - measure(line)) / spaces
@@ -2088,12 +2139,11 @@ class _Page:
                                 g = gap + extra
                         elif align in ("center", "right"):
                             free = line_room - measure(line)
-                            off = free / 2 if align == "center" else free
+                            off = s_off + (free / 2 if align == "center" else free)
                         is_para_end = j == len(wrapped) - 1 and sp_idx == len(subparts) - 1 and p_idx < len(paras) - 1
                         end_mark = "para" if is_para_end else (True if j == len(wrapped) - 1 else end or False)
                         lines.append((line, g, off, end_mark, y_off))
                         y_off += lead_k
-            drop = (k - 1) * ascent
             grow = drop + (lines[-1][4] if lines else 0.0) - old_span + 0.22 * (style["size"] - base["size"])
             return lines, width, tck, lead_k, drop, grow
 
@@ -2115,11 +2165,11 @@ class _Page:
                     out.append(("\n" if ln[3] else " ", key_ref))
             return _strip_seq(out)
 
-        def emit(line, start, width, tck, g, at):
+        def emit(line, start, width, tck, g, at, target=self):
             """Write one line from ``start`` along it; ``at(s)`` is the page point s along."""
             if not content:
                 placed, _ = _place(line, start, width, tck, g)
-                self.run(style, font, [(ch, *at(s)) for ch, s in placed])
+                target.run(style, font, [(ch, *at(s)) for ch, s in placed])
                 return
             k = style["size"] / base["size"]
             pen, group, current = start, [], None
@@ -2129,7 +2179,7 @@ class _Page:
                     pen += g - tck
                     continue
                 if key != current and current is not None:
-                    self.run(scaled(current, k)[0], fonts_by[current], group)
+                    target.run(scaled(current, k)[0], fonts_by[current], group)
                     group = []
                 current = key
                 px, py = at(pen)
@@ -2137,13 +2187,13 @@ class _Page:
                     px, py = px - down[0] * key[-2] * k, py - down[1] * key[-2] * k
                 group.append((ch, px, py))
                 st, w = scaled(key, k)
-                if key[-1] is not None:  # in links or markups: where their words are now
+                if target is self and key[-1] is not None:  # in links or markups: where their words are now
                     (x0, y0), (x1, _) = at(pen), at(pen + w(ch))
                     for index in key[-1]:
                         linked.setdefault(index, []).append((x0, y0, x1, st["size"]))
                 pen += w(ch) + tck
             if current is not None:
-                self.run(scaled(current, k)[0], fonts_by[current], group)
+                target.run(scaled(current, k)[0], fonts_by[current], group)
 
         def squeeze(found, style, current):
             """Nothing below can move, so the paragraph has to end above
@@ -2165,6 +2215,8 @@ class _Page:
             return *best, False
 
         lines, width, tck, lead_k, drop, grow = layout(style)
+        if obstacles:
+            self.notes["wrapped_picture"] = True
         more, nxt = [], None  # lines that run on at the top of the next column
         if flow and abs(grow) > 0.5:
             found = self.flow.column(rows, lead)
@@ -2188,6 +2240,83 @@ class _Page:
                     else:
                         more = []
                     break
+            if not fits and not found["lines"] and len(lines) > 1 and nxt is None and self.writer is not None:
+                has_next = self.number + 1 < len(self.writer.pages)
+                if has_next:
+                    self.notes["can_next_page"] = True
+                else:
+                    self.notes["add_page"] = True
+                if opts.get("fit") == "next_page" and has_next and self.doc is not None:
+                    for keep in range(len(lines) - 1, 0, -1):
+                        here = drop + lines[keep - 1][4] - old_span + 0.22 * (style["size"] - base["size"])
+                        if found["low"] - here < found["limit"] - 0.01:
+                            continue
+                        words = rejoin(lines[keep:])
+                        next_page = self.writer.pages[self.number + 1]
+                        next_work = _Page(self.doc[self.number + 1], next_page, self.doc,
+                                          self.number + 1, self.writer, self.pdfa)
+                        next_work.strict = False
+                        nxt_col = next_work.flow.top_column(left, orig_right, lead) if next_work.flow else None
+                        if nxt_col:
+                            col_w = max(nxt_col["x1"] - nxt_col["x0"], base["size"] * 4)
+                            more_next = layout(style, words, col_w, indent=False)[0]
+                            more_span = (more_next[-1][4] - more_next[0][4]) if more_next else 0.0
+                            push = more_span + 1.5 * lead_k
+                            moved_ok = (not nxt_col["lines"]) or (
+                                nxt_col["low"] - push >= nxt_col["limit"] - 0.01
+                                and next_work.flow.move(nxt_col, -push)
+                            )
+                            if more_next and moved_ok:
+                                base_y = more_next[0][4]
+                                for mn, (ml, mg, moff, _, my) in enumerate(more_next):
+                                    next_work.line_no = mn
+                                    emit(ml, moff, width, tck, mg,
+                                         lambda s, dy=my - base_y, nc=nxt_col: (nc["x0"] + s, nc["baseline"] - dy),
+                                         target=next_work)
+                                next_work.line_no = None
+                                plain_more = words if isinstance(words, str) else "".join(ch for ch, _ in words)
+                                next_work.texts.append((None, plain_more))
+                                self.spills.append((self.number + 1, next_work, None))
+                                self.written_text = rejoin(lines[:keep])
+                                if isinstance(self.written_text, list):
+                                    self.written_text = "".join(ch for ch, _ in self.written_text)
+                                lines, grow, fits = lines[:keep], here, True
+                                self.notes["next_page"] = len(more_next)
+                                self.notes["moved_next_page"] = len(nxt_col["lines"])
+                                self.notes.pop("can_next_page", None)
+                                break
+                        next_work.close()
+                        break
+                elif opts.get("fit") == "add_page" and not has_next:
+                    for keep in range(len(lines) - 1, 0, -1):
+                        here = drop + lines[keep - 1][4] - old_span + 0.22 * (style["size"] - base["size"])
+                        if found["low"] - here < found["limit"] - 0.01:
+                            continue
+                        words = rejoin(lines[keep:])
+                        more_new = layout(style, words, room, indent=False)[0]
+                        if more_new:
+                            new_runs = []
+
+                            class _Collector:
+                                def run(self_, st, f, entries):
+                                    own, name = f[:2]
+                                    new_runs.append({"style": st, "own": own, "name": name, "entries": entries})
+
+                            top_y = float(self.page.cropbox.top) - 72.0 - lead_k * 0.8
+                            base_y = more_new[0][4]
+                            col_target = _Collector()
+                            for ml, mg, moff, _, my in more_new:
+                                emit(ml, left + moff, width, tck, mg,
+                                     lambda s, dy=my - base_y: (s, top_y - dy),
+                                     target=col_target)
+                            self.spills.append((len(self.writer.pages), None, new_runs))
+                            self.written_text = rejoin(lines[:keep])
+                            if isinstance(self.written_text, list):
+                                self.written_text = "".join(ch for ch, _ in self.written_text)
+                            lines, grow, fits = lines[:keep], here, True
+                            self.notes["added_page"] = len(more_new)
+                            self.notes.pop("add_page", None)
+                        break
             if not fits and opts.get("fit") == "shrink":
                 for step in range(1, 11):  # down to three quarters of the size, a little at a time
                     smaller = _restyle(style, {"size": style["size"] * (1 - 0.025 * step)})
@@ -2897,6 +3026,26 @@ def _edit(path, output, edits, password, report, old_way):
                     _draw(writer, page, work.covers, work.runs)
                     if old_way is not True:
                         expect[number - 1] = work.expected()
+                    for spill_idx, spill_work, new_runs in work.spills:
+                        if spill_work is not None:
+                            try:
+                                spill_page = writer.pages[spill_idx]
+                                core._own_contents(spill_page, shared)
+                                if spill_work.flow is not None and spill_work.flow.changed():
+                                    spill_work.ready()
+                                    spill_work.flow.write(writer, spill_page)
+                                    spill_work.runs += spill_work.flow.orphans
+                                _draw(writer, spill_page, spill_work.covers, spill_work.runs)
+                                if old_way is not True:
+                                    expect[spill_idx] = spill_work.expected()
+                            finally:
+                                spill_work.close()
+                        elif new_runs is not None:
+                            new_page = writer.add_blank_page(
+                                width=float(page.mediabox.width),
+                                height=float(page.mediabox.height),
+                            )
+                            _draw(writer, new_page, [], new_runs)
                 finally:
                     work.close()
         finally:

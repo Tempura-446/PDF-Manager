@@ -87,6 +87,12 @@ Draw, move, resize and arrange form fields directly on the page in the reader.
   paragraph at the document's own spacing and `Shift+Enter` making a soft line
   break); and unchanged leading lines before the first edited word are left
   byte-identical in the page's content stream.
+- **Flow around pictures and onto the next page.** Rewritten paragraphs wrap
+  shorter beside pictures or filled boxes and expand to full column width
+  below them without overlapping. When a paragraph overflows the bottom of a
+  page, the reader offers **Continue on the next page** (flowing overflow
+  lines to the top of the next page's column and shifting its text down) or
+  **Add a page** on the last page, alongside **Shrink to fit**.
 
 ## 0.56.0
 

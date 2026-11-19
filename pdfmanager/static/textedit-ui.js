@@ -876,8 +876,12 @@ export const TextEditing = (Base) => class extends Base {
 
   /** The last change again, its text made a little smaller to fit the page. */
   async _shrinkToFit(edit) {
+    return this._fitOverflow(edit, "shrink");
+  }
+
+  async _fitOverflow(edit, fit) {
     await this._undoTextEdit();
-    return this._applyTextEdit({ ...edit, fit: "shrink" });
+    return this._applyTextEdit({ ...edit, fit });
   }
 
 

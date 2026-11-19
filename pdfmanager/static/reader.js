@@ -2618,9 +2618,18 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
         }
         if (used.some((u) => u.wider)) notes.push("The line is now longer than its column: to wrap it again, rewrite the whole paragraph (Shift+click it).");
         if (used.some((u) => u.taller)) notes.push("The paragraph now takes more lines than before, so it may run into what's below it. Undo with Ctrl+Z.");
+        if (used.some((u) => u.wrapped_picture)) notes.push("Some lines were shortened to wrap around a picture.");
+        if (used.some((u) => u.next_page)) notes.push("Overflow lines continued onto the next page.");
+        if (used.some((u) => u.added_page)) notes.push("Added a new page for the overflow lines.");
         if (used.some((u) => u.overflow) && !edit.fit) {
-          notes.push("The text no longer fits on the page, so the text below it wasn't moved. Shorten it, or let it shrink a little.");
-          return this.toast(notes.join(" "), 12000, ["Shrink to fit", () => this._shrinkToFit(edit)]);
+          notes.push("The text no longer fits on the page, so the text below it wasn't moved.");
+          const actions = [["Shrink to fit", () => this._shrinkToFit(edit)]];
+          if (used.some((u) => u.can_next_page)) {
+            actions.unshift(["Continue on the next page", () => this._fitOverflow(edit, "next_page")]);
+          } else if (used.some((u) => u.add_page)) {
+            actions.unshift(["Add a page", () => this._fitOverflow(edit, "add_page")]);
+          }
+          return this.toast(notes.join(" "), 12000, actions);
         }
         if (used.some((u) => u.overflow)) notes.push("Even a little smaller, the text doesn't fit on the page, so the text below it wasn't moved.");
         if (notes.length) this.toast(notes.join(" "), 8000);
