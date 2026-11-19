@@ -1088,8 +1088,8 @@ def dwg_to_dxf(path, output, oda_path: str | None = None) -> Path:
         out_dir = Path(tmp) / "out"
         in_dir.mkdir()
         out_dir.mkdir()
-        shutil.copy2(src, in_dir / src.name)
-        cmd = [str(converter), str(in_dir), str(out_dir), "ACAD2018", "DXF", "0", "1", src.name]
+        shutil.copy2(src, in_dir / "drawing.dwg")
+        cmd = [str(converter), str(in_dir), str(out_dir), "ACAD2018", "DXF", "0", "1", "drawing.dwg"]
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         except OSError as exc:

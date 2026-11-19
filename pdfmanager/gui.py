@@ -3502,9 +3502,16 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
         name = Path(raw_name).name or "drawing.dxf"
+        ext = Path(name).suffix.lower()
+        if ext == ".dwg":
+            temp_name = "input.dwg"
+        elif ext == ".dxf":
+            temp_name = "input.dxf"
+        else:
+            raise UserError("choose a .dxf or .dwg drawing")
         with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
-            src = Path(tmp) / name
-            out = Path(tmp) / f"{src.stem}.pdf"
+            src = Path(tmp) / temp_name
+            out = Path(tmp) / "output.pdf"
             src.write_bytes(body)
             dxf.drawing_to_pdf(src, out)
             pdf_bytes = out.read_bytes()
