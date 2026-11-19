@@ -1576,7 +1576,7 @@ def test_printing_puts_each_page_on_one_sheet():
     a break after every page, printed a blank sheet after each page.)"""
     root = Path(__file__).resolve().parents[1] / "pdfmanager" / "static"
     css = (root / "reader.css").read_text(encoding="utf-8")
-    js = (root / "reader.js").read_text(encoding="utf-8")
+    js = (root / "reader-save.js").read_text(encoding="utf-8")
     rules = css[css.index("@media print"):]
     rules = rules[:rules.index("\n}\n")]
     assert ".rd-print-page { width: 100vw; height: 100vh;" in rules
