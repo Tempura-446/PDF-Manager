@@ -162,7 +162,7 @@ def _latest_release():
     name = f"ZPDF-{version}-windows.zip"
     if not assets.get(name) or not assets.get(name + ".sha256"):
         raise core.PdfManagerError(f"the release of version {version} on GitHub is missing {name} or its checksum")
-    return version, {"zip": assets[name], "sha256": assets[name + ".sha256"]}
+    return version, {"zip": assets[name], "sha256": assets[name + ".sha256"], "sig": assets.get(name + ".sig")}
 
 
 def _cache_file():
@@ -236,16 +236,21 @@ def install(python=None, notes=None):
     version, source = latest_version()
     progress.say(f"Downloading version {version}…")
     progress.check()
-    if isinstance(source, dict):  # a published release: the zip, checked against its checksum
+    if isinstance(source, dict):  # a published release: the zip, checked against its checksum and signature
+        from pdfmanager import relsign
+
         with _open(_request(source["zip"], accept="application/octet-stream")) as res:
             data = res.read()
         with _open(_request(source["sha256"], accept="application/octet-stream")) as res:
-            published = res.read().decode("ascii", "replace").split()
-        import hashlib
-
-        if not published or hashlib.sha256(data).hexdigest() != published[0].lower():
-            raise core.PdfManagerError(
-                f"the download of version {version} came out damaged (its checksum doesn't match); try again")
+            sha_bytes = res.read()
+        sig_bytes = None
+        if source.get("sig"):
+            with _open(_request(source["sig"], accept="application/octet-stream")) as res:
+                sig_bytes = res.read()
+        try:
+            relsign.verify_release(data, sha_bytes, sig_bytes, version=version)
+        except ValueError as exc:
+            raise core.PdfManagerError(str(exc)) from None
     else:
         with _open(_request(f"/repos/{_repo()}/zipball/{source}")) as res:
             data = res.read()
