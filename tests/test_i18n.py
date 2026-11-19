@@ -42,7 +42,11 @@ def test_install_switch_fallback_and_remove_language_pack(tmp_path, monkeypatch)
     monkeypatch.setattr(update, "data_dir", lambda: tmp_path / "appdata")
     (tmp_path / "appdata").mkdir(parents=True, exist_ok=True)
 
-    pack_zip = _make_pack_zip(tmp_path / "fr.zip", code="fr", name="Français")
+    pack_zip = _make_pack_zip(tmp_path / "it.zip", code="it", name="Italiano", strings={
+        "nav.open": "Apri un PDF",
+        "reader.save": "Salva",
+        "status.pages_count": "{count} pagine",
+    })
     good_sha = hashlib.sha256(pack_zip.read_bytes()).hexdigest()
 
     # Wrong checksum is refused
@@ -51,17 +55,17 @@ def test_install_switch_fallback_and_remove_language_pack(tmp_path, monkeypatch)
 
     # Valid install succeeds
     info = i18n.install_pack_from_zip(pack_zip, expected_sha256=good_sha)
-    assert info["code"] == "fr" and info["dir"] == "ltr"
+    assert info["code"] == "it" and info["dir"] == "ltr"
     assert len(i18n.list_installed_packs()) == 1
 
     # Switch language and verify fallback for keys missing in the older/partial pack
-    assert i18n.set_language("fr") == "fr"
-    assert i18n.get_language() == "fr"
-    assert i18n.t("nav.open") == "Ouvrir un PDF"
+    assert i18n.set_language("it") == "it"
+    assert i18n.get_language() == "it"
+    assert i18n.t("nav.open") == "Apri un PDF"
     assert i18n.t("reader.print") == "Print…"  # falls back to English!
 
     # Removing the active pack resets language cleanly to English
-    i18n.remove_pack("fr")
+    i18n.remove_pack("it")
     assert i18n.list_installed_packs() == []
     assert i18n.get_language() == "en"
     assert i18n.t("nav.open") == "Open a PDF"

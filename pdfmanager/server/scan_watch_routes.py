@@ -252,6 +252,7 @@ class ScanWatchRoutesMixin:
             "dir": i18n.language_dir(effective),
             "strings": i18n.load_catalog(effective),
             "packs": i18n.list_installed_packs(),
+            "languages": i18n.list_available_languages(),
         })
 
     def _i18n_set_language(self, body):
