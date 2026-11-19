@@ -49,4 +49,4 @@ include = ["pdfmanager", "pdfmanager.*"]
 version = {attr = "pdfmanager.__version__"}
 
 [tool.setuptools.package-data]
-pdfmanager = ["gui.html", "static/*.js", "static/*.css", "static/fonts/*", "static/meaning/*", "static/hyphen/*", "static/pdfjs/**/*"]
+pdfmanager = ["gui.html", "locales/*.json", "static/*.js", "static/*.css", "static/fonts/*", "static/meaning/*", "static/hyphen/*", "static/pdfjs/**/*"]
