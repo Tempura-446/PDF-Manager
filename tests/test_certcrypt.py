@@ -252,7 +252,7 @@ def test_the_tool_pages_and_the_recent_list_know_what_it_is(tmp_path, people):
     seen = gui._inspect_pdf(out)
     assert seen["for_people"] and not seen["locked"] and "protected for particular people" in seen["error"]
     assert "for_people" not in gui._inspect_pdf(plain(tmp_path / "q.pdf"))
-    html = (Path(gui.__file__).parent / "gui.html").read_text(encoding="utf-8")
-    assert '!(it.for_people && current.id === "decrypt-cert")' in html          # that tool takes it
-    assert 'with your Digital ID first (Protect → Open with Digital ID)' in html
-    assert "const failed = e.failed && !e.facts?.for_people;" in html
+    js = (Path(gui.__file__).parent / "static" / "tools.js").read_text(encoding="utf-8")
+    assert '!(it.for_people && current.id === "decrypt-cert")' in js          # that tool takes it
+    assert 'with your Digital ID first (Protect → Open with Digital ID)' in js
+    assert "const failed = e.failed && !e.facts?.for_people;" in js

@@ -182,9 +182,11 @@ def test_the_reader_asks_by_id_and_after_the_first_page():
     # The page starts the file and pdf.js before its stylesheets, and only when started with a file.
     html = GUI_HTML.read_text(encoding="utf-8")
     head = html[:html.index("</head>")] if "</head>" in html else html[:html.index("<body")]
-    assert head.index("window.zpdfEarly") < head.index('<link rel="stylesheet"')
+    early = (STATIC / "early-open.js").read_text(encoding="utf-8")
+    assert head.index('/static/early-open.js') < head.index('<link rel="stylesheet"')
+    assert "window.zpdfEarly" in early
     first = int(re.search(r"const FIRST_BYTES = (\d+) \* 1024 \* 1024;", js).group(1)) << 20
-    assert f'Range: "bytes=0-{first - 1}"' in head
+    assert f'Range: "bytes=0-{first - 1}"' in early
 
 
 # ---- in a browser ------------------------------------------------------------------------

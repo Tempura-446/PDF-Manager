@@ -134,7 +134,8 @@ def test_scan_is_a_tool_of_the_app():
     op = gui.OPS["scan"]
     assert op["files"] == "scan" and op["group"] == "Convert" and op["fields"] == []
     html = Path(gui.__file__).with_name("gui.html").read_text(encoding="utf-8")
-    assert 'id="scan-host"' in html and "Scan paper" in html
+    tools_js = (Path(gui.__file__).parent / "static" / "tools.js").read_text(encoding="utf-8")
+    assert 'id="scan-host"' in html and "Scan paper" in tools_js
 
 
 def test_cli_photos_to_pdf(tmp_path):

@@ -553,9 +553,11 @@ def test_tools_in_the_app(report_pdf, tmp_path):
                                       work=tmp_path / "work2")
     assert name == "report_accessibility.txt" and b"Accessibility check: report.pdf" in data
     assert notes[0].startswith("report.pdf: 5 accessibility problems")
-    html = (Path(gui.__file__).parent / "gui.html").read_text(encoding="utf-8")
-    assert '"access-check": \'<' in html and "\n  tag: '<" in html  # icons
-    assert '"access-check": "See what keeps screen readers out' in html
+    static = Path(gui.__file__).parent / "static"
+    core_js = (static / "app-core.js").read_text(encoding="utf-8")
+    tools_js = (static / "tools.js").read_text(encoding="utf-8")
+    assert '"access-check": \'<' in core_js and "\n  tag: '<" in core_js  # icons
+    assert '"access-check": "See what keeps screen readers out' in tools_js
 
 
 def test_reader_checks_accessibility(tagged, report_pdf, app):

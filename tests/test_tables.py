@@ -333,8 +333,10 @@ def test_tool_is_in_the_app():
     assert [c[0] for c in fields["layout"]["choices"]] == list(tables.LAYOUTS)
     assert [c[0] for c in fields["format"]["choices"]] == ["xlsx", "csv"]
     from pathlib import Path
-    html = Path(gui.__file__).with_name("gui.html").read_text(encoding="utf-8")
-    assert "\"to-excel\": '<" in html and '"to-excel": "' in html  # an icon and a tagline
+    static = Path(gui.__file__).parent / "static"
+    core_js = (static / "app-core.js").read_text(encoding="utf-8")
+    tools_js = (static / "tools.js").read_text(encoding="utf-8")
+    assert "\"to-excel\": '<" in core_js and '"to-excel": "' in tools_js  # an icon and a tagline
 
 
 def test_gui_to_excel(tmp_path, report):

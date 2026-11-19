@@ -34,11 +34,11 @@ def to_sign_pdf(path):
 
 
 def test_the_glass_and_motion_tokens():
-    html = GUI_HTML.read_text(encoding="utf-8")
+    css = (GUI_HTML.parent / "static" / "app.css").read_text(encoding="utf-8")
     # Dark mode's frosted fill is the same in both dark blocks, and has a rim.
-    dark = re.findall(r"--glass: (rgb\([^)]*\));\s*--glass-edge: (rgb\([^)]*\))", html)
+    dark = re.findall(r"--glass: (rgb\([^)]*\));\s*--glass-edge: (rgb\([^)]*\))", css)
     assert len(dark) == 2 and dark[0] == dark[1], dark
-    assert "@media (prefers-reduced-motion: reduce) { :root { --t: 0ms; } }" in html
+    assert "@media (prefers-reduced-motion: reduce) { :root { --t: 0ms; } }" in css
 
 
 @pytest.fixture
