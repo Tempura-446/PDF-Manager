@@ -72,19 +72,25 @@ def collect(path, password=None):
     import pypdfium2 as pdfium
 
     reader = core.open_pdf(path, password)
+    try:
+        labels = list(reader.page_labels)
+    except Exception:
+        labels = []
     found, by_ref, replies = [], {}, []
     with core.PDFIUM_LOCK:
         doc = pdfium.PdfDocument(str(path), password=password)
         try:
             for number, page in enumerate(reader.pages, 1):
+                page_label = labels[number - 1] if number - 1 < len(labels) else str(number)
                 textpage = None
                 for ref in page.get("/Annots") or []:
                     annot = ref.get_object()
                     if not isinstance(annot, DictionaryObject) or annot.get("/Subtype") not in KINDS:
                         continue
-                    item = {"page": number, "kind": KINDS[annot["/Subtype"]],
+                    item = {"page": number, "label": page_label, "kind": KINDS[annot["/Subtype"]],
                             "author": _str(annot.get("/T")), "date": _date_text(annot.get("/M") or annot.get("/CreationDate")),
                             "text": _str(annot.get("/Contents")).strip(), "subject": _str(annot.get("/Subj")),
+                            "color": _color_hex(annot.get("/C")),
                             "marked": "", "replies": [],
                             "top": max(_nums(annot.get("/Rect"))[1::2] or [0])}
                     effect = annot.get("/BE")
@@ -218,6 +224,123 @@ def to_csv(found, output):
                 w.writerow([r["page"], "Reply", safe(r["author"]), r["date"], "", safe(r["text"]),
                             c["text"][:60] or c["kind"]])
     return output
+
+
+GROUP_MODES = ("page", "type", "author")
+
+
+def filter_comments(found, author=None, kind=None, color=None, pages=None):
+    """Filter collected comments by ``author`` (case-insensitive substring),
+    ``kind`` (case-insensitive exact match, e.g. "Highlight", "Cloud"),
+    ``color`` (hex string like "#FFFF00"), and/or ``pages`` (1-based iterable
+    or page-range string like "1-3,5")."""
+    page_set = None
+    if pages is not None and pages != "":
+        if isinstance(pages, str):
+            from pdfmanager.pageranges import parse_page_ranges
+
+            max_page = max((c["page"] for c in found), default=0)
+            if max_page:
+                page_set = {i + 1 for i in parse_page_ranges(pages, max_page)}
+            else:
+                page_set = set()
+        else:
+            page_set = set(pages)
+    want_author = (author or "").strip().lower()
+    want_kind = (kind or "").strip().lower()
+    want_color = (color or "").strip().upper()
+    if want_color and not want_color.startswith("#"):
+        want_color = "#" + want_color
+
+    out = []
+    for c in found:
+        if page_set is not None and c["page"] not in page_set:
+            continue
+        if want_author and want_author not in (c.get("author") or "").lower():
+            continue
+        if want_kind and (c.get("kind") or "").lower() != want_kind:
+            continue
+        if want_color and (c.get("color") or "").upper() != want_color:
+            continue
+        out.append(c)
+    return out
+
+
+def _page_heading(item):
+    num = item["page"]
+    label = (item.get("label") or "").strip()
+    if label and label != str(num):
+        return f"Page {num} ({label})"
+    return f"Page {num}"
+
+
+def to_markdown(found, output=None, title="Comments", group_by="page"):
+    """Render collected comments as a structured Markdown review summary.
+
+    ``group_by`` is one of ``"page"``, ``"type"``, or ``"author"``. Writes UTF-8
+    to ``output`` when provided and returns the Markdown string.
+    """
+    if group_by not in GROUP_MODES:
+        raise ValueError(f"group_by must be one of {GROUP_MODES}, got {group_by!r}")
+    total = count(found)
+    lines = [f"# Review Summary: {title}", ""]
+    if not total:
+        lines.append("_No comments._")
+    else:
+        by_kind = {}
+        for c in found:
+            by_kind[c["kind"]] = by_kind.get(c["kind"], 0) + 1
+        breakdown = ", ".join(f"{n} {k}" for k, n in sorted(by_kind.items()))
+        lines.append(f"**{total} comment{'s' if total != 1 else ''}** ({breakdown})")
+
+        groups = {}
+        order = []
+        for c in found:
+            if group_by == "page":
+                key = _page_heading(c)
+            elif group_by == "type":
+                key = c["kind"]
+            else:
+                key = c.get("author") or "Unattributed"
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(c)
+
+        for heading in order:
+            lines.extend(["", f"## {heading}"])
+            for c in groups[heading]:
+                meta = []
+                if group_by != "page":
+                    meta.append(_page_heading(c))
+                if group_by != "author" and c.get("author"):
+                    meta.append(c["author"])
+                if c.get("date"):
+                    meta.append(c["date"])
+                if c.get("color"):
+                    meta.append(f"`{c['color']}`")
+                head = f"**{c['kind']}**"
+                if meta:
+                    head += " — " + " · ".join(meta)
+                lines.extend(["", f"### {head}"])
+                if c.get("marked"):
+                    quoted = "\n".join(f"> {ln}" for ln in c["marked"].splitlines())
+                    lines.extend(["", quoted])
+                if c.get("text"):
+                    lines.extend(["", c["text"]])
+                if c.get("replies"):
+                    lines.append("")
+                    for r in c["replies"]:
+                        rwho = " · ".join(bit for bit in (r.get("author"), r.get("date")) if bit)
+                        prefix = f"- **Reply** ({rwho}): " if rwho else "- **Reply**: "
+                        lines.append(prefix + (r.get("text") or "").replace("\n", " "))
+
+    text = "\n".join(lines).rstrip() + "\n"
+    if output is not None:
+        out = Path(output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8", newline="\n")
+    return text
 
 
 # --------------------------------------------------------------------------

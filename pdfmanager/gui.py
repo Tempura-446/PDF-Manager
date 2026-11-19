@@ -317,13 +317,21 @@ OPERATIONS = [
     # -- comments --
     {"id": "comments", "group": "Stamp", "label": "Comments: summary & export", "files": "pdf",
      "help": "List the comments of PDFs (notes, highlights, stamps…, with the words they mark "
-             "and the replies) as a PDF to read or print, or as a spreadsheet; or move "
+             "and the replies) as a PDF, Markdown summary, or spreadsheet; or move "
              "comments between copies of a document with XFDF files (Acrobat reads and "
              "writes them).",
      "fields": [_f("mode", "Make", "select", "summary",
-                   choices=[["summary", "A summary (PDF)"], ["csv", "A spreadsheet (CSV)"],
+                   choices=[["summary", "A summary (PDF)"], ["markdown", "A Markdown summary (.md)"],
+                            ["csv", "A spreadsheet (CSV)"],
                             ["export", "A comments file to send (XFDF)"],
                             ["import", "Add comments from an XFDF file"]]),
+                _f("group_by", "Group by", "select", "page",
+                   choices=[["page", "Page"], ["type", "Annotation type"], ["author", "Author"]],
+                   show_if={"mode": "markdown"}),
+                _f("author", "Filter by author (blank = all)", "text", "", placeholder="all",
+                   show_if={"mode": ["summary", "markdown", "csv"]}),
+                _f("kind", "Filter by type (blank = all)", "text", "", placeholder="e.g. Highlight, Note, Cloud",
+                   show_if={"mode": ["summary", "markdown", "csv"]}),
                 _f("xfdf", "Comments file (.xfdf)", "file", None, accept=".xfdf,.xml",
                    show_if={"mode": "import"})]},
     {"id": "fill-many", "group": "Stamp", "label": "Fill many (mail merge)", "files": "pdf",
@@ -971,8 +979,19 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                 n = comments.export_xfdf(src, out, password)
             else:
                 found = comments.collect(src, password)
+                found = comments.filter_comments(
+                    found,
+                    author=(opts.get("author") or "").strip() or None,
+                    kind=(opts.get("kind") or "").strip() or None,
+                )
                 n = comments.count(found)
-                if mode == "csv":
+                if mode == "markdown":
+                    group_by = opts.get("group_by") or "page"
+                    if group_by not in comments.GROUP_MODES:
+                        raise UserError(f"unknown grouping {group_by!r}")
+                    out = out.with_name(f"{src.stem}_comments.md")
+                    comments.to_markdown(found, out, title=src.name, group_by=group_by)
+                elif mode == "csv":
                     out = out.with_name(f"{src.stem}_comments.csv")
                     comments.to_csv(found, out)
                 else:
@@ -2710,7 +2729,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._form_import(body)
             if path == "/api/drawing/open":
                 return self._drawing_open(body)
-            if path in ("/api/comments/summary", "/api/comments/export", "/api/comments/import"):
+            if path in ("/api/comments/summary", "/api/comments/markdown", "/api/comments/export", "/api/comments/import"):
                 return self._comments(path.rsplit("/", 1)[1], body)
             if path == "/api/text/edit":
                 return self._text_edit(body)
@@ -3317,6 +3336,18 @@ class Handler(BaseHTTPRequestHandler):
             if what == "summary":
                 comments.summary_pdf(comments.collect(src, password), out, name)
                 return self._send(HTTPStatus.OK, out.read_bytes(), "application/pdf")
+            if what == "markdown":
+                group_by = fields.get("group_by") or "page"
+                if group_by not in comments.GROUP_MODES:
+                    raise UserError(f"unknown grouping {group_by!r}")
+                found = comments.filter_comments(
+                    comments.collect(src, password),
+                    author=fields.get("author") or None,
+                    kind=fields.get("kind") or None,
+                )
+                md = comments.to_markdown(found, title=name, group_by=group_by)
+                return self._send(HTTPStatus.OK, md.encode("utf-8"), "text/markdown; charset=utf-8",
+                                  {"X-Pdfm-Count": str(comments.count(found))})
             if what == "export":
                 n = comments.export_xfdf(src, out, password)
                 return self._send(HTTPStatus.OK, out.read_bytes(), "application/vnd.adobe.xfdf",
