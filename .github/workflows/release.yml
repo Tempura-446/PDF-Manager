@@ -1,0 +1,81 @@
+name: Publish release
+
+# Builds and publishes the current version in pdfmanager/__init__.py to
+# Tempura-446/ZPDF-releases using packaging/release.py, and tags this
+# repository with v<version>.
+#
+# One-time setup: add a repository secret named RELEASES_TOKEN (Settings >
+# Secrets and variables > Actions > Secrets) containing a fine-grained PAT
+# with "Contents: Read and write" access to Tempura-446/ZPDF-releases.
+# (Dry runs work without RELEASES_TOKEN.)
+on:
+  workflow_dispatch:
+    inputs:
+      skip_checks:
+        description: "Skip tests, PyInstaller build, and self-test (use when CI already passed)"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Build release files and upload as artifact without publishing or tagging"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release (Windows, Python 3.13)
+    runs-on: windows-latest
+    steps:
+      - name: Check RELEASES_TOKEN secret
+        if: ${{ !inputs.dry_run }}
+        shell: pwsh
+        env:
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          if (-not $env:RELEASES_TOKEN) {
+            Write-Error "Missing repository secret RELEASES_TOKEN. Add a fine-grained PAT with Contents: Read and write on Tempura-446/ZPDF-releases in Settings > Secrets and variables > Actions."
+            exit 1
+          }
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          $extras = if ("${{ inputs.skip_checks }}" -eq "true") { "app,ocr" } else { "build,test" }
+          python -m pip install --disable-pip-version-check -e ".[$extras]"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Run packaging/release.py
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          $args = @("packaging/release.py")
+          if ("${{ inputs.skip_checks }}" -eq "true") { $args += "--skip-checks" }
+          if ("${{ inputs.dry_run }}" -eq "true") { $args += "--dry-run" }
+          python @args
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: release-files
+          path: dist/release/*
+          if-no-files-found: ignore
+          retention-days: 14
