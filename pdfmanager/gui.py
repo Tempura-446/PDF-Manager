@@ -765,11 +765,13 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         icc = extra_files.get("icc")
         core.convert_color(src, out, opts.get("to") or "gray", icc, password)
     elif op == "ocr":
+        report = {}
         core.ocr(src, out, language=opts.get("language") or "eng",
                  force=_bool(opts.get("force")), deskew=_bool(opts.get("deskew")),
                  password=password, engine=opts.get("engine") or "auto",
                  rotate=_bool(opts.get("rotate", True)),
-                 quality=opts.get("quality") or None)
+                 quality=opts.get("quality") or None, report=report)
+        notes.extend(ocr.format_report(report))
     elif op == "clean":
         auto_rotate = _bool(opts.get("auto_rotate"))
         if auto_rotate and not (scan.find_tesseract() or ocr.builtin_available()):
@@ -2770,6 +2772,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/text/runs":
                 return self._text_runs(body)
             # -- end of text reflow --
+            if path == "/api/ocr/unsure":
+                return self._ocr_unsure(body)
+            if path == "/api/ocr/fix":
+                return self._ocr_fix(body)
             if path == "/api/pages/arrange":
                 return self._arrange(body)
             if path == "/api/sign/cert":
@@ -3734,6 +3740,43 @@ class Handler(BaseHTTPRequestHandler):
             runs = textedit.paragraph_runs(src, page, rect, text, fields.get("password") or None)
         return self._send(HTTPStatus.OK, {"runs": runs})
     # -- end of text reflow --
+
+    def _ocr_unsure(self, body):
+        """Return unsure OCR words stored in the PDF's private /PieceInfo keys."""
+        from pdfmanager import textlayer
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            src.write_bytes(uploads[0][2])
+            found = textlayer.read_unsure_words(src, fields.get("password") or None)
+        return self._send(HTTPStatus.OK, found)
+
+    def _ocr_fix(self, body):
+        """Correct (or accept) OCR words in the invisible text layer; sends back the updated PDF."""
+        from pdfmanager import textlayer
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        try:
+            edits = json.loads(fields.get("edits") or "[]")
+        except ValueError:
+            raise UserError("the OCR corrections are damaged; try again") from None
+        if not isinstance(edits, list):
+            raise UserError("the OCR corrections must be a list")
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "fixed.pdf"
+            src.write_bytes(uploads[0][2])
+            textlayer.correct_words(src, out, edits, password=password)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)  # stays protected
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf",
+                          {"X-Pdfm-Changed": str(len(edits))})
 
     def _images_list(self, body):
         """The pictures on the reader's pages (see pageimages.py)."""
