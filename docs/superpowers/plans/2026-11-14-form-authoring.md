@@ -85,8 +85,8 @@
 - [x] A check list before finishing: fields without a tooltip, duplicate names with different types, fields off the page, overlapping fields, required fields that are read-only, calculations that name a missing field.
 
 **Task 3.3: data**
-- [ ] Clear the form; export what was filled in (FDF, XFDF, CSV, JSON); fill from such a file. A "Fill many" tool: one PDF per row of a spreadsheet (mail merge), named from a column.
-- [ ] Test: export then import gives the same values; ten rows give ten filled files.
+- [x] Clear the form; export what was filled in (FDF, XFDF, CSV, JSON); fill from such a file. A "Fill many" tool: one PDF per row of a spreadsheet (mail merge), named from a column.
+- [x] Test: export then import gives the same values; ten rows give ten filled files.
 
 ### Phase 4 (release D): buttons and simple actions
 

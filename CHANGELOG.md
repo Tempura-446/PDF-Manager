@@ -56,6 +56,11 @@ Draw, move, resize and arrange form fields directly on the page in the reader.
   missing tooltips, duplicate names with different types, off-page or
   overlapping fields, required read-only fields, and calculations that name a
   missing field, and clicking any item selects that field on the page.
+- **Form data and Fill many.** Use the **Data** menu in **Prepare form** to
+  **Clear form**, **Import data** from FDF, XFDF, CSV, or JSON, or **Export
+  data** in any of those formats. A new **Fill many (mail merge)** tool fills
+  one PDF per row of a CSV, Excel (`.xlsx`), or JSON file and names each
+  output from a chosen column.
 
 ## 0.56.0
 
