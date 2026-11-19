@@ -82,10 +82,12 @@ def test_japanese_paragraph_rewrap_and_justify(tmp_path):
     ttlib = pytest.importorskip("fontTools.ttLib")
 
     orig1 = "これは日本語の段落テストです。"
-    orig2 = "句読点の処理を確認します。"
+    orig2 = "句読点の処理を確認します、"
+    # Reuse only characters already embedded in the PDF subset font so the test
+    # does not depend on a system CJK font being installed on the runner.
     new_text = (
-        "これは日本語の長い段落のテストです。"
-        "行頭に句点が来ないように折り返し、両端揃えでは文字間隔を広げて幅を満たします。"
+        "これは日本語の段落テストです。句読点の処理を確認します、"
+        "これは日本語の段落テストです。句読点の処理を確認します。"
     )
     # Map every Japanese character used in the test into a temporary TrueType font so
     # ReportLab embeds a real Type0 Identity-H font with a complete /ToUnicode CMap.

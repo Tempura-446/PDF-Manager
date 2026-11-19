@@ -6,7 +6,9 @@ also the notes of its release on
 
 ## 0.57.0
 
-Draw, move, resize and arrange form fields directly on the page in the reader.
+Author and preview fillable forms in the reader, convert CAD drawings (DXF/DWG)
+and manage drawing sheet sets, and reflow multi-line paragraphs around pictures,
+across pages, and in CJK and right-to-left scripts.
 
 - **Prepare form mode in the reader.** Open **Prepare form** from the
   reader's **More** menu, the command palette (`Ctrl+K`), or the
