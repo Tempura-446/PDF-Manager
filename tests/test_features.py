@@ -483,7 +483,7 @@ def test_gui_to_word_and_from_office(tmp_path, monkeypatch):
 from pdfmanager import redact  # noqa: E402
 
 
-def secret_pdf(path, rotate=0):
+def redactable_pdf(path, rotate=0):
     from pypdf import PdfWriter
 
     c = canvas.Canvas(str(path), pagesize=A4)
@@ -520,7 +520,7 @@ def dark_fraction(path, page, box):
 @pytest.mark.parametrize("method", ["remove", "image"])
 @pytest.mark.parametrize("rotate", [0, 90])
 def test_redact_removes_the_text(tmp_path, rotate, method):
-    src = secret_pdf(tmp_path / "s.pdf", rotate)
+    src = redactable_pdf(tmp_path / "s.pdf", rotate)
     found = redact.redact(src, tmp_path / "out.pdf", terms=["john smith"],
                           patterns=[redact.PRESETS["emails"]], method=method)
     assert found == {1: 2}
@@ -539,7 +539,7 @@ def test_redact_removes_the_text(tmp_path, rotate, method):
 
 
 def test_redact_presets_and_boxes(tmp_path):
-    src = secret_pdf(tmp_path / "s.pdf")
+    src = redactable_pdf(tmp_path / "s.pdf")
     found = redact.redact(src, tmp_path / "out.pdf", patterns=[redact.PRESETS["numbers"],
                                                                redact.PRESETS["phones"]],
                           boxes=["2:70,690,200,720"])
@@ -549,14 +549,14 @@ def test_redact_presets_and_boxes(tmp_path):
 
 
 def test_redact_whole_words_and_case(tmp_path):
-    src = secret_pdf(tmp_path / "s.pdf")
+    src = redactable_pdf(tmp_path / "s.pdf")
     assert len(redact.find_text(src, ["smit"])[0]) == 1
     assert redact.find_text(src, ["smit"], whole_words=True) == {}
     assert redact.find_text(src, ["JOHN"], case_sensitive=True) == {}
 
 
 def test_cli_and_gui_redact(tmp_path, capsys):
-    src = secret_pdf(tmp_path / "s.pdf")
+    src = redactable_pdf(tmp_path / "s.pdf")
     assert main(["redact", str(src), "-t", "John Smith", "--find", "emails"]) == 0
     assert "2 area(s) on page(s) 1" in capsys.readouterr().out
     assert main(["redact", str(src)]) == 1
@@ -694,7 +694,7 @@ def test_outline_endpoint(app, tmp_path):
 
 def test_redact_find_endpoint(app, tmp_path):
     base, token = app
-    src = secret_pdf(tmp_path / "s.pdf")
+    src = redactable_pdf(tmp_path / "s.pdf")
     found = post(base, token, "/api/redact/find", {"terms": "John Smith", "emails": "true"}, src)
     assert list(found["boxes"]) == ["1"] and len(found["boxes"]["1"]) == 2
 
