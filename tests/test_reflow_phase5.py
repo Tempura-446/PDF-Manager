@@ -99,6 +99,11 @@ def test_japanese_paragraph_rewrap_and_justify(tmp_path):
             for ch in set(orig1 + orig2 + new_text):
                 if ord(ch) not in table.cmap:
                     table.cmap[ord(ch)] = sample_gid
+    # Give the temporary TTF a unique PostScript/family name so ReportLab's face
+    # cache does not reuse an earlier test's unpatched DejaVuSans/Arial face.
+    for rec in ttf["name"].names:
+        if rec.nameID in (1, 4, 6):
+            rec.string = "TestJapaneseSans".encode("utf-16-be" if rec.isUnicode() else "latin-1")
     ja_ttf = tmp_path / "test_ja.ttf"
     ttf.save(str(ja_ttf))
     ttf.close()
