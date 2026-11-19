@@ -1412,6 +1412,7 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
           const sec = byId.get(a.id);
           if (sec) layer.append(sec);
         }
+        this.#wireFormActions(layer, annots, source.id);
       }).catch(() => {});
     });
     eventBus.on("pagerendered", ({ pageNumber }) => {
@@ -2073,6 +2074,110 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
       const label = box?.title || this.fieldNames.names.get(input.dataset.elementId || box?.dataset.annotationId);
       if (label) input.setAttribute("aria-label", label);
     }
+  }
+
+  async #wireFormActions(layer, annots, pageNum) {
+    const tab = this.activeTab;
+    if (!tab || !this.doc || !layer.isConnected) return;
+    const hasInteractive = annots.some((a) => a.pushButton || a.checkBox);
+    if (!hasInteractive) return;
+
+    const ver = tab.version || 0;
+    let pages = tab.formFields?.version === ver ? tab.formFields.pages : null;
+    if (!pages && tab.formActions?.version === ver) pages = tab.formActions.pages;
+    if (!pages) {
+      try {
+        const bytes = await this._fullBytes();
+        if (!bytes || tab !== this.activeTab) return;
+        const res = await this._post("/api/form/fields", bytes, tab, { details: "1" });
+        if (res.ok) {
+          ({ fields: pages } = await res.json());
+          if ((tab.version || 0) === ver) tab.formActions = { version: ver, pages: pages || {} };
+        }
+      } catch (e) { /* ignored */ }
+    }
+    if (!layer.isConnected || tab !== this.activeTab) return;
+
+    const pageList = pages?.[String(pageNum)] || [];
+    const byName = new Map(pageList.map((f) => [f.name, f]));
+
+    const applyShowHide = (names, show) => {
+      if (!names?.length) return;
+      const set = new Set(names);
+      for (const el of this.viewerEl.querySelectorAll(".annotationLayer [name]")) {
+        if (!set.has(el.getAttribute("name"))) continue;
+        const sec = el.closest("section");
+        if (sec) sec.hidden = !show;
+      }
+    };
+
+    for (const a of annots) {
+      const sec = layer.querySelector(`[data-annotation-id="${CSS.escape(a.id)}"]`);
+      if (!sec) continue;
+      const meta = a.fieldName ? byName.get(a.fieldName) : null;
+
+      if (a.checkBox && meta?.show_hide?.length) {
+        const input = sec.querySelector('input[type="checkbox"]');
+        if (input && !input.dataset.showHideWired) {
+          input.dataset.showHideWired = "1";
+          const sync = () => applyShowHide(meta.show_hide, input.checked);
+          input.addEventListener("change", sync);
+          sync();
+        }
+      }
+
+      if (a.pushButton && !sec.dataset.actionWired) {
+        sec.dataset.actionWired = "1";
+        let act = meta?.action || null;
+        if (!act) {
+          if (a.action === "Print") act = { type: "print" };
+          else if (a.resetForm) act = { type: "reset", fields: a.resetForm.fields || [] };
+          else if (a.url) act = { type: "url", url: a.url };
+        }
+        if (!act) continue;
+        sec.style.cursor = "pointer";
+        sec.addEventListener("click", (e) => {
+          if (this.formMode && !this.formPreview) return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (act.type === "reset") {
+            this._resetFormFields(act.fields || []);
+          } else if (act.type === "print") {
+            this.print();
+          } else if (act.type === "goto" && act.page) {
+            this.pdfViewer.currentPageNumber = act.page;
+          } else if (act.type === "url" && /^https?:/i.test(act.url || "")) {
+            this._lastOpenedUrl = act.url;
+            window.open(act.url, "_blank", "noopener,noreferrer");
+          } else if (act.type === "email") {
+            const q = act.subject ? `?subject=${encodeURIComponent(act.subject)}` : "";
+            const mailto = `mailto:${act.to || ""}${q}`;
+            this._lastMailto = mailto;
+            const link = el("a", { href: mailto, hidden: true });
+            document.body.append(link);
+            link.click();
+            link.remove();
+          }
+        });
+      }
+    }
+  }
+
+  _resetFormFields(fieldNames = []) {
+    if (!this.doc) return;
+    const only = fieldNames?.length ? new Set(fieldNames) : null;
+    for (const input of this.viewerEl.querySelectorAll(".annotationLayer input, .annotationLayer textarea, .annotationLayer select")) {
+      const name = input.getAttribute("name");
+      if (only && !only.has(name)) continue;
+      if (input.type === "checkbox" || input.type === "radio") {
+        input.checked = input.defaultChecked;
+      } else {
+        input.value = input.defaultValue || "";
+      }
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    if (!only) this.doc.annotationStorage?.resetModified?.();
   }
 
   /** A printed form with no fields to type in (lines, boxes, tick boxes on
