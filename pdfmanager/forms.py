@@ -570,6 +570,21 @@ def field_details(path, password=None):
         calc = _calc_of(field)
         for used in calc[1] if calc else ():
             users.setdefault(used, []).append(_qualified_name(field))
+    root = reader.trailer["/Root"]
+    mark = root.get("/MarkInfo")
+    mark = mark.get_object() if mark is not None else {}
+    tagged = bool(root.get("/StructTreeRoot") and mark.get("/Marked"))
+    page_tabs = {}
+    for pno, pg in enumerate(reader.pages, 1):
+        t = str(pg.get("/Tabs") or "")
+        if t == "/C":
+            page_tabs[pno] = "cols"
+        elif t == "/A":
+            page_tabs[pno] = "custom"
+        elif t == "/S" or (not t and tagged):
+            page_tabs[pno] = "structure"
+        else:
+            page_tabs[pno] = "rows"
     found = {}
     for number, index, annot, field in rows:
         kind, name = _kind(field), _qualified_name(field)
@@ -602,6 +617,7 @@ def field_details(path, password=None):
             dv_str = ""
         info = {
             "index": index, "rect": _rect_of(annot), "name": name, "type": kind,
+            "tab_order": page_tabs.get(number, "rows"),
             "tooltip": str(tooltip) if tooltip is not None else "",
             "required": bool(flags & REQUIRED), "readonly": bool(flags & READ_ONLY),
             "visibility": _visibility_of(annot),
@@ -2256,4 +2272,96 @@ def make_table(path, output, page, index, rows_count, cols_count, row_gap=4, col
             created_names.append(cname)
     core._write(writer, output)
     return created_names
+
+
+def _sort_widgets_reading(items, by="rows"):
+    """Sort ``(slot, ref, rect, name)`` tuples by rows (top-to-bottom,
+    left-to-right) or by columns (left-to-right, top-to-bottom)."""
+    if by == "cols":
+        by_x = sorted(items, key=lambda it: (it[2][0], -it[2][3]))
+        groups, cur = [], []
+        for it in by_x:
+            if not cur:
+                cur = [it]
+            else:
+                col_x1 = max(g[2][2] for g in cur)
+                if it[2][0] < col_x1 - 2:
+                    cur.append(it)
+                else:
+                    groups.append(cur)
+                    cur = [it]
+        if cur:
+            groups.append(cur)
+        out = []
+        for g in groups:
+            g.sort(key=lambda it: (-it[2][3], it[2][0]))
+            out.extend(g)
+        return out
+    by_y = sorted(items, key=lambda it: (-it[2][3], it[2][0]))
+    groups, cur = [], []
+    for it in by_y:
+        if not cur:
+            cur = [it]
+        else:
+            row_y0 = min(g[2][1] for g in cur)
+            if it[2][3] > row_y0 + 2:
+                cur.append(it)
+            else:
+                groups.append(cur)
+                cur = [it]
+    if cur:
+        groups.append(cur)
+    out = []
+    for g in groups:
+        g.sort(key=lambda it: (it[2][0], -it[2][3]))
+        out.extend(g)
+    return out
+
+
+def reorder_fields(path, output, page, order=None, mode="custom", password=None):
+    """Reorder widget annotations on 1-based ``page`` and set ``/Tabs``.
+
+    ``mode`` is ``"custom"`` (with ``order`` as a permutation of 0-based
+    widget indices), ``"rows"`` (``/Tabs /R``), or ``"cols"`` (``/Tabs /C``).
+    Returns the new list of field names in order.
+    """
+    reader = core.open_pdf(path, password)
+    writer = core.clone_document(reader)
+    pno = int(page)
+    if pno < 1 or pno > len(writer.pages):
+        raise core.PdfManagerError(f"page {pno} is out of range")
+    pg = writer.pages[pno - 1]
+    if "/Annots" not in pg:
+        core._write(writer, output)
+        return []
+    annots = pg["/Annots"].get_object()
+    widget_slots = []
+    for slot, ref in enumerate(annots):
+        obj = ref.get_object()
+        if obj.get("/Subtype") == "/Widget":
+            field = _field_of(obj)
+            widget_slots.append((slot, ref, _rect_of(obj), _qualified_name(field)))
+    if not widget_slots:
+        core._write(writer, output)
+        return []
+
+    if mode == "rows":
+        ordered = _sort_widgets_reading(widget_slots, "rows")
+        pg[NameObject("/Tabs")] = NameObject("/R")
+    elif mode == "cols":
+        ordered = _sort_widgets_reading(widget_slots, "cols")
+        pg[NameObject("/Tabs")] = NameObject("/C")
+    else:
+        n = len(widget_slots)
+        if not isinstance(order, (list, tuple)) or len(order) != n or set(order) != set(range(n)):
+            raise core.PdfManagerError("order must list every field on the page once")
+        ordered = [widget_slots[i] for i in order]
+        pg[NameObject("/Tabs")] = NameObject("/A")
+
+    slots = [w[0] for w in widget_slots]
+    for slot, item in zip(slots, ordered):
+        annots[slot] = item[1]
+    core._write(writer, output)
+    return [item[3] for item in ordered]
+
 

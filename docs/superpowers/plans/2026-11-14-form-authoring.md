@@ -76,9 +76,9 @@
 ### Phase 3 (release C): order, trying it out, and data
 
 **Task 3.1: tab order**
-- [ ] A numbered badge on each field shows the order. Default: rows, left to right, top to bottom (the structure order when the file is tagged).
-- [ ] A "Fields" list in the sidebar (page by page): drag to reorder, click to select, rename in place. "Order by rows" and "Order by columns" reset it. Written as the page's annotation order and `/Tabs`.
-- [ ] Test: Tab in pdf.js and the order pdfium reports follow the list.
+- [x] A numbered badge on each field shows the order. Default: rows, left to right, top to bottom (the structure order when the file is tagged).
+- [x] A "Fields" list in the sidebar (page by page): drag to reorder, click to select, rename in place. "Order by rows" and "Order by columns" reset it. Written as the page's annotation order and `/Tabs`.
+- [x] Test: Tab in pdf.js and the order pdfium reports follow the list.
 
 **Task 3.2: Preview**
 - [ ] A "Preview" switch in Form mode fills the form in as a user would, with scripts running, without leaving the designer; values typed in a preview aren't kept unless "Keep as default values" is chosen.

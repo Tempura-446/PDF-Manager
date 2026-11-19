@@ -729,3 +729,58 @@ def test_copy_to_pages_and_make_table(tmp_path):
     assert abs(p1[2]["rect"][0] - 146) < 0.2
     # Check row 2 col 1 y1 == 642 - 22 - 4 == 616
     assert abs(p1[4]["rect"][3] - 616) < 0.2
+
+
+def test_reorder_fields_and_tabs(tmp_path):
+    raw = blank(tmp_path / "grid.pdf", 1)
+    added = tmp_path / "added.pdf"
+    forms.add_fields(raw, added, [
+        {"page": 1, "rect": [72, 700, 172, 722], "type": "text", "name": "TopLeft"},
+        {"page": 1, "rect": [220, 700, 320, 722], "type": "text", "name": "TopRight"},
+        {"page": 1, "rect": [72, 640, 172, 662], "type": "text", "name": "BotLeft"},
+        {"page": 1, "rect": [220, 640, 320, 662], "type": "text", "name": "BotRight"},
+    ])
+
+    # Custom order
+    custom = tmp_path / "custom.pdf"
+    names = forms.reorder_fields(added, custom, 1, order=[3, 1, 2, 0], mode="custom")
+    assert names == ["BotRight", "TopRight", "BotLeft", "TopLeft"]
+    r = PdfReader(str(custom))
+    assert str(r.pages[0]["/Tabs"]) == "/A"
+    assert [f["name"] for f in forms.field_details(custom)[1]] == names
+    assert forms.field_details(custom)[1][0]["tab_order"] == "custom"
+
+    # Verify pdfium reports annotations in the same custom order
+    try:
+        import pypdfium2 as pdfium
+        import pypdfium2.raw as pdfium_c
+        doc = pdfium.PdfDocument(str(custom))
+        page = doc[0]
+        pdfium_names = []
+        for i in range(pdfium_c.FPDFPage_GetAnnotCount(page)):
+            annot = pdfium_c.FPDFPage_GetAnnot(page, i)
+            if pdfium_c.FPDFAnnot_GetSubtype(annot) == pdfium_c.FPDF_ANNOT_WIDGET:
+                n = pdfium_c.FPDFAnnot_GetStringValue(annot, b"T\x00", None, 0)
+                buf = (pdfium_c.c_ushort * (n // 2))()
+                pdfium_c.FPDFAnnot_GetStringValue(annot, b"T\x00", buf, n)
+                pdfium_names.append(bytes(buf).decode("utf-16-le").rstrip("\x00"))
+            pdfium_c.FPDFPage_CloseAnnot(annot)
+        doc.close()
+        assert pdfium_names == names
+    except ImportError:
+        pass
+
+    # Order by columns
+    cols = tmp_path / "cols.pdf"
+    col_names = forms.reorder_fields(custom, cols, 1, mode="cols")
+    assert col_names == ["TopLeft", "BotLeft", "TopRight", "BotRight"]
+    assert str(PdfReader(str(cols)).pages[0]["/Tabs"]) == "/C"
+    assert forms.field_details(cols)[1][0]["tab_order"] == "cols"
+
+    # Order by rows
+    rows_pdf = tmp_path / "rows.pdf"
+    row_names = forms.reorder_fields(cols, rows_pdf, 1, mode="rows")
+    assert row_names == ["TopLeft", "TopRight", "BotLeft", "BotRight"]
+    assert str(PdfReader(str(rows_pdf)).pages[0]["/Tabs"]) == "/R"
+    assert forms.field_details(rows_pdf)[1][0]["tab_order"] == "rows"
+
