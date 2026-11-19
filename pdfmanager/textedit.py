@@ -701,7 +701,7 @@ def _options(edit):
             if not low <= value <= high:
                 raise core.PdfManagerError(f"the {key} should be between {low:g} and {high:g}")
             opts[key] = value
-    for key in ("bold", "italic", "flow", "styles", "hyphens"):
+    for key in ("bold", "italic", "flow", "styles", "hyphens", "indent", "keep_unchanged"):
         if edit.get(key) is not None:
             opts[key] = bool(edit[key])
     if edit.get("color") is not None:
@@ -818,6 +818,7 @@ def _fit(widths, gap, room, justify=False, joins=None):
     if n == 0:
         return [(0, 0)]
     joins = joins or [None] * n
+    varies = callable(room)
     best = [(0, 0.0, -1)] + [None] * n  # for the first j pieces: (lines, demerits, where the last line starts)
     for j in range(1, n + 1):
         end = joins[j - 1] if j < n else None  # how this line would end
@@ -827,23 +828,28 @@ def _fit(widths, gap, room, justify=False, joins=None):
             if i < j - 1 and joins[i] is None:
                 natural += gap
                 spaces += 1
-            if natural > room + 1e-9 and i < j - 1:
-                break
             if best[i] is None:
+                if not varies and natural > room + 1e-9 and i < j - 1:
+                    break
                 continue
-            slack, last = max(room - natural, 0.0), j == n
+            r = room(best[i][0]) if varies else room
+            if natural > r + 1e-9 and i < j - 1:
+                if not varies:
+                    break
+                continue
+            slack, last = max(r - natural, 0.0), j == n
             if last:
                 cost = 0.0
-                if n > 1 and (j - i == 1 or natural < room * 0.12):
+                if n > 1 and (j - i == 1 or natural < r * 0.12):
                     cost = 2.0  # a lone or very short word left over
             elif not spaces:
                 # One word (or part of one) alone on a line that isn't the last:
                 # right when it nearly fills the line, never to tidy the others.
-                cost = 10.0 + 1e4 * (slack / room)
+                cost = 10.0 + 1e4 * (slack / r)
             elif justify:
-                cost = (slack / spaces / gap) ** 2 if gap > 0 else 10.0 + (slack / room) ** 2
+                cost = (slack / spaces / gap) ** 2 if gap > 0 else 10.0 + (slack / r) ** 2
             else:
-                cost = (slack / room) ** 2
+                cost = (slack / r) ** 2
             if end:
                 cost += 0.6 if end[0] == "soft" else 0.2
                 if i > 0 and joins[i - 1] and end[0] == "soft" and joins[i - 1][0] == "soft":
@@ -886,10 +892,11 @@ def _pieces_of(words, divide, justify, room, measure):
     the hyphen's width left 0 for the caller). Words are divided in
     justified text, and where one is wider than the room; never the
     paragraph's last word. ``words`` are strings or lists of (letter, style)."""
+    base_room = room(0) if callable(room) else room
     pieces, joins = [], []
     for k, word in enumerate(words):
         cuts = []
-        if divide and word and k < len(words) - 1 and (justify or measure(word) > room):
+        if divide and word and k < len(words) - 1 and (justify or measure(word) > base_room):
             cuts = divide(word if isinstance(word, str) else "".join(ch for ch, _ in word))
         start = 0
         for at, kind in cuts:
@@ -912,8 +919,9 @@ def _wrap_marked(text, room, measure, justify=False, greedy=False, divide=None):
     if greedy or len(words) > FIT_LIMIT or len(words) < 2:
         lines, line = [], ""
         for word in words:
+            r = room(len(lines)) if callable(room) else room
             trial = word if not line else line + " " + word
-            if line and measure(trial) > room:
+            if line and measure(trial) > r:
                 lines.append(line)
                 line = word
             else:
@@ -1062,8 +1070,9 @@ def _wrap_seq_marked(seq, room, measure, justify=False, greedy=False, divide=Non
     if greedy or len(words) > FIT_LIMIT or len(words) < 2 or not (words[0] or words[1]):
         lines, line = [], []
         for word in words:
+            r = room(len(lines)) if callable(room) else room
             trial = word if not line else line + [(" ", word[0][1] if word else line[-1][1])] + word
-            if line and measure(trial) > room:
+            if line and measure(trial) > r:
                 lines.append(line)
                 line = word
             else:
@@ -1133,22 +1142,147 @@ def _face(font):
     return bold, italic
 
 
-def _alignment(rows, left, right, word, natural, size):
+def _alignment(rows, left, right, word, natural, size, first_indent=0.0):
     """How a paragraph's lines are set: "justify", "center", "right" or "left"."""
     tol = max(1.0, 0.1 * size)
     starts = [r[0]["s"] for r in rows]
     ends = [r[-1]["s"] + r[-1]["adv"] for r in rows]
     body = rows[:-1]
-    aligned = bool(body) and all(abs(e - right) < tol for e in ends[:-1]) and all(abs(s - left) < tol for s in starts[:-1])
+    left_ok = (bool(body)
+               and abs(starts[0] - (left + first_indent)) < tol
+               and all(abs(s - left) < tol for s in starts[1:-1]))
+    aligned = bool(body) and all(abs(e - right) < tol for e in ends[:-1]) and left_ok
     if aligned and (len(body) >= 2 or (word is not None and word - natural > max(0.2, natural * 0.08))):
         return "justify"
-    if len(rows) >= 2 and not all(abs(s - left) < tol for s in starts):
+    if len(rows) >= 2 and not all(abs(s - left) < tol for s in starts) and first_indent == 0.0:
         middles = [(s + e) / 2 for s, e in zip(starts, ends)]
         if max(middles) - min(middles) < tol * 2:
             return "center"
         if all(abs(e - right) < tol for e in ends):
             return "right"
     return "left"
+
+
+_BULLET_RE = re.compile(r"^(?:[•●▪▫◦‣⁃–—*-]|(?:\(?\d{1,3}[.)]|\(?[A-Za-z][.)]))\s+")
+
+
+def _detect_indent(rows, size, right):
+    """Detect a hanging bullet/numbered marker or a first-line indent.
+
+    Returns ``(marker_count, marker_prefix, body_left, first_indent)`` where
+    ``marker_count`` is the number of leading letters in ``rows[0]`` belonging
+    to a kept bullet/number marker, ``marker_prefix`` is its text prefix,
+    ``body_left`` is the body column's left edge, and ``first_indent`` is any
+    extra first-line indent (> 0 for indented non-bullet paragraphs).
+    """
+    line0 = _text_of(rows[0])
+    m = _BULLET_RE.match(line0)
+    if m:
+        prefix = m.group(0)
+        # Find the index in rows[0] of the first letter of the body text after the marker.
+        marker_text = prefix.rstrip()
+        pos, acc = 0, ""
+        while pos < len(rows[0]) and len(acc) < len(marker_text):
+            ch = rows[0][pos]["char"]
+            if not ch.isspace():
+                acc += ch
+            pos += 1
+        while pos < len(rows[0]) and rows[0][pos]["char"].isspace():
+            pos += 1
+        if 0 < pos < len(rows[0]):
+            body_start = rows[0][pos]["s"]
+            # Confirm hanging indent: either multi-line wraps under body_start, or clear gap after marker.
+            if len(rows) >= 2:
+                rest_left = min(r[0]["s"] for r in rows[1:])
+                if rest_left >= rows[0][0]["s"] + size * 0.25 and abs(rest_left - body_start) <= size * 1.5:
+                    return pos, prefix, min(body_start, rest_left), 0.0
+            elif body_start - rows[0][0]["s"] >= size * 0.5:
+                return pos, prefix, body_start, 0.0
+    if len(rows) >= 2:
+        tol = max(1.5, 0.15 * size)
+        rest_starts = [r[0]["s"] for r in rows[1:]]
+        rest_left = min(rest_starts)
+        ends = [r[-1]["s"] + r[-1]["adv"] for r in rows]
+        middles = [(r[0]["s"] + e) / 2 for r, e in zip(rows, ends)]
+        first_indent = rows[0][0]["s"] - rest_left
+        # Require lines 1..N to share a common left edge and reject centered/right-aligned blocks.
+        rest_aligned = all(abs(s - rest_left) <= tol for s in rest_starts)
+        is_centered = max(middles) - min(middles) < tol * 2
+        is_right = len(rows) == 2 and abs(ends[0] - ends[1]) < tol
+        if rest_aligned and not is_centered and not is_right \
+                and size * 0.4 < first_indent < max(right - rest_left, size * 4) * 0.5:
+            return 0, "", rest_left, first_indent
+    return 0, "", min(r[0]["s"] for r in rows), 0.0
+
+
+def _para_spacing(rows, down, default_lead):
+    """Return ``(lead, para_gap)`` measured from ``rows``.
+
+    When ``rows`` spans multiple paragraphs (a baseline gap > 1.35 * lead),
+    ``lead`` is the intra-paragraph line spacing and ``para_gap`` is the extra
+    space between paragraphs. Otherwise ``para_gap`` defaults to ``0.6 * lead``.
+    """
+    if len(rows) < 2:
+        return default_lead, default_lead * 0.6
+    steps = []
+    for a, b in zip(rows, rows[1:]):
+        step = ((a[0]["origin"][0] - b[0]["origin"][0]) * -down[0]
+                + (a[0]["origin"][1] - b[0]["origin"][1]) * -down[1])
+        if step > 0:
+            steps.append(step)
+    if not steps:
+        return default_lead, default_lead * 0.6
+    ordered = sorted(steps)
+    lead = ordered[len(ordered) // 3] if len(ordered) >= 3 else min(ordered)
+    big = [s for s in steps if s > lead * 1.35]
+    if big:
+        para_gap = max(0.0, sorted(big)[len(big) // 2] - lead)
+        normal = [s for s in steps if s <= lead * 1.35]
+        if normal:
+            lead = sum(normal) / len(normal)
+        return lead, para_gap
+    return sum(steps) / len(steps), (sum(steps) / len(steps)) * 0.6
+
+
+def _leading_unchanged(rows, text, marks=None):
+    """How many leading lines of ``rows`` match the prefix of ``text`` untouched.
+
+    Returns ``(keep_head, text_offset)`` so callers can leave ``rows[:keep_head]``
+    byte-identical in the content stream and only re-set from ``keep_head`` on.
+    """
+    if len(rows) < 2:
+        return 0, 0
+    pos = 0
+    keep = 0
+    n = len(text)
+    for k in range(len(rows) - 1):
+        line_txt = _text_of(rows[k]).strip()
+        if not line_txt:
+            break
+        while pos < n and text[pos] == " ":
+            pos += 1
+        if not text.startswith(line_txt, pos):
+            break
+        end = pos + len(line_txt)
+        if end < n and not text[end].isspace():
+            break
+        if marks is not None:
+            # Verify bold/italic marks on this line match the original letters.
+            row_marks = [(L["style"]["bold"], L["style"]["italic"]) for L in rows[k] if not L["char"].isspace()]
+            new_marks = [marks[i] for i in range(pos, end) if not text[i].isspace()]
+            if row_marks != new_marks:
+                break
+        # Don't skip past line k if the next line's first word changed and might now fit on line k.
+        nxt_orig = _text_of(rows[k + 1]).strip().split(" ", 1)[0] if k + 1 < len(rows) else ""
+        nxt_pos = end
+        while nxt_pos < n and text[nxt_pos] == " ":
+            nxt_pos += 1
+        nxt_new = text[nxt_pos:].split(" ", 1)[0] if nxt_pos < n else ""
+        if nxt_orig and nxt_new and nxt_new != nxt_orig and len(nxt_new) < len(nxt_orig):
+            break
+        keep = k + 1
+        pos = nxt_pos
+    return keep, pos
 
 
 class _Page:
@@ -1195,7 +1329,7 @@ class _Page:
     def start(self):
         """Before each change."""
         self.notes, self.spot, self.legacy = {}, None, self.old_way
-        self.spots, self.line_no = None, None
+        self.spots, self.line_no, self.written_text = None, None, None
         self._first_run = len(self.runs)
 
     def touch(self, letters):
@@ -1703,21 +1837,56 @@ class _Page:
             return self.line(rect, text, None, opts)
         _set_rises(rows)
         tc, word = _spacing(rows)
-        everything = [L for row in rows for L in row]
-        self.touch(everything)
         base = rows[0][0]["style"]
         if abs(base["angle"]) >= 1:
+            everything = [L for row in rows for L in row]
+            self.touch(everything)
             return self._redo(rows[0], rows, text, tc, word, opts)
         u, down = _unit(base["matrix"]), _down(base["matrix"])
+        orig_right = max(row[-1]["s"] + row[-1]["adv"] for row in rows)
+        lead, para_gap = _para_spacing(rows, down, base["size"] * 1.2)
+        marker_count, marker_prefix, left, first_indent = (
+            _detect_indent(rows, base["size"], orig_right)
+            if opts.get("indent", True)
+            else (0, "", min(row[0]["s"] for row in rows), 0.0)
+        )
+        marks = opts.get("runs")
+        if marker_count > 0 and text.strip():
+            mt = marker_prefix.rstrip()
+            if text.startswith(mt) and len(text) > len(mt) and text[len(mt)].isspace():
+                cut = len(mt)
+                while cut < len(text) and text[cut] == " ":
+                    cut += 1
+                rows = [rows[0][marker_count:]] + rows[1:]
+                text = text[cut:]
+                if marks and len(marks) >= cut:
+                    marks = marks[cut:]
+            else:
+                marker_count = 0
+                left = min(row[0]["s"] for row in rows)
+        align_rows = list(rows)
+        align_first_indent = first_indent
+        room = max(orig_right - left, base["size"] * 4)
+        # Re-set only from the first changed line when possible, leaving earlier lines byte-identical.
+        if (opts.get("keep_unchanged", True)
+                and len(rows) >= 2
+                and text.strip()
+                and "\n\n" not in text
+                and not any(k in opts for k in ("font", "size", "bold", "italic", "color", "align"))
+                and not (_rtl(text) or any(_rtl(L["char"]) for row in rows for L in row))
+                and self.flow is not None and not self.flow.flowed and not self.legacy):
+            use_marks = marks if marks and len(marks) == len(text) else None
+            keep_head, text_pos = _leading_unchanged(rows, text, use_marks)
+            if keep_head > 0 and text[text_pos:].strip():
+                rows = rows[keep_head:]
+                text = text[text_pos:]
+                if marks and len(marks) >= text_pos:
+                    marks = marks[text_pos:]
+                first_indent = 0.0
+        everything = [L for row in rows for L in row]
+        self.written_text = text
+        self.touch(everything)
         first = rows[0][0]
-        left = min(row[0]["s"] for row in rows)
-        right = max(row[-1]["s"] + row[-1]["adv"] for row in rows)
-        room = max(right - left, base["size"] * 4)
-        lead = base["size"] * 1.2
-        if len(rows) > 1:  # the old lines' spacing, measured down the page
-            span = ((first["origin"][0] - rows[-1][0]["origin"][0]) * -down[0]
-                    + (first["origin"][1] - rows[-1][0]["origin"][1]) * -down[1])
-            lead = span / (len(rows) - 1) if span > 0 else lead
         flow = opts.get("flow", True) and self.flow is not None and not self.flow.flowed
         self.legacy = self.legacy or _rtl(text) or any(_rtl(L["char"]) for L in everything)
         taken = self.flow is not None and not self.flow.flowed and self.take(rows, paragraph=True, text=text)
@@ -1737,7 +1906,6 @@ class _Page:
         looks = (_char_styles(rows, text, (lambda L: _link_at(links, L)) if links else None)
                  if opts.get("styles", True) and not (_rtl(text) or any(_rtl(L["char"]) for L in everything))
                  else None)
-        marks = opts.get("runs")
         if marks and len(marks) == len(text):  # the editor's bold and italic, letter by letter
             looks = looks or [(base, None, 0.0)] * len(text)
             made, was = {}, {}
@@ -1790,7 +1958,9 @@ class _Page:
         plain = not any(key in opts for key in ("font", "bold", "italic"))  # the old words' font
         was = font if plain else _choose(self.page, base, text)
         natural = _metrics(was[0], was[1], base)[1] + 2 * tc
-        align = opts.get("align") or _alignment(rows, left, right, word, natural, base["size"])
+        align = opts.get("align") or _alignment(
+            align_rows, left, orig_right, word, natural, base["size"], first_indent=align_first_indent
+        )
         top = max(L["loose"][3] for L in rows[0])
         ascent = (top - first["origin"][1]) if abs(down[1]) > 0.5 else base["size"] * 0.8
         old_span = ((rows[-1][0]["origin"][0] - first["origin"][0]) * down[0]
@@ -1817,45 +1987,78 @@ class _Page:
                 scaled_by[key, k] = (st, _metrics(fonts_by[key][0], fonts_by[key][1], st)[0])
             return scaled_by[key, k]
 
-        def layout(style, text=content or text, room=room, tight=1.0):
-            """The new lines: ([(text, word gap, offset, ends a part)], letter width,
-            letter spacing, line spacing, drop, growth). With words in several
-            styles, ``text`` and each line's text are lists of (letter, look)."""
+        def _split_paras_seq(seq):
+            """Split a styled-character sequence into paragraphs on blank lines (\\n\\n)."""
+            parts = _split_seq(seq, "\n")
+            paras, cur = [], []
+            for p in parts:
+                if not any(not ch.isspace() for ch, _ in p):
+                    if cur:
+                        paras.append(cur)
+                        cur = []
+                else:
+                    cur.append(p)
+            if cur or not paras:
+                paras.append(cur or [[]])
+            return paras
+
+        def layout(style, text=content or text, room=room, tight=1.0, indent=True):
+            """The new lines: ([(text, word gap, offset, ends a part, y_off)],
+            letter width, letter spacing, line spacing, drop, growth). With words
+            in several styles, ``text`` and each line's text are lists of (letter, look)."""
             if isinstance(text, list):
-                return layout_runs(style, text, room, tight)
+                return layout_runs(style, text, room, tight, indent=indent)
             k = style["size"] / base["size"]
             tight = min(1.0, max(tight, style["size"] * 1.02 / (lead * k)))  # lines never closer than their size
             width, space = _metrics(font[0], font[1], style)
             tck = tc * k
             gap = space + 2 * tck if align == "justify" or word is None or not plain else word * k
+            lead_k = lead * k * tight
+            pgap_k = para_gap * k * tight
 
             def measure(line):
                 return _place(line, 0.0, width, tck, gap)[1] - tck
 
-            lines = []
-            for part in text.split("\n"):
-                wrapped = _wrap_marked(part, room, measure, justify=align == "justify", greedy=simple, divide=divide)
-                for j, (line, end) in enumerate(wrapped):
-                    line, g, off = line.strip(), gap, 0.0
-                    spaces = line.count(" ")
-                    if align == "justify" and j < len(wrapped) - 1 and spaces:
-                        extra = (room - measure(line)) / spaces
-                        if 0 <= extra <= style["size"] * 2:
-                            g = gap + extra
-                    elif align in ("center", "right"):
-                        free = room - measure(line)
-                        off = free / 2 if align == "center" else free
-                    lines.append((line, g, off, True if j == len(wrapped) - 1 else end or False))
+            lines, y_off = [], 0.0
+            paras = [p for p in text.split("\n\n")] if "\n\n" in text else [text]
+            for p_idx, para in enumerate(paras):
+                if p_idx > 0:
+                    y_off += pgap_k
+                subparts = para.split("\n")
+                for sp_idx, part in enumerate(subparts):
+                    fi = (first_indent * k
+                          if indent and sp_idx == 0 and first_indent > 0 and align in ("left", "justify")
+                          else 0.0)
+                    room_arg = (lambda i, r=room, f=fi: max(r - f, style["size"] * 2) if i == 0 else r) if fi > 0 else room
+                    wrapped = _wrap_marked(part, room_arg, measure, justify=align == "justify", greedy=simple, divide=divide)
+                    for j, (line, end) in enumerate(wrapped):
+                        line, g = line.strip(), gap
+                        line_room = max(room - fi, style["size"] * 2) if (j == 0 and fi > 0) else room
+                        off = fi if (j == 0 and fi > 0) else 0.0
+                        spaces = line.count(" ")
+                        if align == "justify" and j < len(wrapped) - 1 and spaces:
+                            extra = (line_room - measure(line)) / spaces
+                            if 0 <= extra <= style["size"] * 2:
+                                g = gap + extra
+                        elif align in ("center", "right"):
+                            free = line_room - measure(line)
+                            off = free / 2 if align == "center" else free
+                        is_para_end = j == len(wrapped) - 1 and sp_idx == len(subparts) - 1 and p_idx < len(paras) - 1
+                        end_mark = "para" if is_para_end else (True if j == len(wrapped) - 1 else end or False)
+                        lines.append((line, g, off, end_mark, y_off))
+                        y_off += lead_k
             drop = (k - 1) * ascent  # a bigger size grows down from the old top
-            grow = drop + (len(lines) - 1) * lead * k * tight - old_span + 0.22 * (style["size"] - base["size"])
-            return lines, width, tck, lead * k * tight, drop, grow
+            grow = drop + (lines[-1][4] if lines else 0.0) - old_span + 0.22 * (style["size"] - base["size"])
+            return lines, width, tck, lead_k, drop, grow
 
-        def layout_runs(style, seq, room, tight):
+        def layout_runs(style, seq, room, tight, indent=True):
             k = style["size"] / base["size"]
             tight = min(1.0, max(tight, style["size"] * 1.02 / (lead * k)))
             width, space = _metrics(font[0], font[1], style)
             tck = tc * k
             gap = space + 2 * tck if align == "justify" or word is None else word * k
+            lead_k = lead * k * tight
+            pgap_k = para_gap * k * tight
 
             def measure(line):
                 pen = 0.0
@@ -1863,36 +2066,53 @@ class _Page:
                     pen += gap - tck if ch.isspace() else scaled(key, k)[1](ch) + tck
                 return pen - tck
 
-            lines = []
-            for part in _split_seq(seq, "\n"):
-                wrapped = _wrap_seq_marked(part, room, measure, justify=align == "justify", greedy=simple, divide=divide)
-                for j, (line, end) in enumerate(wrapped):
-                    line, g, off = _strip_seq(line), gap, 0.0
-                    spaces = sum(1 for ch, _ in line if ch == " ")
-                    if align == "justify" and j < len(wrapped) - 1 and spaces:
-                        extra = (room - measure(line)) / spaces
-                        if 0 <= extra <= style["size"] * 2:
-                            g = gap + extra
-                    elif align in ("center", "right"):
-                        free = room - measure(line)
-                        off = free / 2 if align == "center" else free
-                    lines.append((line, g, off, True if j == len(wrapped) - 1 else end or False))
+            lines, y_off = [], 0.0
+            paras = _split_paras_seq(seq)
+            for p_idx, subparts in enumerate(paras):
+                if p_idx > 0:
+                    y_off += pgap_k
+                for sp_idx, part in enumerate(subparts):
+                    fi = (first_indent * k
+                          if indent and sp_idx == 0 and first_indent > 0 and align in ("left", "justify")
+                          else 0.0)
+                    room_arg = (lambda i, r=room, f=fi: max(r - f, style["size"] * 2) if i == 0 else r) if fi > 0 else room
+                    wrapped = _wrap_seq_marked(part, room_arg, measure, justify=align == "justify", greedy=simple, divide=divide)
+                    for j, (line, end) in enumerate(wrapped):
+                        line, g = _strip_seq(line), gap
+                        line_room = max(room - fi, style["size"] * 2) if (j == 0 and fi > 0) else room
+                        off = fi if (j == 0 and fi > 0) else 0.0
+                        spaces = sum(1 for ch, _ in line if ch == " ")
+                        if align == "justify" and j < len(wrapped) - 1 and spaces:
+                            extra = (line_room - measure(line)) / spaces
+                            if 0 <= extra <= style["size"] * 2:
+                                g = gap + extra
+                        elif align in ("center", "right"):
+                            free = line_room - measure(line)
+                            off = free / 2 if align == "center" else free
+                        is_para_end = j == len(wrapped) - 1 and sp_idx == len(subparts) - 1 and p_idx < len(paras) - 1
+                        end_mark = "para" if is_para_end else (True if j == len(wrapped) - 1 else end or False)
+                        lines.append((line, g, off, end_mark, y_off))
+                        y_off += lead_k
             drop = (k - 1) * ascent
-            grow = drop + (len(lines) - 1) * lead * k * tight - old_span + 0.22 * (style["size"] - base["size"])
-            return lines, width, tck, lead * k * tight, drop, grow
+            grow = drop + (lines[-1][4] if lines else 0.0) - old_span + 0.22 * (style["size"] - base["size"])
+            return lines, width, tck, lead_k, drop, grow
 
         def rejoin(part):
             """Lines joined into one text again (for running on into the next column)."""
-            # (A line's fourth part: True at the end of a part, "soft" where a
-            # word was divided there, "hard" after a word's own hyphen.)
+            # (A line's fourth part: "para" at a paragraph break, True at the end of a part,
+            # "soft" where a word was divided there, "hard" after a word's own hyphen.)
             if not content:
                 return "".join((ln[0][:-1] if ln[3] == "soft" else ln[0])
-                               + ("\n" if ln[3] is True else "" if ln[3] else " ") for ln in part).rstrip()
+                               + ("\n\n" if ln[3] == "para" else "\n" if ln[3] is True else "" if ln[3] else " ")
+                               for ln in part).rstrip()
             out = []
             for ln in part:
                 out += ln[0][:-1] if ln[3] == "soft" else ln[0]
-                if not ln[3] or ln[3] is True:
-                    out.append(("\n" if ln[3] else " ", ln[0][-1][1] if ln[0] else content[0][1]))
+                key_ref = ln[0][-1][1] if ln[0] else content[0][1]
+                if ln[3] == "para":
+                    out.extend([("\n", key_ref), ("\n", key_ref)])
+                elif not ln[3] or ln[3] is True:
+                    out.append(("\n" if ln[3] else " ", key_ref))
             return _strip_seq(out)
 
         def emit(line, start, width, tck, g, at):
@@ -1954,12 +2174,13 @@ class _Page:
                 # into the next column, whose text moves down to make room.
                 nxt = self.flow.next_column(found, lead)
                 for keep in range(len(lines) - 1, 0, -1) if nxt else ():
-                    here = drop + (keep - 1) * lead_k - old_span + 0.22 * (style["size"] - base["size"])
+                    here = drop + lines[keep - 1][4] - old_span + 0.22 * (style["size"] - base["size"])
                     if found["low"] - here < found["limit"] - 0.01:
                         continue
                     words = rejoin(lines[keep:])
-                    more = layout(style, words, max(nxt["x1"] - nxt["x0"], base["size"] * 4))[0]
-                    push = (len(more) + 0.5) * lead_k
+                    more = layout(style, words, max(nxt["x1"] - nxt["x0"], base["size"] * 4), indent=False)[0]
+                    more_span = (more[-1][4] - more[0][4]) if more else 0.0
+                    push = more_span + 1.5 * lead_k
                     if nxt["low"] - push >= nxt["limit"] - 0.01 and self.flow.move(nxt, -push):
                         lines, grow, fits = lines[:keep], here, True
                         self.notes["moved"] = len(nxt["lines"])
@@ -2000,15 +2221,16 @@ class _Page:
                     self.notes["size"] = round(style["size"], 2)
             self.notes["taller"] = True
             del fitted  # said either way: it takes more lines than it did
-        for n, (line, g, off, _) in enumerate(lines):
-            d = drop + n * lead_k
+        for n, (line, g, off, _, y_off) in enumerate(lines):
+            d = drop + y_off
             point = (first["origin"][0] + u[0] * (-first["s"]) + down[0] * d,
                      first["origin"][1] + u[1] * (-first["s"]) + down[1] * d)
             self.line_no = n
             emit(line, left + off, width, tck, g, lambda s, p=point: (p[0] + u[0] * s, p[1] + u[1] * s))
-        for n, (line, g, off, _) in enumerate(more):  # level text only: the paragraph is level
+        more_base = more[0][4] if more else 0.0
+        for n, (line, g, off, _, y_off) in enumerate(more):  # level text only: the paragraph is level
             self.line_no = len(lines) + n
-            emit(line, off, width, tck, g, lambda s, n=n: (nxt["x0"] + s, nxt["baseline"] - n * lead_k))
+            emit(line, off, width, tck, g, lambda s, dy=y_off - more_base: (nxt["x0"] + s, nxt["baseline"] - dy))
         self.line_no = None
         if looks and links:
             self._move_links(links, linked)
@@ -2659,9 +2881,10 @@ def _edit(path, output, edits, password, report, old_way):
                             font = work.line(rect, text, old, opts)
                         work.settle()
                         work.strict = work.strict and kind == "line"
-                        if not work.legacy and kind != "add" and text.strip():
-                            shown = "".join(ch for ch in text if ch not in work.notes.get("missing", ""))
-                            line = kind == "line" and "\n" not in text and len(work.bands) > lines
+                        check_text = work.written_text if work.written_text is not None else text
+                        if not work.legacy and kind != "add" and check_text.strip():
+                            shown = "".join(ch for ch in check_text if ch not in work.notes.get("missing", ""))
+                            line = kind == "line" and "\n" not in check_text and len(work.bands) > lines
                             work.texts.append((len(work.bands) - 1 if line else None, shown))
                         if report is not None:
                             drawn = any(not ch.isspace() for ch in text)
