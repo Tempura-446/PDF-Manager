@@ -1830,7 +1830,7 @@ def _page_image(im):
 
 
 def ocr(path, output, language="eng", force=False, deskew=False, password=None, engine="auto",
-        rotate=True):
+        rotate=True, quality=None):
     """Add a searchable, selectable text layer to scanned pages.
 
     ``engine`` is "auto" (the built-in engine when it is installed, else
@@ -1842,11 +1842,13 @@ def ocr(path, output, language="eng", force=False, deskew=False, password=None, 
     "eng+deu"); the built-in engine reads English, most European languages,
     Chinese and Japanese unasked, and fetches a reading model once for
     Russian, Korean, Arabic, Hindi and other scripts (see ocr.script_for).
-    ``rotate`` turns sideways and upside-down pages upright."""
+    ``rotate`` turns sideways and upside-down pages upright.
+    ``quality`` is "standard" (built-in, fast), "best" (larger models,
+    fetched once, slower) or None (use the Settings default)."""
     from pdfmanager import ocr as _ocr  # it uses this module
 
     return _ocr.run(path, output, language=language, force=force, deskew=deskew,
-                    password=password, engine=engine, rotate=rotate)
+                    password=password, engine=engine, rotate=rotate, quality=quality)
 
 
 # pdfium is not thread-safe: every use of pypdfium2 must hold this lock
