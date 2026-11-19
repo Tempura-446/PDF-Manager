@@ -121,10 +121,10 @@
 
 ### Phase 5 (release E): speed
 
-- [ ] Pages in parallel: a small pool of worker processes, each with its own engine (the render lock stays per process), sized to the cores and memory; progress and Cancel as now.
-- [ ] On Windows, try ONNX Runtime's DirectML provider (the PC's graphics card) when it is there, and fall back to the CPU at the first error. Off by default until it has been checked on a few PCs; a Settings choice.
-- [ ] Skip what needs no reading: blank pages, and pages whose picture is the same as one already read (hash of the image stream).
-- [ ] Test: a 50-page holdout file is at least twice as fast with four workers, and the text is identical to one worker's.
+- [x] Pages in parallel: a small pool of worker processes, each with its own engine (the render lock stays per process), sized to the cores and memory; progress and Cancel as now.
+- [x] On Windows, try ONNX Runtime's DirectML provider (the PC's graphics card) when it is there, and fall back to the CPU at the first error. Off by default until it has been checked on a few PCs; a Settings choice.
+- [x] Skip what needs no reading: blank pages, and pages whose picture is the same as one already read (hash of the image stream).
+- [x] Test: a 50-page holdout file is at least twice as fast with four workers, and the text is identical to one worker's.
 
 ---
 

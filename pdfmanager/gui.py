@@ -3655,6 +3655,8 @@ class Handler(BaseHTTPRequestHandler):
             if q not in ocr.QUALITIES:
                 raise UserError(f"unknown OCR accuracy {q!r}")
             changes["ocr_quality"] = None if q == "standard" else q
+        if "ocr_gpu" in data:
+            changes["ocr_gpu"] = True if data["ocr_gpu"] else None
         update.save_settings(**changes)
         if "remember" in data:
             privacy.set_remembering(bool(data["remember"]))  # (turning it off clears what's kept)

@@ -15,12 +15,14 @@ Tesseract, through OCRmyPDF, stays as the second engine: for the scripts
 the built-in engine has no model for, and for PDF/A output straight from OCR.
 """
 import ctypes
+import hashlib
 import importlib.util
 import logging
 import math
 import os
 import re
 import statistics
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,9 +30,9 @@ from pathlib import Path
 from pdfmanager import core, scan, textlayer
 from pdfmanager.textlayer import Word
 
-__all__ = ["Word", "Line", "ENGINES", "QUALITIES", "default_quality", "choose_engine",
-           "script_for", "recognise", "reading_order", "text_of", "skew_angle", "page_orientation",
-           "format_report"]
+__all__ = ["Word", "Line", "ENGINES", "QUALITIES", "default_quality", "default_gpu", "default_workers",
+           "choose_engine", "script_for", "recognise", "reading_order", "text_of", "skew_angle",
+           "page_orientation", "format_report"]
 
 ENGINES = ("auto", "builtin", "tesseract")
 QUALITIES = ("standard", "best")
@@ -199,7 +201,8 @@ def _tesseract_missing(no_ocrmypdf=False):
 
 _engine_lock = threading.Lock()   # building the instances
 _call_lock = threading.Lock()     # using them: each keeps the last call's settings
-_engines = {}                     # (script, quality) -> RapidOCR
+_engines = {}                     # (script, quality, gpu) -> RapidOCR
+_directml_failed = False
 
 
 def default_quality():
@@ -208,6 +211,26 @@ def default_quality():
 
     chosen = update.settings().get("ocr_quality")
     return chosen if chosen in QUALITIES else "standard"
+
+
+def default_gpu():
+    """Whether Windows DirectML GPU acceleration for OCR is turned on in Settings
+    (off by default)."""
+    from pdfmanager import update
+
+    return bool(update.settings().get("ocr_gpu", False))
+
+
+def _directml_available():
+    """Whether ONNX Runtime's DirectML provider can be tried on this machine."""
+    if sys.platform != "win32" or _directml_failed:
+        return False
+    try:
+        import onnxruntime
+
+        return "DmlExecutionProvider" in (onnxruntime.get_available_providers() or ())
+    except Exception:
+        return False
 
 
 def _check_quality(quality):
@@ -315,14 +338,20 @@ def _best_model(kind):
                            size_note="about 80 MB", fallback_hint="choose Standard accuracy")
 
 
-def _engine(script=None, quality="standard"):
+def _engine(script=None, quality="standard", use_gpu=None):
     """The RapidOCR instance for a script and quality ('standard' or 'best').
-    Models take about a second to load, so each is made once."""
+    Models take about a second to load, so each is made once. When DirectML
+    GPU acceleration is turned on in Settings (Windows), tries it and falls
+    back to the CPU at the first error."""
+    global _directml_failed
     quality = _check_quality(quality)
-    key = (script, quality)
+    gpu = (default_gpu() if use_gpu is None else bool(use_gpu)) and _directml_available()
+    key = (script, quality, gpu)
     with _engine_lock:
         if key not in _engines:
             params = {"Global.return_word_box": True}
+            if gpu:
+                params["EngineConfig.onnxruntime.use_dml"] = True
             if quality == "best":
                 from rapidocr import ModelType, OCRVersion
 
@@ -348,9 +377,23 @@ def _engine(script=None, quality="standard"):
 
                 _engines[key] = RapidOCR(params=params)
             except Exception as exc:  # a broken install, or model files missing from a build
-                raise core.PdfManagerError(
-                    f"OCR's built-in engine could not start; reinstall ZPDF ({PIP_OCR}) or choose the "
-                    f"Tesseract engine ({exc})") from None
+                if gpu:
+                    logging.getLogger(__name__).warning("DirectML OCR engine failed (%s); falling back to CPU", exc)
+                    _directml_failed = True
+                    params.pop("EngineConfig.onnxruntime.use_dml", None)
+                    key = (script, quality, False)
+                    try:
+                        from rapidocr import RapidOCR
+
+                        _engines[key] = RapidOCR(params=params)
+                    except Exception as cpu_exc:
+                        raise core.PdfManagerError(
+                            f"OCR's built-in engine could not start; reinstall ZPDF ({PIP_OCR}) or choose the "
+                            f"Tesseract engine ({cpu_exc})") from None
+                else:
+                    raise core.PdfManagerError(
+                        f"OCR's built-in engine could not start; reinstall ZPDF ({PIP_OCR}) or choose the "
+                        f"Tesseract engine ({exc})") from None
             # It announces every model it loads; only trouble is worth hearing.
             logging.getLogger("RapidOCR").setLevel(logging.WARNING)
         return _engines[key]
@@ -358,10 +401,11 @@ def _engine(script=None, quality="standard"):
 
 def reset():
     """Forget the loaded engines and what was learnt about the install (tests)."""
-    global _builtin_imports
+    global _builtin_imports, _directml_failed
     with _engine_lock:
         _engines.clear()
         _builtin_imports = None
+        _directml_failed = False
 
 
 def _array(image):
@@ -690,9 +734,24 @@ def _read(image, script=None, quality="standard"):
     the detector alone. The per-line flip check stays off: on short crops it
     guesses wrong (a lone "6" became "9", 7 pt print turned to nonsense), and
     whole pages are turned upright by page_orientation() instead."""
+    global _directml_failed
+    arr = _array(_clear(image))
+    used_gpu = default_gpu() and _directml_available()
     engine = _engine(script, quality)
-    with _call_lock:
-        return engine(_array(_clear(image)), use_det=True, use_cls=False, use_rec=True)
+    try:
+        with _call_lock:
+            return engine(arr, use_det=True, use_cls=False, use_rec=True)
+    except Exception as exc:
+        if not used_gpu:
+            raise
+        logging.getLogger(__name__).warning("DirectML OCR call failed (%s); falling back to CPU", exc)
+        with _engine_lock:
+            _directml_failed = True
+            for k in [k for k in _engines if k[2]]:
+                _engines.pop(k, None)
+        engine = _engine(script, quality, use_gpu=False)
+        with _call_lock:
+            return engine(arr, use_det=True, use_cls=False, use_rec=True)
 
 
 def recognise(image, script=None, quality="standard"):
@@ -718,6 +777,10 @@ def recognise(image, script=None, quality="standard"):
             if _lines_score(big_lines) > _lines_score(lines):
                 lines = reading_order(big_lines)
     return lines
+
+
+_ORIG_READ = _read
+_ORIG_RECOGNISE = recognise
 
 
 def _lines(result):
@@ -1207,7 +1270,7 @@ def format_report(report):
 
 
 def run(path, output, language="eng", force=False, deskew=False, password=None, engine="auto",
-        rotate=True, quality=None, report=None):
+        rotate=True, quality=None, report=None, workers=None):
     """Add a searchable text layer to the scanned pages of ``path``; see
     ``core.ocr``."""
     from pdfmanager import progress
@@ -1242,7 +1305,8 @@ def run(path, output, language="eng", force=False, deskew=False, password=None, 
         if chosen == "tesseract":
             _run_tesseract(source, tmp_out, language, force, deskew, rotate)
         else:
-            _run_builtin(source, tmp_out, force, deskew, rotate, script, quality=quality, report=report)
+            _run_builtin(source, tmp_out, force, deskew, rotate, script, quality=quality,
+                         report=report, workers=workers)
         os.replace(tmp_out, output)
     finally:
         for tmp in (tmp_in, tmp_out):
@@ -1308,8 +1372,145 @@ def render_scale(width_pt, height_pt, dpi=RENDER_DPI):
     return min(dpi / 72, MAX_RENDER_SIDE / longest)
 
 
+PARALLEL_MIN_PAGES = 3  # spin up worker processes only when at least this many unique scan pages need OCR
+MAX_WORKERS = 4         # cap parallel OCR workers (each loads its own ONNX Runtime session)
+
+
+def _available_memory_mb():
+    """Approximate free/available RAM in MB, or None if unknown."""
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/meminfo", encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) // 1024
+        except OSError:
+            return None
+    if sys.platform == "win32":
+        try:
+            class _MemStatus(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+            st = _MemStatus()
+            st.dwLength = ctypes.sizeof(st)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+                return int(st.ullAvailPhys // (1024 * 1024))
+        except Exception:
+            return None
+    return None
+
+
+def default_workers(page_count):
+    """Number of worker processes for parallel OCR, sized to CPU cores and
+    available memory (1 when fewer than PARALLEL_MIN_PAGES need reading)."""
+    if page_count < PARALLEL_MIN_PAGES:
+        return 1
+    cores = os.cpu_count() or 1
+    n = min(MAX_WORKERS, max(1, cores // 2 if cores > 2 else cores))
+    avail_mb = _available_memory_mb()
+    if avail_mb is not None:
+        n = min(n, max(1, avail_mb // 600))
+    return max(1, min(n, page_count))
+
+
+def _is_blank_image(image):
+    """Whether a rendered page image is blank (uniform colour or faint
+    scanner-bed noise with no visible ink or graphics worth running OCR on)."""
+    import numpy as np
+
+    grey = image.convert("L")
+    w, h = grey.size
+    if w == 0 or h == 0:
+        return True
+    arr = np.asarray(grey, dtype=np.int16)
+    if w > 12 and h > 12:
+        arr = arr[2:-2, 2:-2]
+    if int(arr.max()) - int(arr.min()) < 18:
+        return True
+    med = int(np.median(arr[::4, ::4]))
+    ink = int(np.count_nonzero(np.abs(arr - med) >= 24))
+    return ink < 12
+
+
+def _image_hash(image):
+    """Fast content digest of a rendered page image for duplicate-page skipping."""
+    h = hashlib.blake2b(digest_size=16)
+    h.update(f"{image.mode}:{image.width}x{image.height}:".encode("ascii"))
+    h.update(image.tobytes())
+    return h.hexdigest()
+
+
+def _recognise_scan_page(image, doc, page_idx, page_w, page_h, scale, rotate, deskew, script, quality):
+    """Recognise a single scanned page image; returns ``(lines, turn, angle, image_size)``."""
+    from PIL import Image
+
+    lines = None
+    turn = 0
+    angle = 0.0
+    if rotate:
+        first = _with_quality(_read, image, script, quality)
+        turn = _with_quality(page_orientation, image, script, quality) if _reads_wrong_way(first) else 0
+        if turn:
+            image = image.rotate(turn, expand=True)
+        else:
+            lines = _refine_lines(image, _lines(first), script, quality)
+    if deskew:
+        angle = skew_angle(image)
+        if angle:
+            image = image.rotate(-angle, resample=Image.BICUBIC, fillcolor="white")
+            lines = None
+    if lines is None:
+        lines = _with_quality(recognise, image, script, quality)
+    # Small print: re-render at higher DPI when median text height is under SMALL_TEXT_PX.
+    if lines and 0 < _median_text_height(lines) < SMALL_TEXT_PX and doc is not None:
+        high_scale = render_scale(page_w, page_h, dpi=HIGH_RENDER_DPI)
+        if high_scale > scale * 1.15:
+            with core.PDFIUM_LOCK:
+                pdfium_page = core.show_whole_page(doc[page_idx])
+                high_image = pdfium_page.render(scale=high_scale).to_pil()
+            if turn:
+                high_image = high_image.rotate(turn, expand=True)
+            if angle:
+                high_image = high_image.rotate(-angle, resample=Image.BICUBIC, fillcolor="white")
+            high_lines = _scale_lines(_lines(_with_quality(_read, high_image, script, quality)),
+                                      scale / high_scale)
+            high_lines = _retry_low_confidence(image, high_lines, script, quality)
+            if _lines_score(high_lines) > _lines_score(lines):
+                lines = reading_order(high_lines)
+    return lines, turn, angle, image.size
+
+
+def _recognise_scan_page_worker(task):
+    """Top-level picklable worker for ProcessPoolExecutor: opens its own pdfium
+    handle and ONNX engine, renders ``page_idx``, and returns
+    ``(page_idx, lines, turn, angle, image_size)``."""
+    import pypdfium2 as pdfium
+
+    source_str, page_idx, rotate, deskew, script, quality = task
+    doc = pdfium.PdfDocument(source_str)
+    try:
+        pdfium_page = core.show_whole_page(doc[page_idx])
+        page_w, page_h = pdfium_page.get_width(), pdfium_page.get_height()
+        scale = render_scale(page_w, page_h)
+        image = pdfium_page.render(scale=scale).to_pil()
+        lines, turn, angle, img_size = _recognise_scan_page(
+            image, doc, page_idx, page_w, page_h, scale, rotate, deskew, script, quality)
+    finally:
+        doc.close()
+    return page_idx, lines, turn, angle, img_size
+
+
 def _run_builtin(source, output, force, deskew, rotate=True, script=None, notes=None, quality="standard",
-                 report=None):
+                 report=None, workers=None, _page_worker=None):
     """``notes`` (a list) is given what was done beyond reading plain scans:
     a rubbish layer replaced, pictures read on a page of real text.
     ``report`` (a dict, if passed) is filled with per-page OCR stats and
@@ -1370,7 +1571,8 @@ def _run_builtin(source, output, force, deskew, rotate=True, script=None, notes=
                     report["replaced"].append(i + 1)
                 note(f"page {i + 1}: its text layer was unreadable and has been replaced")
     try:
-        _read_pages(source, output, force, deskew, rotate, script, note, quality=quality, report=report)
+        _read_pages(source, output, force, deskew, rotate, script, note, quality=quality,
+                    report=report, workers=workers, _page_worker=_page_worker)
     finally:
         if stripped is not None and stripped.exists():
             stripped.unlink()
@@ -1402,7 +1604,10 @@ def _record_unsure_stat(report, page_num, unsure_count, word_count):
             report["flagged_pages"].append(page_num)
 
 
-def _read_pages(source, output, force, deskew, rotate, script, note, quality="standard", report=None):
+def _read_pages(source, output, force, deskew, rotate, script, note, quality="standard",
+                report=None, workers=None, _page_worker=None):
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
     import pypdfium2 as pdfium
     import pypdfium2.raw as pdfium_raw
     from PIL import Image
@@ -1420,8 +1625,14 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
         doc = pdfium.PdfDocument(str(source))
     try:
         total = len(doc)
+        # Pass 1: handle text+picture pages, skip blank scan pages, and group
+        # identical scan pages by image hash so duplicates are only read once.
+        scan_pages = []      # [(i, img_hash, page_w, page_h, scale, kept_image)]
+        first_for_hash = {}  # img_hash -> (i, page_w, page_h, scale, image)
+        done_count = 0
+
         for i in range(total):
-            progress.report(i, total, "page")
+            progress.report(done_count, total, "page")
             page = writer.pages[i]
             if not force and page_has_text(page):
                 # A page with text of its own: its pictures may still hold
@@ -1439,10 +1650,11 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
                         textpage.close()
                 if not boxes:
                     _record_skip(report, "already had text", i + 1)
+                    done_count += 1
                     continue
                 words = []
                 for box in boxes:
-                    progress.report(i, total, "page")  # (Cancel is heard between pictures)
+                    progress.report(done_count, total, "page")  # (Cancel is heard between pictures)
                     try:
                         lines = _with_quality(recognise, image.crop(box), script, quality)
                     except progress.Cancelled:
@@ -1489,74 +1701,121 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
                             report["pictures"][i + 1] = read
                         _record_unsure_stat(report, i + 1, unsure, len(fresh))
                         note(f"page {i + 1}: read the text in {read} picture{'s' if read != 1 else ''}")
+                        done_count += 1
                         continue
                 _record_skip(report, "already had text", i + 1)
+                done_count += 1
                 continue
+
             with core.PDFIUM_LOCK:
                 pdfium_page = core.show_whole_page(doc[i])
                 page_w, page_h = pdfium_page.get_width(), pdfium_page.get_height()
                 scale = render_scale(page_w, page_h)
                 image = pdfium_page.render(scale=scale).to_pil()
+            if _is_blank_image(image):
+                _record_skip(report, "blank page", i + 1)
+                done_count += 1
+                continue
+            img_hash = _image_hash(image)
+            scan_pages.append((i, img_hash, page_w, page_h, scale, image if force else None))
+            if img_hash not in first_for_hash:
+                first_for_hash[img_hash] = (i, page_w, page_h, scale, image)
+
+        # Pass 2: recognise each unique non-blank scan page (in parallel when beneficial).
+        results_by_hash = {}
+        unique_items = list(first_for_hash.items())
+        n_workers = default_workers(len(unique_items)) if workers is None else max(1, int(workers))
+        min_parallel = 2 if workers is not None else PARALLEL_MIN_PAGES
+        can_pool = _page_worker is not None or (recognise is _ORIG_RECOGNISE and _read is _ORIG_READ)
+        use_pool = n_workers > 1 and len(unique_items) >= min_parallel and can_pool
+
+        if use_pool:
+            import multiprocessing
+
+            worker_fn = _page_worker or _recognise_scan_page_worker
+            hash_by_page = {info[0]: h for h, info in unique_items}
+            executor = ProcessPoolExecutor(
+                max_workers=min(n_workers, len(unique_items)),
+                mp_context=multiprocessing.get_context("spawn"),
+            )
             try:
-                lines = None
-                turn = 0
-                angle = 0.0
-                if rotate:
-                    first = _with_quality(_read, image, script, quality)
-                    turn = _with_quality(page_orientation, image, script, quality) if _reads_wrong_way(first) else 0
-                    if turn:
-                        # Show the page the right way up, as Acrobat does:
-                        # /Rotate turns it clockwise, the picture turned the
-                        # other way round.
-                        image = image.rotate(turn, expand=True)
-                        _set_rotation(page, (page.rotation or 0) + 360 - turn)
-                    else:
-                        lines = _refine_lines(image, _lines(first), script, quality)
-                if deskew:
-                    angle = skew_angle(image)
-                    if angle:
-                        # Turn the picture straight, and the page with it, so
-                        # the words and the page stay in step.
-                        image = image.rotate(-angle, resample=Image.BICUBIC, fillcolor="white")
-                        _turn_page(page, -angle, Transformation)
-                        lines = None
-                if lines is None:
-                    lines = _with_quality(recognise, image, script, quality)
-                # Small print: re-render at higher DPI when median text height is under SMALL_TEXT_PX.
-                if lines and 0 < _median_text_height(lines) < SMALL_TEXT_PX:
-                    high_scale = render_scale(page_w, page_h, dpi=HIGH_RENDER_DPI)
-                    if high_scale > scale * 1.15:
-                        with core.PDFIUM_LOCK:
-                            pdfium_page = core.show_whole_page(doc[i])
-                            high_image = pdfium_page.render(scale=high_scale).to_pil()
-                        if turn:
-                            high_image = high_image.rotate(turn, expand=True)
-                        if angle:
-                            high_image = high_image.rotate(-angle, resample=Image.BICUBIC, fillcolor="white")
-                        high_lines = _scale_lines(_lines(_with_quality(_read, high_image, script, quality)),
-                                                  scale / high_scale)
-                        high_lines = _retry_low_confidence(image, high_lines, script, quality)
-                        if _lines_score(high_lines) > _lines_score(lines):
-                            lines = reading_order(high_lines)
+                futs = {
+                    executor.submit(worker_fn, (str(source), info[0], rotate, deskew, script, quality)): info[0]
+                    for _h, info in unique_items
+                }
+                for fut in as_completed(futs):
+                    page_idx = futs[fut]
+                    try:
+                        _p, lines, turn, angle, img_size = fut.result()
+                    except Exception as exc:
+                        raise core.PdfManagerError(f"OCR failed on page {page_idx + 1}: {exc}") from None
+                    results_by_hash[hash_by_page[page_idx]] = (lines, turn, angle, img_size)
+                    done_count += 1
+                    progress.report(min(done_count, total - 1), total, "page")
             except progress.Cancelled:
+                executor.shutdown(wait=False, cancel_futures=True)
                 raise
-            except Exception as exc:  # engine trouble: say which page
-                raise core.PdfManagerError(f"OCR failed on page {i + 1}: {exc}") from None
+            except BaseException:
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise
+            else:
+                executor.shutdown(wait=True)
+        else:
+            for img_hash, (page_idx, page_w, page_h, scale, image) in unique_items:
+                progress.report(min(done_count, total - 1), total, "page")
+                try:
+                    if _page_worker is not None:
+                        _p, lines, turn, angle, img_size = _page_worker(
+                            (str(source), page_idx, rotate, deskew, script, quality))
+                    else:
+                        lines, turn, angle, img_size = _recognise_scan_page(
+                            image, doc, page_idx, page_w, page_h, scale, rotate, deskew, script, quality)
+                except progress.Cancelled:
+                    raise
+                except Exception as exc:  # engine trouble: say which page
+                    raise core.PdfManagerError(f"OCR failed on page {page_idx + 1}: {exc}") from None
+                results_by_hash[img_hash] = (lines, turn, angle, img_size)
+                done_count += 1
+                progress.report(min(done_count, total - 1), total, "page")
+
+        # Pass 3: apply results to pages in deterministic page order.
+        for i, img_hash, page_w, page_h, scale, kept_image in scan_pages:
+            progress.report(min(i, total - 1), total, "page")
+            page = writer.pages[i]
+            lines, turn, angle, img_size = results_by_hash[img_hash]
+            if turn:
+                # Show the page the right way up, as Acrobat does:
+                # /Rotate turns it clockwise, the picture turned the other way round.
+                _set_rotation(page, (page.rotation or 0) + 360 - turn)
+            if angle:
+                # Turn the page with the deskewed picture so words and page stay in step.
+                _turn_page(page, -angle, Transformation)
             if force:
-                _rasterise(writer, page, image, scale)
+                img = kept_image
+                if turn:
+                    img = img.rotate(turn, expand=True)
+                if angle:
+                    img = img.rotate(-angle, resample=Image.BICUBIC, fillcolor="white")
+                _rasterise(writer, page, img, scale)
                 textlayer._write_page_unsure_list(page, [])
                 rasterised = True
             words = [w for line in lines for w in line.words]
             if words:
                 base_idx = textlayer._count_ocr_words_in_page(page, writer)
-                textlayer.add_text_layer(writer, page, words, image.size, scale * 72)
+                textlayer.add_text_layer(writer, page, words, img_size, scale * 72)
                 unsure = textlayer.record_unsure_words(
-                    writer, page, words, image.size, scale * 72, base_index=base_idx)
+                    writer, page, words, img_size, scale * 72, base_index=base_idx)
                 if report is not None:
                     report["pages_read"].append(i + 1)
                 _record_unsure_stat(report, i + 1, unsure, len(words))
             else:
                 _record_skip(report, "no text found", i + 1)
+
+        if report is not None:
+            report["pages_read"].sort()
+            report["flagged_pages"].sort()
+            for pages in report["skipped"].values():
+                pages.sort()
     finally:
         with core.PDFIUM_LOCK:
             doc.close()

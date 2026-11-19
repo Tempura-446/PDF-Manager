@@ -1830,7 +1830,7 @@ def _page_image(im):
 
 
 def ocr(path, output, language="eng", force=False, deskew=False, password=None, engine="auto",
-        rotate=True, quality=None, report=None):
+        rotate=True, quality=None, report=None, workers=None):
     """Add a searchable, selectable text layer to scanned pages.
 
     ``engine`` is "auto" (the built-in engine when it is installed, else
@@ -1846,11 +1846,15 @@ def ocr(path, output, language="eng", force=False, deskew=False, password=None, 
     ``quality`` is "standard" (built-in, fast), "best" (larger models,
     fetched once, slower) or None (use the Settings default).
     ``report`` is an optional dict filled with per-page OCR stats and
-    unsure-word counts."""
+    unsure-word counts.
+    ``workers`` is the number of worker processes for parallel page OCR
+    (None sizes the pool automatically to CPU cores and memory; 1 runs
+    sequentially)."""
     from pdfmanager import ocr as _ocr  # it uses this module
 
     return _ocr.run(path, output, language=language, force=force, deskew=deskew,
-                    password=password, engine=engine, rotate=rotate, quality=quality, report=report)
+                    password=password, engine=engine, rotate=rotate, quality=quality,
+                    report=report, workers=workers)
 
 
 # pdfium is not thread-safe: every use of pypdfium2 must hold this lock
