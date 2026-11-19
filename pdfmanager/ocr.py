@@ -1730,9 +1730,14 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
         use_pool = n_workers > 1 and len(unique_items) >= min_parallel and can_pool
 
         if use_pool:
+            import multiprocessing
+
             worker_fn = _page_worker or _recognise_scan_page_worker
             hash_by_page = {info[0]: h for h, info in unique_items}
-            executor = ProcessPoolExecutor(max_workers=min(n_workers, len(unique_items)))
+            executor = ProcessPoolExecutor(
+                max_workers=min(n_workers, len(unique_items)),
+                mp_context=multiprocessing.get_context("spawn"),
+            )
             try:
                 futs = {
                     executor.submit(worker_fn, (str(source), info[0], rotate, deskew, script, quality)): info[0]
@@ -1771,9 +1776,11 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
                     raise core.PdfManagerError(f"OCR failed on page {page_idx + 1}: {exc}") from None
                 results_by_hash[img_hash] = (lines, turn, angle, img_size)
                 done_count += 1
+                progress.report(min(done_count, total - 1), total, "page")
 
         # Pass 3: apply results to pages in deterministic page order.
         for i, img_hash, page_w, page_h, scale, kept_image in scan_pages:
+            progress.report(min(i, total - 1), total, "page")
             page = writer.pages[i]
             lines, turn, angle, img_size = results_by_hash[img_hash]
             if turn:

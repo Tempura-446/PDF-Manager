@@ -31,7 +31,7 @@ def _make_scan_pdf(path, specs):
 def _timed_page_worker(task):
     """Top-level picklable worker simulating OCR work per page."""
     _source_str, page_idx, _rotate, _deskew, _script, _quality = task
-    time.sleep(0.15)
+    time.sleep(0.35)
     w1 = Word(f"Page{page_idx + 1}", [(60, 60), (180, 60), (180, 95), (60, 95)], 0.94)
     w2 = Word(f"Token{page_idx + 1}", [(200, 60), (340, 60), (340, 95), (200, 95)], 0.45)
     line = ocr.Line(f"{w1.text} {w2.text}", [(60, 60), (340, 60), (340, 95), (60, 95)], 0.70, [w1, w2])
