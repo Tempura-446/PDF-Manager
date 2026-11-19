@@ -4,6 +4,26 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.60.1
+
+Wires offline PDF translation and language pack management into the desktop
+GUI, fixes locale bundling in standalone PyInstaller builds, and adds Linux
+and macOS desktop packaging & unified 3-OS release updates.
+
+- **Offline translation & language packs in the GUI.** Added **Translate PDF
+  (offline)** under **Convert** tools (side-by-side PDF, plain text `.txt`, or
+  in-place PDF), **Translate this page…** in the reader's **More** menu and
+  command palette (`Ctrl+K`), and **Settings → Language & offline packs** to
+  switch interface language and install/remove `.zip` language packs.
+- **Standalone PyInstaller locales fix.** Bundled `pdfmanager/locales` in
+  `packaging/build_app.py` so standalone builds include all built-in starter
+  locales (`en`, `zh-Hans`, `es`, `fr`, `de`).
+- **Linux & macOS builds and 3-OS updater.** Added Linux desktop integration
+  (`.desktop` entry, Nautilus/KDE actions, distro hints, `.deb` and AppDir
+  packaging, SANE `scanimage` scanning), macOS `.app` `Info.plist` PDF
+  associations, unsigned `.dmg` packaging + Finder Quick Actions, and OS-aware
+  release asset selection in `update.py`.
+
 ## 0.60.0
 
 Full offline Language Packs & Translation suite (UI internationalization,
