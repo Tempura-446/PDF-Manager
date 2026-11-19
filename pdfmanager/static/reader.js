@@ -191,7 +191,7 @@ const header = (res, name) => { try { return decodeURIComponent(res.headers.get(
 const ANNOT_KEYS = { h: "HIGHLIGHT", c: "NOTE", a: "FREETEXT", d: "INK", s: "SIGN" };
 
 export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditing(TextEditing(Measuring(Layering(Object))))))))) {
-  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onFormSelect, onRepair, onForgetRecent, onSaveTab, onUnsaved, onBrokenWhy, onOpenWithId } = {}) {
+  constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onFormSelect, onFormCheck, onRepair, onForgetRecent, onSaveTab, onUnsaved, onBrokenWhy, onOpenWithId } = {}) {
     super();
     this.host = host;
     this.token = token;
@@ -207,6 +207,7 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
     this.recent = recent;  // (host) => fills host with the app's Recent list (the start screen's), resolves to how many
     this.onFormHint = onFormHint;  // (tab) => the "looks like a form" check came out for tab, or was dismissed
     this.onFormSelect = onFormSelect;  // (selected, pages, tab) => the selected fields in Prepare form changed
+    this.onFormCheck = onFormCheck;    // (issues, tab) => results of "Check form" (or null to clear)
     this.onBrokenWhy = onBrokenWhy;    // (tab) => what's known of a file that can't be shown ({ for_people } when it's protected for certificates)
     this.onOpenWithId = onOpenWithId;  // (tab, Digital ID file, its password) => "" once the opened copy is in a tab, else what went wrong
     this.onRepair = onRepair;  // (tab) => run Repair on a file that can't be shown; resolves when its result is open (or it failed)
@@ -2599,6 +2600,7 @@ export class Reader extends Tabs(FormMode(Finding(Signing(Annotating(MarkupEditi
     }
     this._undoButtons();
   }
+  _reloadFormState() { return this.activeTab ? this.#reloadEditing(this.activeTab) : Promise.resolve(); }
 
   // ---- saving, printing, editing ------------------------------------------------
   /** Filled-in form fields or annotations that aren't in the file yet. */

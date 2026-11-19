@@ -94,17 +94,25 @@ export const FormMode = (Base) => class extends Base {
     this.formRedoBtn = el("button", { class: "rd-btn compact", type: "button", title: "Redo (Ctrl+Y)", "aria-label": "Redo", disabled: true, html: svg("redo") });
     this.formDeleteBtn = el("button", { class: "rd-btn compact", type: "button", title: "Delete selected fields (Delete)", "aria-label": "Delete selected fields", disabled: true, html: svg("trash") });
     this.formSaveBtn = el("button", { class: "rd-btn", type: "button", title: "Save changes (Ctrl+S)", "aria-label": "Save", html: svg("save") + "<span>Save</span>" });
+    this.formPreviewBtn = el("button", { class: "rd-btn", type: "button", "aria-pressed": "false", title: "Try filling in the form with scripts running" }, "Preview");
+    this.formKeepDefaultsBtn = el("button", { class: "rd-btn", type: "button", hidden: true, title: "Save what you entered in Preview as the fields' default values" }, "Keep as default values");
+    this.formCheckBtn = el("button", { class: "rd-btn", type: "button", title: "Check for missing tooltips, overlaps, or broken calculations" }, "Check form");
     this.formCloseBtn = el("button", { class: "rd-btn", type: "button", title: "Close Prepare form", "aria-label": "Close Prepare form", html: svg("x") });
     this.formUndoBtn.addEventListener("click", () => this._undo());
     this.formRedoBtn.addEventListener("click", () => this._undo(true));
     this.formDeleteBtn.addEventListener("click", () => this._deleteSelectedFields());
+    this.formPreviewBtn.addEventListener("click", () => this.setFormPreview(!this.formPreview));
+    this.formKeepDefaultsBtn.addEventListener("click", () => this.keepPreviewDefaults());
+    this.formCheckBtn.addEventListener("click", () => this.checkForm());
     this.formSaveBtn.addEventListener("click", () => this.save());
     this.formCloseBtn.addEventListener("click", () => this.closeFormMode());
     this.formmodebar = el("div", { class: "rd-findbar rd-formmodebar", hidden: true, role: "toolbar", "aria-label": "Prepare form" },
       ...this.formToolBtns, el("span", { class: "rd-sep" }), this.formFindBtn,
       el("span", { class: "rd-sep" }), this.formUndoBtn, this.formRedoBtn, this.formDeleteBtn,
+      el("span", { class: "rd-sep" }), this.formPreviewBtn, this.formKeepDefaultsBtn, this.formCheckBtn,
       el("span", { style: "flex:1" }), this.formSaveBtn, this.formCloseBtn);
     this.formMode = false;
+    this.formPreview = false;
     this.formTool = "select";
     this.formPicked = new Set();
     this.formClipboard = null;
@@ -120,9 +128,15 @@ export const FormMode = (Base) => class extends Base {
     this.measureTool?.(null);
     this.formbar.hidden = true;
     this.formMode = true;
+    this.formPreview = false;
     this.formPicked = new Set();
     this.root.classList.add("rd-formmode");
+    this.root.classList.remove("rd-form-preview");
     this.formmodebar.hidden = false;
+    this.formPreviewBtn?.setAttribute("aria-pressed", "false");
+    if (this.formKeepDefaultsBtn) this.formKeepDefaultsBtn.hidden = true;
+    for (const btn of this.formToolBtns) btn.disabled = false;
+    if (this.formFindBtn) this.formFindBtn.disabled = false;
     if (this.fieldsTab) this.fieldsTab.hidden = false;
     this._setFormTool(tool);
     this._stepAside();
@@ -134,12 +148,18 @@ export const FormMode = (Base) => class extends Base {
   closeFormMode() {
     if (!this.formMode) return;
     this._formFlushNudge();
+    const wasPreview = this.formPreview;
     this._formPickCb = null;
     this.formMode = false;
+    this.formPreview = false;
     this.formTool = "select";
     this.formPicked = new Set();
-    this.root.classList.remove("rd-formmode", "rd-form-placing", "rd-form-picking");
+    this.root.classList.remove("rd-formmode", "rd-form-placing", "rd-form-picking", "rd-form-preview");
     this.formmodebar.hidden = true;
+    this.formPreviewBtn?.setAttribute("aria-pressed", "false");
+    if (this.formKeepDefaultsBtn) this.formKeepDefaultsBtn.hidden = true;
+    for (const btn of this.formToolBtns) btn.disabled = false;
+    if (this.formFindBtn) this.formFindBtn.disabled = false;
     if (this.fieldsTab) {
       if (this.fieldsTab.getAttribute("aria-selected") === "true") this._showSidebarTab?.("thumbs");
       this.fieldsTab.hidden = true;
@@ -147,6 +167,65 @@ export const FormMode = (Base) => class extends Base {
     for (const layer of this.viewerEl.querySelectorAll(".rd-formlayer")) layer.remove();
     this._stepAside();
     this._notifyFormSelect();
+    this.onFormCheck?.(null, this.activeTab);
+    if (wasPreview && this.doc?.annotationStorage?.size > 0) this._reloadFormState?.();
+  }
+
+  async setFormPreview(on) {
+    if (!this.formMode || !this.doc) return;
+    const next = !!on;
+    if (next === this.formPreview) return;
+    this._formFlushNudge();
+    this.formPreview = next;
+    this.root.classList.toggle("rd-form-preview", next);
+    this.formPreviewBtn?.setAttribute("aria-pressed", String(next));
+    if (this.formKeepDefaultsBtn) this.formKeepDefaultsBtn.hidden = !next;
+    for (const btn of this.formToolBtns) btn.disabled = next;
+    if (this.formFindBtn) this.formFindBtn.disabled = next;
+    if (next) {
+      this._setFormTool("select");
+      this.formPicked = new Set();
+      this._notifyFormSelect();
+      if (this.formDeleteBtn) this.formDeleteBtn.disabled = true;
+    } else {
+      if (this.doc.annotationStorage?.size > 0) await this._reloadFormState?.();
+      else this._drawFormOverlays();
+    }
+  }
+
+  keepPreviewDefaults() {
+    if (!this.formMode || !this.doc) return;
+    return this._changeDocument((bytes, tab) => this._post("/api/form/keep-defaults", bytes, tab), {
+      failure: "Couldn't keep default values: ",
+      edited: (_res, tab) => { tab.formFields = null; },
+      after: (res) => {
+        const count = Number(res.headers.get("X-Pdfm-Fields") || 0);
+        this.toast(count ? `Saved ${count} default value${count === 1 ? "" : "s"}` : "Default values updated", 2000);
+      },
+    });
+  }
+
+  async checkForm() {
+    if (!this.formMode || !this.doc) return;
+    const tab = this.activeTab;
+    try {
+      const res = await this._post("/api/form/check", await this._currentBytes(), tab);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+      const { issues } = await res.json();
+      if (this.activeTab === tab && this.formMode) this.onFormCheck?.(issues || [], tab);
+    } catch (e) {
+      this.toast("Couldn't check form: " + (e.message || e));
+    }
+  }
+
+  async selectFormField(page, index) {
+    if (!this.formMode || !this.doc) return;
+    if (this.formPreview) await this.setFormPreview(false);
+    this.formPicked = new Set([fieldKey(page, index)]);
+    this.pdfViewer.currentPageNumber = page;
+    this._drawFormOverlays();
+    const box = this.viewerEl.querySelector(`.rd-formfield[data-page="${page}"][data-index="${index}"]`);
+    box?.scrollIntoView({ block: "center", inline: "nearest" });
   }
 
   _setFormTool(tool) {
@@ -776,6 +855,10 @@ export const FormMode = (Base) => class extends Base {
 
   _formKeyDown(e) {
     if (!this.formMode || !this.doc || isTyping(e)) return false;
+    if (this.formPreview) {
+      if (e.key === "Escape") { e.preventDefault(); this.setFormPreview(false); return true; }
+      return false;
+    }
     const mod = e.ctrlKey || e.metaKey;
     if (e.key === "Escape") {
       e.preventDefault();

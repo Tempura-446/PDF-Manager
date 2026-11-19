@@ -2599,6 +2599,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._form_table(body)
             if path == "/api/form/reorder":
                 return self._form_reorder(body)
+            if path == "/api/form/keep-defaults":
+                return self._form_keep_defaults(body)
+            if path == "/api/form/check":
+                return self._form_check(body)
             if path in ("/api/comments/summary", "/api/comments/export", "/api/comments/import"):
                 return self._comments(path.rsplit("/", 1)[1], body)
             if path == "/api/text/edit":
@@ -3339,6 +3343,34 @@ class Handler(BaseHTTPRequestHandler):
             data = out.read_bytes()
         return self._send(HTTPStatus.OK, data, "application/pdf",
                           {"X-Pdfm-Names": json.dumps(names, ensure_ascii=True)})
+
+    def _form_keep_defaults(self, body):
+        """Promote current form values (/V) to default values (/DV)."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "defaults.pdf"
+            src.write_bytes(uploads[0][2])
+            count = forms.keep_defaults(src, out, password=password)
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf",
+                          {"X-Pdfm-Fields": str(count)})
+
+    def _form_check(self, body):
+        """Run pre-finish checks on form fields."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            src.write_bytes(uploads[0][2])
+            issues = forms.check_form(src, password=password)
+        return self._send(HTTPStatus.OK, json.dumps({"issues": issues}, ensure_ascii=False), "application/json")
 
     def _save_settings(self, body):
         data = json.loads(body or b"{}")
