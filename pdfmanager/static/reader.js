@@ -25,6 +25,7 @@ import * as files from "./files.js";
 import { COLORS, el, fadeOut, heldTimer, ICON, isTyping, MIN_ZOOM, MAX_ZOOM, pdfjs, store, svg, viewer } from "./readerkit.js";
 import { Annotating } from "./annotate.js";
 import { CheckOcrMode } from "./checkocr.js";
+import { CropMode } from "./cropmode.js";
 import { Finding } from "./find.js";
 import { FormMode } from "./formmode.js";
 import { Layering } from "./layers.js";
@@ -110,7 +111,7 @@ const ZOOM_PRESETS = [
  *  t, e and m are the reader's own: next, previous, rotate, panel, edit text, measure). */
 const ANNOT_KEYS = { h: "HIGHLIGHT", c: "NOTE", a: "FREETEXT", d: "INK", s: "SIGN" };
 
-export class Reader extends Tabs(CheckOcrMode(FormMode(Finding(Signing(Annotating(MarkupEditing(TextEditing(Measuring(Layering(SplitView(ReaderNav(ReaderRender(ReaderSave(Object)))))))))))))) {
+export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(Annotating(MarkupEditing(TextEditing(Measuring(Layering(SplitView(ReaderNav(ReaderRender(ReaderSave(Object))))))))))))))) {
   constructor(host, { token, isDesktop, api, tools = [], onEdit, onAllTools, onCommands, onHome, onChange, recent, onFormHint, onFormSelect, onFormCheck, onRepair, onForgetRecent, onSaveTab, onUnsaved, onBrokenWhy, onOpenWithId } = {}) {
     super();
     this.host = host;
@@ -349,6 +350,7 @@ export class Reader extends Tabs(CheckOcrMode(FormMode(Finding(Signing(Annotatin
         this.brokenSaid));
     this.main = el("div", { class: "rd-main" }, this.container, this.loading, this.empty, this.broken, this.measPanel);
     this._buildSplitView();
+    this._buildCropMode();
     // The file panel: beside the pages in a wide window, over them (with a
     // scrim) in a narrow one. The app puts its content in.
     this.side = el("aside", { class: "rd-side", id: "rd-side", role: "region", "aria-label": "This file", hidden: true });
@@ -403,11 +405,11 @@ export class Reader extends Tabs(CheckOcrMode(FormMode(Finding(Signing(Annotatin
     overlayClose.addEventListener("click", () => this.closeCompare());
     // Skip link: past the bars, to the pages (out of sight until it has focus).
     this.skipLink = el("a", { class: "skip-link rd-skip", href: "#", onclick: (e) => { e.preventDefault(); this.container.focus(); } }, "Skip to the page");
-    this.root.append(this.skipLink, toolbar, this.tabbar, this.findbar, this.annotbar, this.formmodebar, this.checkocrbar, this.scalebar, this.overlaybar, this.splitBar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.moreToolsMenu, this.fileInput);
+    this.root.append(this.skipLink, toolbar, this.tabbar, this.findbar, this.annotbar, this.formmodebar, this.checkocrbar, this.scalebar, this.overlaybar, this.splitBar, this.cropbar, this.sigbar, this.formbar, this.body, this.menu, this.ctxMenu, this.zoomMenu, this.moreToolsMenu, this.fileInput);
     // A drawing in progress takes every click in the window as the next
     // stroke; end it first when the tabs, toolbar or menu are used. This
     // listens on the window before pdf.js does, so it runs first.
-    const outside = [this.tabbar, toolbar, this.side, this.scalebar, this.formmodebar, this.checkocrbar, this.splitBar, this.menu, this.ctxMenu];
+    const outside = [this.tabbar, toolbar, this.side, this.scalebar, this.formmodebar, this.checkocrbar, this.splitBar, this.cropbar, this.menu, this.ctxMenu];
     window.addEventListener("pointerdown", (e) => {
       if (!outside.some((area) => area.contains(e.target))) return;
       this._finishEditing();
@@ -453,6 +455,8 @@ export class Reader extends Tabs(CheckOcrMode(FormMode(Finding(Signing(Annotatin
       this.#menuItem("fillable", "Prepare form (add or edit form fields)", () => this.openFormMode()),
       this.#menuItem("fillable", "Make it fillable (find the form's fields)", () => this.makeFillable()),
       this.#menuItem("edittext", "Check OCR (fix unsure words)", () => this.openCheckOcr()),
+      this.#menuItem("rect", "Crop pages visually…", () => this.openCropMode(), this.cropMode),
+      this.#menuItem("print", "Print preflight check…", () => this.checkPreflight()),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
       this.#menuItem("access", "Check accessibility", () => this.checkAccessibility()),  // -- accessibility --
       this.#menuItem("x", "Close this document", () => this.closeTab()),
@@ -769,6 +773,7 @@ export class Reader extends Tabs(CheckOcrMode(FormMode(Finding(Signing(Annotatin
     }
     if (e.key === "Escape" && this.markupMode === "IMAGES" && this.pickedImage) { this._pickImage(null); return; }
     if (e.key === "Escape" && this.editMode && this.editMode !== "NONE") { this._setEditMode("NONE"); return; }
+    if (e.key === "Escape" && this.cropMode) { this.closeCropMode(); return; }
     if (e.key === "Escape" && this.checkOcrMode) {
       if (this._ocrPop) this._closeCheckOcrPop();
       else this.closeCheckOcr();
@@ -1003,6 +1008,68 @@ export class Reader extends Tabs(CheckOcrMode(FormMode(Finding(Signing(Annotatin
   }
   // -- end of accessibility --
 
+  /** Print preflight check: inspect DPI, fonts, colour spaces, bleed & hairlines,
+   *  with click-to-jump and one-click safe fixes. */
+  async checkPreflight() {
+    const tab = this.activeTab;
+    if (!tab || !this.doc) return;
+    this._busy(true);
+    let data;
+    try {
+      const bytes = await this._currentBytes();
+      const form = new FormData();
+      form.append("file", new Blob([bytes], { type: "application/pdf" }), tab.name);
+      if (this.password) form.append("password", this.password);
+      const res = await fetch("/api/preflight/check", {
+        method: "POST", headers: { "X-Pdfm-Token": this.token }, body: form,
+      });
+      data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+    } catch (e) {
+      this._busy(false);
+      this.toast("Print preflight failed: " + (e?.message || e));
+      return;
+    }
+    this._busy(false);
+    const s = data.summary || { errors: 0, warnings: 0 };
+    const head = el("p", { class: "rd-preflight-summary" },
+      data.passed ? "Ready to print" : `${s.errors} print error${s.errors === 1 ? "" : "s"} found`,
+      s.warnings ? ` · ${s.warnings} warning${s.warnings === 1 ? "" : "s"}` : "",
+      data.color_spaces?.length ? ` · Colour spaces: ${data.color_spaces.join(", ")}` : "");
+    const list = el("ul", { class: "rd-preflight-list" });
+    if (!data.issues?.length) {
+      list.append(el("li", {}, "No print issues detected."));
+    } else {
+      for (const issue of data.issues) {
+        const badge = el("span", { class: `rd-pf-sev rd-pf-${issue.severity}` }, issue.severity.toUpperCase());
+        const li = el("li", {}, badge, " ", issue.message);
+        if (issue.page) {
+          li.classList.add("rd-pf-jump");
+          li.title = "Jump to page " + issue.page;
+          li.addEventListener("click", () => this.goToPage(issue.page));
+        }
+        list.append(li);
+      }
+    }
+    const buttons = [["ok", "Close", true]];
+    const hasMixed = (data.issues || []).some((i) => i.code === "mixed_page_size");
+    const hasBleed = (data.issues || []).some((i) => i.code === "missing_bleed") || !data.page_sizes?.every((p) => p.has_bleed);
+    if (hasMixed) buttons.unshift(["normalize", "Normalize page sizes", false]);
+    if (hasBleed) buttons.unshift(["bleed", "Add 3 mm bleed + crop marks", false]);
+    const choice = await this._dialog("Print preflight", [head, list], buttons);
+    if (choice === "normalize" || choice === "bleed") {
+      await this._changeDocument(
+        (bytes, t) => this._post("/api/preflight/fix", bytes, t, {
+          normalize_size: choice === "normalize" ? "true" : "false",
+          add_bleed_mm: choice === "bleed" ? "3" : "0",
+          add_crop_marks: choice === "bleed" ? "true" : "false",
+        }),
+        { failure: "Could not apply print fix: " },
+      );
+      this.toast(choice === "normalize" ? "Normalized page sizes." : "Added 3 mm bleed and crop marks.");
+    }
+  }
+
   /** A toast that explains the tool just chosen: it goes when that tool or
    *  its bar does, or when another bar opens (see #endHint). */
   /** Open a link that leaves the document, in the browser: only web, mail
@@ -1152,6 +1219,8 @@ export class Reader extends Tabs(CheckOcrMode(FormMode(Finding(Signing(Annotatin
       { icon: "hand", label: "Hand tool", words: "drag scroll pan", run: () => this.toggleHand() },
       { icon: "full", label: "Full screen", words: "presentation", run: () => this.toggleFullscreen() },
       { icon: "print", label: "Print", keys: "Ctrl+P", run: () => this.print() },
+      { icon: "rect", label: "Crop pages visually", words: "trim margins box cut", run: () => this.openCropMode() },
+      { icon: "print", label: "Print preflight check", words: "dpi cmyk rgb bleed fonts hairline press", run: () => this.checkPreflight() },
       ...(this.activeTab?.fileId ? [{ icon: "save", label: "Save", keys: "Ctrl+S", words: "write file", run: () => this.save() }] : []),
       { icon: "save", label: this.activeTab?.fileId ? "Save as" : this._edited() ? "Save a copy with your changes" : "Save a copy",
         keys: this.activeTab?.fileId ? "Ctrl+Shift+S" : "Ctrl+S", words: "download export copy", run: () => this.saveCopy() },

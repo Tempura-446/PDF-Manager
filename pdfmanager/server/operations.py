@@ -164,7 +164,7 @@ OPERATIONS = [
                    choices=[[str(n), str(n)] for n in (2, 4, 6, 8, 9)]),
                 _f("size", "Sheet size", "select", "a4",
                    choices=[[p, p.upper() if p[0] == "a" else p.capitalize()] for p in PAPER])]},
-    {"id": "booklet", "group": "Layout", "label": "Booklet", "files": "pdf",
+    {"id": "booklet", "live": True, "group": "Layout", "label": "Booklet", "files": "pdf",
      "help": "Print a folded booklet: two pages side by side on each sheet, in the order that "
              "comes out right once the sheets are folded in the middle. Print it on both sides, "
              "flipping on the short edge, then fold the stack and staple it on the fold. Blank "
@@ -1756,7 +1756,7 @@ THUMB_WIDTH = 240
 
 # Tools whose result can be seen before running them: page 1 of it, redrawn
 # as the options change.
-PREVIEW_OPS = {"watermark", "number", "headers", "resize", "nup"}
+PREVIEW_OPS = {"watermark", "number", "headers", "resize", "nup", "booklet"}
 PREVIEW_PAGES = 40  # longer documents are previewed from their first pages only
 
 

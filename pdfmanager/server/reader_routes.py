@@ -7,7 +7,7 @@ import urllib.parse
 from http import HTTPStatus
 from pathlib import Path
 
-from pdfmanager import (comments, core, filefacts, layers, markup, outline,
+from pdfmanager import (comments, core, crop, filefacts, layers, markup, outline,
                         pageimages, textedit, viewports)
 from pdfmanager.server.common import (
     MARKUPS_IN_HEADER, RecentFiles, SavedOver, UserError,
@@ -484,5 +484,40 @@ class ReaderRoutesMixin:
             core.arrange(paths[0], out, plan, inserts=paths[1:], password=password)
             if password and core.open_pdf(paths[0], password).is_encrypted:
                 core.encrypt(out, out, password)  # stays protected
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf")
+
+    def _crop(self, body):
+        """Apply an interactive visual crop rectangle to selected pages and return the PDF."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        try:
+            rect = json.loads(fields.get("rect") or "[]")
+            if not isinstance(rect, list) or len(rect) != 4:
+                raise ValueError("rect must have 4 coordinates")
+        except ValueError as exc:
+            raise UserError(f"invalid crop rectangle: {exc}") from None
+        password = fields.get("password") or None
+        scope = fields.get("scope") or "page"
+        page_num = int(fields.get("page") or 1)
+        pages_spec = fields.get("pages") or None
+        trim_permanently = _bool(fields.get("trim_permanently"))
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "in.pdf"
+            out = Path(tmp) / "cropped.pdf"
+            src.write_bytes(uploads[0][2])
+            crop.crop_pages(
+                src,
+                out,
+                rect,
+                scope=scope,
+                page_num=page_num,
+                pages_spec=pages_spec,
+                password=password,
+                trim_permanently=trim_permanently,
+            )
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)
             data = out.read_bytes()
         return self._send(HTTPStatus.OK, data, "application/pdf")

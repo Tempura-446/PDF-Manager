@@ -1030,3 +1030,48 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
   .rd-split-open .rd-main.rd-pane-active,
   .rd-split-open .rd-split-pane.rd-pane-active { outline: 2px solid Highlight; }
 }
+
+/* ---- Interactive Visual Crop & Print Preflight (Priority #5 Phases 2-3) --- */
+.rd-cropbar { gap: 8px; }
+.rd-crop-range { width: 110px; }
+.rd-crop-readout { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.rd-crop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  cursor: crosshair;
+  background: rgba(0, 0, 0, 0.08);
+}
+.rd-crop-box {
+  position: absolute;
+  border: 2px solid var(--accent, #2b6cb0);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
+  cursor: move;
+  box-sizing: border-box;
+}
+.rd-crop-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: #fff;
+  border: 2px solid var(--accent, #2b6cb0);
+  border-radius: 2px;
+  transform: translate(-50%, -50%);
+}
+.rd-crop-h-nw { left: 0; top: 0; cursor: nwse-resize; }
+.rd-crop-h-n  { left: 50%; top: 0; cursor: ns-resize; }
+.rd-crop-h-ne { left: 100%; top: 0; cursor: nesw-resize; }
+.rd-crop-h-e  { left: 100%; top: 50%; cursor: ew-resize; }
+.rd-crop-h-se { left: 100%; top: 100%; cursor: nwse-resize; }
+.rd-crop-h-s  { left: 50%; top: 100%; cursor: ns-resize; }
+.rd-crop-h-sw { left: 0; top: 100%; cursor: nesw-resize; }
+.rd-crop-h-w  { left: 0; top: 50%; cursor: ew-resize; }
+.rd-preflight-summary { margin: 0 0 10px; font-weight: 600; }
+.rd-preflight-list { margin: 0; padding: 0; list-style: none; max-height: 280px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.rd-preflight-list li { padding: 6px 8px; border-radius: 6px; background: var(--surface-2, rgba(0, 0, 0, 0.04)); font-size: 13px; }
+.rd-preflight-list li.rd-pf-jump { cursor: pointer; }
+.rd-preflight-list li.rd-pf-jump:hover { background: var(--hover, rgba(0, 0, 0, 0.08)); }
+.rd-pf-sev { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-right: 4px; }
+.rd-pf-error { background: #fee2e2; color: #991b1b; }
+.rd-pf-warning { background: #fef3c7; color: #92400e; }
+.rd-pf-info { background: #e0f2fe; color: #075985; }

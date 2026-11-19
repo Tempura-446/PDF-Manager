@@ -855,7 +855,7 @@ async function updateLive() {
   $("live").classList.toggle("failed", !!message);
   $("live-msg").hidden = !message;
   $("live-msg").textContent = message ? `No preview: ${message}` : "";
-  $("live-cap").textContent = (op === "nup" ? "The first sheet" : "Page 1") + " as it will come out"
+  $("live-cap").textContent = (op === "nup" || op === "booklet" ? "The first sheet" : "Page 1") + " as it will come out"
     + (items.length > 1 ? ` (${file.name})` : "");
 }
 $("form").addEventListener("input", () => scheduleLive());
