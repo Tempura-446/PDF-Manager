@@ -4,6 +4,44 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.59.0
+
+Compare documents side by side in the reader, crop pages visually, run print
+preflight checks, automatically rename and file PDFs by content rules, and
+verify published releases with Ed25519 signatures.
+
+- **Side-by-side split view in the reader.** Press `Ctrl+\` (or choose **Split
+  view** from the **More** menu or command palette) to open a second pane
+  beside the active document with a draggable divider. View either a second
+  open tab or an independent second view of the same document, toggle **Sync
+  scroll** with **Lock offset** for revisions with extra cover pages, and
+  switch panes with `F6` / `Ctrl+Shift+\`.
+- **Interactive visual crop & Booklet live preview.** Choose **Crop pages
+  visually…** in the reader to drag a shaded crop rectangle with corner/edge
+  handles and live `in` / `mm` / `pt` dimensions across rotated pages, apply to
+  this/odd/even/range/all pages with optional permanent trim and full
+  Undo/Redo. The **Booklet** tool now also shows a live first-sheet preview
+  alongside **Pages per sheet (N-up)**.
+- **Print preflight check & safe fixes.** Run `pdfm preflight` or open **Print
+  preflight check…** in the reader to inspect effective image DPI, unembedded
+  or Type 3 fonts, RGB/CMYK/Spot colour spaces, transparency, page box bleed,
+  mixed page sizes, hairline strokes, and rich-black small text — with
+  click-to-jump page navigation and one-click **Normalize page sizes** and
+  **Add 3 mm bleed + crop marks** fixes.
+- **Smart auto-rename & filing rules.** Automatically rename and file PDFs
+  based on dates, text, metadata, or named regex captures using `pdfm
+  auto-file` (dry-run by default, `--apply` with collision suffixes and
+  `--undo` rollback), `/api/filing/rules` & `/api/filing/preview`, and optional
+  auto-filing on Watch folders.
+- **Ed25519 release signing support.** Added `pdfmanager/relsign.py`,
+  `packaging/release.py --keygen` / `--sign-key`, and signature verification in
+  the built-in updater so signed releases are cryptographically verified before
+  installing.
+- **Internationalization (i18n) foundation.** Added `pdfmanager/i18n.py`,
+  `locales/en.json`, `static/i18n.js`, RTL direction support, and offline
+  language pack install/remove endpoints (`/api/i18n/*`) ready for language
+  packs.
+
 ## 0.58.0
 
 Export PDFs and review comments to Markdown, read hard scans and scanned tables
