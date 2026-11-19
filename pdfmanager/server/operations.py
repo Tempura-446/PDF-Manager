@@ -531,6 +531,23 @@ OPERATIONS = [
                 _f("images", "Extract pictures to an assets folder", "check", False),
                 _f("page_breaks", "Insert page separators", "check", False),
                 _f("front_matter", "Include YAML metadata front matter", "check", False)]},
+    {"id": "translate", "group": "Convert", "label": "Translate PDF (offline)", "files": "pdf",
+     "action": "Translate",
+     "help": "Translate PDFs completely offline using an installed language pack. Numbers, dates, "
+             "URLs, emails, and reference codes (such as INV-2026-118) stay unchanged. Install "
+             "language packs under Settings → Language.",
+     "fields": [_f("source_lang", "From language", "select", "en",
+                   choices=[["en", "English"], ["zh-Hans", "简体中文 (Chinese)"],
+                            ["es", "Español (Spanish)"], ["fr", "Français (French)"],
+                            ["de", "Deutsch (German)"]]),
+                _f("target_lang", "To language", "select", "es",
+                   choices=[["es", "Español (Spanish)"], ["fr", "Français (French)"],
+                            ["de", "Deutsch (German)"], ["zh-Hans", "简体中文 (Chinese)"],
+                            ["en", "English"]]),
+                _f("mode", "Output layout", "select", "side-by-side",
+                   choices=[["side-by-side", "Side by side (original + translation PDF)"],
+                            ["text", "Plain text (.txt)"],
+                            ["in-place", "Translated copy, same layout (PDF)"]])]},
     # Quantities: a schedule of what was measured on a drawing (pdfmanager/quantities.py)
     {"id": "quantities", "group": "Convert", "label": "Quantities from a drawing", "files": "pdf",
      "help": "A schedule (takeoff) of everything measured on a drawing: the dimensions and measurements "
@@ -1110,6 +1127,25 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         if made["textless"]:
             summary += " (no text found — run OCR first)"
         notes.append(f"{src.name}: {summary}")
+    elif op == "translate":
+        from pdfmanager import translate
+
+        source_lang = opts.get("source_lang") or "en"
+        target_lang = opts.get("target_lang") or "es"
+        mode = opts.get("mode") or "side-by-side"
+        if mode not in translate.MODES:
+            raise UserError(f"unknown translation layout {mode!r}")
+        ext = ".txt" if mode == "text" else ".pdf"
+        out = out_dir / f"{src.stem}_{target_lang}{ext}"
+        made = translate.translate_pdf(
+            src, out, source_lang, target_lang,
+            mode=mode,
+            password=password,
+        )
+        notes.append(
+            f"{src.name}: translated {made['pages']} page{'s' if made['pages'] != 1 else ''} "
+            f"({source_lang} → {target_lang}, {made['mode']})"
+        )
     # -- end of pptx and html --
     elif op == "from-office":
         out = out_dir / f"{src.stem}.pdf"

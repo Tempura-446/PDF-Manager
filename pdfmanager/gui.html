@@ -157,6 +157,16 @@
     <h3>Appearance</h3>
     <label class="dlg-field inline"><span>Theme</span>
       <select id="theme" autofocus><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+    <h3>Language &amp; offline packs</h3>
+    <label class="dlg-field inline"><span>Interface language</span>
+      <select id="set-language"><option value="en">English</option></select></label>
+    <p class="dlg-hint">Starter locales are automatic translations. Language packs also carry offline translation, OCR, and search-by-meaning models.</p>
+    <div class="dlg-row" style="display:flex;gap:8px;align-items:center;margin:6px 0;">
+      <button type="button" class="btn secondary" id="set-pack-install">Install language pack (.zip)…</button>
+      <input type="file" id="set-pack-file" accept=".zip" hidden>
+    </div>
+    <ul class="watch-list" id="set-packs-list" aria-label="Installed language packs"></ul>
+    <p class="dlg-status" id="lang-status" aria-live="polite"></p>
     <h3>OCR (Make searchable)</h3>
     <label class="dlg-field"><span>Reading accuracy</span>
       <select id="set-ocr-quality">
@@ -283,6 +293,7 @@
   </form>
 </dialog>
 
+<script src="/static/i18n.js"></script>
 <script src="/static/app-core.js"></script>
 <script src="/static/tools.js"></script>
 <script src="/static/scan-ui.js"></script>
