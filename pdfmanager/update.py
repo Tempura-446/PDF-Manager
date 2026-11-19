@@ -152,6 +152,19 @@ def latest_version():
     return found.group(1), branch
 
 
+def release_asset_candidates(version, platform_name=None):
+    """Preferred release asset names for the current OS, in priority order.
+    Falls back to ``ZPDF-<version>-windows.zip`` (the source/wheel bundle used by
+    pip installs) when platform-specific binaries aren't attached to a release."""
+    plat = platform_name or sys.platform
+    win = f"ZPDF-{version}-windows.zip"
+    if plat == "darwin":
+        return [f"ZPDF-{version}-macos.dmg", f"ZPDF-{version}-macos.zip", win]
+    if plat.startswith("linux"):
+        return [f"ZPDF-{version}-linux.zip", f"zpdf_{version}_amd64.deb", win]
+    return [win]
+
+
 def _latest_release():
     with _open(_request(f"/repos/{_repo()}/releases/latest")) as res:
         release = json.load(res)
@@ -159,10 +172,12 @@ def _latest_release():
     if not parse_version(version):
         raise core.PdfManagerError("the newest release on GitHub has no version number")
     assets = {a.get("name"): a.get("url") for a in release.get("assets") or ()}
-    name = f"ZPDF-{version}-windows.zip"
-    if not assets.get(name) or not assets.get(name + ".sha256"):
-        raise core.PdfManagerError(f"the release of version {version} on GitHub is missing {name} or its checksum")
-    return version, {"zip": assets[name], "sha256": assets[name + ".sha256"], "sig": assets.get(name + ".sig")}
+    candidates = release_asset_candidates(version)
+    chosen = next((n for n in candidates if assets.get(n) and assets.get(n + ".sha256")), None)
+    if not chosen:
+        expected = candidates[0]
+        raise core.PdfManagerError(f"the release of version {version} on GitHub is missing {expected} or its checksum")
+    return version, {"zip": assets[chosen], "sha256": assets[chosen + ".sha256"], "sig": assets.get(chosen + ".sig"), "asset": chosen}
 
 
 def _cache_file():

@@ -33,6 +33,8 @@ jobs:
             label: windows
           - os: ubuntu-latest
             label: linux
+          - os: macos-latest
+            label: macos
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -70,6 +72,13 @@ jobs:
       - name: Build Linux .deb package
         if: runner.os == 'Linux'
         run: python packaging/build_linux.py --deb
+      - name: Patch Info.plist, self-test, and build macOS .dmg
+        if: runner.os == 'macOS'
+        run: |
+          python packaging/build_macos.py
+          "dist/ZPDF.app/Contents/MacOS/ZPDF" --self-test "$RUNNER_TEMP/selftest.txt" || status=$?
+          cat "$RUNNER_TEMP/selftest.txt"
+          exit ${status:-0}
       # On pull requests the zip is only a by-product of checking the build, so
       # keep it briefly and don't fail the check if the storage quota is full.
       - uses: actions/upload-artifact@v7
@@ -80,5 +89,7 @@ jobs:
             dist/ZPDF-${{ matrix.label }}.zip
             dist/zpdf_*.deb
             dist/zpdf_*.deb.sha256
+            dist/ZPDF-*-macos.dmg
+            dist/ZPDF-*-macos.dmg.sha256
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 3 || 90 }}

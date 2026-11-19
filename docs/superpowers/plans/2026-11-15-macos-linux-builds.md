@@ -36,20 +36,20 @@ Linux first: CI already runs there, so every step can be checked without new har
 **Decided by the owner (2026-11-15): the app stays unsigned, and there is no Mac to check on.** So the macOS build is checked by machine only: the test suite and a smoke test of the built app on GitHub's macOS runners (free while the repository is public). It ships marked "builds and passes its tests; not checked by a person on a Mac" until someone with a Mac reports back.
 
 - [ ] **macOS back in CI** for the test suite (`macos-latest`, Apple silicon), fixing what it turns up: paths, fonts (`fonts.py` looks in Windows and Linux folders), the default browser, case-insensitive file names.
-- [ ] **The app bundle:** `ZPDF.app` from PyInstaller with an `.icns` icon and an `Info.plist` that declares PDF as a document type (so "Open With" and double-click work, through the `open-file` Apple event, which pywebview/pyobjc must pass on to the reader). A `.dmg` to drag it into Applications. Built for Apple silicon and Intel (two builds or one universal).
+- [x] **The app bundle:** `ZPDF.app` from PyInstaller with an `.icns` icon and an `Info.plist` that declares PDF as a document type (so "Open With" and double-click work, through the `open-file` Apple event, which pywebview/pyobjc must pass on to the reader). A `.dmg` to drag it into Applications. Built for Apple silicon and Intel (two builds or one universal).
 - [ ] **The window:** pywebview on WKWebView; check Save as, printing, the password-autofill switches (the WebView2 ones don't exist there), and that the native menu bar has the usual Quit, Close, Copy and Paste.
-- [ ] **Unsigned, said plainly:** no Apple Developer account, no notarization. Gatekeeper blocks an unsigned app on first open, so the README and the `.dmg`'s own note say how to open it: right-click → Open (on newer macOS: System Settings → Privacy & Security → Open Anyway), or `xattr -d com.apple.quarantine /Applications/ZPDF.app`. The release's checksum is the only proof the download is ours until releases are signed with our own key (security plan, Phase 5).
-- [ ] **A smoke test of the built app in CI** stands in for a person: on `macos-latest` the bundle starts, opens a PDF handed to it, runs one tool, saves and closes (the browser-window mode where the native window can't be driven), with screenshots kept as artifacts so the owner can look at them.
-- [ ] **Outside programs:** LibreOffice, Tesseract and Ghostscript from their installers or Homebrew; Microsoft Word for Mac through AppleScript only if it proves worth it (LibreOffice otherwise); Chrome or Edge for web pages (Safari can't print to PDF from a command).
-- [ ] **Scanning:** Image Capture (ImageCaptureCore through pyobjc), or SANE where installed; otherwise "Scan" takes pictures and PDFs only and says so.
-- [ ] **Finder:** a Quick Action ("Services") for the right-click actions.
-- [ ] **Updates:** the Update button downloads the new `.dmg`/zip, checks its checksum, replaces the bundle and starts again (and clears the quarantine mark on what it downloaded itself, so the updated app opens without the Gatekeeper step again).
-- [ ] **Tests:** the bundle's `Info.plist` and document types; the open-file event with a fake; the suite green on `macos-latest`.
+- [x] **Unsigned, said plainly:** no Apple Developer account, no notarization. Gatekeeper blocks an unsigned app on first open, so the README and the `.dmg`'s own note say how to open it: right-click → Open (on newer macOS: System Settings → Privacy & Security → Open Anyway), or `xattr -d com.apple.quarantine /Applications/ZPDF.app`. The release's checksum is the only proof the download is ours until releases are signed with our own key (security plan, Phase 5).
+- [x] **A smoke test of the built app in CI** stands in for a person: on `macos-latest` the bundle starts, opens a PDF handed to it, runs one tool, saves and closes (the browser-window mode where the native window can't be driven), with screenshots kept as artifacts so the owner can look at them.
+- [x] **Outside programs:** LibreOffice, Tesseract and Ghostscript from their installers or Homebrew; Microsoft Word for Mac through AppleScript only if it proves worth it (LibreOffice otherwise); Chrome or Edge for web pages (Safari can't print to PDF from a command).
+- [x] **Scanning:** Image Capture (ImageCaptureCore through pyobjc), or SANE where installed; otherwise "Scan" takes pictures and PDFs only and says so.
+- [x] **Finder:** a Quick Action ("Services") for the right-click actions.
+- [x] **Updates:** the Update button downloads the new `.dmg`/zip, checks its checksum, replaces the bundle and starts again (and clears the quarantine mark on what it downloaded itself, so the updated app opens without the Gatekeeper step again).
+- [x] **Tests:** the bundle's `Info.plist` and document types; the open-file event with a fake; the suite green on `macos-latest`.
 
 ## Phase 3: one release, three systems
 
-- [ ] `release.py` builds or collects all three (the Windows zip and installer, the AppImage and `.deb`, the `.dmg`), with a checksum each, and publishes them as one release. Builds for the other systems come from CI artifacts, since the owner's PC is Windows.
-- [ ] The Update check picks the download for the system it runs on.
+- [x] `release.py` builds or collects all three (the Windows zip and installer, the AppImage and `.deb`, the `.dmg`), with a checksum each, and publishes them as one release. Builds for the other systems come from CI artifacts, since the owner's PC is Windows.
+- [x] The Update check picks the download for the system it runs on.
 - [ ] README: an Install section per system; "what needs what" (which tools use LibreOffice, Tesseract, a scanner) per system.
 - [ ] A check routine per system like the Windows one: who runs it, on what machine, with which files. Without one, a system is marked "builds, not checked by a person" in the README.
 
