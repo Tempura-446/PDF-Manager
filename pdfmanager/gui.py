@@ -582,6 +582,19 @@ OPERATIONS = [
                             ["Letter", "Letter"], ["Tabloid", "Tabloid"], ["Arch D", "Arch D"]]),
                 _f("scale", "Plot scale", "text", "fit", placeholder="fit or 1:100"),
                 _f("monochrome", "Monochrome (black lines)", "checkbox", False)]},
+    {"id": "sheet-sets", "group": "Convert", "label": "Sheet sets", "files": "pdf",
+     "help": "Work with multi-sheet architectural or engineering drawing sets: split into "
+             "one file per sheet named from its title block, label pages with sheet numbers, "
+             "or link detail references (e.g. 2/A-102, SEE A-201) to the target sheet.",
+     "fields": [_f("action", "Action", "select", "split",
+                   choices=[["split", "Split into sheets (one PDF per sheet)"],
+                            ["name", "Name pages (set page labels to sheet numbers)"],
+                            ["link", "Link detail references between sheets"]])]},
+    {"id": "compare-sets", "group": "Convert", "label": "Compare sheet sets", "files": "pdf2", "min": 2, "max": 2,
+     "help": "Compare two revisions of a drawing set sheet by sheet, matched by sheet number "
+             "rather than page order. Lists changed, added and removed sheets and makes a "
+             "visual overlay diff PDF of the changed sheets.",
+     "fields": []},
     {"id": "recipe", "group": "Automate", "label": "Recipes", "files": "pdf", "panel": "recipe",
      "help": "Run several tools one after another, e.g. clean up scans → OCR → compress. "
              "Save a recipe to use it again here, from the command line or in a watch folder.",
@@ -1128,6 +1141,24 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             monochrome=_bool(opts.get("monochrome")),
         )
         notes.append(f"{src.name}: {len(made['layers'])} layers, {made['paper']}, {made['scale']}")
+    elif op == "sheet-sets":
+        from pdfmanager import sheetsets
+
+        action = (opts.get("action") or "split").strip()
+        if action == "split":
+            made = sheetsets.split_sheets(src, out_dir, password=password)
+            notes.append(f"{src.name}: split into {len(made)} sheet{'s' if len(made) != 1 else ''}")
+            return [m["output"] for m in made]
+        if action == "name":
+            out = out_dir / f"{src.stem}_named.pdf"
+            made = sheetsets.name_pages(src, out, password=password)
+            notes.append(f"{src.name}: labelled {len(made['sheets'])} pages")
+        elif action == "link":
+            out = out_dir / f"{src.stem}_linked.pdf"
+            made = sheetsets.link_sheets(src, out, password=password)
+            notes.append(f"{src.name}: added {made['links']} cross-sheet link{'s' if made['links'] != 1 else ''}")
+        else:
+            raise UserError(f"unknown sheet-set action {action!r}")
     else:
         raise UserError(f"unknown operation {op!r}")
     return [out]
@@ -1493,6 +1524,22 @@ def _run_files(op, files, opts, password, extra_files, work, notes):
         notes.append(f"{len(changed)} page{'s' if len(changed) != 1 else ''} with differences"
                      if changed else "No differences found.")
         outputs = [out]
+    elif op == "compare-sets":
+        from pdfmanager import sheetsets
+
+        if len(files) != 2:
+            raise UserError("add exactly two drawing sets: the older version, then the newer version")
+        out = out_dir / f"{files[0].stem}_vs_{files[1].stem}_sheets.pdf"
+        res = sheetsets.compare_sets(files[0], files[1], out_pdf=out, password_v1=password, password_v2=password)
+        parts = []
+        if res["changed"]:
+            parts.append("Changed: " + ", ".join(x["sheet"] for x in res["changed"]))
+        if res["added"]:
+            parts.append("Added: " + ", ".join(x["sheet"] for x in res["added"]))
+        if res["removed"]:
+            parts.append("Removed: " + ", ".join(x["sheet"] for x in res["removed"]))
+        notes.append("; ".join(parts) if parts else "No differences found between sheet sets.")
+        outputs = [res["output"]] if res["output"] else []
     elif op == "web" and not files:  # a web address
         address = opts["url"].strip()
         name = re.sub(r"[^\w.-]+", "-", re.sub(r"(?i)^https?://(www\.)?", "", address)).strip("-.")[:60]

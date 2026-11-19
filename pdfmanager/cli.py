@@ -644,6 +644,39 @@ def cmd_from_dxf(a):
         print(f"Wrote {out}  ({len(made['layers'])} layers, {made['paper']}, {made['scale']})")
 
 
+def run_sheet_split(a, src, out, pw):
+    from pdfmanager import sheetsets
+
+    made = sheetsets.split_sheets(src, out, password=pw)
+    return f"{out}  ({len(made)} sheet{'s' if len(made) != 1 else ''})"
+
+
+def run_sheet_name(a, src, out, pw):
+    from pdfmanager import sheetsets
+
+    made = sheetsets.name_pages(src, out, password=pw)
+    return f"{out}  ({len(made['sheets'])} pages labelled)"
+
+
+def run_sheet_link(a, src, out, pw):
+    from pdfmanager import sheetsets
+
+    made = sheetsets.link_sheets(src, out, password=pw)
+    return f"{out}  ({made['links']} cross-sheet link{'s' if made['links'] != 1 else ''})"
+
+
+def cmd_sheet_compare(a):
+    from pdfmanager import sheetsets
+
+    res = sheetsets.compare_sets(a.old, a.new, out_pdf=a.output, password_v1=a.password, password_v2=a.password)
+    print(f"Changed ({len(res['changed'])}): " + (", ".join(x["sheet"] for x in res["changed"]) or "none"))
+    print(f"Added ({len(res['added'])}): " + (", ".join(x["sheet"] for x in res["added"]) or "none"))
+    print(f"Removed ({len(res['removed'])}): " + (", ".join(x["sheet"] for x in res["removed"]) or "none"))
+    print(f"Unchanged ({len(res['unchanged'])})")
+    if res["output"]:
+        print(f"Wrote overlay diff to {res['output']}")
+
+
 def run_quantities(a, src, out, pw):
     from pdfmanager import quantities
 
@@ -903,6 +936,7 @@ OUTPUTS.update({"to-pptx": (None, "pptx"), "to-html": (None, "html")})
 # -- end of pptx and html --
 OUTPUTS["tag"] = ("tagged", "pdf")  # -- accessibility --
 OUTPUTS["to-dxf"] = (None, "dxf")  # -- drawing tools --
+OUTPUTS.update({"sheet-split": ("sheets", "dir"), "sheet-name": ("named", "pdf"), "sheet-link": ("linked", "pdf")})
 
 
 def _is_batch(patterns, inputs):
@@ -1819,6 +1853,20 @@ def build_parser():
     sp.add_argument("--paper", default="A3", help="paper size (A4, A3, A2, A1, A0, Letter, Tabloid, Arch D)")
     sp.add_argument("--scale", default="fit", help="plot scale: fit, 1:50, 1:100, etc. (default: fit)")
     sp.add_argument("--monochrome", action="store_true", help="draw all lines and text in black")
+
+    per_file("sheet-split", run_sheet_split,
+             "split a drawing set into one PDF per sheet named from its title block",
+             out_help="output folder (default: <input>_sheets)")
+    per_file("sheet-name", run_sheet_name,
+             "set PDF page labels from each sheet's title-block number (e.g. A-101)")
+    per_file("sheet-link", run_sheet_link,
+             "add clickable links from detail/sheet references (e.g. 2/A-102, SEE A-201) to the target sheet")
+    sp = other("sheet-compare", cmd_sheet_compare,
+               "compare two versions of a drawing set sheet by sheet, matched by sheet number")
+    sp.add_argument("old", help="first (older) drawing set PDF")
+    sp.add_argument("new", help="second (newer) drawing set PDF")
+    sp.add_argument("-o", "--output", help="optional overlay diff PDF of changed sheets")
+    sp.add_argument("-P", "--password", help="password if the PDFs are encrypted")
 
     sp = per_file("comments", run_comments,
                   "list the comments in PDFs, or make a summary (PDF), a spreadsheet (CSV) or an "
