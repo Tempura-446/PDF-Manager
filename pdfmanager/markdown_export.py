@@ -155,31 +155,39 @@ def _format_table(rows):
     return "\n".join(out)
 
 
-def _front_matter_block(path, password, title, page_count):
+def _read_metadata(path, password):
     reader = core.open_pdf(path, password)
     meta = reader.metadata or {}
-    doc_title = (meta.get("/Title") or "").strip() or title
-    author = (meta.get("/Author") or "").strip()
-    subject = (meta.get("/Subject") or "").strip()
+    return {
+        "title": (meta.get("/Title") or "").strip(),
+        "author": (meta.get("/Author") or "").strip(),
+        "subject": (meta.get("/Subject") or "").strip(),
+    }
+
+
+def _front_matter_block(source_name, meta, title, page_count):
+    doc_title = (meta or {}).get("title") or title
+    author = (meta or {}).get("author") or ""
+    subject = (meta or {}).get("subject") or ""
     lines = ["---", f"title: {_yaml_quote(doc_title)}"]
     if author:
         lines.append(f"author: {_yaml_quote(author)}")
     if subject:
         lines.append(f"subject: {_yaml_quote(subject)}")
     lines.append(f"pages: {page_count}")
-    lines.append(f"source: {_yaml_quote(Path(path).name)}")
+    lines.append(f"source: {_yaml_quote(source_name)}")
     lines.append("---")
     return "\n".join(lines)
 
 
-def _render_markdown(path, pages_items, title, password=None, output=None,
+def _render_markdown(source_name, pages_items, title, meta=None, output=None,
                      extract_images=False, page_breaks=False, front_matter=False):
     blocks = []
     stats = {"pages": len(pages_items), "headings": 0, "tables": 0, "images": 0,
              "blocks": 0, "assets_dir": None}
 
     if front_matter:
-        blocks.append(_front_matter_block(path, password, title, len(pages_items)))
+        blocks.append(_front_matter_block(source_name, meta, title, len(pages_items)))
 
     out_path = Path(output) if output is not None else None
     assets_dir = (out_path.parent / f"{out_path.stem}_assets") if (extract_images and out_path) else None
@@ -265,7 +273,8 @@ def _render_markdown(path, pages_items, title, password=None, output=None,
 def to_markdown_text(path, password=None, pages=None, page_breaks=False, front_matter=False):
     """Convert a PDF to a Markdown string without writing to disk."""
     title, pages_items = webpage.flow(path, password=password, pages=pages)
-    text, _ = _render_markdown(path, pages_items, title, password=password,
+    meta = _read_metadata(path, password) if front_matter else None
+    text, _ = _render_markdown(Path(path).name, pages_items, title, meta=meta,
                                extract_images=False, page_breaks=page_breaks,
                                front_matter=front_matter)
     return text
@@ -281,7 +290,8 @@ def pdf_to_markdown(path, output, password=None, pages=None, extract_images=Fals
     """
     out = Path(output)
     title, pages_items = webpage.flow(path, password=password, pages=pages)
-    text, stats = _render_markdown(path, pages_items, title, password=password,
+    meta = _read_metadata(path, password) if front_matter else None
+    text, stats = _render_markdown(Path(path).name, pages_items, title, meta=meta,
                                    output=out, extract_images=extract_images,
                                    page_breaks=page_breaks, front_matter=front_matter)
     out.parent.mkdir(parents=True, exist_ok=True)
