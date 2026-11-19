@@ -90,18 +90,18 @@
 ### Phase 2 (release B): hard pages
 
 **Task 2.1: cleaning the picture before reading** (for reading only; the page keeps its image)
-- [ ] Per page, measure contrast, background evenness and stroke width, and apply only what the page needs: background flattening (uneven light, coloured paper), contrast stretch for faint print, light denoising for photocopy speckle.
-- [ ] Small print: when the median text height is under about 20 px at 300 dpi, read from a 450 or 600 dpi render of those regions.
-- [ ] Phone photos: find the page's corners and straighten the perspective (`pagephoto.py` already does this for Scan); mild dewarping of curved lines by fitting each text line's baseline.
-- [ ] Each step is kept only if the holdout score for its category improves and no other category gets worse.
+- [x] Per page, measure contrast, background evenness and stroke width, and apply only what the page needs: background flattening (uneven light, coloured paper), contrast stretch for faint print, light denoising for photocopy speckle.
+- [x] Small print: when the median text height is under about 20 px at 300 dpi, read from a 450 or 600 dpi render of those regions.
+- [x] Phone photos: find the page's corners and straighten the perspective (`pagephoto.py` already does this for Scan); mild dewarping of curved lines by fitting each text line's baseline.
+- [x] Each step is kept only if the holdout score for its category improves and no other category gets worse.
 
 **Task 2.2: two readings, the better kept**
-- [ ] When a line's confidence is low, read it again from the cleaned or enlarged picture and keep the reading with the higher confidence; never both.
-- [ ] Test: the faint and small-print holdout pages meet the target.
+- [x] When a line's confidence is low, read it again from the cleaned or enlarged picture and keep the reading with the higher confidence; never both.
+- [x] Test: the faint and small-print holdout pages meet the target.
 
 **Task 2.3: a "Best accuracy" choice**
-- [ ] The larger PP-OCR models as an optional download ("Best accuracy, slower"), next to the built-in one, chosen in the tool and in Settings. Fetched once and checked, as the script models are.
-- [ ] Test: with the model faked, the choice reaches the engine; the scorer reports both.
+- [x] The larger PP-OCR models as an optional download ("Best accuracy, slower"), next to the built-in one, chosen in the tool and in Settings. Fetched once and checked, as the script models are.
+- [x] Test: with the model faked, the choice reaches the engine; the scorer reports both.
 
 ### Phase 3 (release C): saying what it wasn't sure of, and fixing it
 

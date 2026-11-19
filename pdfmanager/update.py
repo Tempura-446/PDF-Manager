@@ -70,7 +70,8 @@ def public_settings():
     """Settings for the page (never the token itself)."""
     data = settings()
     return {"repo": data.get("update_repo") or RELEASES, "token_set": bool(data.get("github_token")),
-            "check": data.get("check_updates", True), "how": how_installed()}
+            "check": data.get("check_updates", True), "how": how_installed(),
+            "ocr_quality": data.get("ocr_quality") or "standard"}
 
 
 # ---- checking -------------------------------------------------------------------------

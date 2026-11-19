@@ -315,7 +315,7 @@ def run_number(a, src, out, pw):
 
 def run_ocr(a, src, out, pw):
     return core.ocr(src, out, language=a.language, force=a.force, deskew=a.deskew, password=pw,
-                    engine=a.engine, rotate=not a.keep_orientation)
+                    engine=a.engine, rotate=not a.keep_orientation, quality=a.quality)
 
 
 def run_clean(a, src, out, pw):
@@ -1602,6 +1602,9 @@ def build_parser():
     sp.add_argument("--engine", choices=ocr.ENGINES, default="auto",
                     help="auto (default: the built-in engine when installed, else Tesseract), "
                          "builtin or tesseract")
+    sp.add_argument("--quality", choices=ocr.QUALITIES, default=None,
+                    help="standard (built-in, fast) or best (larger models, fetched once, slower); "
+                         "default: Settings")
     sp.add_argument("--language", default="eng",
                     help="language(s) as Tesseract codes, e.g. eng+deu; the built-in engine reads "
                          "English, European languages, Chinese and Japanese as they are, and "

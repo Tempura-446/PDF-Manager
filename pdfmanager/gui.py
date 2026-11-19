@@ -240,6 +240,11 @@ OPERATIONS = [
      "fields": [_f("engine", "Engine", "select", "auto",
                    choices=[["auto", "Automatic"], ["builtin", "Built-in"], ["tesseract", "Tesseract"]],
                    hint="Automatic: the built-in engine when it's installed, else Tesseract."),
+                _f("quality", "Accuracy", "select", "",
+                   choices=[["", "Use Settings default"],
+                            ["standard", "Standard (fast)"],
+                            ["best", "Best accuracy (slower)"]],
+                   hint="Best accuracy downloads larger models once (built-in engine)."),
                 _f("language", "Language(s)", "text", "eng", placeholder="eng+rus"),
                 _f("rotate", "Turn sideways and upside-down pages upright", "check", True),
                 _f("deskew", "Straighten crooked scans", "check", False),
@@ -748,7 +753,8 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         core.ocr(src, out, language=opts.get("language") or "eng",
                  force=_bool(opts.get("force")), deskew=_bool(opts.get("deskew")),
                  password=password, engine=opts.get("engine") or "auto",
-                 rotate=_bool(opts.get("rotate", True)))
+                 rotate=_bool(opts.get("rotate", True)),
+                 quality=opts.get("quality") or None)
     elif op == "clean":
         auto_rotate = _bool(opts.get("auto_rotate"))
         if auto_rotate and not (scan.find_tesseract() or ocr.builtin_available()):
@@ -3582,6 +3588,11 @@ class Handler(BaseHTTPRequestHandler):
             changes["github_token"] = ""
         if "check" in data:
             changes["check_updates"] = None if data["check"] else False
+        if "ocr_quality" in data:
+            q = str(data["ocr_quality"] or "").strip()
+            if q not in ocr.QUALITIES:
+                raise UserError(f"unknown OCR accuracy {q!r}")
+            changes["ocr_quality"] = None if q == "standard" else q
         update.save_settings(**changes)
         if "remember" in data:
             privacy.set_remembering(bool(data["remember"]))  # (turning it off clears what's kept)

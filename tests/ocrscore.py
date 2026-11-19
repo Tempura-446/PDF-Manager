@@ -238,27 +238,22 @@ def found_words(truth, text):
     return 1 - ocrpages.missing_words(truth, text)
 
 
-def main():
+def score_quality(args, folder, quality):
     from pdfmanager import core, ocr
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--out", help="write the table here as well (Markdown)")
-    parser.add_argument("--keep", help="keep the pages in this folder")
-    parser.add_argument("--engine", default="builtin", choices=("builtin", "tesseract"))
-    args = parser.parse_args()
-    if args.engine == "builtin" and not ocr.builtin_available():
-        sys.exit("The built-in engine isn't installed (pip install rapidocr onnxruntime).")
-    folder = Path(args.keep or tempfile.mkdtemp(prefix="zpdf-ocr-"))
-    folder.mkdir(parents=True, exist_ok=True)
 
-    lines = ["| Page | Characters wrong | Words wrong | Numbers exact | Seconds |", "|---|---|---|---|---|"]
+    heading = f"### Quality: {quality}\n" if args.quality == "both" else ""
+    lines = []
+    if heading:
+        lines.append(heading)
+    lines += ["| Page | Characters wrong | Words wrong | Numbers exact | Seconds |", "|---|---|---|---|---|"]
     if args.engine == "builtin":
-        ocr.recognise(ocrpages.render("warm up"))  # the model's loading isn't any page's time
+        ocr.recognise(ocrpages.render("warm up"), quality=quality)  # the model's loading isn't any page's time
     for kind, image, truth in pages():
         if args.keep:
             image.save(folder / (re.sub(r"\W+", "-", kind.lower()).strip("-") + ".png"))
         t0 = time.perf_counter()
         if args.engine == "builtin":
-            text = ocr.text_of(ocr.recognise(image))
+            text = ocr.text_of(ocr.recognise(image, quality=quality))
         else:
             src = ocrpages.scan_pdf(image, folder / "page.pdf")
             ocr.run(src, folder / "page-out.pdf", engine="tesseract")
@@ -271,16 +266,33 @@ def main():
     lines += ["", "| Through the tool | Its words found afterwards | Note |", "|---|---|---|"]
     for kind, (src, truth) in (("Scan with a rubbish text layer", garbage_layer(folder)),
                                ("Real text with a scanned figure", mixed(folder))):
-        out = folder / (src.stem + "-out.pdf")
+        out = folder / (src.stem + f"-{quality}-out.pdf")
         try:
-            ocr.run(src, out, engine=args.engine)
+            ocr.run(src, out, engine=args.engine, quality=quality)
             note = ""
         except core.PdfManagerError as exc:
             shutil.copyfile(src, out)
             note = str(exc)[:80]
         lines.append(f"| {kind} | {found_words(truth, pdf_text(out)):.0%} | {note} |")
+    return "\n".join(lines)
 
-    table = "\n".join(lines)
+
+def main():
+    from pdfmanager import ocr
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--out", help="write the table here as well (Markdown)")
+    parser.add_argument("--keep", help="keep the pages in this folder")
+    parser.add_argument("--engine", default="builtin", choices=("builtin", "tesseract"))
+    parser.add_argument("--quality", default="standard", choices=("standard", "best", "both"),
+                        help="built-in engine accuracy to score (default: standard)")
+    args = parser.parse_args()
+    if args.engine == "builtin" and not ocr.builtin_available():
+        sys.exit("The built-in engine isn't installed (pip install rapidocr onnxruntime).")
+    folder = Path(args.keep or tempfile.mkdtemp(prefix="zpdf-ocr-"))
+    folder.mkdir(parents=True, exist_ok=True)
+
+    qualities = ("standard", "best") if args.quality == "both" else (args.quality,)
+    table = "\n\n".join(score_quality(args, folder, q) for q in qualities)
     print(table)
     if args.out:
         Path(args.out).write_text(table + "\n", encoding="utf-8")

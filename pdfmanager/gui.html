@@ -1325,6 +1325,13 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
     <h3>Appearance</h3>
     <label class="dlg-field inline"><span>Theme</span>
       <select id="theme" autofocus><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+    <h3>OCR (Make searchable)</h3>
+    <label class="dlg-field"><span>Reading accuracy</span>
+      <select id="set-ocr-quality">
+        <option value="standard">Standard (built-in, fast)</option>
+        <option value="best">Best accuracy (larger models, fetched once, slower)</option>
+      </select></label>
+    <p class="dlg-hint">Default for Make searchable (OCR); you can still override it per file in the tool.</p>
     <div id="shell-menu" hidden>
       <h3>Right-click menu</h3>
       <label class="dlg-check"><input type="checkbox" id="set-shell-menu"> Show ZPDF in the right-click menu</label>
@@ -4638,6 +4645,7 @@ async function openSettings() {
   $("settings-version").textContent = `You have version ${$("version").textContent.replace("Version ", "")}` +
     ({ source: " (running from a source folder: update it with git pull)", frozen: " (the standalone app: download a new one to update it)" }[s.how] || ".");
   $("set-check").checked = s.check;
+  $("set-ocr-quality").value = s.ocr_quality || "standard";
   showPrivacy(s);
   showBehind(s);
   updateStatus("behind-status", "");
@@ -4825,8 +4833,14 @@ $("set-clear-history").addEventListener("click", async () => {
   } catch (err) { updateStatus("privacy-status", err.message, true); }
 });
 jsonApi("/api/settings").then((s) => { window.zpdfForgetFiles = !s.remember; }).catch(() => {});
+$("set-ocr-quality").addEventListener("change", async (e) => {
+  try {
+    await jsonApi("/api/settings", { ocr_quality: e.target.value });
+  } catch (err) { updateStatus("set-status", err.message, true); }
+});
 async function saveSettings() {
-  const data = { check: $("set-check").checked, repo: $("set-repo").value.trim() };
+  const data = { check: $("set-check").checked, repo: $("set-repo").value.trim(),
+                 ocr_quality: $("set-ocr-quality").value };
   if ($("set-token").value.trim()) data.token = $("set-token").value.trim();
   const s = await jsonApi("/api/settings", data);
   $("set-token").value = "";
