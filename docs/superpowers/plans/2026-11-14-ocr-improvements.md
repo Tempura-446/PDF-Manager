@@ -115,9 +115,9 @@
 
 ### Phase 4 (release D): tables and forms
 
-- [ ] Find ruled and unruled tables on a scanned page (the layout model and `tables.py` already find them on text pages), and read cell by cell, so a column of numbers stays a column. Digits get a digits-only second reading when a cell looks numeric (O/0, l/1, S/5).
-- [ ] The text layer keeps cell order (row by row), so Copy and PDF to Excel work on scans.
-- [ ] Test: the holdout's table of numbers exports to Excel with every number exact.
+- [x] Find ruled and unruled tables on a scanned page (the layout model and `tables.py` already find them on text pages), and read cell by cell, so a column of numbers stays a column. Digits get a digits-only second reading when a cell looks numeric (O/0, l/1, S/5).
+- [x] The text layer keeps cell order (row by row), so Copy and PDF to Excel work on scans.
+- [x] Test: the holdout's table of numbers exports to Excel with every number exact.
 
 ### Phase 5 (release E): speed
 
