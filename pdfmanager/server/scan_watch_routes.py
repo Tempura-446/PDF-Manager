@@ -200,3 +200,44 @@ class ScanWatchRoutesMixin:
             if "login" in data:
                 background.set_start_at_login(bool(data["login"]))
         return self._send(HTTPStatus.OK, _settings_for_page(type(self).instance_mode))
+
+    def _i18n_get(self):
+        from pdfmanager import i18n
+
+        lang = i18n.get_language()
+        effective = i18n.DEFAULT_LANG if lang == "auto" else lang
+        return self._send(HTTPStatus.OK, {
+            "setting": lang,
+            "lang": effective,
+            "dir": i18n.language_dir(effective),
+            "strings": i18n.load_catalog(effective),
+            "packs": i18n.list_installed_packs(),
+        })
+
+    def _i18n_set_language(self, body):
+        from pdfmanager import i18n
+
+        data = json.loads(body or b"{}")
+        i18n.set_language(data.get("language") or i18n.DEFAULT_LANG)
+        return self._i18n_get()
+
+    def _i18n_pack_install(self, body):
+        import tempfile
+        from pathlib import Path
+        from pdfmanager import i18n
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("choose a language pack .zip file to install")
+        with tempfile.TemporaryDirectory(prefix="pdfm-lang-") as tmp:
+            pack_zip = Path(tmp) / "pack.zip"
+            pack_zip.write_bytes(uploads[0][2])
+            installed = i18n.install_pack_from_zip(pack_zip, expected_sha256=fields.get("sha256") or None)
+        return self._send(HTTPStatus.OK, {"installed": installed, "packs": i18n.list_installed_packs()})
+
+    def _i18n_pack_remove(self, body):
+        from pdfmanager import i18n
+
+        data = json.loads(body or b"{}")
+        res = i18n.remove_pack(data.get("code") or "")
+        return self._send(HTTPStatus.OK, {**res, "packs": i18n.list_installed_packs(), "lang": i18n.get_language()})
