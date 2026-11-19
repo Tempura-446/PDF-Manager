@@ -188,7 +188,7 @@ def detect_install_kind(exe_path=None, env=None):
     if environ.get("APPIMAGE"):
         return "appimage"
     exe = Path(exe_path or sys.executable)
-    exe_str = str(exe)
+    exe_str = exe.as_posix()
     if exe_str.startswith(("/usr/bin/", "/opt/zpdf/")):
         return "deb"
     if getattr(sys, "frozen", False):
