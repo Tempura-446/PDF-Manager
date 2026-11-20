@@ -4,6 +4,31 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.60.2
+
+Enterprise digital signatures (PAdES baseline levels, DocMDP certifying
+signatures, FieldMDP form-field locking, detached `.p7s` signatures, and ETSI
+XML/PDF validation reports), Smart Filing Rules GUI in Settings & Watch
+folders, startup UI language auto-loading, and automated GUI wiring checks.
+
+- **PAdES baseline levels, DocMDP & FieldMDP (`certsign.py`).** Choose PAdES
+  level `B-B`, `B-T`, `B-LT`, or `B-LTA` (ETSI EN 319 142) when signing with a
+  Digital ID, certify documents with DocMDP permissions (`no-changes`,
+  `fill-and-sign`, or `fill-sign-comment`), lock form fields upon signing via
+  FieldMDP (`lock_fields`), create and verify detached CMS/CAdES `.p7s`
+  signatures (`sign_detached()` / `verify_detached()`), and export signature
+  validation reports as plain text (`.txt`), formatted PDF (`.pdf`), or ETSI
+  XML (`.xml`).
+- **Smart Filing Rules in Settings & Watch folders.** Added the **Auto-rename &
+  file results using Smart Filing Rules** toggle when adding a Watch folder,
+  plus a **Smart filing rules** section in Settings to load starter rules
+  (Invoices, Receipts, Contracts, Statements) and preview rules against any
+  sample PDF.
+- **Startup UI language & Translate icon.** Saved interface languages now load
+  automatically at startup (`ZpdfI18n.load()`), and the **Translate PDF
+  (offline)** tool has its own dedicated icon in the sidebar and command
+  palette.
+
 ## 0.60.1
 
 Wires offline PDF translation and language pack management into the desktop
