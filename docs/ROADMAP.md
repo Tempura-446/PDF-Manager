@@ -31,7 +31,7 @@ Master index of ZPDF's completed, in-progress, and planned feature tracks. Each 
 | 6 | **Smart Auto-Rename & Filing Rules** (rule-based renaming & routing in Organize and Watch folders) | Done (Phases 1–2) | [`2026-11-18-smart-filing-rules.md`](superpowers/plans/2026-11-18-smart-filing-rules.md) |
 | 7 | **Language Packs & Offline Translation** (i18n framework, UI packs, offline PDF translation, multilingual OCR/search) | Done (Phases 1–4) | [`2026-11-13-language-packs.md`](superpowers/plans/2026-11-13-language-packs.md) |
 | 8 | **macOS & Linux Builds** (Linux AppImage/`.deb`, macOS `.app`/`.dmg`, unified 3-OS updater) | Done (Phases 1–3) | [`2026-11-15-macos-linux-builds.md`](superpowers/plans/2026-11-15-macos-linux-builds.md) |
-| 9 | **Security — Phases 6–8** (PAdES/DocMDP/FieldMDP/Windows cert store, security profiles & audit log, GPO/FIPS) | Planned | [`2026-11-14-security.md`](superpowers/plans/2026-11-14-security.md) |
+| 9 | **Security — Phases 6–8** (PAdES/DocMDP/FieldMDP/Windows cert store, security profiles & audit log, GPO/FIPS) | Phase 6 done | [`2026-11-14-security.md`](superpowers/plans/2026-11-14-security.md) |
 | 10 | **Closer to Windows — Phase 4** (Explorer thumbnail COM DLL — gated on code-signing decision) | Phases 1–3 done | [`2026-11-15-windows-integration.md`](superpowers/plans/2026-11-15-windows-integration.md) |
 
 ---
