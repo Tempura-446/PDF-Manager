@@ -4,6 +4,28 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.61.4
+
+Windows standalone double-click bundle publishing, trimmed Linux packages,
+multi-core process-pool batching, and Homebrew / winget manifest templates.
+
+- **Windows standalone release asset (`.github/workflows/build-app.yml`).**
+  Releases now publish `ZPDF-<version>-windows-standalone.zip` (+ `.sha256`)
+  alongside the lightweight Python-installer `ZPDF-<version>-windows.zip`,
+  macOS `.dmg`/`.zip`, and Linux `.deb`/`.zip`.
+- **Trimmed Linux & standalone bundles (`packaging/build_app.py`,
+  `packaging/build_linux.py`).** Excluded unused dev/test and Qt3D/Multimedia/
+  Sql/Pdf modules, pruned non-essential `qtwebengine_locales` packs on Linux,
+  and declared `Depends: libgl1, libegl1, libnss3, libxkbcommon-x11-0` in the
+  `.deb` package metadata.
+- **Multi-core batch processing (`core.py`).** Added `processes=True` mode to
+  `core.batch_run()` using a spawned `ProcessPoolExecutor` with bounded
+  concurrency, cancellation, and per-item error isolation to bypass the Python
+  GIL on CPU-bound PDF batches.
+- **Package-manager templates (`packaging/homebrew/zpdf.rb`,
+  `packaging/winget/Tempura446.ZPDF.yaml`).** Added ready-to-use Homebrew Cask
+  (macOS) and winget portable (Windows) manifest templates.
+
 ## 0.61.3
 
 First full three-platform release (Windows, Linux, and macOS) with macOS
