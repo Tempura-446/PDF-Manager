@@ -281,16 +281,24 @@ class ReaderRoutesMixin:
             src, out = Path(tmp) / "file.pdf", Path(tmp) / "edited.pdf"
             src.write_bytes(uploads[0][2])
             report = []
+            visual_report = []
             textedit.edit_text(
                 src, out, edits, password, report=report,
                 require_permanent=require_permanent, verify_visual=verify_visual,
+                visual_report=visual_report,
             )
             if password and core.open_pdf(src, password).is_encrypted:
                 core.encrypt(out, out, password)  # stays protected
             data = out.read_bytes()
-        # Which font each change got, for the reader to say so.
-        return self._send(HTTPStatus.OK, data, "application/pdf",
-                          {"X-Pdfm-Fonts": json.dumps(report, ensure_ascii=True)})
+        summary = textedit.summarize_report(report)
+        headers = {
+            "X-Pdfm-Fonts": json.dumps(report, ensure_ascii=True),
+            "X-Pdfm-Summary": json.dumps(summary, ensure_ascii=True),
+        }
+        if visual_report:
+            headers["X-Pdfm-Visual"] = json.dumps(visual_report, ensure_ascii=True)
+        # Which font each change got, plus permanent-vs-cover summary & visual verification.
+        return self._send(HTTPStatus.OK, data, "application/pdf", headers)
 
     def _text_fonts(self, body):
         """The fonts the reader's text editor offers: the document's own

@@ -329,7 +329,7 @@ def test_tool_is_in_the_app():
     op = gui.OPS["to-excel"]
     assert op["group"] == "Convert" and op["label"] == "PDF → Excel"
     fields = {f["key"]: f for f in op["fields"]}
-    assert set(fields) == {"pages", "layout", "format"}
+    assert set(fields) == {"pages", "layout", "format", "auto_ocr"}
     assert [c[0] for c in fields["layout"]["choices"]] == list(tables.LAYOUTS)
     assert [c[0] for c in fields["format"]["choices"]] == ["xlsx", "csv"]
     from pathlib import Path
