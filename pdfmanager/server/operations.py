@@ -761,7 +761,7 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         core.compress(src, out, level=opts.get("level") or "medium", password=password,
                       sharp_scans=_bool(opts.get("sharp_scans", True)), notes=notes,
                       target_mb=target_mb, stats=stats)
-        if stats.get("original_bytes"):
+        if target_mb is not None and stats.get("original_bytes"):
             notes.append(
                 f"{src.name}: {core._fmt_bytes(stats['original_bytes'])} → "
                 f"{core._fmt_bytes(stats['output_bytes'])} (-{stats['saved_pct']:.1f}%)"

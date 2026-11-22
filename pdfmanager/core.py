@@ -1301,8 +1301,8 @@ def compress(path, output, level="medium", image_quality=None, max_dpi=None, pas
         kept_original = True
         if target_bytes is not None:
             target_met = output_bytes <= target_bytes
-        if notes is not None:
-            notes.append("already optimized; kept original size")
+            if notes is not None:
+                notes.append("already optimized; kept original size")
 
     saved_bytes = max(0, original_bytes - output_bytes)
     saved_pct = round((saved_bytes / original_bytes) * 100, 1) if original_bytes else 0.0
