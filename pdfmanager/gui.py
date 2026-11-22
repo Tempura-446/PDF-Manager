@@ -209,7 +209,12 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
         if self.path.split("?", 1)[0] == "/api/bye":
             return self._bye()
         if self.path.split("?", 1)[0] == "/api/instance":
-            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return self._error(HTTPStatus.BAD_REQUEST, "invalid Content-Length")
+            if length < 0:
+                return self._error(HTTPStatus.BAD_REQUEST, "invalid Content-Length")
             if length > 1_000_000:
                 return self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "too large")
             try:
@@ -227,7 +232,12 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
             if 0 < unread <= 1_000_000:
                 self.rfile.read(unread)
             return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._error(HTTPStatus.BAD_REQUEST, "invalid Content-Length")
+        if length < 0:
+            return self._error(HTTPStatus.BAD_REQUEST, "invalid Content-Length")
         if length > MAX_UPLOAD:
             return self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                                f"upload too large ({MAX_UPLOAD // 2**20} MB max)")

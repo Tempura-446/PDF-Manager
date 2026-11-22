@@ -2005,6 +2005,10 @@ def _rasterise(writer, page, image, scale):
 
 def _looks_grey(image, sample=200):
     """Whether an RGB image is grey all over (then it is stored as grey)."""
-    small = image.resize((sample, sample))
-    r, g, b = (band.getdata() for band in small.split())
-    return all(abs(x - y) < 8 and abs(y - z) < 8 for x, y, z in zip(r, g, b))
+    import numpy as np
+
+    arr = np.asarray(image.resize((sample, sample)).convert("RGB"), dtype=np.int16)
+    return bool(
+        np.all(np.abs(arr[:, :, 0] - arr[:, :, 1]) < 8)
+        and np.all(np.abs(arr[:, :, 1] - arr[:, :, 2]) < 8)
+    )
