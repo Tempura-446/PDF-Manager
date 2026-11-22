@@ -1439,6 +1439,16 @@ GitHub's machines don't run jobs on this account. The test suite can run on
 your own Windows PC instead: see [docs/pc-runner.md](docs/pc-runner.md).
 Releases are checked locally in any case (below).
 
+## Security, redaction & known limitations
+
+- **Permanent redaction vs. visual covering:** `redact` (`method="remove"`) removes text operators from PDF content streams and Form XObjects, scrubs matching bookmark titles, annotations, form fields, and structure-tree `/ActualText`/`/Alt`, and re-checks the written file. When a page cannot be safely rewritten as vector content (or when `method="image"` is chosen), the page is rasterized one page at a time with black boxes burned into pixels. Always review the verification report (`still_in`) before sharing sensitive documents; scanned text inside embedded raster images is only removed when rasterized (`method="image"`).
+- **Text editing integrity:** `edit_text` supports `require_permanent=True` (refusing fallback to visual cover-up when underlying text operators cannot be cleanly removed) and `verify_visual=True` (rendering before/after crops to detect clipping or overlap).
+- **Digital signatures:** Modifying a signed PDF invalidates existing cryptographic signatures; both the Reader GUI and mutating CLI commands warn when a source file is digitally signed. Signature verification checks cryptographic integrity, certificate validity, and post-signing modifications via `pyhanko`; online OCSP/CRL revocation checks require explicit opt-in and network access.
+- **Encryption:** ZPDF writes AES-256 (or AES-128 when requested) via `pypdf`/`cryptography` and `pikepdf`. Passwords and private-key passphrases are scrubbed from diagnostic logs (`applog.py`) and formatted error messages.
+- **Attachments & archives:** Extracting embedded PDF attachments sanitizes filenames against path traversal (`../`, drive letters, null bytes) and rejects symlinks.
+- **Performance benchmarking:** Run `python3 packaging/benchmark.py --pages 10 100` to measure local wall-clock time, throughput, Python heap peak, and RSS across comparison, redaction, text editing, and batch workloads.
+- **Code signing:** Windows and macOS binaries are not yet Authenticode-signed or Apple-notarized (Windows SmartScreen may show a warning on first run). See [docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md) for the full release-readiness assessment and competitive matrix.
+
 ## Releasing
 
 Releases are published on
