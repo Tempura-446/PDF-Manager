@@ -298,13 +298,13 @@ class _Page:
             own = self._document_font(key, bold, italic, letters)
             if own:
                 return own, None, SAME, fonts.display_name(own.font.get_object().get("/BaseFont", family))
-            name = fonts.installed_family(family, bold, italic, letters)
-            if name:
-                return None, name, INSTALLED, fonts.display_name(fonts.file_name(name))
             if key in fonts.STANDARD_FAMILIES:
                 name = fonts.font_for(letters or "a", fonts.STANDARD_FAMILIES[key], bold, italic)
                 return None, name, STANDARD if name in BASE14_NAMES else SIMILAR, \
                     fonts.display_name(fonts.file_name(name))
+            name = fonts.installed_family(family, bold, italic, letters)
+            if name:
+                return None, name, INSTALLED, fonts.display_name(fonts.file_name(name))
         name = _similar(letters, kind, bold, italic)
         return None, name, SIMILAR, fonts.display_name(fonts.file_name(name))
 

@@ -337,7 +337,7 @@ def _arrived(path, state):
         stat = path.stat()
     except OSError:
         return written
-    return max(written, getattr(stat, "st_birthtime", stat.st_ctime))
+    return max(written, getattr(stat, "st_birthtime", 0), stat.st_ctime)
 
 
 def _documents(pending, settings, state, now):
