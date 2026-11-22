@@ -1422,7 +1422,12 @@ def encrypt(path, output, user_password, owner_password=None, password=None, per
     open password (``user_password``, which may be empty: anyone can open
     it) can do; the permissions password (``owner_password``) lifts the
     limits, so it must differ from the open password."""
-    from pdfmanager import pdfpermissions
+    from pdfmanager import pdfpermissions, policy
+
+    try:
+        policy.check_fips_algorithm("aes-256")
+    except policy.PolicyError as exc:
+        raise PdfManagerError(str(exc)) from None
 
     reader = open_pdf(path, password)
     restricted = pdfpermissions.restricts(permissions)
@@ -1478,17 +1483,9 @@ def _forget_pdfa(pdf):
         del pdf.Root.Metadata
 
 
-def decrypt(path, output, password, *, _internal=False):
-    """Remove the protection. A PDF that limits printing, copying or
-    changes needs its permissions password for this (as in Acrobat), not
-    just the password to open it."""
-    if not _internal:
-        from pdfmanager import policy
-
-        try:
-            policy.check_password_removal_allowed()
-        except policy.PolicyError as exc:
-            raise PdfManagerError(str(exc)) from None
+def _decrypt_unprotected(path, output, password):
+    """Internal helper: decrypt ``path`` into a temporary staging path when the
+    caller is guaranteed to re-encrypt before producing a final output."""
     reader = open_pdf(path, password)
     try:
         import pikepdf
@@ -1507,6 +1504,24 @@ def decrypt(path, output, password, *, _internal=False):
             pass  # qpdf can't read it: pypdf already could
     writer = clone_document(reader)
     return _write(writer, output)
+
+
+def decrypt(path, output, password, *, _internal=False):
+    """Remove the protection. A PDF that limits printing, copying or
+    changes needs its permissions password for this (as in Acrobat), not
+    just the password to open it.
+
+    Administrator ``disable_password_removal`` policy is always enforced
+    unconditionally (``_internal`` is retained only for signature compatibility
+    and cannot bypass policy).
+    """
+    from pdfmanager import policy
+
+    try:
+        policy.check_password_removal_allowed()
+    except policy.PolicyError as exc:
+        raise PdfManagerError(str(exc)) from None
+    return _decrypt_unprotected(path, output, password)
 
 
 def set_metadata(path, output, password=None, **fields):

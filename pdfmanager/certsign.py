@@ -586,8 +586,19 @@ def sign(path, output, pfx, pfx_password=None, *, page=None, box=None, field=Non
     if level == "B-LTA":
         meta_kwargs["use_pades_lta"] = True
 
+    from pdfmanager import policy
+
+    try:
+        policy.check_fips_algorithm("sha256")
+    except policy.PolicyError as exc:
+        raise core.PdfManagerError(str(exc)) from None
+
     meta = signers.PdfSignatureMetadata(**meta_kwargs)
     if timestamper is None and timestamp_url:
+        try:
+            policy.check_network_allowed("Timestamp server request")
+        except policy.PolicyError as exc:
+            raise core.PdfManagerError(str(exc)) from None
         if not str(timestamp_url).lower().startswith(("http://", "https://")):
             raise core.PdfManagerError("the timestamp server must be an http:// or https:// "
                                        "address")
@@ -721,8 +732,13 @@ def verify(path, password=None, trusted=None):
     from pyhanko.pdf_utils.reader import PdfFileReader
     from pyhanko.sign.fields import enumerate_sig_fields
 
+    from pdfmanager import policy
+
     name = Path(path).name
-    roots = _load_certs(trusted)
+    policy_roots = policy.validated_trust_list_paths()
+    combined_trusted = list(trusted) if isinstance(trusted, (list, tuple, set)) else ([trusted] if trusted else [])
+    combined_trusted.extend(policy_roots)
+    roots = _load_certs(combined_trusted or None)
     pages = core.open_pdf(path, password)  # checks the file and the password, nicely
     data = Path(path).read_bytes()
     try:
@@ -750,12 +766,14 @@ def _blank(fq_name):
     return {"field": fq_name, "signer": None, "email": None, "issuer": None,
             "kind": "signature", "time": None, "time_source": None, "timestamp_trusted": None,
             "intact": False, "coverage": None, "changes": None, "changes_detail": None,
-            "trusted": False, "status": INVALID, "summary": "", "reason": None,
+            "trusted": False, "revocation_status": "not_checked", "digest_algorithm": None,
+            "status": INVALID, "summary": "", "reason": None,
             "location": None, "contact": None, "page": None, "box": None, "revision": None,
             "error": None, "certificate_expires": None, "lasting": ""}
 
 
 def _check_one(reader, fq_name, value, ref, roots, pages):
+    from pdfmanager import policy
     from pyhanko.sign.validation import (KeyUsageConstraints, validate_pdf_signature,
                                          validate_pdf_timestamp)
     from pyhanko.sign.validation.pdf_embedded import EmbeddedPdfSignature
@@ -784,6 +802,9 @@ def _check_one(reader, fq_name, value, ref, roots, pages):
     claimed = sig.self_reported_timestamp
     timestamp = sig.sig_object_type == "/DocTimeStamp"
     entry["kind"] = "timestamp" if timestamp else "signature"
+    md_alg = getattr(sig, "md_algorithm", None)
+    if md_alg:
+        entry["digest_algorithm"] = str(md_alg).lower()
     try:
         context = ValidationContext(trust_roots=list(roots), allow_fetching=False,
                                     moment=claimed, revocation_mode="soft-fail")
@@ -833,8 +854,20 @@ def _check_one(reader, fq_name, value, ref, roots, pages):
     if signed_at is not None:
         expired = not (validity["not_before"].native <= signed_at <= validity["not_after"].native)
     revoked = bool(getattr(status, "revoked", False))
+    entry["revocation_status"] = "revoked" if revoked else "not_checked"
 
-    if not entry["intact"] or revoked or expired:
+    fips_error = None
+    if entry["digest_algorithm"]:
+        try:
+            policy.check_fips_algorithm(entry["digest_algorithm"])
+        except policy.PolicyError as exc:
+            fips_error = str(exc)
+
+    if fips_error:
+        entry["status"] = INVALID
+        entry["error"] = fips_error
+        entry["summary"] = f"Rejected by policy: {fips_error}."
+    elif not entry["intact"] or revoked or expired:
         entry["status"] = INVALID
     elif entry["changes"] == "disallowed":
         entry["status"] = MODIFIED
@@ -842,7 +875,8 @@ def _check_one(reader, fq_name, value, ref, roots, pages):
         entry["status"] = VALID
     else:
         entry["status"] = UNTRUSTED
-    entry["summary"] = _summary(entry, revoked, expired)
+    if not fips_error:
+        entry["summary"] = _summary(entry, revoked, expired)
     try:
         entry["certificate_expires"] = _when(validity["not_after"].native)
         entry["lasting"] = _lasting(entry, validity["not_after"].native)
@@ -1088,6 +1122,12 @@ def verify_detached(path, p7s_path, trusted=None):
     signer_name = _name_of(signer_asn1)
     issuer_name = _name_of_issuer(signer_asn1)
     digest_alg = si["digest_algorithm"]["algorithm"].native
+    from pdfmanager import policy
+
+    try:
+        policy.check_fips_algorithm(digest_alg)
+    except policy.PolicyError:
+        return {"status": INVALID, "intact": False, "trusted": False, "signer": signer_name, "issuer": issuer_name, "algorithm": str(digest_alg).upper()}
     hash_cls = {"sha256": hashes.SHA256, "sha384": hashes.SHA384, "sha512": hashes.SHA512}.get(digest_alg)
     if hash_cls is None:
         return {"status": INVALID, "intact": False, "trusted": False, "signer": signer_name, "issuer": issuer_name, "algorithm": digest_alg}
@@ -1122,8 +1162,11 @@ def verify_detached(path, p7s_path, trusted=None):
         intact = False
 
     trusted_ok = False
-    if intact and trusted:
-        roots = _load_certs(trusted if isinstance(trusted, (list, tuple)) else [trusted])
+    policy_roots = policy.validated_trust_list_paths()
+    combined_trusted = list(trusted) if isinstance(trusted, (list, tuple, set)) else ([trusted] if trusted else [])
+    combined_trusted.extend(policy_roots)
+    if intact and combined_trusted:
+        roots = _load_certs(combined_trusted)
         root_fps = {r.sha256 for r in roots}
         trusted_ok = signer_asn1.sha256 in root_fps or any(c.sha256 in root_fps for c in certs)
 

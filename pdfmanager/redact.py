@@ -759,28 +759,225 @@ def _prune_fields(writer, widget_ids):
 INFO_NAMES = {"/Title": "title", "/Author": "author", "/Subject": "subject", "/Keywords": "keywords",
               "/Creator": "made with", "/Producer": "made with"}
 DEEP_STREAM = 5_000_000  # bytes: larger inner data isn't searched (pictures aren't either)
+MAX_EMBED_DEPTH = 3
+MAX_ARCHIVE_ENTRIES = 200
+MAX_ARCHIVE_DECOMPRESSED = 10 * 1024 * 1024  # 10 MB total decompressed cap per archive
+MAX_COMPRESSION_RATIO = 100
+
+_TEXT_ATTACHMENT_SUFFIXES = frozenset({
+    ".txt", ".csv", ".tsv", ".json", ".xml", ".html", ".htm", ".md",
+    ".rtf", ".log", ".yaml", ".yml", ".ini", ".cfg", ".svg",
+})
+_ARCHIVE_ATTACHMENT_SUFFIXES = frozenset({
+    ".zip", ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp",
+})
+_XML_TAG_RE = re.compile(r"<[^>]+>")
 
 STATUS_CLEAN = "verified_clean"
 STATUS_FINDINGS = "findings_detected"
 STATUS_INCOMPLETE = "verification_incomplete"
 
 
+def _strip_xml_text(raw: bytes) -> str:
+    text = raw.decode("utf-8", "replace")
+    return _XML_TAG_RE.sub(" ", text)
+
+
+def _read_zip_member_capped(zf, info, remaining: int) -> tuple[bytes | None, str | None]:
+    """Read a zip member with strict streaming byte cap (guards against spoofed headers)."""
+    if info.flag_bits & 0x1:
+        return None, "password-protected archive entry"
+    if info.file_size > remaining:
+        return None, f"decompressed size exceeds {MAX_ARCHIVE_DECOMPRESSED}-byte limit"
+    if info.compress_size > 0 and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO:
+        return None, f"compression ratio exceeds {MAX_COMPRESSION_RATIO}x limit (possible archive bomb)"
+    chunks = []
+    total = 0
+    with zf.open(info, "r") as stream:
+        while True:
+            buf = stream.read(65536)
+            if not buf:
+                break
+            total += len(buf)
+            if total > remaining:
+                return None, f"decompressed size exceeds {MAX_ARCHIVE_DECOMPRESSED}-byte limit"
+            if info.compress_size > 0 and total / info.compress_size > MAX_COMPRESSION_RATIO:
+                return None, f"compression ratio exceeds {MAX_COMPRESSION_RATIO}x limit (possible archive bomb)"
+            chunks.append(buf)
+    return b"".join(chunks), None
+
+
+def _inspect_attachment_bytes(
+    name: str,
+    raw_att: bytes,
+    *,
+    terms,
+    patterns,
+    case_sensitive: bool,
+    whole_words: bool,
+    search,
+    note,
+    skip_attachment,
+    attachments_checked: list,
+    depth: int = 0,
+) -> bool:
+    """Format-aware recursive inspection of an embedded attachment.
+
+    Returns True if any part of this attachment could not be completely verified.
+    """
+    import io
+    import tempfile
+    import zipfile
+    from pathlib import Path
+
+    incomplete = False
+    label = f"attached file ({name})"
+    if depth > MAX_EMBED_DEPTH:
+        skip_attachment(name, f"exceeded maximum nesting depth ({MAX_EMBED_DEPTH})")
+        return True
+    size_limit = min(DEEP_STREAM, MAX_ARCHIVE_DECOMPRESSED)
+    if len(raw_att) > size_limit:
+        skip_attachment(name, f"exceeds {size_limit}-byte size limit ({len(raw_att)} bytes)")
+        return True
+
+    suffix = Path(name).suffix.lower()
+
+    # 1. Embedded PDF (by extension or magic header)
+    if suffix == ".pdf" or raw_att[:5] == b"%PDF-":
+        try:
+            with tempfile.TemporaryDirectory(prefix="zpdf-att-") as tmp:
+                sub_pdf = Path(tmp) / "embedded.pdf"
+                sub_pdf.write_bytes(raw_att)
+                try:
+                    sub_reader = core.open_pdf(sub_pdf)
+                except core.PdfManagerError as exc:
+                    skip_attachment(name, f"unreadable or password-protected embedded PDF ({exc})")
+                    return True
+                if sub_reader.is_encrypted:
+                    skip_attachment(name, "password-protected embedded PDF")
+                    return True
+                sub_res = check_redacted(
+                    sub_pdf,
+                    terms=terms,
+                    patterns=patterns,
+                    case_sensitive=case_sensitive,
+                    whole_words=whole_words,
+                    _depth=depth + 1,
+                )
+            attachments_checked.append(name)
+            for item in sub_res.get("found") or ():
+                note(f"inside {label} -> {item['where']}", item["what"])
+            if sub_res.get("status") == STATUS_INCOMPLETE or sub_res.get("skipped"):
+                for sk in sub_res.get("skipped") or ():
+                    skip_attachment(f"{name}/{sk['where']}", sk["reason"])
+                incomplete = True
+            return incomplete
+        except Exception as exc:  # noqa: BLE001
+            skip_attachment(name, f"embedded PDF inspection error: {exc}")
+            return True
+
+    # 2. Office Open XML (.docx/.xlsx/.pptx/.odt/...) or ZIP archive
+    if suffix in _ARCHIVE_ATTACHMENT_SUFFIXES or raw_att[:4] == b"PK\x03\x04":
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw_att)) as zf:
+                infos = zf.infolist()
+                if len(infos) > MAX_ARCHIVE_ENTRIES:
+                    skip_attachment(name, f"archive exceeds {MAX_ARCHIVE_ENTRIES}-entry limit ({len(infos)} entries)")
+                    return True
+                remaining = MAX_ARCHIVE_DECOMPRESSED
+                attachments_checked.append(name)
+                for info in infos:
+                    if info.is_dir():
+                        continue
+                    member_label = f"{name}!{info.filename}"
+                    data, err = _read_zip_member_capped(zf, info, remaining)
+                    if err is not None:
+                        skip_attachment(member_label, err)
+                        incomplete = True
+                        continue
+                    remaining -= len(data)
+                    msuf = Path(info.filename).suffix.lower()
+                    if msuf == ".pdf" or data[:5] == b"%PDF-" or msuf in _ARCHIVE_ATTACHMENT_SUFFIXES or data[:4] == b"PK\x03\x04":
+                        sub_inc = _inspect_attachment_bytes(
+                            member_label,
+                            data,
+                            terms=terms,
+                            patterns=patterns,
+                            case_sensitive=case_sensitive,
+                            whole_words=whole_words,
+                            search=search,
+                            note=note,
+                            skip_attachment=skip_attachment,
+                            attachments_checked=attachments_checked,
+                            depth=depth + 1,
+                        )
+                        if sub_inc:
+                            incomplete = True
+                    elif msuf in (".xml", ".rels", ".html", ".htm", ".svg"):
+                        search(_strip_xml_text(data), f"inside {label} ({info.filename})")
+                    elif msuf in _TEXT_ATTACHMENT_SUFFIXES or b"\x00" not in data:
+                        for encoding in ("utf-8", "utf-16"):
+                            if search(data.decode(encoding, "ignore"), f"inside {label} ({info.filename})"):
+                                break
+                    # Binary media inside Office docs (e.g. word/media/image1.png) cannot be text-verified;
+                    # skip only if non-Office ZIP contains unsupported binaries, or flag image binaries explicitly?
+                    # For Office XML, text lives in XML parts; still flag unknown non-image binaries in raw ZIPs.
+                    elif suffix == ".zip":
+                        skip_attachment(member_label, f"unsupported binary archive entry ({msuf or 'binary'})")
+                        incomplete = True
+                return incomplete
+        except zipfile.BadZipFile as exc:
+            skip_attachment(name, f"corrupt archive ({exc})")
+            return True
+        except Exception as exc:  # noqa: BLE001
+            skip_attachment(name, f"archive inspection error: {exc}")
+            return True
+
+    # 3. Plain / structured text formats
+    if suffix in _TEXT_ATTACHMENT_SUFFIXES:
+        attachments_checked.append(name)
+        for encoding in ("utf-8", "utf-16"):
+            if search(raw_att.decode(encoding, "ignore"), f"inside {label}"):
+                break
+        return False
+
+    # 4. UTF-8 text without a known extension (no NUL bytes and valid UTF-8)
+    if b"\x00" not in raw_att:
+        try:
+            decoded = raw_att.decode("utf-8")
+            attachments_checked.append(name)
+            search(decoded, f"inside {label}")
+            return False
+        except UnicodeDecodeError:
+            pass
+
+    # 5. Unsupported binary format: scan raw bytes best-effort for findings, AND mark incomplete
+    # so we never falsely report verified_clean on an unverified binary attachment.
+    for encoding in ("utf-8", "utf-16"):
+        if search(raw_att[:DEEP_STREAM].decode(encoding, "ignore"), f"inside {label}"):
+            break
+    skip_attachment(name, f"unsupported attachment format ({suffix or 'binary'})")
+    return True
+
+
 def check_redacted(path, terms=(), patterns=(), case_sensitive=False, whole_words=False, areas=None,
-                   password=None):
+                   password=None, _depth=0):
     """Look through the PDF at ``path`` for what should be gone: the words
     and kinds of numbers that were redacted (``terms``, ``patterns``),
     anywhere they could be kept, and any text left under the redacted
     ``areas`` ({0-based page: [boxes]}).
 
     Returns ``{"clean", "status", "checked", "found", "skipped", "warnings",
-    "checks"}`` where ``status`` is one of ``verified_clean``,
-    ``findings_detected``, or ``verification_incomplete``. ``clean`` is True
-    only when ``status == "verified_clean"`` (R-003)."""
+    "checks", "attachments_checked", "attachments_skipped", "inspection_errors"}``
+    where ``status`` is one of ``verified_clean``, ``findings_detected``, or
+    ``verification_incomplete``. ``clean`` is True only when
+    ``status == "verified_clean"`` (R-003, SEC-003)."""
     import pypdfium2 as pdfium
 
     regexes = _regexes(terms, patterns, case_sensitive, whole_words)
     found, seen = [], set()
     skipped, warnings, checks = [], [], {}
+    attachments_checked, attachments_skipped, inspection_errors = [], [], []
 
     def note(where, what):
         what = " ".join(str(what).split())[:80]
@@ -792,8 +989,14 @@ def check_redacted(path, terms=(), patterns=(), case_sensitive=False, whole_word
         reason_str = str(reason) or "unreadable"
         skipped.append({"where": where, "reason": reason_str})
         warnings.append(f"Skipped {where}: {reason_str}")
+        inspection_errors.append({"where": where, "reason": reason_str})
         if check_key and checks.get(check_key) != "findings":
             checks[check_key] = "incomplete"
+
+    def skip_attachment(att_name, reason):
+        reason_str = str(reason) or "unreadable"
+        attachments_skipped.append({"name": att_name, "reason": reason_str})
+        skip(f"attached file ({att_name})", reason_str, "attachments")
 
     def search(text, where):
         hit = False
@@ -898,16 +1101,20 @@ def check_redacted(path, terms=(), patterns=(), case_sensitive=False, whole_word
         for name, contents in (reader.attachments or {}).items():
             for data in contents if isinstance(contents, list) else [contents]:
                 raw_att = bytes(data)
-                if len(raw_att) > DEEP_STREAM:
+                if _inspect_attachment_bytes(
+                    name,
+                    raw_att,
+                    terms=terms,
+                    patterns=patterns,
+                    case_sensitive=case_sensitive,
+                    whole_words=whole_words,
+                    search=search,
+                    note=note,
+                    skip_attachment=skip_attachment,
+                    attachments_checked=attachments_checked,
+                    depth=_depth,
+                ):
                     att_incomplete = True
-                    skip(
-                        f"attached file ({name})",
-                        f"exceeds {DEEP_STREAM}-byte scan limit ({len(raw_att)} bytes)",
-                        "attachments",
-                    )
-                for encoding in ("utf-8", "utf-16"):
-                    if search(raw_att[:DEEP_STREAM].decode(encoding, "ignore"), f"inside an attached file ({name})"):
-                        break
         if len(found) > before_att:
             checks["attachments"] = "findings"
         elif att_incomplete:
@@ -984,6 +1191,9 @@ def check_redacted(path, terms=(), patterns=(), case_sensitive=False, whole_word
         "skipped": skipped,
         "warnings": warnings,
         "checks": checks,
+        "attachments_checked": attachments_checked,
+        "attachments_skipped": attachments_skipped,
+        "inspection_errors": inspection_errors,
     }
 
 

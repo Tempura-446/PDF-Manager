@@ -106,6 +106,12 @@ def _request(path, raw=False, accept=None):
 
 
 def _open(req):
+    from pdfmanager import policy
+
+    try:
+        policy.check_updates_allowed()
+    except policy.PolicyError as exc:
+        raise core.PdfManagerError(str(exc)) from None
     try:
         return urllib.request.urlopen(req, timeout=TIMEOUT)
     except urllib.error.HTTPError as exc:
@@ -223,15 +229,55 @@ def check(force=False):
 
 # ---- installing -----------------------------------------------------------------------
 
+_MAX_UPDATE_MEMBERS = 5_000
+_MAX_UPDATE_BYTES = 200 * 1024 * 1024  # 200 MB uncompressed ceiling
+
+
 def _extract(data, target):
-    """Unzip GitHub's download into ``target``; returns the project folder."""
-    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+    """Safely unzip GitHub's download into ``target``; returns the project folder.
+
+    Rejects corrupt archives, path traversal, symlinks, excessive member counts,
+    and oversized uncompressed payloads (archive bombs).
+    """
+    import stat
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        raise core.PdfManagerError("the download is not a valid zip archive") from None
+
+    with zf:
+        infos = zf.infolist()
+        if len(infos) > _MAX_UPDATE_MEMBERS:
+            raise core.PdfManagerError("the download archive has too many files")
         root = Path(target).resolve()
-        for member in zf.infolist():
-            dest = (root / member.filename).resolve()
+        total_written = 0
+        for member in infos:
+            # Reject symlinks embedded in zip archives (Unix mode S_IFLNK).
+            mode = (member.external_attr >> 16) & 0o170000
+            if mode == stat.S_IFLNK:
+                raise core.PdfManagerError("the download archive contains unsafe symbolic links")
+            raw_name = member.filename.replace("\\", "/")
+            if raw_name.startswith("/") or ".." in Path(raw_name).parts or ":" in raw_name.split("/")[0]:
+                raise core.PdfManagerError("the download contains unsafe file names")
+            dest = (root / raw_name).resolve()
             if root not in dest.parents and dest != root:
                 raise core.PdfManagerError("the download contains unsafe file names")
-        zf.extractall(root)
+            if member.is_dir():
+                dest.mkdir(parents=True, exist_ok=True)
+                continue
+            if total_written + member.file_size > _MAX_UPDATE_BYTES:
+                raise core.PdfManagerError("the download archive exceeds the maximum allowed extracted size")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(member, "r") as src, open(dest, "wb") as dst:
+                while True:
+                    chunk = src.read(65536)
+                    if not chunk:
+                        break
+                    total_written += len(chunk)
+                    if total_written > _MAX_UPDATE_BYTES:
+                        raise core.PdfManagerError("the download archive exceeds the maximum allowed extracted size")
+                    dst.write(chunk)
     projects = [p.parent for p in Path(target).glob("*/pyproject.toml")]
     if len(projects) != 1:
         raise core.PdfManagerError("the download isn't a ZPDF source folder")
@@ -242,12 +288,19 @@ def _extract(data, target):
 _NO_BUILD = re.compile(r"No matching distribution found for (onnxruntime|rapidocr)", re.I)
 
 
-def install(python=None, notes=None):
+def install(python=None, notes=None, *, allow_downgrade=False):
     """Download the newest version and install it with pip. Returns the
     version installed. The running app keeps the old version until it's
     started again. If the OCR engine has no build for this Python, the
     update is installed without it and ``notes`` (a list) gets a sentence
     saying so."""
+    from pdfmanager import policy
+
+    try:
+        policy.check_updates_allowed()
+    except policy.PolicyError as exc:
+        raise core.PdfManagerError(str(exc)) from None
+
     how = how_installed()
     if how == "source":
         raise core.PdfManagerError("this copy runs from a source folder; update it with git pull")
@@ -255,6 +308,10 @@ def install(python=None, notes=None):
         raise core.PdfManagerError("download the new standalone app from GitHub to update it")
     progress.say("Finding the newest version…")
     version, source = latest_version()
+    if not allow_downgrade and parse_version(version) < parse_version(__version__):
+        raise core.PdfManagerError(
+            f"refusing to downgrade from {__version__} to older version {version}"
+        )
     progress.say(f"Downloading version {version}…")
     progress.check()
     if isinstance(source, dict):  # a published release: the zip, checked against its checksum and signature

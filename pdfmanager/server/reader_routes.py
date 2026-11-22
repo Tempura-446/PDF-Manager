@@ -23,15 +23,47 @@ class ReaderRoutesMixin:
         """A file opened from this computer. Big files are read in pieces
         (HTTP Range): the reader shows the first pages without waiting for
         the whole file."""
+        from pdfmanager import policy, risks
+
         path = self.opened.get(key) if self.opened is not None else None
         if path is None or not path.is_file():
             return self._error(HTTPStatus.NOT_FOUND, "that file is no longer available")
-        size = path.stat().st_size
         # The path is percent-encoded like the name: a folder called
         # "Документы" would otherwise be unsendable.
         headers = {"X-Pdfm-Filename": gui_hook("_download_headers", _download_headers)(path.name)["X-Pdfm-Filename"],
                    "X-Pdfm-Path": urllib.parse.quote(str(path), safe=""),
                    "X-Pdfm-Stamp": _file_stamp(path), "Accept-Ranges": "bytes"}
+
+        if policy.requires_make_safe_on_open():
+            # Administrator policy requires Make Safe sanitization before opening.
+            with tempfile.TemporaryDirectory(prefix="pdfm-safe-") as tmp:
+                safe_path = Path(tmp) / "safe.pdf"
+                try:
+                    risks.make_safe(path, safe_path)
+                except Exception as exc:  # noqa: BLE001 - fail closed when policy requires Make Safe
+                    return self._error(
+                        HTTPStatus.UNPROCESSABLE_ENTITY,
+                        f"cannot open file: administrator policy requires Make Safe sanitization ({exc})",
+                    )
+                safe_bytes = safe_path.read_bytes()
+            headers["X-Pdfm-Made-Safe"] = "1"
+            size = len(safe_bytes)
+            wanted = self.headers.get("Range")
+            span = _byte_range(wanted, size) if wanted else (0, size - 1)
+            if span is None:
+                return self._send(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, b"", "application/pdf",
+                                  {**headers, "Content-Range": f"bytes */{size}"})
+            start, end = span
+            if start == 0:
+                RecentFiles.add(path)
+            if wanted:
+                headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+            self._start(HTTPStatus.PARTIAL_CONTENT if wanted else HTTPStatus.OK, "application/pdf",
+                        end - start + 1, headers)
+            self.wfile.write(safe_bytes[start:end + 1])
+            return
+
+        size = path.stat().st_size
         wanted = self.headers.get("Range")
         span = _byte_range(wanted, size) if wanted else (0, size - 1)
         if span is None:

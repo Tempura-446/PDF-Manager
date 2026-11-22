@@ -18,8 +18,8 @@
       <string id="RequireMakeSafeOnOpen_Help">Requires untrusted PDFs to be sanitized before opening.</string>
       <string id="DisablePasswordRemoval">Disable removing PDF passwords</string>
       <string id="DisablePasswordRemoval_Help">Prevents users from stripping password protection from encrypted PDFs.</string>
-      <string id="FipsMode">Enforce FIPS-approved cryptography</string>
-      <string id="FipsMode_Help">Restricts ZPDF cryptography to AES-256 and SHA-256+ and refuses RC4, MD5, and SHA-1.</string>
+      <string id="FipsMode">Enforce FIPS algorithm policy</string>
+      <string id="FipsMode_Help">Restricts ZPDF cryptographic algorithms to AES-256 and SHA-256+ and rejects RC4, MD5, SHA-1, DES, and 3DES. Note: software algorithm filtering does not constitute FIPS 140-2/140-3 cryptographic module certification.</string>
       <string id="OfflineUpdateDir">Offline update channel folder</string>
       <string id="OfflineUpdateDir_Help">Local or UNC file-share path containing ZPDF release ZIPs and .sha256 files.</string>
       <string id="ForceSecurityProfile">Default security profile</string>
