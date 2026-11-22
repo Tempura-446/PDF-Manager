@@ -4,6 +4,30 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.60.3
+
+Complete offline PDF translation out of the box: bundles the CTranslate2 +
+SentencePiece runtime, adds one-click hybrid language pack downloads in Settings
+and the Reader, automatic English pivoting, and full Unicode/CJK PDF font
+rendering.
+
+- **Bundled offline translation runtime.** Added `ctranslate2` and
+  `sentencepiece` (CPU-only wheels) to ZPDF's optional `translate` / `all` /
+  `build` extras and standalone PyInstaller builds so offline translation works
+  immediately after downloading a pack.
+- **Hybrid one-click language pack catalog & downloader (`i18n.py`).** Settings
+  → Language now includes a filterable **Download language packs…** browser that
+  fetches curated SHA-256-verified packs (`zh-Hans`, `es`, `fr`, `de`, `ja`,
+  `ko`, `ar`) from `ZPDF-releases` (`langpacks-v1`) and falls back to Argos
+  Translate's open-source model index for 30+ additional languages. Manual file
+  install also supports `.argosmodel` archives directly.
+- **Reader one-click download, English pivoting & Unicode PDF fonts
+  (`translate.py`).** Expanded Translate PDF and Reader **Translate this page…**
+  to 18 languages, added a one-click **Download pack now** button when a pack is
+  missing, added automatic `src → en → dst` pivoting when no direct pair is
+  installed, and switched translated PDF pages to Unicode-capable fonts via
+  `fonts.font_for()`.
+
 ## 0.60.2
 
 Enterprise digital signatures (PAdES baseline levels, DocMDP certifying
