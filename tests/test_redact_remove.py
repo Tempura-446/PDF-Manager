@@ -436,8 +436,8 @@ def test_tags_lose_replacement_text_that_repeats_removed_words(tmp_path):
     w._root_object[NameObject("/StructTreeRoot")] = w._add_object(DictionaryObject({
         NameObject("/Type"): NameObject("/StructTreeRoot"), NameObject("/K"): ArrayObject([first, second])}))
     w._root_object[NameObject("/MarkInfo")] = DictionaryObject({NameObject("/Marked"): BooleanObject(True)})
-    w.add_outline_item("About TOPSECRETWORD", 0)
-    w.add_outline_item("Contents", 0)
+    w.add_outline_item(title="About TOPSECRETWORD", page_number=0)
+    w.add_outline_item(title="Contents", page_number=0)
     w.write(str(src))
     out = tmp_path / "out.pdf"
     report = redact.redact(src, out, terms=["TOPSECRETWORD"])
@@ -705,8 +705,8 @@ def test_r001_coordinate_redaction_scrubs_bookmarks_alt_text_and_verifies_copies
         NameObject("/Type"): NameObject("/StructTreeRoot"),
         NameObject("/K"): ArrayObject([elem]),
     }))
-    w.add_outline_item("Section: Project FalconX", 0)
-    w.add_outline_item("Public Overview", 0)
+    w.add_outline_item(title="Section: Project FalconX", page_number=0)
+    w.add_outline_item(title="Public Overview", page_number=0)
     w.add_attachment("Project FalconX.txt", b"Attachment mentions Project FalconX")
     # Add a text comment on page 1 (outside the redaction box) containing the secret
     comment = DictionaryObject({

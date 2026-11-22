@@ -1289,12 +1289,25 @@ def compress(path, output, level="medium", image_quality=None, max_dpi=None, pas
             if notes is not None:
                 notes.extend(best_notes)
     else:
-        was_encrypted, used_dpi, used_quality = _compress_once(
-            src_path, out_path, level, image_quality, max_dpi, password, sharp_scans, notes,
-        )
+        same_file = src_path.is_file() and src_path.resolve() == out_path.resolve()
+        if keep_smaller and same_file:
+            with tempfile.TemporaryDirectory(prefix="pdfm-comp-") as tmp:
+                tmp_out = Path(tmp) / "compressed.pdf"
+                was_encrypted, used_dpi, used_quality = _compress_once(
+                    src_path, tmp_out, level, image_quality, max_dpi, password, sharp_scans, notes,
+                )
+                cand_size = tmp_out.stat().st_size
+                if not was_encrypted and original_bytes > 0 and cand_size > original_bytes:
+                    kept_original = True
+                else:
+                    shutil.copyfile(tmp_out, out_path)
+        else:
+            was_encrypted, used_dpi, used_quality = _compress_once(
+                src_path, out_path, level, image_quality, max_dpi, password, sharp_scans, notes,
+            )
 
     output_bytes = out_path.stat().st_size if out_path.is_file() else 0
-    if keep_smaller and not was_encrypted and original_bytes > 0 and output_bytes > original_bytes:
+    if not kept_original and keep_smaller and not was_encrypted and original_bytes > 0 and output_bytes > original_bytes:
         if src_path.resolve() != out_path.resolve():
             shutil.copyfile(src_path, out_path)
         output_bytes = original_bytes
