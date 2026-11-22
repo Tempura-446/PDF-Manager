@@ -441,46 +441,123 @@ def _word_changes(a, b):
     return removed, added
 
 
-def compare(old, new, output, old_password=None, new_password=None, all_pages=False, dpi=DPI):
-    """Write a comparison report of ``old`` and ``new`` to ``output``.
-    Returns a summary: {"old_pages", "new_pages", "changes": [{"old", "new",
-    "kind", "removed", "added", "areas", "confidence", "reordered",
-    "size_changed", "orientation_changed"}]} with 1-based page numbers (None
-    for a page that is only in one file); kind is "changed", "added",
-    "removed" or "same"."""
+MODES = ("both", "text", "visual")
+LOW_CONFIDENCE_THRESHOLD = 0.45
+
+
+def _summarize_counts(rows):
+    return {
+        "changed": sum(1 for r in rows if r["kind"] == "changed"),
+        "added": sum(1 for r in rows if r["kind"] == "added"),
+        "removed": sum(1 for r in rows if r["kind"] == "removed"),
+        "same": sum(1 for r in rows if r["kind"] == "same"),
+        "reordered": sum(1 for r in rows if r.get("reordered")),
+        "low_confidence": sum(1 for r in rows if r.get("low_confidence")),
+    }
+
+
+def format_summary(summary):
+    """Human-readable one-line summary of comparison results for GUI and CLI."""
+    counts = summary.get("counts") or _summarize_counts(summary.get("changes", []))
+    total_diff = counts["changed"] + counts["added"] + counts["removed"]
+    if total_diff == 0:
+        return "No differences found."
+    bits = []
+    if counts["changed"]:
+        bits.append(f"{counts['changed']} changed")
+    if counts["added"]:
+        bits.append(f"{counts['added']} added")
+    if counts["removed"]:
+        bits.append(f"{counts['removed']} removed")
+    if counts["reordered"]:
+        bits.append(f"{counts['reordered']} reordered")
+    if counts["low_confidence"]:
+        bits.append(f"{counts['low_confidence']} low-confidence alignment")
+    return f"{total_diff} page{'s' if total_diff != 1 else ''} with differences ({', '.join(bits)})"
+
+
+def _compute_rows(old, new, old_password, new_password, dpi, mode, render_a, render_b):
+    if mode not in MODES:
+        raise core.PdfManagerError(f"unknown compare mode {mode!r}; use {', '.join(MODES)}")
     with progress.section(0, 3, "original"):
         a = _analyze(old, old_password)
     with progress.section(1, 3, "changed version"):
         b = _analyze(new, new_password)
     rows = []
     scored_pairs = _align_scored(a, b)
-    with _PageRenderer(old, old_password, dpi) as render_a, _PageRenderer(new, new_password, dpi) as render_b:
-        for n, (i, j, conf, reordered) in enumerate(scored_pairs):
-            progress.check()
-            progress.report(2 * len(scored_pairs) + n, max(1, 3 * len(scored_pairs)), message="comparing pages")
-            if i is None or j is None:
-                kind, removed, added, areas = ("added" if i is None else "removed"), [], [], []
-                geom = {"size_changed": False, "orientation_changed": False}
+    for n, (i, j, conf, reordered) in enumerate(scored_pairs):
+        progress.check()
+        progress.report(2 * len(scored_pairs) + n, max(1, 3 * len(scored_pairs)), message="comparing pages")
+        if i is None or j is None:
+            kind, removed, added, areas = ("added" if i is None else "removed"), [], [], []
+            geom = {"size_changed": False, "orientation_changed": False}
+            low_conf = False
+        else:
+            removed, added = ([], []) if mode == "visual" else _word_changes(a[i]["text"], b[j]["text"])
+            geom = _geometry_diff(a[i]["size"], b[j]["size"])
+            areas = [] if mode == "text" else _changed_areas(render_a.get(i), render_b.get(j))
+            if mode == "text":
+                kind = "changed" if (removed or added) else "same"
+            elif mode == "visual":
+                kind = "changed" if (areas or geom["size_changed"] or geom["orientation_changed"]) else "same"
             else:
-                removed, added = _word_changes(a[i]["text"], b[j]["text"])
-                geom = _geometry_diff(a[i]["size"], b[j]["size"])
-                areas = _changed_areas(render_a.get(i), render_b.get(j))
                 kind = "changed" if (removed or added or areas or geom["size_changed"] or geom["orientation_changed"]) else "same"
-            rows.append({
-                "old": None if i is None else i + 1,
-                "new": None if j is None else j + 1,
-                "kind": kind,
-                "removed": removed,
-                "added": added,
-                "areas": areas,
-                "confidence": conf,
-                "reordered": reordered,
-                "size_changed": geom["size_changed"],
-                "orientation_changed": geom["orientation_changed"],
-            })
+            low_conf = conf < LOW_CONFIDENCE_THRESHOLD
+        row = {
+            "old": None if i is None else i + 1,
+            "new": None if j is None else j + 1,
+            "kind": kind,
+            "removed": removed,
+            "added": added,
+            "areas": areas,
+            "confidence": round(float(conf), 3),
+            "low_confidence": low_conf,
+            "reordered": reordered,
+            "size_changed": geom["size_changed"],
+            "orientation_changed": geom["orientation_changed"],
+        }
+        row["label"] = _label(row)
+        rows.append(row)
+    return a, b, rows
+
+
+def compare_summary(old, new, old_password=None, new_password=None, all_pages=True, dpi=DPI, mode="both"):
+    """Compute a structured, JSON-serializable comparison summary without writing a PDF.
+
+    Ideal for interactive side-by-side diff viewers and CLI ``--json`` output.
+    """
+    with _PageRenderer(old, old_password, dpi) as render_a, _PageRenderer(new, new_password, dpi) as render_b:
+        a, b, rows = _compute_rows(old, new, old_password, new_password, dpi, mode, render_a, render_b)
+    counts = _summarize_counts(rows)
+    return {
+        "old_name": Path(old).name,
+        "new_name": Path(new).name,
+        "old_pages": len(a),
+        "new_pages": len(b),
+        "mode": mode,
+        "counts": counts,
+        "changes": [r for r in rows if all_pages or r["kind"] != "same"],
+    }
+
+
+def compare(old, new, output, old_password=None, new_password=None, all_pages=False, dpi=DPI, mode="both"):
+    """Write a comparison report of ``old`` and ``new`` to ``output``.
+    Returns a summary: {"old_pages", "new_pages", "mode", "counts", "changes":
+    [{"old", "new", "kind", "removed", "added", "areas", "confidence",
+    "low_confidence", "reordered", "size_changed", "orientation_changed",
+    "label"}]} with 1-based page numbers (None for a page only in one file);
+    kind is "changed", "added", "removed" or "same"."""
+    with _PageRenderer(old, old_password, dpi) as render_a, _PageRenderer(new, new_password, dpi) as render_b:
+        a, b, rows = _compute_rows(old, new, old_password, new_password, dpi, mode, render_a, render_b)
         _report(Path(old).name, Path(new).name, len(a), len(b), render_a, render_b, rows, output, all_pages)
-    return {"old_pages": len(a), "new_pages": len(b),
-            "changes": [r for r in rows if all_pages or r["kind"] != "same"]}
+    counts = _summarize_counts(rows)
+    return {
+        "old_pages": len(a),
+        "new_pages": len(b),
+        "mode": mode,
+        "counts": counts,
+        "changes": [r for r in rows if all_pages or r["kind"] != "same"],
+    }
 
 
 # --------------------------------------------------------------------------

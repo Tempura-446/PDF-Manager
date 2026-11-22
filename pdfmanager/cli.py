@@ -1241,9 +1241,20 @@ def cmd_interleave(a):
 
 def cmd_compare(a):
     passwords = _Passwords(a.password)
+    mode = getattr(a, "mode", "both") or "both"
+    if getattr(a, "json", False) and not a.output:
+        summary = compare.compare_summary(
+            a.old, a.new, passwords.for_file(a.old), passwords.for_file(a.new),
+            all_pages=a.all_pages, mode=mode,
+        )
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        return 0
     out = a.output or _default_output(a.old, f"vs_{Path(a.new).stem}")
     summary = compare.compare(a.old, a.new, out, passwords.for_file(a.old),
-                              passwords.for_file(a.new), all_pages=a.all_pages)
+                              passwords.for_file(a.new), all_pages=a.all_pages, mode=mode)
+    if getattr(a, "json", False):
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        return 0
     changes = [c for c in summary["changes"] if c["kind"] != "same"]
     for c in changes:
         where = (f"page {c['new']} added" if c["kind"] == "added" else
@@ -1252,7 +1263,7 @@ def cmd_compare(a):
         detail = "; ".join([f"- {w}" for w in c["removed"][:3]] + [f"+ {w}" for w in c["added"][:3]])
         print(f"{where}: {detail or 'layout or pictures changed'}" if c["kind"] == "changed"
               else where)
-    print(f"{len(changes)} page(s) differ" if changes else "no differences")
+    print(compare.format_summary(summary))
     print(f"-> {out}")
 
 
@@ -1990,6 +2001,10 @@ def build_parser():
     sp.add_argument("-o", "--output", help="report file (default: <old>_vs_<new>.pdf)")
     sp.add_argument("--all-pages", action="store_true",
                     help="show unchanged pages in the report too")
+    sp.add_argument("--mode", choices=compare.MODES, default="both",
+                    help="compare both text and visual layout (default), text only, or visual only")
+    sp.add_argument("--json", action="store_true",
+                    help="print structured JSON diff summary (skips PDF creation unless -o is given)")
     sp.add_argument("--password")
 
     sp = per_file("to-word", run_to_word, "convert PDFs to editable Word documents (.docx)",
