@@ -61,7 +61,7 @@ def test_policy_precedence_hklm_over_hkcu_over_json(tmp_path):
 def test_fips_mode_refuses_rc4_and_weak_algorithms():
     fips_on = {"fips_mode": True}
     for bad in ("RC4", "rc4-128", "MD5", "SHA-1", "sha1"):
-        with pytest.raises(core.PdfManagerError, match="FIPS mode"):
+        with pytest.raises(policy.PolicyError, match="FIPS mode"):
             policy.check_fips_algorithm(bad, policies=fips_on)
 
     # Strong algorithms remain allowed

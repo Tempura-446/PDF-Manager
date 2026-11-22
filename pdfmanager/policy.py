@@ -17,7 +17,9 @@ import os
 import sys
 from pathlib import Path
 
-from pdfmanager import core
+
+class PolicyError(ValueError):
+    """Raised when an operation is blocked by an administrator security policy."""
 
 POLICY_REGISTRY_PATH = r"Software\Policies\ZPDF"
 DEFAULT_POSIX_POLICY_FILE = Path("/etc/zpdf/policy.json")
@@ -164,20 +166,20 @@ def snapshot(*, policies: dict | None = None) -> dict:
 
 
 def check_fips_algorithm(algorithm: str, *, policies: dict | None = None) -> None:
-    """Raise PdfManagerError if ``fips_mode`` is enabled and ``algorithm`` is forbidden."""
+    """Raise PolicyError if ``fips_mode`` is enabled and ``algorithm`` is forbidden."""
     if not get("fips_mode", False, policies=policies):
         return
     norm = str(algorithm or "").strip().lower()
     if norm in FIPS_FORBIDDEN_ALGORITHMS or "rc4" in norm or "md5" in norm or "sha1" in norm:
-        raise core.PdfManagerError(
+        raise PolicyError(
             f"FIPS mode policy forbids algorithm {algorithm!r}; use AES-256 and SHA-256 or stronger"
         )
 
 
 def check_password_removal_allowed(*, policies: dict | None = None) -> None:
-    """Raise PdfManagerError if administrator policy forbids removing PDF passwords."""
+    """Raise PolicyError if administrator policy forbids removing PDF passwords."""
     if get("disable_password_removal", False, policies=policies):
-        raise core.PdfManagerError(
+        raise PolicyError(
             "Removing PDF passwords is disabled by your organisation's security policy"
         )
 

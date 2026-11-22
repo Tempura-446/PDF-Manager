@@ -1356,7 +1356,10 @@ def decrypt(path, output, password, *, _internal=False):
     if not _internal:
         from pdfmanager import policy
 
-        policy.check_password_removal_allowed()
+        try:
+            policy.check_password_removal_allowed()
+        except policy.PolicyError as exc:
+            raise PdfManagerError(str(exc)) from None
     reader = open_pdf(path, password)
     try:
         import pikepdf
