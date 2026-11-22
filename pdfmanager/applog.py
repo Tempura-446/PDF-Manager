@@ -55,8 +55,8 @@ _PASSWORD = re.compile(
 )
 
 
-def sanitize_secrets(text):
-    """Remove private keys, auth tokens, and password/passphrase values while keeping paths readable."""
+def clean_message(text):
+    """Strip private keys, auth tokens, and password/passphrase values while keeping paths readable."""
     text = str(text)
     text = _PRIVATE_KEY.sub("<private-key>", text)
     text = _TOKEN.sub("<token>", text)
@@ -69,16 +69,15 @@ def scrub(text):
     if home and home not in ("/", "\\"):
         for form in {home, home.replace("\\", "\\\\"), home.replace("\\", "/")}:
             text = text.replace(form, "~")
-    text = sanitize_secrets(text)
+    text = clean_message(text)
     return _DOCUMENT.sub("<file>", text)
 
 
 def format_user_error(exc, path=None):
-    """Consistent, secret-safe user-facing error message for CLI and GUI.
+    """Consistent, safe user-facing error message for CLI and GUI.
 
     Translates common OS errors (permissions, disk full, missing file) into
-    plain-language messages with recovery guidance while never leaking
-    passwords, tokens, or private keys.
+    plain-language messages with recovery guidance while stripping credentials.
     """
     import errno
     from pdfmanager import progress
@@ -88,14 +87,14 @@ def format_user_error(exc, path=None):
     target = path or getattr(exc, "filename", None)
     prefix = f"{target}: " if target else ""
     if isinstance(exc, PermissionError):
-        return sanitize_secrets(
+        return clean_message(
             f"{prefix}permission denied (check file permissions or close any program using the file)"
         )
     if isinstance(exc, FileNotFoundError):
-        return sanitize_secrets(f"{prefix}file not found")
+        return clean_message(f"{prefix}file not found")
     if isinstance(exc, OSError) and getattr(exc, "errno", None) == errno.ENOSPC:
-        return sanitize_secrets(f"{prefix}not enough disk space to finish writing the file")
-    msg = sanitize_secrets(str(exc) or type(exc).__name__)
+        return clean_message(f"{prefix}not enough disk space to finish writing the file")
+    msg = clean_message(str(exc) or type(exc).__name__)
     if path and str(path) not in msg:
         return f"{path}: {msg}"
     return msg

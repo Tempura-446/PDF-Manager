@@ -1,11 +1,11 @@
 # Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Phase 6 product quality, CLI/GUI parity, and packaging regression tests."""
 
+import ast
 import errno
 import re
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 from unittest import mock
 
@@ -30,10 +30,15 @@ def _make_pdf(path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 def test_requirements_txt_matches_pyproject_core_dependencies():
-    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r"^dependencies\s*=\s*(\[[\s\S]*?^\])", text, re.M)
+    assert match is not None
+    # Strip inline TOML comments before literal_eval (works on Python 3.10+).
+    cleaned = re.sub(r"#[^\n]*", "", match.group(1))
+    dep_specs = ast.literal_eval(cleaned)
     core_deps = [
         re.split(r"[<>=!~;\s]", spec, maxsplit=1)[0].strip().lower()
-        for spec in pyproject["project"]["dependencies"]
+        for spec in dep_specs
     ]
     req_lines = [
         line.strip()
