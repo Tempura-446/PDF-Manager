@@ -162,7 +162,8 @@ function updateSummary() {
 /** Redact has something to black out: words or phrases, a kind of number, or areas drawn. */
 function redactChosen() {
   if (($("f-terms")?.value || "").trim()) return true;
-  if (["emails", "phones", "numbers"].some((k) => $("f-" + k)?.checked)) return true;
+  if (($("f-regex")?.value || "").trim()) return true;
+  if (["emails", "phones", "numbers", "ssn", "ein", "uk_ni", "iban", "credit_card"].some((k) => $("f-" + k)?.checked)) return true;
   try {
     const boxes = JSON.parse($("f-boxes")?.value || "null");
     return !!boxes && Object.values(boxes).some((list) => Array.isArray(list) ? list.length : !!list);
@@ -217,7 +218,7 @@ const TAGLINES = {
   clean: "Drop blank pages and straighten scans", watermark: "Stamp text or a logo on every page", number: "Add page numbers",
   flatten: "Bake forms and comments into the page", "flatten-layers": "Keep a drawing's shown layers, drop the hidden ones", headers: "Titles, dates and Bates numbers", form: "Create fillable forms",
   metadata: "Set the title, author and keywords", encrypt: "Protect with a password", decrypt: "Remove a password",
-  redact: "Black out text for good", sanitize: "Remove hidden data and scripts", makesafe: "Take out what could do harm in a PDF you were sent", "upgrade-protection": "Replace old, weak encryption with AES-256",
+  redact: "Black out text for good", sanitize: "Remove hidden data and scripts", makesafe: "Take out what could do harm in a PDF you were sent", "sec-profile": "Apply a saved bundle of security rules in one step", "upgrade-protection": "Replace old, weak encryption with AES-256",
   "encrypt-cert": "Only the people you choose can open it, with their Digital ID", "decrypt-cert": "Open a PDF that was protected for you", pdfa: "Convert for long-term archiving", "pdfa-check": "See if a file meets PDF/A, and why not",
   comments: "List comments, or send them as XFDF", web: "Save a web page as a PDF", attach: "Attach files to a PDF, or remove them", labels: "Number pages i, ii, iii then 1, 2, 3", repair: "Mend damaged files; open fast online",
   "sign-cert": "Sign with a certificate (.pfx or .p12), like Acrobat", "verify-sig": "See who signed and if anything changed",
