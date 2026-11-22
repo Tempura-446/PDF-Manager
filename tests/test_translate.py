@@ -154,3 +154,45 @@ def test_http_translate_page_endpoint(tmp_path, monkeypatch):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_english_pivot_chains_es_en_and_en_fr(tmp_path, monkeypatch):
+    monkeypatch.setattr(appdata, "data_dir", lambda: tmp_path / "appdata")
+    # Create fake model dirs for es->en and en->fr (no direct es->fr)
+    (tmp_path / "appdata" / "locales" / "es" / "models" / "es-en").mkdir(parents=True)
+    (tmp_path / "appdata" / "locales" / "fr" / "models" / "en-fr").mkdir(parents=True)
+
+    hops = []
+
+    def fake_single(s, d, mdir):
+        hops.append((s, d))
+        return lambda batch: [f"[{s}->{d}:{x}]" for x in batch]
+
+    monkeypatch.setattr(translate, "_load_single_translator", fake_single)
+    out = translate.translate_texts(["Hola mundo"], "es", "fr")
+    assert hops == [("es", "en"), ("en", "fr")]
+    assert out == ["[en->fr:[es->en:Hola mundo]]"]
+
+
+def test_model_dir_for_matches_bcp47_and_argos_codes(tmp_path, monkeypatch):
+    monkeypatch.setattr(appdata, "data_dir", lambda: tmp_path / "appdata")
+    mdir = tmp_path / "appdata" / "locales" / "zh-Hans" / "models" / "en-zh"
+    mdir.mkdir(parents=True)
+    assert translate.model_dir_for("en", "zh-Hans") == mdir
+    assert "en-zh" in translate.installed_translation_pairs()
+
+
+def test_translate_pdf_renders_cjk_unicode_without_error(tmp_path):
+    src = _make_sample_pdf(tmp_path / "en.pdf", [["Hello world INV-2026-118"]])
+    out_pdf = tmp_path / "zh_sbs.pdf"
+    res = translate.translate_pdf(
+        src,
+        out_pdf,
+        "en",
+        "zh-Hans",
+        mode="side-by-side",
+        translator=lambda batch: ["你好世界，发票编号测试。" for _ in batch],
+    )
+    assert res["pages"] == 1
+    assert out_pdf.is_file() and out_pdf.read_bytes().startswith(b"%PDF")
+

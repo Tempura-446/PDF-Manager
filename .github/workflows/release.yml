@@ -60,7 +60,7 @@ jobs:
       - name: Install dependencies
         shell: pwsh
         run: |
-          $extras = if ("${{ inputs.skip_checks }}" -eq "true") { "app,ocr" } else { "build,test" }
+          $extras = if ("${{ inputs.skip_checks }}" -eq "true") { "app,ocr,translate" } else { "build,test" }
           python -m pip install --disable-pip-version-check -e ".[$extras]"
           if ($LASTEXITCODE -ne 0) { exit 1 }
 

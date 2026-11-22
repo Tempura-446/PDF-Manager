@@ -282,3 +282,25 @@ class ScanWatchRoutesMixin:
         data = json.loads(body or b"{}")
         res = i18n.remove_pack(data.get("code") or "")
         return self._send(HTTPStatus.OK, {**res, "packs": i18n.list_installed_packs(), "lang": i18n.get_language()})
+
+    def _i18n_catalog(self):
+        from pdfmanager import i18n
+
+        return self._send(HTTPStatus.OK, i18n.list_catalog_packs(fetch=True))
+
+    def _i18n_pack_download(self, body):
+        from pdfmanager import i18n
+
+        data = json.loads(body or b"{}")
+        code = str(data.get("code") or "").strip()
+        pair = str(data.get("pair") or "").strip() or None
+        source = str(data.get("source") or "").strip() or None
+        if not code and not pair:
+            raise UserError("specify a language code or translation pair to download")
+        res = i18n.download_and_install_pack(code or pair.split("-")[0], pair=pair, source=source)
+        return self._send(HTTPStatus.OK, {
+            **res,
+            "packs": i18n.list_installed_packs(),
+            "languages": i18n.list_available_languages(),
+        })
+

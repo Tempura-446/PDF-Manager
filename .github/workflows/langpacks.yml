@@ -1,0 +1,83 @@
+name: Publish language packs
+
+# Builds curated ZPDF language packs (UI catalog + offline CTranslate2 translation
+# models + SHA-256 checksums) and publishes them to the `langpacks-v1` release on
+# Tempura-446/ZPDF-releases so Settings -> Language can download them with one click.
+on:
+  workflow_dispatch:
+    inputs:
+      languages:
+        description: "Space-separated BCP-47 language codes to build and publish"
+        type: string
+        default: "zh-Hans es fr de ja ko ar"
+      dry_run:
+        description: "Build packs and upload as workflow artifacts without publishing"
+        type: boolean
+        default: false
+
+concurrency:
+  group: langpacks
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-publish:
+    name: Build curated language packs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check RELEASES_TOKEN secret
+        if: ${{ !inputs.dry_run }}
+        env:
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          if [ -z "$RELEASES_TOKEN" ]; then
+            echo "::error::Missing RELEASES_TOKEN secret for Tempura-446/ZPDF-releases"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install minimal dependencies
+        run: python -m pip install --disable-pip-version-check -e .
+
+      - name: Build curated language packs
+        env:
+          LANGS: ${{ inputs.languages }}
+        run: |
+          mkdir -p dist/langpacks
+          for code in $LANGS; do
+            echo "=== Building language pack: $code ==="
+            python packaging/build_langpack.py "$code" \
+              --fetch-argos \
+              --allow-empty-ui \
+              --out dist/langpacks
+          done
+          ls -lh dist/langpacks
+
+      - name: Publish to Tempura-446/ZPDF-releases (langpacks-v1)
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          TAG="langpacks-v1"
+          REPO="Tempura-446/ZPDF-releases"
+          if ! gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" -R "$REPO" \
+              --title "ZPDF Language Packs" \
+              --notes "Curated offline language packs (UI catalogs + CTranslate2 translation models + SHA-256 checksums) downloaded on demand by ZPDF Settings -> Language."
+          fi
+          gh release upload "$TAG" dist/langpacks/* -R "$REPO" --clobber
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: language-packs
+          path: dist/langpacks/*
+          if-no-files-found: ignore
+          retention-days: 14

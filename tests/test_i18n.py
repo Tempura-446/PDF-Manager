@@ -126,3 +126,158 @@ def test_i18n_http_endpoints(tmp_path, monkeypatch):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def _make_argos_zip(path, from_code="en", to_code="zh", from_name="English", to_name="Chinese"):
+    root = f"translate-{from_code}_{to_code}-1_9"
+    meta = {
+        "from_code": from_code,
+        "to_code": to_code,
+        "from_name": from_name,
+        "to_name": to_name,
+        "package_version": "1.9",
+    }
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"{root}/metadata.json", json.dumps(meta))
+        zf.writestr(f"{root}/sentencepiece.model", b"FAKE-SPM-DATA")
+        zf.writestr(f"{root}/model/model.bin", b"FAKE-CT2-WEIGHTS")
+        zf.writestr(f"{root}/model/config.json", '{"model": "transformer"}')
+        zf.writestr(f"{root}/stanza/ignored.pt", b"SHOULD-BE-SKIPPED")
+    return path
+
+
+def test_install_argos_model_zip_maps_zh_and_skips_stanza(tmp_path, monkeypatch):
+    monkeypatch.setattr(appdata, "data_dir", lambda: tmp_path / "appdata")
+    monkeypatch.setattr(update, "data_dir", lambda: tmp_path / "appdata")
+    (tmp_path / "appdata").mkdir(parents=True, exist_ok=True)
+
+    argos_zip = _make_argos_zip(tmp_path / "en_zh.argosmodel", "en", "zh", "English", "Chinese")
+    # Also verify install_pack_from_zip auto-detects .argosmodel archives
+    res = i18n.install_pack_from_zip(argos_zip)
+    assert res["code"] == "zh-Hans"
+    assert res["pair"] == "en-zh-Hans"
+
+    model_dir = i18n.packs_dir() / "zh-Hans" / "models" / "en-zh-Hans"
+    assert (model_dir / "model.bin").is_file()
+    assert (model_dir / "sentencepiece.model").is_file()
+    assert not any(model_dir.rglob("ignored.pt"))
+
+    packs = i18n.list_installed_packs()
+    assert len(packs) == 1
+    assert packs[0]["has_translate"] is True
+    assert packs[0]["pairs"] == ["en-zh-Hans"]
+
+
+def test_hybrid_catalog_and_download_zpdf_plus_argos_fallback(tmp_path, monkeypatch):
+    monkeypatch.setattr(appdata, "data_dir", lambda: tmp_path / "appdata")
+    monkeypatch.setattr(update, "data_dir", lambda: tmp_path / "appdata")
+    (tmp_path / "appdata").mkdir(parents=True, exist_ok=True)
+
+    # Build a fake ZPDF curated pack for Spanish + SHA-256
+    es_zip = _make_pack_zip(tmp_path / "ZPDF-lang-es-0.60.2.zip", code="es", name="Español", strings={"reader.save": "Guardar"})
+    es_bytes = es_zip.read_bytes()
+    es_sha = hashlib.sha256(es_bytes).hexdigest()
+
+    # Build fake Argos models for Japanese (en->ja and ja->en)
+    en_ja = _make_argos_zip(tmp_path / "en_ja.argosmodel", "en", "ja", "English", "Japanese").read_bytes()
+    ja_en = _make_argos_zip(tmp_path / "ja_en.argosmodel", "ja", "en", "Japanese", "English").read_bytes()
+
+    fake_github_release = {
+        "assets": [
+            {
+                "name": "ZPDF-lang-es-0.60.2.zip",
+                "browser_download_url": "https://github.com/Tempura-446/ZPDF-releases/releases/download/langpacks-v1/ZPDF-lang-es-0.60.2.zip",
+                "size": len(es_bytes),
+            },
+            {
+                "name": "ZPDF-lang-es-0.60.2.zip.sha256",
+                "browser_download_url": "https://github.com/Tempura-446/ZPDF-releases/releases/download/langpacks-v1/ZPDF-lang-es-0.60.2.zip.sha256",
+                "size": 90,
+            },
+        ]
+    }
+    fake_argos_index = [
+        {"from_code": "en", "to_code": "es", "from_name": "English", "to_name": "Spanish", "package_version": "1.9",
+         "links": ["https://argos.example/en_es.argosmodel"]},
+        {"from_code": "en", "to_code": "ja", "from_name": "English", "to_name": "Japanese", "package_version": "1.9",
+         "links": ["https://argos.example/en_ja.argosmodel"]},
+        {"from_code": "ja", "to_code": "en", "from_name": "Japanese", "to_name": "English", "package_version": "1.9",
+         "links": ["https://argos.example/ja_en.argosmodel"]},
+    ]
+
+    responses = {
+        f"{update.API}/repos/{update.RELEASES}/releases/tags/{i18n.LANGPACKS_RELEASE_TAG}": json.dumps(fake_github_release).encode(),
+        i18n.ARGOS_INDEX_URL: json.dumps(fake_argos_index).encode(),
+        "https://github.com/Tempura-446/ZPDF-releases/releases/download/langpacks-v1/ZPDF-lang-es-0.60.2.zip": es_bytes,
+        "https://github.com/Tempura-446/ZPDF-releases/releases/download/langpacks-v1/ZPDF-lang-es-0.60.2.zip.sha256": f"{es_sha}  ZPDF-lang-es-0.60.2.zip\n".encode(),
+        "https://argos.example/en_ja.argosmodel": en_ja,
+        "https://argos.example/ja_en.argosmodel": ja_en,
+    }
+
+    def fake_get(url, *, headers=None, timeout=30):
+        if url not in responses:
+            raise core.PdfManagerError(f"unexpected url: {url}")
+        return responses[url]
+
+    monkeypatch.setattr(i18n, "_http_get_bytes", fake_get)
+
+    # 1. Hybrid catalog prefers ZPDF for 'es' and falls back to Argos for 'ja'
+    cat = i18n.list_catalog_packs(fetch=True)
+    by_code = {p["code"]: p for p in cat["packs"]}
+    assert by_code["es"]["source"] == "zpdf"
+    assert by_code["ja"]["source"] == "argos"
+    assert sorted(by_code["ja"]["available_pairs"]) == ["en-ja", "ja-en"]
+
+    # 2. Download 'es' -> uses curated ZPDF pack with SHA-256 verification
+    res_es = i18n.download_and_install_pack("es")
+    assert res_es["source"] == "zpdf"
+    assert i18n.load_catalog("es")["reader.save"] == "Guardar"
+
+    # 3. Download 'ja' -> falls back to Argos and installs both en-ja and ja-en
+    res_ja = i18n.download_and_install_pack("ja")
+    assert res_ja["source"] == "argos"
+    assert sorted(res_ja["installed_pairs"]) == ["en-ja", "ja-en"]
+
+    # 4. HTTP endpoints (/api/i18n/catalog and /api/i18n/pack/download)
+    srv, url = gui.make_server()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        base = url.split("#", 1)[0].rstrip("/")
+        token = srv.RequestHandlerClass.token
+        req = urllib.request.Request(base + "/api/i18n/catalog", headers={"X-Pdfm-Token": token})
+        with urllib.request.urlopen(req) as r:
+            http_cat = json.loads(r.read().decode("utf-8"))
+        http_by_code = {p["code"]: p for p in http_cat["packs"]}
+        assert http_by_code["ja"]["has_translate"] is True
+        assert sorted(http_by_code["ja"]["installed_pairs"]) == ["en-ja", "ja-en"]
+
+        req_dl = urllib.request.Request(
+            base + "/api/i18n/pack/download",
+            data=json.dumps({"code": "es"}).encode("utf-8"),
+            headers={"X-Pdfm-Token": token, "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req_dl) as r:
+            http_dl = json.loads(r.read().decode("utf-8"))
+        assert http_dl["source"] == "zpdf" and http_dl["code"] == "es"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_build_langpack_bundles_argos_models(tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("build_langpack", Path(__file__).resolve().parent.parent / "packaging" / "build_langpack.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    az = _make_argos_zip(tmp_path / "en_es.argosmodel", "en", "es", "English", "Spanish")
+    ui_json = Path(__file__).resolve().parent.parent / "pdfmanager" / "locales" / "es.json"
+    zip_path, sha_path = mod.build_pack("es", ui_json, tmp_path / "out", version="0.60.2", argos_zips=[az])
+    assert zip_path.is_file() and sha_path.is_file()
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        names = set(zf.namelist())
+    assert "models/en-es/model.bin" in names
+    assert "models/en-es/sentencepiece.model" in names
+    assert not any("stanza" in n for n in names)
+

@@ -66,10 +66,15 @@ def test_gui_and_reader_wire_translate_and_language_settings():
     html = (ROOT / "pdfmanager" / "gui.html").read_text(encoding="utf-8")
     assert "/static/i18n.js" in html
     assert 'id="set-language"' in html
+    assert 'id="set-pack-browse"' in html
+    assert 'id="set-pack-catalog"' in html
+    assert 'id="set-pack-filter"' in html
     assert 'id="set-pack-install"' in html
     assert 'id="set-pack-file"' in html
+    assert ".argosmodel" in html
 
     reader_js = (ROOT / "pdfmanager" / "static" / "reader.js").read_text(encoding="utf-8")
     assert "Translate this page" in reader_js
     assert "translateCurrentPage()" in reader_js
     assert "/api/translate/page" in reader_js
+    assert "/api/i18n/pack/download" in reader_js
