@@ -889,8 +889,56 @@ class Scrubber:
             pts = list(zip(values[0::2], values[1::2]))
         return [_apply(ctm, x, y) for x, y in pts]
 
+    @staticmethod
+    def _clip_axis_line(p0, p1, areas, grow=0.0):
+        """Clip a single horizontal or vertical segment ``p0 -> p1`` (in page space)
+        to the parts strictly outside ``areas``. Returns a list of ``(start, end)``
+        segments, or ``None`` if the segment is not axis-aligned."""
+        x0, y0 = p0
+        x1, y1 = p1
+        eps = 0.01
+        if abs(y0 - y1) <= eps:
+            # Horizontal segment at fixed y
+            fixed = (y0 + y1) / 2.0
+            lo, hi = (x0, x1) if x0 <= x1 else (x1, x0)
+            intervals = [(lo, hi)]
+            for ax0, ay0, ax1, ay1 in areas:
+                if ay0 - grow <= fixed <= ay1 + grow:
+                    next_iv = []
+                    for a, b in intervals:
+                        if ax1 <= a or ax0 >= b:
+                            next_iv.append((a, b))
+                        else:
+                            if a < ax0:
+                                next_iv.append((a, ax0))
+                            if ax1 < b:
+                                next_iv.append((ax1, b))
+                    intervals = next_iv
+            return [((a, fixed), (b, fixed)) for a, b in intervals if b - a > eps]
+        if abs(x0 - x1) <= eps:
+            # Vertical segment at fixed x
+            fixed = (x0 + x1) / 2.0
+            lo, hi = (y0, y1) if y0 <= y1 else (y1, y0)
+            intervals = [(lo, hi)]
+            for ax0, ay0, ax1, ay1 in areas:
+                if ax0 - grow <= fixed <= ax1 + grow:
+                    next_iv = []
+                    for a, b in intervals:
+                        if ay1 <= a or ay0 >= b:
+                            next_iv.append((a, b))
+                        else:
+                            if a < ay0:
+                                next_iv.append((a, ay0))
+                            if ay1 < b:
+                                next_iv.append((ay1, b))
+                    intervals = next_iv
+            return [((fixed, a), (fixed, b)) for a, b in intervals if b - a > eps]
+        return None
+
     def _paint_path(self, path, clip, paint, op, state, out, marked):
-        """Emit a path, leaving out subpaths that lie completely under a box."""
+        """Emit a path, dropping subpaths inside a redaction box, safely clipping
+        simple axis-aligned rules, and conservatively raising Unsupported for any
+        other vector path that partially intersects a redaction box (R-002)."""
         if op == "n" or not path:
             out.extend(p[0] for p in path)
             if clip is not None:
@@ -914,6 +962,30 @@ class Scrubber:
                 box = (x0 - grow, y0 - grow, x1 + grow, y1 + grow)
                 if any(_inside(box, area) for area in self.areas):
                     dropped = True
+                    continue
+                if any(_overlaps(box, area) for area in self.areas):
+                    # Partially intersecting vector geometry: only clip simple
+                    # stroked axis-aligned rules (e.g. table borders / underlines);
+                    # all other intersecting vector paths fall back to rasterization
+                    # so no vector geometry remains recoverable under the box.
+                    clipped_sub = None
+                    if (clip is None and op in ("S", "s") and len(sub) == 2
+                            and str(sub[0][0].operator) == "m" and str(sub[1][0].operator) == "l"
+                            and len(sub[0][1]) == 1 and len(sub[1][1]) == 1):
+                        segs = self._clip_axis_line(sub[0][1][0], sub[1][1][0], self.areas, grow)
+                        inv = _invert(state.ctm) if segs is not None else None
+                        if segs is not None and inv is not None:
+                            clipped_sub = []
+                            for p_start, p_end in segs:
+                                ux0, uy0 = _apply(inv, *p_start)
+                                ux1, uy1 = _apply(inv, *p_end)
+                                clipped_sub.append((_op([round(ux0, 4), round(uy0, 4)], "m"), [p_start], True))
+                                clipped_sub.append((_op([round(ux1, 4), round(uy1, 4)], "l"), [p_end], False))
+                    if clipped_sub is None:
+                        raise Unsupported("a drawing crosses a redacted area")
+                    dropped = True
+                    if clipped_sub:
+                        keep.append(clipped_sub)
                     continue
             keep.append(sub)
         if not dropped:

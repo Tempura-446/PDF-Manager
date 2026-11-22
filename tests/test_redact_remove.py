@@ -671,3 +671,210 @@ def test_fax_pictures_are_blacked_out(tmp_path):
     assert picture.getpixel((2, 2)) == (0, 0, 0) and picture.getpixel((w // 2 - 2, h - 2)) == (0, 0, 0)
     assert [picture.getpixel((x, 5)) for x in range(w // 2 + 2, w)] == \
         [original.getpixel((x, 5)) for x in range(w // 2 + 2, w)]
+
+
+# -- Phase 1 security remediation: R-001, R-002, R-003 ------------------------------------------
+
+def test_r001_coordinate_redaction_scrubs_bookmarks_alt_text_and_verifies_copies(tmp_path):
+    """R-001: Coordinate-only redaction extracts sensitive text under the box,
+    propagates it to outline/alt-text sanitization, and verifies copies across
+    metadata, attachments, comments, form fields, and other pages."""
+    src = tmp_path / "coord.pdf"
+    c = canvas.Canvas(str(src), pagesize=(612, 792))
+    c.setTitle("Report for Project FalconX")
+    c.setFont("Helvetica", 14)
+    c.drawString(72, 700, "Project FalconX")
+    c.drawString(72, 660, "Public summary stays visible.")
+    c.acroForm.textfield(name="memo", value="Notes on Project FalconX", x=72, y=400, width=200, height=20)
+    c.showPage()
+    c.setFont("Helvetica", 14)
+    c.drawString(72, 700, "Repeated Project   FalconX on page two")
+    c.showPage()
+    c.save()
+
+    w = PdfWriter(clone_from=str(src))
+    page0 = w.pages[0]
+    elem = w._add_object(DictionaryObject({
+        NameObject("/Type"): NameObject("/StructElem"),
+        NameObject("/S"): NameObject("/P"),
+        NameObject("/Pg"): page0.indirect_reference,
+        NameObject("/ActualText"): TextStringObject("Project FalconX"),
+        NameObject("/K"): ArrayObject([NumberObject(0)]),
+    }))
+    w._root_object[NameObject("/StructTreeRoot")] = w._add_object(DictionaryObject({
+        NameObject("/Type"): NameObject("/StructTreeRoot"),
+        NameObject("/K"): ArrayObject([elem]),
+    }))
+    w.add_outline_item("Section: Project FalconX", 0)
+    w.add_outline_item("Public Overview", 0)
+    w.add_attachment("Project FalconX.txt", b"Attachment mentions Project FalconX")
+    # Add a text comment on page 1 (outside the redaction box) containing the secret
+    comment = DictionaryObject({
+        NameObject("/Type"): NameObject("/Annot"),
+        NameObject("/Subtype"): NameObject("/Text"),
+        NameObject("/Rect"): ArrayObject([NumberObject(400), NumberObject(400), NumberObject(420), NumberObject(420)]),
+        NameObject("/Contents"): TextStringObject("Review Project FalconX"),
+    })
+    page0[NameObject("/Annots")].append(w._add_object(comment))
+    w.write(str(src))
+
+    out = tmp_path / "out.pdf"
+    # Coordinate-only redaction covering "Project FalconX" on page 1
+    report = redact.redact(src, out, boxes={0: [(68, 692, 220, 720)]})
+    assert report.bookmarks == 1
+    assert "FalconX" not in text(out, 0)
+    assert "Public summary stays visible." in text(out, 0)
+
+    reader = PdfReader(str(out))
+    # Bookmark scrubbed; unrelated bookmark preserved
+    assert [o.title for o in reader.outline] == ["Section: " + redact.BLACKED, "Public Overview"]
+    # Accessibility /ActualText pruned
+    assert "/ActualText" not in reader.trailer["/Root"]["/StructTreeRoot"]["/K"][0]
+    # Post-redaction verification detects remaining copies across the document
+    proof = report.proof
+    assert proof["status"] == redact.STATUS_FINDINGS and not proof["clean"]
+    wheres = " | ".join(f["where"] for f in proof["found"])
+    assert "details (title)" in wheres
+    assert "Project FalconX.txt" in wheres
+    assert "form field" in wheres
+    assert "comment on page 1" in wheres
+    assert "text of page 2" in wheres
+    assert "a bookmark" not in wheres
+
+
+def test_r001_stopword_and_short_token_filtering():
+    """R-001: Common stopwords and tiny fragments are not propagated document-wide,
+    while meaningful terms, partial words, and ID codes are preserved."""
+    assert not redact._is_safe_sanitization_term("the")
+    assert not redact._is_safe_sanitization_term("a")
+    assert not redact._is_safe_sanitization_term("12")
+    assert not redact._is_safe_sanitization_term("...")
+    assert not redact._is_safe_sanitization_term("the and for")
+    assert redact._is_safe_sanitization_term("911")
+    assert redact._is_safe_sanitization_term("FalconX")
+    assert redact._is_safe_sanitization_term("John Smith")
+    assert redact._normalize_extracted_terms(["the\n  Project   FalconX \nproject falconx"]) == ["Project FalconX"]
+
+
+def test_r002_axis_line_clipped_and_complex_intersecting_paths_fallback_to_raster(tmp_path):
+    """R-002: Simple axis-aligned rules crossing a box are cleanly clipped so the
+    inner segment is removed; partially intersecting filled shapes, curves,
+    diagonal lines, and multi-segment polygons conservatively fall back to
+    rasterization so no vector geometry remains recoverable."""
+    box = (90, 590, 130, 630)
+
+    # 1. Axis-aligned horizontal rule crossing box -> clipped cleanly, stays vector
+    rule_pdf = raw_content_pdf(
+        tmp_path / "rule.pdf",
+        b"q 0 0 1 RG 2 w 50 610 m 300 610 l S Q",
+    )
+    rule_out = tmp_path / "rule_out.pdf"
+    rep_rule = redact.redact(rule_pdf, rule_out, boxes={0: [box]})
+    assert rep_rule.pictures == {}
+    with pikepdf.open(str(rule_out)) as pdf:
+        body = pdf.pages[0].Contents.read_bytes()
+    # Original unclipped 50..300 line is split into 50..90 and 130..300
+    assert b"50 610 m" in body and b"90 610 l" in body and b"130 610 m" in body and b"300 610 l" in body
+
+    # 2. Partially intersecting filled rectangle -> falls back to rasterization
+    rect_pdf = raw_content_pdf(
+        tmp_path / "partial_rect.pdf",
+        b"q 1 0 0 rg 100 600 80 20 re f Q",
+    )
+    rect_out = tmp_path / "partial_rect_out.pdf"
+    rep_rect = redact.redact(rect_pdf, rect_out, boxes={0: [box]})
+    assert 1 in rep_rect.pictures
+    assert b"100 600 80 20 re" not in everything_in(rect_out)
+
+    # 3. Partially intersecting Bezier curve (e.g. vector signature) -> falls back to rasterization
+    curve_pdf = raw_content_pdf(
+        tmp_path / "curve.pdf",
+        b"q 0 0 0 RG 2 w 70 600 m 100 640 120 580 160 615 c S Q",
+    )
+    curve_out = tmp_path / "curve_out.pdf"
+    rep_curve = redact.redact(curve_pdf, curve_out, boxes={0: [box]})
+    assert 1 in rep_curve.pictures
+    assert b"100 640 120 580 160 615 c" not in everything_in(curve_out)
+
+    # 4. Partially intersecting diagonal line -> falls back to rasterization
+    diag_pdf = raw_content_pdf(
+        tmp_path / "diag.pdf",
+        b"q 0 0 0 RG 2 w 70 580 m 150 640 l S Q",
+    )
+    diag_out = tmp_path / "diag_out.pdf"
+    rep_diag = redact.redact(diag_pdf, diag_out, boxes={0: [box]})
+    assert 1 in rep_diag.pictures
+
+    # 5. Path completely outside the box -> untouched, stays vector
+    outside_pdf = raw_content_pdf(
+        tmp_path / "outside.pdf",
+        b"q 0 1 0 rg 400 600 20 20 re f Q",
+    )
+    outside_out = tmp_path / "outside_out.pdf"
+    rep_out = redact.redact(outside_pdf, outside_out, boxes={0: [box]})
+    assert rep_out.pictures == {}
+    with pikepdf.open(str(outside_out)) as pdf:
+        assert b"400 600 20 20 re" in pdf.pages[0].Contents.read_bytes()
+
+
+def test_r003_verification_distinguishes_clean_findings_and_incomplete(tmp_path, monkeypatch):
+    """R-003: check_redacted() explicitly distinguishes verified_clean,
+    findings_detected, and verification_incomplete, and never reports clean=True
+    when attachments, streams, or metadata checks are skipped or fail."""
+    src = tmp_path / "clean.pdf"
+    c = canvas.Canvas(str(src), pagesize=(612, 792))
+    c.setFont("Helvetica", 12)
+    c.drawString(72, 720, "Harmless document text")
+    c.save()
+
+    # 1. Verified clean
+    clean_res = redact.check_redacted(src, terms=["NONEXISTENT_SECRET"])
+    assert clean_res["status"] == redact.STATUS_CLEAN
+    assert clean_res["clean"] is True
+    assert clean_res["skipped"] == [] and clean_res["warnings"] == []
+    assert clean_res["checks"]["page_text"] == "passed"
+    assert clean_res["checks"]["metadata"] == "passed"
+    assert clean_res["checks"]["inner_streams"] == "passed"
+    assert redact.proof_words(clean_res).startswith("Checked:")
+
+    # 2. Findings detected
+    hit_res = redact.check_redacted(src, terms=["Harmless"])
+    assert hit_res["status"] == redact.STATUS_FINDINGS
+    assert hit_res["clean"] is False
+    assert hit_res["checks"]["page_text"] == "findings"
+    assert redact.proof_words(hit_res).startswith("Careful:")
+
+    # 3. Oversized attachment exceeding DEEP_STREAM -> verification_incomplete
+    att_pdf = tmp_path / "big_att.pdf"
+    w = PdfWriter(clone_from=str(src))
+    w.add_attachment("big.bin", b"A" * 512)
+    w.write(str(att_pdf))
+    with monkeypatch.context() as mp:
+        mp.setattr(redact, "DEEP_STREAM", 100)
+        att_res = redact.check_redacted(att_pdf, terms=["NONEXISTENT_SECRET"])
+    assert att_res["status"] == redact.STATUS_INCOMPLETE
+    assert att_res["clean"] is False
+    assert att_res["checks"]["attachments"] == "incomplete"
+    assert any("big.bin" in s["where"] for s in att_res["skipped"])
+    words = redact.proof_words(att_res)
+    assert words.startswith("Verification incomplete:") and "nothing redacted is left" not in words
+
+    # 4. Inner stream inspection failure (pikepdf.open fails) -> verification_incomplete
+    with monkeypatch.context() as mp:
+        mp.setattr(pikepdf, "open", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("corrupt xref")))
+        stream_res = redact.check_redacted(src, terms=["NONEXISTENT_SECRET"])
+    assert stream_res["status"] == redact.STATUS_INCOMPLETE
+    assert stream_res["clean"] is False
+    assert stream_res["checks"]["inner_streams"] == "incomplete"
+    assert any("corrupt xref" in s["reason"] for s in stream_res["skipped"])
+
+    # 5. Verification exception inside redact() -> proof is verification_incomplete (not None / clean)
+    with monkeypatch.context() as mp:
+        mp.setattr(redact, "check_redacted", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+        out = tmp_path / "boom_out.pdf"
+        rep = redact.redact(src, out, terms=["Harmless"])
+    assert rep.proof is not None
+    assert rep.proof["status"] == redact.STATUS_INCOMPLETE
+    assert rep.proof["clean"] is False
+    assert "boom" in redact.proof_words(rep.proof)
+
