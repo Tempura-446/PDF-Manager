@@ -4,6 +4,43 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.61.2
+
+Comprehensive security, reliability, and audit remediation across administrator
+policies, security profiles, recursive redaction verification, process
+isolation, attachment extraction, and local HTTP server hardening.
+
+- **Administrator policy enforcement (`policy.py`, `ocr.py`, `i18n.py`,
+  `escl.py`, `update.py`, `certsign.py`, `server/reader_routes.py`,
+  `ZPDF.adml`).** Wired production enforcement across all 7 administrator
+  policies (`disable_network`, `disable_updates`, `disable_password_removal`,
+  `require_make_safe_on_open`, `force_security_profile`, `fips_mode`, and
+  validated `trust_list_paths` with symlink/traversal guards merged into
+  digital signature verification). Clarified FIPS algorithm-policy wording.
+- **Security Profile password-removal fix (`secprofiles.py`, `core.py`).**
+  Closed the `_internal=True` policy bypass in `core.decrypt()` and enforced
+  `disable_password_removal`, `force_security_profile`, `require_make_safe_on_open`,
+  and atomic output writes in `secprofiles.apply_profile()`.
+- **Recursive attachment redaction verification (`redact.py`).** Upgraded
+  `check_redacted()` with format-aware inspection of embedded PDFs, Office
+  Open XML documents (`.docx`, `.xlsx`, `.pptx`), and ZIP archives under
+  depth, entry-count, decompressed-size, and compression-ratio limits; flagged
+  encrypted, oversized, and unsupported binary attachments as
+  `verification_incomplete`.
+- **Process isolation & attachment extraction hardening (`isolation.py`,
+  `core.py`).** Fixed the multiprocessing pipe-buffer deadlock on multi-megabyte
+  payloads by draining `out_q` before `proc.join()`, added cancellation support
+  and guaranteed handle/process cleanup, stripped Unicode bidi/control/drive
+  prefixes from extracted attachment names, blocked symlink escapes, and added
+  a 250 MB aggregate attachment extraction cap.
+- **Update, HTTP server, audit log & OCR fixes (`update.py`, `relsign.py`,
+  `gui.py`, `server/common.py`, `auditlog.py`, `ocr.py`).** Hardened update
+  zip extraction against symlinks/zip-bombs/corrupt archives and added downgrade
+  protection; validated `Content-Length` headers against negative/malformed
+  values; added recursive sensitive-key redaction to `auditlog._clean_details()`;
+  and vectorized `ocr._looks_grey()` with NumPy (removing Pillow 14
+  `Image.getdata()` deprecation).
+
 ## 0.61.1
 
 Source-code security hardening and desktop GUI bug fixes following a full
