@@ -284,6 +284,12 @@ def _best_model_source(kind):
 
 def _fetch(url, target):
     import urllib.request
+    from pdfmanager import policy
+
+    try:
+        policy.check_network_allowed("OCR model download")
+    except policy.PolicyError as exc:
+        raise core.PdfManagerError(str(exc)) from None
 
     with urllib.request.urlopen(url, timeout=60) as response, open(target, "wb") as out:
         while True:

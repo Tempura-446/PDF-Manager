@@ -166,11 +166,16 @@ def snapshot(*, policies: dict | None = None) -> dict:
 
 
 def check_fips_algorithm(algorithm: str, *, policies: dict | None = None) -> None:
-    """Raise PolicyError if ``fips_mode`` is enabled and ``algorithm`` is forbidden."""
+    """Raise PolicyError if ``fips_mode`` is enabled and ``algorithm`` is forbidden.
+
+    Note: This enforces ZPDF's algorithm-policy filter (rejecting RC4, MD5,
+    SHA-1, DES, 3DES, and AES-128-ECB). It does **not** provide or claim
+    FIPS 140-2/140-3 validated cryptographic module certification.
+    """
     if not get("fips_mode", False, policies=policies):
         return
     norm = str(algorithm or "").strip().lower()
-    if norm in FIPS_FORBIDDEN_ALGORITHMS or "rc4" in norm or "md5" in norm or "sha1" in norm:
+    if norm in FIPS_FORBIDDEN_ALGORITHMS or "rc4" in norm or "md5" in norm or "sha1" in norm or "sha-1" in norm:
         raise PolicyError(
             f"FIPS mode policy forbids algorithm {algorithm!r}; use AES-256 and SHA-256 or stronger"
         )
@@ -182,6 +187,107 @@ def check_password_removal_allowed(*, policies: dict | None = None) -> None:
         raise PolicyError(
             "Removing PDF passwords is disabled by your organisation's security policy"
         )
+
+
+def check_network_allowed(operation: str = "network access", *, policies: dict | None = None) -> None:
+    """Raise PolicyError if administrator policy disables outbound network access."""
+    if get("disable_network", False, policies=policies):
+        raise PolicyError(
+            f"{operation} is disabled by your organisation's security policy (disable_network)"
+        )
+
+
+def check_updates_allowed(*, policies: dict | None = None) -> None:
+    """Raise PolicyError if administrator policy disables updates or network access."""
+    if get("disable_updates", False, policies=policies) or get("disable_network", False, policies=policies):
+        raise PolicyError(
+            "Updates are disabled by your organisation's security policy"
+        )
+
+
+def requires_make_safe_on_open(*, policies: dict | None = None) -> bool:
+    """True when administrator policy requires Make Safe sanitization on document open."""
+    return bool(get("require_make_safe_on_open", False, policies=policies))
+
+
+def forced_security_profile(*, policies: dict | None = None) -> str:
+    """Return the administrator-mandated security profile name, or ``""`` if none."""
+    return str(get("force_security_profile", "", policies=policies) or "").strip()
+
+
+def check_security_profile_allowed(requested: str | None = None, *, policies: dict | None = None) -> str:
+    """Validate ``requested`` against ``force_security_profile`` and return the effective profile name.
+
+    If ``force_security_profile`` is configured, any non-matching profile request
+    raises ``PolicyError`` so users/CLI/API cannot downgrade to a weaker profile.
+    """
+    forced = forced_security_profile(policies=policies)
+    req = str(requested or "").strip()
+    if not forced:
+        return req
+    if not req or req.lower() == forced.lower():
+        return forced
+    raise PolicyError(
+        f"Security profile {req!r} is blocked by administrator policy; "
+        f"only the mandated profile {forced!r} may be applied"
+    )
+
+
+_TRUST_CERT_SUFFIXES = frozenset({".pem", ".crt", ".cer", ".der"})
+
+
+def validated_trust_list_paths(*, policies: dict | None = None) -> list[Path]:
+    """Return validated certificate file paths from ``trust_list_paths``.
+
+    Rejects relative paths, ``..`` traversal components, missing/unreadable
+    targets, and symbolic links that escape their configured directory.
+    Never raises on inaccessible entries; fails safely by omitting them.
+    """
+    raw_paths = get("trust_list_paths", [], policies=policies) or []
+    if not isinstance(raw_paths, list):
+        return []
+    validated: list[Path] = []
+    seen: set[Path] = set()
+    for entry in raw_paths:
+        text = str(entry or "").strip()
+        if not text:
+            continue
+        p = Path(text)
+        # Require absolute path and forbid raw '..' traversal segments.
+        if not p.is_absolute() or ".." in p.parts:
+            continue
+        try:
+            # Reject direct symlinks that escape the configured parent directory.
+            parent_resolved = p.parent.resolve(strict=True)
+            resolved = p.resolve(strict=True)
+        except OSError:
+            continue
+        if p.is_symlink():
+            try:
+                resolved.relative_to(parent_resolved)
+            except ValueError:
+                continue
+        if resolved.is_file():
+            if resolved.suffix.lower() in _TRUST_CERT_SUFFIXES and resolved not in seen:
+                seen.add(resolved)
+                validated.append(resolved)
+        elif resolved.is_dir():
+            try:
+                children = sorted(resolved.iterdir())
+            except OSError:
+                continue
+            for child in children:
+                if child.suffix.lower() not in _TRUST_CERT_SUFFIXES:
+                    continue
+                try:
+                    c_res = child.resolve(strict=True)
+                    c_res.relative_to(resolved)
+                except (OSError, ValueError):
+                    continue
+                if c_res.is_file() and c_res not in seen:
+                    seen.add(c_res)
+                    validated.append(c_res)
+    return validated
 
 
 def offline_update_candidates(*, policies: dict | None = None) -> list[dict]:

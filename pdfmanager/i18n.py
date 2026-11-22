@@ -333,6 +333,12 @@ def list_available_languages():
 
 def _http_get_bytes(url, *, headers=None, timeout=30):
     """Download ``url`` over HTTPS and return its raw bytes."""
+    from pdfmanager import policy
+
+    try:
+        policy.check_network_allowed("Language pack download")
+    except policy.PolicyError as exc:
+        raise core.PdfManagerError(str(exc)) from None
     if not str(url or "").startswith("https://"):
         raise core.PdfManagerError(f"refusing non-HTTPS language pack URL: {url!r}")
     req = urllib.request.Request(url, headers={"User-Agent": "ZPDF", **(headers or {})})

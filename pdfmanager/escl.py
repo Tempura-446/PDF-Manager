@@ -275,6 +275,12 @@ def _url(device_id):
 def _request(parts, method, path, body=None, timeout=TIMEOUT, limit=MAX_XML):
     """One request to a scanner: (status, headers, bytes). ``path`` is
     relative to the device's root, or absolute (a job's own address)."""
+    from pdfmanager import policy
+
+    try:
+        policy.check_network_allowed("Network scanner access")
+    except policy.PolicyError as exc:
+        raise EsclError(str(exc), "refused") from None
     if path.startswith(("http://", "https://")):
         # A job's address as the scanner gave it. Scanners name themselves in
         # many ways there (their host name, another address of theirs), so

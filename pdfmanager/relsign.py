@@ -107,19 +107,30 @@ def verify_checksum(sha256_bytes, signature_text, public_key_pem=None):
         raise ValueError("release signature does not match the built-in signing key") from exc
 
 
-def verify_release(zip_bytes, sha256_bytes, sig_bytes=None, public_key_pem=None, version=""):
+def is_signing_configured(public_key_pem=None) -> bool:
+    """True when an Ed25519 release public key is configured for verification."""
+    return load_public_key(public_key_pem) is not None
+
+
+def verify_release(zip_bytes, sha256_bytes, sig_bytes=None, public_key_pem=None, version="", *,
+                   require_signature=False):
     """Verify a downloaded release zip against its SHA-256 checksum and, when a
-    public key is configured, its Ed25519 signature. Raises ``ValueError`` on
-    any mismatch or missing/invalid signature."""
+    public key is configured (or ``require_signature=True``), its Ed25519
+    signature. Raises ``ValueError`` on any mismatch or missing/invalid signature."""
     label = f"version {version}" if version else "the download"
     published = sha256_bytes.decode("ascii", "replace").split()
     if not published or hashlib.sha256(zip_bytes).hexdigest() != published[0].lower():
         raise ValueError(f"the download of {label} came out damaged (its checksum doesn't match); try again")
     pub = load_public_key(public_key_pem)
-    if pub is not None:
-        if not sig_bytes:
-            raise ValueError(f"the release of {label} has no signature; refusing to install an unsigned update")
-        try:
-            verify_checksum(sha256_bytes, sig_bytes, public_key_pem=pub)
-        except ValueError as exc:
-            raise ValueError(f"the release of {label} failed signature verification ({exc}); refusing to install") from None
+    if pub is None:
+        if require_signature:
+            raise ValueError(
+                f"no release public key is configured; refusing to install {label} without signature verification"
+            )
+        return
+    if not sig_bytes:
+        raise ValueError(f"the release of {label} has no signature; refusing to install an unsigned update")
+    try:
+        verify_checksum(sha256_bytes, sig_bytes, public_key_pem=pub)
+    except ValueError as exc:
+        raise ValueError(f"the release of {label} failed signature verification ({exc}); refusing to install") from None

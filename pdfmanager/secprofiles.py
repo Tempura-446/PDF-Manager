@@ -198,7 +198,7 @@ def dynamic_print_watermark(
 def apply_profile(
     path: str | Path,
     output: str | Path,
-    profile: str | dict,
+    profile: str | dict | None,
     *,
     password: str | None = None,
     user_password: str | None = None,
@@ -208,22 +208,72 @@ def apply_profile(
 ) -> dict:
     """Apply a named or dict Security Profile to ``path`` and write ``output``.
 
+    Enforces administrator policies:
+      - ``force_security_profile``: rejects non-matching profiles.
+      - ``require_make_safe_on_open``: forces ``make_safe`` on.
+      - ``disable_password_removal``: refuses to produce an unencrypted output
+        from an encrypted input (requires an output password to re-encrypt).
+
     Returns a summary dict ``{"profile": name, "output": str(output), "steps": [...]}``.
     """
-    prof = get_profile(profile, store_path) if isinstance(profile, str) else dict(profile)
+    import os
+    from pdfmanager import policy
+
+    forced = policy.forced_security_profile()
+    if isinstance(profile, dict):
+        req_name = str(profile.get("name") or "").strip()
+        if forced and req_name.lower() != forced.lower():
+            raise core.PdfManagerError(
+                f"Security profile {req_name or 'Custom'!r} is blocked by administrator policy; "
+                f"only the mandated profile {forced!r} may be applied"
+            )
+        prof = get_profile(forced, store_path) if forced else dict(profile)
+    else:
+        try:
+            effective_name = policy.check_security_profile_allowed(profile)
+        except policy.PolicyError as exc:
+            raise core.PdfManagerError(str(exc)) from None
+        if not effective_name:
+            raise core.PdfManagerError("security profile name can't be empty")
+        prof = get_profile(effective_name, store_path)
+
     prof_name = prof.get("name", "Custom")
     applied_steps = []
 
+    eff_user_pw = user_password if user_password is not None else prof.get("user_password")
+    eff_owner_pw = owner_password if owner_password is not None else prof.get("owner_password")
+    will_encrypt = bool(eff_user_pw or eff_owner_pw)
+
+    input_encrypted = core.open_pdf(path, password).is_encrypted
+    if input_encrypted and not will_encrypt:
+        try:
+            policy.check_password_removal_allowed()
+        except policy.PolicyError as exc:
+            raise core.PdfManagerError(
+                f"{exc}; provide an output password to keep the document encrypted"
+            ) from None
+
+    must_make_safe = bool(prof.get("make_safe")) or policy.requires_make_safe_on_open()
+
     with tempfile.TemporaryDirectory(prefix="zpdf-secprof-") as tmp:
+        try:
+            os.chmod(tmp, 0o700)
+        except OSError:
+            pass
         current = Path(tmp) / "step0.pdf"
-        if core.open_pdf(path, password).is_encrypted:
-            core.decrypt(path, current, password or "", _internal=True)
+        if input_encrypted:
+            if will_encrypt:
+                # Staging-only decryption inside private tempdir; guaranteed re-encryption below.
+                core._decrypt_unprotected(path, current, password or "")
+            else:
+                # Policy already verified above; decrypt via public API.
+                core.decrypt(path, current, password or "")
         else:
             shutil.copyfile(path, current)
 
         step_idx = 0
 
-        if prof.get("make_safe"):
+        if must_make_safe:
             step_idx += 1
             nxt = Path(tmp) / f"step{step_idx}.pdf"
             risks.make_safe(current, nxt)
@@ -259,10 +309,8 @@ def apply_profile(
             current = nxt
             applied_steps.append("watermark")
 
-        eff_user_pw = user_password if user_password is not None else prof.get("user_password")
-        eff_owner_pw = owner_password if owner_password is not None else prof.get("owner_password")
         perm_cfg = prof.get("permissions")
-        if eff_user_pw or eff_owner_pw:
+        if will_encrypt:
             import secrets
 
             step_idx += 1
@@ -290,7 +338,18 @@ def apply_profile(
 
         out = Path(output)
         out.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(current), str(out))
+        # Atomic write to final destination so failures never leave partial/decrypted output.
+        fd, staged = tempfile.mkstemp(prefix=out.name + ".", suffix=".tmp", dir=out.parent)
+        try:
+            os.close(fd)
+            shutil.copyfile(current, staged)
+            os.replace(staged, out)
+        except BaseException:
+            try:
+                os.unlink(staged)
+            except OSError:
+                pass
+            raise
 
     auditlog.record(
         "profile_applied",
