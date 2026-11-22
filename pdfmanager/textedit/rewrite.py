@@ -103,7 +103,7 @@ class _Page:
             raw.FPDFText_GetFontInfo(self.textpage.raw, i, buf, len(buf), ctypes.byref(flags))
             out.append((ch, x, y + moved.get(i, 0.0), buf.value, raw.FPDFText_GetFontSize(self.textpage.raw, i)))
         return {"letters": out, "bands": list(self.bands), "strict": self.strict and not moved,
-                "texts": list(self.texts)}
+                "texts": list(self.texts), "touched": list(self.touched), "flowed": bool(moved)}
 
     def take(self, rows, paragraph=False, text=None):
         """Take the old words (rows of letters) out of the page's drawing,
@@ -1487,7 +1487,8 @@ class _Page:
         return True
 
 
-def edit_text(path, output, edits, password=None, report=None):
+def edit_text(path, output, edits, password=None, report=None,
+              require_permanent=False, verify_visual=False, visual_report=None):
     """Change words on pages. ``edits`` is a list of {"page" (1-based), and
     either "rect": [x0, y0, x1, y1] around the old words in PDF points (with
     "paragraph": true to rewrite the lines in it as one paragraph that
@@ -1512,12 +1513,19 @@ def edit_text(path, output, edits, password=None, report=None):
     below it can move is never drawn over what follows: it is set smaller
     and tighter, as little as needed, and the report gives its "size".
 
+    When ``require_permanent=True``, edits that cannot be rewritten directly in
+    the content stream will NOT silently fall back to visual covering; instead
+    :class:`core.PdfManagerError` is raised (T-002). When ``verify_visual=True``,
+    unaffected regions of edited pages are rendered and compared against the
+    original PDF via :func:`verify_visual_fidelity` (T-003).
+
     Returns how many edits were made; ``report``, a list, gets for each the
     font used ("same", "installed", "standard" or "similar") and its name,
     with "asked" (the family asked for) and "matched" (whether it was the
     one used), "moved" (lines moved), "overflow", "size" (shrunk to),
     "wider" and "taller" when they apply; "covered" when the old words
-    could only be covered (they are still in the file under the cover), and
+    could only be covered (they are still in the file under the cover),
+    "permanent" (bool) and "method" ("permanent" or "covered"), and
     "missing" (the letters no font here can draw, left out)."""
     output = Path(output)
     if output.is_dir():
@@ -1526,19 +1534,41 @@ def edit_text(path, output, edits, password=None, report=None):
         output.parent.mkdir(parents=True, exist_ok=True)
     # The changes are made in the pages' own drawing. Before the result is
     # kept it is read back: every letter no change was about must still be
-    # there, where it was. If one isn't (a drawing this misreads), the
-    # changes are made the old way instead, which touches nothing: the old
-    # words covered, the new ones drawn on top.
+    # there, where it was, and every replacement must match in order. If one
+    # isn't (a drawing this misreads), the changes are made the old way instead
+    # (unless require_permanent=True), which covers the old words and draws the
+    # new ones on top.
     fd, tmp = tempfile.mkstemp(prefix=output.name + ".", suffix=".check", dir=output.parent)
     os.close(fd)
+    last_visual = None
+
+    def _regions_from_expect(expect):
+        regions = {}
+        for page_idx, want in expect.items():
+            boxes = list(want.get("touched") or [])
+            if want.get("flowed") and boxes:
+                # Reflowed paragraphs shift lines below them; mask down to page bottom.
+                x0 = min(b[0] for b in boxes)
+                x1 = max(b[2] for b in boxes)
+                y1 = max(b[3] for b in boxes)
+                boxes.append((x0, 0.0, x1, y1))
+            regions[page_idx] = boxes
+        return regions
 
     def attempt(some, old_way):
         """Make ``some`` changes; (how many, the notes, whether what was
         written reads back as it should)."""
+        nonlocal last_visual
         notes = []
         try:
             count, expect = _edit(path, tmp, some, password, notes, old_way)
-            return count, notes, old_way is True or _intact(tmp, expect)
+            if old_way is True:
+                return count, notes, True
+            ok = _intact(tmp, expect)
+            if ok and verify_visual and expect:
+                last_visual = verify_visual_fidelity(path, tmp, _regions_from_expect(expect), password=password)
+                ok = last_visual["ok"]
+            return count, notes, ok
         except core.PdfManagerError:
             raise  # a change that can't be made either way (no such page, ...)
         except Exception:  # noqa: BLE001 - a drawing the new way can't handle
@@ -1548,19 +1578,37 @@ def edit_text(path, output, edits, password=None, report=None):
 
     try:
         count, notes, sound = attempt(edits, frozenset())
-        if not sound and len(edits) > 1:
-            # Which of the changes it was: each is tried alone, and only
-            # those that fail are made the old way.
-            order = _order(edits)
-            bad = frozenset(n for n, k in enumerate(order) if not attempt([edits[k]], frozenset())[2])
-            if bad:
-                count, notes, sound = attempt(edits, bad)
-        if not sound:
-            count, notes, _ = attempt(edits, True)
+        if require_permanent:
+            covered_idx = [i + 1 for i, n in enumerate(notes) if n.get("covered")]
+            if not sound or covered_idx:
+                if covered_idx:
+                    detail = f"edit(s) {', '.join(map(str, covered_idx))} required visual covering"
+                elif verify_visual and last_visual and not last_visual.get("ok"):
+                    bad_pages = [str(p + 1) for p, info in last_visual.get("pages", {}).items() if not info.get("ok")]
+                    detail = f"visual fidelity check failed on page(s) {', '.join(bad_pages)}"
+                else:
+                    detail = "content-stream integrity verification failed"
+                raise core.PdfManagerError(
+                    f"permanent text edit could not be completed safely ({detail}); "
+                    "pass require_permanent=False to allow visual-cover fallback"
+                )
+        else:
+            if not sound and len(edits) > 1:
+                # Which of the changes it was: each is tried alone, and only
+                # those that fail are made the old way.
+                order = _order(edits)
+                bad = frozenset(n for n, k in enumerate(order) if not attempt([edits[k]], frozenset())[2])
+                if bad:
+                    count, notes, sound = attempt(edits, bad)
+            if not sound:
+                count, notes, _ = attempt(edits, True)
         os.replace(tmp, output)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
+    if visual_report is not None and last_visual is not None:
+        visual_report.clear()
+        visual_report.update(last_visual)
     if report is not None:
         report += notes
     return count
@@ -1576,15 +1624,144 @@ def _order(edits):
     return sorted(range(len(edits)), key=lambda k: pages.index(int(edits[k].get("page", 0))))
 
 
+# Bidi control characters that PDF extractors may insert or omit without changing visible text.
+_BIDI_CONTROLS = frozenset(
+    "\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\ufeff"
+)
+
+
+def _normalize_for_check(text, *, keep_soft_hyphen=True):
+    """Normalize text for ordered integrity validation (T-001):
+    NFKC (expands ligatures like ﬁ -> fi), maps PDFium line-end hyphen markers
+    (\\ufffe, \\u0002) to '-', handles soft hyphens (\\u00ad), strips bidi
+    control marks and whitespace."""
+    norm = unicodedata.normalize("NFKC", str(text or ""))
+    for marker in ("\ufffe", "\u0002"):
+        norm = norm.replace(marker, "-")
+    norm = norm.replace("\u00ad", "-" if keep_soft_hyphen else "")
+    return "".join(ch for ch in norm if not ch.isspace() and ch not in _BIDI_CONTROLS)
+
+
+def _ordered_text_matches(read_raw, asked_raw):
+    """Verify that ``asked_raw`` appears in ``read_raw`` in the expected
+    character order (T-001), accounting for Unicode normalization, ligatures,
+    soft/line-wrap hyphens, whitespace differences, and RTL visual ordering."""
+    asked = _normalize_for_check(asked_raw, keep_soft_hyphen=False)
+    if not asked:
+        return True
+    read = _normalize_for_check(read_raw, keep_soft_hyphen=True)
+    if asked in read:
+        return True
+    # Soft-hyphen / line-wrap hyphen tolerance: reflow may break a word across
+    # lines with a soft hyphen (\u00ad) or end-of-line hyphen (\ufffe/\u0002).
+    read_no_shy = _normalize_for_check(
+        str(read_raw or "").replace("\ufffe", "").replace("\u0002", ""),
+        keep_soft_hyphen=False,
+    )
+    if asked in read_no_shy:
+        return True
+    # Also handle explicit '-' inserted by hyphenation when asked has none at that spot.
+    if "-" not in asked and asked in read.replace("-", ""):
+        return True
+    # RTL scripts (Arabic/Hebrew): PDFium may return visual (reversed) order.
+    if _rtl(asked_raw):
+        rev = asked[::-1]
+        if rev in read or rev in read_no_shy:
+            return True
+    return False
+
+
+def summarize_report(report):
+    """Classify each edit in ``report`` as permanent content modification vs.
+    visual covering (T-002). Returns ``{"total", "permanent", "covered",
+    "all_permanent"}`` with 1-based edit indices."""
+    permanent, covered = [], []
+    for idx, entry in enumerate(report or (), start=1):
+        if isinstance(entry, dict) and entry.get("covered"):
+            covered.append(idx)
+        else:
+            permanent.append(idx)
+    return {
+        "total": len(permanent) + len(covered),
+        "permanent": permanent,
+        "covered": covered,
+        "all_permanent": len(covered) == 0,
+    }
+
+
+def verify_visual_fidelity(orig_path, edited_path, regions_by_page, *, password=None,
+                           dpi=72, pixel_tol=12, max_changed_ratio=0.005, margin_pt=4.0):
+    """Render modified pages of ``orig_path`` and ``edited_path`` at ``dpi`` and
+    verify that pixels outside ``regions_by_page`` ({0-based page: [(x0, y0, x1, y1)]})
+    remain visually unchanged within ``pixel_tol`` and ``max_changed_ratio`` (T-003)."""
+    import numpy as np
+    import pypdfium2 as pdfium
+
+    scale = float(dpi) / 72.0
+    pages_out = {}
+    with core.PDFIUM_LOCK:
+        orig_doc = pdfium.PdfDocument(str(orig_path), password=password)
+        edit_doc = pdfium.PdfDocument(str(edited_path), password=password)
+        try:
+            for page_idx, rects in (regions_by_page or {}).items():
+                idx = int(page_idx)
+                if idx < 0 or idx >= len(orig_doc) or idx >= len(edit_doc):
+                    pages_out[idx] = {"ok": False, "reason": "page missing", "changed_ratio": 1.0, "max_diff": 255}
+                    continue
+                op, ep = orig_doc[idx], edit_doc[idx]
+                try:
+                    pw, ph = op.get_size()
+                    o_img = np.asarray(op.render(scale=scale).to_pil().convert("RGB"))
+                    e_img = np.asarray(ep.render(scale=scale).to_pil().convert("RGB"))
+                finally:
+                    op.close()
+                    ep.close()
+                if o_img.shape != e_img.shape:
+                    pages_out[idx] = {
+                        "ok": False,
+                        "reason": f"page dimensions changed ({o_img.shape} vs {e_img.shape})",
+                        "changed_ratio": 1.0,
+                        "max_diff": 255,
+                    }
+                    continue
+                h, w = o_img.shape[:2]
+                mask = np.ones((h, w), dtype=bool)
+                for x0, y0, x1, y1 in rects or ():
+                    px0 = max(0, int(math.floor((min(x0, x1) - margin_pt) * scale)))
+                    px1 = min(w, int(math.ceil((max(x0, x1) + margin_pt) * scale)))
+                    # Convert PDF bottom-left y coordinates to image top-left rows
+                    py0 = max(0, int(math.floor((ph - max(y0, y1) - margin_pt) * scale)))
+                    py1 = min(h, int(math.ceil((ph - min(y0, y1) + margin_pt) * scale)))
+                    if px1 > px0 and py1 > py0:
+                        mask[py0:py1, px0:px1] = False
+                unmasked_count = int(mask.sum())
+                if unmasked_count == 0:
+                    pages_out[idx] = {"ok": True, "changed_ratio": 0.0, "changed_pixels": 0, "max_diff": 0}
+                    continue
+                diff = np.abs(o_img.astype(np.int16) - e_img.astype(np.int16)).max(axis=2)
+                outside = diff[mask]
+                changed = int((outside > pixel_tol).sum())
+                max_diff = int(outside.max()) if outside.size else 0
+                ratio = changed / unmasked_count
+                pages_out[idx] = {
+                    "ok": ratio <= max_changed_ratio,
+                    "changed_ratio": round(ratio, 6),
+                    "changed_pixels": changed,
+                    "max_diff": max_diff,
+                }
+        finally:
+            orig_doc.close()
+            edit_doc.close()
+    return {"ok": all(p["ok"] for p in pages_out.values()), "dpi": dpi, "pages": pages_out}
+
+
 def _intact(path, expect):
     """Whether the file written reads back as it should (see
     :meth:`_Page.expected`): every letter no change was about is there
     once, at its place, in its font and size; where only lines were
     changed, those letters read in the order they did and no other letter
     has appeared anywhere but on the changed lines; and
-    the new words can be read on the page."""
-    import collections
-
+    the new words read back in the expected character order (T-001)."""
     import pypdfium2 as pdfium
 
     raw = _raw()
@@ -1632,15 +1809,12 @@ def _intact(path, expect):
 
                         if want["strict"] and any(not any(on(band, L) for band in want["bands"]) for L in new):
                             return False
+                        # T-001: Ordered character validation (replaces Counter-only frequency check).
                         for which, text in want["texts"]:
-                            there = collections.Counter(L[0] for L in new if which is None or on(want["bands"][which], L))
-                            # (pdfium reads a hyphen that ends a line as U+FFFE or U+0002, and a soft
-                            # hyphen may come back as U+00AD: a word's own hyphen there is still its hyphen.)
-                            read = unicodedata.normalize("NFKC", "".join(there.elements()))
-                            for marker in ("\ufffe", "\u0002", "\u00ad"):
-                                read = read.replace(marker, "-")
-                            asked = collections.Counter(unicodedata.normalize("NFKC", "".join(text.split())))
-                            if asked - collections.Counter(read):
+                            band_chars = "".join(
+                                L[0] for L in new if which is None or on(want["bands"][which], L)
+                            )
+                            if not _ordered_text_matches(band_chars, text):
                                 return False
                     finally:
                         textpage.close()
