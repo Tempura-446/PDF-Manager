@@ -1285,6 +1285,19 @@ def _profile_processes(profile, exe=None):
         _log(f"profile processes ({exe or 'any'}): {pids} in {time.monotonic() - started:.1f}s"
              + (f"; stderr: {out.stderr.strip()[:200]}" if out.stderr.strip() else ""))
         return pids
+    if sys.platform == "darwin" or not Path("/proc").is_dir():
+        pattern = re.compile(re.escape(marker) + r"(?:\s|$)")
+        try:
+            out = subprocess.run(["ps", "-axo", "pid=,command="],
+                                 capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        pids = []
+        for line in out.stdout.splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) == 2 and parts[0].isdigit() and pattern.search(parts[1]):
+                pids.append(int(parts[0]))
+        return pids
     pids = []
     for entry in Path("/proc").glob("[0-9]*/cmdline"):
         try:
