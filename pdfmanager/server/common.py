@@ -690,7 +690,12 @@ class HandlerBase(BaseHTTPRequestHandler):
         """The page is being closed (or reloaded). Sent with
         navigator.sendBeacon, which can't add headers, so the token comes
         in the query string; this request can do nothing else."""
-        self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 65536))
+        try:
+            length = max(0, int(self.headers.get("Content-Length") or 0))
+        except ValueError:
+            length = 0
+        if length:
+            self.rfile.read(min(length, 65536))
         query = urllib.parse.parse_qs(self.path.partition("?")[2])
         if not secrets.compare_digest(query.get("token", [""])[0], self.token):
             return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")

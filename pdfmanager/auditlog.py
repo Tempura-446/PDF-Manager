@@ -67,19 +67,39 @@ def _safe_actor(actor: str | None) -> str:
         return "unknown"
 
 
+_SENSITIVE_KEY_PARTS = (
+    "password", "passwd", "passphrase", "secret", "token",
+    "private_key", "api_key", "authorization", "cookie", "key_pem",
+)
+
+
+def _is_sensitive_key(key: str) -> bool:
+    low = str(key).strip().lower()
+    return any(part in low for part in _SENSITIVE_KEY_PARTS)
+
+
 def _clean_details(details: dict | None) -> dict:
     if not details:
         return {}
     cleaned = {}
     for k, v in details.items():
-        if isinstance(v, str):
-            cleaned[str(k)] = applog.clean_message(v)
+        ks = str(k)
+        if _is_sensitive_key(ks):
+            cleaned[ks] = "[redacted]"
+        elif isinstance(v, dict):
+            cleaned[ks] = _clean_details(v)
+        elif isinstance(v, str):
+            cleaned[ks] = applog.clean_message(v)
         elif isinstance(v, (int, float, bool)) or v is None:
-            cleaned[str(k)] = v
+            cleaned[ks] = v
         elif isinstance(v, (list, tuple)):
-            cleaned[str(k)] = [applog.clean_message(x) if isinstance(x, str) else x for x in v]
+            cleaned[ks] = [
+                _clean_details(x) if isinstance(x, dict)
+                else (applog.clean_message(x) if isinstance(x, str) else x)
+                for x in v
+            ]
         else:
-            cleaned[str(k)] = applog.clean_message(str(v))
+            cleaned[ks] = applog.clean_message(str(v))
     return cleaned
 
 
