@@ -58,7 +58,7 @@ def set_outline(path, output, items, password=None):
     parents = []  # parents[level] = the last item added at that level
     for item in items:
         parent = parents[item["level"] - 1] if item["level"] else None
-        added = writer.add_outline_item(item["title"], item["page"] - 1, parent=parent)
+        added = writer.add_outline_item(title=item["title"], page_number=item["page"] - 1, parent=parent)
         del parents[item["level"]:]
         parents.append(added)
     if items:

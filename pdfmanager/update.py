@@ -187,7 +187,13 @@ def _cache_file():
 def check(force=False):
     """{"current", "latest", "available", "error", "how", "checked"}. Asks
     GitHub at most every CHECK_EVERY seconds unless ``force``."""
+    from pdfmanager import policy
+
     result = {"current": __version__, "how": how_installed()}
+    if policy.get("disable_updates") or policy.get("disable_network"):
+        return {**result, "latest": None, "available": False,
+                "error": "updates are disabled by administrator policy" if force else None,
+                "checked": None}
     try:
         cached = json.loads(_cache_file().read_text(encoding="utf-8"))
     except (OSError, ValueError):

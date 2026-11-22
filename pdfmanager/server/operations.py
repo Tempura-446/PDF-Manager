@@ -787,7 +787,10 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                          f"left as {'they are' if many else 'it is'}")
     elif op == "compress":
         raw_target = str(opts.get("target_mb") or "").strip()
-        target_mb = float(raw_target) if raw_target else None
+        try:
+            target_mb = float(raw_target) if raw_target else None
+        except ValueError:
+            raise UserError("target file size must be a positive number in MB") from None
         stats = {}
         core.compress(src, out, level=opts.get("level") or "medium", password=password,
                       sharp_scans=_bool(opts.get("sharp_scans", True)), notes=notes,

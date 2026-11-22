@@ -308,7 +308,7 @@ def test_sanitize_strips_scripts_from_fields_bookmarks_and_action_chains(tmp_pat
     widget.get_object()[NameObject("/Parent")] = parent
     acroform[NameObject("/Fields")] = ArrayObject([parent])
     acroform[NameObject("/CO")] = ArrayObject([parent])
-    w.add_outline_item("Chapter", 0)
+    w.add_outline_item(title="Chapter", page_number=0)
     w._root_object["/Outlines"]["/First"].get_object()[NameObject("/A")] = script()
     w._root_object[NameObject("/OpenAction")] = DictionaryObject({
         NameObject("/S"): NameObject("/GoTo"), NameObject("/Next"): script(),

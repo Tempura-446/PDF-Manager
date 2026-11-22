@@ -190,6 +190,9 @@ def export_redaction_log(report, output, fmt="json"):
         out.write_text(json.dumps(entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     elif fmt == "csv":
         fields = ["page", "box", "reason", "actor", "timestamp", "method"]
+        def _safe_cell(val):
+            s = "" if val is None else str(val)
+            return "'" + s if s[:1] in ("=", "+", "-", "@", "\t", "\r") else s
         with out.open("w", encoding="utf-8", newline="") as fh:
             writer = csv.DictWriter(fh, fieldnames=fields)
             writer.writeheader()
@@ -197,7 +200,7 @@ def export_redaction_log(report, output, fmt="json"):
                 row = dict(item)
                 if isinstance(row.get("box"), (list, tuple)):
                     row["box"] = ",".join(str(v) for v in row["box"])
-                writer.writerow({k: row.get(k, "") for k in fields})
+                writer.writerow({k: _safe_cell(row.get(k, "")) for k in fields})
     else:
         raise core.PdfManagerError(f"unsupported redaction log format {fmt!r} (use 'json' or 'csv')")
     return out

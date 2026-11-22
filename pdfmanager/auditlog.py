@@ -83,6 +83,37 @@ def _clean_details(details: dict | None) -> dict:
     return cleaned
 
 
+def _csv_safe(value) -> str:
+    text = "" if value is None else str(value)
+    if text[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + text
+    return text
+
+
+def _lock_file(fh) -> None:
+    try:
+        import fcntl
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    except (ImportError, OSError):
+        try:
+            import msvcrt
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+        except (ImportError, OSError):
+            pass
+
+
+def _unlock_file(fh) -> None:
+    try:
+        import fcntl
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except (ImportError, OSError):
+        try:
+            import msvcrt
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        except (ImportError, OSError):
+            pass
+
+
 def record(
     action: str,
     *,
@@ -93,22 +124,45 @@ def record(
     log_path: str | Path | None = None,
 ) -> dict:
     """Append a hash-chained security audit entry and return the written dict."""
+    import os
+
     path = audit_file(log_path)
     with _LOCK:
         path.parent.mkdir(parents=True, exist_ok=True)
-        prev = _last_hash(path)
-        entry = {
-            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "action": str(action),
-            "status": str(status),
-            "actor": _safe_actor(actor),
-            "target": Path(target).name if target else None,
-            "details": _clean_details(details),
-            "prev_hash": prev,
-        }
-        entry["entry_hash"] = _compute_hash(entry)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry, sort_keys=True, ensure_ascii=False) + "\n")
+        with path.open("a+", encoding="utf-8") as fh:
+            _lock_file(fh)
+            try:
+                fh.seek(0)
+                last_line = ""
+                for line in fh:
+                    stripped = line.strip()
+                    if stripped:
+                        last_line = stripped
+                prev = GENESIS_HASH
+                if last_line:
+                    try:
+                        prev = str(json.loads(last_line).get("entry_hash") or GENESIS_HASH)
+                    except json.JSONDecodeError:
+                        prev = GENESIS_HASH
+                entry = {
+                    "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "action": str(action),
+                    "status": str(status),
+                    "actor": _safe_actor(actor),
+                    "target": Path(target).name if target else None,
+                    "details": _clean_details(details),
+                    "prev_hash": prev,
+                }
+                entry["entry_hash"] = _compute_hash(entry)
+                fh.seek(0, os.SEEK_END)
+                fh.write(json.dumps(entry, sort_keys=True, ensure_ascii=False) + "\n")
+                fh.flush()
+            finally:
+                _unlock_file(fh)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
     return entry
 
 
@@ -189,7 +243,7 @@ def export_entries(
     action: str | None = None,
     log_path: str | Path | None = None,
 ) -> Path:
-    """Export audit log entries to JSON or CSV."""
+    """Export audit log entries to JSON or CSV (with CSV formula-injection protection)."""
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
     entries = read_entries(action=action, log_path=log_path)
@@ -204,7 +258,7 @@ def export_entries(
             for entry in entries:
                 row = dict(entry)
                 row["details"] = json.dumps(row.get("details") or {}, sort_keys=True, ensure_ascii=False)
-                writer.writerow({k: row.get(k, "") for k in fields})
+                writer.writerow({k: _csv_safe(row.get(k, "")) for k in fields})
     else:
         raise ValueError(f"unsupported audit export format {fmt!r} (use 'json' or 'csv')")
     return out

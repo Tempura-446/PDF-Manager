@@ -71,9 +71,10 @@ def _load_custom(path: str | Path | None = None) -> dict[str, dict]:
 
 
 def _save_custom(profiles: dict[str, dict], path: str | Path | None = None) -> None:
+    from pdfmanager.appdata import write_private
+
     fp = profiles_file(path)
-    fp.parent.mkdir(parents=True, exist_ok=True)
-    fp.write_text(json.dumps(profiles, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_private(fp, json.dumps(profiles, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
 
 
 def list_profiles(store_path: str | Path | None = None) -> list[dict]:
@@ -119,8 +120,10 @@ def delete_profile(name: str, store_path: str | Path | None = None) -> None:
 
 
 def export_profile(name: str, output: str | Path, store_path: str | Path | None = None) -> Path:
-    """Export a single profile as a shareable JSON file."""
+    """Export a single profile as a shareable JSON file (never exports stored passwords)."""
     prof = get_profile(name, store_path)
+    prof.pop("user_password", None)
+    prof.pop("owner_password", None)
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
     payload = {"zpdf_security_profile": 1, "profile": prof}
