@@ -151,6 +151,102 @@ class Report(dict):
         self.proof = None
 
 
+# Short/generic standalone words skipped when inferring document-wide sanitization
+# terms from coordinate-based redaction boxes (R-001), to avoid false positives.
+_COMMON_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "that", "this", "from", "have", "been", "were",
+    "will", "your", "into", "over", "also", "more", "some", "such", "than", "then",
+    "they", "them", "when", "what", "which", "where", "page", "date", "name",
+    "total", "item", "note", "notes", "none", "true", "false", "copy", "file",
+})
+
+
+def _is_safe_sanitization_term(term):
+    """Return True if ``term`` is specific enough to propagate into document-wide
+    sanitization and verification without matching unrelated common prose."""
+    cleaned = " ".join(str(term or "").split())
+    if not cleaned:
+        return False
+    compact = re.sub(r"\s+", "", cleaned)
+    if len(compact) < 3:
+        return False
+    # Reject pure punctuation/symbols
+    if not any(ch.isalnum() for ch in compact):
+        return False
+    words = cleaned.split()
+    if len(words) == 1:
+        low = cleaned.lower()
+        if low in _COMMON_STOPWORDS:
+            return False
+        if len(compact) == 3 and not any(ch.isdigit() or not ch.isalnum() for ch in compact):
+            return False
+    else:
+        if all(w.lower() in _COMMON_STOPWORDS for w in words):
+            return False
+    return True
+
+
+def _normalize_extracted_terms(raw_texts):
+    """Normalize extracted text snippets into deduplicated sanitization terms."""
+    terms, seen = [], set()
+    for raw in raw_texts:
+        if not raw:
+            continue
+        for line in str(raw).splitlines():
+            cleaned = " ".join(line.split())
+            if not _is_safe_sanitization_term(cleaned):
+                continue
+            key = cleaned.lower()
+            if key not in seen:
+                seen.add(key)
+                terms.append(cleaned)
+    return terms
+
+
+def _extract_box_terms(path, boxes, password=None):
+    """Extract and normalize sensitive text inside coordinate-based ``boxes``
+    ({0-based page: [(x0, y0, x1, y1), ...]}) before removal (R-001)."""
+    if not boxes:
+        return []
+    import pypdfium2 as pdfium
+
+    snippets = []
+    with core.PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(str(path), password=password)
+        try:
+            for page_num, page_boxes in boxes.items():
+                if not 0 <= int(page_num) < len(doc):
+                    continue
+                textpage = doc[int(page_num)].get_textpage()
+                try:
+                    for x0, y0, x1, y1 in page_boxes:
+                        raw = textpage.get_text_bounded(
+                            min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)
+                        )
+                        if raw and raw.strip():
+                            snippets.append(raw)
+                finally:
+                    textpage.close()
+        finally:
+            doc.close()
+    return _normalize_extracted_terms(snippets)
+
+
+def _box_regexes(box_terms, case_sensitive=False):
+    """Build regexes for coordinate-extracted terms (using word boundaries on
+    short single tokens to avoid accidentally matching unrelated words)."""
+    regexes = []
+    flags = 0 if case_sensitive else re.IGNORECASE
+    for term in box_terms:
+        parts = term.split()
+        if not parts:
+            continue
+        body = r"\s+".join(re.escape(part) for part in parts)
+        use_bounds = len(parts) == 1 and len(term) <= 4 and term.isalnum()
+        regexes.append(re.compile(rf"\b{body}\b" if use_bounds else body, flags))
+    return regexes
+
+
 def redact(path, output, terms=(), patterns=(), boxes=None, case_sensitive=False,
            whole_words=False, dpi=200, password=None, method="remove"):
     """Black out every match of ``terms``/``patterns`` and the given
@@ -171,14 +267,21 @@ def redact(path, output, terms=(), patterns=(), boxes=None, case_sensitive=False
             page, box = _parse_box(spec)
             parsed.setdefault(page, []).append(box)
         boxes = parsed
+    coord_boxes = {}
     for page, page_boxes in (boxes or {}).items():
         if not 0 <= int(page) < len(reader.pages):
             raise core.PdfManagerError(f"page {int(page) + 1} doesn't exist")
-        areas.setdefault(int(page), []).extend(tuple(map(float, b)) for b in page_boxes)
+        norm_boxes = [tuple(map(float, b)) for b in page_boxes]
+        coord_boxes.setdefault(int(page), []).extend(norm_boxes)
+        areas.setdefault(int(page), []).extend(norm_boxes)
+    # R-001: extract text from coordinate-based boxes before removal so it is
+    # propagated into document-wide sanitization and post-redaction verification.
+    box_terms = _extract_box_terms(path, coord_boxes, password)
     writer = core.clone_document(reader)
     pictures, bookmarks = {}, 0
     if areas:
         removed_widgets = set()
+        removed = {}
         if method == "remove":
             from pdfmanager import redactcontent
 
@@ -187,9 +290,22 @@ def redact(path, output, terms=(), patterns=(), boxes=None, case_sensitive=False
             kept = {n: found for n, found in areas.items() if n not in pictures}
             for number, found in kept.items():
                 removed_widgets |= _drop_annotations(writer.pages[number], found)
-            _prune_alt_text(writer, {n: removed.get(n, "") for n in kept}, regexes)
+            if coord_boxes and removed:
+                # Merge any text actually removed from coordinate-redacted pages
+                # (handles text split across PDF content objects or Form XObjects).
+                extra_terms = _normalize_extracted_terms(
+                    removed.get(n, "") for n in coord_boxes if n in removed
+                )
+                seen_low = {t.lower() for t in box_terms}
+                for t in extra_terms:
+                    if t.lower() not in seen_low:
+                        seen_low.add(t.lower())
+                        box_terms.append(t)
+            sanitize_regexes = list(regexes) + _box_regexes(box_terms, case_sensitive)
+            _prune_alt_text(writer, {n: removed.get(n, "") for n in kept}, sanitize_regexes)
             to_picture = {n: areas[n] for n in pictures}
         else:
+            sanitize_regexes = list(regexes) + _box_regexes(box_terms, case_sensitive)
             to_picture = areas
         if to_picture:
             images = _render_redacted(path, to_picture, dpi, password)
@@ -197,7 +313,7 @@ def redact(path, output, terms=(), patterns=(), boxes=None, case_sensitive=False
                 removed_widgets |= _replace_page(writer, writer.pages[number], image, box)
             _prune_structure(writer, [writer.pages[n] for n in images])
         _prune_fields(writer, removed_widgets)
-        bookmarks = _scrub_outline(writer, regexes)
+        bookmarks = _scrub_outline(writer, sanitize_regexes)
         # pypdf writes every object it holds, unlinked or not, so the old
         # content, pictures and fields would still sit in the file. A copy
         # made from the written result carries only what is reachable.
@@ -210,10 +326,26 @@ def redact(path, output, terms=(), patterns=(), boxes=None, case_sensitive=False
                     {n + 1: why for n, why in sorted(pictures.items())}, bookmarks)
     if areas:
         # Look again, in the file as written: is anything redacted still kept somewhere?
+        check_terms = list(terms)
+        seen_terms = {t.lower() for t in check_terms}
+        for t in box_terms:
+            if t.lower() not in seen_terms:
+                seen_terms.add(t.lower())
+                check_terms.append(t)
         try:
-            report.proof = check_redacted(output, terms, patterns, case_sensitive, whole_words, areas, password)
-        except Exception:  # noqa: BLE001 - the check failing must not lose the redacted file
-            report.proof = None
+            report.proof = check_redacted(
+                output, check_terms, patterns, case_sensitive, whole_words, areas, password
+            )
+        except Exception as exc:  # noqa: BLE001 - the check failing must not lose the redacted file
+            report.proof = {
+                "clean": False,
+                "status": STATUS_INCOMPLETE,
+                "checked": [],
+                "found": [],
+                "skipped": [{"where": "verification", "reason": str(exc) or type(exc).__name__}],
+                "warnings": [f"Redaction verification could not complete: {exc}"],
+                "checks": {},
+            }
     return report
 
 
@@ -485,6 +617,10 @@ INFO_NAMES = {"/Title": "title", "/Author": "author", "/Subject": "subject", "/K
               "/Creator": "made with", "/Producer": "made with"}
 DEEP_STREAM = 5_000_000  # bytes: larger inner data isn't searched (pictures aren't either)
 
+STATUS_CLEAN = "verified_clean"
+STATUS_FINDINGS = "findings_detected"
+STATUS_INCOMPLETE = "verification_incomplete"
+
 
 def check_redacted(path, terms=(), patterns=(), case_sensitive=False, whole_words=False, areas=None,
                    password=None):
@@ -493,21 +629,28 @@ def check_redacted(path, terms=(), patterns=(), case_sensitive=False, whole_word
     anywhere they could be kept, and any text left under the redacted
     ``areas`` ({0-based page: [boxes]}).
 
-    Returns {"clean", "checked": the places looked in, "found": [{"where",
-    "what"}]}. The places: the pages' text, the document's details, its
-    bookmarks, form values, comments, attached files (names and contents),
-    the rest of the file's data, and earlier versions kept in the file (a
-    file saved over itself keeps the old one inside)."""
+    Returns ``{"clean", "status", "checked", "found", "skipped", "warnings",
+    "checks"}`` where ``status`` is one of ``verified_clean``,
+    ``findings_detected``, or ``verification_incomplete``. ``clean`` is True
+    only when ``status == "verified_clean"`` (R-003)."""
     import pypdfium2 as pdfium
 
     regexes = _regexes(terms, patterns, case_sensitive, whole_words)
     found, seen = [], set()
+    skipped, warnings, checks = [], [], {}
 
     def note(where, what):
         what = " ".join(str(what).split())[:80]
         if (where, what) not in seen:
             seen.add((where, what))
             found.append({"where": where, "what": what})
+
+    def skip(where, reason, check_key=None):
+        reason_str = str(reason) or "unreadable"
+        skipped.append({"where": where, "reason": reason_str})
+        warnings.append(f"Skipped {where}: {reason_str}")
+        if check_key and checks.get(check_key) != "findings":
+            checks[check_key] = "incomplete"
 
     def search(text, where):
         hit = False
@@ -519,28 +662,38 @@ def check_redacted(path, terms=(), patterns=(), case_sensitive=False, whole_word
 
     checked = ["page text"]
     in_pages = set()
+    before_pages = len(found)
+    before_boxes = 0
+    box_hits = False
     with core.PDFIUM_LOCK:
         doc = pdfium.PdfDocument(str(path), password=password)
         try:
             for number, page in enumerate(doc):
                 textpage = page.get_textpage()
-                before = len(found)
-                search(textpage.get_text_range(), f"the text of page {number + 1}")
-                in_pages.update(f["what"] for f in found[before:])
-                for x0, y0, x1, y1 in (areas or {}).get(number, ()):
-                    left = textpage.get_text_bounded(min(x0, x1) + 0.5, min(y0, y1) + 0.5,
-                                                     max(x0, x1) - 0.5, max(y0, y1) - 0.5).strip()
-                    if left:
-                        note(f"under a box on page {number + 1}", left)
-                textpage.close()
+                try:
+                    before = len(found)
+                    search(textpage.get_text_range(), f"the text of page {number + 1}")
+                    in_pages.update(f["what"] for f in found[before:])
+                    for x0, y0, x1, y1 in (areas or {}).get(number, ()):
+                        left = textpage.get_text_bounded(min(x0, x1) + 0.5, min(y0, y1) + 0.5,
+                                                         max(x0, x1) - 0.5, max(y0, y1) - 0.5).strip()
+                        if left:
+                            before_boxes += 1
+                            box_hits = True
+                            note(f"under a box on page {number + 1}", left)
+                finally:
+                    textpage.close()
         finally:
             doc.close()
+    checks["page_text"] = "findings" if (len(found) - before_pages - before_boxes) > 0 else "passed"
     if areas:
         checked.append("under the boxes")
+        checks["under_boxes"] = "findings" if box_hits else "passed"
 
     reader = core.open_pdf(path, password)
     root = reader.trailer["/Root"].get_object()
     checked.append("document details")
+    before_meta = len(found)
     try:
         info = reader.trailer.get("/Info")
         info = info.get_object() if info is not None else {}
@@ -549,49 +702,84 @@ def check_redacted(path, terms=(), patterns=(), case_sensitive=False, whole_word
         meta = root.get("/Metadata")
         if meta is not None:
             search(meta.get_object().get_data().decode("utf-8", "replace"), "the document's details (XMP)")
-    except Exception:  # noqa: BLE001 - damaged details: nothing readable is nothing kept readable
-        pass
+        checks["metadata"] = "findings" if len(found) > before_meta else "passed"
+    except Exception as exc:  # noqa: BLE001 - report unreadable metadata as incomplete verification
+        skip("document details", exc, "metadata")
 
     checked.append("bookmarks")
     from pdfmanager import risks
 
-    for item in risks._walk(root.get("/Outlines"), "/First", "/Next"):
-        if "/Title" in item:
-            search(str(item["/Title"]), "a bookmark")
+    before_bm = len(found)
+    try:
+        for item in risks._walk(root.get("/Outlines"), "/First", "/Next"):
+            if "/Title" in item:
+                search(str(item["/Title"]), "a bookmark")
+        checks["bookmarks"] = "findings" if len(found) > before_bm else "passed"
+    except Exception as exc:  # noqa: BLE001
+        skip("bookmarks", exc, "bookmarks")
 
     checked.append("form values")
-    acroform = root.get("/AcroForm")
-    if acroform is not None:
-        for field in risks._walk(acroform.get_object().get("/Fields"), "/Kids"):
-            for key in ("/V", "/DV", "/TU"):
-                if key in field:
-                    search(str(field[key].get_object()), f"a form field ({field.get('/T', 'unnamed')})")
+    before_forms = len(found)
+    try:
+        acroform = root.get("/AcroForm")
+        if acroform is not None:
+            for field in risks._walk(acroform.get_object().get("/Fields"), "/Kids"):
+                for key in ("/V", "/DV", "/TU"):
+                    if key in field:
+                        search(str(field[key].get_object()), f"a form field ({field.get('/T', 'unnamed')})")
+        checks["form_values"] = "findings" if len(found) > before_forms else "passed"
+    except Exception as exc:  # noqa: BLE001
+        skip("form values", exc, "form_values")
 
     checked.append("comments")
-    for number, page in enumerate(reader.pages):
-        for ref in page.get("/Annots") or []:
-            annot = ref.get_object()
-            if not isinstance(annot, DictionaryObject) or annot.get("/Subtype") in ("/Widget", "/Link"):
-                continue
-            for key in ("/Contents", "/RC", "/Subj"):
-                if key in annot:
-                    search(str(annot[key].get_object()), f"a comment on page {number + 1}")
+    before_comments = len(found)
+    try:
+        for number, page in enumerate(reader.pages):
+            for ref in page.get("/Annots") or []:
+                annot = ref.get_object()
+                if not isinstance(annot, DictionaryObject) or annot.get("/Subtype") in ("/Widget", "/Link"):
+                    continue
+                for key in ("/Contents", "/RC", "/Subj"):
+                    if key in annot:
+                        search(str(annot[key].get_object()), f"a comment on page {number + 1}")
+        checks["comments"] = "findings" if len(found) > before_comments else "passed"
+    except Exception as exc:  # noqa: BLE001
+        skip("comments", exc, "comments")
 
     checked.append("attachments")
-    for name, _ in risks._attached(root, reader.pages):
-        search(name, f"the name of an attached file ({name})")
+    before_att = len(found)
+    att_incomplete = False
     try:
+        for name, _ in risks._attached(root, reader.pages):
+            search(name, f"the name of an attached file ({name})")
         for name, contents in (reader.attachments or {}).items():
             for data in contents if isinstance(contents, list) else [contents]:
+                raw_att = bytes(data)
+                if len(raw_att) > DEEP_STREAM:
+                    att_incomplete = True
+                    skip(
+                        f"attached file ({name})",
+                        f"exceeds {DEEP_STREAM}-byte scan limit ({len(raw_att)} bytes)",
+                        "attachments",
+                    )
                 for encoding in ("utf-8", "utf-16"):
-                    if search(bytes(data[:DEEP_STREAM]).decode(encoding, "ignore"), f"inside an attached file ({name})"):
+                    if search(raw_att[:DEEP_STREAM].decode(encoding, "ignore"), f"inside an attached file ({name})"):
                         break
-    except Exception:  # noqa: BLE001 - an attachment that can't be read out
-        pass
+        if len(found) > before_att:
+            checks["attachments"] = "findings"
+        elif att_incomplete:
+            checks["attachments"] = "incomplete"
+        else:
+            checks["attachments"] = "passed"
+    except Exception as exc:  # noqa: BLE001 - report unreadable attachment as incomplete verification
+        skip("attachments", exc, "attachments")
 
     # The rest of the file's data: anything written in the open that the
     # places above don't cover.
     if regexes:
+        checked.append("inner data")
+        before_inner = len(found)
+        inner_incomplete = False
         try:
             import pikepdf
 
@@ -602,34 +790,85 @@ def check_redacted(path, terms=(), patterns=(), case_sensitive=False, whole_word
                         continue
                     try:
                         data = obj.read_bytes()
-                    except Exception:  # noqa: BLE001
+                    except Exception as exc:  # noqa: BLE001
+                        inner_incomplete = True
+                        skip(f"inner stream {getattr(obj, 'objgen', '')}".strip(), exc, "inner_streams")
                         continue
                     if len(data) > DEEP_STREAM:
+                        inner_incomplete = True
+                        skip(
+                            f"inner stream {getattr(obj, 'objgen', '')}".strip(),
+                            f"exceeds {DEEP_STREAM}-byte scan limit ({len(data)} bytes)",
+                            "inner_streams",
+                        )
                         continue
                     before = len(found)
                     search(data.decode("latin-1"), "the file's inner data")
                     # (What the page text already showed is the same find, not another.)
                     found[before:] = [f for f in found[before:] if f["what"] not in in_pages]
-        except Exception:  # noqa: BLE001 - qpdf can't read it: the places above were still checked
-            pass
+            if len(found) > before_inner:
+                checks["inner_streams"] = "findings"
+            elif inner_incomplete:
+                checks["inner_streams"] = "incomplete"
+            else:
+                checks["inner_streams"] = "passed"
+        except Exception as exc:  # noqa: BLE001 - report qpdf/pikepdf failure as incomplete verification
+            skip("inner data streams", exc, "inner_streams")
+    else:
+        checks["inner_streams"] = "skipped"
 
     checked.append("earlier versions")
+    before_prev = len(found)
     try:
         raw = open(path, "rb").read()
         if raw.count(b"%%EOF") > 1 or "/Prev" in reader.trailer:
             note("earlier versions kept in the file", "what was there before the last save")
-    except OSError:
-        pass
-    return {"clean": not found, "checked": checked, "found": found}
+        checks["earlier_versions"] = "findings" if len(found) > before_prev else "passed"
+    except OSError as exc:
+        skip("earlier versions", exc, "earlier_versions")
+
+    if found:
+        status = STATUS_FINDINGS
+    elif skipped or warnings:
+        status = STATUS_INCOMPLETE
+    else:
+        status = STATUS_CLEAN
+    return {
+        "clean": status == STATUS_CLEAN,
+        "status": status,
+        "checked": checked,
+        "found": found,
+        "skipped": skipped,
+        "warnings": warnings,
+        "checks": checks,
+    }
 
 
 def proof_words(proof):
     """The check's result as one sentence for the person."""
-    if proof["clean"]:
+    status = proof.get("status") or (STATUS_CLEAN if proof.get("clean") else STATUS_FINDINGS)
+    if status == STATUS_CLEAN:
         places = [p for p in proof["checked"] if p not in ("under the boxes", "earlier versions")]
         under = " Nothing is left under the boxes." if "under the boxes" in proof["checked"] else ""
-        return (f"Checked: nothing redacted is left in the {', '.join(places[:-1])} or {places[-1]}, "
+        if len(places) >= 2:
+            joined = f"{', '.join(places[:-1])} or {places[-1]}"
+        elif places:
+            joined = places[0]
+        else:
+            joined = "document"
+        return (f"Checked: nothing redacted is left in the {joined}, "
                 f"and the file keeps no earlier version.{under}")
+    if status == STATUS_INCOMPLETE:
+        reasons = [
+            f"{item['where']} ({item['reason']})"
+            for item in (proof.get("skipped") or [])[:3]
+        ]
+        if not reasons:
+            reasons = list((proof.get("warnings") or [])[:3])
+        more = "" if len(proof.get("skipped") or []) <= 3 else f" (and {len(proof['skipped']) - 3} more)"
+        detail = "; ".join(reasons) + more if reasons else "some checks could not run"
+        return (f"Verification incomplete: no redacted text was found in the checked areas, "
+                f"but parts of the file could not be verified ({detail}).")
     by_what = {}
     for item in proof["found"]:
         by_what.setdefault(item["what"], []).append(item["where"])
@@ -646,4 +885,11 @@ def proof_words(proof):
         fix.append("black it out again with the method that turns pages into pictures")
     if "earlier versions" in wheres:
         fix.append("save the result as a new file")
-    return "Careful: " + ". ".join(parts) + more + "." + (" " + "; ".join(fix).capitalize() + "." if fix else "")
+    incomplete_note = (
+        " Also, verification was incomplete for some parts of the file."
+        if (proof.get("skipped") or proof.get("warnings")) else ""
+    )
+    return ("Careful: " + ". ".join(parts) + more + "."
+            + (" " + "; ".join(fix).capitalize() + "." if fix else "")
+            + incomplete_note)
+
