@@ -4,6 +4,50 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.61.0
+
+Enterprise security controls, major functional depth upgrades across
+compression, comparison, redaction, and Excel conversion, and full Release
+Candidate validation.
+
+- **Security Profiles, Dynamic Print Watermarks & Tamper-Evident Audit Log
+  (Security Phase 7, `secprofiles.py`, `auditlog.py`).** Added named Security
+  Profiles (`Confidential`, `Internal`, `Public Share`, plus custom
+  exportable/importable profiles) available in both the desktop GUI
+  (**Security profile** tool) and CLI (`pdfm profile`), dynamic traceable
+  print/export watermarks (`{user}`, `{date}`, `{time}`, `{datetime}`,
+  `{file}`), and a local SHA-256 hash-chained audit log (`pdfm audit` +
+  `GET /api/audit`).
+- **Enterprise Policies (GPO/ADMX), FIPS Mode, Offline Updates & Process
+  Isolation (Security Phase 8, `policy.py`, `isolation.py`).** Added
+  precedence-ordered administrator policy loading (`HKLM\Software\Policies\ZPDF`
+  > `HKCU` > JSON policy file) with Windows Group Policy/Intune `ZPDF.admx` /
+  `ZPDF.adml` templates, FIPS-approved cryptography enforcement, password-removal
+  locking in `core.decrypt()`, offline local/UNC update channel discovery,
+  `pdfm policy show` + `GET /api/policy`, and spawned child-process
+  timeout/memory isolation (`isolation.run_isolated()`).
+- **Smart Target-Size Compression (`core.compress()`, GUI & CLI).** Added
+  `--target-mb` / **Target file size in MB** quality-preserving auto-tuning
+  ladder, a no-bloat guarantee (`keep_smaller=True`) so already-optimal PDFs
+  never grow larger, and structured before/after savings statistics.
+- **Comparison Depth (`compare.py`, GUI & CLI).** Added `both`, `text`, and
+  `visual` comparison modes, JSON-safe `compare_summary()` without PDF
+  generation, detailed changed/added/removed/reordered/low-confidence summary
+  counts, and optional JSON diff export (`pdfm compare --mode --json`).
+- **Regulated Redaction in GUI (`redact.py`, `operations.py`).** Exposed US SSN,
+  US EIN, UK National Insurance, EU/International IBAN, Luhn-verified payment
+  cards, custom regular expressions, FOIA/GDPR reason-code stamps, and
+  downloadable JSON/CSV redaction logs directly in the desktop app.
+- **PDF → Excel Auto-OCR & Styling, plus Reader Text-Edit Integrity Headers
+  (`tables.py`, `reader_routes.py`).** Added automatic OCR fallback (`auto_ocr`)
+  when extracting tables from scanned PDFs, subtle header shading and cell
+  borders in `.xlsx` output, and `X-Pdfm-Summary` / `X-Pdfm-Visual` integrity
+  headers from the Reader text-edit endpoint.
+- **Release Candidate Validation (`docs/RC_VALIDATION_REPORT.md`).** Verified
+  across Linux (`Python 3.10`, `3.12`, `3.13`), Windows (`Python 3.13`, E2E),
+  CodeQL, 500-page performance benchmarks, wheel clean-venv install, and
+  failure/recovery regression tests (`tests/test_rc_failure_recovery.py`).
+
 ## 0.60.4
 
 Major six-phase engineering hardening release covering permanent redaction
