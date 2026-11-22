@@ -1535,20 +1535,36 @@ def number_pages(path, output, fmt="{n} / {total}", position="bottom-center",
 _NUMBER_FORMAT = re.compile(r"(?:[^{}]|\{\{|\}\}|\{(?:n|total)(?::[^{}]*)?\})*")
 
 
+_WIN_RESERVED = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+MAX_ATTACHMENT_BYTES = 50_000_000  # 50 MB default safety cap per extracted attachment (S-003/S-004)
+
+
 def _safe_filename(name, fallback, limit=120):
-    name = Path(str(name).replace("\\", "/")).name
+    raw = str(name or "").replace("\x00", "").replace("\\", "/")
+    name = Path(raw).name
     name = "".join("_" if c in '<>:"|?*' or ord(c) < 32 else c for c in name).strip(" .")
+    if name in ("", ".", ".."):
+        return fallback
     stem, suffix = Path(name).stem, Path(name).suffix[:16]
+    if stem.upper() in _WIN_RESERVED:
+        stem = "_" + stem
     while len((stem + suffix).encode("utf-8")) > limit and stem:  # file systems stop at 255 bytes
         stem = stem[:-1]
     return (stem + suffix).strip(" .") or fallback
 
 
-def extract_media(path, outdir, images=True, attachments=True, min_size=16, password=None):
+def extract_media(path, outdir, images=True, attachments=True, min_size=16, password=None,
+                  max_attachment_bytes=MAX_ATTACHMENT_BYTES):
     """Save the pictures and/or attached files of a PDF into ``outdir``.
     Pictures are saved in their own format where possible (JPEG stays JPEG),
     each picture once even if it's used on several pages; pictures smaller
     than ``min_size`` pixels (lines, dots, tiny icons) are skipped.
+    Attachments larger than ``max_attachment_bytes`` (default 50 MB; None for
+    no limit) are skipped and recorded in ``saved["skipped"]`` (S-003).
     Returns {"images": [paths], "attachments": [paths]}."""
     import hashlib
 
@@ -1560,10 +1576,13 @@ def extract_media(path, outdir, images=True, attachments=True, min_size=16, pass
 
     def target(folder, name):
         folder.mkdir(parents=True, exist_ok=True)
+        folder_resolved = folder.resolve()
         candidate, n = folder / name, 1
         while candidate.name.lower() in taken or candidate.exists():
             n += 1
             candidate = folder / f"{Path(name).stem} ({n}){Path(name).suffix}"
+        if folder_resolved not in candidate.resolve().parents:
+            raise PdfManagerError(f"unsafe extraction target path for {name!r}")
         taken.add(candidate.name.lower())
         return candidate
 
@@ -1630,11 +1649,15 @@ def extract_media(path, outdir, images=True, attachments=True, min_size=16, pass
                 files.append((spec.get("/UF") or spec.get("/F") or "attachment", data))
         seen = set()  # the same file listed under two names is saved once
         for name, data in files:
+            safe_name = _safe_filename(str(name), "attachment")
+            if max_attachment_bytes is not None and len(data) > max_attachment_bytes:
+                saved.setdefault("skipped", []).append(f"{safe_name} (exceeds size limit)")
+                continue
             digest = hashlib.sha1(data).digest()
             if digest in seen:
                 continue
             seen.add(digest)
-            out = target(outdir / "attachments", _safe_filename(str(name), "attachment"))
+            out = target(outdir / "attachments", safe_name)
             try:
                 out.write_bytes(data)
             except OSError:  # a name the file system won't take: the rest is still saved

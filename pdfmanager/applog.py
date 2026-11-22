@@ -39,12 +39,31 @@ _EXTENSIONS = (r"pdf|png|jpe?g|tiff?|bmp|gif|webp|docx?|xlsx?|pptx?|odt|ods|odp|
 _DOCUMENT = re.compile(rf"""(?:(?<=[\\/'"\[(\s])|^)[^\\/'"\[\]()\n]*?\.(?:{_EXTENSIONS})\b""", re.I | re.M)
 
 
+# Sensitive values that must never appear in diagnostic logs (S-006).
+_PRIVATE_KEY = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+    re.M,
+)
+_TOKEN = re.compile(
+    r"(?:(?:Bearer\s+|token\s+|X-Pdfm-Token:\s*)[A-Za-z0-9._~+/=-]{8,}"
+    r"|\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}\b"
+    r"|\bgithub_pat_[A-Za-z0-9_]{20,}\b)",
+    re.I,
+)
+_PASSWORD = re.compile(
+    r"""(?i)((?:user_|owner_|pfx_|id_|cert_)?(?:password|passphrase|passwd|secret)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&)]+)"""
+)
+
+
 def scrub(text):
-    """``text`` without the home folder or document names in it."""
+    """``text`` without the home folder, document names, or secrets in it."""
     home = str(Path.home())
     if home and home not in ("/", "\\"):
         for form in {home, home.replace("\\", "\\\\"), home.replace("\\", "/")}:
             text = text.replace(form, "~")
+    text = _PRIVATE_KEY.sub("<private-key>", text)
+    text = _TOKEN.sub("<token>", text)
+    text = _PASSWORD.sub(r"\1<redacted>", text)
     return _DOCUMENT.sub("<file>", text)
 
 
