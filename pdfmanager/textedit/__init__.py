@@ -12,11 +12,13 @@ from .reflow_ops import (
     _wrap, _wrap_marked,
 )
 from .rewrite import (
-    _Page, _edit, _intact, edit_text, font_choices, paragraph_runs,
+    _Page, _edit, _intact, _ordered_text_matches, edit_text, font_choices,
+    paragraph_runs, summarize_report, verify_visual_fidelity,
 )
 
 __all__ = [
     "ALIGNS", "BASE14_NAMES", "FIT_LIMIT", "INSTALLED", "LOOKS", "MARKUPS",
     "MOVED", "PAD", "READER_FONTS", "SAME", "SIMILAR", "STANDARD",
-    "edit_text", "font_choices", "paragraph_runs",
+    "edit_text", "font_choices", "paragraph_runs", "summarize_report",
+    "verify_visual_fidelity",
 ]

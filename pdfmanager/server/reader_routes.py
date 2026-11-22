@@ -275,11 +275,16 @@ class ReaderRoutesMixin:
         except ValueError:
             raise UserError("the changes are damaged; make them again") from None
         password = fields.get("password") or None
+        require_permanent = str(fields.get("require_permanent") or "").lower() in ("1", "true", "yes")
+        verify_visual = str(fields.get("verify_visual") or "").lower() in ("1", "true", "yes")
         with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
             src, out = Path(tmp) / "file.pdf", Path(tmp) / "edited.pdf"
             src.write_bytes(uploads[0][2])
             report = []
-            textedit.edit_text(src, out, edits, password, report=report)
+            textedit.edit_text(
+                src, out, edits, password, report=report,
+                require_permanent=require_permanent, verify_visual=verify_visual,
+            )
             if password and core.open_pdf(src, password).is_encrypted:
                 core.encrypt(out, out, password)  # stays protected
             data = out.read_bytes()
