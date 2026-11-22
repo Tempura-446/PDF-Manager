@@ -308,10 +308,14 @@ def redact(path, output, terms=(), patterns=(), boxes=None, case_sensitive=False
             sanitize_regexes = list(regexes) + _box_regexes(box_terms, case_sensitive)
             to_picture = areas
         if to_picture:
-            images = _render_redacted(path, to_picture, dpi, password)
-            for number, (image, box) in images.items():
-                removed_widgets |= _replace_page(writer, writer.pages[number], image, box)
-            _prune_structure(writer, [writer.pages[n] for n in images])
+            replaced_pages = []
+            for number, image, box in _iter_render_redacted(path, to_picture, dpi, password):
+                try:
+                    removed_widgets |= _replace_page(writer, writer.pages[number], image, box)
+                finally:
+                    image.close()
+                replaced_pages.append(writer.pages[number])
+            _prune_structure(writer, replaced_pages)
         _prune_fields(writer, removed_widgets)
         bookmarks = _scrub_outline(writer, sanitize_regexes)
         # pypdf writes every object it holds, unlinked or not, so the old
@@ -465,46 +469,80 @@ def _visible_box(page):
     return box if box[2] > box[0] and box[3] > box[1] else media
 
 
-def _render_redacted(path, areas, dpi, password):
-    """{page: (PIL image with black boxes, visible box)} at ``dpi``."""
+def _iter_render_redacted(path, areas, dpi, password):
+    """Yield ``(page_number, PIL image with black boxes, visible_box)`` one page at a time.
+
+    Streaming avoids holding all rendered pages simultaneously in memory on
+    large documents. Callers should close each yielded PIL image after use.
+    """
     import pypdfium2 as pdfium
     from PIL import ImageDraw
 
-    scale = dpi / 72
-    images = {}
     with core.PDFIUM_LOCK:
         doc = pdfium.PdfDocument(str(path), password=password)
         doc.init_forms()  # without this, filled-in fields are left out of the picture
         try:
             for n, (number, boxes) in enumerate(areas.items()):
+                progress.check()
                 progress.report(n, len(areas), "blacking out page")
                 page = doc[number]
-                page.set_rotation(0)  # draw in the page's own coordinates
-                left, bottom, right, top = _visible_box(page)
-                scale = core.render_scale(page, dpi / 72)
-                image = page.render(scale=scale, may_draw_forms=True).to_pil().convert("RGB")
+                try:
+                    page.set_rotation(0)  # draw in the page's own coordinates
+                    left, bottom, right, top = _visible_box(page)
+                    scale = core.render_scale(page, dpi / 72)
+                    image = page.render(scale=scale, may_draw_forms=True).to_pil().convert("RGB")
+                finally:
+                    page.close()
                 draw = ImageDraw.Draw(image)
                 for x0, y0, x1, y1 in boxes:
                     draw.rectangle([(x0 - left) * scale, (top - y1) * scale,
                                     (x1 - left) * scale, (top - y0) * scale], fill=(0, 0, 0))
-                images[number] = (image, (left, bottom, right, top))
+                yield number, image, (left, bottom, right, top)
         finally:
             doc.close()
-    return images
+
+
+def _render_redacted(path, areas, dpi, password):
+    """{page: (PIL image with black boxes, visible box)} at ``dpi``."""
+    return {number: (image, box)
+            for number, image, box in _iter_render_redacted(path, areas, dpi, password)}
+
+
+def _is_grayscale(image):
+    """True when an RGB image has identical R, G, B channels without full tobytes() copies."""
+    if image.mode == "L":
+        return True
+    if image.mode != "RGB":
+        return False
+    try:
+        import numpy as np
+        arr = np.asarray(image)
+        return bool((arr[:, :, 0] == arr[:, :, 1]).all() and (arr[:, :, 1] == arr[:, :, 2]).all())
+    except ImportError:
+        from PIL import ImageChops
+        r, g, b = image.split()
+        return (ImageChops.difference(r, g).getbbox() is None
+                and ImageChops.difference(g, b).getbbox() is None)
 
 
 def _image_page(image, width, height):
     """A one-page PDF showing ``image`` at width x height points."""
     from reportlab.lib.utils import ImageReader
 
-    if image.convert("L").convert("RGB").tobytes() == image.tobytes():
+    converted = False
+    if _is_grayscale(image) and image.mode != "L":
         image = image.convert("L")  # black and white or gray: a third of the size
-    buf = io.BytesIO()
-    c = core.pdf_canvas(buf, pagesize=(width, height))
-    c.drawImage(ImageReader(image), 0, 0, width, height)
-    c.showPage()
-    c.save()
-    return PdfReader(buf).pages[0]
+        converted = True
+    try:
+        buf = io.BytesIO()
+        c = core.pdf_canvas(buf, pagesize=(width, height))
+        c.drawImage(ImageReader(image), 0, 0, width, height)
+        c.showPage()
+        c.save()
+        return PdfReader(buf).pages[0]
+    finally:
+        if converted:
+            image.close()
 
 
 def _replace_page(writer, page, image, box):

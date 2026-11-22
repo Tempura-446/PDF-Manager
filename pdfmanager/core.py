@@ -1948,3 +1948,119 @@ def pdf_to_images(path, outdir, dpi=150, fmt="png", pages=None, password=None):
             return written
         finally:
             doc.close()
+
+
+# --------------------------------------------------------------------------
+# Bounded concurrent batch execution
+# --------------------------------------------------------------------------
+
+DEFAULT_MAX_WORKERS = 4
+
+
+def default_workers(max_workers=None):
+    """Bounded worker count for batch operations.
+
+    When ``max_workers`` is None, caps concurrency at ``min(4, cpu_count)``
+    so batch jobs stay responsive without exhausting memory or file
+    descriptors. Explicit values are clamped to at least 1.
+    """
+    if max_workers is None:
+        return max(1, min(DEFAULT_MAX_WORKERS, os.cpu_count() or 1))
+    return max(1, int(max_workers))
+
+
+def batch_run(items, fn, *, max_workers=None, on_progress=None):
+    """Run ``fn(item)`` over ``items`` with bounded concurrency and error isolation.
+
+    Returns a list of result dicts in the same order as ``items``:
+      - ``{"index": i, "item": item, "ok": True, "result": value}`` on success
+      - ``{"index": i, "item": item, "ok": False, "error": str(exc), "exception": exc}`` on failure
+
+    Key properties:
+      - Caps in-flight work to at most ``workers * 2`` tasks so large batches
+        do not allocate unbounded futures or buffers.
+      - Checks ``progress.check()`` before submitting and as tasks finish;
+        cancels queued tasks on ``progress.Cancelled``.
+      - Propagates ``progress.Cancelled`` immediately while isolating all
+        other per-item exceptions so one bad document does not abort the batch.
+    """
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+    import contextvars
+
+    item_list = list(items)
+    total = len(item_list)
+    if total == 0:
+        return []
+
+    workers = default_workers(max_workers)
+    results = [None] * total
+
+    def _run_one(item):
+        progress.check()
+        return fn(item)
+
+    if workers == 1 or total == 1:
+        for i, item in enumerate(item_list):
+            progress.check()
+            try:
+                value = _run_one(item)
+                results[i] = {"index": i, "item": item, "ok": True, "result": value}
+            except progress.Cancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 (per-item error isolation)
+                results[i] = {"index": i, "item": item, "ok": False,
+                              "error": str(exc), "exception": exc}
+            if on_progress is not None:
+                on_progress(i + 1, total)
+        return results
+
+    def _submit(executor, item):
+        ctx = contextvars.copy_context()
+        return executor.submit(ctx.run, _run_one, item)
+
+    max_in_flight = workers * 2
+    next_index = 0
+    done_count = 0
+    in_flight = {}
+
+    executor = ThreadPoolExecutor(max_workers=workers)
+    try:
+        while next_index < total and len(in_flight) < max_in_flight:
+            progress.check()
+            fut = _submit(executor, item_list[next_index])
+            in_flight[fut] = next_index
+            next_index += 1
+
+        while in_flight:
+            done_futs, _ = wait(in_flight.keys(), return_when=FIRST_COMPLETED)
+            for fut in done_futs:
+                idx = in_flight.pop(fut)
+                item = item_list[idx]
+                try:
+                    value = fut.result()
+                    results[idx] = {"index": idx, "item": item, "ok": True, "result": value}
+                except progress.Cancelled:
+                    for pending in in_flight:
+                        pending.cancel()
+                    raise
+                except Exception as exc:  # noqa: BLE001 (per-item error isolation)
+                    results[idx] = {"index": idx, "item": item, "ok": False,
+                                    "error": str(exc), "exception": exc}
+                done_count += 1
+                if on_progress is not None:
+                    on_progress(done_count, total)
+
+            while next_index < total and len(in_flight) < max_in_flight:
+                progress.check()
+                fut = _submit(executor, item_list[next_index])
+                in_flight[fut] = next_index
+                next_index += 1
+    except progress.Cancelled:
+        for pending in in_flight:
+            pending.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True)
+    return results
+
