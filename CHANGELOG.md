@@ -4,6 +4,36 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.61.1
+
+Source-code security hardening and desktop GUI bug fixes following a full
+backend and frontend audit.
+
+- **In-place compression safety (`core.py`).** Fixed an in-place
+  `compress(doc, doc)` edge case where an already-optimal PDF could be
+  overwritten before comparing sizes; now writes to a temporary file first and
+  keeps the original intact whenever compression does not shrink it. Also
+  validates non-numeric `target_mb` input cleanly in the GUI.
+- **Audit log & profile export hardening (`auditlog.py`, `redact.py`,
+  `secprofiles.py`).** Added cross-process file locking (`fcntl.flock` /
+  `msvcrt.locking`) and owner-only `0o600` permissions on `audit.jsonl`,
+  neutralized CSV formula-injection prefixes (`=`, `+`, `-`, `@`) in exported
+  audit and redaction logs, stripped stored passwords from exported security
+  profile JSON files, and switched custom profile saves to atomic private
+  writes.
+- **Enterprise policy & pypdf 8.0 compatibility (`update.py`, `outline.py`).**
+  Enforced `disable_updates` / `disable_network` policies in `update.check()`,
+  and migrated `add_outline_item()` calls to keyword arguments ahead of
+  pypdf 8.0.
+- **GUI live redaction preview, Reader integrity toasts & Settings audit log
+  (`gui.html`, `tools.js`, `reader-save.js`, `settings.js`).** Fixed live
+  striped match previews in **Redact** for all regulated presets (`SSN`, `EIN`,
+  `UK NI`, `IBAN`, Luhn `credit_card`) and custom regular expressions; surfaced
+  Reader text-edit visual-cover and visual-check warnings from `X-Pdfm-Summary`
+  and `X-Pdfm-Visual`; added **Security audit log & policies** (View / Verify
+  integrity) to Settings; and locked Update controls in Settings when disabled
+  by administrator policy.
+
 ## 0.61.0
 
 Enterprise security controls, major functional depth upgrades across
