@@ -612,7 +612,7 @@ PANELS.redact = {
         const ask = ++asked, body = new FormData();
         body.append("file", items[0].file, items[0].file.name);
         body.append("password", $("pw").value);
-        for (const k of ["terms", "emails", "phones", "numbers", "case_sensitive", "whole_words"]) {
+        for (const k of ["terms", "regex", "emails", "phones", "numbers", "ssn", "ein", "uk_ni", "iban", "credit_card", "case_sensitive", "whole_words"]) {
           const f = $("f-" + k);
           if (f) body.append(k, f.type === "checkbox" ? String(f.checked) : f.value);
         }
