@@ -1263,7 +1263,10 @@ def cmd_compare(a):
         detail = "; ".join([f"- {w}" for w in c["removed"][:3]] + [f"+ {w}" for w in c["added"][:3]])
         print(f"{where}: {detail or 'layout or pictures changed'}" if c["kind"] == "changed"
               else where)
-    print(compare.format_summary(summary))
+    counts = summary.get("counts") or {}
+    bits = [f"{counts[k]} {k}" for k in ("changed", "added", "removed") if counts.get(k)]
+    suffix = f" ({', '.join(bits)})" if bits else ""
+    print(f"{len(changes)} page(s) differ{suffix}" if changes else "no differences")
     print(f"-> {out}")
 
 

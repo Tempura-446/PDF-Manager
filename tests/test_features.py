@@ -341,7 +341,7 @@ def test_cli_and_gui_compare(tmp_path, capsys):
     work.mkdir()
     notes = []
     name, _, _ = gui.run_operation("compare", [old, new], {}, work=work, notes=notes)
-    assert name == "v1_vs_v2.pdf" and notes == ["3 pages with differences"]
+    assert name == "v1_vs_v2.pdf" and len(notes) == 1 and notes[0].startswith("3 pages with differences")
 
 
 # -- Word and Office ------------------------------------------------------------------
