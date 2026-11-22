@@ -79,6 +79,63 @@ jobs:
           "dist/ZPDF.app/Contents/MacOS/ZPDF" --self-test "$RUNNER_TEMP/selftest.txt" || status=$?
           cat "$RUNNER_TEMP/selftest.txt"
           exit ${status:-0}
+      - name: Publish Linux and macOS assets to ZPDF-releases (on version tag)
+        if: startsWith(github.ref, 'refs/tags/v') && (runner.os == 'Linux' || runner.os == 'macOS')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          LABEL: ${{ matrix.label }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "RELEASES_TOKEN not configured; skipping release upload"
+            exit 0
+          fi
+          python - <<'PY'
+          import hashlib, os, shutil, subprocess
+          from pathlib import Path
+          import pdfmanager
+
+          ver = pdfmanager.__version__
+          tag = f"v{ver}"
+          label = os.environ["LABEL"]
+          dist = Path("dist")
+          files = []
+
+          # Versioned zip + sha256 matching update.py release_asset_candidates()
+          src_zip = dist / f"ZPDF-{label}.zip"
+          if src_zip.is_file():
+              ver_zip = dist / f"ZPDF-{ver}-{label}.zip"
+              shutil.copyfile(src_zip, ver_zip)
+              sha = hashlib.sha256(ver_zip.read_bytes()).hexdigest()
+              ver_sha = dist / f"ZPDF-{ver}-{label}.zip.sha256"
+              ver_sha.write_text(f"{sha}  {ver_zip.name}\n", encoding="ascii")
+              files.extend([ver_zip, ver_sha])
+
+          # Platform installers (.deb on Linux, .dmg on macOS) + their .sha256
+          for pat in (f"zpdf_{ver}_*.deb", f"zpdf_{ver}_*.deb.sha256",
+                      f"ZPDF-{ver}-macos.dmg", f"ZPDF-{ver}-macos.dmg.sha256"):
+              for p in sorted(dist.glob(pat)):
+                  if p not in files:
+                      files.append(p)
+
+          # Optional Ed25519 signatures when RELEASE_SIGNING_KEY is configured
+          sig_key = os.environ.get("RELEASE_SIGNING_KEY", "").strip()
+          if sig_key:
+              from pdfmanager import relsign
+              for p in list(files):
+                  if p.name.endswith(".sha256"):
+                      sig_path = p.with_name(p.name[:-7] + ".sig")
+                      sig_path.write_text(relsign.sign_checksum(p.read_bytes(), sig_key), encoding="ascii")
+                      files.append(sig_path)
+
+          if not files:
+              raise SystemExit("No platform release assets found to upload")
+          cmd = ["gh", "release", "upload", tag, *(str(p) for p in files),
+                 "-R", "Tempura-446/ZPDF-releases", "--clobber"]
+          print("Uploading:", [p.name for p in files])
+          subprocess.run(cmd, check=True)
+          PY
       # On pull requests the zip is only a by-product of checking the build, so
       # keep it briefly and don't fail the check if the storage quota is full.
       - uses: actions/upload-artifact@v7
