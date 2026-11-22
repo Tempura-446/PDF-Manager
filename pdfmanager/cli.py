@@ -195,7 +195,8 @@ def run_compress(a, src, out, pw):
     before = Path(src).stat().st_size  # before: the output may replace the input
     notes = []
     result = core.compress(src, out, level=a.level, image_quality=a.image_quality,
-                           max_dpi=a.max_dpi, password=pw, sharp_scans=a.sharp_scans, notes=notes)
+                           max_dpi=a.max_dpi, password=pw, sharp_scans=a.sharp_scans,
+                           notes=notes, target_mb=getattr(a, "target_mb", None))
     after = Path(result).stat().st_size
     pct = (1 - after / before) * 100 if before else 0
     return (f"{result}  ({_human_size(before)} -> {_human_size(after)}, {pct:.1f}% smaller"
@@ -1656,6 +1657,8 @@ def build_parser():
     sp.add_argument("--no-sharp-scans", dest="sharp_scans", action="store_false",
                     help="compress scanned pages like other pictures, instead of keeping "
                          "their text at full sharpness over a reduced background")
+    sp.add_argument("--target-mb", type=float, metavar="MB",
+                    help="automatically tune quality/DPI to fit within this maximum size in MB")
 
     sp = per_file("color", run_color, "convert colours to grayscale, RGB or CMYK")
     sp.add_argument("--to", required=True, choices=imaging.COLOR_TARGETS)

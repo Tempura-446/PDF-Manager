@@ -188,7 +188,11 @@ OPERATIONS = [
                         "(good for screen and office printing); High to 96 DPI."),
                 _f("sharp_scans", "Keep scanned text sharp", "check", True,
                    hint="Scanned pages keep their text at full sharpness; only the paper "
-                        "behind it is reduced.")]},
+                        "behind it is reduced."),
+                _f("target_mb", "Target file size in MB (optional)", "number", "", min=0.1, step=0.5,
+                   placeholder="e.g. 5",
+                   hint="Leave blank to use the preset above, or enter a maximum size "
+                        "(e.g. 5 MB for email) to auto-tune quality.")]},
     {"id": "color", "group": "Optimize", "label": "Convert colours", "files": "pdf",
      "fields": [_f("to", "Convert to", "select", "gray",
                    choices=[["gray", "Grayscale"], ["rgb", "RGB (screen)"],
@@ -751,8 +755,17 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                          f"{'are' if many else 'is'} blank and {'were' if many else 'was'} "
                          f"left as {'they are' if many else 'it is'}")
     elif op == "compress":
+        raw_target = str(opts.get("target_mb") or "").strip()
+        target_mb = float(raw_target) if raw_target else None
+        stats = {}
         core.compress(src, out, level=opts.get("level") or "medium", password=password,
-                      sharp_scans=_bool(opts.get("sharp_scans", True)), notes=notes)
+                      sharp_scans=_bool(opts.get("sharp_scans", True)), notes=notes,
+                      target_mb=target_mb, stats=stats)
+        if stats.get("original_bytes"):
+            notes.append(
+                f"{src.name}: {core._fmt_bytes(stats['original_bytes'])} → "
+                f"{core._fmt_bytes(stats['output_bytes'])} (-{stats['saved_pct']:.1f}%)"
+            )
     elif op == "color":
         icc = extra_files.get("icc")
         core.convert_color(src, out, opts.get("to") or "gray", icc, password)

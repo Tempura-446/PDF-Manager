@@ -1162,8 +1162,53 @@ def _finish_compression(writer):
         pass
 
 
+def _compress_once(path, output, level, image_quality, max_dpi, password, sharp_scans, notes):
+    preset_dpi, preset_quality = imaging.COMPRESSION_LEVELS[level]
+    asked_dpi, asked_quality = max_dpi, image_quality
+    eff_dpi = preset_dpi if max_dpi is None else max_dpi
+    eff_quality = preset_quality if image_quality is None else image_quality
+    reader = open_pdf(path, password)
+    was_encrypted = reader.is_encrypted
+    writer = clone_document(reader)
+    try:
+        imaging.unwrap_ascii(writer)  # first: everything after reads the streams
+        if eff_dpi or eff_quality:
+            layers = imaging.SCAN_LAYERS.get(level) if sharp_scans else None
+            if layers:
+                layers = (asked_dpi or layers[0], asked_quality or layers[1], *layers[2:])
+            sharp = imaging.downsample_images(writer, eff_dpi, eff_quality or 85, layers)[2]
+            if sharp and notes is not None:
+                notes.append(f"{sharp} scanned page{'s' if sharp != 1 else ''} kept sharp")
+        _finish_compression(writer)
+    except PyPdfError as exc:  # a stream pypdf can't rewrite
+        raise PdfManagerError(f"can't rewrite {path} ({exc})") from None
+    _write(writer, output)
+    pack(output)
+    return was_encrypted, eff_dpi, eff_quality
+
+
+# Quality-preserving ladder used by target_mb auto-tuning (highest quality first).
+_TARGET_LADDER = (
+    ("low", None, None),
+    ("medium", 150, 80),
+    ("medium", 130, 68),
+    ("high", 110, 58),
+    ("high", 96, 48),
+    ("high", 72, 38),
+    ("high", 60, 28),
+)
+
+
+def _fmt_bytes(n):
+    if n >= 1024 * 1024:
+        return f"{n / (1024 * 1024):.2f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n} B"
+
+
 def compress(path, output, level="medium", image_quality=None, max_dpi=None, password=None,
-             sharp_scans=True, notes=None):
+             sharp_scans=True, notes=None, *, target_mb=None, keep_smaller=True, stats=None):
     """Reduce file size.
 
     ``level`` is a preset:
@@ -1176,42 +1221,113 @@ def compress(path, output, level="medium", image_quality=None, max_dpi=None, pas
     ``image_quality`` (1-95) and ``max_dpi`` override the preset's values.
     Images are only replaced when the new version is smaller.
 
-    With ``sharp_scans`` (medium and high), a scanned page keeps its text
-    at full resolution: the scan becomes a black-and-white text shape over
-    a low-resolution background (see scanlayers.py), when that is at most
-    a tenth larger than the usual result. ``notes`` (a list) is told how many
-    pages that was done for.
+    With ``target_mb`` (positive float), ZPDF steps through a quality-preserving
+    ladder to reach ``<= target_mb`` MB at the highest visual quality possible.
+    With ``keep_smaller=True`` (default), an unencrypted PDF that cannot be
+    shrunk keeps its original bytes rather than bloating.
+    If a dict is passed via ``stats``, it is populated with ``original_bytes``,
+    ``output_bytes``, ``saved_bytes``, ``saved_pct``, ``kept_original``,
+    ``target_bytes``, ``target_met``, ``level``, ``max_dpi``, ``image_quality``.
     """
+    import shutil
+
     try:
         level = imaging.normalize_level(level)
     except ValueError as exc:
         raise PdfManagerError(str(exc)) from None
-    preset_dpi, preset_quality = imaging.COMPRESSION_LEVELS[level]
-    asked_dpi, asked_quality = max_dpi, image_quality
-    max_dpi = preset_dpi if max_dpi is None else max_dpi
-    image_quality = preset_quality if image_quality is None else image_quality
     if image_quality is not None and not 1 <= image_quality <= 95:
         raise PdfManagerError("image quality must be between 1 and 95")
     if max_dpi is not None and max_dpi < 1:
         raise PdfManagerError("maximum DPI must be at least 1")
+    target_bytes = None
+    if target_mb is not None:
+        try:
+            target_mb = float(target_mb)
+        except (TypeError, ValueError):
+            raise PdfManagerError("target size must be a positive number of MB") from None
+        if target_mb <= 0:
+            raise PdfManagerError("target size must be greater than 0 MB")
+        target_bytes = int(target_mb * 1024 * 1024)
 
-    reader = open_pdf(path, password)
-    writer = clone_document(reader)
-    try:
-        imaging.unwrap_ascii(writer)  # first: everything after reads the streams
-        if max_dpi or image_quality:
-            layers = imaging.SCAN_LAYERS.get(level) if sharp_scans else None
-            if layers:
-                layers = (asked_dpi or layers[0], asked_quality or layers[1], *layers[2:])
-            sharp = imaging.downsample_images(writer, max_dpi, image_quality or 85, layers)[2]
-            if sharp and notes is not None:
-                notes.append(f"{sharp} scanned page{'s' if sharp != 1 else ''} kept sharp")
-        _finish_compression(writer)
-    except PyPdfError as exc:  # a stream pypdf can't rewrite
-        raise PdfManagerError(f"can't rewrite {path} ({exc})") from None
-    _write(writer, output)
-    pack(output)
-    return Path(output)
+    src_path = Path(path)
+    out_path = Path(output)
+    original_bytes = src_path.stat().st_size if src_path.is_file() else 0
+    used_level, used_dpi, used_quality = level, max_dpi, image_quality
+    was_encrypted = False
+    kept_original = False
+    target_met = None
+
+    if target_bytes is not None:
+        best_path = None
+        best_size = None
+        best_meta = (level, max_dpi, image_quality)
+        best_notes = []
+        with tempfile.TemporaryDirectory(prefix="pdfm-target-") as tmp:
+            for idx, (cand_level, cand_dpi, cand_q) in enumerate(_TARGET_LADDER):
+                progress.check()
+                progress.report(idx, len(_TARGET_LADDER), f"trying {cand_level} compression")
+                cand_out = Path(tmp) / f"cand_{idx}.pdf"
+                cand_notes = []
+                was_encrypted, eff_dpi, eff_q = _compress_once(
+                    src_path, cand_out, cand_level, cand_q, cand_dpi,
+                    password, sharp_scans, cand_notes,
+                )
+                cand_size = cand_out.stat().st_size
+                if best_size is None or cand_size < best_size:
+                    best_size = cand_size
+                    best_path = cand_out
+                    best_meta = (cand_level, eff_dpi, eff_q)
+                    best_notes = cand_notes
+                if cand_size <= target_bytes:
+                    target_met = True
+                    break
+            else:
+                target_met = best_size is not None and best_size <= target_bytes
+            used_level, used_dpi, used_quality = best_meta
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(best_path, out_path)
+            if notes is not None:
+                notes.extend(best_notes)
+    else:
+        was_encrypted, used_dpi, used_quality = _compress_once(
+            src_path, out_path, level, image_quality, max_dpi, password, sharp_scans, notes,
+        )
+
+    output_bytes = out_path.stat().st_size if out_path.is_file() else 0
+    if keep_smaller and not was_encrypted and original_bytes > 0 and output_bytes > original_bytes:
+        if src_path.resolve() != out_path.resolve():
+            shutil.copyfile(src_path, out_path)
+        output_bytes = original_bytes
+        kept_original = True
+        if target_bytes is not None:
+            target_met = output_bytes <= target_bytes
+        if notes is not None:
+            notes.append("already optimized; kept original size")
+
+    saved_bytes = max(0, original_bytes - output_bytes)
+    saved_pct = round((saved_bytes / original_bytes) * 100, 1) if original_bytes else 0.0
+    if target_bytes is not None and notes is not None:
+        if target_met:
+            notes.append(f"target {_fmt_bytes(target_bytes)} met ({_fmt_bytes(output_bytes)})")
+        else:
+            notes.append(
+                f"smallest achievable was {_fmt_bytes(output_bytes)} "
+                f"(target {_fmt_bytes(target_bytes)})"
+            )
+    if stats is not None:
+        stats.update({
+            "original_bytes": original_bytes,
+            "output_bytes": output_bytes,
+            "saved_bytes": saved_bytes,
+            "saved_pct": saved_pct,
+            "kept_original": kept_original,
+            "target_bytes": target_bytes,
+            "target_met": target_met,
+            "level": used_level,
+            "max_dpi": used_dpi,
+            "image_quality": used_quality,
+        })
+    return out_path
 
 
 def pack(path):
