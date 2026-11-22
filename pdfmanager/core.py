@@ -1349,10 +1349,14 @@ def _forget_pdfa(pdf):
         del pdf.Root.Metadata
 
 
-def decrypt(path, output, password):
+def decrypt(path, output, password, *, _internal=False):
     """Remove the protection. A PDF that limits printing, copying or
     changes needs its permissions password for this (as in Acrobat), not
     just the password to open it."""
+    if not _internal:
+        from pdfmanager import policy
+
+        policy.check_password_removal_allowed()
     reader = open_pdf(path, password)
     try:
         import pikepdf

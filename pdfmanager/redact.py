@@ -38,7 +38,27 @@ PRESETS = {
     "emails": r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+",
     "phones": r"(?<![\w.])\+?\(?\d[\d ()./-]{6,}\d(?![\w.])",
     "numbers": r"(?<!\w)\d(?:[ -]?\d){7,}(?!\w)",  # card, account and ID numbers
+    "ssn": r"\b\d{3}-\d{2}-\d{4}\b",  # US Social Security Number
+    "ein": r"\b\d{2}-\d{7}\b",  # US Employer Identification Number
+    "uk_ni": r"\b[A-CEGHJ-PR-TW-Z]{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?[A-D]\b",  # UK National Insurance
+    "iban": r"\b[A-Z]{2}\d{2}(?:[ -]?[A-Z0-9]){11,30}\b",  # EU/International IBAN
+    "credit_card": r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)",  # payment cards (filtered with Luhn check)
 }
+
+
+def luhn_valid(value):
+    """True when the digits in ``value`` pass the Luhn check (13–19 digits)."""
+    digits = [int(ch) for ch in str(value) if ch.isdigit()]
+    if not 13 <= len(digits) <= 19:
+        return False
+    total = 0
+    for idx, digit in enumerate(reversed(digits)):
+        if idx % 2 == 1:
+            doubled = digit * 2
+            total += doubled - 9 if doubled > 9 else doubled
+        else:
+            total += digit
+    return total % 10 == 0
 
 
 def find_text(path, terms=(), patterns=(), case_sensitive=False, whole_words=False,
@@ -49,6 +69,7 @@ def find_text(path, terms=(), patterns=(), case_sensitive=False, whole_words=Fal
     import pypdfium2 as pdfium
 
     regexes = _regexes(terms, patterns, case_sensitive, whole_words)
+    luhn_pattern = PRESETS["credit_card"]
     found = {}
     if not regexes:
         return found
@@ -61,7 +82,10 @@ def find_text(path, terms=(), patterns=(), case_sensitive=False, whole_words=Fal
                 text = textpage.get_text_range()
                 boxes = []
                 for regex in regexes:
+                    check_luhn = regex.pattern == luhn_pattern
                     for match in regex.finditer(text):
+                        if check_luhn and not luhn_valid(match.group(0)):
+                            continue
                         boxes.extend(_match_boxes(textpage, match.start(), match.end()))
                 textpage.close()
                 if boxes:
@@ -143,12 +167,40 @@ class Report(dict):
       None when nothing was redacted or the check couldn't be made.
     """
 
-    def __init__(self, counts=(), method="remove", pictures=None, bookmarks=0):
+    def __init__(self, counts=(), method="remove", pictures=None, bookmarks=0, redaction_log=None):
         super().__init__(counts)
         self.method = method
         self.pictures = dict(pictures or {})
         self.bookmarks = bookmarks
         self.proof = None
+        self.redaction_log = list(redaction_log or [])
+
+
+def export_redaction_log(report, output, fmt="json"):
+    """Export ``report.redaction_log`` (page, box, reason, actor, timestamp) to JSON or CSV."""
+    import csv
+    import json
+    from pathlib import Path
+
+    out = Path(output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    entries = list(getattr(report, "redaction_log", None) or [])
+    fmt = str(fmt).lower()
+    if fmt == "json":
+        out.write_text(json.dumps(entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    elif fmt == "csv":
+        fields = ["page", "box", "reason", "actor", "timestamp", "method"]
+        with out.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fields)
+            writer.writeheader()
+            for item in entries:
+                row = dict(item)
+                if isinstance(row.get("box"), (list, tuple)):
+                    row["box"] = ",".join(str(v) for v in row["box"])
+                writer.writerow({k: row.get(k, "") for k in fields})
+    else:
+        raise core.PdfManagerError(f"unsupported redaction log format {fmt!r} (use 'json' or 'csv')")
+    return out
 
 
 # Short/generic standalone words skipped when inferring document-wide sanitization
@@ -248,13 +300,16 @@ def _box_regexes(box_terms, case_sensitive=False):
 
 
 def redact(path, output, terms=(), patterns=(), boxes=None, case_sensitive=False,
-           whole_words=False, dpi=200, password=None, method="remove"):
+           whole_words=False, dpi=200, password=None, method="remove",
+           reason_code=None, actor=None):
     """Black out every match of ``terms``/``patterns`` and the given
     ``boxes`` ({0-based page: [(x0, y0, x1, y1)]} in PDF points, or
     "PAGE:X0,Y0,X1,Y1" strings with 1-based pages). ``method`` "remove"
     takes out what's under the boxes and keeps the rest of the page as it
-    was; "image" turns the redacted pages into pictures (``dpi``). Returns
-    a :class:`Report`: {1-based page: number of areas blacked out}."""
+    was; "image" turns the redacted pages into pictures (``dpi``).
+    Optional ``reason_code`` (e.g. FOIA ``"(b)(6)"`` or ``"GDPR Art. 17"``)
+    is recorded in ``report.redaction_log`` and stamped on rasterized boxes.
+    Returns a :class:`Report`: {1-based page: number of areas blacked out}."""
     if method not in METHODS:
         raise core.PdfManagerError(f"unknown redaction method {method!r}; use "
                                    + " or ".join(METHODS))
@@ -309,7 +364,9 @@ def redact(path, output, terms=(), patterns=(), boxes=None, case_sensitive=False
             to_picture = areas
         if to_picture:
             replaced_pages = []
-            for number, image, box in _iter_render_redacted(path, to_picture, dpi, password):
+            for number, image, box in _iter_render_redacted(
+                path, to_picture, dpi, password, reason_code=reason_code
+            ):
                 try:
                     removed_widgets |= _replace_page(writer, writer.pages[number], image, box)
                 finally:
@@ -326,8 +383,33 @@ def redact(path, output, terms=(), patterns=(), boxes=None, case_sensitive=False
         buf.seek(0)
         writer = core.clone_document(PdfReader(buf))
     core._write(writer, output)
-    report = Report({number + 1: len(found) for number, found in sorted(areas.items())}, method,
-                    {n + 1: why for n, why in sorted(pictures.items())}, bookmarks)
+
+    from datetime import datetime, timezone
+    import getpass
+    from pdfmanager import auditlog
+
+    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    who = str(actor) if actor else getpass.getuser()
+    reason_str = str(reason_code).strip() if reason_code else ""
+    redaction_log = [
+        {
+            "page": number + 1,
+            "box": [round(float(v), 2) for v in b],
+            "reason": reason_str,
+            "actor": who,
+            "timestamp": ts,
+            "method": "image" if (method == "image" or number in pictures) else "remove",
+        }
+        for number, found in sorted(areas.items())
+        for b in found
+    ]
+    report = Report(
+        {number + 1: len(found) for number, found in sorted(areas.items())},
+        method,
+        {n + 1: why for n, why in sorted(pictures.items())},
+        bookmarks,
+        redaction_log=redaction_log,
+    )
     if areas:
         # Look again, in the file as written: is anything redacted still kept somewhere?
         check_terms = list(terms)
@@ -350,6 +432,20 @@ def redact(path, output, terms=(), patterns=(), boxes=None, case_sensitive=False
                 "warnings": [f"Redaction verification could not complete: {exc}"],
                 "checks": {},
             }
+        try:
+            auditlog.record(
+                "redact",
+                target=path,
+                actor=who,
+                details={
+                    "pages": len(areas),
+                    "boxes": len(redaction_log),
+                    "method": method,
+                    "reason": reason_str,
+                },
+            )
+        except OSError:
+            pass  # never fail redaction if the local audit file is unwritable
     return report
 
 
@@ -469,7 +565,7 @@ def _visible_box(page):
     return box if box[2] > box[0] and box[3] > box[1] else media
 
 
-def _iter_render_redacted(path, areas, dpi, password):
+def _iter_render_redacted(path, areas, dpi, password, reason_code=None):
     """Yield ``(page_number, PIL image with black boxes, visible_box)`` one page at a time.
 
     Streaming avoids holding all rendered pages simultaneously in memory on
@@ -478,6 +574,7 @@ def _iter_render_redacted(path, areas, dpi, password):
     import pypdfium2 as pdfium
     from PIL import ImageDraw
 
+    label = str(reason_code).strip() if reason_code else ""
     with core.PDFIUM_LOCK:
         doc = pdfium.PdfDocument(str(path), password=password)
         doc.init_forms()  # without this, filled-in fields are left out of the picture
@@ -495,17 +592,22 @@ def _iter_render_redacted(path, areas, dpi, password):
                     page.close()
                 draw = ImageDraw.Draw(image)
                 for x0, y0, x1, y1 in boxes:
-                    draw.rectangle([(x0 - left) * scale, (top - y1) * scale,
-                                    (x1 - left) * scale, (top - y0) * scale], fill=(0, 0, 0))
+                    rx0, ry0 = (x0 - left) * scale, (top - y1) * scale
+                    rx1, ry1 = (x1 - left) * scale, (top - y0) * scale
+                    draw.rectangle([rx0, ry0, rx1, ry1], fill=(0, 0, 0))
+                    if label:
+                        draw.text((rx0 + 2, ry0 + 1), label, fill=(255, 255, 255))
                 yield number, image, (left, bottom, right, top)
         finally:
             doc.close()
 
 
-def _render_redacted(path, areas, dpi, password):
+def _render_redacted(path, areas, dpi, password, reason_code=None):
     """{page: (PIL image with black boxes, visible box)} at ``dpi``."""
     return {number: (image, box)
-            for number, image, box in _iter_render_redacted(path, areas, dpi, password)}
+            for number, image, box in _iter_render_redacted(
+                path, areas, dpi, password, reason_code=reason_code
+            )}
 
 
 def _is_grayscale(image):
