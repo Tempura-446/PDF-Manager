@@ -55,16 +55,49 @@ _PASSWORD = re.compile(
 )
 
 
+def clean_message(text):
+    """Strip private keys, auth tokens, and password/passphrase values while keeping paths readable."""
+    text = str(text)
+    text = _PRIVATE_KEY.sub("<private-key>", text)
+    text = _TOKEN.sub("<token>", text)
+    return _PASSWORD.sub(r"\1<redacted>", text)
+
+
 def scrub(text):
     """``text`` without the home folder, document names, or secrets in it."""
     home = str(Path.home())
     if home and home not in ("/", "\\"):
         for form in {home, home.replace("\\", "\\\\"), home.replace("\\", "/")}:
             text = text.replace(form, "~")
-    text = _PRIVATE_KEY.sub("<private-key>", text)
-    text = _TOKEN.sub("<token>", text)
-    text = _PASSWORD.sub(r"\1<redacted>", text)
+    text = clean_message(text)
     return _DOCUMENT.sub("<file>", text)
+
+
+def format_user_error(exc, path=None):
+    """Consistent, safe user-facing error message for CLI and GUI.
+
+    Translates common OS errors (permissions, disk full, missing file) into
+    plain-language messages with recovery guidance while stripping credentials.
+    """
+    import errno
+    from pdfmanager import progress
+
+    if isinstance(exc, progress.Cancelled):
+        return "operation cancelled"
+    target = path or getattr(exc, "filename", None)
+    prefix = f"{target}: " if target else ""
+    if isinstance(exc, PermissionError):
+        return clean_message(
+            f"{prefix}permission denied (check file permissions or close any program using the file)"
+        )
+    if isinstance(exc, FileNotFoundError):
+        return clean_message(f"{prefix}file not found")
+    if isinstance(exc, OSError) and getattr(exc, "errno", None) == errno.ENOSPC:
+        return clean_message(f"{prefix}not enough disk space to finish writing the file")
+    msg = clean_message(str(exc) or type(exc).__name__)
+    if path and str(path) not in msg:
+        return f"{path}: {msg}"
+    return msg
 
 
 class _ScrubbingFormatter(logging.Formatter):

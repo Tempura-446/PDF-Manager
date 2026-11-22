@@ -1137,6 +1137,14 @@ KEEP_UNENCRYPTED.add("sign-cert")  # stays protected inside the signed file; re-
 KEEP_UNENCRYPTED |= {"to-pptx", "to-html", "to-md"}  # -- pptx, html and markdown -- (not PDFs)
 
 
+# Commands that do not rewrite a PDF or already handle/report signatures themselves.
+_NO_SIGNED_WARNING = {
+    "info", "text", "to-images", "to-word", "to-excel", "to-pptx", "to-html", "to-md",
+    "quantities", "extract-media", "comments", "verify-sig", "sign-cert", "redact",
+    "check-pdfa", "check-access", "preflight", "risks", "inspect-protection",
+}
+
+
 def _reencrypt(out, password):
     """Outputs made from a password-protected file get the same password,
     so editing a protected PDF never silently produces an unprotected one."""
@@ -1144,6 +1152,8 @@ def _reencrypt(out, password):
 
 
 def run_per_file(a):
+    from pdfmanager import applog, risks
+
     inputs = _expand(a.inputs)
     batch = _is_batch(a.inputs, inputs)
     passwords = _Passwords(a.password, given_first=a.command == "decrypt")
@@ -1158,18 +1168,27 @@ def run_per_file(a):
     for src, out in plan:
         try:
             pw = passwords.for_file(src)
+            was_signed = (
+                a.command not in _NO_SIGNED_WARNING
+                and Path(src).suffix.lower() == ".pdf"
+                and risks.signed(src, pw)
+            )
             result = a.run(a, src, out, pw)
             if pw and a.command not in KEEP_UNENCRYPTED and result is not None:
                 _reencrypt(out, pw)
             if result is not None:
+                if was_signed:
+                    print(
+                        f"warning: {src} is digitally signed; the modified copy's "
+                        "signatures will show as broken",
+                        file=sys.stderr,
+                    )
                 print(f"{src} -> {result}" if batch else f"-> {result}")
         except (core.PdfManagerError, PageRangeError, FileNotFoundError, OSError) as exc:
             if not batch:
                 raise
             failures += 1
-            message = str(exc)
-            print(f"error: {message if str(src) in message else f'{src}: {message}'}",
-                  file=sys.stderr)
+            print(f"error: {applog.format_user_error(exc, path=src)}", file=sys.stderr)
     if getattr(a, "json_records", None) is not None:
         print(json.dumps(a.json_records, default=str, indent=2))
     if batch:
@@ -2269,10 +2288,15 @@ def main(argv=None):
     args = build_parser().parse_args(_leading_dash_ranges(argv))
     # pypdf logs a warning for every small defect it repairs; only show errors.
     logging.getLogger("pypdf").setLevel(logging.ERROR)
+    from pdfmanager import applog, progress
+
     try:
         return args.func(args) or 0
+    except progress.Cancelled:
+        print("error: operation cancelled", file=sys.stderr)
+        return 130
     except (core.PdfManagerError, PageRangeError, OSError, ValueError, KeyError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {applog.format_user_error(exc)}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         return 130

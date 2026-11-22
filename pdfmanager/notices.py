@@ -16,7 +16,7 @@ from pathlib import Path
 from pdfmanager import __version__
 
 ROOT = "pdf-manager"
-EXTRAS = ("app", "ocr")
+EXTRAS = ("app", "ocr", "translate")
 HERE = Path(__file__).resolve().parent
 _LICENCE_FILE = re.compile(r"licen[cs]e|copying|notice", re.I)
 
