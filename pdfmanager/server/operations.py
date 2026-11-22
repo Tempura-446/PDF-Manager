@@ -71,7 +71,12 @@ OPERATIONS = [
     {"id": "compare", "group": "Combine", "label": "Compare", "files": "pdf2",
      "help": "Find what changed between two versions: add the original first, then the "
              "changed version. You get a report with the differences marked.",
-     "fields": [_f("all_pages", "Include unchanged pages in the report", "check", False)]},
+     "fields": [_f("mode", "Compare", "select", "both",
+                   choices=[["both", "Text and visual layout (recommended)"],
+                            ["text", "Text changes only (ignore layout shifts)"],
+                            ["visual", "Visual / layout changes only"]]),
+                _f("all_pages", "Include unchanged pages in the report", "check", False),
+                _f("export_json", "Also save structured JSON diff summary", "check", False)]},
     {"id": "extract", "group": "Pages", "label": "Extract pages", "files": "pdf",
      "help": "Click the pages to copy into a new PDF, or type them.",
      "board": {"mode": "select", "effect": "keep", "field": "pages"},
@@ -1652,12 +1657,15 @@ def _run_files(op, files, opts, password, extra_files, work, notes):
         if len(files) != 2:
             raise UserError("add exactly two files: the original, then the changed version")
         out = out_dir / f"{files[0].stem}_vs_{files[1].stem}.pdf"
+        mode = opts.get("mode") or "both"
         summary = compare.compare(files[0], files[1], out, password, password,
-                                  all_pages=_bool(opts.get("all_pages")))
-        changed = [c for c in summary["changes"] if c["kind"] != "same"]
-        notes.append(f"{len(changed)} page{'s' if len(changed) != 1 else ''} with differences"
-                     if changed else "No differences found.")
+                                  all_pages=_bool(opts.get("all_pages")), mode=mode)
+        notes.append(compare.format_summary(summary))
         outputs = [out]
+        if _bool(opts.get("export_json")):
+            json_out = out_dir / f"{files[0].stem}_vs_{files[1].stem}_diff.json"
+            json_out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            outputs.append(json_out)
     elif op == "compare-sets":
         from pdfmanager import sheetsets
 
