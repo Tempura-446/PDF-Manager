@@ -109,8 +109,8 @@ def section(index, count, label=""):
     begin = start + width * index
     full = " — ".join(x for x in (outer, label) if x)
     token = _part.set((begin, begin + width, full))
-    report(message=full, fraction_in_part=0.0)
     try:
+        report(message=full, fraction_in_part=0.0)
         yield
     finally:
         _part.reset(token)
