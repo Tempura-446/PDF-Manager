@@ -2149,7 +2149,7 @@ def default_workers(max_workers=None):
     return max(1, int(max_workers))
 
 
-def batch_run(items, fn, *, max_workers=None, on_progress=None):
+def batch_run(items, fn, *, max_workers=None, on_progress=None, processes=False):
     """Run ``fn(item)`` over ``items`` with bounded concurrency and error isolation.
 
     Returns a list of result dicts in the same order as ``items``:
@@ -2163,9 +2163,13 @@ def batch_run(items, fn, *, max_workers=None, on_progress=None):
         cancels queued tasks on ``progress.Cancelled``.
       - Propagates ``progress.Cancelled`` immediately while isolating all
         other per-item exceptions so one bad document does not abort the batch.
+      - When ``processes=True``, executes ``fn`` in a spawned
+        ``ProcessPoolExecutor`` (``fn`` and ``items`` must be picklable) to
+        bypass the Python GIL on CPU-bound PDF workloads.
     """
-    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+    from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
     import contextvars
+    import multiprocessing
 
     item_list = list(items)
     total = len(item_list)
@@ -2195,6 +2199,8 @@ def batch_run(items, fn, *, max_workers=None, on_progress=None):
         return results
 
     def _submit(executor, item):
+        if processes:
+            return executor.submit(fn, item)
         ctx = contextvars.copy_context()
         return executor.submit(ctx.run, _run_one, item)
 
@@ -2203,7 +2209,13 @@ def batch_run(items, fn, *, max_workers=None, on_progress=None):
     done_count = 0
     in_flight = {}
 
-    executor = ThreadPoolExecutor(max_workers=workers)
+    if processes:
+        executor = ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=multiprocessing.get_context("spawn"),
+        )
+    else:
+        executor = ThreadPoolExecutor(max_workers=workers)
     try:
         while next_index < total and len(in_flight) < max_in_flight:
             progress.check()

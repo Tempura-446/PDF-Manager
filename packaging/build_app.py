@@ -84,6 +84,25 @@ def main():
         # hooks PyInstaller can't follow.
         "--paths", str(ROOT),
         "--collect-submodules", "pdfmanager",
+        # Exclude dev/test and unused heavy GUI/scientific modules from bundles.
+        "--exclude-module", "pytest",
+        "--exclude-module", "tkinter",
+        "--exclude-module", "matplotlib",
+        "--exclude-module", "scipy",
+        "--exclude-module", "IPython",
+        "--exclude-module", "PyQt6.Qt3DCore",
+        "--exclude-module", "PyQt6.Qt3DRender",
+        "--exclude-module", "PyQt6.QtMultimedia",
+        "--exclude-module", "PyQt6.QtMultimediaWidgets",
+        "--exclude-module", "PyQt6.QtSql",
+        "--exclude-module", "PyQt6.QtTest",
+        "--exclude-module", "PyQt6.QtBluetooth",
+        "--exclude-module", "PyQt6.QtNfc",
+        "--exclude-module", "PyQt6.QtPdf",
+        "--exclude-module", "PyQt6.QtPdfWidgets",
+        "--exclude-module", "PyQt6.QtQuick3D",
+        "--exclude-module", "PyQt6.QtSensors",
+        "--exclude-module", "PyQt6.QtSerialPort",
     ]
     if system == "Darwin":
         args += ["--osx-bundle-identifier", "io.github.pdfmanager"]
@@ -91,6 +110,26 @@ def main():
 
     dist = ROOT / "dist"
     target = dist / (f"{NAME}.app" if system == "Darwin" else NAME)
+
+    # Trim non-essential QtWebEngine locale packs on Linux (keeps en-US + ZPDF UI locales).
+    if system == "Linux":
+        keep_locales = {
+            "en-US.pak", "en-GB.pak", "es.pak", "fr.pak", "de.pak",
+            "ja.pak", "zh-CN.pak", "zh-TW.pak", "ko.pak", "pt-BR.pak",
+        }
+        removed_bytes = 0
+        for loc_dir in target.rglob("qtwebengine_locales"):
+            if loc_dir.is_dir():
+                for pak in loc_dir.glob("*.pak"):
+                    if pak.name not in keep_locales:
+                        try:
+                            removed_bytes += pak.stat().st_size
+                            pak.unlink()
+                        except OSError:
+                            pass
+        if removed_bytes:
+            print(f"Pruned {removed_bytes / (1024 * 1024):.1f} MB of unused QtWebEngine locale packs")
+
     label = {"Windows": "windows", "Darwin": "macos"}.get(system, "linux")
     archive = shutil.make_archive(str(dist / f"ZPDF-{label}"), "zip", dist, target.name)
     print(f"\nBuilt {target}\nZipped to {archive}")
