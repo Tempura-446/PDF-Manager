@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. -->
+<policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                           revision="1.0" schemaVersion="1.0"
+                           xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <displayName>ZPDF Group Policy Templates</displayName>
+  <description>Administrator security and deployment policies for ZPDF.</description>
+  <resources>
+    <stringTable>
+      <string id="ZPDF_Category">ZPDF</string>
+      <string id="ZPDF_Category_Help">Security, network, update, and cryptography policies for ZPDF.</string>
+      <string id="DisableNetwork">Disable all network access</string>
+      <string id="DisableNetwork_Help">Turns off all internet access in ZPDF (update checks, timestamp servers, language pack downloads).</string>
+      <string id="DisableUpdates">Disable built-in Update button</string>
+      <string id="DisableUpdates_Help">Hides and disables self-updates when ZPDF is managed by IT.</string>
+      <string id="RequireMakeSafeOnOpen">Require Make Safe on open</string>
+      <string id="RequireMakeSafeOnOpen_Help">Requires untrusted PDFs to be sanitized before opening.</string>
+      <string id="DisablePasswordRemoval">Disable removing PDF passwords</string>
+      <string id="DisablePasswordRemoval_Help">Prevents users from stripping password protection from encrypted PDFs.</string>
+      <string id="FipsMode">Enforce FIPS-approved cryptography</string>
+      <string id="FipsMode_Help">Restricts ZPDF cryptography to AES-256 and SHA-256+ and refuses RC4, MD5, and SHA-1.</string>
+      <string id="OfflineUpdateDir">Offline update channel folder</string>
+      <string id="OfflineUpdateDir_Help">Local or UNC file-share path containing ZPDF release ZIPs and .sha256 files.</string>
+      <string id="ForceSecurityProfile">Default security profile</string>
+      <string id="ForceSecurityProfile_Help">Name of the ZPDF Security Profile enforced on saved documents (e.g. Confidential).</string>
+    </stringTable>
+    <presentationTable>
+      <presentation id="OfflineUpdateDir">
+        <textBox refId="OfflineUpdateDirText">
+          <label>Folder or UNC share path:</label>
+        </textBox>
+      </presentation>
+      <presentation id="ForceSecurityProfile">
+        <textBox refId="ForceSecurityProfileText">
+          <label>Security profile name:</label>
+        </textBox>
+      </presentation>
+    </presentationTable>
+  </resources>
+</policyDefinitionResources>

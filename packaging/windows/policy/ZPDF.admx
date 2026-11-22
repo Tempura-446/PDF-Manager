@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. -->
+<policyDefinitions xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   revision="1.0" schemaVersion="1.0"
+                   xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <policyNamespaces>
+    <target prefix="zpdf" namespace="Tempura446.Policies.ZPDF" />
+  </policyNamespaces>
+  <resources minRequiredRevision="1.0" />
+  <categories>
+    <category name="ZPDF" displayName="$(string.ZPDF_Category)" explainText="$(string.ZPDF_Category_Help)" />
+  </categories>
+  <policies>
+    <policy name="DisableNetwork" class="Both" displayName="$(string.DisableNetwork)"
+            explainText="$(string.DisableNetwork_Help)" key="Software\Policies\ZPDF"
+            valueName="disable_network">
+      <parentCategory ref="ZPDF" />
+      <supportedOn ref="SUPPORTED_Windows10" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="DisableUpdates" class="Both" displayName="$(string.DisableUpdates)"
+            explainText="$(string.DisableUpdates_Help)" key="Software\Policies\ZPDF"
+            valueName="disable_updates">
+      <parentCategory ref="ZPDF" />
+      <supportedOn ref="SUPPORTED_Windows10" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="RequireMakeSafeOnOpen" class="Both" displayName="$(string.RequireMakeSafeOnOpen)"
+            explainText="$(string.RequireMakeSafeOnOpen_Help)" key="Software\Policies\ZPDF"
+            valueName="require_make_safe_on_open">
+      <parentCategory ref="ZPDF" />
+      <supportedOn ref="SUPPORTED_Windows10" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="DisablePasswordRemoval" class="Both" displayName="$(string.DisablePasswordRemoval)"
+            explainText="$(string.DisablePasswordRemoval_Help)" key="Software\Policies\ZPDF"
+            valueName="disable_password_removal">
+      <parentCategory ref="ZPDF" />
+      <supportedOn ref="SUPPORTED_Windows10" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="FipsMode" class="Both" displayName="$(string.FipsMode)"
+            explainText="$(string.FipsMode_Help)" key="Software\Policies\ZPDF"
+            valueName="fips_mode">
+      <parentCategory ref="ZPDF" />
+      <supportedOn ref="SUPPORTED_Windows10" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="OfflineUpdateDir" class="Both" displayName="$(string.OfflineUpdateDir)"
+            explainText="$(string.OfflineUpdateDir_Help)" key="Software\Policies\ZPDF"
+            presentation="$(presentation.OfflineUpdateDir)">
+      <parentCategory ref="ZPDF" />
+      <supportedOn ref="SUPPORTED_Windows10" />
+      <elements>
+        <text id="OfflineUpdateDirText" valueName="offline_update_dir" />
+      </elements>
+    </policy>
+    <policy name="ForceSecurityProfile" class="Both" displayName="$(string.ForceSecurityProfile)"
+            explainText="$(string.ForceSecurityProfile_Help)" key="Software\Policies\ZPDF"
+            presentation="$(presentation.ForceSecurityProfile)">
+      <parentCategory ref="ZPDF" />
+      <supportedOn ref="SUPPORTED_Windows10" />
+      <elements>
+        <text id="ForceSecurityProfileText" valueName="force_security_profile" />
+      </elements>
+    </policy>
+  </policies>
+</policyDefinitions>

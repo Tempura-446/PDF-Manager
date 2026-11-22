@@ -109,7 +109,7 @@ def run(steps, src, output, password=None, notes=None, state=None):
     with tempfile.TemporaryDirectory(prefix="pdfm-recipe-") as tmp:
         current = Path(tmp) / Path(src).name
         if core.open_pdf(src, password).is_encrypted:
-            core.decrypt(src, current, password or "")
+            core.decrypt(src, current, password or "", _internal=True)
         else:
             shutil.copyfile(src, current)
         for n, step in enumerate(steps, 1):

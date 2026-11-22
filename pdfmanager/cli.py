@@ -2267,6 +2267,109 @@ def build_parser():
                             help="run a right-click action on the files in the app (Explorer's "
                                  "menu uses it; files given together go into one job)")
 
+    def cmd_profile(a):
+        from pdfmanager import secprofiles
+
+        if a.profile_cmd == "list":
+            for prof in secprofiles.list_profiles():
+                kind = "built-in" if prof.get("builtin") else "custom"
+                desc = prof.get("description") or ""
+                print(f"{prof['name']} ({kind})" + (f" — {desc}" if desc else ""))
+            return 0
+        if a.profile_cmd == "apply":
+            res = secprofiles.apply_profile(
+                a.input,
+                a.output,
+                a.name,
+                password=a.password,
+                user_password=a.user_password,
+                owner_password=a.owner_password,
+            )
+            print(f"-> {res['output']}  (profile {res['profile']}: {', '.join(res['steps']) or 'no changes'})")
+            return 0
+        if a.profile_cmd == "export":
+            out = secprofiles.export_profile(a.name, a.output)
+            print(f"-> {out}")
+            return 0
+        if a.profile_cmd == "import":
+            prof = secprofiles.import_profile(a.file)
+            print(f"imported security profile {prof['name']!r}")
+            return 0
+        return 1
+
+    sp = other("profile", cmd_profile, "list, apply, export, or import saved security profiles")
+    psub = sp.add_subparsers(dest="profile_cmd", required=True)
+    psub.add_parser("list", help="list available security profiles")
+    p_apply = psub.add_parser("apply", help="apply a security profile to a PDF")
+    p_apply.add_argument("name", help="security profile name (e.g. Confidential, Internal, Public Share)")
+    p_apply.add_argument("input", help="source PDF")
+    p_apply.add_argument("-o", "--output", required=True, help="output PDF")
+    p_apply.add_argument("--password", help="password to open the source PDF")
+    p_apply.add_argument("--user-password", help="password to open the output PDF")
+    p_apply.add_argument("--owner-password", help="permissions password for the output PDF")
+    p_exp = psub.add_parser("export", help="export a security profile to a JSON file")
+    p_exp.add_argument("name", help="profile name")
+    p_exp.add_argument("-o", "--output", required=True, help="destination JSON file")
+    p_imp = psub.add_parser("import", help="import a security profile from a JSON file")
+    p_imp.add_argument("file", help="profile JSON file")
+
+    def cmd_audit(a):
+        from pdfmanager import auditlog
+
+        if a.audit_cmd == "show":
+            entries = auditlog.read_entries(action=a.action, limit=a.limit)
+            if a.json:
+                print(json.dumps(entries, indent=2, ensure_ascii=False))
+            else:
+                for e in entries:
+                    print(f"{e.get('timestamp')}  {e.get('action')}  {e.get('status')}  "
+                          f"{e.get('actor')}  {e.get('target') or '-'}")
+            return 0
+        if a.audit_cmd == "verify":
+            res = auditlog.verify_chain()
+            if res["valid"]:
+                print(f"audit log verified OK ({res['count']} entries)")
+                return 0
+            print(f"audit log integrity FAILED ({len(res['errors'])} error(s) in {res['count']} entries):",
+                  file=sys.stderr)
+            for err in res["errors"]:
+                print(f"  line {err['line']}: {err['reason']}", file=sys.stderr)
+            return 2
+        if a.audit_cmd == "export":
+            out = auditlog.export_entries(a.output, fmt=a.format, action=a.action)
+            print(f"-> {out}")
+            return 0
+        return 1
+
+    sp = other("audit", cmd_audit, "inspect, verify, or export the tamper-evident security audit log")
+    asub = sp.add_subparsers(dest="audit_cmd", required=True)
+    a_show = asub.add_parser("show", help="show recent audit log entries")
+    a_show.add_argument("--action", help="filter by action name (e.g. redact, profile_applied)")
+    a_show.add_argument("--limit", type=int, default=50, help="maximum entries to show")
+    a_show.add_argument("--json", action="store_true", help="output JSON")
+    asub.add_parser("verify", help="verify SHA-256 hash chain integrity of the audit log")
+    a_exp = asub.add_parser("export", help="export the audit log to JSON or CSV")
+    a_exp.add_argument("-o", "--output", required=True, help="destination file")
+    a_exp.add_argument("--format", choices=["json", "csv"], default="json")
+    a_exp.add_argument("--action", help="filter by action name")
+
+    def cmd_policy(a):
+        from pdfmanager import policy
+
+        snap = policy.snapshot()
+        if a.json:
+            print(json.dumps(snap, indent=2, ensure_ascii=False))
+        else:
+            for key, info in snap.items():
+                lock_tag = " [locked]" if info["locked"] else ""
+                print(f"{key}: {info['value']!r}{lock_tag}")
+        return 0
+
+    sp = other("policy", cmd_policy, "show effective enterprise administrator policies")
+    psub2 = sp.add_subparsers(dest="policy_cmd", required=True)
+    pol_show = psub2.add_parser("show", help="show effective policies and locked status")
+    pol_show.add_argument("--json", action="store_true", help="output JSON")
+
     return p
 
 
