@@ -89,6 +89,15 @@ export const ReaderSave = (Base) => class extends Base {
           return this.toast(notes.join(" "), 12000, actions);
         }
         if (used.some((u) => u.overflow)) notes.push("Even a little smaller, the text doesn't fit on the page, so the text below it wasn't moved.");
+        let summary = null, visual = [];
+        try { summary = JSON.parse(res.headers.get("X-Pdfm-Summary") || "null"); } catch (e) {}
+        try { visual = JSON.parse(res.headers.get("X-Pdfm-Visual") || "[]"); } catch (e) {}
+        if (summary && summary.covered > 0) {
+          notes.push("Note: underlying text could not be permanently removed and was visually covered instead.");
+        }
+        if (Array.isArray(visual) && visual.some((v) => v && v.ok === false)) {
+          notes.push("Visual check flagged possible text clipping or overlap — inspect the page or undo with Ctrl+Z.");
+        }
         if (notes.length) this.toast(notes.join(" "), 8000);
       },
     });

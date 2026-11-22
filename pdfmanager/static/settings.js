@@ -49,6 +49,22 @@ async function openSettings() {
     $("shell-menu").hidden = !menu.available;
     $("set-shell-menu").checked = !!menu.on;
   } catch (e) { $("shell-menu").hidden = true; }
+  updateStatus("audit-status", "");
+  try {
+    const polRes = await jsonApi("/api/policy");
+    const pols = polRes.policies || {};
+    const locked = Object.entries(pols).filter(([, info]) => info.locked).map(([k, info]) => `${k}=${JSON.stringify(info.value)}`);
+    if ($("policy-status")) {
+      $("policy-status").textContent = locked.length
+        ? `Managed by administrator policy: ${locked.join(", ")}.`
+        : "No administrator policies active.";
+    }
+    const updatesLockedOff = Boolean((pols.disable_updates?.locked && pols.disable_updates?.value)
+      || (pols.disable_network?.locked && pols.disable_network?.value));
+    $("set-check").disabled = updatesLockedOff;
+    $("set-check-now").disabled = updatesLockedOff;
+    if (updatesLockedOff) updateStatus("set-status", "Updates are disabled by administrator policy.");
+  } catch (e) { /* policy endpoint optional */ }
   $("settings-dialog").showModal();
 }
 
@@ -315,6 +331,34 @@ async function showText(title, path) {
 }
 $("show-licence").addEventListener("click", () => showText("Licence", "/api/licence"));
 $("show-notices").addEventListener("click", () => showText("Third-party notices", "/api/notices"));
+$("show-audit")?.addEventListener("click", async () => {
+  $("text-title").textContent = "Security audit log";
+  $("text-body").textContent = "Loading…";
+  $("text-dialog").showModal();
+  try {
+    const data = await jsonApi("/api/audit");
+    const integrity = data.integrity || { valid: true, count: 0, errors: [] };
+    const head = integrity.valid
+      ? `Chain integrity: OK (${integrity.count} entries)\n\n`
+      : `Chain integrity: FAILED (${(integrity.errors || []).length} error(s))\n\n`;
+    const lines = (data.entries || []).map((e) =>
+      `${e.timestamp}  ${e.action}  [${e.status}]  ${e.actor}  ${e.target || "-"}`);
+    $("text-body").textContent = head + (lines.length ? lines.join("\n") : "No security events recorded yet.");
+  } catch (e) { $("text-body").textContent = "Couldn't load audit log: " + e.message; }
+  $("text-body").scrollTop = 0;
+});
+$("verify-audit")?.addEventListener("click", async () => {
+  updateStatus("audit-status", "Verifying SHA-256 hash chain…");
+  try {
+    const data = await jsonApi("/api/audit");
+    const integrity = data.integrity || { valid: true, count: 0, errors: [] };
+    if (integrity.valid) {
+      updateStatus("audit-status", `Audit log verified OK (${integrity.count} entries).`);
+    } else {
+      updateStatus("audit-status", `Integrity FAILED: ${(integrity.errors || []).length} tampered or broken entry(ies).`, true);
+    }
+  } catch (e) { updateStatus("audit-status", e.message, true); }
+});
 $("copy-diagnostics").addEventListener("click", async () => {
   try {
     const text = await (await api("/api/diagnostics")).text();

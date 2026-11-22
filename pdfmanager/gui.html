@@ -244,6 +244,13 @@
     <details class="dlg-online"><summary>When ZPDF goes online</summary>
       <p class="dlg-hint">ZPDF has no telemetry: nothing about you or your files is ever sent. It connects only on these occasions:</p>
       <ul id="set-online"></ul></details>
+    <h3>Security audit log &amp; policies</h3>
+    <p class="dlg-hint" id="policy-status">No administrator policies active.</p>
+    <div class="dlg-row" style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0;">
+      <button type="button" class="btn secondary" id="show-audit">View audit log</button>
+      <button type="button" class="btn secondary" id="verify-audit">Verify integrity</button>
+    </div>
+    <p class="dlg-status" id="audit-status" aria-live="polite"></p>
     <h3>Updates</h3>
     <label class="dlg-check"><input type="checkbox" id="set-check"> Check for new versions when ZPDF starts</label>
     <label class="dlg-field"><span>GitHub repository</span><input type="text" id="set-repo" spellcheck="false" autocomplete="off" placeholder="owner/name"></label>
