@@ -4,6 +4,24 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.61.3
+
+First full three-platform release (Windows, Linux, and macOS) with macOS
+compatibility fixes and automated multiplatform package publishing.
+
+- **Multiplatform release publishing (`.github/workflows/build-app.yml`,
+  `.github/workflows/tests.yml`).** Releases now automatically publish Windows
+  (`.zip`), Linux (`.zip` and `.deb`), and macOS (`.dmg` and `.zip`) packages
+  with `.sha256` checksums (and optional `.sig` Ed25519 signatures) to
+  `Tempura-446/ZPDF-releases`, backed by full `pytest` CI across Ubuntu,
+  Windows, and macOS.
+- **macOS compatibility fixes (`textedit/rewrite.py`, `gui.py`, `watch.py`).**
+  Resolved PDF Base-14 standard fonts (`Times`, `Helvetica`, `Courier`) before
+  macOS system fonts so text editing matches Windows and Linux consistently;
+  added `ps`-based browser-profile process cleanup on macOS where `/proc` is
+  absent; and included `st_ctime` in `watch._arrived()` for macOS APFS
+  backdated-mtime handling.
+
 ## 0.61.2
 
 Comprehensive security, reliability, and audit remediation across administrator
