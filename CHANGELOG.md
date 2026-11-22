@@ -4,6 +4,43 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.60.4
+
+Major six-phase engineering hardening release covering permanent redaction
+security, text-editing integrity, scanned & digital PDF comparison, security and
+reliability hardening, streaming performance, and release-readiness parity.
+
+- **Redaction security remediation (Phase 1, `redact.py` & `redactcontent.py`).**
+  Coordinate-based redactions now scrub matching bookmark titles, annotations,
+  form fields, and structure-tree `/ActualText`/`/Alt`, verify the written file
+  for any surviving copies, and safely handle nested Form XObjects and content
+  streams.
+- **Text editing integrity (Phase 2, `textedit/`).** Added
+  `require_permanent=True` (refusing fallback to visual cover-ups when text
+  operators cannot be cleanly removed) and `verify_visual=True` (before/after
+  crop verification to detect clipping or overlap), alongside improved font and
+  layout safety.
+- **PDF comparison engine improvements (Phase 3, `compare.py`).** Multi-signal
+  page alignment (text, visual perceptual hashes, dimensions) with confidence
+  scores for digital, scanned, and mixed PDFs; streaming memory management for
+  large documents; and aspect-ratio-preserving visual diffs when page sizes
+  differ.
+- **Security & reliability hardening (Phase 4).** Hardened password/encryption
+  handling, certificate/signature validation (`certsign.py`), safe attachment
+  extraction against path traversal and symlinks, temporary-file cleanup, and
+  secret scrubbing in diagnostic logs (`applog.py`).
+- **Performance & scalability (Phase 5, `redact.py`, `core.py`,
+  `packaging/benchmark.py`).** Streaming one-page-at-a-time raster redaction
+  (`_iter_render_redacted()`, cutting 30-page 150-DPI render RSS by 75% and
+  speeding up end-to-end raster redaction by 15.6%), bounded concurrent
+  `core.batch_run()` with per-item error isolation and cancellation, and a
+  reproducible CLI benchmark harness (`packaging/benchmark.py`).
+- **Product quality & CLI/GUI parity (Phase 6).** Synced `requirements.txt` with
+  `pyproject.toml` (`numpy>=1.24`), added the `translate` extra to third-party
+  license notices (`notices.py`), unified secret-safe OS error formatting across
+  CLI and GUI (`applog.format_user_error()`), added CLI warnings when mutating
+  digitally signed PDFs, and published `docs/RELEASE_READINESS.md`.
+
 ## 0.60.3
 
 Complete offline PDF translation out of the box: bundles the CTranslate2 +
