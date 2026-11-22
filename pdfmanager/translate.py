@@ -17,7 +17,7 @@ from pypdf.generic import NameObject, TextStringObject
 from reportlab.lib.utils import simpleSplit
 from reportlab.pdfgen import canvas
 
-from pdfmanager import core, i18n, progress
+from pdfmanager import core, fonts, i18n, progress
 
 # Tokens preserved verbatim during translation (order matters: URLs/emails before codes/numbers).
 _PROTECT_RE = re.compile(
@@ -64,48 +64,93 @@ def split_sentences(text):
     return [s for s in _SENTENCE_SPLIT_RE.split(cleaned) if s]
 
 
+def _pair_candidates(src_lang, dst_lang):
+    """Return candidate folder names for ``src_lang -> dst_lang`` (BCP-47 and Argos base codes)."""
+    s = i18n.normalize_code(src_lang)
+    d = i18n.normalize_code(dst_lang)
+    s_arg = i18n.bcp47_to_argos(s)
+    d_arg = i18n.bcp47_to_argos(d)
+    cands = [f"{s}-{d}", f"{s_arg}-{d_arg}", f"{s}-{d_arg}", f"{s_arg}-{d}"]
+    seen = []
+    for c in cands:
+        if c not in seen:
+            seen.append(c)
+    return seen
+
+
+def installed_translation_pairs():
+    """Return sorted list of installed offline translation model pair folder names."""
+    root = i18n.packs_dir()
+    if not root.is_dir():
+        return []
+    found = set()
+    for pack_dir in root.iterdir():
+        models_dir = pack_dir / "models"
+        if pack_dir.is_dir() and models_dir.is_dir():
+            for pair_dir in models_dir.iterdir():
+                if pair_dir.is_dir():
+                    found.add(pair_dir.name)
+    return sorted(found)
+
+
 def model_dir_for(src_lang, dst_lang):
     """Locate an installed offline translation model directory for ``src_lang -> dst_lang``."""
     s = i18n.normalize_code(src_lang)
     d = i18n.normalize_code(dst_lang)
-    pair = f"{s}-{d}"
+    pair_names = _pair_candidates(s, d)
+    root = i18n.packs_dir()
+    # Check primary pack folders first (dst, src), then any other installed pack
+    checked = set()
     for code in (d, s):
-        cand = i18n.packs_dir() / code / "models" / pair
-        if cand.is_dir():
-            return cand
+        checked.add(code)
+        for pair in pair_names:
+            cand = root / code / "models" / pair
+            if cand.is_dir():
+                return cand
+    if root.is_dir():
+        for pack_dir in sorted(root.iterdir()):
+            if not pack_dir.is_dir() or pack_dir.name in checked:
+                continue
+            for pair in pair_names:
+                cand = pack_dir / "models" / pair
+                if cand.is_dir():
+                    return cand
     return None
 
 
-def _load_offline_translator(src_lang, dst_lang):
-    """Return a batch callable ``fn(list[str]) -> list[str]`` backed by an installed
-    language pack model (CTranslate2 or Argos Translate), or raise PdfManagerError."""
-    s = i18n.normalize_code(src_lang)
-    d = i18n.normalize_code(dst_lang)
-    if s == d:
-        return lambda batch: list(batch)
-
-    mdir = model_dir_for(s, d)
-    if mdir is None:
-        pack_code = d if d != i18n.DEFAULT_LANG else s
-        raise core.PdfManagerError(
-            f"translation from {s} to {d} requires the {pack_code!r} language pack "
-            f"(~{_APPROX_PACK_MB} MB); install it in Settings → Language first"
-        )
-
-    # Try CTranslate2 + SentencePiece model inside the installed pack
+def _load_single_translator(s, d, mdir):
+    """Load a single-hop offline translator from ``mdir`` (CTranslate2 or Argos Translate)."""
     try:
         import ctranslate2
         import sentencepiece as spm
 
-        sp_files = list(mdir.glob("*.model"))
-        if sp_files:
-            sp = spm.SentencePieceProcessor(model_file=str(sp_files[0]))
-            tr = ctranslate2.Translator(str(mdir), device="cpu")
+        # Support both flat layout (mdir/model.bin) and nested Argos layout (mdir/model/model.bin)
+        ct2_dir = mdir / "model" if (mdir / "model").is_dir() and not (mdir / "model.bin").is_file() else mdir
+        sp_src_file = next(
+            (mdir / name for name in ("sentencepiece_src.model", "source.spm") if (mdir / name).is_file()),
+            None,
+        )
+        sp_tgt_file = next(
+            (mdir / name for name in ("sentencepiece_tgt.model", "target.spm") if (mdir / name).is_file()),
+            None,
+        )
+        if sp_src_file and sp_tgt_file:
+            sp_src = spm.SentencePieceProcessor(model_file=str(sp_src_file))
+            sp_tgt = spm.SentencePieceProcessor(model_file=str(sp_tgt_file))
+        else:
+            sp_files = list(mdir.glob("*.model")) or list(ct2_dir.glob("*.model"))
+            if not sp_files:
+                sp_src = sp_tgt = None
+            else:
+                sp_src = sp_tgt = spm.SentencePieceProcessor(model_file=str(sp_files[0]))
+
+        if sp_src is not None:
+            tr = ctranslate2.Translator(str(ct2_dir), device="cpu")
 
             def _ct2_batch(batch):
-                tokenized = [sp.encode(text, out_type=str) for text in batch]
+                tokenized = [sp_src.encode(text, out_type=str) for text in batch]
                 results = tr.translate_batch(tokenized)
-                return [sp.decode(r.hypotheses[0]) for r in results]
+                return [sp_tgt.decode(r.hypotheses[0]) for r in results]
 
             return _ct2_batch
     except ImportError:
@@ -115,7 +160,7 @@ def _load_offline_translator(src_lang, dst_lang):
     try:
         import argostranslate.translate as argos
 
-        s_base, d_base = s.split("-")[0], d.split("-")[0]
+        s_base, d_base = i18n.bcp47_to_argos(s), i18n.bcp47_to_argos(d)
         installed = argos.get_installed_languages()
         from_lang = next((l for l in installed if l.code == s_base), None)
         to_lang = next((l for l in installed if l.code == d_base), None)
@@ -129,6 +174,35 @@ def _load_offline_translator(src_lang, dst_lang):
     raise core.PdfManagerError(
         f"found model folder for {s} → {d} at {mdir}, but no offline translation runtime "
         "(ctranslate2 or argostranslate) is installed"
+    )
+
+
+def _load_offline_translator(src_lang, dst_lang):
+    """Return a batch callable ``fn(list[str]) -> list[str]`` backed by an installed
+    language pack model (CTranslate2 or Argos Translate), automatically pivoting
+    through English when direct ``src -> dst`` is absent, or raise PdfManagerError."""
+    s = i18n.normalize_code(src_lang)
+    d = i18n.normalize_code(dst_lang)
+    if s == d:
+        return lambda batch: list(batch)
+
+    mdir = model_dir_for(s, d)
+    if mdir is not None:
+        return _load_single_translator(s, d, mdir)
+
+    # Automatic English pivot: src -> en -> dst
+    if s != i18n.DEFAULT_LANG and d != i18n.DEFAULT_LANG:
+        hop1 = model_dir_for(s, i18n.DEFAULT_LANG)
+        hop2 = model_dir_for(i18n.DEFAULT_LANG, d)
+        if hop1 is not None and hop2 is not None:
+            fn1 = _load_single_translator(s, i18n.DEFAULT_LANG, hop1)
+            fn2 = _load_single_translator(i18n.DEFAULT_LANG, d, hop2)
+            return lambda batch: fn2(fn1(batch))
+
+    pack_code = d if d != i18n.DEFAULT_LANG else s
+    raise core.PdfManagerError(
+        f"translation from {s} to {d} requires the {pack_code!r} language pack "
+        f"(~{_APPROX_PACK_MB} MB); download it in Settings → Language first"
     )
 
 
@@ -194,16 +268,17 @@ def translate_page(path, page_num, src_lang, dst_lang, *, password=None, transla
     }
 
 
-def _make_text_page(width, height, text, font_name="Helvetica", font_size=10):
+def _make_text_page(width, height, text, font_name=None, font_size=10):
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(width, height))
     margin = 36
     max_w = max(72, width - 2 * margin)
     y = height - margin
     leading = font_size * 1.4
-    c.setFont(font_name, font_size)
-    for para in text.split("\n\n"):
-        for line in simpleSplit(para, font_name, font_size, max_w):
+    chosen_font = font_name or fonts.font_for(text or "")
+    c.setFont(chosen_font, font_size)
+    for para in (text or "").split("\n\n"):
+        for line in simpleSplit(para, chosen_font, font_size, max_w):
             if y < margin:
                 break
             c.drawString(margin, y, line)

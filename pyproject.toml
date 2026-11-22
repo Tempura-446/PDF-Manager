@@ -28,10 +28,12 @@ dependencies = [
 app = ["pywebview>=5", "pythonnet>=3.0; sys_platform == 'win32'"]
 # OCR's built-in engine: the PP-OCR models (inside the rapidocr wheel) on ONNX Runtime.
 ocr = ["rapidocr>=3.10", "onnxruntime>=1.17"]
+# Offline PDF translation runtime (CTranslate2 + SentencePiece; CPU-only wheels).
+translate = ["ctranslate2>=4.0", "sentencepiece>=0.2"]
 # The second OCR engine: OCRmyPDF, which runs the Tesseract program.
 tesseract = ["ocrmypdf>=15"]
-all = ["pywebview>=5", "pythonnet>=3.0; sys_platform == 'win32'", "rapidocr>=3.10", "onnxruntime>=1.17", "ocrmypdf>=15"]
-build = ["pywebview>=5", "pythonnet>=3.0; sys_platform == 'win32'", "pyinstaller>=6", "rapidocr>=3.10", "onnxruntime>=1.17"]
+all = ["pywebview>=5", "pythonnet>=3.0; sys_platform == 'win32'", "rapidocr>=3.10", "onnxruntime>=1.17", "ctranslate2>=4.0", "sentencepiece>=0.2", "ocrmypdf>=15"]
+build = ["pywebview>=5", "pythonnet>=3.0; sys_platform == 'win32'", "pyinstaller>=6", "rapidocr>=3.10", "onnxruntime>=1.17", "ctranslate2>=4.0", "sentencepiece>=0.2"]
 test = ["pytest>=7"]
 
 [project.scripts]

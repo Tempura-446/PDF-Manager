@@ -75,9 +75,13 @@ function renderLanguageState(info) {
   list.replaceChildren(...packs.map((p) => {
     const li = document.createElement("li");
     li.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;";
-    const caps = [p.has_translate && "translate", p.has_ocr && "OCR", p.has_meaning && "search"].filter(Boolean);
+    const caps = [
+      p.has_translate && (p.pairs?.length ? `translate: ${p.pairs.join(", ")}` : "translate"),
+      p.has_ocr && "OCR",
+      p.has_meaning && "search",
+    ].filter(Boolean);
     const label = document.createElement("span");
-    label.textContent = `${p.name} (${p.code})` + (caps.length ? ` — ${caps.join(", ")}` : "");
+    label.textContent = `${p.name} (${p.code})` + (caps.length ? ` — ${caps.join("; ")}` : "");
     const rm = document.createElement("button");
     rm.type = "button";
     rm.className = "link-btn";
@@ -86,10 +90,61 @@ function renderLanguageState(info) {
       try {
         await jsonApi("/api/i18n/packs/remove", { code: p.code });
         await loadLanguages();
+        if (langCatalogCache) renderLangCatalog(langCatalogCache);
         updateStatus("lang-status", `Removed ${p.code} language pack.`);
       } catch (err) { updateStatus("lang-status", err.message, true); }
     });
     li.append(label, rm);
+    return li;
+  }));
+}
+
+let langCatalogCache = null;
+
+function renderLangCatalog(catalog) {
+  const list = $("set-pack-catalog");
+  if (!list) return;
+  const q = ($("set-pack-filter")?.value || "").trim().toLowerCase();
+  const items = (catalog?.packs || []).filter((p) =>
+    !q || p.code.toLowerCase().includes(q) || (p.name || "").toLowerCase().includes(q)
+  );
+  if (!items.length) {
+    const li = document.createElement("li");
+    li.className = "dlg-hint";
+    li.textContent = q ? "No matching language packs." : "No downloadable packs available right now.";
+    list.replaceChildren(li);
+    return;
+  }
+  list.replaceChildren(...items.map((p) => {
+    const li = document.createElement("li");
+    li.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;";
+    const label = document.createElement("span");
+    const srcTag = p.source === "zpdf" ? "ZPDF pack" : "Argos offline model";
+    const pairsText = p.available_pairs?.length ? ` · ${p.available_pairs.join(", ")}` : "";
+    label.textContent = `${p.name} (${p.code}) — ${srcTag}${pairsText}`;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "link-btn";
+    btn.textContent = p.has_translate ? "Re-download" : "Download";
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Downloading…";
+      updateStatus("lang-status", `Downloading ${p.name} (${p.code})…`);
+      try {
+        const res = await jsonApi("/api/i18n/pack/download", { code: p.code, source: p.source });
+        await loadLanguages();
+        const fresh = await jsonApi("/api/i18n/catalog");
+        langCatalogCache = fresh;
+        renderLangCatalog(fresh);
+        const pairs = res.installed_pairs?.length ? ` (${res.installed_pairs.join(", ")})` : "";
+        updateStatus("lang-status", `Installed ${p.name}${pairs}. Ready for offline translation.`);
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = "Download";
+        updateStatus("lang-status", err.message, true);
+      }
+    });
+    li.append(label, btn);
     return li;
   }));
 }
@@ -107,6 +162,29 @@ $("set-language")?.addEventListener("change", async (e) => {
     if (window.ZpdfI18n?.load) await window.ZpdfI18n.load(TOKEN);
     updateStatus("lang-status", `Language set to ${e.target.value}.`);
   } catch (err) { updateStatus("lang-status", err.message, true); }
+});
+
+$("set-pack-browse")?.addEventListener("click", async () => {
+  const wrap = $("set-pack-catalog-wrap");
+  if (!wrap) return;
+  if (!wrap.hidden && langCatalogCache) {
+    wrap.hidden = true;
+    return;
+  }
+  wrap.hidden = false;
+  updateStatus("lang-status", "Checking available language packs…");
+  try {
+    langCatalogCache = await jsonApi("/api/i18n/catalog");
+    renderLangCatalog(langCatalogCache);
+    const total = langCatalogCache.packs?.length || 0;
+    updateStatus("lang-status", total ? `${total} languages available for offline download.` : "Catalog unavailable (offline?).");
+  } catch (err) {
+    updateStatus("lang-status", err.message, true);
+  }
+});
+
+$("set-pack-filter")?.addEventListener("input", () => {
+  if (langCatalogCache) renderLangCatalog(langCatalogCache);
 });
 
 $("set-pack-install")?.addEventListener("click", () => $("set-pack-file")?.click());

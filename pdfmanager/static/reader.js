@@ -1077,10 +1077,23 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     if (!tab?.doc) return;
     const langs = [
       ["en", "English"],
+      ["zh-Hans", "简体中文 (Chinese Simplified)"],
+      ["zh-Hant", "繁體中文 (Chinese Traditional)"],
       ["es", "Español (Spanish)"],
       ["fr", "Français (French)"],
       ["de", "Deutsch (German)"],
-      ["zh-Hans", "简体中文 (Chinese)"],
+      ["ja", "日本語 (Japanese)"],
+      ["ko", "한국어 (Korean)"],
+      ["ar", "العربية (Arabic)"],
+      ["pt", "Português (Portuguese)"],
+      ["ru", "Русский (Russian)"],
+      ["it", "Italiano (Italian)"],
+      ["nl", "Nederlands (Dutch)"],
+      ["pl", "Polski (Polish)"],
+      ["tr", "Türkçe (Turkish)"],
+      ["hi", "हिन्दी (Hindi)"],
+      ["vi", "Tiếng Việt (Vietnamese)"],
+      ["uk", "Українська (Ukrainian)"],
     ];
     const mkSel = (def) => {
       const sel = el("select");
@@ -1102,9 +1115,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       ["go", "Translate", true],
     ]);
     if (go !== "go") return;
-    this.toast("Translating page offline…");
-    let data;
-    try {
+    const runTranslate = async () => {
       const bytes = await this._currentBytes();
       const fd = new FormData();
       fd.append("file", new Blob([bytes], { type: "application/pdf" }), tab.name || "document.pdf");
@@ -1117,11 +1128,47 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
         headers: this.token ? { "X-Pdfm-Token": this.token } : {},
         body: fd,
       });
-      data = await res.json();
-      if (!res.ok) throw new Error(data.error || res.statusText);
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.error || res.statusText);
+      return payload;
+    };
+    this.toast("Translating page offline…");
+    let data;
+    try {
+      data = await runTranslate();
     } catch (e) {
-      await this._dialog("Offline translation", [el("p", {}, e?.message || String(e))], [["ok", "Close", true]]);
-      return;
+      const msg = e?.message || String(e);
+      if (msg.includes("language pack")) {
+        const dlChoice = await this._dialog("Offline translation", [el("p", {}, msg)], [
+          ["cancel", "Close", false],
+          ["download", "Download pack now", true],
+        ]);
+        if (dlChoice !== "download") return;
+        const needed = [...new Set([fromSel.value, toSel.value].filter((c) => c && c !== "en"))];
+        this.toast(`Downloading language pack (${needed.join(", ")})…`);
+        try {
+          for (const code of needed) {
+            const dlRes = await fetch("/api/i18n/pack/download", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(this.token ? { "X-Pdfm-Token": this.token } : {}),
+              },
+              body: JSON.stringify({ code }),
+            });
+            const dlData = await dlRes.json();
+            if (!dlRes.ok) throw new Error(dlData.error || dlRes.statusText);
+          }
+          this.toast("Translating page offline…");
+          data = await runTranslate();
+        } catch (dlErr) {
+          await this._dialog("Offline translation", [el("p", {}, dlErr?.message || String(dlErr))], [["ok", "Close", true]]);
+          return;
+        }
+      } else {
+        await this._dialog("Offline translation", [el("p", {}, msg)], [["ok", "Close", true]]);
+        return;
+      }
     }
     const out = el("textarea", {
       readonly: "readonly",

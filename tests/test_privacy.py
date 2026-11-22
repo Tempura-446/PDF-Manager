@@ -148,8 +148,8 @@ def test_every_way_online_is_stated():
     root = Path(privacy.__file__).parent
     calling = sorted(p.name for p in root.glob("*.py")
                      if "urlopen(" in p.read_text(encoding="utf-8") and p.name != "privacy.py")
-    # ocr.py: language data; update.py: versions and updates. (Timestamps go through pyHanko, in certsign.py.)
-    assert calling == ["ocr.py", "update.py"], calling
+    # i18n.py: language packs & translation models; ocr.py: language data; update.py: versions and updates. (Timestamps go through pyHanko, in certsign.py.)
+    assert calling == ["i18n.py", "ocr.py", "update.py"], calling
     # escl.py: a network scanner, on the local network only (0.44.0)
     others = sorted(p.name for p in root.glob("*.py") if p.name != "privacy.py" and any(
         mark in p.read_text(encoding="utf-8") for mark in ("http.client.HTTP", "socket.socket(")))

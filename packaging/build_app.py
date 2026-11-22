@@ -77,6 +77,9 @@ def main():
         # and onnxruntime keeps its shared libraries beside its Python files.
         "--collect-all", "rapidocr",
         "--collect-all", "onnxruntime",
+        # Offline PDF translation runtime (CTranslate2 + SentencePiece).
+        "--collect-all", "ctranslate2",
+        "--collect-all", "sentencepiece",
         # Find the package from the source tree: editable installs use import
         # hooks PyInstaller can't follow.
         "--paths", str(ROOT),

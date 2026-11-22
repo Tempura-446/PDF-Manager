@@ -156,6 +156,8 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
             return self._send(HTTPStatus.OK, {"news": news, "last": last})
         if path == "/api/i18n":
             return self._i18n_get()
+        if path == "/api/i18n/catalog":
+            return self._i18n_catalog()
         if path == "/api/shellmenu":
             from pdfmanager import winsetup
 
@@ -372,10 +374,12 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._watch_list()
             if path == "/api/i18n/language":
                 return self._i18n_set_language(body)
-            if path == "/api/i18n/pack/install":
+            if path in ("/api/i18n/pack/install", "/api/i18n/packs/install"):
                 return self._i18n_pack_install(body)
-            if path == "/api/i18n/pack/remove":
+            if path in ("/api/i18n/pack/remove", "/api/i18n/packs/remove"):
                 return self._i18n_pack_remove(body)
+            if path in ("/api/i18n/pack/download", "/api/i18n/packs/download"):
+                return self._i18n_pack_download(body)
             if path == "/api/shellmenu":
                 from pdfmanager import winsetup
 

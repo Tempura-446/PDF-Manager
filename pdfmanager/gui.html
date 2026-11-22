@@ -161,9 +161,14 @@
     <label class="dlg-field inline"><span>Interface language</span>
       <select id="set-language"><option value="en">English</option></select></label>
     <p class="dlg-hint">Starter locales are automatic translations. Language packs also carry offline translation, OCR, and search-by-meaning models.</p>
-    <div class="dlg-row" style="display:flex;gap:8px;align-items:center;margin:6px 0;">
+    <div class="dlg-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0;">
+      <button type="button" class="btn secondary" id="set-pack-browse">Download language packs…</button>
       <button type="button" class="btn secondary" id="set-pack-install" data-i18n="settings.language.install_file">Install language pack from file…</button>
-      <input type="file" id="set-pack-file" accept=".zip" hidden>
+      <input type="file" id="set-pack-file" accept=".zip,.argosmodel" hidden>
+    </div>
+    <div id="set-pack-catalog-wrap" hidden style="margin:6px 0 10px;">
+      <input type="search" id="set-pack-filter" placeholder="Filter languages (e.g. Spanish, Japanese, zh-Hans)…" aria-label="Filter downloadable language packs" style="width:100%;box-sizing:border-box;margin-bottom:6px;">
+      <ul class="watch-list" id="set-pack-catalog" aria-label="Downloadable language packs" style="max-height:220px;overflow:auto;"></ul>
     </div>
     <ul class="watch-list" id="set-packs-list" aria-label="Installed language packs"></ul>
     <p class="dlg-status" id="lang-status" aria-live="polite"></p>
