@@ -522,7 +522,9 @@ OPERATIONS = [
                             ["one-sheet", "Everything on one sheet"]]),
                 _f("format", "Format", "select", "xlsx",
                    choices=[["xlsx", "Excel workbook (.xlsx)"], ["csv", "CSV files (zip)"]],
-                   hint="A table that continues on the next page is kept as one table.")]},
+                   hint="A table that continues on the next page is kept as one table."),
+                _f("auto_ocr", "Run OCR automatically on scanned pages", "check", True,
+                   hint="If a page is a scan with no text layer, ZPDF runs OCR before extracting tables.")]},
     # -- pptx and html --
     {"id": "to-pptx", "group": "Convert", "label": "PDF → PowerPoint", "files": "pdf",
      "help": "Turn PDFs into PowerPoint slides (.pptx), one slide per page. No PowerPoint "
@@ -1291,13 +1293,15 @@ def _to_excel(src, out_dir, opts, password, notes):
     layout = opts.get("layout") or "sheet-per-table"
     if layout not in tables.LAYOUTS:
         raise UserError(f"unknown layout {layout!r}")
+    auto_ocr = _bool(opts.get("auto_ocr", True))
     try:
         if (opts.get("format") or "xlsx") == "csv":
-            made = tables.to_csv(src, out_dir / f"{src.stem}_tables", password, _pages(opts))
+            made = tables.to_csv(src, out_dir / f"{src.stem}_tables", password, _pages(opts),
+                                 auto_ocr=auto_ocr)
             outputs = made["files"]
         else:
             made = tables.to_excel(src, out_dir / f"{src.stem}.xlsx", password, _pages(opts),
-                                   mode=layout)
+                                   mode=layout, auto_ocr=auto_ocr)
             outputs = [made["output"]]
     except tables.NoTablesFound as exc:
         notes.append(f"{src.name}: {exc}")

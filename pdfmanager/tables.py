@@ -535,11 +535,29 @@ def find_tables(path, password=None, pages=None):
     return _scan(path, password, pages)[0]
 
 
-def _found_or_explain(path, password, pages):
-    """find_tables, or NoTablesFound saying why there are none."""
+def _found_or_explain(path, password, pages, auto_ocr=False):
+    """find_tables, or NoTablesFound saying why there are none.
+
+    With ``auto_ocr=True``, if no tables were found because pages are scanned
+    (have no extractable text), runs OCR into a temporary PDF and retries
+    table extraction automatically.
+    """
     tables, textless, searched = _scan(path, password, pages)
     if tables:
         return tables
+    if auto_ocr and textless:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="pdfm-table-ocr-") as tmp:
+            ocr_pdf = Path(tmp) / "ocr.pdf"
+            try:
+                core.ocr(path, ocr_pdf, password=password, engine="auto")
+            except core.PdfManagerError:
+                pass  # fall through to the clear explanation below
+            else:
+                tables_ocr, _, _ = _scan(ocr_pdf, None, pages)
+                if tables_ocr:
+                    return tables_ocr
     ocr = "scanned pages need OCR first (Make searchable)"
     if textless and len(textless) == searched:
         raise NoTablesFound(f"no tables were found; the pages have no text — {ocr}")
@@ -665,12 +683,19 @@ def _fit_columns(sheet, widths):
 
 
 def _write_rows(sheet, rows, start, widths):
-    """Rows from ``start``, the first one bold (the header). Returns the next free row."""
-    from openpyxl.styles import Alignment
+    """Rows from ``start``, the first one bold with subtle header fill and borders. Returns the next free row."""
+    from openpyxl.styles import Alignment, Border, PatternFill, Side
+
+    header_fill = PatternFill(fill_type="solid", fgColor="EEF2F7")
+    thin = Side(style="thin", color="D9DFE7")
+    cell_border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
     for r, cells in enumerate(rows):
         for c, text in enumerate(cells, 1):
             cell = _put(sheet, start + r, c, text, bold=r == 0)
+            cell.border = cell_border
+            if r == 0:
+                cell.fill = header_fill
             if len(text) > 58:
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
             widths[c] = max(widths.get(c, 0), min(len(text), 58))
@@ -683,7 +708,7 @@ def _title(number, table):
     return f"Page{'s' if '-' in pages else ''} {pages}, table {number}"
 
 
-def to_excel(path, output, password=None, pages=None, mode="sheet-per-table"):
+def to_excel(path, output, password=None, pages=None, mode="sheet-per-table", *, auto_ocr=False):
     """Write the PDF's tables to an Excel workbook (.xlsx): a Summary sheet,
     then a sheet per table ("p3 table 1") or, with mode "one-sheet", all
     tables on one sheet under a title row each. The first row of each table
@@ -699,7 +724,7 @@ def to_excel(path, output, password=None, pages=None, mode="sheet-per-table"):
     output = Path(output)
     if output.is_dir():
         raise core.PdfManagerError(f"{output} is a folder; give the name of the workbook to write")
-    tables = list(_numbered(_found_or_explain(path, password, pages)))
+    tables = list(_numbered(_found_or_explain(path, password, pages, auto_ocr=auto_ocr)))
 
     book = Workbook()
     summary = book.active
@@ -749,11 +774,11 @@ def _csv_safe(text):
     return text
 
 
-def to_csv(path, outdir, password=None, pages=None):
+def to_csv(path, outdir, password=None, pages=None, *, auto_ocr=False):
     """Write each table to its own CSV file in ``outdir`` (UTF-8 with a BOM, so
     Excel reads accents and symbols right), named <name>_p3_table1.csv.
     Returns {"files", "tables"}. Raises NoTablesFound when there are none."""
-    tables = list(_numbered(_found_or_explain(path, password, pages)))
+    tables = list(_numbered(_found_or_explain(path, password, pages, auto_ocr=auto_ocr)))
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     files = []
