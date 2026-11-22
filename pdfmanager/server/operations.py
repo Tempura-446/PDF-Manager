@@ -365,12 +365,24 @@ OPERATIONS = [
              "is taken out of the file for good.",
      "fields": [_f("terms", "Words or phrases", "text", "", placeholder="John Smith, 555-1234",
                    hint="separate several with commas"),
+                _f("regex", "Custom regular expression (optional)", "text", "",
+                   placeholder=r"CASE-\d{6}",
+                   hint="matches any pattern using Python regular expression syntax"),
                 # (how the words match beside them; the kinds of numbers on a row of their own)
                 _f("case_sensitive", "Match upper/lower case", "check", False),
                 _f("whole_words", "Whole words only", "check", False),
                 _f("emails", "All email addresses", "check", False),
                 _f("phones", "All phone numbers", "check", False),
                 _f("numbers", "Card, account and ID numbers", "check", False),
+                _f("ssn", "US Social Security Numbers (SSN)", "check", False),
+                _f("ein", "US Employer IDs (EIN)", "check", False),
+                _f("uk_ni", "UK National Insurance numbers", "check", False),
+                _f("iban", "EU / International IBANs", "check", False),
+                _f("credit_card", "Payment cards (Luhn-verified)", "check", False),
+                _f("reason_code", "Redaction reason code (optional)", "text", "",
+                   placeholder="(b)(6) or GDPR Art. 17",
+                   hint="Recorded in the redaction log and stamped on rasterized boxes."),
+                _f("export_log", "Also save redaction log (.json)", "check", False),
                 # -- true redaction --
                 _f("method", "How", "select", "remove",
                    choices=[["remove", "Remove what's under the boxes — the rest stays searchable"],
@@ -379,6 +391,17 @@ OPERATIONS = [
                         "notes say which."),
                 # -- end of true redaction --
                 _f("boxes", "", "hidden", "")]},
+    {"id": "sec-profile", "group": "Security", "label": "Security profile", "files": "pdf",
+     "action": "Apply profile",
+     "help": "Apply a named bundle of security steps (Make safe, strip hidden data, watermark, "
+             "and optional AES-256 permissions) in one click, recorded in the audit log.",
+     "fields": [_f("profile", "Profile", "select", "Confidential",
+                   choices=[["Confidential", "Confidential — Make safe, strip hidden data, CONFIDENTIAL watermark"],
+                            ["Internal", "Internal — Make safe, strip hidden data, dynamic user/date watermark"],
+                            ["Public Share", "Public Share — Make safe, strip hidden data & comments"]]),
+                _f("user_password", "Password to open (optional)", "password", "",
+                   hint="Leave blank to apply the profile without adding a password."),
+                _f("owner_password", "Permissions password (optional)", "password", "")]},
     {"id": "sanitize", "group": "Security", "label": "Remove hidden data", "files": "pdf", "action": "Remove hidden data",
      "help": "Remove information that travels unseen inside a PDF before you share it.",
      "fields": [_f("metadata", "Author, title, dates and other document details", "check", True),
@@ -678,6 +701,7 @@ SUFFIX.update({"attach": "attached", "labels": "labelled", "repair": "repaired"}
 SUFFIX["comments"] = "comments"
 SUFFIX["flatten-layers"] = "flat"
 SUFFIX["to-excel"] = "tables"
+SUFFIX["sec-profile"] = "protected"
 SUFFIX.update({"tag": "tagged", "access-check": "accessibility"})  # -- accessibility --
 
 
@@ -798,10 +822,11 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         if method not in redact.METHODS:
             raise UserError("choose how to redact: remove what's under the boxes, or pictures")
         # -- end of true redaction --
+        reason_code = (opts.get("reason_code") or "").strip() or None
         found = redact.redact(src, out, terms=terms, patterns=patterns, boxes=boxes,
                               case_sensitive=_bool(opts.get("case_sensitive")),
                               whole_words=_bool(opts.get("whole_words")), password=password,
-                              method=method)
+                              method=method, reason_code=reason_code)
         notes.append(f"{src.name}: " + (
             f"blacked out {sum(found.values())} area{'s' if sum(found.values()) != 1 else ''} "
             f"on page{'s' if len(found) != 1 else ''} {_pages_list(list(found))}"
@@ -809,6 +834,21 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             else "nothing matched, so nothing was blacked out"))
         if getattr(found, "proof", None):
             notes.append(redact.proof_words(found.proof))
+        if _bool(opts.get("export_log")):
+            log_out = out_dir / f"{src.stem}_redaction_log.json"
+            redact.export_redaction_log(found, log_out, fmt="json")
+            return [out, log_out]
+    elif op == "sec-profile":
+        from pdfmanager import secprofiles
+
+        prof_name = opts.get("profile") or "Confidential"
+        res = secprofiles.apply_profile(
+            src, out, prof_name,
+            password=password,
+            user_password=(opts.get("user_password") or "").strip() or None,
+            owner_password=(opts.get("owner_password") or "").strip() or None,
+        )
+        notes.append(f"{src.name}: applied {res['profile']} ({', '.join(res['steps']) or 'no changes'})")
     elif op == "recipe":
         try:
             steps = json.loads(opts.get("steps") or "[]")
@@ -1311,6 +1351,9 @@ def _redact_request(opts):
     from the page editor as {"1": [[x0, y0, x1, y1], ...]} (1-based pages)."""
     terms = [t.strip() for t in re.split(r"[,;\n]", opts.get("terms") or "") if t.strip()]
     patterns = [redact.PRESETS[k] for k in redact.PRESETS if _bool(opts.get(k))]
+    custom_rx = (opts.get("regex") or "").strip()
+    if custom_rx:
+        patterns.append(custom_rx)
     try:
         raw = json.loads(opts.get("boxes") or "{}")
         boxes = {int(page) - 1: [tuple(float(v) for v in box) for box in found]

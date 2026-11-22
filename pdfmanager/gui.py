@@ -182,6 +182,14 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
             from pdfmanager import notices
 
             return self._send(HTTPStatus.OK, notices.third_party_notices(), "text/plain; charset=utf-8")
+        if path == "/api/audit":
+            from pdfmanager import auditlog
+
+            return self._json({"entries": auditlog.read_entries(limit=100), "integrity": auditlog.verify_chain()})
+        if path == "/api/policy":
+            from pdfmanager import policy
+
+            return self._json({"policies": policy.snapshot()})
         if path == "/api/debug/stacks" and os.environ.get("PDFM_LOG"):
             return self._send(HTTPStatus.OK, _thread_stacks(), "text/plain; charset=utf-8")
         self._error(HTTPStatus.NOT_FOUND, "not found")

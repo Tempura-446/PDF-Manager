@@ -260,6 +260,8 @@ def apply_profile(
         eff_owner_pw = owner_password if owner_password is not None else prof.get("owner_password")
         perm_cfg = prof.get("permissions")
         if eff_user_pw or eff_owner_pw:
+            import secrets
+
             step_idx += 1
             nxt = Path(tmp) / f"step{step_idx}.pdf"
             perms = None
@@ -269,11 +271,15 @@ def apply_profile(
                     changes=perm_cfg.get("changes", "any"),
                     copy=bool(perm_cfg.get("copy", True)),
                 )
+            final_owner = eff_owner_pw
+            if not final_owner or final_owner == (eff_user_pw or ""):
+                # Restricted permissions require an owner password distinct from user_password.
+                final_owner = secrets.token_urlsafe(18) if (perms is not None and filetools.restricts(perms)) else eff_user_pw
             core.encrypt(
                 current,
                 nxt,
                 user_password=eff_user_pw or "",
-                owner_password=eff_owner_pw or eff_user_pw,
+                owner_password=final_owner,
                 permissions=perms,
             )
             current = nxt
