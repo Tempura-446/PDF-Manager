@@ -653,7 +653,7 @@ def download_and_install_pack(code, *, pair=None, source=None):
             progress.report(1, 3, f"downloading ZPDF language pack ({norm_code})")
             zip_bytes = _http_get_bytes(zpack["download_url"], timeout=180)
             with tempfile.TemporaryDirectory(prefix="pdfm-lang-dl-") as tmp:
-                zip_path = Path(tmp) / f"ZPDF-lang-{norm_code}.zip"
+                zip_path = Path(tmp) / "pack.zip"
                 zip_path.write_bytes(zip_bytes)
                 progress.report(2, 3, f"installing {norm_code} language pack")
                 installed = install_pack_from_zip(zip_path, expected_sha256=expected_sha)
@@ -707,7 +707,7 @@ def download_and_install_pack(code, *, pair=None, source=None):
         if archive_bytes is None:
             raise core.PdfManagerError(f"failed to download {entry['pair']} model: {last_err}")
         with tempfile.TemporaryDirectory(prefix="pdfm-argos-dl-") as tmp:
-            model_zip = Path(tmp) / f"{entry['pair']}.argosmodel"
+            model_zip = Path(tmp) / "model.argosmodel"
             model_zip.write_bytes(archive_bytes)
             res = install_argos_model_zip(
                 model_zip,
