@@ -79,8 +79,8 @@ jobs:
           "dist/ZPDF.app/Contents/MacOS/ZPDF" --self-test "$RUNNER_TEMP/selftest.txt" || status=$?
           cat "$RUNNER_TEMP/selftest.txt"
           exit ${status:-0}
-      - name: Publish Linux and macOS assets to ZPDF-releases (on version tag)
-        if: startsWith(github.ref, 'refs/tags/v') && (runner.os == 'Linux' || runner.os == 'macOS')
+      - name: Publish platform assets to ZPDF-releases (on version tag)
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
@@ -102,13 +102,15 @@ jobs:
           dist = Path("dist")
           files = []
 
-          # Versioned zip + sha256 matching update.py release_asset_candidates()
+          # Versioned zip + sha256: on Windows name it -windows-standalone.zip so it
+          # complements (rather than overwrites) the lightweight Python-installer zip.
           src_zip = dist / f"ZPDF-{label}.zip"
           if src_zip.is_file():
-              ver_zip = dist / f"ZPDF-{ver}-{label}.zip"
+              out_name = f"ZPDF-{ver}-windows-standalone.zip" if label == "windows" else f"ZPDF-{ver}-{label}.zip"
+              ver_zip = dist / out_name
               shutil.copyfile(src_zip, ver_zip)
               sha = hashlib.sha256(ver_zip.read_bytes()).hexdigest()
-              ver_sha = dist / f"ZPDF-{ver}-{label}.zip.sha256"
+              ver_sha = dist / f"{out_name}.sha256"
               ver_sha.write_text(f"{sha}  {ver_zip.name}\n", encoding="ascii")
               files.extend([ver_zip, ver_sha])
 

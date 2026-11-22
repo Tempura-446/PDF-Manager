@@ -74,6 +74,7 @@ def stage_deb(app_dir, stage_dir, *, version=None, arch=None):
         f"Section: utils\n"
         f"Priority: optional\n"
         f"Architecture: {deb_arch}\n"
+        f"Depends: libgl1, libegl1, libnss3, libxkbcommon-x11-0\n"
         f"Maintainer: Tempura-446 <noreply@github.com>\n"
         f"Description: ZPDF offline PDF reader, editor, OCR, and manager\n"
         f" Read, edit, merge, split, OCR, sign, translate, and organize PDF files offline.\n"

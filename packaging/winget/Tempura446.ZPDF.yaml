@@ -1,0 +1,23 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
+# winget portable-zip manifest template for ZPDF standalone Windows builds.
+# Update PackageVersion and InstallerSha256 from ZPDF-<version>-windows-standalone.zip.sha256.
+PackageIdentifier: Tempura446.ZPDF
+PackageVersion: 0.61.3
+PackageLocale: en-US
+Publisher: Tempura-446
+PublisherUrl: https://github.com/Tempura-446/ZPDF-releases
+PackageName: ZPDF
+PackageUrl: https://github.com/Tempura-446/ZPDF-releases
+License: PolyForm Internal Use License 1.0.0 with personal-use permission
+ShortDescription: Offline PDF reader, editor, redactor, OCR, and document manager
+Installers:
+  - Architecture: x64
+    InstallerType: zip
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: ZPDF\ZPDF.exe
+        PortableCommandAlias: zpdf
+    InstallerUrl: https://github.com/Tempura-446/ZPDF-releases/releases/download/v0.61.3/ZPDF-0.61.3-windows-standalone.zip
+    InstallerSha256: REPLACE_WITH_SHA256_FROM_RELEASE
+ManifestType: singleton
+ManifestVersion: 1.6.0
