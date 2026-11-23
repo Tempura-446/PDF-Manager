@@ -4,6 +4,27 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.61.8
+
+High-quality NLLB-200 offline translation engine, entity protection, and deeper PDF layout fidelity.
+
+- **High-Quality Universal Offline Model — Meta NLLB-200 (`nllb-200`).**
+  Downloadable with one click from **Settings → Language Packs**
+  (**High-Quality Universal (NLLB-200 · 200 languages)**, ~615 MB streaming
+  download, zero new dependencies). Automatically preferred over Argos
+  OpenSubtitles models whenever installed for direct 200-language translation
+  with much stronger accuracy on business, formal, and technical PDFs.
+- **True content-stream text removal & deeper layout fidelity.** Removes
+  original `BT … ET` text operators via `pikepdf` (preserving all images,
+  logos, tables, borders, shadings, and gradients with zero whiteout patches
+  and zero ghost text on Copy/Find), adds `pdfplumber.find_tables()` cell-aware
+  bounds, and preserves `left`/`center`/`right` alignment and `bold`/`italic`
+  font styles.
+- **Verbatim entity protection.** Keeps standalone data cells verbatim and
+  protects inline emails, URLs, phone numbers, currency amounts, ISO dates,
+  and reference codes using collision-free numeric sentinels with an automatic
+  translate-around fallback.
+
 ## 0.61.7
 
 Major offline PDF translation upgrade: layout preservation, fluent CJK/neural quality, BPE tokenizer support, and one-click language pack downloads.
