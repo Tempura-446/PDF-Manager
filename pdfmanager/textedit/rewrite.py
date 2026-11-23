@@ -105,11 +105,16 @@ class _Page:
         append = out.append
         for i in range(self.textpage.count_chars()):
             code = get_unicode(tp_raw, i)
-            if code <= 32:
+            if code in (0, 9, 10, 13, 32):
                 continue
-            ch = chr(code)
-            if ch.isspace():
-                continue
+            if code < 32 or code == 45 or code >= 0xD800:
+                ch = self.textpage.get_text_range(i, 1)
+                if not ch or ch.isspace():
+                    continue
+            else:
+                ch = chr(code)
+                if ch.isspace():
+                    continue
             loose = get_charbox(i, loose=True)
             if loose[2] <= loose[0] or loose[3] <= loose[1]:
                 continue
@@ -1813,11 +1818,16 @@ def _intact(path, expect):
                         floor = math.floor
                         for i in range(textpage.count_chars()):
                             code = get_unicode(tp_raw, i)
-                            if code <= 32:
+                            if code in (0, 9, 10, 13, 32):
                                 continue
-                            ch = chr(code)
-                            if ch.isspace():
-                                continue
+                            if code < 32 or code == 45 or code >= 0xD800:
+                                ch = textpage.get_text_range(i, 1)
+                                if not ch or ch.isspace():
+                                    continue
+                            else:
+                                ch = chr(code)
+                                if ch.isspace():
+                                    continue
                             loose = get_charbox(i, loose=True)
                             if loose[2] <= loose[0] or loose[3] <= loose[1] or hides(textpage, i, loose):
                                 continue
