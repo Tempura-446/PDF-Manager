@@ -173,7 +173,8 @@ def _load_single_translator(s, d, mdir):
 
     raise core.PdfManagerError(
         f"found model folder for {s} → {d} at {mdir}, but no offline translation runtime "
-        "(ctranslate2 or argostranslate) is installed"
+        "(ctranslate2 + sentencepiece, or argostranslate) is installed. "
+        "Update ZPDF, re-run Install ZPDF.cmd, or run: pip install ctranslate2 sentencepiece"
     )
 
 

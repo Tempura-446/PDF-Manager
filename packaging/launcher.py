@@ -124,6 +124,9 @@ def self_test(result_file):
             from pdfmanager import ocr
 
             assert ocr._model_source("korean")[0].endswith(".onnx"), "rapidocr's model list is missing"
+            # Offline translation runtime must be bundled and importable.
+            importlib.import_module("ctranslate2")
+            importlib.import_module("sentencepiece")
 
         server, url = gui.make_server()
         Thread(target=server.serve_forever, daemon=True).start()

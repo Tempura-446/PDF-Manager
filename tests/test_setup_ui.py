@@ -270,7 +270,7 @@ def test_the_installer_script_hands_over_to_the_window_and_runs_for_it():
     # A stop is told on one line; pip's lines are shown by the window, kept quiet in the console.
     assert 'trap {' in text and 'Write-Host "@@error $_"; exit 1' in text
     assert '$PipSays = "--quiet"' in text and 'if ($Engine) { $PipSays = "--progress-bar=off" }' in text
-    assert "--disable-pip-version-check --quiet" not in text and text.count("--disable-pip-version-check $PipSays") == 6
+    assert "--disable-pip-version-check --quiet" not in text and text.count("--disable-pip-version-check $PipSays") == 7
     # Already installed, the two programs are still listed at the end.
     already = text.split('Write-Host "@@note extras|Already installed"', 1)[1].split("}", 1)[0]
     assert already.count("@@extra ") == 3 and already.count("|1") == 3
