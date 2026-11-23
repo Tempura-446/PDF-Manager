@@ -189,6 +189,12 @@
         </div></label>
       <button type="button" class="btn secondary" id="set-translate-save" style="margin-top:4px;">Save AI translation settings</button>
     </div>
+    <label class="dlg-field" style="margin-top:6px;"><span>Translation glossary &amp; keep-verbatim terms (optional)</span>
+      <textarea id="set-translate-glossary" rows="3" placeholder="One per line: keep verbatim (e.g. Acme Corp) or map (e.g. Force Majeure = 不可抗力)" style="width:100%;box-sizing:border-box;font-family:inherit;"></textarea></label>
+    <div style="display:flex;gap:6px;align-items:center;margin:2px 0 6px;">
+      <button type="button" class="btn secondary" id="set-translate-glossary-save">Save glossary</button>
+      <span class="dlg-hint" style="margin:0;">Applies to both offline (NLLB-200 / Language Packs) and Smart AI translation.</span>
+    </div>
     <p class="dlg-status" id="lang-status" aria-live="polite"></p>
     <h3>OCR (Make searchable)</h3>
     <label class="dlg-field"><span>Reading accuracy</span>

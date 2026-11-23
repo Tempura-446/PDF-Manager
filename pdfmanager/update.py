@@ -77,7 +77,8 @@ def public_settings():
             "translate_engine": data.get("translate_engine") or "offline",
             "translate_api_url": data.get("translate_api_url") or "http://localhost:11434/v1",
             "translate_model": data.get("translate_model") or "qwen2.5:7b",
-            "translate_key_set": bool(data.get("translate_api_key"))}
+            "translate_key_set": bool(data.get("translate_api_key")),
+            "translate_glossary": data.get("translate_glossary") or ""}
 
 
 # ---- checking -------------------------------------------------------------------------

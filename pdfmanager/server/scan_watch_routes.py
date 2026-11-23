@@ -248,6 +248,9 @@ class ScanWatchRoutesMixin:
             changes["translate_api_key"] = str(data["translate_api_key"]).strip()
         if data.get("clear_translate_key"):
             changes["translate_api_key"] = ""
+        if "translate_glossary" in data:
+            gloss = str(data["translate_glossary"] or "").strip()[:16384]
+            changes["translate_glossary"] = gloss or None
         update.save_settings(**changes)
         if "remember" in data:
             privacy.set_remembering(bool(data["remember"]))  # (turning it off clears what's kept)

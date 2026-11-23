@@ -31,7 +31,23 @@ _BUILTIN_DIR = Path(__file__).resolve().parent / "locales"
 
 LANGPACKS_RELEASE_TAG = "langpacks-v1"
 NLLB_PACK_CODE = "nllb-200"
+NLLB_LARGE_PACK_CODE = "nllb-200-1.3b"
 NLLB_BASE_URL = "https://huggingface.co/JustFrederik/nllb-200-distilled-600M-ct2-int8/resolve/main"
+NLLB_LARGE_BASE_URL = "https://huggingface.co/JustFrederik/nllb-200-distilled-1.3B-ct2-int8/resolve/main"
+NLLB_PACKS = {
+    NLLB_PACK_CODE: {
+        "name": "High-Quality Universal (NLLB-200 600M · 200 languages)",
+        "base_url": NLLB_BASE_URL,
+        "size_bytes": 645_000_000,
+        "pair_label": "200 languages (direct, fast & high quality)",
+    },
+    NLLB_LARGE_PACK_CODE: {
+        "name": "Best Offline Quality (NLLB-200 1.3B · 200 languages)",
+        "base_url": NLLB_LARGE_BASE_URL,
+        "size_bytes": 1_400_000_000,
+        "pair_label": "200 languages (largest offline model, smartest phrasing)",
+    },
+}
 NLLB_FILES = ("config.json", "shared_vocabulary.txt", "sentencepiece.bpe.model", "model.bin")
 ARGOS_INDEX_URL = "https://raw.githubusercontent.com/argosopentech/argospm-index/main/index.json"
 _ZPDF_PACK_RE = re.compile(r"^ZPDF-lang-([A-Za-z0-9-]+)-(\d+(?:\.\d+)*)\.zip$")
@@ -61,8 +77,8 @@ def normalize_code(code):
     raw = str(code or "").strip()
     if not raw or raw.lower() == "auto":
         return "auto"
-    if raw.lower() == NLLB_PACK_CODE:
-        return NLLB_PACK_CODE
+    if raw.lower() in NLLB_PACKS:
+        return raw.lower()
     if not _CODE_RE.match(raw):
         raise core.PdfManagerError(f"invalid language code: {raw!r}")
     parts = raw.split("-")
@@ -614,20 +630,21 @@ def list_catalog_packs(fetch=True):
 
     # Annotate with local installation status
     out = []
-    nllb_dir = packs_dir() / NLLB_PACK_CODE / "models" / NLLB_PACK_CODE
-    nllb_installed = (nllb_dir / "model.bin").is_file() and bool(list(nllb_dir.glob("*.model")))
-    out.append({
-        "code": NLLB_PACK_CODE,
-        "name": "High-Quality Universal (NLLB-200 · 200 languages)",
-        "version": "1.0",
-        "source": "nllb",
-        "available_pairs": ["200 languages (direct, high quality)"],
-        "size_bytes": 645_000_000,
-        "dir": "ltr",
-        "installed": nllb_installed,
-        "has_translate": nllb_installed,
-        "installed_pairs": ["nllb-200"] if nllb_installed else [],
-    })
+    for nllb_code, meta in NLLB_PACKS.items():
+        nllb_dir = packs_dir() / nllb_code / "models" / nllb_code
+        nllb_installed = (nllb_dir / "model.bin").is_file() and bool(list(nllb_dir.glob("*.model")))
+        out.append({
+            "code": nllb_code,
+            "name": meta["name"],
+            "version": "1.0",
+            "source": "nllb",
+            "available_pairs": [meta["pair_label"]],
+            "size_bytes": meta["size_bytes"],
+            "dir": "ltr",
+            "installed": nllb_installed,
+            "has_translate": nllb_installed,
+            "installed_pairs": [nllb_code] if nllb_installed else [],
+        })
     for code in sorted(merged):
         item = dict(merged[code])
         inst = installed_map.get(code)
@@ -640,7 +657,7 @@ def list_catalog_packs(fetch=True):
     return {
         "packs": out,
         "sources": {
-            "nllb": 1,
+            "nllb": len(NLLB_PACKS),
             "zpdf": len(zpdf_packs),
             "argos": len(argos_by_lang),
         },
@@ -711,19 +728,22 @@ def _http_post_json(url, payload, *, headers=None, timeout=180):
         raise core.PdfManagerError(f"could not reach AI translation endpoint {url}{hint}: {exc}") from None
 
 
-def _download_and_install_nllb():
-    """Download Meta NLLB-200-distilled-600M (CTranslate2 int8) into ``<packs_dir>/nllb-200/``."""
-    pack_dest = packs_dir() / NLLB_PACK_CODE
-    model_dest = pack_dest / "models" / NLLB_PACK_CODE
+def _download_and_install_nllb(pack_code=NLLB_PACK_CODE):
+    """Download Meta NLLB-200 (600M or 1.3B CTranslate2 int8) into ``<packs_dir>/<pack_code>/``."""
+    meta = NLLB_PACKS[pack_code]
+    pack_dest = packs_dir() / pack_code
+    model_dest = pack_dest / "models" / pack_code
     model_dest.mkdir(parents=True, exist_ok=True)
     total = len(NLLB_FILES)
+    base_url = meta["base_url"]
+    label = "NLLB-200 1.3B" if pack_code == NLLB_LARGE_PACK_CODE else "NLLB-200"
     for idx, filename in enumerate(NLLB_FILES, start=1):
         progress.check()
-        progress.report(idx - 1, total, f"downloading NLLB-200 ({filename})")
-        _http_download_to_file(f"{NLLB_BASE_URL}/{filename}", model_dest / filename)
+        progress.report(idx - 1, total, f"downloading {label} ({filename})")
+        _http_download_to_file(f"{base_url}/{filename}", model_dest / filename)
     manifest = {
-        "code": NLLB_PACK_CODE,
-        "name": "High-Quality Universal (NLLB-200 · 200 languages)",
+        "code": pack_code,
+        "name": meta["name"],
         "version": "1.0",
         "dir": "ltr",
         "source": "nllb",
@@ -732,8 +752,8 @@ def _download_and_install_nllb():
     if not (pack_dest / "ui.json").is_file():
         (pack_dest / "ui.json").write_text("{}\n", encoding="utf-8")
     ensure_translation_runtime()
-    progress.report(total, total, "installed NLLB-200 universal translation model")
-    return {"code": NLLB_PACK_CODE, "source": "nllb", "installed": manifest}
+    progress.report(total, total, f"installed {label} universal translation model")
+    return {"code": pack_code, "source": "nllb", "installed": manifest}
 
 
 def _parse_sha256_text(text):
@@ -746,15 +766,15 @@ def _parse_sha256_text(text):
 
 def download_and_install_pack(code, *, pair=None, source=None):
     """Download and install a language pack using the hybrid strategy:
-    - ``nllb-200``: downloads Meta NLLB-200-distilled-600M (CTranslate2 int8, 200 languages).
+    - ``nllb-200`` / ``nllb-200-1.3b``: downloads Meta NLLB-200 (CTranslate2 int8, 200 languages).
     - Prefer curated ZPDF pack on ``Tempura-446/ZPDF-releases`` (SHA-256 verified)
       when ``pair`` is not specified and ``source != 'argos'``.
     - Fall back to Argos Translate's open-source CTranslate2 models for any other
       language or explicit ``src-dst`` pair.
     """
     norm_code = normalize_code(code)
-    if norm_code == NLLB_PACK_CODE:
-        return _download_and_install_nllb()
+    if norm_code in NLLB_PACKS:
+        return _download_and_install_nllb(norm_code)
     if norm_code in ("auto", DEFAULT_LANG) and not pair:
         raise core.PdfManagerError(f"cannot download a language pack for {norm_code!r}")
 

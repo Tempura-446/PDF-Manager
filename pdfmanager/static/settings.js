@@ -33,6 +33,9 @@ async function openSettings() {
     $("set-translate-key-state").textContent = s.translate_key_set ? "· saved" : "";
     $("set-translate-key-clear").hidden = !s.translate_key_set;
   }
+  if ($("set-translate-glossary")) {
+    $("set-translate-glossary").value = s.translate_glossary || "";
+  }
   showPrivacy(s);
   showBehind(s);
   updateStatus("behind-status", "");
@@ -351,6 +354,15 @@ if ($("set-translate-engine")) {
       $("set-translate-key-state").textContent = "";
       $("set-translate-key-clear").hidden = true;
       updateStatus("lang-status", "AI translation API key removed.");
+    } catch (err) { updateStatus("lang-status", err.message, true); }
+  });
+}
+if ($("set-translate-glossary-save")) {
+  $("set-translate-glossary-save").addEventListener("click", async () => {
+    try {
+      const gloss = $("set-translate-glossary").value.trim();
+      await jsonApi("/api/settings", { translate_glossary: gloss });
+      updateStatus("lang-status", gloss ? "Translation glossary saved." : "Translation glossary cleared.");
     } catch (err) { updateStatus("lang-status", err.message, true); }
   });
 }
