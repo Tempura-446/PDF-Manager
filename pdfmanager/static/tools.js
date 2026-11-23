@@ -927,9 +927,39 @@ async function run(preview) {
     await showResult(name, blob, resultId, note, bad.map((it) => it.file.name));
   } catch (err) {
     const said = plainError(err.message);
-    showError(said, { detail: err.message, focus: true });
+    let action = null;
+    if (current.id === "translate" && /language pack/i.test(String(err.message || ""))) {
+      const needed = [...new Set([opts.source_lang, opts.target_lang].filter((c) => c && c !== "en"))];
+      if (needed.length) {
+        const downloadAndTranslate = async () => {
+          clearMessages();
+          busy(true, `Downloading language pack (${needed.join(", ")})…`);
+          try {
+            for (const code of needed) {
+              await api("/api/i18n/pack/download", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ code }),
+              });
+            }
+          } catch (dlErr) {
+            busy(false);
+            showError(dlErr.message || String(dlErr), { focus: true });
+            return;
+          }
+          busy(false);
+          await run(preview);
+        };
+        action = { label: `Download pack (${needed.join(", ")}) & translate`, onClick: downloadAndTranslate };
+      }
+    }
+    showError(said, { detail: err.message, focus: true, action });
     // …and by the button too, where the eyes are.
-    $("run-err").replaceChildren(icon("alert"), String(said || "").replace(/^(?!\S+\.[A-Za-z0-9]{2,5}(?:[\s:]|$))./, (c) => c.toUpperCase()));
+    const runErrNodes = [icon("alert"), String(said || "").replace(/^(?!\S+\.[A-Za-z0-9]{2,5}(?:[\s:]|$))./, (c) => c.toUpperCase())];
+    if (action) {
+      runErrNodes.push(" ", el("button", { type: "button", class: "btn seal sm", onclick: action.onClick }, icon("download"), action.label));
+    }
+    $("run-err").replaceChildren(...runErrNodes);
     $("run-err").hidden = false;
   } finally { busy(false); }
 }

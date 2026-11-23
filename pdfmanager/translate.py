@@ -298,7 +298,7 @@ def _load_offline_translator(src_lang, dst_lang):
     pack_code = d if d != i18n.DEFAULT_LANG else s
     raise core.PdfManagerError(
         f"translation from {s} to {d} requires the {pack_code!r} language pack "
-        f"(~{_APPROX_PACK_MB} MB); download it in Settings → Language first"
+        f"(~{_APPROX_PACK_MB} MB); download it now to continue"
     )
 
 
