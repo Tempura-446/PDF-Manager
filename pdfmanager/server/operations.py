@@ -586,8 +586,8 @@ OPERATIONS = [
      "help": "Translate PDFs completely offline using an installed language pack. Numbers, dates, "
              "URLs, emails, and reference codes (such as INV-2026-118) stay unchanged. Download "
              "language packs with one click under Settings → Language (English pivoting works automatically).",
-     "fields": [_f("source_lang", "From language", "select", "en",
-                   choices=[["en", "English"], ["zh-Hans", "简体中文 (Chinese Simplified)"],
+     "fields": [_f("source_lang", "From language", "select", "auto",
+                   choices=[["auto", "Auto-detect"], ["en", "English"], ["zh-Hans", "简体中文 (Chinese Simplified)"],
                             ["zh-Hant", "繁體中文 (Chinese Traditional)"], ["es", "Español (Spanish)"],
                             ["fr", "Français (French)"], ["de", "Deutsch (German)"],
                             ["ja", "日本語 (Japanese)"], ["ko", "한국어 (Korean)"],
@@ -1229,7 +1229,7 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
     elif op == "translate":
         from pdfmanager import translate
 
-        source_lang = opts.get("source_lang") or "en"
+        source_lang = opts.get("source_lang") or "auto"
         target_lang = opts.get("target_lang") or "es"
         mode = opts.get("mode") or "side-by-side"
         if mode not in translate.MODES:
@@ -1241,9 +1241,17 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             mode=mode,
             password=password,
         )
+        eff_src = made.get("src_lang") or source_lang
+        src_note = f"auto→{eff_src}" if source_lang == "auto" else eff_src
+        empty = int(made.get("empty_pages") or 0)
+        ocr_hint = (
+            f"; {empty} page{'s' if empty != 1 else ''} had no selectable text — run Make searchable (OCR) first if scanned"
+            if empty > 0
+            else ""
+        )
         notes.append(
             f"{src.name}: translated {made['pages']} page{'s' if made['pages'] != 1 else ''} "
-            f"({source_lang} → {target_lang}, {made['mode']})"
+            f"({src_note} → {target_lang}, {made['mode']}{ocr_hint})"
         )
     # -- end of pptx and html --
     elif op == "from-office":

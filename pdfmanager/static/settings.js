@@ -109,8 +109,13 @@ function renderLanguageState(info) {
       p.has_ocr && "OCR",
       p.has_meaning && "search",
     ].filter(Boolean);
+    const sz = Number(p.size_bytes || 0);
+    const szText = sz >= 1_000_000_000 ? `${(sz / 1_000_000_000).toFixed(1)} GB`
+      : (sz >= 1_000_000 ? `${Math.round(sz / 1_000_000)} MB`
+        : (sz >= 1_000 ? `${Math.round(sz / 1_000)} KB` : ""));
+    const metaParts = [szText, caps.join("; ")].filter(Boolean);
     const label = document.createElement("span");
-    label.textContent = `${p.name} (${p.code})` + (caps.length ? ` — ${caps.join("; ")}` : "");
+    label.textContent = `${p.name} (${p.code})` + (metaParts.length ? ` — ${metaParts.join(" · ")}` : "");
     const rm = document.createElement("button");
     rm.type = "button";
     rm.className = "link-btn";
@@ -407,6 +412,25 @@ if ($("set-translate-engine")) {
       $("set-translate-key-clear").hidden = !s.translate_key_set;
       updateStatus("lang-status", "AI translation settings saved.");
     } catch (err) { updateStatus("lang-status", err.message, true); }
+  });
+  $("set-translate-test")?.addEventListener("click", async () => {
+    const btn = $("set-translate-test");
+    btn.disabled = true;
+    updateStatus("lang-status", "Testing AI translation connection…");
+    try {
+      const payload = {
+        translate_api_url: $("set-translate-url").value.trim(),
+        translate_model: $("set-translate-model").value.trim(),
+      };
+      const key = $("set-translate-key").value.trim();
+      if (key) payload.translate_api_key = key;
+      const res = await jsonApi("/api/translate/test", payload);
+      updateStatus("lang-status", `Connected to ${res.model} (${res.ms} ms) — sample: "${res.sample}"`);
+    } catch (err) {
+      updateStatus("lang-status", err.message, true);
+    } finally {
+      btn.disabled = false;
+    }
   });
   $("set-translate-key-clear").addEventListener("click", async () => {
     try {

@@ -232,6 +232,127 @@ def _load_tokenizer(model_path, spm):
     return spm.SentencePieceProcessor(model_file=str(model_path))
 
 
+import collections
+import threading
+
+_CT2_CACHE = collections.OrderedDict()
+_CT2_CACHE_LOCK = threading.Lock()
+_CT2_CACHE_MAX = 2
+
+
+def clear_model_cache():
+    """Release cached CTranslate2 translator models from memory."""
+    with _CT2_CACHE_LOCK:
+        _CT2_CACHE.clear()
+
+
+def _get_cached_ct2(ct2_dir, sp_src_path, sp_tgt_path, ctranslate2, spm):
+    """Return ``(translator, sp_src, sp_tgt)`` from an in-memory LRU cache (size 2),
+    keyed by model directory, tokenizer paths, and ``model.bin`` mtime so re-downloaded
+    packs automatically invalidate stale entries."""
+    resolved = str(Path(ct2_dir).resolve())
+    model_bin = Path(ct2_dir) / "model.bin"
+    try:
+        mtime = model_bin.stat().st_mtime_ns
+    except OSError:
+        mtime = 0
+    key = (resolved, str(sp_src_path), str(sp_tgt_path), mtime, id(ctranslate2))
+    with _CT2_CACHE_LOCK:
+        hit = _CT2_CACHE.get(key)
+        if hit is not None:
+            _CT2_CACHE.move_to_end(key)
+            return hit
+    sp_src = _load_tokenizer(sp_src_path, spm)
+    sp_tgt = sp_src if sp_tgt_path == sp_src_path else _load_tokenizer(sp_tgt_path, spm)
+    tr = ctranslate2.Translator(str(ct2_dir), device="cpu")
+    entry = (tr, sp_src, sp_tgt)
+    with _CT2_CACHE_LOCK:
+        _CT2_CACHE[key] = entry
+        _CT2_CACHE.move_to_end(key)
+        while len(_CT2_CACHE) > _CT2_CACHE_MAX:
+            _CT2_CACHE.popitem(last=False)
+    return entry
+
+
+_ZH_TRAD_CHARS = set("這為們個說會時國學體點對關開門車書長發經與從進還實務業")
+_ZH_SIMP_CHARS = set("这为们个说会时国学体点对关开门车书长发经与从进还实务业")
+_LATIN_STOPWORDS = {
+    "en": {"the", "and", "of", "to", "in", "is", "for", "that", "with", "this", "are", "from", "will", "not", "be"},
+    "es": {"el", "la", "los", "las", "de", "del", "que", "en", "para", "con", "por", "una", "como", "este", "está"},
+    "fr": {"le", "la", "les", "des", "du", "de", "et", "est", "dans", "pour", "avec", "une", "sur", "pas", "nous"},
+    "de": {"der", "die", "das", "und", "den", "von", "zu", "mit", "ist", "für", "auf", "nicht", "eine", "dem", "sich"},
+    "pt": {"os", "as", "dos", "das", "que", "com", "para", "uma", "por", "não", "são", "como", "mais", "este", "pela"},
+    "it": {"il", "la", "gli", "delle", "della", "che", "con", "per", "una", "sono", "nel", "anche", "questo", "non"},
+    "nl": {"de", "het", "een", "van", "en", "in", "op", "voor", "met", "zijn", "niet", "aan", "ook", "dat", "worden"},
+    "pl": {"się", "jest", "nie", "oraz", "przez", "jako", "który", "tego", "tym", "dla", "będzie", "może", "tylko"},
+    "tr": {"ve", "bir", "bu", "için", "ile", "olan", "olarak", "daha", "çok", "gibi", "kadar", "tarafından", "ancak"},
+    "vi": {"của", "và", "các", "trong", "được", "cho", "với", "không", "này", "một", "những", "người", "từ", "đến"},
+}
+
+
+def detect_language(text):
+    """Offline zero-dependency language detector returning a ZPDF BCP-47 code
+    (e.g. ``en``, ``zh-Hans``, ``zh-Hant``, ``ja``, ``ko``, ``es``, ``fr``, ``de``)."""
+    sample = str(text or "")[:6000]
+    if not sample.strip():
+        return "en"
+    # 1. Script-based detection for non-Latin scripts
+    ja_kana = len(re.findall(r"[\u3040-\u30ff]", sample))
+    ko_hangul = len(re.findall(r"[\uac00-\ud7af]", sample))
+    han_chars = re.findall(r"[\u4e00-\u9fff]", sample)
+    cyrillic = re.findall(r"[\u0400-\u04ff]", sample)
+    arabic = len(re.findall(r"[\u0600-\u06ff]", sample))
+    hebrew = len(re.findall(r"[\u0590-\u05ff]", sample))
+    devanagari = len(re.findall(r"[\u0900-\u097f]", sample))
+    thai = len(re.findall(r"[\u0e00-\u0e7f]", sample))
+    greek = len(re.findall(r"[\u0370-\u03ff]", sample))
+
+    if ja_kana >= 3:
+        return "ja"
+    if ko_hangul >= 3:
+        return "ko"
+    if len(han_chars) >= 3:
+        trad = sum(1 for ch in han_chars if ch in _ZH_TRAD_CHARS)
+        simp = sum(1 for ch in han_chars if ch in _ZH_SIMP_CHARS)
+        return "zh-Hant" if trad > simp else "zh-Hans"
+    if len(cyrillic) >= 6:
+        uk_hits = sum(1 for ch in cyrillic if ch.lower() in "іїєґ")
+        return "uk" if uk_hits >= 2 else "ru"
+    if arabic >= 6:
+        return "ar"
+    if hebrew >= 6:
+        return "he"
+    if devanagari >= 6:
+        return "hi"
+    if thai >= 6:
+        return "th"
+    if greek >= 6:
+        return "el"
+
+    # 2. Latin-script stopword + diacritic scoring
+    words = re.findall(r"[A-Za-z\u00c0-\u024f\u1e00-\u1eff]{2,}", sample.lower())
+    if not words:
+        return "en"
+    scores = {lang: sum(1 for w in words if w in sw) for lang, sw in _LATIN_STOPWORDS.items()}
+    # Boost distinctive diacritics
+    if re.search(r"[ñ¡¿]", sample.lower()):
+        scores["es"] += 3
+    if re.search(r"[ßäöü]", sample.lower()):
+        scores["de"] += 3
+    if re.search(r"[çœæ]", sample.lower()):
+        scores["fr"] += 2
+    if re.search(r"[ãõ]", sample.lower()):
+        scores["pt"] += 3
+    if re.search(r"[łńśźżąćę]", sample.lower()):
+        scores["pl"] += 4
+    if re.search(r"[ğışçöü]", sample.lower()):
+        scores["tr"] += 3
+    if re.search(r"[ăâđêôơư]", sample.lower()):
+        scores["vi"] += 4
+    best_lang, best_score = max(scores.items(), key=lambda kv: kv[1])
+    return best_lang if best_score >= 2 else "en"
+
+
 def _load_single_translator(s, d, mdir):
     """Load a single-hop offline translator from ``mdir`` (CTranslate2 or Argos Translate)."""
     ct2_loaded = False
@@ -258,17 +379,16 @@ def _load_single_translator(s, d, mdir):
             None,
         )
         if sp_src_file and sp_tgt_file:
-            sp_src = _load_tokenizer(sp_src_file, spm)
-            sp_tgt = _load_tokenizer(sp_tgt_file, spm)
+            sp_src_path, sp_tgt_path = sp_src_file, sp_tgt_file
         else:
             sp_files = sorted(mdir.glob("*.model")) or sorted(ct2_dir.glob("*.model"))
             if not sp_files:
                 raise core.PdfManagerError(
                     f"found model folder for {s} → {d} at {mdir}, but no tokenizer (.model) file was found"
                 )
-            sp_src = sp_tgt = _load_tokenizer(sp_files[0], spm)
+            sp_src_path = sp_tgt_path = sp_files[0]
 
-        tr = ctranslate2.Translator(str(ct2_dir), device="cpu")
+        tr, sp_src, sp_tgt = _get_cached_ct2(ct2_dir, sp_src_path, sp_tgt_path, ctranslate2, spm)
 
         def _ct2_batch(batch):
             tokenized = [sp_src.encode(text, out_type=str) for text in batch]
@@ -553,8 +673,7 @@ def _load_nllb_translator(s, d, mdir):
         (mdir / name for name in ("sentencepiece.bpe.model", "sentencepiece.model") if (mdir / name).is_file()),
         None,
     ) or sorted(mdir.glob("*.model"))[0]
-    sp = spm.SentencePieceProcessor(model_file=str(sp_file))
-    tr = ctranslate2.Translator(str(mdir), device="cpu")
+    tr, sp, _ = _get_cached_ct2(mdir, sp_file, sp_file, ctranslate2, spm)
 
     def _nllb_batch(batch):
         tokenized = [[src_flores, *sp.encode(text, out_type=str), "</s>"] for text in batch]
@@ -1041,12 +1160,13 @@ def translate_page(path, page_num, src_lang, dst_lang, *, password=None, transla
         raise core.PdfManagerError(f"page {page_num} is out of range (1–{total})")
     raw_text = (reader.pages[page_num - 1].extract_text() or "").strip()
     paragraphs = _extract_paragraphs(raw_text)
+    resolved_src = detect_language(raw_text) if str(src_lang or "").strip().lower() in ("", "auto") else i18n.normalize_code(src_lang)
     if not paragraphs:
-        return {"page": page_num, "src_lang": src_lang, "dst_lang": dst_lang, "original": "", "translated": ""}
-    translated_paras = translate_texts(paragraphs, src_lang, dst_lang, translator=translator)
+        return {"page": page_num, "src_lang": resolved_src, "dst_lang": i18n.normalize_code(dst_lang), "original": "", "translated": ""}
+    translated_paras = translate_texts(paragraphs, resolved_src, dst_lang, translator=translator)
     return {
         "page": page_num,
-        "src_lang": i18n.normalize_code(src_lang),
+        "src_lang": resolved_src,
         "dst_lang": i18n.normalize_code(dst_lang),
         "original": "\n\n".join(paragraphs),
         "translated": "\n\n".join(translated_paras),
@@ -1524,13 +1644,27 @@ def _strip_text_from_pdf(src_path, page_indices, password=None):
         return None
 
 
-def _make_layout_overlay(width, height, blocks, translated_texts, bg_image=None, *, draw_bg=False):
+def _make_layout_overlay(
+    width,
+    height,
+    blocks,
+    translated_texts,
+    bg_image=None,
+    *,
+    draw_bg=False,
+    crop_x0=0.0,
+    crop_y0=0.0,
+):
     """Build a transparent PDF overlay page that draws each translated block
-    in-place with original font size, bold/italic style, color, alignment, and
-    CJK-aware auto-fit wrapping. When ``draw_bg=True`` (fallback when content-
-    stream text stripping was unavailable), paints sampled background rects first."""
+    in-place with original font size, bold/italic style, color, alignment,
+    smart vertical headroom (preventing silent clipping on longer target
+    languages), and CJK-aware auto-fit wrapping. When ``draw_bg=True`` (fallback
+    when content-stream text stripping was unavailable), paints sampled
+    background rects first."""
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(width, height))
+    if crop_x0 or crop_y0:
+        c.translate(float(crop_x0), float(crop_y0))
 
     for idx, (blk, trans) in enumerate(zip(blocks, translated_texts)):
         text = (trans or "").strip()
@@ -1577,7 +1711,27 @@ def _make_layout_overlay(width, height, blocks, translated_texts, bg_image=None,
                         right_limit = min(right_limit, other["x0"] - 6.0)
                 avail_w = max(avail_w, right_limit - x0)
 
-        avail_h = max(orig_size * 1.25, (bottom - top) + 2 * pad)
+        # Smart vertical headroom: outside tables, measure free space down to the
+        # next block in the same horizontal column so longer translations (e.g.
+        # EN -> ES/DE/FR) don't get silently clipped when whitespace is available.
+        max_bottom = bottom
+        if not blk.get("in_table"):
+            span_l = box_x0 if align != "right" else box_x1 - avail_w
+            span_r = span_l + avail_w
+            next_top = height - 18.0
+            for j, other in enumerate(blocks):
+                if j == idx:
+                    continue
+                if other["top"] >= bottom - 2.0:
+                    o_l = other.get("box_x0", other["x0"])
+                    o_r = other.get("box_x1", other["x1"])
+                    if min(span_r, o_r) > max(span_l, o_l):
+                        next_top = min(next_top, other["top"] - 4.0)
+            if next_top > bottom:
+                # Allow up to 2 extra lines of safe headroom into genuine whitespace
+                max_bottom = min(next_top, bottom + orig_size * 2.8)
+
+        avail_h = max(orig_size * 1.25, (max_bottom - top) + 2 * pad)
         chosen_font = fonts.font_for(
             text,
             family=blk.get("family", "sans"),
@@ -1603,7 +1757,7 @@ def _make_layout_overlay(width, height, blocks, translated_texts, bg_image=None,
         y = height - top - fit_size * 0.88
         cx = (box_x0 + box_x1) / 2.0
         for line in wrapped:
-            if y < max(4.0, height - bottom - pad - leading * 0.35):
+            if y < max(4.0, height - max_bottom - pad - leading * 0.35):
                 break
             if align == "center":
                 c.drawCentredString(cx, y, line)
@@ -1631,6 +1785,16 @@ def _render_page_bg(pdfium_doc, page_index):
         return None
 
 
+def _page_crop_origin(page):
+    """Return ``(crop_x0, crop_y0)`` offset between ``cropbox`` and ``mediabox``."""
+    try:
+        cb = page.cropbox
+        mb = page.mediabox
+        return (float(cb.left) - float(mb.left), float(cb.bottom) - float(mb.bottom))
+    except Exception:  # noqa: BLE001
+        return (0.0, 0.0)
+
+
 def translate_pdf(
     input_path,
     output_path,
@@ -1653,14 +1817,23 @@ def translate_pdf(
         raise core.PdfManagerError(f"unknown translation mode: {mode!r}")
 
     reader = core.open_pdf(src, password=password)
+    want_auto = str(src_lang or "").strip().lower() in ("", "auto")
 
     if mode == "text":
+        progress.report(message="Extracting text…", fraction_in_part=0.05)
         pages_raw = []
+        empty_pages = 0
         for page in reader.pages:
             txt = (page.extract_text() or "").strip()
-            pages_raw.append(_extract_paragraphs(txt))
+            paras = _extract_paragraphs(txt)
+            if not paras:
+                empty_pages += 1
+            pages_raw.append(paras)
         flat_paras = [p for paras in pages_raw for p in paras]
-        flat_translated = translate_texts(flat_paras, src_lang, dst_lang, translator=translator)
+        resolved_src = detect_language(" ".join(flat_paras[:30])) if want_auto else i18n.normalize_code(src_lang)
+        fn = translator if translator is not None else _load_offline_translator(resolved_src, dst_lang)
+        with progress.section(0, 1, "Translating"):
+            flat_translated = translate_texts(flat_paras, resolved_src, dst_lang, translator=fn) if flat_paras else []
         pages_translated = []
         cursor = 0
         for paras in pages_raw:
@@ -1669,16 +1842,29 @@ def translate_pdf(
             pages_translated.append("\n\n".join(chunk))
         sections = [f"--- Page {i} ---\n{txt}" for i, txt in enumerate(pages_translated, start=1)]
         dst.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
-        return {"mode": mode, "pages": len(pages_translated), "output": str(dst)}
+        return {
+            "mode": mode,
+            "pages": len(pages_translated),
+            "src_lang": resolved_src,
+            "empty_pages": empty_pages,
+            "output": str(dst),
+        }
 
-    # Extract positioned layout blocks per page via pdfplumber so images, tables,
-    # borders, columns, alignment, bold/italic styles, font sizes, and colors stay intact.
+    # Phase 1: Extract positioned layout blocks per page via pdfplumber so images,
+    # tables, borders, columns, alignment, bold/italic styles, font sizes, and colors stay intact.
+    progress.report(message="Extracting page layout…", fraction_in_part=0.05)
     pages_blocks = []
     try:
         import pdfplumber
 
         with pdfplumber.open(str(src), password=password or "") as pdoc:
-            for ppage in pdoc.pages:
+            total_p = max(1, len(pdoc.pages))
+            for i, ppage in enumerate(pdoc.pages):
+                progress.check()
+                progress.report(
+                    message=f"Extracting layout (page {i + 1}/{total_p})…",
+                    fraction_in_part=0.05 + 0.10 * ((i + 1) / total_p),
+                )
                 pages_blocks.append(_extract_layout_blocks(ppage))
     except Exception:  # noqa: BLE001 - fall back to plain text pages if pdfplumber fails
         pages_blocks = [[] for _ in reader.pages]
@@ -1686,9 +1872,22 @@ def translate_pdf(
     if len(pages_blocks) != len(reader.pages):
         pages_blocks = [[] for _ in reader.pages]
 
-    # Translate all positioned blocks in one deduplicated batch
     flat_texts = [blk["text"] for blks in pages_blocks for blk in blks]
-    flat_translated = translate_texts(flat_texts, src_lang, dst_lang, translator=translator) if flat_texts else []
+    if want_auto:
+        sample = " ".join(flat_texts[:40]) or " ".join((p.extract_text() or "")[:500] for p in reader.pages[:3])
+        resolved_src = detect_language(sample)
+    else:
+        resolved_src = i18n.normalize_code(src_lang)
+
+    # Load translator once and reuse across blocks, fallback pages, and annotations
+    fn = translator if translator is not None else _load_offline_translator(resolved_src, dst_lang)
+
+    # Phase 2: Translate all positioned blocks in one deduplicated batch
+    if flat_texts:
+        with progress.section(1, 5, "Translating text"):
+            flat_translated = translate_texts(flat_texts, resolved_src, dst_lang, translator=fn)
+    else:
+        flat_translated = []
 
     pages_trans_blocks = []
     cursor = 0
@@ -1697,8 +1896,8 @@ def translate_pdf(
         cursor += len(blks)
         pages_trans_blocks.append(chunk)
 
-    # Strip original BT..ET text operators from pages that have positioned blocks so
-    # zero ghost original text remains underneath and no opaque whiteout patches are needed.
+    # Phase 3: Strip original BT..ET text operators from pages that have positioned blocks
+    progress.report(message="Rebuilding PDF layout…", fraction_in_part=0.82)
     block_page_indices = {i for i, blks in enumerate(pages_blocks) if blks}
     stripped_reader = _strip_text_from_pdf(src, block_page_indices, password=password)
     use_stripped = stripped_reader is not None and len(stripped_reader.pages) == len(reader.pages)
@@ -1713,58 +1912,97 @@ def translate_pdf(
     except Exception:  # noqa: BLE001
         pdfium_doc = None
 
+    empty_pages = 0
     try:
         writer = PdfWriter()
+        total_pages = max(1, len(reader.pages))
         if mode == "side-by-side":
             for idx, (orig_page, blks, trans_blks) in enumerate(
                 zip(reader.pages, pages_blocks, pages_trans_blocks)
             ):
+                progress.check()
+                progress.report(
+                    message=f"Rendering page {idx + 1}/{total_pages}…",
+                    fraction_in_part=0.84 + 0.14 * ((idx + 1) / total_pages),
+                )
                 w = float(orig_page.mediabox.width)
                 h = float(orig_page.mediabox.height)
+                cx0, cy0 = _page_crop_origin(orig_page)
                 spread = writer.add_blank_page(width=w * 2, height=h)
                 spread.merge_page(orig_page)
                 if blks:
                     bg_img = _render_page_bg(pdfium_doc, idx)
-                    overlay = _make_layout_overlay(w, h, blks, trans_blks, bg_image=bg_img, draw_bg=not use_stripped)
+                    overlay = _make_layout_overlay(
+                        w, h, blks, trans_blks,
+                        bg_image=bg_img, draw_bg=not use_stripped,
+                        crop_x0=cx0, crop_y0=cy0,
+                    )
                     base_right = stripped_reader.pages[idx] if use_stripped else orig_page
                     shift = Transformation().translate(w, 0)
                     spread.merge_transformed_page(base_right, shift)
                     spread.merge_transformed_page(overlay, shift)
                 else:
                     raw_txt = (orig_page.extract_text() or "").strip()
+                    if not raw_txt:
+                        empty_pages += 1
                     fallback = "\n\n".join(
-                        translate_texts(_extract_paragraphs(raw_txt), src_lang, dst_lang, translator=translator)
-                    ) if raw_txt else "(no text on page)"
+                        translate_texts(_extract_paragraphs(raw_txt), resolved_src, dst_lang, translator=fn)
+                    ) if raw_txt else "(no selectable text on page)"
                     right_page = _make_text_page(w, h, fallback)
                     spread.merge_transformed_page(right_page, Transformation().translate(w, 0))
             with open(dst, "wb") as fh:
                 writer.write(fh)
-            return {"mode": mode, "pages": len(reader.pages), "output": str(dst)}
+            return {
+                "mode": mode,
+                "pages": len(reader.pages),
+                "src_lang": resolved_src,
+                "empty_pages": empty_pages,
+                "output": str(dst),
+            }
 
         # in-place mode: overlay translated blocks onto text-stripped original pages
         # (preserving images, tables, borders, colors, and layout with zero ghost text)
         for idx, (orig_page, blks, trans_blks) in enumerate(zip(reader.pages, pages_blocks, pages_trans_blocks)):
+            progress.check()
+            progress.report(
+                message=f"Rendering page {idx + 1}/{total_pages}…",
+                fraction_in_part=0.84 + 0.14 * ((idx + 1) / total_pages),
+            )
             w = float(orig_page.mediabox.width)
             h = float(orig_page.mediabox.height)
+            cx0, cy0 = _page_crop_origin(orig_page)
             if blks:
                 bg_img = _render_page_bg(pdfium_doc, idx)
-                overlay = _make_layout_overlay(w, h, blks, trans_blks, bg_image=bg_img, draw_bg=not use_stripped)
+                overlay = _make_layout_overlay(
+                    w, h, blks, trans_blks,
+                    bg_image=bg_img, draw_bg=not use_stripped,
+                    crop_x0=cx0, crop_y0=cy0,
+                )
                 base_page = stripped_reader.pages[idx] if use_stripped else orig_page
                 attached = writer.add_page(base_page)
                 attached.merge_page(overlay)
             else:
                 raw_txt = (orig_page.extract_text() or "").strip()
+                if not raw_txt:
+                    empty_pages += 1
                 fallback = "\n\n".join(
-                    translate_texts(_extract_paragraphs(raw_txt), src_lang, dst_lang, translator=translator)
+                    translate_texts(_extract_paragraphs(raw_txt), resolved_src, dst_lang, translator=fn)
                 ) if raw_txt else ""
                 new_page = _make_text_page(w, h, fallback)
                 if "/Annots" in orig_page:
                     new_page[NameObject("/Annots")] = orig_page["/Annots"]
                 writer.add_page(new_page)
-        updated_items = _translate_annotations_and_fields(writer, src_lang, dst_lang, translator)
+        updated_items = _translate_annotations_and_fields(writer, resolved_src, dst_lang, fn)
         with open(dst, "wb") as fh:
             writer.write(fh)
-        return {"mode": mode, "pages": len(reader.pages), "annotations_translated": updated_items, "output": str(dst)}
+        return {
+            "mode": mode,
+            "pages": len(reader.pages),
+            "src_lang": resolved_src,
+            "empty_pages": empty_pages,
+            "annotations_translated": updated_items,
+            "output": str(dst),
+        }
     finally:
         if pdfium_doc is not None:
             try:

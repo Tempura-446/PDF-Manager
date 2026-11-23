@@ -178,6 +178,10 @@ def list_installed_packs():
         code = m.get("code") or sub.name
         models_dir = sub / "models"
         pairs = sorted(d.name for d in models_dir.iterdir() if d.is_dir()) if models_dir.is_dir() else []
+        try:
+            size_bytes = sum(f.stat().st_size for f in sub.rglob("*") if f.is_file())
+        except OSError:
+            size_bytes = 0
         found.append({
             "code": code,
             "name": m.get("name") or code,
@@ -185,6 +189,7 @@ def list_installed_packs():
             "automatic": bool(m.get("automatic", True)),
             "dir": language_dir(code),
             "path": str(sub),
+            "size_bytes": size_bytes,
             "has_ocr": any((sub / "ocr").glob("*.onnx")) if (sub / "ocr").is_dir() else False,
             "has_meaning": (sub / "meaning" / "words.npz").is_file() or (sub / "words.npz").is_file(),
             "has_translate": bool(pairs),

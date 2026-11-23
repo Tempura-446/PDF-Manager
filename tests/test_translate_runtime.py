@@ -510,6 +510,97 @@ def test_cjk_and_latin_punctuation_polish():
     assert translate._clean_mt_output("Hello , world ( test ) !", "en") == "Hello, world (test)!"
 
 
+def test_ct2_model_lru_cache_and_invalidation(tmp_path):
+    translate.clear_model_cache()
+    mdir = tmp_path / "m1"
+    mdir.mkdir()
+    mbin = mdir / "model.bin"
+    mbin.write_bytes(b"v1")
+    sp_path = mdir / "bpe.model"
+    sp_path.write_text("#version: 0.2\na b\n", encoding="utf-8")
+
+    loads = []
+
+    class FakeCT2:
+        class Translator:
+            def __init__(self, path, device="cpu"):
+                loads.append(path)
+
+    class FakeSPM:
+        pass
+
+    tr1, _, _ = translate._get_cached_ct2(mdir, sp_path, sp_path, FakeCT2, FakeSPM)
+    tr2, _, _ = translate._get_cached_ct2(mdir, sp_path, sp_path, FakeCT2, FakeSPM)
+    assert tr1 is tr2
+    assert len(loads) == 1
+    translate.clear_model_cache()
+
+
+def test_detect_language_scripts_and_latin():
+    assert translate.detect_language("这是一份关于合同条款的简体中文文件。") == "zh-Hans"
+    assert translate.detect_language("這是一份關於合約條款的繁體中文文件，請仔細閱讀。") == "zh-Hant"
+    assert translate.detect_language("これは日本語のテスト文書です。") == "ja"
+    assert translate.detect_language("이것은 한국어 테스트 문서입니다.") == "ko"
+    assert translate.detect_language("Это документ на русском языке для проверки.") == "ru"
+    assert translate.detect_language("Це український документ із перевіркою ї та є.") == "uk"
+    assert translate.detect_language("هذا مستند باللغة العربية للاختبار.") == "ar"
+    assert translate.detect_language("El contrato de servicios para la empresa con el cliente está vigente.") == "es"
+    assert translate.detect_language("Le contrat de service pour la société avec le client est en vigueur.") == "fr"
+    assert translate.detect_language("Der Vertrag für das Unternehmen und die Kunden ist nicht gültig.") == "de"
+    assert translate.detect_language("This agreement sets forth the terms and conditions for the services.") == "en"
+
+
+def test_translate_pdf_auto_detect_and_empty_page_count(tmp_path):
+    from reportlab.pdfgen import canvas
+
+    src = tmp_path / "es_and_blank.pdf"
+    c = canvas.Canvas(str(src), pagesize=(612, 792))
+    c.setFont("Helvetica", 12)
+    c.drawString(72, 700, "El contrato para la empresa con el cliente está vigente.")
+    c.showPage()
+    # Second page has no text (simulates scanned image page)
+    c.rect(72, 600, 100, 100, stroke=1, fill=0)
+    c.showPage()
+    c.save()
+
+    out = tmp_path / "out.pdf"
+    res = translate.translate_pdf(
+        src, out, "auto", "en",
+        mode="in-place",
+        translator=lambda batch: [f"EN:{s}" for s in batch],
+    )
+    assert res["src_lang"] == "es"
+    assert res["empty_pages"] == 1
+    assert out.is_file()
+
+
+def test_vertical_headroom_prevents_clipping_longer_translation():
+    from pypdf import PdfWriter
+
+    # Narrow 1-line block with plenty of whitespace below (next block is 120pt lower)
+    blocks = [
+        {
+            "text": "Short",
+            "x0": 72.0, "top": 100.0, "x1": 150.0, "bottom": 114.0,
+            "box_x0": 72.0, "box_x1": 150.0, "size": 12.0,
+            "color": (0.0, 0.0, 0.0), "family": "sans", "bold": False,
+            "italic": False, "align": "left", "lines": 1, "in_table": False,
+        },
+        {
+            "text": "Next section",
+            "x0": 72.0, "top": 240.0, "x1": 200.0, "bottom": 254.0,
+            "box_x0": 72.0, "box_x1": 200.0, "size": 12.0,
+            "color": (0.0, 0.0, 0.0), "family": "sans", "bold": False,
+            "italic": False, "align": "left", "lines": 1, "in_table": False,
+        },
+    ]
+    long_trans = "This is a much longer expanded translation that wraps onto a second line"
+    overlay = translate._make_layout_overlay(612.0, 792.0, blocks, [long_trans, "Next section"])
+    extracted = overlay.extract_text() or ""
+    assert "second line" in extracted
+
+
+
 
 
 
