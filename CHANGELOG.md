@@ -4,6 +4,27 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.62.0
+
+Smarter 100% offline PDF translation, NLLB-200 1.3B pack, and custom glossary.
+
+- **Smarter offline translation pipeline (zero extra download).** Added
+  abbreviation-safe & numbered-list-safe sentence splitting (preserving `Dr.`,
+  `Inc.`, `U.S.`, `Fig. 2`, `Jan. 5`, `e.g.`, and `1. First item`),
+  paragraph-level context chunking (up to 360 chars) for NLLB-200, multi-word
+  ALL-CAPS heading normalization (keeping short acronyms like `PDF`/`USA`/`API`),
+  bullet & `Label: <verbatim>` separation, length-bucketed CTranslate2 decoding
+  with `repetition_penalty=1.2` and short-heading anti-hallucination retry, and
+  CJK full-width / Latin punctuation polish.
+- **Best Offline Quality pack: NLLB-200-distilled-1.3B (`int8`, 200 languages).**
+  Available as a 1-click download (`nllb-200-1.3b`, ~1.4 GB) under **Settings →
+  Language → Download language packs…** and automatically preferred over 600M
+  when installed — zero LLM server required.
+- **Custom Translation Glossary & Keep-Verbatim Terms.** Configurable under
+  **Settings → Language** (`Term` to keep verbatim or `Source = Target` to
+  force exact terminology), enforced deterministically in both offline
+  CTranslate2 and Smart AI modes.
+
 ## 0.61.9
 
 Bordered-page layout fix and Smart AI (context-aware LLM) translation engine.
