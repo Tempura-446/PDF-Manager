@@ -195,6 +195,10 @@
       <button type="button" class="btn secondary" id="set-translate-glossary-save">Save glossary</button>
       <span class="dlg-hint" style="margin:0;">Applies to both offline (NLLB-200 / Language Packs) and Smart AI translation.</span>
     </div>
+    <div id="lang-dl-wrap" hidden style="display:flex;align-items:center;gap:8px;margin:6px 0 4px;">
+      <span class="job-progress" id="lang-dl-bar" role="progressbar" aria-label="Language pack download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="flex:1;"><span></span></span>
+      <button type="button" class="btn secondary pb-small" id="lang-dl-cancel">Cancel</button>
+    </div>
     <p class="dlg-status" id="lang-status" aria-live="polite"></p>
     <h3>OCR (Make searchable)</h3>
     <label class="dlg-field"><span>Reading accuracy</span>

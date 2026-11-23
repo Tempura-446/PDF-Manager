@@ -281,3 +281,51 @@ def test_build_langpack_bundles_argos_models(tmp_path):
     assert "models/en-es/sentencepiece.model" in names
     assert not any("stanza" in n for n in names)
 
+
+def test_download_size_and_byte_progress(tmp_path, monkeypatch):
+    import io
+    import urllib.request
+    from pdfmanager import progress
+
+    assert i18n._fmt_bytes(500) == "500 B"
+    assert i18n._fmt_bytes(12_500) == "12 KB"
+    assert i18n._fmt_bytes(645_000_000) == "645.0 MB"
+    assert i18n._fmt_bytes(1_400_000_000) == "1.40 GB"
+
+    # Verify byte-level progress updates inside a progress.Job
+    payload = b"x" * 600_000
+
+    class FakeResp(io.BytesIO):
+        def __init__(self, data):
+            super().__init__(data)
+            self.headers = {"Content-Length": str(len(data))}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=600: FakeResp(payload))
+    dest = tmp_path / "model.bin"
+    seen = []
+    job = progress.Job()
+    orig_report = progress.report
+
+    def spy_report(*args, **kwargs):
+        seen.append((kwargs.get("message"), kwargs.get("fraction_in_part")))
+        return orig_report(*args, **kwargs)
+
+    monkeypatch.setattr(progress, "report", spy_report)
+    job.run(
+        i18n._http_download_to_file,
+        "https://example.invalid/model.bin",
+        dest,
+        progress_label="Downloading NLLB-200",
+        frac_start=0.1,
+        frac_end=0.9,
+    )
+    assert job.state == "done"
+    assert dest.read_bytes() == payload
+    assert any("Downloading NLLB-200" in (m or "") and "%" in (m or "") for m, _ in seen)
+    assert seen[-1][1] == pytest.approx(0.9)

@@ -357,8 +357,24 @@ def list_available_languages():
 
 # ---- Argos .argosmodel extraction & hybrid online catalog ----------------------------
 
+import contextvars
+from contextlib import contextmanager
+
+_dl_progress = contextvars.ContextVar("_zpdf_dl_progress", default=None)
+
+
+@contextmanager
+def _download_progress(label, *, expected_bytes=0, frac_start=0.0, frac_end=1.0):
+    token = _dl_progress.set((label, int(expected_bytes or 0), float(frac_start), float(frac_end)))
+    try:
+        yield
+    finally:
+        _dl_progress.reset(token)
+
+
 def _http_get_bytes(url, *, headers=None, timeout=30):
-    """Download ``url`` over HTTPS and return its raw bytes."""
+    """Download ``url`` over HTTPS and return its raw bytes (reporting byte-level
+    progress when called inside ``_download_progress(...)``)."""
     from pdfmanager import policy
 
     try:
@@ -368,9 +384,39 @@ def _http_get_bytes(url, *, headers=None, timeout=30):
     if not str(url or "").startswith("https://"):
         raise core.PdfManagerError(f"refusing non-HTTPS language pack URL: {url!r}")
     req = urllib.request.Request(url, headers={"User-Agent": "ZPDF", **(headers or {})})
+    ctx = _dl_progress.get()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read()
+            if not ctx:
+                return resp.read()
+            label, expected_bytes, frac_start, frac_end = ctx
+            raw_len = resp.headers.get("Content-Length") if getattr(resp, "headers", None) else None
+            try:
+                total_bytes = int(raw_len) if raw_len else expected_bytes
+            except (TypeError, ValueError):
+                total_bytes = expected_bytes
+            buf = bytearray()
+            span = max(0.0, frac_end - frac_start)
+            while True:
+                progress.check()
+                chunk = resp.read(262_144)
+                if not chunk:
+                    break
+                buf.extend(chunk)
+                got = len(buf)
+                if total_bytes > 0:
+                    pct = min(100, int(got * 100 / total_bytes))
+                    frac = frac_start + span * min(1.0, got / total_bytes)
+                    progress.report(
+                        message=f"{label} · {_fmt_bytes(got)} / {_fmt_bytes(total_bytes)} ({pct}%)",
+                        fraction_in_part=frac,
+                    )
+                else:
+                    progress.report(
+                        message=f"{label} · {_fmt_bytes(got)}",
+                        fraction_in_part=frac_start,
+                    )
+            return bytes(buf)
     except urllib.error.HTTPError as exc:
         raise core.PdfManagerError(f"download failed (HTTP {exc.code}) for {url}") from None
     except OSError as exc:
@@ -616,16 +662,19 @@ def list_catalog_packs(fetch=True):
 
     merged = {}
     for code, entry in argos_by_lang.items():
+        pairs = sorted(entry["available_pairs"])
         merged[code] = {
             **entry,
-            "available_pairs": sorted(entry["available_pairs"]),
-            "size_bytes": 0,
+            "available_pairs": pairs,
+            "size_bytes": len(pairs) * 50_000_000,
+            "size_approx": True,
         }
     for code, zpack in zpdf_packs.items():
         argos_pairs = merged.get(code, {}).get("available_pairs", [])
         merged[code] = {
             **zpack,
             "available_pairs": argos_pairs or [f"en-{code}", f"{code}-en"],
+            "size_approx": False,
         }
 
     # Annotate with local installation status
@@ -640,6 +689,7 @@ def list_catalog_packs(fetch=True):
             "source": "nllb",
             "available_pairs": [meta["pair_label"]],
             "size_bytes": meta["size_bytes"],
+            "size_approx": False,
             "dir": "ltr",
             "installed": nllb_installed,
             "has_translate": nllb_installed,
@@ -664,8 +714,30 @@ def list_catalog_packs(fetch=True):
     }
 
 
-def _http_download_to_file(url, dest_path, *, timeout=600):
-    """Stream ``url`` over HTTPS directly to ``dest_path`` without buffering large files in RAM."""
+def _fmt_bytes(num_bytes):
+    """Format a byte count concisely for download progress (e.g. ``645 MB``, ``1.4 GB``)."""
+    n = max(0, int(num_bytes or 0))
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.2f} GB"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f} MB"
+    if n >= 1_000:
+        return f"{n / 1_000:.0f} KB"
+    return f"{n} B"
+
+
+def _http_download_to_file(
+    url,
+    dest_path,
+    *,
+    timeout=600,
+    progress_label=None,
+    expected_bytes=0,
+    frac_start=0.0,
+    frac_end=1.0,
+):
+    """Stream ``url`` over HTTPS directly to ``dest_path`` without buffering large files in RAM,
+    reporting byte-level progress when ``progress_label`` is given."""
     from pdfmanager import policy
 
     try:
@@ -678,13 +750,37 @@ def _http_download_to_file(url, dest_path, *, timeout=600):
     tmp_path = Path(dest_path).with_suffix(Path(dest_path).suffix + ".part")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp, open(tmp_path, "wb") as fh:
+            raw_len = resp.headers.get("Content-Length") if getattr(resp, "headers", None) else None
+            try:
+                total_bytes = int(raw_len) if raw_len else int(expected_bytes or 0)
+            except (TypeError, ValueError):
+                total_bytes = int(expected_bytes or 0)
+            got = 0
+            span = max(0.0, float(frac_end) - float(frac_start))
             while True:
                 progress.check()
-                chunk = resp.read(1 << 20)
+                chunk = resp.read(262_144)
                 if not chunk:
                     break
                 fh.write(chunk)
+                got += len(chunk)
+                if progress_label:
+                    if total_bytes > 0:
+                        pct = min(100, int(got * 100 / total_bytes))
+                        frac = float(frac_start) + span * min(1.0, got / total_bytes)
+                        progress.report(
+                            message=f"{progress_label} · {_fmt_bytes(got)} / {_fmt_bytes(total_bytes)} ({pct}%)",
+                            fraction_in_part=frac,
+                        )
+                    else:
+                        progress.report(
+                            message=f"{progress_label} · {_fmt_bytes(got)}",
+                            fraction_in_part=float(frac_start),
+                        )
         tmp_path.replace(dest_path)
+    except progress.Cancelled:
+        tmp_path.unlink(missing_ok=True)
+        raise
     except urllib.error.HTTPError as exc:
         tmp_path.unlink(missing_ok=True)
         raise core.PdfManagerError(f"download failed (HTTP {exc.code}) for {url}") from None
@@ -734,13 +830,34 @@ def _download_and_install_nllb(pack_code=NLLB_PACK_CODE):
     pack_dest = packs_dir() / pack_code
     model_dest = pack_dest / "models" / pack_code
     model_dest.mkdir(parents=True, exist_ok=True)
-    total = len(NLLB_FILES)
     base_url = meta["base_url"]
     label = "NLLB-200 1.3B" if pack_code == NLLB_LARGE_PACK_CODE else "NLLB-200"
-    for idx, filename in enumerate(NLLB_FILES, start=1):
+    # Small tokenizer/config files occupy 0–5%, model.bin occupies 5–96%, finalization 96–100%.
+    small_files = [f for f in NLLB_FILES if f != "model.bin"]
+    small_step = 0.05 / max(1, len(small_files))
+    small_idx = 0
+    for filename in NLLB_FILES:
         progress.check()
-        progress.report(idx - 1, total, f"downloading {label} ({filename})")
-        _http_download_to_file(f"{base_url}/{filename}", model_dest / filename)
+        if filename == "model.bin":
+            frac_start, frac_end = 0.05, 0.96
+            expected = meta["size_bytes"]
+            dl_label = f"Downloading {label}"
+        else:
+            frac_start = small_idx * small_step
+            frac_end = (small_idx + 1) * small_step
+            small_idx += 1
+            expected = 0
+            dl_label = f"Downloading {label} ({filename})"
+        progress.report(message=f"{dl_label}…", fraction_in_part=frac_start)
+        _http_download_to_file(
+            f"{base_url}/{filename}",
+            model_dest / filename,
+            progress_label=dl_label,
+            expected_bytes=expected,
+            frac_start=frac_start,
+            frac_end=frac_end,
+        )
+    progress.report(message=f"Finalizing {label}…", fraction_in_part=0.97)
     manifest = {
         "code": pack_code,
         "name": meta["name"],
@@ -752,7 +869,7 @@ def _download_and_install_nllb(pack_code=NLLB_PACK_CODE):
     if not (pack_dest / "ui.json").is_file():
         (pack_dest / "ui.json").write_text("{}\n", encoding="utf-8")
     ensure_translation_runtime()
-    progress.report(total, total, f"installed {label} universal translation model")
+    progress.report(message=f"Installed {label} universal translation model", fraction_in_part=1.0)
     return {"code": pack_code, "source": "nllb", "installed": manifest}
 
 
@@ -781,7 +898,7 @@ def download_and_install_pack(code, *, pair=None, source=None):
     # 1. Try ZPDF curated release pack first (hybrid priority)
     if not pair and source != "argos":
         progress.check()
-        progress.report(0, 3, f"checking ZPDF releases for {norm_code}")
+        progress.report(message=f"Checking ZPDF releases for {norm_code}…", fraction_in_part=0.02)
         zpdf_packs = fetch_zpdf_release_packs()
         zpack = zpdf_packs.get(norm_code)
         if zpack:
@@ -793,20 +910,27 @@ def download_and_install_pack(code, *, pair=None, source=None):
                 except core.PdfManagerError:
                     expected_sha = None
             progress.check()
-            progress.report(1, 3, f"downloading ZPDF language pack ({norm_code})")
-            zip_bytes = _http_get_bytes(zpack["download_url"], timeout=180)
+            dl_label = f"Downloading {norm_code} language pack"
+            progress.report(message=f"{dl_label}…", fraction_in_part=0.05)
+            with _download_progress(
+                dl_label,
+                expected_bytes=int(zpack.get("size_bytes") or 0),
+                frac_start=0.05,
+                frac_end=0.88,
+            ):
+                zip_bytes = _http_get_bytes(zpack["download_url"], timeout=180)
             with tempfile.TemporaryDirectory(prefix="pdfm-lang-dl-") as tmp:
                 zip_path = Path(tmp) / "pack.zip"
                 zip_path.write_bytes(zip_bytes)
-                progress.report(2, 3, f"installing {norm_code} language pack")
+                progress.report(message=f"Installing {norm_code} language pack…", fraction_in_part=0.90)
                 installed = install_pack_from_zip(zip_path, expected_sha256=expected_sha)
             ensure_translation_runtime()
-            progress.report(3, 3, f"installed {norm_code}")
+            progress.report(message=f"Installed {norm_code}", fraction_in_part=1.0)
             return {"code": norm_code, "source": "zpdf", "installed": installed}
 
     # 2. Fall back to Argos Translate index
     progress.check()
-    progress.report(0, 3, f"fetching translation model index for {norm_code}")
+    progress.report(message=f"Fetching translation model index for {norm_code}…", fraction_in_part=0.02)
     argos_entries = fetch_argos_index(use_cache=True)
     if not argos_entries:
         raise core.PdfManagerError(
@@ -837,19 +961,31 @@ def download_and_install_pack(code, *, pair=None, source=None):
 
     installed_results = []
     total = len(wanted_pairs)
-    for idx, entry in enumerate(wanted_pairs, start=1):
+    per_pair = 0.90 / max(1, total)
+    for idx, entry in enumerate(wanted_pairs):
         progress.check()
-        progress.report(idx - 1, total, f"downloading {entry['pair']} translation model")
+        p_start = 0.05 + idx * per_pair
+        p_dl_end = p_start + per_pair * 0.85
+        p_end = p_start + per_pair
+        dl_label = f"Downloading {entry['pair']} ({idx + 1}/{total})"
+        progress.report(message=f"{dl_label}…", fraction_in_part=p_start)
         last_err = None
         archive_bytes = None
         for link in entry["links"]:
             try:
-                archive_bytes = _http_get_bytes(link, timeout=240)
+                with _download_progress(
+                    dl_label,
+                    expected_bytes=50_000_000,
+                    frac_start=p_start,
+                    frac_end=p_dl_end,
+                ):
+                    archive_bytes = _http_get_bytes(link, timeout=240)
                 break
             except core.PdfManagerError as exc:
                 last_err = exc
         if archive_bytes is None:
             raise core.PdfManagerError(f"failed to download {entry['pair']} model: {last_err}")
+        progress.report(message=f"Installing {entry['pair']}…", fraction_in_part=p_dl_end)
         with tempfile.TemporaryDirectory(prefix="pdfm-argos-dl-") as tmp:
             model_zip = Path(tmp) / "model.argosmodel"
             model_zip.write_bytes(archive_bytes)
@@ -860,8 +996,9 @@ def download_and_install_pack(code, *, pair=None, source=None):
                 name=entry["to_name"] if entry["dst"] != DEFAULT_LANG else entry["from_name"],
             )
             installed_results.append(res)
+        progress.report(message=f"Installed {entry['pair']}", fraction_in_part=p_end)
     ensure_translation_runtime()
-    progress.report(total, total, f"installed {norm_code} translation models")
+    progress.report(message=f"Installed {norm_code} translation models", fraction_in_part=1.0)
     return {
         "code": installed_results[-1]["code"],
         "source": "argos",

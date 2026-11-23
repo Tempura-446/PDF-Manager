@@ -936,11 +936,15 @@ async function run(preview) {
           busy(true, `Downloading language pack (${needed.join(", ")})…`);
           try {
             for (const code of needed) {
-              await api("/api/i18n/pack/download", {
+              const dlRes = await runJob("/api/i18n/pack/download", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ code }),
               });
+              if (!dlRes) {
+                busy(false);
+                return;
+              }
             }
           } catch (dlErr) {
             busy(false);

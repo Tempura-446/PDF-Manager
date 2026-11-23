@@ -320,10 +320,14 @@ class ScanWatchRoutesMixin:
         source = str(data.get("source") or "").strip() or None
         if not code and not pair:
             raise UserError("specify a language code or translation pair to download")
-        res = i18n.download_and_install_pack(code or pair.split("-")[0], pair=pair, source=source)
-        return self._send(HTTPStatus.OK, {
-            **res,
-            "packs": i18n.list_installed_packs(),
-            "languages": i18n.list_available_languages(),
-        })
+
+        def download_job():
+            res = i18n.download_and_install_pack(code or pair.split("-")[0], pair=pair, source=source)
+            return {"json": {
+                **res,
+                "packs": i18n.list_installed_packs(),
+                "languages": i18n.list_available_languages(),
+            }}
+
+        return self._job_or_now(download_job)
 
