@@ -144,3 +144,67 @@ def test_cjk_wrap_text_breaks_long_chinese_lines():
     assert len(lines) >= 3
     assert "".join(lines) == text
 
+
+def test_layout_preserving_translation_keeps_images_columns_and_styles(tmp_path):
+    from PIL import Image
+    from pypdf import PdfReader
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+    import pdfplumber
+
+    src = tmp_path / "formatted.pdf"
+    logo = tmp_path / "logo.png"
+    Image.new("RGB", (40, 40), (20, 90, 180)).save(logo)
+
+    c = canvas.Canvas(str(src), pagesize=(612, 792))
+    # Colored header banner + logo image
+    c.setFillColorRGB(0.1, 0.2, 0.45)
+    c.rect(36, 700, 540, 52, stroke=0, fill=1)
+    c.drawImage(ImageReader(str(logo)), 46, 706, width=40, height=40)
+    c.setFillColorRGB(1, 1, 1)
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(100, 720, "Quarterly Summary")
+    # Two separate columns
+    c.setFillColorRGB(0, 0, 0)
+    c.setFont("Helvetica", 10)
+    c.drawString(40, 640, "Left column paragraph line one.")
+    c.drawString(320, 640, "Right column paragraph line one.")
+    c.showPage()
+    c.save()
+
+    with pdfplumber.open(str(src)) as pdoc:
+        blocks = translate._extract_layout_blocks(pdoc.pages[0])
+    # Heading + Left column + Right column must remain 3 distinct positioned blocks
+    assert len(blocks) == 3
+    xs = sorted(b["x0"] for b in blocks)
+    assert xs[0] < 60 and xs[1] < 120 and xs[2] > 300
+    heading = next(b for b in blocks if "Quarterly" in b["text"])
+    assert heading["size"] >= 17.0
+
+    def fake_zh(batch):
+        mapping = {
+            "Quarterly Summary": "季度总结",
+            "Left column paragraph line one.": "左栏第一行段落。",
+            "Right column paragraph line one.": "右栏第一行段落。",
+        }
+        return [mapping.get(s, s) for s in batch]
+
+    fake_zh._neural = True
+
+    out_inp = tmp_path / "translated_inplace.pdf"
+    translate.translate_pdf(src, out_inp, "en", "zh-Hans", mode="in-place", translator=fake_zh)
+    reader = PdfReader(str(out_inp))
+    page = reader.pages[0]
+    # Embedded image must still be present in the page resources!
+    xobjs = page.get("/Resources", {}).get("/XObject", {})
+    if hasattr(xobjs, "get_object"):
+        xobjs = xobjs.get_object()
+    has_image = any(
+        (v.get_object() if hasattr(v, "get_object") else v).get("/Subtype") == "/Image"
+        for v in xobjs.values()
+    )
+    assert has_image, "Original embedded image was lost during in-place translation!"
+    text = page.extract_text() or ""
+    assert "季度总结" in text and "左栏第一行段落" in text and "右栏第一行段落" in text
+
+
