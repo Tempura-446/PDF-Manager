@@ -118,12 +118,109 @@ def model_dir_for(src_lang, dst_lang):
     return None
 
 
+ensure_runtime = i18n.ensure_translation_runtime
+
+
+class _SubwordBpe:
+    """Minimal subword-nmt BPE encoder/decoder for Argos 1.9 ``bpe.model`` packs."""
+
+    _BPE_PUNCT_RE = re.compile(r"([.,!?;:()\[\]\"'])")
+
+    def __init__(self, model_path):
+        ranks = {}
+        with open(model_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 2:
+                    pair = (parts[0], parts[1])
+                    if pair not in ranks:
+                        ranks[pair] = len(ranks)
+        self._ranks = ranks
+        self._cache = {}
+
+    def _encode_word(self, word):
+        cached = self._cache.get(word)
+        if cached is not None:
+            return cached
+        if len(word) == 1:
+            res = [word]
+            self._cache[word] = res
+            return res
+        symbols = list(word[:-1]) + [word[-1] + "</w>"]
+        ranks = self._ranks
+        while len(symbols) > 1:
+            best_pair = None
+            best_rank = None
+            for i in range(len(symbols) - 1):
+                pair = (symbols[i], symbols[i + 1])
+                rank = ranks.get(pair)
+                if rank is not None and (best_rank is None or rank < best_rank):
+                    best_rank = rank
+                    best_pair = pair
+            if best_pair is None:
+                break
+            a, b = best_pair
+            merged = []
+            i = 0
+            while i < len(symbols):
+                if i < len(symbols) - 1 and symbols[i] == a and symbols[i + 1] == b:
+                    merged.append(a + b)
+                    i += 2
+                else:
+                    merged.append(symbols[i])
+                    i += 1
+            symbols = merged
+        out = []
+        for idx, sym in enumerate(symbols):
+            if idx < len(symbols) - 1:
+                out.append(sym + "@@")
+            else:
+                out.append(sym[:-4] if sym.endswith("</w>") else sym)
+        self._cache[word] = out
+        return out
+
+    def encode(self, text, out_type=str):  # noqa: ARG002 - mirrors SentencePieceProcessor
+        spaced = self._BPE_PUNCT_RE.sub(r" \1 ", text)
+        tokens = []
+        for word in spaced.split():
+            tokens.extend(self._encode_word(word))
+        return tokens
+
+    def decode(self, tokens):
+        text = " ".join(tokens).replace("@@ ", "").replace("@@", "")
+        text = text.replace(" @-@ ", "-").replace("&quot;", '"').replace("&apos;", "'")
+        text = re.sub(r"\s+([.,!?;:)])", r"\1", text)
+        text = re.sub(r"([(])\s+", r"\1", text)
+        return text.strip()
+
+
+def _load_tokenizer(model_path, spm):
+    """Load a SentencePiece ``.model`` or subword-nmt ``bpe.model`` tokenizer."""
+    with open(model_path, "rb") as fh:
+        head = fh.read(32)
+    if head.startswith(b"#version:"):
+        return _SubwordBpe(model_path)
+    return spm.SentencePieceProcessor(model_file=str(model_path))
+
+
 def _load_single_translator(s, d, mdir):
     """Load a single-hop offline translator from ``mdir`` (CTranslate2 or Argos Translate)."""
-    try:
-        import ctranslate2
-        import sentencepiece as spm
+    ct2_loaded = False
+    for attempt in range(2):
+        try:
+            import ctranslate2
+            import sentencepiece as spm
+            ct2_loaded = True
+            break
+        except ImportError:
+            if attempt == 0 and ensure_runtime():
+                continue
+            break
 
+    if ct2_loaded:
         # Support both flat layout (mdir/model.bin) and nested Argos layout (mdir/model/model.bin)
         ct2_dir = mdir / "model" if (mdir / "model").is_dir() and not (mdir / "model.bin").is_file() else mdir
         sp_src_file = next(
@@ -135,26 +232,24 @@ def _load_single_translator(s, d, mdir):
             None,
         )
         if sp_src_file and sp_tgt_file:
-            sp_src = spm.SentencePieceProcessor(model_file=str(sp_src_file))
-            sp_tgt = spm.SentencePieceProcessor(model_file=str(sp_tgt_file))
+            sp_src = _load_tokenizer(sp_src_file, spm)
+            sp_tgt = _load_tokenizer(sp_tgt_file, spm)
         else:
-            sp_files = list(mdir.glob("*.model")) or list(ct2_dir.glob("*.model"))
+            sp_files = sorted(mdir.glob("*.model")) or sorted(ct2_dir.glob("*.model"))
             if not sp_files:
-                sp_src = sp_tgt = None
-            else:
-                sp_src = sp_tgt = spm.SentencePieceProcessor(model_file=str(sp_files[0]))
+                raise core.PdfManagerError(
+                    f"found model folder for {s} → {d} at {mdir}, but no tokenizer (.model) file was found"
+                )
+            sp_src = sp_tgt = _load_tokenizer(sp_files[0], spm)
 
-        if sp_src is not None:
-            tr = ctranslate2.Translator(str(ct2_dir), device="cpu")
+        tr = ctranslate2.Translator(str(ct2_dir), device="cpu")
 
-            def _ct2_batch(batch):
-                tokenized = [sp_src.encode(text, out_type=str) for text in batch]
-                results = tr.translate_batch(tokenized)
-                return [sp_tgt.decode(r.hypotheses[0]) for r in results]
+        def _ct2_batch(batch):
+            tokenized = [sp_src.encode(text, out_type=str) for text in batch]
+            results = tr.translate_batch(tokenized)
+            return [sp_tgt.decode(r.hypotheses[0]) for r in results]
 
-            return _ct2_batch
-    except ImportError:
-        pass
+        return _ct2_batch
 
     # Fallback: Argos Translate if installed
     try:
