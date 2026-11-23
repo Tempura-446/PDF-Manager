@@ -1193,10 +1193,7 @@ def remove(path, password, areas, regexes=()):
     """Remove what lies under ``areas`` ({0-based page: [(x0, y0, x1, y1)]}
     in PDF points) and draw the black boxes. Returns (PDF bytes, {page:
     reason} for pages this couldn't do, {page: text that was removed})."""
-    try:
-        pdf = pikepdf.open(str(path), password=password or "")
-    except pikepdf.PasswordError:
-        pdf = pikepdf.open(str(path), password="")
+    pdf = core.open_pikepdf(path, password)
     failed, loose = {}, set()
     with pdf:
         for n, (number, boxes) in enumerate(sorted(areas.items())):

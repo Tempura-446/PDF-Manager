@@ -1537,10 +1537,8 @@ def _needs_mending(path, password):
     a download that stopped, a wrong index of objects), and pypdf or pdfium
     can't open it, lose its trailer or count other pages. A file all three
     read alike is left as it is."""
-    import pikepdf
-
     try:
-        with pikepdf.open(str(path), password=password or "") as pdf:
+        with core.open_pikepdf(path, password) as pdf:
             if not any("reconstruct cross-reference" in str(w) for w in pdf.get_warnings()):
                 return False
             if "/Perms" in pdf.Root or _file_mentions(path, b"/ByteRange"):
@@ -1569,7 +1567,6 @@ def _mend_inputs(op, files, password, work, notes):
     with a note saying so (Repair itself mends the file as it is)."""
     if op == "repair" or not work or OPS[op].get("files") not in ("pdf", "pdf2"):
         return files
-    import pikepdf
 
     mended = []
     for index, path in enumerate(files):
@@ -1578,7 +1575,7 @@ def _mend_inputs(op, files, password, work, notes):
             target = Path(work) / "mended" / f"{index:03d}" / path.name
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
-                with pikepdf.open(str(path), password=password or "") as pdf:
+                with core.open_pikepdf(path, password) as pdf:
                     core.keep_size(pdf).save(target, encryption=pdf.is_encrypted or None)  # (still locked if it was)
                 notes.append(f"{path.name} was damaged; it was mended first, as Repair does")
                 path = target
