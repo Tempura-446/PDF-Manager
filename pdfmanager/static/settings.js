@@ -144,23 +144,83 @@ function renderLangCatalog(catalog) {
     list.replaceChildren(li);
     return;
   }
+  const formatPackSize = (bytes, approx) => {
+    const n = Number(bytes || 0);
+    if (!n || n <= 0) return "";
+    const prefix = approx ? "~" : "";
+    if (n >= 1_000_000_000) return `${prefix}${(n / 1_000_000_000).toFixed(1)} GB`;
+    if (n >= 1_000_000) return `${prefix}${Math.round(n / 1_000_000)} MB`;
+    return `${prefix}${Math.max(1, Math.round(n / 1_000))} KB`;
+  };
   list.replaceChildren(...items.map((p) => {
     const li = document.createElement("li");
     li.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;";
     const label = document.createElement("span");
-    const srcTag = p.source === "zpdf" ? "ZPDF pack" : "Argos offline model";
+    const srcTag = p.source === "nllb" ? "NLLB-200 universal" : (p.source === "zpdf" ? "ZPDF pack" : "Argos offline model");
+    const sizeText = formatPackSize(p.size_bytes, p.size_approx);
+    const sizePart = sizeText ? ` · ${sizeText}` : "";
     const pairsText = p.available_pairs?.length ? ` · ${p.available_pairs.join(", ")}` : "";
-    label.textContent = `${p.name} (${p.code}) — ${srcTag}${pairsText}`;
+    label.textContent = `${p.name} (${p.code}) — ${srcTag}${sizePart}${pairsText}`;
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "link-btn";
-    btn.textContent = p.has_translate ? "Re-download" : "Download";
+    const idleLabel = p.has_translate ? "Re-download" : (sizeText ? `Download (${sizeText})` : "Download");
+    btn.textContent = idleLabel;
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       btn.textContent = "Downloading…";
-      updateStatus("lang-status", `Downloading ${p.name} (${p.code})…`);
+      const dlWrap = $("lang-dl-wrap"), dlBar = $("lang-dl-bar"), dlCancel = $("lang-dl-cancel");
+      let activeJobId = null, wasCancelled = false;
+      const setBar = (frac) => {
+        if (!dlBar) return;
+        const pct = Math.max(0, Math.min(100, Math.round((frac || 0) * 100)));
+        dlBar.setAttribute("aria-valuenow", String(pct));
+        dlBar.firstElementChild.style.width = `${pct}%`;
+      };
+      if (dlCancel) {
+        dlCancel.disabled = false;
+        dlCancel.textContent = "Cancel";
+        dlCancel.onclick = async () => {
+          if (!activeJobId) return;
+          dlCancel.disabled = true;
+          dlCancel.textContent = "Cancelling…";
+          try { await api(`/api/job/${activeJobId}/cancel`, { method: "POST" }); } catch (e) { /* already ended */ }
+        };
+      }
+      const langDlUi = {
+        start(id) {
+          activeJobId = id;
+          if (dlWrap) dlWrap.hidden = false;
+          setBar(0);
+        },
+        message(m) { updateStatus("lang-status", m); },
+        progress(f) { setBar(f); },
+        cancelled() { wasCancelled = true; },
+        end() {
+          activeJobId = null;
+          if (dlWrap) dlWrap.hidden = true;
+          setBar(0);
+        },
+      };
+      updateStatus("lang-status", `Downloading ${p.name}${sizeText ? ` (${sizeText})` : ""}…`);
       try {
-        const res = await jsonApi("/api/i18n/pack/download", { code: p.code, source: p.source });
+        let res;
+        if (typeof runJob === "function") {
+          const resp = await runJob("/api/i18n/pack/download", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code: p.code, source: p.source }),
+          }, langDlUi);
+          if (!resp || wasCancelled) {
+            btn.disabled = false;
+            btn.textContent = idleLabel;
+            updateStatus("lang-status", `Cancelled downloading ${p.name}.`);
+            return;
+          }
+          res = await resp.json();
+        } else {
+          res = await jsonApi("/api/i18n/pack/download", { code: p.code, source: p.source });
+        }
         await loadLanguages();
         const fresh = await jsonApi("/api/i18n/catalog");
         langCatalogCache = fresh;
@@ -169,7 +229,7 @@ function renderLangCatalog(catalog) {
         updateStatus("lang-status", `Installed ${p.name}${pairs}. Ready for offline translation.`);
       } catch (err) {
         btn.disabled = false;
-        btn.textContent = "Download";
+        btn.textContent = idleLabel;
         updateStatus("lang-status", err.message, true);
       }
     });
