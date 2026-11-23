@@ -331,3 +331,17 @@ class ScanWatchRoutesMixin:
 
         return self._job_or_now(download_job)
 
+    def _translate_test(self, body):
+        from pdfmanager import translate
+
+        data = json.loads(body or b"{}")
+        cfg = update.settings()
+        api_url = str(data.get("translate_api_url") or cfg.get("translate_api_url") or "http://localhost:11434/v1").strip()
+        model = str(data.get("translate_model") or cfg.get("translate_model") or "qwen2.5:7b").strip()
+        api_key = str(data.get("translate_api_key") or cfg.get("translate_api_key") or "").strip()
+        t0 = time.monotonic()
+        fn = translate._load_llm_translator("en", "es", api_url=api_url, model=model, api_key=api_key)
+        sample = fn(["Hello world"])[0]
+        ms = int((time.monotonic() - t0) * 1000)
+        return self._send(HTTPStatus.OK, {"ok": True, "model": model, "sample": sample, "ms": ms})
+

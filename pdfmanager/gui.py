@@ -398,6 +398,8 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._i18n_pack_remove(body)
             if path in ("/api/i18n/pack/download", "/api/i18n/packs/download"):
                 return self._i18n_pack_download(body)
+            if path == "/api/translate/test":
+                return self._translate_test(body)
             if path == "/api/shellmenu":
                 from pdfmanager import winsetup
 

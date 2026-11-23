@@ -187,7 +187,10 @@
           <input type="password" id="set-translate-key" placeholder="Leave blank for local Ollama / LM Studio" autocomplete="off" style="flex:1;">
           <button type="button" class="btn secondary" id="set-translate-key-clear" hidden>Clear</button>
         </div></label>
-      <button type="button" class="btn secondary" id="set-translate-save" style="margin-top:4px;">Save AI translation settings</button>
+      <div style="display:flex;gap:6px;margin-top:4px;">
+        <button type="button" class="btn secondary" id="set-translate-save">Save AI translation settings</button>
+        <button type="button" class="btn secondary" id="set-translate-test">Test connection</button>
+      </div>
     </div>
     <label class="dlg-field" style="margin-top:6px;"><span>Translation glossary &amp; keep-verbatim terms (optional)</span>
       <textarea id="set-translate-glossary" rows="3" placeholder="One per line: keep verbatim (e.g. Acme Corp) or map (e.g. Force Majeure = 不可抗力)" style="width:100%;box-sizing:border-box;font-family:inherit;"></textarea></label>
