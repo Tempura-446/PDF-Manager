@@ -95,7 +95,7 @@ def test_missing_tokenizer_reports_specific_error(tmp_path, monkeypatch):
 
 
 def test_clean_mt_output_strips_sentencepiece_marker_and_cjk_spaces():
-    assert translate._clean_mt_output("\u2581你好, 你今天好吗?", "zh-Hans") == "你好, 你今天好吗?"
+    assert translate._clean_mt_output("\u2581你好, 你今天好吗?", "zh-Hans") == "你好，你今天好吗？"
     assert translate._clean_mt_output("\u2581本文件 解释了 协议 的 条款。", "zh-Hans") == "本文件解释了协议的条款。"
     assert translate._clean_mt_output("\u2581Hello   world", "en") == "Hello world"
 
@@ -372,6 +372,142 @@ def test_llm_translator_batch_and_fallback(monkeypatch):
     assert out[2] == "$1,250.00"  # pure currency bypassed LLM verbatim
     assert calls and calls[0][0] == "http://localhost:11434/v1/chat/completions"
     assert calls[0][1] == "qwen2.5:7b"
+
+
+def test_abbreviation_and_list_safe_sentence_splitting():
+    text = "Dr. Smith met Ms. Jones at Acme Inc. in the U.S. on Jan. 5. See Fig. 2 for details."
+    sents = translate.split_sentences(text)
+    assert sents == [
+        "Dr. Smith met Ms. Jones at Acme Inc. in the U.S. on Jan. 5.",
+        "See Fig. 2 for details.",
+    ]
+    numbered = translate.split_sentences("1. First step is easy. Second sentence.")
+    assert numbered == ["1. First step is easy.", "Second sentence."]
+
+
+def test_all_caps_normalization_and_structural_affixes():
+    assert translate._normalize_all_caps("EXECUTIVE SUMMARY OF PDF REPORT") == "Executive summary of PDF report"
+    assert translate._normalize_all_caps("TERMS AND CONDITIONS") == "Terms and conditions"
+    assert translate._normalize_all_caps("Mixed Case Heading") == "Mixed Case Heading"
+
+    seen = []
+
+    def fake_neural(batch):
+        seen.extend(batch)
+        return [f"ZH({s})" for s in batch]
+
+    fake_neural._neural = True
+    out = translate.translate_texts(
+        [
+            "EXECUTIVE SUMMARY",
+            "• Review the contract",
+            "Email: alice@acme.com",
+            "Total: $1,250.00",
+        ],
+        "en",
+        "zh-Hans",
+        translator=fake_neural,
+        glossary="",
+    )
+    assert seen == ["Executive summary", "Review the contract", "Email", "Total"]
+    assert out == [
+        "ZH(Executive summary)",
+        "• ZH(Review the contract)",
+        "ZH(Email)：alice@acme.com",
+        "ZH(Total)：$1,250.00",
+    ]
+
+
+def test_nllb_paragraph_context_and_13b_preference(tmp_path, monkeypatch):
+    monkeypatch.setattr(i18n, "packs_dir", lambda: tmp_path / "locales")
+    catalog = i18n.list_catalog_packs(fetch=False)
+    codes = [p["code"] for p in catalog["packs"]]
+    assert "nllb-200" in codes
+    assert "nllb-200-1.3b" in codes
+
+    # Install 600M first
+    m600 = i18n.packs_dir() / "nllb-200" / "models" / "nllb-200"
+    m600.mkdir(parents=True)
+    (m600 / "model.bin").write_bytes(b"600m")
+    (m600 / "sentencepiece.bpe.model").write_bytes(b"sp")
+    assert translate.nllb_model_dir() == m600
+
+    # Installing 1.3B takes priority automatically
+    m13b = i18n.packs_dir() / "nllb-200-1.3b" / "models" / "nllb-200-1.3b"
+    m13b.mkdir(parents=True)
+    (m13b / "model.bin").write_bytes(b"1.3b")
+    (m13b / "sentencepiece.bpe.model").write_bytes(b"sp")
+    assert translate.nllb_model_dir() == m13b
+
+    # Context chunking groups short consecutive sentences together for NLLB
+    received = []
+
+    def fake_nllb(batch):
+        received.extend(batch)
+        return [f"TR:{s}" for s in batch]
+
+    fake_nllb._neural = True
+    fake_nllb._context_window = 360
+    out = translate.translate_texts(
+        ["First sentence is short. It continues with a pronoun."],
+        "en",
+        "es",
+        translator=fake_nllb,
+        glossary="",
+    )
+    assert received == ["First sentence is short. It continues with a pronoun."]
+    assert out == ["TR:First sentence is short. It continues with a pronoun."]
+
+
+def test_offline_glossary_keep_verbatim_and_force_map():
+    glossary = "# Company terms\nAcme Corp\nForce Majeure = 不可抗力\nStatement of Work -> 工作说明书\n"
+    rules = translate.parse_glossary(glossary)
+    assert rules[0] == ("Statement of Work", "工作说明书")
+    assert ("Force Majeure", "不可抗力") in rules
+    assert ("Acme Corp", None) in rules
+
+    def fake_neural(batch):
+        return [f"译文:{s}" for s in batch]
+
+    fake_neural._neural = True
+    out = translate.translate_texts(
+        ["Acme Corp signed the Statement of Work under Force Majeure."],
+        "en",
+        "zh-Hans",
+        translator=fake_neural,
+        glossary=glossary,
+    )
+    assert "Acme Corp" in out[0]
+    assert "工作说明书" in out[0]
+    assert "不可抗力" in out[0]
+
+
+def test_bucketed_ct2_decoding_and_hallucination_retry():
+    calls = []
+
+    class FakeRes:
+        def __init__(self, hyp):
+            self.hypotheses = [hyp]
+
+    class FakeTranslator:
+        def translate_batch(self, batch_toks, **kwargs):
+            calls.append((len(batch_toks), kwargs))
+            if kwargs["beam_size"] == 4 and len(batch_toks[0]) <= 16:
+                return [FakeRes(["halluc"] * 40)]
+            return [FakeRes(["ok", "short"]) for _ in batch_toks]
+
+    hyps = translate._translate_ct2_bucketed(FakeTranslator(), [["Summary", "</s>"]])
+    assert hyps == [["ok", "short"]]
+    assert calls[0][1]["repetition_penalty"] == 1.2
+    assert calls[0][1]["max_decoding_length"] <= 64
+    assert len(calls) == 2
+    assert calls[1][1]["beam_size"] == 2
+    assert calls[1][1]["repetition_penalty"] == 1.35
+
+
+def test_cjk_and_latin_punctuation_polish():
+    assert translate._clean_mt_output("你好 , 世界 .", "zh-Hans") == "你好，世界。"
+    assert translate._clean_mt_output("Hello , world ( test ) !", "en") == "Hello, world (test)!"
 
 
 

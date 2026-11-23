@@ -56,12 +56,38 @@ def restore_tokens(text, tokens):
     return re.sub(r"__ZTOK(\d+)__", _repl, text)
 
 
+_ABBREV_END_RE = re.compile(
+    r"(?:"
+    r"\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Inc|Ltd|Corp|Co|Dept|Gov|Gen|Col|Lt|Sgt|Rev|"
+    r"No|Fig|Eq|Vol|Ch|Sec|Art|Ref|vs|etc|al|"
+    r"Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|"
+    r"Mon|Tue|Wed|Thu|Fri|Sat|Sun)\."
+    r"|\b(?:e\.g|i\.e|a\.m|p\.m|Ph\.D|M\.D|B\.A|M\.A)\."
+    r"|(?:[A-Za-z]\.){2,}"
+    r"|\b[A-Z]\."
+    r"|^\(?\d{1,3}\."
+    r")$",
+    re.IGNORECASE,
+)
+
+
 def split_sentences(text):
-    """Split ``text`` into sentences while preserving order and non-empty segments."""
+    """Split ``text`` into sentences without breaking common abbreviations,
+    initials, acronyms (e.g. ``Dr.``, ``Inc.``, ``U.S.``, ``Fig. 2``), or
+    numbered list prefixes (``1. First item``)."""
     cleaned = str(text or "").strip()
     if not cleaned:
         return []
-    return [s for s in _SENTENCE_SPLIT_RE.split(cleaned) if s]
+    raw_parts = [s for s in _SENTENCE_SPLIT_RE.split(cleaned) if s]
+    if len(raw_parts) <= 1:
+        return raw_parts
+    merged = [raw_parts[0]]
+    for part in raw_parts[1:]:
+        if _ABBREV_END_RE.search(merged[-1]):
+            merged[-1] = merged[-1] + " " + part
+        else:
+            merged.append(part)
+    return merged
 
 
 def _pair_candidates(src_lang, dst_lang):
@@ -246,14 +272,8 @@ def _load_single_translator(s, d, mdir):
 
         def _ct2_batch(batch):
             tokenized = [sp_src.encode(text, out_type=str) for text in batch]
-            results = tr.translate_batch(
-                tokenized,
-                beam_size=4,
-                replace_unknowns=True,
-                no_repeat_ngram_size=4,
-                max_decoding_length=512,
-            )
-            return [_clean_mt_output(sp_tgt.decode(r.hypotheses[0]), d) for r in results]
+            hyps = _translate_ct2_bucketed(tr, tokenized)
+            return [_clean_mt_output(sp_tgt.decode(hyp), d) for hyp in hyps]
 
         _ct2_batch._neural = True
         return _ct2_batch
@@ -284,12 +304,79 @@ def _load_single_translator(s, d, mdir):
     )
 
 
+def _translate_ct2_bucketed(tr, tokenized, *, target_prefix_token=None):
+    """Run ``tr.translate_batch()`` with length-adaptive ``max_decoding_length``,
+    ``repetition_penalty=1.2``, and a tighter retry if a short input hallucinates
+    an abnormally long tail."""
+    if not tokenized:
+        return []
+    buckets = {"short": [], "med": [], "long": []}
+    for idx, toks in enumerate(tokenized):
+        n = len(toks)
+        if n <= 16:
+            buckets["short"].append((idx, toks))
+        elif n <= 64:
+            buckets["med"].append((idx, toks))
+        else:
+            buckets["long"].append((idx, toks))
+
+    hyps = [None] * len(tokenized)
+    for name, items in buckets.items():
+        if not items:
+            continue
+        batch_toks = [t for _, t in items]
+        max_src = max(len(t) for t in batch_toks)
+        if name == "short":
+            max_dec = max(36, min(64, int(max_src * 3.0) + 12))
+        elif name == "med":
+            max_dec = max(96, min(192, int(max_src * 2.6) + 16))
+        else:
+            max_dec = min(512, max(200, int(max_src * 2.5) + 16))
+        kwargs = {
+            "beam_size": 4,
+            "repetition_penalty": 1.2,
+            "replace_unknowns": True,
+            "no_repeat_ngram_size": 4,
+            "max_decoding_length": max_dec,
+        }
+        if target_prefix_token is not None:
+            kwargs["target_prefix"] = [[target_prefix_token]] * len(batch_toks)
+        results = tr.translate_batch(batch_toks, **kwargs)
+        for (orig_idx, src_toks), res in zip(items, results):
+            hyp = list(res.hypotheses[0])
+            # Guard against short-heading runaway hallucinations (> 3.5x source token count)
+            if len(src_toks) <= 24 and len(hyp) > max(32, int(len(src_toks) * 3.5)):
+                retry_kwargs = {
+                    "beam_size": 2,
+                    "repetition_penalty": 1.35,
+                    "replace_unknowns": True,
+                    "no_repeat_ngram_size": 3,
+                    "max_decoding_length": max(24, int(len(src_toks) * 2.0) + 8),
+                }
+                if target_prefix_token is not None:
+                    retry_kwargs["target_prefix"] = [[target_prefix_token]]
+                retry_res = tr.translate_batch([src_toks], **retry_kwargs)
+                if retry_res and retry_res[0].hypotheses:
+                    hyp = list(retry_res[0].hypotheses[0])
+            hyps[orig_idx] = hyp
+    return hyps
+
+
 _CJK_LANGS = {"zh", "zh-Hans", "zh-Hant", "ja", "ko"}
+_CJK_FULLWIDTH_LANGS = {"zh", "zh-Hans", "zh-Hant", "ja"}
 _CJK_CHAR_RE = re.compile(r"[\u3000-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af]")
 _CJK_SPACE_RE = re.compile(
     r"(?<=[\u3000-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af])\s+"
     r"(?=[\u3000-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af])"
 )
+_CJK_PUNCT_MAP = {",": "，", ";": "；", ":": "：", "!": "！", "?": "？"}
+_CJK_ASCII_PUNCT_RE = re.compile(
+    r"(?<=[\u3000-\u9fff\uf900-\ufaff\uff00-\uffef])\s*([,;:!?])(?=\s|$|[\u3000-\u9fff\uf900-\ufaff\uff00-\uffef])"
+)
+_CJK_TRAILING_DOT_RE = re.compile(r"(?<=[\u3000-\u9fff\uf900-\ufaff\uff00-\uffef])\s*\.(?=\s|$)")
+_CJK_POST_PUNCT_SPACE_RE = re.compile(r"(?<=[，。；：！？、」』）])\s+(?=[\u3000-\u9fff\uf900-\ufaff\uff00-\uffef])")
+_LATIN_BEFORE_PUNCT_RE = re.compile(r"\s+([,.;:!?)\]])")
+_LATIN_AFTER_OPEN_RE = re.compile(r"([(\[])\s+")
 _BULLET_LINE_RE = re.compile(r"^(?:[\u2022\u2023\u25e6\u2043\u2219•▪▸►\-*–—]|\d+[.)]|[A-Za-z][.)])\s+")
 
 
@@ -298,12 +385,25 @@ def _is_cjk_lang(lang):
     return norm in _CJK_LANGS or norm.split("-", 1)[0] in _CJK_LANGS
 
 
+def _is_cjk_fullwidth_lang(lang):
+    norm = i18n.normalize_code(lang or "")
+    return norm in _CJK_FULLWIDTH_LANGS or norm.split("-", 1)[0] in _CJK_FULLWIDTH_LANGS
+
+
 def _clean_mt_output(text, dst_lang):
-    """Strip leaked SentencePiece ``▁`` markers and normalize whitespace."""
+    """Strip leaked SentencePiece ``▁`` markers, normalize whitespace, and polish
+    target-language punctuation (full-width CJK punctuation or clean Latin spacing)."""
     out = str(text or "").replace("\u2581", " ")
     out = re.sub(r"[ \t]{2,}", " ", out).strip()
     if _is_cjk_lang(dst_lang):
         out = _CJK_SPACE_RE.sub("", out)
+        if _is_cjk_fullwidth_lang(dst_lang):
+            out = _CJK_ASCII_PUNCT_RE.sub(lambda m: _CJK_PUNCT_MAP[m.group(1)], out)
+            out = _CJK_TRAILING_DOT_RE.sub("。", out)
+            out = _CJK_POST_PUNCT_SPACE_RE.sub("", out)
+    else:
+        out = _LATIN_BEFORE_PUNCT_RE.sub(r"\1", out)
+        out = _LATIN_AFTER_OPEN_RE.sub(r"\1", out)
     return out
 
 
@@ -413,16 +513,18 @@ def bcp47_to_flores(code):
 
 
 def nllb_model_dir():
-    """Return the installed NLLB-200 CTranslate2 model directory if present, else ``None``."""
+    """Return the best installed NLLB-200 CTranslate2 model directory (preferring
+    ``nllb-200-1.3b`` over ``nllb-200`` 600M when both are installed), else ``None``."""
     root = i18n.packs_dir()
-    for cand in (root / i18n.NLLB_PACK_CODE / "models" / i18n.NLLB_PACK_CODE, root / i18n.NLLB_PACK_CODE):
-        if (cand / "model.bin").is_file() and list(cand.glob("*.model")):
-            return cand
+    for code in (i18n.NLLB_LARGE_PACK_CODE, i18n.NLLB_PACK_CODE):
+        for cand in (root / code / "models" / code, root / code):
+            if (cand / "model.bin").is_file() and list(cand.glob("*.model")):
+                return cand
     return None
 
 
 def _load_nllb_translator(s, d, mdir):
-    """Load Meta NLLB-200-distilled-600M (CTranslate2 int8) for direct ``s -> d`` translation."""
+    """Load Meta NLLB-200 (600M or 1.3B CTranslate2 int8) for direct ``s -> d`` translation."""
     src_flores = bcp47_to_flores(s)
     dst_flores = bcp47_to_flores(d)
     if not src_flores or not dst_flores:
@@ -456,23 +558,16 @@ def _load_nllb_translator(s, d, mdir):
 
     def _nllb_batch(batch):
         tokenized = [[src_flores, *sp.encode(text, out_type=str), "</s>"] for text in batch]
-        results = tr.translate_batch(
-            tokenized,
-            target_prefix=[[dst_flores]] * len(tokenized),
-            beam_size=4,
-            replace_unknowns=True,
-            no_repeat_ngram_size=4,
-            max_decoding_length=512,
-        )
+        hyps = _translate_ct2_bucketed(tr, tokenized, target_prefix_token=dst_flores)
         out = []
-        for r in results:
-            hyp = list(r.hypotheses[0])
+        for hyp in hyps:
             if hyp and hyp[0] == dst_flores:
                 hyp = hyp[1:]
             out.append(_clean_mt_output(sp.decode(hyp), d))
         return out
 
     _nllb_batch._neural = True
+    _nllb_batch._context_window = 360
     return _nllb_batch
 
 
@@ -504,7 +599,7 @@ def _parse_llm_json_list(raw_content, expected_len):
     return None
 
 
-def _load_llm_translator(src_lang, dst_lang, *, api_url, model, api_key=""):
+def _load_llm_translator(src_lang, dst_lang, *, api_url, model, api_key="", glossary=""):
     """Context-aware batch translator using an OpenAI-compatible ``/chat/completions``
     endpoint (works offline with local Ollama / LM Studio, or online with any BYOK API)."""
     endpoint = str(api_url or "http://localhost:11434/v1").strip().rstrip("/")
@@ -515,11 +610,20 @@ def _load_llm_translator(src_lang, dst_lang, *, api_url, model, api_key=""):
 
     src_label = i18n.BUILTIN_LOCALES.get(src_lang, {}).get("name") or src_lang
     dst_label = i18n.BUILTIN_LOCALES.get(dst_lang, {}).get("name") or dst_lang
+    glossary_rules = parse_glossary(glossary)
+    glossary_clause = ""
+    if glossary_rules:
+        lines = [
+            f"- Keep '{src}' verbatim." if tgt is None else f"- Always translate '{src}' as '{tgt}'."
+            for src, tgt in glossary_rules[:60]
+        ]
+        glossary_clause = " Follow these mandatory terminology rules:\n" + "\n".join(lines) + "\n"
     system_prompt = (
         f"You are an expert document translator translating from {src_label} ({src_lang}) "
         f"to natural, idiomatic, publication-quality {dst_label} ({dst_lang}). "
         "Maintain consistent terminology and formal document tone across all items. "
         "Keep emails, URLs, phone numbers, dates, currency amounts, numbers, and ID codes verbatim. "
+        f"{glossary_clause}"
         "Return ONLY a valid JSON array of translated strings with the exact same length and order as the input array. "
         "Do not add explanations, notes, or markdown."
     )
@@ -555,6 +659,7 @@ def _load_llm_translator(src_lang, dst_lang, *, api_url, model, api_key=""):
 
     _llm_batch._neural = True
     _llm_batch._llm = True
+    _llm_batch._context_window = 1200
     return _llm_batch
 
 
@@ -578,6 +683,7 @@ def _load_offline_translator(src_lang, dst_lang):
             api_url=cfg.get("translate_api_url") or "http://localhost:11434/v1",
             model=cfg.get("translate_model") or "qwen2.5:7b",
             api_key=cfg.get("translate_api_key") or "",
+            glossary=cfg.get("translate_glossary") or "",
         )
 
     # Prefer NLLB-200 universal high-quality model when installed and both languages are supported
@@ -627,6 +733,120 @@ _NEURAL_PROTECT_RE = re.compile(
     r")"
 )
 _PROSE_WORD_RE = re.compile(r"[A-Za-z\u00c0-\u024f\u0400-\u04ff\u0600-\u06ff]{2,}|[\u3040-\u9fff\uac00-\ud7af]")
+_GLOSSARY_SEP_RE = re.compile(r"\s*(?:=>|->|=|\t)\s*")
+_STRUCTURAL_BULLET_RE = re.compile(r"^((?:[\u2022\u2023\u25e6\u2043\u2219•▪▸►\-*–—]|\(?\d{1,3}[.)]|\(?[A-Za-z][.)])\s+)")
+_LABEL_COLON_RE = re.compile(r"^([^:：\n]{1,42})\s*([:：])\s*(.+)$")
+_COMMON_SHORT_CAPS = {
+    "A", "AN", "AND", "ARE", "AS", "AT", "BE", "BY", "DUE", "END", "FEE", "FOR",
+    "IN", "IS", "NEW", "NO", "NOT", "OF", "ON", "OR", "OUR", "PAY", "PER", "SUM",
+    "TAX", "THE", "TO", "ALL", "ANY", "OUT", "USE", "VIA", "WHO", "WHY", "HOW",
+}
+
+
+def parse_glossary(raw_text):
+    """Parse newline-separated glossary / keep-verbatim rules.
+
+    Each non-empty line (ignoring ``#`` comments) is either:
+    - ``Term`` → keep verbatim (``(term, None)``)
+    - ``Source = Target`` / ``Source -> Target`` / ``Source => Target`` → force
+      exact translation (``(source, target)``)
+
+    Returns a list of ``(source, target_or_none)`` sorted longest-source-first.
+    """
+    rules = []
+    seen = set()
+    for raw_line in str(raw_text or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = _GLOSSARY_SEP_RE.search(line)
+        if m:
+            src = line[: m.start()].strip()
+            tgt = line[m.end() :].strip()
+            if src and tgt and src.lower() not in seen:
+                seen.add(src.lower())
+                rules.append((src, tgt))
+        else:
+            if line.lower() not in seen:
+                seen.add(line.lower())
+                rules.append((line, None))
+    rules.sort(key=lambda item: len(item[0]), reverse=True)
+    return rules
+
+
+def _compile_glossary_patterns(glossary_rules):
+    compiled = []
+    for src, tgt in glossary_rules or ():
+        escaped = re.escape(src)
+        if re.search(r"[A-Za-z0-9]", src[0]) and re.search(r"[A-Za-z0-9]", src[-1]):
+            pat = re.compile(rf"(?<!\w){escaped}(?!\w)", re.IGNORECASE)
+        else:
+            pat = re.compile(escaped, re.IGNORECASE)
+        compiled.append((pat, tgt))
+    return compiled
+
+
+def _normalize_all_caps(text):
+    """Convert multi-word ALL-CAPS prose headings (e.g. ``EXECUTIVE SUMMARY``) to
+    sentence case so neural MT translates them instead of copying them as acronyms,
+    while preserving 2–3 letter acronyms (e.g. ``PDF``, ``USA``, ``API``)."""
+    if not text or any(ch.islower() for ch in text):
+        return text
+    alpha_words = re.findall(r"[A-Za-z]{2,}", text)
+    if len(alpha_words) < 2 or sum(len(w) for w in alpha_words) < 6:
+        return text
+    first_done = False
+
+    def _fix_word(match):
+        nonlocal first_done
+        w = match.group(0)
+        if len(w) <= 3 and w not in _COMMON_SHORT_CAPS:
+            first_done = True
+            return w
+        if not first_done:
+            first_done = True
+            return w[0].upper() + w[1:].lower()
+        return w.lower()
+
+    return re.sub(r"\b[A-Z]{2,}\b", _fix_word, text)
+
+
+def _split_structural_affixes(text, dst_lang):
+    """Separate leading bullet/number markers and trailing ``: <verbatim>`` data
+    values so neural MT translates only the prose label or list item body."""
+    prefix = ""
+    suffix = ""
+    body = text
+    m_bul = _STRUCTURAL_BULLET_RE.match(body)
+    if m_bul:
+        prefix = m_bul.group(1)
+        body = body[m_bul.end() :]
+    m_lbl = _LABEL_COLON_RE.match(body)
+    if m_lbl:
+        lhs, _colon, rhs = m_lbl.group(1).strip(), m_lbl.group(2), m_lbl.group(3).strip()
+        if lhs and rhs and not rhs.startswith("//") and _PROSE_WORD_RE.search(lhs) and _is_verbatim_block(rhs):
+            sep = "：" if _is_cjk_fullwidth_lang(dst_lang) else ": "
+            body = lhs
+            suffix = f"{sep}{rhs}"
+    return prefix, body, suffix
+
+
+def _chunk_sentences_for_context(sents, max_chars):
+    """Group consecutive sentences into multi-sentence chunks up to ``max_chars``
+    so context-capable models (NLLB-200, LLM) translate with paragraph context."""
+    if not sents or max_chars <= 0 or len(sents) <= 1:
+        return list(sents)
+    chunks = []
+    cur = sents[0]
+    for s in sents[1:]:
+        cand = f"{cur} {s}"
+        if len(cand) <= max_chars:
+            cur = cand
+        else:
+            chunks.append(cur)
+            cur = s
+    chunks.append(cur)
+    return chunks
 
 
 def _is_verbatim_block(text):
@@ -636,22 +856,45 @@ def _is_verbatim_block(text):
     return _PROSE_WORD_RE.search(stripped) is None
 
 
-def _protect_neural_entities(text):
-    """Replace emails, URLs, phone numbers, codes, ISO dates, and currency with
-    collision-free 6-digit numeric sentinels that neural MT preserves verbatim."""
+def _find_protected_spans(text, compiled_glossary=None):
+    """Return non-overlapping ``(start, end, replacement_value)`` spans for all
+    protected entities and glossary terms in ``text``."""
+    spans = []
+
+    def _overlaps(s, e):
+        return any(not (e <= es or s >= ee) for es, ee, _ in spans)
+
+    for m in _NEURAL_PROTECT_RE.finditer(text):
+        spans.append((m.start(), m.end(), m.group(0)))
+    for pat, tgt in compiled_glossary or ():
+        for m in pat.finditer(text):
+            if not _overlaps(m.start(), m.end()):
+                spans.append((m.start(), m.end(), tgt if tgt is not None else m.group(0)))
+    spans.sort(key=lambda item: item[0])
+    return spans
+
+
+def _protect_neural_entities(text, compiled_glossary=None):
+    """Replace emails, URLs, phone numbers, codes, ISO dates, currency, and
+    glossary terms with collision-free 6-digit numeric sentinels."""
+    spans = _find_protected_spans(text, compiled_glossary)
+    if not spans:
+        return text, []
     mapping = []
     next_id = 910001
-
-    def _repl(match):
-        nonlocal next_id
+    out_parts = []
+    pos = 0
+    for start, end, repl_val in spans:
         while str(next_id) in text:
             next_id += 1
         sentinel = str(next_id)
         next_id += 1
-        mapping.append((sentinel, match.group(0)))
-        return sentinel
-
-    return _NEURAL_PROTECT_RE.sub(_repl, text), mapping
+        out_parts.append(text[pos:start])
+        out_parts.append(sentinel)
+        mapping.append((sentinel, repl_val))
+        pos = end
+    out_parts.append(text[pos:])
+    return "".join(out_parts), mapping
 
 
 def _restore_neural_entities(translated, mapping):
@@ -672,23 +915,24 @@ def _restore_neural_entities(translated, mapping):
     return out, all_found
 
 
-def _translate_around_entities(text, fn, joiner):
+def _translate_around_entities(text, fn, joiner, compiled_glossary=None):
     """Fallback when a neural model drops a sentinel: translate only the prose
-    segments between protected entities so every entity stays 100% verbatim."""
+    segments between protected entities/glossary terms so every span stays exact."""
+    spans = _find_protected_spans(text, compiled_glossary)
     pieces = []
     prose_indices = []
     prose_texts = []
     pos = 0
-    for m in _NEURAL_PROTECT_RE.finditer(text):
-        before = text[pos : m.start()]
+    for start, end, repl_val in spans:
+        before = text[pos:start]
         if before.strip():
             prose_indices.append(len(pieces))
             prose_texts.append(before.strip())
             pieces.append("")
         elif before:
             pieces.append(before)
-        pieces.append(m.group(0))
-        pos = m.end()
+        pieces.append(repl_val)
+        pos = end
     tail = text[pos:]
     if tail.strip():
         prose_indices.append(len(pieces))
@@ -704,13 +948,22 @@ def _translate_around_entities(text, fn, joiner):
     return re.sub(r"[ \t]{2,}", " ", out).strip()
 
 
-def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32):
+def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32, glossary=None):
     """Translate a sequence of strings offline, preserving emails, URLs, phone
-    numbers, reference codes, dates, and currency, and deduplicating identical
-    sentences so each unique sentence is translated once."""
+    numbers, reference codes, dates, currency, bullets, key-value labels, and
+    optional user glossary terms, while deduplicating identical chunks."""
     fn = translator if translator is not None else _load_offline_translator(src_lang, dst_lang)
     is_neural = bool(getattr(fn, "_neural", False))
+    is_llm = bool(getattr(fn, "_llm", False))
+    context_window = int(getattr(fn, "_context_window", 0) or 0)
     joiner = "" if _is_cjk_lang(dst_lang) else " "
+
+    if glossary is None and is_neural and not is_llm:
+        from pdfmanager import update as _update
+
+        glossary = _update.settings().get("translate_glossary") or ""
+    compiled_glossary = _compile_glossary_patterns(parse_glossary(glossary)) if (is_neural and not is_llm) else []
+
     cache = {}
     unique_sentences = []
     per_text_plan = []
@@ -723,13 +976,18 @@ def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32
         if is_neural and _is_verbatim_block(text_str):
             per_text_plan.append(("verbatim", text_str))
             continue
-        if is_neural and getattr(fn, "_llm", False):
-            sents = split_sentences(text_str)
-            per_text_plan.append(("neural", text_str, sents, ()))
+        if is_neural and is_llm:
+            sents = _chunk_sentences_for_context(split_sentences(text_str), context_window)
+            per_text_plan.append(("neural", "", "", text_str, sents, ()))
         elif is_neural:
-            masked, mapping = _protect_neural_entities(text_str)
-            sents = split_sentences(masked)
-            per_text_plan.append(("neural", text_str, sents, mapping))
+            prefix, body, suffix = _split_structural_affixes(text_str, dst_lang)
+            if not body.strip() or _is_verbatim_block(body):
+                per_text_plan.append(("verbatim", text_str))
+                continue
+            norm_body = _normalize_all_caps(body)
+            masked, mapping = _protect_neural_entities(norm_body, compiled_glossary)
+            sents = _chunk_sentences_for_context(split_sentences(masked), context_window)
+            per_text_plan.append(("neural", prefix, suffix, norm_body, sents, mapping))
         else:
             masked, tokens = protect_tokens(text_str)
             sents = split_sentences(masked)
@@ -759,15 +1017,15 @@ def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32
         if kind == "verbatim":
             results.append(item[1])
         elif kind == "neural":
-            _, orig_text, sents, mapping = item
+            _, prefix, suffix, orig_body, sents, mapping = item
             joined = joiner.join(cache.get(s, s) for s in sents)
             if mapping:
                 restored, ok = _restore_neural_entities(joined, mapping)
                 if not ok:
-                    restored = _translate_around_entities(orig_text, fn, joiner)
-                results.append(restored)
+                    restored = _translate_around_entities(orig_body, fn, joiner, compiled_glossary)
+                results.append(f"{prefix}{restored}{suffix}")
             else:
-                results.append(joined)
+                results.append(f"{prefix}{joined}{suffix}")
         else:
             _, sents, tokens = item
             joined = joiner.join(cache.get(s, s) for s in sents)
