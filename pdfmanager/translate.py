@@ -8,13 +8,8 @@ Numbers, reference codes (e.g. ``INV-2026-118``), URLs, and emails are
 protected with placeholders so they pass through unchanged.
 """
 
-import importlib
-import importlib.util
 import io
-import os
 import re
-import subprocess
-import sys
 from pathlib import Path
 
 from pypdf import PageObject, PdfWriter, Transformation
@@ -123,51 +118,7 @@ def model_dir_for(src_lang, dst_lang):
     return None
 
 
-def _has_ct2_runtime():
-    """Return True when both ctranslate2 and sentencepiece are importable."""
-    return (
-        importlib.util.find_spec("ctranslate2") is not None
-        and importlib.util.find_spec("sentencepiece") is not None
-    )
-
-
-def ensure_runtime(*, auto_install=True, force=False):
-    """Ensure the offline translation runtime (``ctranslate2`` + ``sentencepiece``)
-    is available. When missing in a non-frozen Python environment and online
-    access is permitted by both user settings and enterprise policy, installs
-    both wheels automatically so users who upgraded from an older version never
-    need to run ``pip`` manually."""
-    if _has_ct2_runtime():
-        return True
-    if not auto_install or getattr(sys, "frozen", False):
-        return False
-    if os.environ.get("PYTEST_CURRENT_TEST") and not force:
-        return False
-    from pdfmanager import policy, update
-
-    if policy.get("disable_network", False):
-        return False
-    if update.settings().get("online") is False:
-        return False
-    if importlib.util.find_spec("pip") is None:
-        return False
-    progress.say("Installing offline translation runtime (one-time setup)…")
-    try:
-        proc = subprocess.run(
-            [
-                sys.executable, "-I", "-m", "pip", "install",
-                "--disable-pip-version-check", "--no-input",
-                "ctranslate2>=4.0", "sentencepiece>=0.2",
-            ],
-            capture_output=True, text=True, timeout=600,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    if proc.returncode != 0:
-        return False
-    importlib.invalidate_caches()
-    return _has_ct2_runtime()
+ensure_runtime = i18n.ensure_translation_runtime
 
 
 class _SubwordBpe:

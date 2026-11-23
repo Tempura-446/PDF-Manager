@@ -8,9 +8,14 @@ packs live in ``<data_dir>/locales/<code>/`` (containing ``manifest.json`` and
 """
 
 import hashlib
+import importlib
+import importlib.util
 import json
+import os
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 import urllib.error
 import urllib.request
@@ -663,8 +668,7 @@ def download_and_install_pack(code, *, pair=None, source=None):
                 zip_path.write_bytes(zip_bytes)
                 progress.report(2, 3, f"installing {norm_code} language pack")
                 installed = install_pack_from_zip(zip_path, expected_sha256=expected_sha)
-            from pdfmanager import translate as _translate
-            _translate.ensure_runtime()
+            ensure_translation_runtime()
             progress.report(3, 3, f"installed {norm_code}")
             return {"code": norm_code, "source": "zpdf", "installed": installed}
 
@@ -724,8 +728,7 @@ def download_and_install_pack(code, *, pair=None, source=None):
                 name=entry["to_name"] if entry["dst"] != DEFAULT_LANG else entry["from_name"],
             )
             installed_results.append(res)
-    from pdfmanager import translate as _translate
-    _translate.ensure_runtime()
+    ensure_translation_runtime()
     progress.report(total, total, f"installed {norm_code} translation models")
     return {
         "code": installed_results[-1]["code"],
@@ -733,4 +736,51 @@ def download_and_install_pack(code, *, pair=None, source=None):
         "installed_pairs": [r["pair"] for r in installed_results],
         "installed": installed_results[-1],
     }
+
+
+def _has_ct2_runtime():
+    """Return True when both ctranslate2 and sentencepiece are importable."""
+    return (
+        importlib.util.find_spec("ctranslate2") is not None
+        and importlib.util.find_spec("sentencepiece") is not None
+    )
+
+
+def ensure_translation_runtime(*, auto_install=True, force=False):
+    """Ensure the offline translation runtime (``ctranslate2`` + ``sentencepiece``)
+    is available. When missing in a non-frozen Python environment and online
+    access is permitted by both user settings and enterprise policy, installs
+    both wheels automatically so users who upgraded from an older version never
+    need to run ``pip`` manually."""
+    if _has_ct2_runtime():
+        return True
+    if not auto_install or getattr(sys, "frozen", False):
+        return False
+    if os.environ.get("PYTEST_CURRENT_TEST") and not force:
+        return False
+    from pdfmanager import policy
+
+    if policy.get("disable_network", False):
+        return False
+    if update.settings().get("online") is False:
+        return False
+    if importlib.util.find_spec("pip") is None:
+        return False
+    progress.say("Installing offline translation runtime (one-time setup)…")
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable, "-I", "-m", "pip", "install",
+                "--disable-pip-version-check", "--no-input",
+                "ctranslate2>=4.0", "sentencepiece>=0.2",
+            ],
+            capture_output=True, text=True, timeout=600,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if proc.returncode != 0:
+        return False
+    importlib.invalidate_caches()
+    return _has_ct2_runtime()
 

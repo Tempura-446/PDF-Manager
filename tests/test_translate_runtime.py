@@ -5,23 +5,23 @@ import sys
 
 import pytest
 
-from pdfmanager import core, policy, translate, update
+from pdfmanager import core, i18n, policy, translate, update
 
 
 def test_ensure_runtime_returns_true_when_already_installed(monkeypatch):
-    monkeypatch.setattr(translate, "_has_ct2_runtime", lambda: True)
+    monkeypatch.setattr(i18n, "_has_ct2_runtime", lambda: True)
     called = []
-    monkeypatch.setattr(translate.subprocess, "run", lambda *a, **kw: called.append(a))
+    monkeypatch.setattr(i18n.subprocess, "run", lambda *a, **kw: called.append(a))
     assert translate.ensure_runtime(force=True) is True
     assert not called
 
 
 def test_ensure_runtime_auto_installs_via_pip_when_missing(monkeypatch):
     installed = {"ok": False}
-    monkeypatch.setattr(translate, "_has_ct2_runtime", lambda: installed["ok"])
+    monkeypatch.setattr(i18n, "_has_ct2_runtime", lambda: installed["ok"])
     monkeypatch.setattr(policy, "get", lambda key, default=None, **kw: False)
     monkeypatch.setattr(update, "settings", lambda: {"online": True})
-    monkeypatch.setattr(translate.importlib.util, "find_spec", lambda name: object() if name == "pip" else None)
+    monkeypatch.setattr(i18n.importlib.util, "find_spec", lambda name: object() if name == "pip" else None)
 
     ran = []
 
@@ -30,15 +30,15 @@ def test_ensure_runtime_auto_installs_via_pip_when_missing(monkeypatch):
         installed["ok"] = True
         return type("Done", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-    monkeypatch.setattr(translate.subprocess, "run", fake_run)
+    monkeypatch.setattr(i18n.subprocess, "run", fake_run)
     assert translate.ensure_runtime(force=True) is True
     assert ran and "ctranslate2>=4.0" in ran[0] and "sentencepiece>=0.2" in ran[0]
 
 
 def test_ensure_runtime_respects_offline_policy_and_frozen(monkeypatch):
-    monkeypatch.setattr(translate, "_has_ct2_runtime", lambda: False)
+    monkeypatch.setattr(i18n, "_has_ct2_runtime", lambda: False)
     called = []
-    monkeypatch.setattr(translate.subprocess, "run", lambda *a, **kw: called.append(a))
+    monkeypatch.setattr(i18n.subprocess, "run", lambda *a, **kw: called.append(a))
 
     # Enterprise disable_network policy blocks pip
     monkeypatch.setattr(policy, "get", lambda key, default=None, **kw: key == "disable_network")
