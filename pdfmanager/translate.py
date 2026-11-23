@@ -355,14 +355,140 @@ def _extract_paragraphs(raw_text):
     return paragraphs
 
 
+_FLORES200_CODES = {
+    "en": "eng_Latn",
+    "zh": "zho_Hans",
+    "zh-Hans": "zho_Hans",
+    "zh-Hant": "zho_Hant",
+    "es": "spa_Latn",
+    "fr": "fra_Latn",
+    "de": "deu_Latn",
+    "ja": "jpn_Jpan",
+    "ko": "kor_Hang",
+    "ar": "arb_Arab",
+    "pt": "por_Latn",
+    "pt-BR": "por_Latn",
+    "pt-PT": "por_Latn",
+    "ru": "rus_Cyrl",
+    "it": "ita_Latn",
+    "nl": "nld_Latn",
+    "pl": "pol_Latn",
+    "tr": "tur_Latn",
+    "vi": "vie_Latn",
+    "th": "tha_Thai",
+    "hi": "hin_Deva",
+    "id": "ind_Latn",
+    "uk": "ukr_Cyrl",
+    "sv": "swe_Latn",
+    "da": "dan_Latn",
+    "fi": "fin_Latn",
+    "no": "nob_Latn",
+    "nb": "nob_Latn",
+    "cs": "ces_Latn",
+    "el": "ell_Grek",
+    "he": "heb_Hebr",
+    "fa": "pes_Arab",
+    "ro": "ron_Latn",
+    "hu": "hun_Latn",
+    "bg": "bul_Cyrl",
+    "hr": "hrv_Latn",
+    "sk": "slk_Latn",
+    "sl": "slv_Latn",
+    "ca": "cat_Latn",
+    "ms": "zsm_Latn",
+    "tl": "tgl_Latn",
+    "bn": "ben_Beng",
+    "ta": "tam_Taml",
+    "ur": "urd_Arab",
+}
+
+
+def bcp47_to_flores(code):
+    """Map a ZPDF BCP-47 tag (e.g. ``en``, ``zh-Hans``, ``es``) to a Meta NLLB-200 FLORES-200 code."""
+    norm = i18n.normalize_code(code)
+    if norm in _FLORES200_CODES:
+        return _FLORES200_CODES[norm]
+    base = norm.split("-", 1)[0].lower()
+    return _FLORES200_CODES.get(base)
+
+
+def nllb_model_dir():
+    """Return the installed NLLB-200 CTranslate2 model directory if present, else ``None``."""
+    root = i18n.packs_dir()
+    for cand in (root / i18n.NLLB_PACK_CODE / "models" / i18n.NLLB_PACK_CODE, root / i18n.NLLB_PACK_CODE):
+        if (cand / "model.bin").is_file() and list(cand.glob("*.model")):
+            return cand
+    return None
+
+
+def _load_nllb_translator(s, d, mdir):
+    """Load Meta NLLB-200-distilled-600M (CTranslate2 int8) for direct ``s -> d`` translation."""
+    src_flores = bcp47_to_flores(s)
+    dst_flores = bcp47_to_flores(d)
+    if not src_flores or not dst_flores:
+        raise core.PdfManagerError(f"NLLB-200 does not have a language mapping for {s} → {d}")
+
+    ct2_loaded = False
+    for attempt in range(2):
+        try:
+            import ctranslate2
+            import sentencepiece as spm
+            ct2_loaded = True
+            break
+        except ImportError:
+            if attempt == 0 and ensure_runtime():
+                continue
+            break
+
+    if not ct2_loaded:
+        raise core.PdfManagerError(
+            f"found NLLB-200 model at {mdir}, but no offline translation runtime "
+            "(ctranslate2 + sentencepiece) is installed. "
+            "Update ZPDF, re-run Install ZPDF.cmd, or run: pip install ctranslate2 sentencepiece"
+        )
+
+    sp_file = next(
+        (mdir / name for name in ("sentencepiece.bpe.model", "sentencepiece.model") if (mdir / name).is_file()),
+        None,
+    ) or sorted(mdir.glob("*.model"))[0]
+    sp = spm.SentencePieceProcessor(model_file=str(sp_file))
+    tr = ctranslate2.Translator(str(mdir), device="cpu")
+
+    def _nllb_batch(batch):
+        tokenized = [[src_flores, *sp.encode(text, out_type=str), "</s>"] for text in batch]
+        results = tr.translate_batch(
+            tokenized,
+            target_prefix=[[dst_flores]] * len(tokenized),
+            beam_size=4,
+            replace_unknowns=True,
+            no_repeat_ngram_size=4,
+            max_decoding_length=512,
+        )
+        out = []
+        for r in results:
+            hyp = list(r.hypotheses[0])
+            if hyp and hyp[0] == dst_flores:
+                hyp = hyp[1:]
+            out.append(_clean_mt_output(sp.decode(hyp), d))
+        return out
+
+    _nllb_batch._neural = True
+    return _nllb_batch
+
+
 def _load_offline_translator(src_lang, dst_lang):
     """Return a batch callable ``fn(list[str]) -> list[str]`` backed by an installed
-    language pack model (CTranslate2 or Argos Translate), automatically pivoting
-    through English when direct ``src -> dst`` is absent, or raise PdfManagerError."""
+    offline model (preferring high-quality NLLB-200 when installed, otherwise
+    CTranslate2/Argos language pack models with automatic English pivot)."""
     s = i18n.normalize_code(src_lang)
     d = i18n.normalize_code(dst_lang)
     if s == d:
         return lambda batch: list(batch)
+
+    # Prefer NLLB-200 universal high-quality model when installed and both languages are supported
+    nllb_dir = nllb_model_dir()
+    if nllb_dir is not None and bcp47_to_flores(s) and bcp47_to_flores(d):
+        return _load_nllb_translator(s, d, nllb_dir)
 
     mdir = model_dir_for(s, d)
     if mdir is not None:
@@ -726,21 +852,137 @@ def _sample_bg_rgb(bg_image, x0, top, x1, bottom, page_w, page_h):
     return (rs[mid] / 255.0, gs[mid] / 255.0, bs[mid] / 255.0)
 
 
+def _detect_font_style(words):
+    """Infer ``(family, bold, italic)`` from pdfplumber word ``fontname`` attributes."""
+    bold_hits = 0
+    italic_hits = 0
+    serif_hits = 0
+    mono_hits = 0
+    for w in words:
+        fn = str(w.get("fontname") or "").lower()
+        if any(k in fn for k in ("bold", "heavy", "black", "demi", "semibold", "medi")):
+            bold_hits += 1
+        if any(k in fn for k in ("italic", "oblique", "slant")):
+            italic_hits += 1
+        if any(k in fn for k in ("mono", "courier", "consolas", "menlo")):
+            mono_hits += 1
+        elif any(k in fn for k in ("times", "serif", "georgia", "garamond", "cambria", "mincho", "song")):
+            serif_hits += 1
+    half = max(1, len(words) // 2)
+    bold = bold_hits >= half
+    italic = italic_hits >= half
+    if mono_hits >= half:
+        family = "mono"
+    elif serif_hits >= half:
+        family = "serif"
+    else:
+        family = "sans"
+    return family, bold, italic
+
+
+def _detect_align(x0, x1, container_x0, container_x1, *, is_cell=False, lines=1):
+    """Detect ``left``, ``center``, or ``right`` alignment inside a cell or page."""
+    span_w = max(1.0, container_x1 - container_x0)
+    left_m = x0 - container_x0
+    right_m = container_x1 - x1
+    if is_cell:
+        if left_m > 4.0 and right_m > 4.0 and abs(left_m - right_m) <= max(4.0, span_w * 0.08):
+            return "center"
+        if right_m <= max(16.0, span_w * 0.12) and left_m > right_m + 10.0:
+            return "right"
+        return "left"
+    if lines == 1:
+        cx = (x0 + x1) / 2.0
+        page_cx = (container_x0 + container_x1) / 2.0
+        if abs(cx - page_cx) <= 14.0 and left_m > span_w * 0.12 and right_m > span_w * 0.12:
+            return "center"
+        if right_m <= 90.0 and x0 > container_x0 + span_w * 0.58 and (x1 - x0) < span_w * 0.35:
+            return "right"
+    return "left"
+
+
 def _extract_layout_blocks(plumber_page):
-    """Extract positioned text blocks ``{text, x0, top, x1, bottom, size, color, lines}``
-    from a ``pdfplumber`` page, preserving columns, table cells, headings, and font sizes."""
+    """Extract positioned text blocks from a ``pdfplumber`` page, respecting
+    detected table cells, columns, headings, font sizes, bold/italic styles,
+    and left/center/right alignment."""
     words = plumber_page.extract_words(
-        extra_attrs=["size", "non_stroking_color"],
+        extra_attrs=["size", "fontname", "non_stroking_color"],
         keep_blank_chars=False,
         use_text_flow=False,
     )
     if not words:
         return []
 
-    # 1. Group words into visual lines by vertical top coordinate
-    words.sort(key=lambda w: (round(float(w["top"]) / 2.5), float(w["x0"])))
-    raw_lines = []
+    page_w = float(plumber_page.width or 612.0)
+
+    # 1. Detect table cells so table text never merges across columns or bleeds borders
+    table_cells = []
+    try:
+        for tbl in plumber_page.find_tables() or ():
+            for cell in tbl.cells or ():
+                if cell and len(cell) == 4:
+                    cx0, ctop, cx1, cbottom = (float(v) for v in cell)
+                    if (cx1 - cx0) >= 8.0 and (cbottom - ctop) >= 6.0:
+                        table_cells.append((cx0, ctop, cx1, cbottom))
+    except Exception:  # noqa: BLE001
+        table_cells = []
+
+    cell_words = {}
+    free_words = []
     for w in words:
+        wx = (float(w["x0"]) + float(w["x1"])) / 2.0
+        wy = (float(w["top"]) + float(w["bottom"])) / 2.0
+        assigned = None
+        for ci, (cx0, ctop, cx1, cbottom) in enumerate(table_cells):
+            if cx0 - 1.0 <= wx <= cx1 + 1.0 and ctop - 1.0 <= wy <= cbottom + 1.0:
+                assigned = ci
+                break
+        if assigned is not None:
+            cell_words.setdefault(assigned, []).append(w)
+        else:
+            free_words.append(w)
+
+    blocks = []
+
+    # Build one strictly-bounded block per non-empty table cell
+    for ci, cwords in sorted(cell_words.items()):
+        cx0, ctop, cx1, cbottom = table_cells[ci]
+        cwords.sort(key=lambda w: (round(float(w["top"]) / 2.5), float(w["x0"])))
+        sizes = [max(4.0, float(w.get("size") or 10.0)) for w in cwords]
+        avg_size = sum(sizes) / len(sizes)
+        family, bold, italic = _detect_font_style(cwords)
+        wx0 = min(float(w["x0"]) for w in cwords)
+        wx1 = max(float(w["x1"]) for w in cwords)
+        wtop = min(float(w["top"]) for w in cwords)
+        wbot = max(float(w["bottom"]) for w in cwords)
+        line_count = max(1, int(round((wbot - wtop) / max(1.0, avg_size * 1.15))))
+        align = _detect_align(wx0, wx1, cx0, cx1, is_cell=True, lines=line_count)
+        blocks.append({
+            "text": " ".join(w["text"] for w in cwords),
+            "x0": max(cx0 + 2.0, wx0 if align == "left" else cx0 + 2.0),
+            "top": max(ctop + 1.0, wtop),
+            "x1": min(cx1 - 2.0, wx1 if align == "right" else cx1 - 2.0),
+            "bottom": min(cbottom - 1.0, max(wbot, cbottom - 1.0)),
+            "box_x0": cx0 + 2.0,
+            "box_x1": cx1 - 2.0,
+            "size": avg_size,
+            "color": _normalize_color(cwords[0].get("non_stroking_color")),
+            "family": family,
+            "bold": bold,
+            "italic": italic,
+            "align": align,
+            "lines": line_count,
+            "in_table": True,
+        })
+
+    if not free_words:
+        blocks.sort(key=lambda b: (b["top"], b["x0"]))
+        return blocks
+
+    # 2. Group non-table words into visual lines by vertical top coordinate
+    free_words.sort(key=lambda w: (round(float(w["top"]) / 2.5), float(w["x0"])))
+    raw_lines = []
+    for w in free_words:
         w_top = float(w["top"])
         w_size = max(4.0, float(w.get("size") or 10.0))
         if raw_lines and abs(w_top - raw_lines[-1]["top"]) <= max(3.0, raw_lines[-1]["size"] * 0.45):
@@ -748,7 +990,7 @@ def _extract_layout_blocks(plumber_page):
         else:
             raw_lines.append({"top": w_top, "size": w_size, "words": [w]})
 
-    # 2. Split each visual line on large horizontal gaps (separates columns & table cells)
+    # 3. Split each visual line on large horizontal gaps (separates columns)
     segments = []
     for ln in raw_lines:
         lwords = sorted(ln["words"], key=lambda w: float(w["x0"]))
@@ -768,34 +1010,45 @@ def _extract_layout_blocks(plumber_page):
     for seg in segments:
         sizes = [max(4.0, float(w.get("size") or 10.0)) for w in seg]
         avg_size = sum(sizes) / len(sizes)
+        family, bold, italic = _detect_font_style(seg)
+        sx0 = min(float(w["x0"]) for w in seg)
+        sx1 = max(float(w["x1"]) for w in seg)
         seg_objs.append({
             "text": " ".join(w["text"] for w in seg),
-            "x0": min(float(w["x0"]) for w in seg),
+            "x0": sx0,
             "top": min(float(w["top"]) for w in seg),
-            "x1": max(float(w["x1"]) for w in seg),
+            "x1": sx1,
             "bottom": max(float(w["bottom"]) for w in seg),
+            "box_x0": sx0,
+            "box_x1": sx1,
             "size": avg_size,
             "color": _normalize_color(seg[0].get("non_stroking_color")),
+            "family": family,
+            "bold": bold,
+            "italic": italic,
+            "align": _detect_align(sx0, sx1, 0.0, page_w, is_cell=False, lines=1),
             "lines": 1,
+            "in_table": False,
         })
 
-    # 3. Merge vertically adjacent line segments in the same column & font size into blocks
+    # 4. Merge vertically adjacent line segments in the same column & style into blocks
     seg_objs.sort(key=lambda s: (s["top"], s["x0"]))
-    blocks = []
+    free_blocks = []
     for seg in seg_objs:
         merged = False
         if not _BULLET_LINE_RE.match(seg["text"]):
-            for blk in reversed(blocks):
+            for blk in reversed(free_blocks):
                 v_gap = seg["top"] - blk["bottom"]
                 if v_gap > max(7.0, blk["size"] * 0.85):
                     continue
                 if v_gap < -blk["size"] * 0.35:
                     continue
                 same_size = abs(seg["size"] - blk["size"]) <= max(1.0, blk["size"] * 0.15)
-                same_left = abs(seg["x0"] - blk["x0"]) <= max(18.0, blk["size"] * 2.0)
+                # Allow typical first-line paragraph indent (up to 36pt) on line 1 -> line 2
+                left_tol = max(36.0, blk["size"] * 3.0) if blk["lines"] == 1 else max(18.0, blk["size"] * 2.0)
+                same_left = abs(seg["x0"] - blk["x0"]) <= left_tol
                 horiz_overlap = min(seg["x1"], blk["x1"]) > max(seg["x0"], blk["x0"])
                 blk_w = blk["x1"] - blk["x0"]
-                page_w = float(plumber_page.width or 612.0)
                 short_heading = blk["lines"] == 1 and blk_w < min(140.0, page_w * 0.28) and blk["text"][-1] not in ",;"
                 if same_size and same_left and horiz_overlap and not short_heading:
                     prev_text = blk["text"]
@@ -806,19 +1059,95 @@ def _extract_layout_blocks(plumber_page):
                         blk["text"] = prev_text + " " + nxt_text
                     blk["x0"] = min(blk["x0"], seg["x0"])
                     blk["x1"] = max(blk["x1"], seg["x1"])
+                    blk["box_x0"] = blk["x0"]
+                    blk["box_x1"] = blk["x1"]
                     blk["bottom"] = max(blk["bottom"], seg["bottom"])
                     blk["lines"] += 1
+                    blk["align"] = "left"
                     merged = True
                     break
         if not merged:
-            blocks.append(seg)
+            free_blocks.append(seg)
+
+    blocks.extend(free_blocks)
+    blocks.sort(key=lambda b: (b["top"], b["x0"]))
     return blocks
 
 
-def _make_layout_overlay(width, height, blocks, translated_texts, bg_image=None):
-    """Build a transparent PDF overlay page that covers each original text block
-    with its sampled background color and draws the translated text in-place
-    with original font size, color, and CJK-aware auto-fit wrapping."""
+def _strip_bt_et_ops(instructions):
+    """Filter out all PDF text blocks (``BT`` ... ``ET``) while preserving all
+    images, shapes, tables, colors, gradients, and graphics state operators."""
+    kept = []
+    in_text = False
+    for operands, operator in instructions:
+        op = str(operator)
+        if op == "BT":
+            in_text = True
+            continue
+        if op == "ET":
+            in_text = False
+            continue
+        if not in_text:
+            kept.append((operands, operator))
+    return kept
+
+
+def _strip_text_from_pdf(src_path, page_indices, password=None):
+    """Return a ``pypdf.PdfReader`` over a copy of ``src_path`` with all
+    ``BT ... ET`` text operators removed from ``page_indices`` (while keeping
+    all images, tables, borders, shadings, gradients, and forms intact), or
+    ``None`` if stripping fails."""
+    if not page_indices:
+        return None
+    try:
+        import pikepdf
+        from pypdf import PdfReader
+
+        with core.open_pikepdf(src_path, password) as pdf:
+            for idx in page_indices:
+                if idx < 0 or idx >= len(pdf.pages):
+                    continue
+                page = pdf.pages[idx]
+                ops = pikepdf.parse_content_stream(page)
+                kept = _strip_bt_et_ops(ops)
+                page.Contents = pdf.make_stream(pikepdf.unparse_content_stream(kept))
+                # Also strip text inside non-shared Form XObjects on this page
+                res = page.get("/Resources")
+                xobjs = res.get("/XObject") if res and "/XObject" in res else None
+                if xobjs:
+                    new_xobjs = None
+                    for name, ref in list(xobjs.items()):
+                        if isinstance(ref, pikepdf.Stream) and ref.get("/Subtype") == "/Form":
+                            try:
+                                fops = pikepdf.parse_content_stream(ref)
+                                fkept = _strip_bt_et_ops(fops)
+                                if len(fkept) != len(fops):
+                                    cloned = pdf.make_stream(pikepdf.unparse_content_stream(fkept))
+                                    for k, v in ref.items():
+                                        if k not in ("/Length", "/Filter", "/DecodeParms"):
+                                            cloned[k] = v
+                                    if new_xobjs is None:
+                                        new_xobjs = pikepdf.Dictionary(xobjs)
+                                    new_xobjs[name] = cloned
+                            except Exception:  # noqa: BLE001
+                                continue
+                    if new_xobjs is not None:
+                        new_res = pikepdf.Dictionary(res)
+                        new_res["/XObject"] = new_xobjs
+                        page["/Resources"] = new_res
+            buf = io.BytesIO()
+            pdf.save(buf)
+        buf.seek(0)
+        return PdfReader(buf)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _make_layout_overlay(width, height, blocks, translated_texts, bg_image=None, *, draw_bg=False):
+    """Build a transparent PDF overlay page that draws each translated block
+    in-place with original font size, bold/italic style, color, alignment, and
+    CJK-aware auto-fit wrapping. When ``draw_bg=True`` (fallback when content-
+    stream text stripping was unavailable), paints sampled background rects first."""
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(width, height))
 
@@ -827,31 +1156,53 @@ def _make_layout_overlay(width, height, blocks, translated_texts, bg_image=None)
         if not text:
             continue
         x0, top, x1, bottom = blk["x0"], blk["top"], blk["x1"], blk["bottom"]
+        box_x0 = blk.get("box_x0", x0)
+        box_x1 = blk.get("box_x1", x1)
         orig_size = max(5.5, float(blk["size"]))
         pad = min(2.0, orig_size * 0.18)
+        bg_rgb = _sample_bg_rgb(bg_image, x0, top, x1, bottom, width, height) if bg_image is not None else None
 
-        # Cover original text with sampled background color
-        bg_rgb = _sample_bg_rgb(bg_image, x0, top, x1, bottom, width, height)
-        rect_x = max(0.0, x0 - pad)
-        rect_y = max(0.0, height - bottom - pad)
-        rect_w = min(width - rect_x, (x1 - x0) + 2 * pad)
-        rect_h = min(height - rect_y, (bottom - top) + 2 * pad)
-        c.setFillColorRGB(*bg_rgb)
-        c.rect(rect_x, rect_y, rect_w, rect_h, stroke=0, fill=1)
+        if draw_bg:
+            cover_rgb = bg_rgb if bg_rgb is not None else (1.0, 1.0, 1.0)
+            rect_x = max(0.0, x0 - pad)
+            rect_y = max(0.0, height - bottom - pad)
+            rect_w = min(width - rect_x, (x1 - x0) + 2 * pad)
+            rect_h = min(height - rect_y, (bottom - top) + 2 * pad)
+            c.setFillColorRGB(*cover_rgb)
+            c.rect(rect_x, rect_y, rect_w, rect_h, stroke=0, fill=1)
 
-        # Allow single-line labels/headings to expand into free space on their right
-        avail_w = max(18.0, x1 - x0)
-        if blk["lines"] == 1:
-            right_limit = width - 18.0
-            for j, other in enumerate(blocks):
-                if j == idx:
-                    continue
-                if other["top"] < bottom and other["bottom"] > top and other["x0"] >= x1 - 2.0:
-                    right_limit = min(right_limit, other["x0"] - 6.0)
-            avail_w = max(avail_w, right_limit - x0)
+        # Compute available width: strictly cell-bounded inside tables;
+        # outside tables, single-line labels/headings may expand into free space.
+        avail_w = max(18.0, box_x1 - box_x0)
+        align = blk.get("align", "left")
+        if not blk.get("in_table") and blk["lines"] == 1:
+            if align == "center":
+                half_span = min((x0 + x1) / 2.0 - 18.0, width - 18.0 - (x0 + x1) / 2.0)
+                avail_w = max(avail_w, half_span * 2.0)
+            elif align == "right":
+                left_limit = 18.0
+                for j, other in enumerate(blocks):
+                    if j == idx:
+                        continue
+                    if other["top"] < bottom and other["bottom"] > top and other["x1"] <= x0 + 2.0:
+                        left_limit = max(left_limit, other["x1"] + 6.0)
+                avail_w = max(avail_w, x1 - left_limit)
+            else:
+                right_limit = width - 18.0
+                for j, other in enumerate(blocks):
+                    if j == idx:
+                        continue
+                    if other["top"] < bottom and other["bottom"] > top and other["x0"] >= x1 - 2.0:
+                        right_limit = min(right_limit, other["x0"] - 6.0)
+                avail_w = max(avail_w, right_limit - x0)
 
         avail_h = max(orig_size * 1.25, (bottom - top) + 2 * pad)
-        chosen_font = fonts.font_for(text)
+        chosen_font = fonts.font_for(
+            text,
+            family=blk.get("family", "sans"),
+            bold=bool(blk.get("bold", False)),
+            italic=bool(blk.get("italic", False)),
+        )
 
         # Auto-fit font size down gently until wrapped lines fit inside the block
         min_size = max(5.5, orig_size * 0.55)
@@ -861,19 +1212,24 @@ def _make_layout_overlay(width, height, blocks, translated_texts, bg_image=None)
             fit_size = max(min_size, fit_size * 0.9)
             wrapped = _wrap_text(text, chosen_font, fit_size, avail_w)
 
-        # Ensure readable contrast between text color and sampled background
         fg_rgb = blk["color"]
-        if abs(_luminance(fg_rgb) - _luminance(bg_rgb)) < 0.25:
+        if bg_rgb is not None and abs(_luminance(fg_rgb) - _luminance(bg_rgb)) < 0.25:
             fg_rgb = (0.0, 0.0, 0.0) if _luminance(bg_rgb) > 0.5 else (1.0, 1.0, 1.0)
 
         c.setFillColorRGB(*fg_rgb)
         c.setFont(chosen_font, fit_size)
         leading = fit_size * 1.2
         y = height - top - fit_size * 0.88
+        cx = (box_x0 + box_x1) / 2.0
         for line in wrapped:
             if y < max(4.0, height - bottom - pad - leading * 0.35):
                 break
-            c.drawString(x0, y, line)
+            if align == "center":
+                c.drawCentredString(cx, y, line)
+            elif align == "right":
+                c.drawRightString(box_x1, y, line)
+            else:
+                c.drawString(box_x0, y, line)
             y -= leading
 
     c.showPage()
@@ -935,7 +1291,7 @@ def translate_pdf(
         return {"mode": mode, "pages": len(pages_translated), "output": str(dst)}
 
     # Extract positioned layout blocks per page via pdfplumber so images, tables,
-    # borders, columns, font sizes, and colors stay intact.
+    # borders, columns, alignment, bold/italic styles, font sizes, and colors stay intact.
     pages_blocks = []
     try:
         import pdfplumber
@@ -960,7 +1316,13 @@ def translate_pdf(
         cursor += len(blks)
         pages_trans_blocks.append(chunk)
 
-    # Optional 72-dpi render for exact background-color matching under each text block
+    # Strip original BT..ET text operators from pages that have positioned blocks so
+    # zero ghost original text remains underneath and no opaque whiteout patches are needed.
+    block_page_indices = {i for i, blks in enumerate(pages_blocks) if blks}
+    stripped_reader = _strip_text_from_pdf(src, block_page_indices, password=password)
+    use_stripped = stripped_reader is not None and len(stripped_reader.pages) == len(reader.pages)
+
+    # Optional 72-dpi render for contrast checking / fallback background cover rects
     pdfium_doc = None
     try:
         import pypdfium2 as pdfium
@@ -982,9 +1344,10 @@ def translate_pdf(
                 spread.merge_page(orig_page)
                 if blks:
                     bg_img = _render_page_bg(pdfium_doc, idx)
-                    overlay = _make_layout_overlay(w, h, blks, trans_blks, bg_image=bg_img)
+                    overlay = _make_layout_overlay(w, h, blks, trans_blks, bg_image=bg_img, draw_bg=not use_stripped)
+                    base_right = stripped_reader.pages[idx] if use_stripped else orig_page
                     shift = Transformation().translate(w, 0)
-                    spread.merge_transformed_page(orig_page, shift)
+                    spread.merge_transformed_page(base_right, shift)
                     spread.merge_transformed_page(overlay, shift)
                 else:
                     raw_txt = (orig_page.extract_text() or "").strip()
@@ -997,15 +1360,16 @@ def translate_pdf(
                 writer.write(fh)
             return {"mode": mode, "pages": len(reader.pages), "output": str(dst)}
 
-        # in-place mode: overlay translated blocks directly onto the original pages
-        # (preserving images, tables, borders, colors, and layout) + translate annotations/fields
+        # in-place mode: overlay translated blocks onto text-stripped original pages
+        # (preserving images, tables, borders, colors, and layout with zero ghost text)
         for idx, (orig_page, blks, trans_blks) in enumerate(zip(reader.pages, pages_blocks, pages_trans_blocks)):
             w = float(orig_page.mediabox.width)
             h = float(orig_page.mediabox.height)
             if blks:
                 bg_img = _render_page_bg(pdfium_doc, idx)
-                overlay = _make_layout_overlay(w, h, blks, trans_blks, bg_image=bg_img)
-                attached = writer.add_page(orig_page)
+                overlay = _make_layout_overlay(w, h, blks, trans_blks, bg_image=bg_img, draw_bg=not use_stripped)
+                base_page = stripped_reader.pages[idx] if use_stripped else orig_page
+                attached = writer.add_page(base_page)
                 attached.merge_page(overlay)
             else:
                 raw_txt = (orig_page.extract_text() or "").strip()

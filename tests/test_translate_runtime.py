@@ -206,6 +206,41 @@ def test_layout_preserving_translation_keeps_images_columns_and_styles(tmp_path)
     assert has_image, "Original embedded image was lost during in-place translation!"
     text = page.extract_text() or ""
     assert "季度总结" in text and "左栏第一行段落" in text and "右栏第一行段落" in text
+    # Original English text must be stripped from the content stream (no ghost text on Copy/Find!)
+    assert "Quarterly Summary" not in text and "Left column" not in text
+    assert heading["bold"] is True
+
+
+def test_table_cells_and_centered_title_layout(tmp_path):
+    from reportlab.pdfgen import canvas
+    import pdfplumber
+
+    src = tmp_path / "table_and_title.pdf"
+    c = canvas.Canvas(str(src), pagesize=(612, 792))
+    c.setFont("Helvetica-Bold", 16)
+    c.drawCentredString(306, 740, "Centered Report Title")
+    # Draw a 2x2 bordered table
+    c.setStrokeColorRGB(0, 0, 0)
+    c.rect(60, 620, 480, 60, stroke=1, fill=0)
+    c.line(300, 620, 300, 680)
+    c.line(60, 650, 540, 650)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(70, 660, "Item")
+    c.drawString(310, 660, "Price")
+    c.setFont("Helvetica", 10)
+    c.drawString(70, 630, "Widget")
+    c.drawRightString(530, 630, "$99.00")
+    c.showPage()
+    c.save()
+
+    with pdfplumber.open(str(src)) as pdoc:
+        blocks = translate._extract_layout_blocks(pdoc.pages[0])
+    title = next(b for b in blocks if "Centered Report Title" in b["text"])
+    assert title["align"] == "center" and title["bold"] is True
+    table_blocks = [b for b in blocks if b.get("in_table")]
+    assert len(table_blocks) == 4
+    price_val = next(b for b in table_blocks if "$99.00" in b["text"])
+    assert price_val["align"] == "right"
 
 
 def test_neural_entity_protection_and_verbatim_bypass():
@@ -246,6 +281,43 @@ def test_neural_entity_fallback_when_sentinel_dropped():
     dropping_neural._neural = True
     res = translate.translate_texts(["Email support@example.com today"], "en", "zh-Hans", translator=dropping_neural)
     assert "support@example.com" in res[0] and "电邮" in res[0] and "今天" in res[0]
+
+
+def test_nllb200_mapping_and_catalog_entry(tmp_path, monkeypatch):
+    from pdfmanager import appdata
+
+    monkeypatch.setattr(appdata, "data_dir", lambda: tmp_path / "appdata")
+    assert translate.bcp47_to_flores("en") == "eng_Latn"
+    assert translate.bcp47_to_flores("zh-Hans") == "zho_Hans"
+    assert translate.bcp47_to_flores("zh-Hant") == "zho_Hant"
+    assert translate.bcp47_to_flores("es") == "spa_Latn"
+    assert translate.bcp47_to_flores("ja") == "jpn_Jpan"
+    assert translate.nllb_model_dir() is None
+
+    catalog = i18n.list_catalog_packs(fetch=False)
+    assert catalog["packs"] and catalog["packs"][0]["code"] == "nllb-200"
+    assert catalog["packs"][0]["installed"] is False
+
+    # Simulate installed NLLB-200 model
+    mdir = i18n.packs_dir() / "nllb-200" / "models" / "nllb-200"
+    mdir.mkdir(parents=True)
+    (mdir / "model.bin").write_bytes(b"fake")
+    (mdir / "sentencepiece.bpe.model").write_bytes(b"fake")
+    assert translate.nllb_model_dir() == mdir
+
+    catalog2 = i18n.list_catalog_packs(fetch=False)
+    assert catalog2["packs"][0]["installed"] is True
+
+    # _load_offline_translator prefers NLLB-200 automatically when installed
+    called = []
+    monkeypatch.setattr(
+        translate,
+        "_load_nllb_translator",
+        lambda s, d, p: (called.append((s, d, p)) or (lambda batch: batch)),
+    )
+    translate._load_offline_translator("en", "zh-Hans")
+    assert called == [("en", "zh-Hans", mdir)]
+
 
 
 
