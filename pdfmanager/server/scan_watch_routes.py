@@ -228,6 +228,26 @@ class ScanWatchRoutesMixin:
             changes["ocr_quality"] = None if q == "standard" else q
         if "ocr_gpu" in data:
             changes["ocr_gpu"] = True if data["ocr_gpu"] else None
+        if "translate_engine" in data:
+            eng = str(data["translate_engine"] or "offline").strip().lower()
+            if eng not in ("offline", "llm"):
+                raise UserError(f"unknown translation engine {eng!r}")
+            changes["translate_engine"] = None if eng == "offline" else eng
+        if "translate_api_url" in data:
+            url = str(data["translate_api_url"] or "").strip().rstrip("/")
+            if url:
+                parsed = urllib.parse.urlsplit(url)
+                host = (parsed.hostname or "").lower()
+                is_local = host in ("localhost", "127.0.0.1", "::1")
+                if parsed.scheme not in ("https", "http") or (parsed.scheme == "http" and not is_local):
+                    raise UserError("translation API URL must use https:// (or http:// for localhost)")
+            changes["translate_api_url"] = url or None
+        if "translate_model" in data:
+            changes["translate_model"] = str(data["translate_model"] or "").strip() or None
+        if data.get("translate_api_key"):
+            changes["translate_api_key"] = str(data["translate_api_key"]).strip()
+        if data.get("clear_translate_key"):
+            changes["translate_api_key"] = ""
         update.save_settings(**changes)
         if "remember" in data:
             privacy.set_remembering(bool(data["remember"]))  # (turning it off clears what's kept)

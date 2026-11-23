@@ -73,7 +73,11 @@ def public_settings():
             "check": data.get("check_updates", True), "how": how_installed(),
             "ocr_quality": data.get("ocr_quality") or "standard",
             "ocr_gpu": bool(data.get("ocr_gpu", False)),
-            "ocr_gpu_supported": sys.platform == "win32"}
+            "ocr_gpu_supported": sys.platform == "win32",
+            "translate_engine": data.get("translate_engine") or "offline",
+            "translate_api_url": data.get("translate_api_url") or "http://localhost:11434/v1",
+            "translate_model": data.get("translate_model") or "qwen2.5:7b",
+            "translate_key_set": bool(data.get("translate_api_key"))}
 
 
 # ---- checking -------------------------------------------------------------------------

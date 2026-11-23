@@ -23,6 +23,16 @@ async function openSettings() {
   $("set-ocr-quality").value = s.ocr_quality || "standard";
   $("ocr-gpu-wrap").hidden = !s.ocr_gpu_supported;
   $("set-ocr-gpu").checked = !!s.ocr_gpu;
+  if ($("set-translate-engine")) {
+    const eng = s.translate_engine || "offline";
+    $("set-translate-engine").value = eng;
+    $("set-translate-llm-wrap").hidden = eng !== "llm";
+    $("set-translate-url").value = s.translate_api_url || "http://localhost:11434/v1";
+    $("set-translate-model").value = s.translate_model || "qwen2.5:7b";
+    $("set-translate-key").value = "";
+    $("set-translate-key-state").textContent = s.translate_key_set ? "· saved" : "";
+    $("set-translate-key-clear").hidden = !s.translate_key_set;
+  }
   showPrivacy(s);
   showBehind(s);
   updateStatus("behind-status", "");
@@ -310,6 +320,40 @@ $("set-ocr-gpu").addEventListener("change", async (e) => {
     await jsonApi("/api/settings", { ocr_gpu: e.target.checked });
   } catch (err) { updateStatus("set-status", err.message, true); }
 });
+if ($("set-translate-engine")) {
+  $("set-translate-engine").addEventListener("change", async (e) => {
+    const eng = e.target.value;
+    $("set-translate-llm-wrap").hidden = eng !== "llm";
+    try {
+      await jsonApi("/api/settings", { translate_engine: eng });
+      updateStatus("lang-status", eng === "llm" ? "Smart AI translation enabled." : "Built-in offline translation selected.");
+    } catch (err) { updateStatus("lang-status", err.message, true); }
+  });
+  $("set-translate-save").addEventListener("click", async () => {
+    const payload = {
+      translate_engine: $("set-translate-engine").value,
+      translate_api_url: $("set-translate-url").value.trim(),
+      translate_model: $("set-translate-model").value.trim(),
+    };
+    const key = $("set-translate-key").value.trim();
+    if (key) payload.translate_api_key = key;
+    try {
+      const s = await jsonApi("/api/settings", payload);
+      $("set-translate-key").value = "";
+      $("set-translate-key-state").textContent = s.translate_key_set ? "· saved" : "";
+      $("set-translate-key-clear").hidden = !s.translate_key_set;
+      updateStatus("lang-status", "AI translation settings saved.");
+    } catch (err) { updateStatus("lang-status", err.message, true); }
+  });
+  $("set-translate-key-clear").addEventListener("click", async () => {
+    try {
+      await jsonApi("/api/settings", { clear_translate_key: true });
+      $("set-translate-key-state").textContent = "";
+      $("set-translate-key-clear").hidden = true;
+      updateStatus("lang-status", "AI translation API key removed.");
+    } catch (err) { updateStatus("lang-status", err.message, true); }
+  });
+}
 async function saveSettings() {
   const data = { check: $("set-check").checked, repo: $("set-repo").value.trim(),
                  ocr_quality: $("set-ocr-quality").value, ocr_gpu: $("set-ocr-gpu").checked };

@@ -171,6 +171,24 @@
       <ul class="watch-list" id="set-pack-catalog" aria-label="Downloadable language packs" style="max-height:220px;overflow:auto;"></ul>
     </div>
     <ul class="watch-list" id="set-packs-list" aria-label="Installed language packs"></ul>
+    <label class="dlg-field" style="margin-top:8px;"><span>PDF translation engine</span>
+      <select id="set-translate-engine">
+        <option value="offline">Built-in offline (NLLB-200 / Language Packs)</option>
+        <option value="llm">Smart AI (Local Ollama / LM Studio or OpenAI-compatible API)</option>
+      </select></label>
+    <div id="set-translate-llm-wrap" hidden style="margin:6px 0 8px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;">
+      <p class="dlg-hint" style="margin-top:0;">Context-aware AI translation. Works 100% offline &amp; free with local <strong>Ollama</strong> (<code>http://localhost:11434/v1</code>, e.g. <code>qwen2.5:7b</code>) or any OpenAI-compatible HTTPS API.</p>
+      <label class="dlg-field"><span>Endpoint URL</span>
+        <input type="text" id="set-translate-url" placeholder="http://localhost:11434/v1" autocomplete="off"></label>
+      <label class="dlg-field"><span>Model name</span>
+        <input type="text" id="set-translate-model" placeholder="qwen2.5:7b" autocomplete="off"></label>
+      <label class="dlg-field"><span>API key (optional for local Ollama) <em id="set-translate-key-state"></em></span>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input type="password" id="set-translate-key" placeholder="Leave blank for local Ollama / LM Studio" autocomplete="off" style="flex:1;">
+          <button type="button" class="btn secondary" id="set-translate-key-clear" hidden>Clear</button>
+        </div></label>
+      <button type="button" class="btn secondary" id="set-translate-save" style="margin-top:4px;">Save AI translation settings</button>
+    </div>
     <p class="dlg-status" id="lang-status" aria-live="polite"></p>
     <h3>OCR (Make searchable)</h3>
     <label class="dlg-field"><span>Reading accuracy</span>

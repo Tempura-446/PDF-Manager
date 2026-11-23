@@ -676,6 +676,41 @@ def _http_download_to_file(url, dest_path, *, timeout=600):
         raise core.PdfManagerError(f"could not reach {url}: {exc}") from None
 
 
+def _http_post_json(url, payload, *, headers=None, timeout=180):
+    """POST JSON ``payload`` to ``url`` and return parsed JSON response.
+    Allows ``http://`` only for loopback hosts (local Ollama / LM Studio);
+    remote hosts require ``https://`` and pass ``policy.check_network_allowed``."""
+    import urllib.parse
+    from pdfmanager import policy
+
+    parsed = urllib.parse.urlsplit(str(url or ""))
+    host = (parsed.hostname or "").lower()
+    is_local = host in ("localhost", "127.0.0.1", "::1")
+    if parsed.scheme not in ("https", "http") or (parsed.scheme == "http" and not is_local):
+        raise core.PdfManagerError(f"refusing insecure AI translation URL: {url!r}")
+    if not is_local:
+        try:
+            policy.check_network_allowed("AI translation")
+        except policy.PolicyError as exc:
+            raise core.PdfManagerError(str(exc)) from None
+    body = json.dumps(payload).encode("utf-8")
+    req_headers = {"Content-Type": "application/json", "User-Agent": "ZPDF", **(headers or {})}
+    req = urllib.request.Request(url, data=body, headers=req_headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="ignore")[:240]
+        except OSError:
+            pass
+        raise core.PdfManagerError(f"AI translation API failed (HTTP {exc.code}): {detail or exc.reason}") from None
+    except (OSError, ValueError) as exc:
+        hint = " (is Ollama / LM Studio running?)" if is_local else ""
+        raise core.PdfManagerError(f"could not reach AI translation endpoint {url}{hint}: {exc}") from None
+
+
 def _download_and_install_nllb():
     """Download Meta NLLB-200-distilled-600M (CTranslate2 int8) into ``<packs_dir>/nllb-200/``."""
     pack_dest = packs_dir() / NLLB_PACK_CODE
