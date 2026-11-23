@@ -80,6 +80,19 @@ def open_pdf(path, password=None):
     return reader
 
 
+def open_pikepdf(path, password=None, **kwargs):
+    """Open a PDF with pikepdf without triggering a UserWarning when a
+    password is supplied for an unencrypted file."""
+    import pikepdf
+
+    try:
+        return pikepdf.open(str(path), **kwargs)
+    except pikepdf.PasswordError:
+        if not password:
+            raise
+        return pikepdf.open(str(path), password=password, **kwargs)
+
+
 def keep_size(pdf):
     """Before qpdf (pikepdf) saves a file whose trailer was lost and rebuilt:
     qpdf only fills in /Size when the trailer has one, and pypdf can't copy
@@ -94,10 +107,8 @@ def _mended(path, password):
     file pypdf can't open: one cut short, or whose cross-reference table is
     damaged or missing. Viewers open such files, so the tools do too. None
     when qpdf can't make sense of it either."""
-    import pikepdf
-
     try:
-        with pikepdf.open(str(path), password=password or "") as pdf:
+        with open_pikepdf(path, password) as pdf:
             if not len(pdf.pages):
                 return None
             buf = io.BytesIO()

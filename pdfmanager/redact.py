@@ -1133,7 +1133,7 @@ def check_redacted(path, terms=(), patterns=(), case_sensitive=False, whole_word
         try:
             import pikepdf
 
-            with pikepdf.open(path, password=password or "") as pdf:
+            with core.open_pikepdf(path, password) as pdf:
                 for obj in pdf.objects:
                     if not isinstance(obj, pikepdf.Stream) or obj.get("/Subtype") == "/Image" \
                             or obj.get("/Type") in ("/EmbeddedFile", "/Metadata", "/XRef", "/ObjStm"):
@@ -1170,7 +1170,8 @@ def check_redacted(path, terms=(), patterns=(), case_sensitive=False, whole_word
     checked.append("earlier versions")
     before_prev = len(found)
     try:
-        raw = open(path, "rb").read()
+        with open(path, "rb") as fh:
+            raw = fh.read()
         if raw.count(b"%%EOF") > 1 or "/Prev" in reader.trailer:
             note("earlier versions kept in the file", "what was there before the last save")
         checks["earlier_versions"] = "findings" if len(found) > before_prev else "passed"

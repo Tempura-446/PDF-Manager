@@ -51,7 +51,7 @@ def ink(path, box):
     height = page.get_height()
     x0, y0, x1, y1 = box
     crop = image.crop((int(x0 * 2), int((height - y1) * 2), int(x1 * 2), int((height - y0) * 2)))
-    data = list(crop.getdata())
+    data = crop.tobytes()
     return sum(1 for v in data if v < 200) / max(1, len(data))
 
 
