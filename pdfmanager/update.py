@@ -336,21 +336,28 @@ def install(python=None, notes=None, *, allow_downgrade=False):
     with tempfile.TemporaryDirectory(prefix="pdfm-update-") as tmp:
         project = _extract(data, tmp)
         progress.say(f"Installing version {version}…")
-        # The app brings OCR along, so a copy installed before it was built in
-        # gets it with the update; a bare library install stays bare.
-        extra = "[app,ocr]" if _has_pywebview() else ""
+        # The app brings OCR and offline translation along, so an existing copy
+        # gets both runtimes with the update; a bare library install stays bare.
+        extra = "[app,ocr,translate]" if _has_pywebview() else ""
         proc = _pip_install(python, f"{project}{extra}")
         if proc.returncode != 0 and extra and _NO_BUILD.search(proc.stderr or proc.stdout or ""):
-            # ONNX Runtime has no build for every Python (none for 3.15 when it
-            # came out): better ZPDF without its OCR engine than no update.
-            progress.say("The OCR engine has no version for this Python; installing without it…")
-            proc = _pip_install(python, f"{project}[app]")
+            progress.say("An optional runtime has no version for this Python; retrying without offline translation…")
+            proc = _pip_install(python, f"{project}[app,ocr]")
             if proc.returncode == 0 and notes is not None:
                 notes.append(
-                    f"It was installed without the built-in OCR engine, which has no version for Python "
-                    f"{sys.version_info.major}.{sys.version_info.minor} yet. To get it back, download ZPDF "
-                    "from its releases page and run Install ZPDF.cmd once: it moves ZPDF to a Python the "
-                    "engine supports.")
+                    f"It was installed without the offline translation runtime (ctranslate2/sentencepiece), "
+                    f"which has no version for Python {sys.version_info.major}.{sys.version_info.minor} yet.")
+            elif proc.returncode != 0 and _NO_BUILD.search(proc.stderr or proc.stdout or ""):
+                # ONNX Runtime has no build for every Python (none for 3.15 when it
+                # came out): better ZPDF without its OCR engine than no update.
+                progress.say("The OCR engine has no version for this Python; installing without it…")
+                proc = _pip_install(python, f"{project}[app]")
+                if proc.returncode == 0 and notes is not None:
+                    notes.append(
+                        f"It was installed without the built-in OCR engine, which has no version for Python "
+                        f"{sys.version_info.major}.{sys.version_info.minor} yet. To get it back, download ZPDF "
+                        "from its releases page and run Install ZPDF.cmd once: it moves ZPDF to a Python the "
+                        "engine supports.")
         if proc.returncode != 0:
             tail = "\n".join((proc.stderr or proc.stdout).strip().splitlines()[-6:])
             raise core.PdfManagerError(f"installing the update failed:\n{tail}")

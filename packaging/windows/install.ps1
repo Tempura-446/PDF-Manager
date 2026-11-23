@@ -254,7 +254,13 @@ if ($lockPython -and ($venvVersion -eq $lockPython)) {
 } else {
     if ($lockPython) { Say "The pinned packages are for Python $lockPython; installing the newest versions for Python $venvVersion" }
     & $venvPython -m pip install --disable-pip-version-check $PipSays --upgrade pip
-    & $venvPython -m pip install --disable-pip-version-check $PipSays --upgrade "$source[app,ocr]"
+    & $venvPython -m pip install --disable-pip-version-check $PipSays --upgrade "$source[app,ocr,translate]"
+    if ($LASTEXITCODE -ne 0) {
+        # If the offline translation runtime has no wheel for this Python yet,
+        # retry with the built-in OCR engine before dropping to bare [app].
+        Say "That didn't work; trying once more without the offline translation runtime..."
+        & $venvPython -m pip install --disable-pip-version-check $PipSays --upgrade "$source[app,ocr]"
+    }
     if ($LASTEXITCODE -ne 0) {
         # Most likely the OCR engine has no build for this Python: better ZPDF
         # without it (OCR then uses Tesseract, if installed) than no ZPDF.

@@ -36,7 +36,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "packaging" / "windows" / "requirements-lock.txt"
-EXTRAS = "app,ocr"  # what install.ps1 installs
+EXTRAS = "app,ocr,translate"  # what install.ps1 installs
 BUILD = ["setuptools>=70.1"]  # builds ZPDF itself (pyproject.toml), wheels included
 
 

@@ -1051,18 +1051,17 @@ def test_update_install(updates, tmp_path, monkeypatch):
 
     def fake_run(cmd, **kw):
         ran.append(cmd)
-        assert (Path(cmd[-1].replace("[app,ocr]", "")) / "pyproject.toml").exists()
+        assert (Path(cmd[-1].replace("[app,ocr,translate]", "")) / "pyproject.toml").exists()
         return type("Done", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
     monkeypatch.setattr(update.subprocess, "run", fake_run)
     assert update.install(python="py") == "9.0.0"
     assert ran[0][:6] == ["py", "-I", "-m", "pip", "install", "--upgrade"]
-    assert ran[0][-1].split("Tempura-446-PDF-Manager-abc123")[1] in ("", "[app,ocr]")
-    # The app (it has the window library) takes OCR with it: a copy from the
-    # 0.13 installer has no engine yet.
+    assert ran[0][-1].split("Tempura-446-PDF-Manager-abc123")[1] in ("", "[app,ocr,translate]")
+    # The app (it has the window library) takes OCR and translation with it.
     monkeypatch.setattr(update, "_has_pywebview", lambda: True)
     update.install(python="py")
-    assert ran[-1][-1].endswith("[app,ocr]")
+    assert ran[-1][-1].endswith("[app,ocr,translate]")
     monkeypatch.setattr(update.subprocess, "run", lambda cmd, **kw: type(
         "Failed", (), {"returncode": 1, "stdout": "", "stderr": "ERROR: no space left"})())
     with pytest.raises(core.PdfManagerError, match="no space left"):
@@ -1136,14 +1135,14 @@ def test_update_installs_the_release_after_checking_it(updates, monkeypatch):
     ran = []
 
     def fake_run(cmd, **kw):
-        project = Path(cmd[-1].replace("[app,ocr]", ""))
+        project = Path(cmd[-1].replace("[app,ocr,translate]", ""))
         assert (project / "pyproject.toml").exists() and project.name == "ZPDF-9.0.0"
         ran.append(cmd)
         return type("Done", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
     monkeypatch.setattr(update.subprocess, "run", fake_run)
     assert update.install(python="py") == "9.0.0"
-    assert ran and ran[-1][-1].endswith("[app,ocr]")
+    assert ran and ran[-1][-1].endswith("[app,ocr,translate]")
     # a download whose checksum doesn't match the published one is refused
     github.release_sha = "0" * 64
     ran.clear()
@@ -1153,9 +1152,9 @@ def test_update_installs_the_release_after_checking_it(updates, monkeypatch):
 
 
 def test_an_update_installs_without_ocr_when_this_python_has_no_engine(updates, monkeypatch):
-    """ONNX Runtime has no build for every Python (none for 3.15 when it came
-    out): the update is installed without the OCR engine, and says so,
-    rather than not at all."""
+    """ONNX Runtime / CTranslate2 have no build for every Python (none for 3.15
+    when it came out): the update falls back from [app,ocr,translate] to
+    [app,ocr] and then [app], and says so, rather than failing completely."""
     update, github = updates
     github.release_zip = _release_zip()
     monkeypatch.setattr(update, "how_installed", lambda: "pip")
@@ -1164,7 +1163,7 @@ def test_an_update_installs_without_ocr_when_this_python_has_no_engine(updates, 
 
     def fake_run(cmd, **kw):
         ran.append(cmd[-1])
-        if cmd[-1].endswith("[app,ocr]"):
+        if cmd[-1].endswith("[app,ocr,translate]") or cmd[-1].endswith("[app,ocr]"):
             return type("Failed", (), {"returncode": 1, "stdout": "", "stderr":
                 "ERROR: Could not find a version that satisfies the requirement onnxruntime>=1.17 "
                 "(from pdf-manager[app,ocr]) (from versions: none)\n"
@@ -1174,7 +1173,7 @@ def test_an_update_installs_without_ocr_when_this_python_has_no_engine(updates, 
     monkeypatch.setattr(update.subprocess, "run", fake_run)
     notes = []
     assert update.install(python="py", notes=notes) == "9.0.0"
-    assert ran[0].endswith("[app,ocr]") and ran[1].endswith("[app]")
+    assert ran[0].endswith("[app,ocr,translate]") and ran[1].endswith("[app,ocr]") and ran[2].endswith("[app]")
     assert notes and "OCR" in notes[0] and "Install ZPDF.cmd" in notes[0]
     assert f"{sys.version_info.major}.{sys.version_info.minor}" in notes[0]
     # any other failure still stops the update

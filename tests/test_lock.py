@@ -57,7 +57,7 @@ def test_the_file_says_which_python_it_is_for_as_install_ps1_reads_it():
     pattern = re.search(r"-match '(\^# python: [^']+)'", INSTALL_PS1.read_text(encoding="utf-8-sig")).group(1)
     pattern = pattern.replace("\\\\", "\\")
     assert [m.group(1) for line in text.splitlines()[:10] if (m := re.match(pattern, line))] == ["3.13"]
-    assert lock.EXTRAS == "app,ocr" and any(b.startswith("setuptools") for b in lock.BUILD)
+    assert lock.EXTRAS == "app,ocr,translate" and any(b.startswith("setuptools") for b in lock.BUILD)
 
 
 def test_installer_uses_the_pinned_packages_only_when_they_are_there():
@@ -72,7 +72,7 @@ def test_installer_uses_the_pinned_packages_only_when_they_are_there():
     assert "--no-build-isolation --no-index" in branch  # ZPDF itself: nothing fetched
     # Without the file, today's installation as before.
     rest = text[text.index("} else {", text.index("$lockPython -and")):]
-    assert '"$source[app,ocr]"' in rest and '"$source[app]"' in rest
+    assert '"$source[app,ocr,translate]"' in rest and '"$source[app,ocr]"' in rest and '"$source[app]"' in rest
 
 
 def test_release_zip_carries_the_file():

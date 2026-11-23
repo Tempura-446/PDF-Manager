@@ -142,22 +142,23 @@ def test_installer_parses():
 
 
 def test_installer_installs_the_app_with_ocr_and_adds_ocrmypdf_from_the_tesseract_extra():
-    """ZPDF is installed with its built-in OCR engine ([app,ocr]); the optional
-    step adds only OCRmyPDF (ZPDF isn't built again), in the version
-    pyproject.toml's "tesseract" extra names."""
+    """ZPDF is installed with its built-in OCR and offline translation engines
+    ([app,ocr,translate]); the optional step adds only OCRmyPDF (ZPDF isn't
+    built again), in the version pyproject.toml's "tesseract" extra names."""
     text = script()
     pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
     extra = re.search(r'^tesseract = \[([^\]]*)\]', pyproject, re.M).group(1)  # (tomllib is 3.11+)
-    assert re.search(r'pip install [^\n]*"\$source\[app,ocr\]"', text)
+    assert re.search(r'pip install [^\n]*"\$source\[app,ocr,translate\]"', text)
     wanted = re.findall(r'pip install [^\n]*"(ocrmypdf[^"]*)"', text)
     assert wanted and [f'"{w}"' for w in wanted] == re.findall(r'"ocrmypdf[^"]*"', extra)
 
 
 def test_build_collects_the_ocr_engine():
-    """The standalone app bundles the built-in engine: rapidocr (with its
-    models) and onnxruntime (with its shared libraries)."""
+    """The standalone app bundles the built-in OCR engine (rapidocr + onnxruntime)
+    and offline translation runtime (ctranslate2 + sentencepiece)."""
     build = (Path(__file__).resolve().parents[1] / "packaging" / "build_app.py").read_text(encoding="utf-8")
     assert '"--collect-all", "rapidocr"' in build and '"--collect-all", "onnxruntime"' in build
+    assert '"--collect-all", "ctranslate2"' in build and '"--collect-all", "sentencepiece"' in build
 
 
 def test_installer_picks_a_python_the_ocr_engine_supports():
@@ -175,11 +176,12 @@ def test_installer_picks_a_python_the_ocr_engine_supports():
 
 
 def test_installer_finishes_without_ocr_when_it_cant_be_installed():
-    """If the OCR packages have no build for this Python, ZPDF is installed
-    without them (it works, with OCR from Tesseract if that's there) rather
-    than not at all."""
+    """If optional native packages have no build for this Python, ZPDF falls
+    back from [app,ocr,translate] to [app,ocr] and then [app] rather than
+    failing completely."""
     text = script()
-    with_ocr = text.index('"$source[app,ocr]"')
+    with_all = text.index('"$source[app,ocr,translate]"')
+    with_ocr = text.index('"$source[app,ocr]"', with_all)
     without = text.index('"$source[app]"', with_ocr)
-    failure = text.index('throw "Installing ZPDF\'s packages failed', with_ocr)
-    assert with_ocr < without < failure
+    failure = text.index('throw "Installing ZPDF\'s packages failed', without)
+    assert with_all < with_ocr < without < failure
