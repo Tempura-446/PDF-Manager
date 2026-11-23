@@ -4,6 +4,28 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.61.7
+
+Major offline PDF translation upgrade: layout preservation, fluent CJK/neural quality, BPE tokenizer support, and one-click language pack downloads.
+
+- **Layout-preserving PDF translation (`in-place` and `side-by-side`).**
+  Original pages stay intact — preserving images, logos, tables, borders,
+  colored banners, multi-column layouts, and heading font sizes — while
+  translated blocks are overlaid in-place with sampled background colors,
+  contrast checks, and CJK-aware auto-fit wrapping.
+- **Major neural translation quality fix.** Eliminated `__ZTOK__` placeholder
+  hallucinations on neural MT models, stripped leaked SentencePiece `▁`
+  markers, added smart PDF paragraph/heading reflow, upgraded CTranslate2
+  decoding (`beam_size=4`, `replace_unknowns=True`, `no_repeat_ngram_size=4`),
+  and replaced ASCII-only wrapping with CJK-aware line wrapping.
+- **Inline 1-click language pack download on the Translate PDF page.**
+  Translating to a language whose pack isn't downloaded yet now offers a
+  **Download pack (…) & translate** button directly on the page.
+- **Automatic runtime self-healing & Argos 1.9 BPE support.** Automatically
+  installs `ctranslate2` + `sentencepiece` when missing in non-frozen installs
+  (respecting Offline mode and enterprise policies) and adds built-in
+  subword-nmt `bpe.model` tokenizer support (e.g. Spanish → English).
+
 ## 0.61.6
 
 Offline translation runtime fix and codebase solidification.
