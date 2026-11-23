@@ -208,3 +208,44 @@ def test_layout_preserving_translation_keeps_images_columns_and_styles(tmp_path)
     assert "季度总结" in text and "左栏第一行段落" in text and "右栏第一行段落" in text
 
 
+def test_neural_entity_protection_and_verbatim_bypass():
+    called_with = []
+
+    def fake_neural(batch):
+        called_with.extend(batch)
+        return [s.replace("Contact", "联系").replace("or visit", "或访问") for s in batch]
+
+    fake_neural._neural = True
+
+    inputs = [
+        "support@example.com",
+        "$1,250.00",
+        "(555) 123-4567",
+        "2026-12-31",
+        "INV-2026-118",
+        "Contact support@example.com or visit https://example.com.",
+    ]
+    out = translate.translate_texts(inputs, "en", "zh-Hans", translator=fake_neural)
+    # First 5 pure-data blocks bypass the neural model completely
+    assert out[:5] == inputs[:5]
+    assert len(called_with) == 1
+    assert "910001" in called_with[0] and "910002" in called_with[0]
+    assert out[5] == "联系 support@example.com 或访问 https://example.com."
+
+
+def test_neural_entity_fallback_when_sentinel_dropped():
+    def dropping_neural(batch):
+        out = []
+        for s in batch:
+            if "910001" in s:
+                out.append("联系丢失了")  # simulates model dropping sentinel
+            else:
+                out.append(s.replace("Email", "电邮").replace("today", "今天"))
+        return out
+
+    dropping_neural._neural = True
+    res = translate.translate_texts(["Email support@example.com today"], "en", "zh-Hans", translator=dropping_neural)
+    assert "support@example.com" in res[0] and "电邮" in res[0] and "今天" in res[0]
+
+
+

@@ -389,12 +389,106 @@ def _load_offline_translator(src_lang, dst_lang):
     )
 
 
+# Entities protected during neural translation using collision-free numeric sentinels
+# (URLs, emails, phone numbers, reference codes, ISO dates, currency & formatted numbers).
+# Plain small integers / years (e.g. "December 31, 2026", "3 items") are left unmasked so
+# the neural model translates dates and counts into natural target-language grammar.
+_NEURAL_PROTECT_RE = re.compile(
+    r"(?:"
+    r"https?://[^\s<>()\"']+[^\s<>()\"'.,;:!?]"
+    r"|www\.[^\s<>()\"']+[^\s<>()\"'.,;:!?]"
+    r"|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    r"|(?:\+?\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.-]\d{3,4}[\s.-]\d{3,4}"
+    r"|\b[A-Z]{2,}(?:-[A-Z0-9]+){1,4}\b"
+    r"|\b\d{4}-\d{2}-\d{2}\b"
+    r"|(?:[$€£¥]\s?\d[\d,]*(?:\.\d+)?)"
+    r"|\b\d{1,3}(?:,\d{3})+(?:\.\d+)?%?"
+    r")"
+)
+_PROSE_WORD_RE = re.compile(r"[A-Za-z\u00c0-\u024f\u0400-\u04ff\u0600-\u06ff]{2,}|[\u3040-\u9fff\uac00-\ud7af]")
+
+
+def _is_verbatim_block(text):
+    """Return True when ``text`` contains only non-translatable data (numbers,
+    currency, dates, emails, URLs, phone numbers, codes, punctuation)."""
+    stripped = _NEURAL_PROTECT_RE.sub(" ", text)
+    return _PROSE_WORD_RE.search(stripped) is None
+
+
+def _protect_neural_entities(text):
+    """Replace emails, URLs, phone numbers, codes, ISO dates, and currency with
+    collision-free 6-digit numeric sentinels that neural MT preserves verbatim."""
+    mapping = []
+    next_id = 910001
+
+    def _repl(match):
+        nonlocal next_id
+        while str(next_id) in text:
+            next_id += 1
+        sentinel = str(next_id)
+        next_id += 1
+        mapping.append((sentinel, match.group(0)))
+        return sentinel
+
+    return _NEURAL_PROTECT_RE.sub(_repl, text), mapping
+
+
+def _restore_neural_entities(translated, mapping):
+    """Restore numeric sentinels in ``translated``; returns ``(text, all_found)``."""
+    out = translated
+    all_found = True
+    for sentinel, original in mapping:
+        pattern = re.compile(r"\s*".join(re.escape(ch) for ch in sentinel))
+        m = pattern.search(out)
+        if not m:
+            all_found = False
+            continue
+        before = out[: m.start()]
+        after = out[m.end() :]
+        pad_l = " " if before and before[-1].isdigit() and original[0].isdigit() else ""
+        pad_r = " " if after and after[0].isdigit() and original[-1].isdigit() else ""
+        out = before + pad_l + original + pad_r + after
+    return out, all_found
+
+
+def _translate_around_entities(text, fn, joiner):
+    """Fallback when a neural model drops a sentinel: translate only the prose
+    segments between protected entities so every entity stays 100% verbatim."""
+    pieces = []
+    prose_indices = []
+    prose_texts = []
+    pos = 0
+    for m in _NEURAL_PROTECT_RE.finditer(text):
+        before = text[pos : m.start()]
+        if before.strip():
+            prose_indices.append(len(pieces))
+            prose_texts.append(before.strip())
+            pieces.append("")
+        elif before:
+            pieces.append(before)
+        pieces.append(m.group(0))
+        pos = m.end()
+    tail = text[pos:]
+    if tail.strip():
+        prose_indices.append(len(pieces))
+        prose_texts.append(tail.strip())
+        pieces.append("")
+    elif tail:
+        pieces.append(tail)
+    if prose_texts:
+        translated = fn(prose_texts)
+        for idx, tr in zip(prose_indices, translated):
+            pieces[idx] = tr
+    out = joiner.join(p for p in pieces if p)
+    return re.sub(r"[ \t]{2,}", " ", out).strip()
+
+
 def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32):
-    """Translate a sequence of strings offline, preserving placeholders (for
-    non-neural translators) and deduplicating identical strings so each unique
-    sentence is translated once."""
+    """Translate a sequence of strings offline, preserving emails, URLs, phone
+    numbers, reference codes, dates, and currency, and deduplicating identical
+    sentences so each unique sentence is translated once."""
     fn = translator if translator is not None else _load_offline_translator(src_lang, dst_lang)
-    use_placeholders = not getattr(fn, "_neural", False)
+    is_neural = bool(getattr(fn, "_neural", False))
     joiner = "" if _is_cjk_lang(dst_lang) else " "
     cache = {}
     unique_sentences = []
@@ -405,12 +499,17 @@ def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32
             per_text_plan.append(None)
             continue
         text_str = str(raw)
-        if use_placeholders:
-            masked, tokens = protect_tokens(text_str)
+        if is_neural and _is_verbatim_block(text_str):
+            per_text_plan.append(("verbatim", text_str))
+            continue
+        if is_neural:
+            masked, mapping = _protect_neural_entities(text_str)
+            sents = split_sentences(masked)
+            per_text_plan.append(("neural", text_str, sents, mapping))
         else:
-            masked, tokens = text_str, ()
-        sents = split_sentences(masked)
-        per_text_plan.append((sents, tokens))
+            masked, tokens = protect_tokens(text_str)
+            sents = split_sentences(masked)
+            per_text_plan.append(("tokens", sents, tokens))
         for s in sents:
             if s not in cache:
                 cache[s] = None
@@ -432,9 +531,23 @@ def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32
         if item is None:
             results.append("")
             continue
-        sents, tokens = item
-        joined = joiner.join(cache.get(s, s) for s in sents)
-        results.append(restore_tokens(joined, tokens) if tokens else joined)
+        kind = item[0]
+        if kind == "verbatim":
+            results.append(item[1])
+        elif kind == "neural":
+            _, orig_text, sents, mapping = item
+            joined = joiner.join(cache.get(s, s) for s in sents)
+            if mapping:
+                restored, ok = _restore_neural_entities(joined, mapping)
+                if not ok:
+                    restored = _translate_around_entities(orig_text, fn, joiner)
+                results.append(restored)
+            else:
+                results.append(joined)
+        else:
+            _, sents, tokens = item
+            joined = joiner.join(cache.get(s, s) for s in sents)
+            results.append(restore_tokens(joined, tokens) if tokens else joined)
     return results
 
 
