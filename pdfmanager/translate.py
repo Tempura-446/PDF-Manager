@@ -476,14 +476,109 @@ def _load_nllb_translator(s, d, mdir):
     return _nllb_batch
 
 
+def _parse_llm_json_list(raw_content, expected_len):
+    """Extract a JSON list of ``expected_len`` strings from an LLM response."""
+    import json
+
+    text = str(raw_content or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        m = re.search(r"\[.*\]", text, re.S)
+        if not m:
+            return None
+        try:
+            parsed = json.loads(m.group(0))
+        except ValueError:
+            return None
+    if isinstance(parsed, dict):
+        for key in ("translations", "items", "result", "output"):
+            if isinstance(parsed.get(key), list):
+                parsed = parsed[key]
+                break
+    if isinstance(parsed, list) and len(parsed) == expected_len:
+        return [str(x) for x in parsed]
+    return None
+
+
+def _load_llm_translator(src_lang, dst_lang, *, api_url, model, api_key=""):
+    """Context-aware batch translator using an OpenAI-compatible ``/chat/completions``
+    endpoint (works offline with local Ollama / LM Studio, or online with any BYOK API)."""
+    endpoint = str(api_url or "http://localhost:11434/v1").strip().rstrip("/")
+    if not endpoint.endswith("/chat/completions"):
+        endpoint = endpoint + "/chat/completions"
+    model_name = str(model or "qwen2.5:7b").strip()
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+    src_label = i18n.BUILTIN_LOCALES.get(src_lang, {}).get("name") or src_lang
+    dst_label = i18n.BUILTIN_LOCALES.get(dst_lang, {}).get("name") or dst_lang
+    system_prompt = (
+        f"You are an expert document translator translating from {src_label} ({src_lang}) "
+        f"to natural, idiomatic, publication-quality {dst_label} ({dst_lang}). "
+        "Maintain consistent terminology and formal document tone across all items. "
+        "Keep emails, URLs, phone numbers, dates, currency amounts, numbers, and ID codes verbatim. "
+        "Return ONLY a valid JSON array of translated strings with the exact same length and order as the input array. "
+        "Do not add explanations, notes, or markdown."
+    )
+
+    def _call_batch(items):
+        import json
+
+        payload = {
+            "model": model_name,
+            "temperature": 0.1,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(items, ensure_ascii=False)},
+            ],
+        }
+        resp = i18n._http_post_json(endpoint, payload, headers=headers)
+        choices = resp.get("choices") or []
+        content = ((choices[0].get("message") or {}).get("content") or "") if choices else ""
+        parsed = _parse_llm_json_list(content, len(items))
+        if parsed is not None:
+            return parsed
+        if len(items) == 1:
+            return [content.strip() or items[0]]
+        # Fallback: translate individually if the model returned a mismatched JSON array length
+        return [_call_batch([item])[0] for item in items]
+
+    def _llm_batch(batch):
+        out = []
+        chunk_size = 10
+        for i in range(0, len(batch), chunk_size):
+            out.extend(_call_batch(list(batch[i : i + chunk_size])))
+        return out
+
+    _llm_batch._neural = True
+    _llm_batch._llm = True
+    return _llm_batch
+
+
 def _load_offline_translator(src_lang, dst_lang):
-    """Return a batch callable ``fn(list[str]) -> list[str]`` backed by an installed
-    offline model (preferring high-quality NLLB-200 when installed, otherwise
-    CTranslate2/Argos language pack models with automatic English pivot)."""
+    """Return a batch callable ``fn(list[str]) -> list[str]`` backed by the
+    configured translation engine (Smart AI LLM when enabled in Settings,
+    otherwise NLLB-200 when installed, otherwise CTranslate2/Argos language
+    pack models with automatic English pivot)."""
     s = i18n.normalize_code(src_lang)
     d = i18n.normalize_code(dst_lang)
     if s == d:
         return lambda batch: list(batch)
+
+    from pdfmanager import update as _update
+
+    cfg = _update.settings()
+    if (cfg.get("translate_engine") or "offline") == "llm":
+        return _load_llm_translator(
+            s,
+            d,
+            api_url=cfg.get("translate_api_url") or "http://localhost:11434/v1",
+            model=cfg.get("translate_model") or "qwen2.5:7b",
+            api_key=cfg.get("translate_api_key") or "",
+        )
 
     # Prefer NLLB-200 universal high-quality model when installed and both languages are supported
     nllb_dir = nllb_model_dir()
@@ -628,7 +723,10 @@ def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32
         if is_neural and _is_verbatim_block(text_str):
             per_text_plan.append(("verbatim", text_str))
             continue
-        if is_neural:
+        if is_neural and getattr(fn, "_llm", False):
+            sents = split_sentences(text_str)
+            per_text_plan.append(("neural", text_str, sents, ()))
+        elif is_neural:
             masked, mapping = _protect_neural_entities(text_str)
             sents = split_sentences(masked)
             per_text_plan.append(("neural", text_str, sents, mapping))
@@ -880,7 +978,7 @@ def _detect_font_style(words):
     return family, bold, italic
 
 
-def _detect_align(x0, x1, container_x0, container_x1, *, is_cell=False, lines=1):
+def _detect_align(x0, x1, container_x0, container_x1, *, is_cell=False, lines=1, solo_row=True):
     """Detect ``left``, ``center``, or ``right`` alignment inside a cell or page."""
     span_w = max(1.0, container_x1 - container_x0)
     left_m = x0 - container_x0
@@ -891,20 +989,23 @@ def _detect_align(x0, x1, container_x0, container_x1, *, is_cell=False, lines=1)
         if right_m <= max(16.0, span_w * 0.12) and left_m > right_m + 10.0:
             return "right"
         return "left"
-    if lines == 1:
+    if lines == 1 and solo_row:
         cx = (x0 + x1) / 2.0
         page_cx = (container_x0 + container_x1) / 2.0
-        if abs(cx - page_cx) <= 14.0 and left_m > span_w * 0.12 and right_m > span_w * 0.12:
+        if (
+            abs(cx - page_cx) <= 12.0
+            and abs(left_m - right_m) <= 24.0
+            and left_m > span_w * 0.12
+            and right_m > span_w * 0.12
+        ):
             return "center"
-        if right_m <= 90.0 and x0 > container_x0 + span_w * 0.58 and (x1 - x0) < span_w * 0.35:
-            return "right"
     return "left"
 
 
 def _extract_layout_blocks(plumber_page):
     """Extract positioned text blocks from a ``pdfplumber`` page, respecting
-    detected table cells, columns, headings, font sizes, bold/italic styles,
-    and left/center/right alignment."""
+    real multi-row/multi-column table cells, columns, headings, font sizes,
+    bold/italic styles, and left/center/right alignment."""
     words = plumber_page.extract_words(
         extra_attrs=["size", "fontname", "non_stroking_color"],
         keep_blank_chars=False,
@@ -914,15 +1015,19 @@ def _extract_layout_blocks(plumber_page):
         return []
 
     page_w = float(plumber_page.width or 612.0)
+    page_h = float(plumber_page.height or 792.0)
 
-    # 1. Detect table cells so table text never merges across columns or bleeds borders
+    # 1. Detect genuine multi-row, multi-column tables (ignore 1x1 page/section border boxes)
     table_cells = []
     try:
         for tbl in plumber_page.find_tables() or ():
+            if len(getattr(tbl, "rows", ()) or ()) < 2 or len(getattr(tbl, "columns", ()) or ()) < 2:
+                continue
             for cell in tbl.cells or ():
                 if cell and len(cell) == 4:
                     cx0, ctop, cx1, cbottom = (float(v) for v in cell)
-                    if (cx1 - cx0) >= 8.0 and (cbottom - ctop) >= 6.0:
+                    cw, ch = cx1 - cx0, cbottom - ctop
+                    if 8.0 <= cw <= page_w * 0.80 and 6.0 <= ch <= page_h * 0.25:
                         table_cells.append((cx0, ctop, cx1, cbottom))
     except Exception:  # noqa: BLE001
         table_cells = []
@@ -944,12 +1049,30 @@ def _extract_layout_blocks(plumber_page):
 
     blocks = []
 
-    # Build one strictly-bounded block per non-empty table cell
+    # Build one strictly-bounded block per genuine homogeneous table cell;
+    # if a cell contains mixed font sizes (e.g. heading + body) or large paragraph gaps,
+    # return its words to free_words so every sub-block keeps its exact position.
     for ci, cwords in sorted(cell_words.items()):
         cx0, ctop, cx1, cbottom = table_cells[ci]
         cwords.sort(key=lambda w: (round(float(w["top"]) / 2.5), float(w["x0"])))
         sizes = [max(4.0, float(w.get("size") or 10.0)) for w in cwords]
+        min_sz, max_sz = min(sizes), max(sizes)
         avg_size = sum(sizes) / len(sizes)
+        if (max_sz - min_sz) > max(2.0, min_sz * 0.25):
+            free_words.extend(cwords)
+            continue
+        # Check for large internal vertical gaps (multi-paragraph container box)
+        has_big_gap = False
+        prev_bot = float(cwords[0]["bottom"])
+        for cw in cwords[1:]:
+            if float(cw["top"]) - prev_bot > max(12.0, avg_size * 1.4):
+                has_big_gap = True
+                break
+            prev_bot = max(prev_bot, float(cw["bottom"]))
+        if has_big_gap:
+            free_words.extend(cwords)
+            continue
+
         family, bold, italic = _detect_font_style(cwords)
         wx0 = min(float(w["x0"]) for w in cwords)
         wx1 = max(float(w["x1"]) for w in cwords)
@@ -991,45 +1114,45 @@ def _extract_layout_blocks(plumber_page):
             raw_lines.append({"top": w_top, "size": w_size, "words": [w]})
 
     # 3. Split each visual line on large horizontal gaps (separates columns)
-    segments = []
+    seg_objs = []
     for ln in raw_lines:
         lwords = sorted(ln["words"], key=lambda w: float(w["x0"]))
+        line_segs = []
         cur = [lwords[0]]
         for w in lwords[1:]:
             prev = cur[-1]
             prev_size = max(4.0, float(prev.get("size") or 10.0))
             gap = float(w["x0"]) - float(prev["x1"])
             if gap > max(18.0, prev_size * 1.8):
-                segments.append(cur)
+                line_segs.append(cur)
                 cur = [w]
             else:
                 cur.append(w)
-        segments.append(cur)
-
-    seg_objs = []
-    for seg in segments:
-        sizes = [max(4.0, float(w.get("size") or 10.0)) for w in seg]
-        avg_size = sum(sizes) / len(sizes)
-        family, bold, italic = _detect_font_style(seg)
-        sx0 = min(float(w["x0"]) for w in seg)
-        sx1 = max(float(w["x1"]) for w in seg)
-        seg_objs.append({
-            "text": " ".join(w["text"] for w in seg),
-            "x0": sx0,
-            "top": min(float(w["top"]) for w in seg),
-            "x1": sx1,
-            "bottom": max(float(w["bottom"]) for w in seg),
-            "box_x0": sx0,
-            "box_x1": sx1,
-            "size": avg_size,
-            "color": _normalize_color(seg[0].get("non_stroking_color")),
-            "family": family,
-            "bold": bold,
-            "italic": italic,
-            "align": _detect_align(sx0, sx1, 0.0, page_w, is_cell=False, lines=1),
-            "lines": 1,
-            "in_table": False,
-        })
+        line_segs.append(cur)
+        solo_row = len(line_segs) == 1
+        for seg in line_segs:
+            sizes = [max(4.0, float(w.get("size") or 10.0)) for w in seg]
+            avg_size = sum(sizes) / len(sizes)
+            family, bold, italic = _detect_font_style(seg)
+            sx0 = min(float(w["x0"]) for w in seg)
+            sx1 = max(float(w["x1"]) for w in seg)
+            seg_objs.append({
+                "text": " ".join(w["text"] for w in seg),
+                "x0": sx0,
+                "top": min(float(w["top"]) for w in seg),
+                "x1": sx1,
+                "bottom": max(float(w["bottom"]) for w in seg),
+                "box_x0": sx0,
+                "box_x1": sx1,
+                "size": avg_size,
+                "color": _normalize_color(seg[0].get("non_stroking_color")),
+                "family": family,
+                "bold": bold,
+                "italic": italic,
+                "align": _detect_align(sx0, sx1, 0.0, page_w, is_cell=False, lines=1, solo_row=solo_row),
+                "lines": 1,
+                "in_table": False,
+            })
 
     # 4. Merge vertically adjacent line segments in the same column & style into blocks
     seg_objs.sort(key=lambda s: (s["top"], s["x0"]))

@@ -319,5 +319,61 @@ def test_nllb200_mapping_and_catalog_entry(tmp_path, monkeypatch):
     assert called == [("en", "zh-Hans", mdir)]
 
 
+def test_bordered_page_box_does_not_flatten_paragraphs(tmp_path):
+    """A full-page or section border rectangle must NOT be treated as a single
+    table cell that smashes headings and paragraphs together."""
+    from reportlab.pdfgen import canvas
+    import pdfplumber
+
+    src = tmp_path / "bordered.pdf"
+    c = canvas.Canvas(str(src), pagesize=(612, 792))
+    # Outer page border box (common in resumes, certificates, invoices)
+    c.rect(36, 36, 540, 720, stroke=1, fill=0)
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(60, 700, "Section Heading")
+    c.setFont("Helvetica", 10)
+    c.drawString(60, 660, "First paragraph inside the bordered page.")
+    c.drawString(60, 600, "Second paragraph separated by whitespace.")
+    c.showPage()
+    c.save()
+
+    with pdfplumber.open(str(src)) as pdoc:
+        blocks = translate._extract_layout_blocks(pdoc.pages[0])
+    assert len(blocks) == 3
+    assert all(not b.get("in_table") for b in blocks)
+    assert blocks[0]["text"] == "Section Heading" and blocks[0]["bold"] is True
+
+
+def test_llm_translator_batch_and_fallback(monkeypatch):
+    calls = []
+
+    def fake_post(url, payload, headers=None, timeout=180):
+        import json
+        calls.append((url, payload["model"], headers))
+        items = json.loads(payload["messages"][1]["content"])
+        if len(items) == 2:
+            return {"choices": [{"message": {"content": '```json\n["你好世界", "联系 support@example.com"]\n```'}}]}
+        return {"choices": [{"message": {"content": '["单项翻译"]'}}]}
+
+    monkeypatch.setattr(i18n, "_http_post_json", fake_post)
+    fn = translate._load_llm_translator(
+        "en", "zh-Hans",
+        api_url="http://localhost:11434/v1",
+        model="qwen2.5:7b",
+        api_key="",
+    )
+    out = translate.translate_texts(
+        ["Hello world", "Contact support@example.com", "$1,250.00"],
+        "en", "zh-Hans",
+        translator=fn,
+    )
+    assert out[0] == "你好世界"
+    assert out[1] == "联系 support@example.com"
+    assert out[2] == "$1,250.00"  # pure currency bypassed LLM verbatim
+    assert calls and calls[0][0] == "http://localhost:11434/v1/chat/completions"
+    assert calls[0][1] == "qwen2.5:7b"
+
+
+
 
 
