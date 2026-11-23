@@ -663,6 +663,8 @@ def download_and_install_pack(code, *, pair=None, source=None):
                 zip_path.write_bytes(zip_bytes)
                 progress.report(2, 3, f"installing {norm_code} language pack")
                 installed = install_pack_from_zip(zip_path, expected_sha256=expected_sha)
+            from pdfmanager import translate as _translate
+            _translate.ensure_runtime()
             progress.report(3, 3, f"installed {norm_code}")
             return {"code": norm_code, "source": "zpdf", "installed": installed}
 
@@ -722,6 +724,8 @@ def download_and_install_pack(code, *, pair=None, source=None):
                 name=entry["to_name"] if entry["dst"] != DEFAULT_LANG else entry["from_name"],
             )
             installed_results.append(res)
+    from pdfmanager import translate as _translate
+    _translate.ensure_runtime()
     progress.report(total, total, f"installed {norm_code} translation models")
     return {
         "code": installed_results[-1]["code"],
