@@ -4,6 +4,23 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.61.9
+
+Bordered-page layout fix and Smart AI (context-aware LLM) translation engine.
+
+- **Fixed bordered-page & multi-column layout regression.** Guarded
+  `pdfplumber.find_tables()` so outer page borders and large boxed sections
+  (resumes, forms, invoices) are never treated as 1×1 table cells, requiring
+  real multi-row/multi-column tables with homogeneous font sizes and no large
+  internal paragraph gaps, and restricted free-text centering to true solo
+  centered titles.
+- **Smart Context-Aware AI Translation Engine (Local Ollama / LM Studio or
+  OpenAI-compatible API).** Configurable under **Settings → Language → PDF
+  translation engine**; translates multi-block batches with full document
+  context, natural idiomatic tone, and verbatim emails/URLs/numbers/codes —
+  100% offline & free with local Ollama (e.g. `qwen2.5:7b` at
+  `http://localhost:11434/v1`) or with any OpenAI-compatible HTTPS API key.
+
 ## 0.61.8
 
 High-quality NLLB-200 offline translation engine, entity protection, and deeper PDF layout fidelity.
