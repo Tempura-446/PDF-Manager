@@ -87,21 +87,43 @@ class _Page:
         appeared off those lines (only lines were changed), "texts":
         [(which line or None, the new words)] to find again}."""
         raw = _raw()
+        tp_raw = self.textpage.raw
+        get_unicode = raw.FPDFText_GetUnicode
+        get_font_info = raw.FPDFText_GetFontInfo
+        get_font_size = raw.FPDFText_GetFontSize
+        get_origin = raw.FPDFText_GetCharOrigin
+        get_charbox = self.textpage.get_charbox
         buf, flags = ctypes.create_string_buffer(256), ctypes.c_int()
+        ox, oy = ctypes.c_double(), ctypes.c_double()
+        ox_ref, oy_ref = ctypes.byref(ox), ctypes.byref(oy)
+        flags_ref = ctypes.byref(flags)
+        buf_len = len(buf)
         moved = self._flow.moved_letters if self._flow is not None else {}
+        touched = self.touched
+        hides = self.hidden.hides
         out = []
+        append = out.append
         for i in range(self.textpage.count_chars()):
-            loose = self.textpage.get_charbox(i, loose=True)
-            ch = self.textpage.get_text_range(i, 1)
-            if loose[2] <= loose[0] or loose[3] <= loose[1] or not ch or ch.isspace():
+            code = get_unicode(tp_raw, i)
+            if code <= 32:
                 continue
-            x, y = _origin(self.textpage, i)
-            cx, cy = (loose[0] + loose[2]) / 2, (loose[1] + loose[3]) / 2
-            if any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b in self.touched) \
-                    or self.hidden.hides(self.textpage, i, loose):
+            ch = chr(code)
+            if ch.isspace():
                 continue
-            raw.FPDFText_GetFontInfo(self.textpage.raw, i, buf, len(buf), ctypes.byref(flags))
-            out.append((ch, x, y + moved.get(i, 0.0), buf.value, raw.FPDFText_GetFontSize(self.textpage.raw, i)))
+            loose = get_charbox(i, loose=True)
+            if loose[2] <= loose[0] or loose[3] <= loose[1]:
+                continue
+            cx, cy = (loose[0] + loose[2]) * 0.5, (loose[1] + loose[3]) * 0.5
+            hit_touched = False
+            for b in touched:
+                if b[0] <= cx <= b[2] and b[1] <= cy <= b[3]:
+                    hit_touched = True
+                    break
+            if hit_touched or hides(self.textpage, i, loose):
+                continue
+            get_origin(tp_raw, i, ox_ref, oy_ref)
+            get_font_info(tp_raw, i, buf, buf_len, flags_ref)
+            append((ch, ox.value, oy.value + moved.get(i, 0.0), buf.value, get_font_size(tp_raw, i)))
         return {"letters": out, "bands": list(self.bands), "strict": self.strict and not moved,
                 "texts": list(self.texts), "touched": list(self.touched), "flowed": bool(moved)}
 
@@ -1774,30 +1796,67 @@ def _intact(path, expect):
                     textpage = page.get_textpage()
                     try:
                         covers = _Covers(page)
+                        tp_raw = textpage.raw
+                        get_unicode = raw.FPDFText_GetUnicode
+                        get_font_info = raw.FPDFText_GetFontInfo
+                        get_font_size = raw.FPDFText_GetFontSize
+                        get_origin = raw.FPDFText_GetCharOrigin
+                        get_charbox = textpage.get_charbox
                         buf, flags = ctypes.create_string_buffer(256), ctypes.c_int()
+                        ox, oy = ctypes.c_double(), ctypes.c_double()
+                        ox_ref, oy_ref = ctypes.byref(ox), ctypes.byref(oy)
+                        flags_ref = ctypes.byref(flags)
+                        buf_len = len(buf)
+                        hides = covers.hides
                         have, everything = {}, []
+                        append_ev = everything.append
+                        floor = math.floor
                         for i in range(textpage.count_chars()):
-                            ch = textpage.get_text_range(i, 1)
-                            loose = textpage.get_charbox(i, loose=True)
-                            if not ch or ch.isspace() or loose[2] <= loose[0] or loose[3] <= loose[1] \
-                                    or covers.hides(textpage, i, loose):
+                            code = get_unicode(tp_raw, i)
+                            if code <= 32:
                                 continue
-                            x, y = _origin(textpage, i)
-                            raw.FPDFText_GetFontInfo(textpage.raw, i, buf, len(buf), ctypes.byref(flags))
-                            letter = [ch, x, y, buf.value, raw.FPDFText_GetFontSize(textpage.raw, i), False,
+                            ch = chr(code)
+                            if ch.isspace():
+                                continue
+                            loose = get_charbox(i, loose=True)
+                            if loose[2] <= loose[0] or loose[3] <= loose[1] or hides(textpage, i, loose):
+                                continue
+                            get_origin(tp_raw, i, ox_ref, oy_ref)
+                            x, y = ox.value, oy.value
+                            get_font_info(tp_raw, i, buf, buf_len, flags_ref)
+                            letter = [ch, x, y, buf.value, get_font_size(tp_raw, i), False,
                                       len(everything)]
-                            everything.append(letter)
-                            have.setdefault((ch, math.floor(x), math.floor(y)), []).append(letter)
+                            append_ev(letter)
+                            key = (ch, floor(x), floor(y))
+                            bucket = have.get(key)
+                            if bucket is None:
+                                have[key] = [letter]
+                            else:
+                                bucket.append(letter)
                         last = -1
+                        get_have = have.get
+                        strict = want["strict"]
                         for ch, x, y, font, size in want["letters"]:
-                            match = next((L for dx in (-1, 0, 1) for dy in (-1, 0, 1)
-                                          for L in have.get((ch, math.floor(x) + dx, math.floor(y) + dy), ())
-                                          if not L[5] and abs(x - L[1]) < 0.15 and abs(y - L[2]) < 0.15
-                                          and L[3] == font and abs(L[4] - size) < 0.05), None)
+                            fx, fy = floor(x), floor(y)
+                            match = None
+                            for dx in (0, -1, 1):
+                                for dy in (0, -1, 1):
+                                    bucket = get_have((ch, fx + dx, fy + dy))
+                                    if bucket is None:
+                                        continue
+                                    for L in bucket:
+                                        if (not L[5] and abs(x - L[1]) < 0.15 and abs(y - L[2]) < 0.15
+                                                and L[3] == font and abs(L[4] - size) < 0.05):
+                                            match = L
+                                            break
+                                    if match is not None:
+                                        break
+                                if match is not None:
+                                    break
                             if match is None:
                                 return False
                             match[5] = True
-                            if want["strict"] and match[6] < last:
+                            if strict and match[6] < last:
                                 return False  # read in another order than before
                             last = match[6]
                         new = [L for L in everything if not L[5]]
