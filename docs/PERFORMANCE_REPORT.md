@@ -48,5 +48,19 @@
 
 ## 4. Known Performance Limitations
 
-- **GIL-bound batch threading**: `core.batch_run` uses `ThreadPoolExecutor`; pure-Python `pypdf` workloads (`batch(8x10p, w=2)`) achieve ~`1.03×` speedup on 2 threads because of the Python GIL, whereas native PDFium/ONNX/C-extension workloads scale across cores (`tests/test_ocr_phase5.py::test_parallel_workers_faster_and_identical_to_single_worker` passed in `16.65s` on an idle 2-vCPU host).
+- **GIL-bound batch threading**: `core.batch_run` defaults to `ThreadPoolExecutor`; pure-Python `pypdf` workloads (`batch(8x10p, w=2)`) achieve ~`1.03×` speedup on 2 threads because of the Python GIL. Opt-in `core.batch_run(..., processes=True)` uses a spawned `ProcessPoolExecutor` to bypass the GIL for CPU-bound batches, while native PDFium/ONNX/C-extension workloads scale across cores (`tests/test_ocr_phase5.py::test_parallel_workers_faster_and_identical_to_single_worker` passed in `16.65s` on an idle 2-vCPU host).
 - **OCR engine benchmarks**: `rapidocr`, `onnxruntime`, and `ocrmypdf` are optional extras not installed in the minimal Linux VM; OCR integration tests are validated in the dedicated GitHub Actions `OCR, PDF/A and Office (Tesseract, Ghostscript, LibreOffice)` CI job.
+
+---
+
+## 5. Performance Optimization Sprint (Post-v0.61.4)
+
+Targeted `cProfile`-driven optimizations across `pdfmanager/redactcontent.py`, `pdfmanager/textedit/rewrite.py`, and `pdfmanager/glyphs.py` (zero accuracy or security trade-offs; all 134 redaction/textedit/reflow/perf tests passing):
+
+| Workload | Before | After | Speedup | What Changed |
+|---|---:|---:|---:|---|
+| `redact_remove` (50 dense pages, warm, no tracemalloc) | `7.538s` | **`1.971s`** | **`3.82×`** | Vertical-span fast-path in `_text()`, global bbox reject in `_Areas`/`_center_in()`, streamlined `_chars()` & `_same_places()` |
+| `redact_remove` (100p, `benchmark.py` w/ tracemalloc) | `33.935s` (98 MB RSS) | **`19.686s`** (62 MB RSS) | **`1.72×`** | Same as above (lower peak RSS too) |
+| `textedit.edit_text` (10 dense pages, warm, no tracemalloc) | `1.872s` | **`0.543s`** | **`3.45×`** | Replaced per-char `get_text_range(i, 1)` FFI/UTF-16 decoding with `FPDFText_GetUnicode`, cached `pypdfium2.raw`, reused `ctypes.c_double` origin buffers, `(0, 0)`-first lookup in `_intact()` |
+| `core.merge` (400 dense pages) | `0.228s` | `0.228s` | Already ~1,750 p/s | No rewrite needed |
+| `core.rotate` (200 dense pages) | `0.109s` | `0.109s` | Already ~1,835 p/s | No rewrite needed |

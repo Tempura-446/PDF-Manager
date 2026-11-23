@@ -1027,6 +1027,24 @@ class Scrubber:
             raise Unsupported("it has text of size zero")
         trm_base = _mul(tm, state.ctm)
         x = 0.0
+        # Fast path: for unrotated horizontal text, every glyph in this operator
+        # shares the same vertical span [y_lo, y_hi]. If no redaction box overlaps
+        # that vertical span, skip per-glyph matrix/quad/_hits checks completely.
+        if trm_base[1] == 0 and trm_base[2] == 0:
+            y_a = trm_base[5] + (state.ts + font.descent * size) * trm_base[3]
+            y_b = trm_base[5] + (state.ts + font.ascent * size) * trm_base[3]
+            y_lo, y_hi = (y_a, y_b) if y_a <= y_b else (y_b, y_a)
+            if not self.filed.overlaps_y(y_lo, y_hi):
+                for item in items:
+                    if isinstance(item, pikepdf.String):
+                        for _, code in font.codes(bytes(item)):
+                            w0 = font.width(code) / 1000
+                            space = state.tw if (not font.two_byte and code == 32) else 0.0
+                            x += (w0 * size + state.tc + space) * th
+                    else:
+                        x -= _num(item) / 1000 * size * th
+                out.append(ins)
+                return _mul((1, 0, 0, 1, x, 0), tm)
         result, buf, pending = [], b"", 0.0
         dropped = False
         for item in items:
@@ -1210,13 +1228,22 @@ def _chars(textpage):
     boxes for spaces and line breaks."""
     import pypdfium2.raw as pdfium_c
 
+    tp_raw = textpage.raw
+    get_unicode = pdfium_c.FPDFText_GetUnicode
+    is_gen = pdfium_c.FPDFText_IsGenerated
+    get_box = textpage.get_charbox
     chars = []
+    append = chars.append
     for i in range(textpage.count_chars()):
-        ch = chr(pdfium_c.FPDFText_GetUnicode(textpage.raw, i) or 32)
-        if ch.isspace() or ch == "\x00" or pdfium_c.FPDFText_IsGenerated(textpage.raw, i) == 1:
-            chars.append((" ", None))
+        code = get_unicode(tp_raw, i)
+        if code <= 32:
+            append((" ", None))
+            continue
+        ch = chr(code)
+        if ch.isspace() or is_gen(tp_raw, i) == 1:
+            append((" ", None))
         else:
-            chars.append((ch, textpage.get_charbox(i)))
+            append((ch, get_box(i)))
     return chars
 
 
@@ -1233,6 +1260,14 @@ class _Areas:
 
     def __init__(self, boxes):
         self.all, self.bands, self.tall = list(boxes), {}, []
+        if self.all:
+            self.min_x = min(a[0] for a in self.all)
+            self.min_y = min(a[1] for a in self.all)
+            self.max_x = max(a[2] for a in self.all)
+            self.max_y = max(a[3] for a in self.all)
+        else:
+            self.min_x = self.min_y = 1e18
+            self.max_x = self.max_y = -1e18
         for a in self.all:
             first, last = self._band(a[1]), self._band(a[3])
             if last - first > self.MANY:
@@ -1243,7 +1278,26 @@ class _Areas:
 
     @staticmethod
     def _band(y):
-        return int(max(-1e9, min(1e9, y)) // _BAND)
+        if y < -1e9:
+            return int(-1e9 // _BAND)
+        if y > 1e9:
+            return int(1e9 // _BAND)
+        return int(y // _BAND)
+
+    def overlaps_y(self, y0, y1):
+        """Fast check whether any redaction box overlaps vertical range [y0, y1]."""
+        if y1 < self.min_y or y0 > self.max_y:
+            return False
+        if self.tall:
+            return True
+        first, last = self._band(y0), self._band(y1)
+        if last - first > self.MANY:
+            return True
+        bands = self.bands
+        for band in range(first, last + 1):
+            if band in bands:
+                return True
+        return False
 
     def near(self, y):
         yield from self.bands.get(self._band(y), ())
@@ -1251,6 +1305,8 @@ class _Areas:
 
     def spanning(self, y0, y1):
         """The boxes in the bands from ``y0`` up to ``y1`` (some more than once)."""
+        if y1 < self.min_y or y0 > self.max_y:
+            return
         first, last = self._band(y0), self._band(y1)
         if last - first > self.MANY:
             yield from self.all
@@ -1261,10 +1317,21 @@ class _Areas:
 
 
 def _center_in(box, areas, shrink=0.5):
-    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
-    candidates = areas.near(cy) if isinstance(areas, _Areas) else areas
-    return any(a[0] + shrink < cx < a[2] - shrink and a[1] + shrink < cy < a[3] - shrink
-               for a in candidates)
+    cx, cy = (box[0] + box[2]) * 0.5, (box[1] + box[3]) * 0.5
+    if isinstance(areas, _Areas):
+        if cy <= areas.min_y + shrink or cy >= areas.max_y - shrink or cx <= areas.min_x + shrink or cx >= areas.max_x - shrink:
+            return False
+        for a in areas.bands.get(areas._band(cy), ()):
+            if a[0] + shrink < cx < a[2] - shrink and a[1] + shrink < cy < a[3] - shrink:
+                return True
+        for a in areas.tall:
+            if a[0] + shrink < cx < a[2] - shrink and a[1] + shrink < cy < a[3] - shrink:
+                return True
+        return False
+    for a in areas:
+        if a[0] + shrink < cx < a[2] - shrink and a[1] + shrink < cy < a[3] - shrink:
+            return True
+    return False
 
 
 def _verify(path, password, data, areas, regexes, loose=()):
@@ -1314,13 +1381,31 @@ def _same_places(old, new, removed=0):
     (other programs place them exactly)."""
     where = {}  # (letter, band of its bottom edge) -> boxes; a letter may only move 0.75 up or down
     for ch, box in old:
-        where.setdefault((ch, int(box[1] // 2)), []).append(box)
+        key = (ch, int(box[1] // 2))
+        bucket = where.get(key)
+        if bucket is None:
+            where[key] = [box]
+        else:
+            bucket.append(box)
+    get_bucket = where.get
     for ch, box in new:
-        size = min(max(box[3] - box[1], 1.0) / 0.6, 100.0)
+        bx0, by0, bx1, by1 = box
+        h = by1 - by0
+        size = min((h if h > 1.0 else 1.0) / 0.6, 100.0)
         slack_x = 0.75 + removed * size / 1000
-        band = int(box[1] // 2)
-        if not any(abs(box[0] - o[0]) <= slack_x and abs(box[2] - o[2]) <= slack_x
-                   and abs(box[1] - o[1]) <= 0.75 and abs(box[3] - o[3]) <= 0.75
-                   for b in (band - 1, band, band + 1) for o in where.get((ch, b), ())):
+        band = int(by0 // 2)
+        found = False
+        for b in (band, band - 1, band + 1):
+            bucket = get_bucket((ch, b))
+            if bucket is None:
+                continue
+            for o in bucket:
+                if (abs(bx0 - o[0]) <= slack_x and abs(bx1 - o[2]) <= slack_x
+                        and abs(by0 - o[1]) <= 0.75 and abs(by1 - o[3]) <= 0.75):
+                    found = True
+                    break
+            if found:
+                break
+        if not found:
             return False
     return True

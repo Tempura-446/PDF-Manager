@@ -8,9 +8,15 @@ import ctypes
 from pdfmanager import fonts
 
 
+_RAW = None
+
+
 def _raw():
-    import pypdfium2.raw as raw
-    return raw
+    global _RAW
+    if _RAW is None:
+        import pypdfium2.raw as raw
+        _RAW = raw
+    return _RAW
 
 
 def _origin(textpage, index):
