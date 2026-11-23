@@ -230,8 +230,7 @@ def test_neural_entity_protection_and_verbatim_bypass():
     assert out[:5] == inputs[:5]
     assert len(called_with) == 1
     assert "910001" in called_with[0] and "910002" in called_with[0]
-    assert "support@example.com" in out[5] and "https://example.com" in out[5]
-    assert "联系" in out[5] and "或访问" in out[5]
+    assert out[5] == "联系 support@example.com 或访问 https://example.com."
 
 
 def test_neural_entity_fallback_when_sentinel_dropped():
