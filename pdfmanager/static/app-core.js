@@ -126,10 +126,13 @@ function humanSize(n) {
 function plural(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
 /** Show an error above the page. ``detail``: the technical words behind a
  *  plain message (folded away under "Details"); ``focus``: move focus to it. */
-function showError(text, { detail = "", focus = false } = {}) {
+function showError(text, { detail = "", focus = false, action = null } = {}) {
   text = String(text || "").replace(/^(?!\S+\.[A-Za-z0-9]{2,5}(?:[\s:]|$))./, (c) => c.toUpperCase());  // (the server's words start in lower case)
   const e = $("error");
   const more = [];
+  if (action && action.label && typeof action.onClick === "function") {
+    more.push(el("button", { type: "button", class: "btn seal sm", onclick: action.onClick }, icon("download"), action.label));
+  }
   if (/Try Repair/.test(text) && current && current.id !== "repair" && ops.some((o) => o.id === "repair")) {
     more.push(el("button", { type: "button", class: "link-btn", onclick: () => select("repair") }, "Open Repair"));
   }
