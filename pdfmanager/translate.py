@@ -562,6 +562,225 @@ def _translate_annotations_and_fields(writer, src_lang, dst_lang, translator):
     return len(targets)
 
 
+def _normalize_color(raw):
+    """Convert a pdfplumber ``non_stroking_color`` value to an ``(r, g, b)`` 0..1 tuple."""
+    if raw is None:
+        return (0.0, 0.0, 0.0)
+    if isinstance(raw, (int, float)):
+        g = max(0.0, min(1.0, float(raw)))
+        return (g, g, g)
+    if isinstance(raw, (list, tuple)):
+        if len(raw) == 1:
+            g = max(0.0, min(1.0, float(raw[0])))
+            return (g, g, g)
+        if len(raw) == 3:
+            return tuple(max(0.0, min(1.0, float(v))) for v in raw)
+        if len(raw) == 4:
+            c, m, y, k = (max(0.0, min(1.0, float(v))) for v in raw)
+            return ((1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k))
+    return (0.0, 0.0, 0.0)
+
+
+def _luminance(rgb):
+    return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+
+
+def _sample_bg_rgb(bg_image, x0, top, x1, bottom, page_w, page_h):
+    """Sample median background RGB around a block's border from a rendered page image."""
+    if bg_image is None or page_w <= 0 or page_h <= 0:
+        return (1.0, 1.0, 1.0)
+    iw, ih = bg_image.size
+    sx, sy = iw / page_w, ih / page_h
+    px0 = max(0, min(iw - 1, int(x0 * sx) - 2))
+    px1 = max(0, min(iw - 1, int(x1 * sx) + 2))
+    py0 = max(0, min(ih - 1, int(top * sy) - 2))
+    py1 = max(0, min(ih - 1, int(bottom * sy) + 2))
+    samples = []
+    step_x = max(1, (px1 - px0) // 12)
+    step_y = max(1, (py1 - py0) // 6)
+    for x in range(px0, px1 + 1, step_x):
+        samples.append(bg_image.getpixel((x, py0)))
+        samples.append(bg_image.getpixel((x, py1)))
+    for y in range(py0, py1 + 1, step_y):
+        samples.append(bg_image.getpixel((px0, y)))
+        samples.append(bg_image.getpixel((px1, y)))
+    if not samples:
+        return (1.0, 1.0, 1.0)
+    rs = sorted(p[0] for p in samples)
+    gs = sorted(p[1] for p in samples)
+    bs = sorted(p[2] for p in samples)
+    mid = len(samples) // 2
+    return (rs[mid] / 255.0, gs[mid] / 255.0, bs[mid] / 255.0)
+
+
+def _extract_layout_blocks(plumber_page):
+    """Extract positioned text blocks ``{text, x0, top, x1, bottom, size, color, lines}``
+    from a ``pdfplumber`` page, preserving columns, table cells, headings, and font sizes."""
+    words = plumber_page.extract_words(
+        extra_attrs=["size", "non_stroking_color"],
+        keep_blank_chars=False,
+        use_text_flow=False,
+    )
+    if not words:
+        return []
+
+    # 1. Group words into visual lines by vertical top coordinate
+    words.sort(key=lambda w: (round(float(w["top"]) / 2.5), float(w["x0"])))
+    raw_lines = []
+    for w in words:
+        w_top = float(w["top"])
+        w_size = max(4.0, float(w.get("size") or 10.0))
+        if raw_lines and abs(w_top - raw_lines[-1]["top"]) <= max(3.0, raw_lines[-1]["size"] * 0.45):
+            raw_lines[-1]["words"].append(w)
+        else:
+            raw_lines.append({"top": w_top, "size": w_size, "words": [w]})
+
+    # 2. Split each visual line on large horizontal gaps (separates columns & table cells)
+    segments = []
+    for ln in raw_lines:
+        lwords = sorted(ln["words"], key=lambda w: float(w["x0"]))
+        cur = [lwords[0]]
+        for w in lwords[1:]:
+            prev = cur[-1]
+            prev_size = max(4.0, float(prev.get("size") or 10.0))
+            gap = float(w["x0"]) - float(prev["x1"])
+            if gap > max(18.0, prev_size * 1.8):
+                segments.append(cur)
+                cur = [w]
+            else:
+                cur.append(w)
+        segments.append(cur)
+
+    seg_objs = []
+    for seg in segments:
+        sizes = [max(4.0, float(w.get("size") or 10.0)) for w in seg]
+        avg_size = sum(sizes) / len(sizes)
+        seg_objs.append({
+            "text": " ".join(w["text"] for w in seg),
+            "x0": min(float(w["x0"]) for w in seg),
+            "top": min(float(w["top"]) for w in seg),
+            "x1": max(float(w["x1"]) for w in seg),
+            "bottom": max(float(w["bottom"]) for w in seg),
+            "size": avg_size,
+            "color": _normalize_color(seg[0].get("non_stroking_color")),
+            "lines": 1,
+        })
+
+    # 3. Merge vertically adjacent line segments in the same column & font size into blocks
+    seg_objs.sort(key=lambda s: (s["top"], s["x0"]))
+    blocks = []
+    for seg in seg_objs:
+        merged = False
+        if not _BULLET_LINE_RE.match(seg["text"]):
+            for blk in reversed(blocks):
+                v_gap = seg["top"] - blk["bottom"]
+                if v_gap > max(7.0, blk["size"] * 0.85):
+                    continue
+                if v_gap < -blk["size"] * 0.35:
+                    continue
+                same_size = abs(seg["size"] - blk["size"]) <= max(1.0, blk["size"] * 0.15)
+                same_left = abs(seg["x0"] - blk["x0"]) <= max(18.0, blk["size"] * 2.0)
+                horiz_overlap = min(seg["x1"], blk["x1"]) > max(seg["x0"], blk["x0"])
+                blk_w = blk["x1"] - blk["x0"]
+                page_w = float(plumber_page.width or 612.0)
+                short_heading = blk["lines"] == 1 and blk_w < min(140.0, page_w * 0.28) and blk["text"][-1] not in ",;"
+                if same_size and same_left and horiz_overlap and not short_heading:
+                    prev_text = blk["text"]
+                    nxt_text = seg["text"]
+                    if prev_text.endswith("-") and len(prev_text) >= 2 and prev_text[-2].isalpha() and nxt_text[0].islower():
+                        blk["text"] = prev_text[:-1] + nxt_text
+                    else:
+                        blk["text"] = prev_text + " " + nxt_text
+                    blk["x0"] = min(blk["x0"], seg["x0"])
+                    blk["x1"] = max(blk["x1"], seg["x1"])
+                    blk["bottom"] = max(blk["bottom"], seg["bottom"])
+                    blk["lines"] += 1
+                    merged = True
+                    break
+        if not merged:
+            blocks.append(seg)
+    return blocks
+
+
+def _make_layout_overlay(width, height, blocks, translated_texts, bg_image=None):
+    """Build a transparent PDF overlay page that covers each original text block
+    with its sampled background color and draws the translated text in-place
+    with original font size, color, and CJK-aware auto-fit wrapping."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(width, height))
+
+    for idx, (blk, trans) in enumerate(zip(blocks, translated_texts)):
+        text = (trans or "").strip()
+        if not text:
+            continue
+        x0, top, x1, bottom = blk["x0"], blk["top"], blk["x1"], blk["bottom"]
+        orig_size = max(5.5, float(blk["size"]))
+        pad = min(2.0, orig_size * 0.18)
+
+        # Cover original text with sampled background color
+        bg_rgb = _sample_bg_rgb(bg_image, x0, top, x1, bottom, width, height)
+        rect_x = max(0.0, x0 - pad)
+        rect_y = max(0.0, height - bottom - pad)
+        rect_w = min(width - rect_x, (x1 - x0) + 2 * pad)
+        rect_h = min(height - rect_y, (bottom - top) + 2 * pad)
+        c.setFillColorRGB(*bg_rgb)
+        c.rect(rect_x, rect_y, rect_w, rect_h, stroke=0, fill=1)
+
+        # Allow single-line labels/headings to expand into free space on their right
+        avail_w = max(18.0, x1 - x0)
+        if blk["lines"] == 1:
+            right_limit = width - 18.0
+            for j, other in enumerate(blocks):
+                if j == idx:
+                    continue
+                if other["top"] < bottom and other["bottom"] > top and other["x0"] >= x1 - 2.0:
+                    right_limit = min(right_limit, other["x0"] - 6.0)
+            avail_w = max(avail_w, right_limit - x0)
+
+        avail_h = max(orig_size * 1.25, (bottom - top) + 2 * pad)
+        chosen_font = fonts.font_for(text)
+
+        # Auto-fit font size down gently until wrapped lines fit inside the block
+        min_size = max(5.5, orig_size * 0.55)
+        fit_size = orig_size
+        wrapped = _wrap_text(text, chosen_font, fit_size, avail_w)
+        while len(wrapped) * (fit_size * 1.2) > avail_h + 1.0 and fit_size > min_size:
+            fit_size = max(min_size, fit_size * 0.9)
+            wrapped = _wrap_text(text, chosen_font, fit_size, avail_w)
+
+        # Ensure readable contrast between text color and sampled background
+        fg_rgb = blk["color"]
+        if abs(_luminance(fg_rgb) - _luminance(bg_rgb)) < 0.25:
+            fg_rgb = (0.0, 0.0, 0.0) if _luminance(bg_rgb) > 0.5 else (1.0, 1.0, 1.0)
+
+        c.setFillColorRGB(*fg_rgb)
+        c.setFont(chosen_font, fit_size)
+        leading = fit_size * 1.2
+        y = height - top - fit_size * 0.88
+        for line in wrapped:
+            if y < max(4.0, height - bottom - pad - leading * 0.35):
+                break
+            c.drawString(x0, y, line)
+            y -= leading
+
+    c.showPage()
+    c.save()
+    buf.seek(0)
+    from pypdf import PdfReader
+    return PdfReader(buf).pages[0]
+
+
+def _render_page_bg(pdfium_doc, page_index):
+    """Render a 72-dpi RGB PIL image for background-color sampling (or None)."""
+    if pdfium_doc is None:
+        return None
+    try:
+        with core.PDFIUM_LOCK:
+            return pdfium_doc[page_index].render(scale=1.0).to_pil().convert("RGB")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def translate_pdf(
     input_path,
     output_path,
@@ -573,9 +792,9 @@ def translate_pdf(
     translator=None,
 ):
     """Translate a PDF into one of three output modes:
-    - ``side-by-side``: double-width PDF with original page left, translation right.
+    - ``side-by-side``: double-width PDF with original page left, layout-preserved translation right.
     - ``text``: plain-text ``.txt`` file with page markers.
-    - ``in-place``: writes translated page overlay + translated annotations & form fields.
+    - ``in-place``: layout-preserving translation overlaid on the original pages + translated annotations & form fields.
     """
     src = Path(input_path)
     dst = Path(output_path)
@@ -584,50 +803,114 @@ def translate_pdf(
         raise core.PdfManagerError(f"unknown translation mode: {mode!r}")
 
     reader = core.open_pdf(src, password=password)
-    pages_raw = []
-    for page in reader.pages:
-        txt = (page.extract_text() or "").strip()
-        pages_raw.append(_extract_paragraphs(txt))
-
-    flat_paras = [p for paras in pages_raw for p in paras]
-    flat_translated = translate_texts(flat_paras, src_lang, dst_lang, translator=translator)
-
-    pages_translated = []
-    cursor = 0
-    for paras in pages_raw:
-        chunk = flat_translated[cursor : cursor + len(paras)]
-        cursor += len(paras)
-        pages_translated.append("\n\n".join(chunk))
 
     if mode == "text":
+        pages_raw = []
+        for page in reader.pages:
+            txt = (page.extract_text() or "").strip()
+            pages_raw.append(_extract_paragraphs(txt))
+        flat_paras = [p for paras in pages_raw for p in paras]
+        flat_translated = translate_texts(flat_paras, src_lang, dst_lang, translator=translator)
+        pages_translated = []
+        cursor = 0
+        for paras in pages_raw:
+            chunk = flat_translated[cursor : cursor + len(paras)]
+            cursor += len(paras)
+            pages_translated.append("\n\n".join(chunk))
         sections = [f"--- Page {i} ---\n{txt}" for i, txt in enumerate(pages_translated, start=1)]
         dst.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
         return {"mode": mode, "pages": len(pages_translated), "output": str(dst)}
 
-    writer = PdfWriter()
-    if mode == "side-by-side":
-        for orig_page, trans_text in zip(reader.pages, pages_translated):
+    # Extract positioned layout blocks per page via pdfplumber so images, tables,
+    # borders, columns, font sizes, and colors stay intact.
+    pages_blocks = []
+    try:
+        import pdfplumber
+
+        with pdfplumber.open(str(src), password=password or "") as pdoc:
+            for ppage in pdoc.pages:
+                pages_blocks.append(_extract_layout_blocks(ppage))
+    except Exception:  # noqa: BLE001 - fall back to plain text pages if pdfplumber fails
+        pages_blocks = [[] for _ in reader.pages]
+
+    if len(pages_blocks) != len(reader.pages):
+        pages_blocks = [[] for _ in reader.pages]
+
+    # Translate all positioned blocks in one deduplicated batch
+    flat_texts = [blk["text"] for blks in pages_blocks for blk in blks]
+    flat_translated = translate_texts(flat_texts, src_lang, dst_lang, translator=translator) if flat_texts else []
+
+    pages_trans_blocks = []
+    cursor = 0
+    for blks in pages_blocks:
+        chunk = flat_translated[cursor : cursor + len(blks)]
+        cursor += len(blks)
+        pages_trans_blocks.append(chunk)
+
+    # Optional 72-dpi render for exact background-color matching under each text block
+    pdfium_doc = None
+    try:
+        import pypdfium2 as pdfium
+
+        with core.PDFIUM_LOCK:
+            pdfium_doc = pdfium.PdfDocument(str(src), password=password)
+    except Exception:  # noqa: BLE001
+        pdfium_doc = None
+
+    try:
+        writer = PdfWriter()
+        if mode == "side-by-side":
+            for idx, (orig_page, blks, trans_blks) in enumerate(
+                zip(reader.pages, pages_blocks, pages_trans_blocks)
+            ):
+                w = float(orig_page.mediabox.width)
+                h = float(orig_page.mediabox.height)
+                spread = writer.add_blank_page(width=w * 2, height=h)
+                spread.merge_page(orig_page)
+                if blks:
+                    bg_img = _render_page_bg(pdfium_doc, idx)
+                    overlay = _make_layout_overlay(w, h, blks, trans_blks, bg_image=bg_img)
+                    shift = Transformation().translate(w, 0)
+                    spread.merge_transformed_page(orig_page, shift)
+                    spread.merge_transformed_page(overlay, shift)
+                else:
+                    raw_txt = (orig_page.extract_text() or "").strip()
+                    fallback = "\n\n".join(
+                        translate_texts(_extract_paragraphs(raw_txt), src_lang, dst_lang, translator=translator)
+                    ) if raw_txt else "(no text on page)"
+                    right_page = _make_text_page(w, h, fallback)
+                    spread.merge_transformed_page(right_page, Transformation().translate(w, 0))
+            with open(dst, "wb") as fh:
+                writer.write(fh)
+            return {"mode": mode, "pages": len(reader.pages), "output": str(dst)}
+
+        # in-place mode: overlay translated blocks directly onto the original pages
+        # (preserving images, tables, borders, colors, and layout) + translate annotations/fields
+        for idx, (orig_page, blks, trans_blks) in enumerate(zip(reader.pages, pages_blocks, pages_trans_blocks)):
             w = float(orig_page.mediabox.width)
             h = float(orig_page.mediabox.height)
-            spread = PageObject.create_blank_page(width=w * 2, height=h)
-            spread.merge_page(orig_page)
-            right_page = _make_text_page(w, h, trans_text or "(no text on page)")
-            spread.merge_transformed_page(right_page, Transformation().translate(w, 0))
-            writer.add_page(spread)
+            if blks:
+                bg_img = _render_page_bg(pdfium_doc, idx)
+                overlay = _make_layout_overlay(w, h, blks, trans_blks, bg_image=bg_img)
+                attached = writer.add_page(orig_page)
+                attached.merge_page(overlay)
+            else:
+                raw_txt = (orig_page.extract_text() or "").strip()
+                fallback = "\n\n".join(
+                    translate_texts(_extract_paragraphs(raw_txt), src_lang, dst_lang, translator=translator)
+                ) if raw_txt else ""
+                new_page = _make_text_page(w, h, fallback)
+                if "/Annots" in orig_page:
+                    new_page[NameObject("/Annots")] = orig_page["/Annots"]
+                writer.add_page(new_page)
+        updated_items = _translate_annotations_and_fields(writer, src_lang, dst_lang, translator)
         with open(dst, "wb") as fh:
             writer.write(fh)
-        return {"mode": mode, "pages": len(pages_translated), "output": str(dst)}
-
-    # in-place mode: replace page text cleanly + translate annotations & form values
-    for orig_page, trans_text in zip(reader.pages, pages_translated):
-        w = float(orig_page.mediabox.width)
-        h = float(orig_page.mediabox.height)
-        new_page = _make_text_page(w, h, trans_text)
-        # Carry over annotations/widgets so they can be translated in place
-        if "/Annots" in orig_page:
-            new_page[NameObject("/Annots")] = orig_page["/Annots"]
-        writer.add_page(new_page)
-    updated_items = _translate_annotations_and_fields(writer, src_lang, dst_lang, translator)
-    with open(dst, "wb") as fh:
-        writer.write(fh)
-    return {"mode": mode, "pages": len(pages_translated), "annotations_translated": updated_items, "output": str(dst)}
+        return {"mode": mode, "pages": len(reader.pages), "annotations_translated": updated_items, "output": str(dst)}
+    finally:
+        if pdfium_doc is not None:
+            try:
+                with core.PDFIUM_LOCK:
+                    pdfium_doc.close()
+            except Exception:  # noqa: BLE001
+                pass
