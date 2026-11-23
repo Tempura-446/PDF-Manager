@@ -14,7 +14,7 @@ from pathlib import Path
 
 from pypdf import PageObject, PdfWriter, Transformation
 from pypdf.generic import NameObject, TextStringObject
-from reportlab.lib.utils import simpleSplit
+from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 
 from pdfmanager import core, fonts, i18n, progress
@@ -246,9 +246,16 @@ def _load_single_translator(s, d, mdir):
 
         def _ct2_batch(batch):
             tokenized = [sp_src.encode(text, out_type=str) for text in batch]
-            results = tr.translate_batch(tokenized)
-            return [sp_tgt.decode(r.hypotheses[0]) for r in results]
+            results = tr.translate_batch(
+                tokenized,
+                beam_size=4,
+                replace_unknowns=True,
+                no_repeat_ngram_size=4,
+                max_decoding_length=512,
+            )
+            return [_clean_mt_output(sp_tgt.decode(r.hypotheses[0]), d) for r in results]
 
+        _ct2_batch._neural = True
         return _ct2_batch
 
     # Fallback: Argos Translate if installed
@@ -262,7 +269,11 @@ def _load_single_translator(s, d, mdir):
         if from_lang and to_lang:
             tr = from_lang.get_translation(to_lang)
             if tr is not None:
-                return lambda batch: [tr.translate(text) for text in batch]
+                def _argos_batch(batch):
+                    return [_clean_mt_output(tr.translate(text), d) for text in batch]
+
+                _argos_batch._neural = True
+                return _argos_batch
     except ImportError:
         pass
 
@@ -271,6 +282,77 @@ def _load_single_translator(s, d, mdir):
         "(ctranslate2 + sentencepiece, or argostranslate) is installed. "
         "Update ZPDF, re-run Install ZPDF.cmd, or run: pip install ctranslate2 sentencepiece"
     )
+
+
+_CJK_LANGS = {"zh", "zh-Hans", "zh-Hant", "ja", "ko"}
+_CJK_CHAR_RE = re.compile(r"[\u3000-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af]")
+_CJK_SPACE_RE = re.compile(
+    r"(?<=[\u3000-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af])\s+"
+    r"(?=[\u3000-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af])"
+)
+_BULLET_LINE_RE = re.compile(r"^(?:[\u2022\u2023\u25e6\u2043\u2219•▪▸►\-*–—]|\d+[.)]|[A-Za-z][.)])\s+")
+
+
+def _is_cjk_lang(lang):
+    norm = i18n.normalize_code(lang or "")
+    return norm in _CJK_LANGS or norm.split("-", 1)[0] in _CJK_LANGS
+
+
+def _clean_mt_output(text, dst_lang):
+    """Strip leaked SentencePiece ``▁`` markers and normalize whitespace."""
+    out = str(text or "").replace("\u2581", " ")
+    out = re.sub(r"[ \t]{2,}", " ", out).strip()
+    if _is_cjk_lang(dst_lang):
+        out = _CJK_SPACE_RE.sub("", out)
+    return out
+
+
+def _extract_paragraphs(raw_text):
+    """Reflow ``pypdf.extract_text()`` lines into clean paragraphs & standalone headings.
+
+    PDF text extraction emits a single ``\\n`` at every visual line wrap. Joining
+    continuing prose lines while keeping headings, bullets, and blank-line breaks
+    separate prevents neural MT models from dropping headings or mangling
+    mid-sentence wraps.
+    """
+    lines = [ln.rstrip() for ln in str(raw_text or "").splitlines()]
+    paragraphs = []
+    buf = []
+
+    def _flush():
+        if buf:
+            text = " ".join(buf).strip()
+            text = re.sub(r"[ \t]{2,}", " ", text)
+            if text:
+                paragraphs.append(text)
+            buf.clear()
+
+    for raw_ln in lines:
+        ln = raw_ln.strip()
+        if not ln:
+            _flush()
+            continue
+        if _BULLET_LINE_RE.match(ln):
+            _flush()
+            buf.append(ln)
+            continue
+        if not buf:
+            buf.append(ln)
+            continue
+        prev = buf[-1]
+        # De-hyphenate wrapped English/Latin words ("agree-\nment" -> "agreement")
+        if prev.endswith("-") and len(prev) >= 2 and prev[-2].isalpha() and ln[0].islower():
+            buf[-1] = prev[:-1] + ln
+            continue
+        # Keep short headings/labels or lines ending in sentence punctuation / colon separate
+        prev_ends_block = prev[-1] in ".!?。！？:" or len(prev) < 42
+        if prev_ends_block and (ln[0].isupper() or _CJK_CHAR_RE.match(ln[0]) or ln[0].isdigit()):
+            _flush()
+            buf.append(ln)
+        else:
+            buf.append(ln)
+    _flush()
+    return paragraphs
 
 
 def _load_offline_translator(src_lang, dst_lang):
@@ -293,7 +375,12 @@ def _load_offline_translator(src_lang, dst_lang):
         if hop1 is not None and hop2 is not None:
             fn1 = _load_single_translator(s, i18n.DEFAULT_LANG, hop1)
             fn2 = _load_single_translator(i18n.DEFAULT_LANG, d, hop2)
-            return lambda batch: fn2(fn1(batch))
+
+            def _pivot_batch(batch):
+                return fn2(fn1(batch))
+
+            _pivot_batch._neural = bool(getattr(fn1, "_neural", False) or getattr(fn2, "_neural", False))
+            return _pivot_batch
 
     pack_code = d if d != i18n.DEFAULT_LANG else s
     raise core.PdfManagerError(
@@ -303,9 +390,12 @@ def _load_offline_translator(src_lang, dst_lang):
 
 
 def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32):
-    """Translate a sequence of strings offline, preserving placeholders and deduplicating
-    identical strings (e.g. repeated headers/footers) so each unique text is translated once."""
+    """Translate a sequence of strings offline, preserving placeholders (for
+    non-neural translators) and deduplicating identical strings so each unique
+    sentence is translated once."""
     fn = translator if translator is not None else _load_offline_translator(src_lang, dst_lang)
+    use_placeholders = not getattr(fn, "_neural", False)
+    joiner = "" if _is_cjk_lang(dst_lang) else " "
     cache = {}
     unique_sentences = []
     per_text_plan = []
@@ -314,7 +404,11 @@ def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32
         if not raw or not str(raw).strip():
             per_text_plan.append(None)
             continue
-        masked, tokens = protect_tokens(str(raw))
+        text_str = str(raw)
+        if use_placeholders:
+            masked, tokens = protect_tokens(text_str)
+        else:
+            masked, tokens = text_str, ()
         sents = split_sentences(masked)
         per_text_plan.append((sents, tokens))
         for s in sents:
@@ -339,8 +433,8 @@ def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32
             results.append("")
             continue
         sents, tokens = item
-        joined = " ".join(cache.get(s, s) for s in sents)
-        results.append(restore_tokens(joined, tokens))
+        joined = joiner.join(cache.get(s, s) for s in sents)
+        results.append(restore_tokens(joined, tokens) if tokens else joined)
     return results
 
 
@@ -351,7 +445,7 @@ def translate_page(path, page_num, src_lang, dst_lang, *, password=None, transla
     if page_num < 1 or page_num > total:
         raise core.PdfManagerError(f"page {page_num} is out of range (1–{total})")
     raw_text = (reader.pages[page_num - 1].extract_text() or "").strip()
-    paragraphs = [p.strip() for p in re.split(r"\n{2,}", raw_text) if p.strip()]
+    paragraphs = _extract_paragraphs(raw_text)
     if not paragraphs:
         return {"page": page_num, "src_lang": src_lang, "dst_lang": dst_lang, "original": "", "translated": ""}
     translated_paras = translate_texts(paragraphs, src_lang, dst_lang, translator=translator)
@@ -364,22 +458,74 @@ def translate_page(path, page_num, src_lang, dst_lang, *, password=None, transla
     }
 
 
+def _wrap_text(text, font_name, font_size, max_w):
+    """Wrap ``text`` to ``max_w`` points, handling both space-delimited Latin
+    text and spaceless CJK scripts (Chinese, Japanese, Korean)."""
+    if not text:
+        return [""]
+    lines = []
+    # Tokenize into CJK single chars, whitespace, or non-CJK words
+    parts = re.findall(r"[\u3000-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af]|\s+|[^\s\u3000-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af]+", text)
+    cur = ""
+    for part in parts:
+        if not cur and part.isspace():
+            continue
+        cand = cur + part
+        if pdfmetrics.stringWidth(cand, font_name, font_size) <= max_w:
+            cur = cand
+            continue
+        if cur.strip():
+            lines.append(cur.rstrip())
+            cur = ""
+        if part.isspace():
+            continue
+        if pdfmetrics.stringWidth(part, font_name, font_size) <= max_w:
+            cur = part
+        else:
+            # Break an overlong token (e.g. URL) by character
+            chunk = ""
+            for ch in part:
+                if chunk and pdfmetrics.stringWidth(chunk + ch, font_name, font_size) > max_w:
+                    lines.append(chunk)
+                    chunk = ch
+                else:
+                    chunk += ch
+            cur = chunk
+    if cur.strip():
+        lines.append(cur.rstrip())
+    return lines or [""]
+
+
 def _make_text_page(width, height, text, font_name=None, font_size=10):
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(width, height))
     margin = 36
     max_w = max(72, width - 2 * margin)
-    y = height - margin
-    leading = font_size * 1.4
+    avail_h = max(72, height - 2 * margin)
     chosen_font = font_name or fonts.font_for(text or "")
-    c.setFont(chosen_font, font_size)
-    for para in (text or "").split("\n\n"):
-        for line in simpleSplit(para, chosen_font, font_size, max_w):
+    paras = (text or "").split("\n\n")
+
+    # Auto-fit font size down gently if a dense translated page would overflow
+    size = float(font_size)
+    wrapped = []
+    for candidate_size in (size, min(size, 9.0), min(size, 8.0), min(size, 7.0)):
+        leading = candidate_size * 1.4
+        wrapped = [_wrap_text(p, chosen_font, candidate_size, max_w) for p in paras]
+        needed_h = sum(len(lines) * leading + leading * 0.45 for lines in wrapped)
+        size = candidate_size
+        if needed_h <= avail_h:
+            break
+
+    y = height - margin
+    leading = size * 1.4
+    c.setFont(chosen_font, size)
+    for lines in wrapped:
+        for line in lines:
             if y < margin:
                 break
             c.drawString(margin, y, line)
             y -= leading
-        y -= leading * 0.5
+        y -= leading * 0.45
     c.showPage()
     c.save()
     buf.seek(0)
@@ -441,8 +587,7 @@ def translate_pdf(
     pages_raw = []
     for page in reader.pages:
         txt = (page.extract_text() or "").strip()
-        paras = [p.strip() for p in re.split(r"\n{2,}", txt) if p.strip()]
-        pages_raw.append(paras)
+        pages_raw.append(_extract_paragraphs(txt))
 
     flat_paras = [p for paras in pages_raw for p in paras]
     flat_translated = translate_texts(flat_paras, src_lang, dst_lang, translator=translator)

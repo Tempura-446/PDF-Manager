@@ -92,3 +92,55 @@ def test_missing_tokenizer_reports_specific_error(tmp_path, monkeypatch):
 
     with pytest.raises(core.PdfManagerError, match="no tokenizer"):
         translate._load_single_translator("en", "es", mdir)
+
+
+def test_clean_mt_output_strips_sentencepiece_marker_and_cjk_spaces():
+    assert translate._clean_mt_output("\u2581你好, 你今天好吗?", "zh-Hans") == "你好, 你今天好吗?"
+    assert translate._clean_mt_output("\u2581本文件 解释了 协议 的 条款。", "zh-Hans") == "本文件解释了协议的条款。"
+    assert translate._clean_mt_output("\u2581Hello   world", "en") == "Hello world"
+
+
+def test_extract_paragraphs_preserves_headings_bullets_and_reflows_prose():
+    raw = (
+        "Invoice INV-2026-118\n"
+        "Please sign and return this agree-\n"
+        "ment before December 31, 2026.\n"
+        "- First item\n"
+        "- Second item\n"
+    )
+    paras = translate._extract_paragraphs(raw)
+    assert paras == [
+        "Invoice INV-2026-118",
+        "Please sign and return this agreement before December 31, 2026.",
+        "- First item",
+        "- Second item",
+    ]
+
+
+def test_neural_translator_skips_ztok_placeholders():
+    seen = []
+
+    def neural_fn(batch):
+        seen.extend(batch)
+        return batch
+
+    neural_fn._neural = True
+    out = translate.translate_texts(
+        ["Please pay $1,250.00 before 2026-12-31."],
+        "en",
+        "zh-Hans",
+        translator=neural_fn,
+    )
+    assert out == ["Please pay $1,250.00 before 2026-12-31."]
+    assert all("__ZTOK" not in s for s in seen)
+
+
+def test_cjk_wrap_text_breaks_long_chinese_lines():
+    from pdfmanager import fonts
+
+    text = "本文件详细解释了协议的所有条款和条件请在截止日期前签署并归还本协议以便及时处理您的申请。"
+    font_name = fonts.font_for(text)
+    lines = translate._wrap_text(text, font_name, 10, 120)
+    assert len(lines) >= 3
+    assert "".join(lines) == text
+
