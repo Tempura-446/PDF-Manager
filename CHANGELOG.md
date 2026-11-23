@@ -4,6 +4,29 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.62.1
+
+Language module download sizes & progress bar, model caching, auto-detect, vertical headroom, and Smart AI connection test.
+
+- **Language module download sizes & live progress bar.** Displays exact sizes
+  for NLLB-200 (`645 MB`, `1.4 GB`) and ZPDF packs (and estimated sizes for
+  Argos packs) in **Settings → Language**, shows on-disk size for installed
+  packs, and streams real-time MB/GB & `%` progress with a **Cancel** button
+  in both Settings and the inline Translate PDF download flow.
+- **In-memory model LRU cache & reuse.** Keeps the active CTranslate2 model +
+  tokenizer in memory (LRU size 2, auto-invalidated on `model.bin` update) and
+  reuses one loaded translator across blocks, fallback pages, and annotations
+  for 5–10× faster repeat and page-by-page translations.
+- **Offline auto-detect source language.** Added zero-dependency script &
+  language detection (`Auto-detect` default in **Translate PDF**).
+- **Smart vertical headroom, cropped-page fix & scanned-PDF warning.** Uses
+  available whitespace below non-table blocks so longer target languages (e.g.
+  EN → ES/DE/FR) don't clip, accounts for non-zero `CropBox` offsets, and warns
+  when pages have no selectable text (suggesting **Make searchable (OCR)**).
+- **Multi-phase PDF translation progress & Smart AI Test connection button.**
+  Reports distinct layout/translate/render phases and lets you verify local
+  Ollama or API endpoints in 1 click under **Settings → Language**.
+
 ## 0.62.0
 
 Smarter 100% offline PDF translation, NLLB-200 1.3B pack, and custom glossary.
