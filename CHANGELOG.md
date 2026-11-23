@@ -4,6 +4,24 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.61.5
+
+Major performance optimizations for permanent content redaction and in-place
+text editing (zero accuracy or security trade-offs).
+
+- **3.8× faster content redaction (`redactcontent.py`).** Added a horizontal
+  vertical-span fast-path in `_text()` to skip per-glyph matrix/quad checks on
+  lines outside redaction boxes, added global bounding-box rejection to
+  `_Areas` / `_center_in()`, and streamlined `_chars()` and `_same_places()`.
+  50 dense pages dropped from `7.54s` to `1.97s` (`3.82×` faster), and 100-page
+  `benchmark.py` RSS fell from `98 MB` to `62 MB`.
+- **3.4× faster text editing (`textedit/rewrite.py`, `glyphs.py`).** Replaced
+  per-character `get_text_range(i, 1)` FFI/UTF-16 decoding with direct
+  `FPDFText_GetUnicode` (preserving PDFium `0x0002` line-end hyphen handling),
+  cached `pypdfium2.raw`, reused `ctypes.c_double` origin buffers, and switched
+  `_intact()` to `(0, 0)`-first neighbor lookup. 10 dense pages dropped from
+  `1.87s` to `0.54s` (`3.45×` faster).
+
 ## 0.61.4
 
 Windows standalone double-click bundle publishing, trimmed Linux packages,

@@ -2,7 +2,7 @@
 # winget portable-zip manifest template for ZPDF standalone Windows builds.
 # Update PackageVersion and InstallerSha256 from ZPDF-<version>-windows-standalone.zip.sha256.
 PackageIdentifier: Tempura446.ZPDF
-PackageVersion: 0.61.4
+PackageVersion: 0.61.5
 PackageLocale: en-US
 Publisher: Tempura-446
 PublisherUrl: https://github.com/Tempura-446/ZPDF-releases
@@ -17,7 +17,7 @@ Installers:
     NestedInstallerFiles:
       - RelativeFilePath: ZPDF\ZPDF.exe
         PortableCommandAlias: zpdf
-    InstallerUrl: https://github.com/Tempura-446/ZPDF-releases/releases/download/v0.61.4/ZPDF-0.61.4-windows-standalone.zip
+    InstallerUrl: https://github.com/Tempura-446/ZPDF-releases/releases/download/v0.61.5/ZPDF-0.61.5-windows-standalone.zip
     InstallerSha256: REPLACE_WITH_SHA256_FROM_RELEASE
 ManifestType: singleton
 ManifestVersion: 1.6.0
