@@ -4,6 +4,25 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.61.6
+
+Offline translation runtime fix and codebase solidification.
+
+- **Offline translation runtime included in installer and in-app updater.**
+  Fixed `Install ZPDF.cmd` (`install.ps1`), the in-app updater (`update.py`),
+  and the lockfile generator (`lock.py`) to install `[app,ocr,translate]`
+  (`ctranslate2` + `sentencepiece`) automatically with graceful fallback, and
+  verified both modules inside the standalone app `--self-test` across Windows,
+  macOS, and Linux.
+- **Resource hygiene & zero-warning `pikepdf` opening.** Fixed an unclosed file
+  handle in `redact.py`, added `core.open_pikepdf()` to eliminate spurious
+  password warnings on unencrypted PDFs, and replaced deprecated Pillow
+  `Image.getdata()` usage.
+- **Static code-quality guardrails.** Added `tests/test_code_quality.py` to
+  permanently enforce clean AST, zero bare `except:`, zero mutable defaults,
+  zero unclosed inline `open()` calls, zero `shell=True`, and release metadata
+  consistency.
+
 ## 0.61.5
 
 Major performance optimizations for permanent content redaction and in-place
