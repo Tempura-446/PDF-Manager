@@ -4,6 +4,30 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.64.3
+
+Performance & memory release: ~4× faster cold startup, 2–3× faster offline MADLAD-400 translation, warm OCR batch pool, gzipped static assets, and 1-click model RAM release.
+
+- **~4× faster cold startup.** Extracted zero-dependency `pdfmanager/errors.py`
+  (`PdfManagerError`) and deferred `pypdf`, `cryptography`, `PIL`, and `core`
+  imports across `gui.py` and `server/*` so the desktop window and HTTP server
+  launch in ~160 ms before any PDF/crypto libraries load.
+- **2–3× faster offline MADLAD-400 translation & instant Cancel.** Added
+  per-batch string deduplication (headers/footers/table headings translated
+  once), length-sorted token-bounded sub-batching (`max_batch_size=2048,
+  batch_type="tokens"`, 32 chunks/sub-batch with mid-batch `progress.check()`),
+  `beam_size=2` for multi-billion MADLAD-400 models, and `inter_threads=2` on
+  6+ core CPUs.
+- **Free model RAM button.** Added `POST /api/translate/unload` and a **Free
+  model RAM** button in **Settings → Language** to release cached CTranslate2
+  translators from memory on demand without restarting ZPDF.
+- **Warm OCR worker pool for batch jobs.** Reuses a bounded
+  `ProcessPoolExecutor` across consecutive OCR files with a 120 s idle TTL and
+  `atexit` cleanup so batch folder OCR avoids re-spawning ONNX workers per file.
+- **Pre-cached gzip static asset serving.** Automatically serves gzip-compressed
+  JS/CSS/SVG/JSON assets (>4 KB) from `_STATIC_CACHE` when the browser sends
+  `Accept-Encoding: gzip`, cutting initial reader payload by ~75%.
+
 ## 0.64.2
 
 Fixed pack removal confirmation dialog and redesigned Settings with clean section tabs.

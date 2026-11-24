@@ -1637,6 +1637,89 @@ def _recognise_scan_page_worker(task):
     return page_idx, lines, turn, angle, img_size
 
 
+_OCR_POOL_LOCK = threading.Lock()
+_OCR_POOL_STATE = {"pool": None, "workers": 0, "in_use": False, "timer": None, "atexit": False}
+_OCR_POOL_IDLE_SECS = 120.0
+
+
+def shutdown_ocr_pool():
+    """Shut down the cached OCR worker pool if idle (or at interpreter exit)."""
+    with _OCR_POOL_LOCK:
+        timer = _OCR_POOL_STATE.get("timer")
+        if timer is not None:
+            timer.cancel()
+            _OCR_POOL_STATE["timer"] = None
+        if _OCR_POOL_STATE.get("in_use"):
+            return
+        pool = _OCR_POOL_STATE.get("pool")
+        _OCR_POOL_STATE["pool"] = None
+        _OCR_POOL_STATE["workers"] = 0
+    if pool is not None:
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:  # noqa: BLE001 - best-effort shutdown
+            pass
+
+
+def _acquire_ocr_pool(max_workers, *, custom_worker=False):
+    """Return ``(executor, is_shared)``. Reuses a warm ProcessPoolExecutor across
+    batch OCR files so workers keep ONNX models loaded; falls back to a dedicated
+    pool if the shared pool is currently busy or a custom worker is supplied."""
+    import atexit
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+
+    if custom_worker:
+        return ProcessPoolExecutor(max_workers=max_workers, mp_context=multiprocessing.get_context("spawn")), False
+
+    old_pool = None
+    with _OCR_POOL_LOCK:
+        if _OCR_POOL_STATE["in_use"]:
+            # Another concurrent OCR job owns the shared pool -> dedicated one-off pool.
+            return ProcessPoolExecutor(max_workers=max_workers, mp_context=multiprocessing.get_context("spawn")), False
+        timer = _OCR_POOL_STATE.get("timer")
+        if timer is not None:
+            timer.cancel()
+            _OCR_POOL_STATE["timer"] = None
+        pool = _OCR_POOL_STATE.get("pool")
+        if pool is not None and _OCR_POOL_STATE["workers"] < max_workers:
+            old_pool = pool
+            pool = None
+        if pool is None:
+            pool = ProcessPoolExecutor(max_workers=max_workers, mp_context=multiprocessing.get_context("spawn"))
+            _OCR_POOL_STATE["pool"] = pool
+            _OCR_POOL_STATE["workers"] = max_workers
+        _OCR_POOL_STATE["in_use"] = True
+        if not _OCR_POOL_STATE["atexit"]:
+            atexit.register(shutdown_ocr_pool)
+            _OCR_POOL_STATE["atexit"] = True
+
+    if old_pool is not None:
+        try:
+            old_pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:  # noqa: BLE001
+            pass
+    return pool, True
+
+
+def _release_ocr_pool(executor, shared, *, broken=False):
+    if not shared:
+        executor.shutdown(wait=not broken, cancel_futures=broken)
+        return
+    with _OCR_POOL_LOCK:
+        _OCR_POOL_STATE["in_use"] = False
+        if broken:
+            if _OCR_POOL_STATE.get("pool") is executor:
+                _OCR_POOL_STATE["pool"] = None
+                _OCR_POOL_STATE["workers"] = 0
+            executor.shutdown(wait=False, cancel_futures=True)
+            return
+        timer = threading.Timer(_OCR_POOL_IDLE_SECS, shutdown_ocr_pool)
+        timer.daemon = True
+        timer.start()
+        _OCR_POOL_STATE["timer"] = timer
+
+
 def _run_builtin(source, output, force, deskew, rotate=True, script=None, notes=None, quality="standard",
                  report=None, workers=None, _page_worker=None):
     """``notes`` (a list) is given what was done beyond reading plain scans:
@@ -1878,14 +1961,10 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
         use_pool = n_workers > 1 and len(unique_items) >= min_parallel and can_pool
 
         if use_pool:
-            import multiprocessing
-
             worker_fn = _page_worker or _recognise_scan_page_worker
             hash_by_page = {info[0]: h for h, info in unique_items}
-            executor = ProcessPoolExecutor(
-                max_workers=min(n_workers, len(unique_items)),
-                mp_context=multiprocessing.get_context("spawn"),
-            )
+            pool_size = min(n_workers, len(unique_items))
+            executor, shared = _acquire_ocr_pool(pool_size, custom_worker=_page_worker is not None)
             try:
                 futs = {
                     executor.submit(worker_fn, (str(source), info[0], rotate, deskew, script, quality)): info[0]
@@ -1901,13 +1980,13 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
                     done_count += 1
                     progress.report(min(done_count, total - 1), total, "page")
             except progress.Cancelled:
-                executor.shutdown(wait=False, cancel_futures=True)
+                _release_ocr_pool(executor, shared, broken=True)
                 raise
             except BaseException:
-                executor.shutdown(wait=False, cancel_futures=True)
+                _release_ocr_pool(executor, shared, broken=True)
                 raise
             else:
-                executor.shutdown(wait=True)
+                _release_ocr_pool(executor, shared, broken=False)
         else:
             for img_hash, (page_idx, page_w, page_h, scale) in unique_items:
                 progress.report(min(done_count, total - 1), total, "page")

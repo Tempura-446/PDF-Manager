@@ -20,8 +20,9 @@ from http.server import BaseHTTPRequestHandler
 from importlib import resources
 from pathlib import Path
 
-from pdfmanager import __version__, applog, core, privacy, progress, quickactions, update
+from pdfmanager import __version__, applog, privacy, progress, quickactions, update
 from pdfmanager.appdata import data_dir, write_private
+from pdfmanager.errors import PdfManagerError
 from pdfmanager.pageranges import PageRangeError
 
 # One run's uploads. Parsing a form upload takes several times its size in
@@ -84,6 +85,9 @@ def lazy_module(mod_name):
     return _LazyModule(mod_name)
 
 
+core = lazy_module("pdfmanager.core")
+
+
 def gui_hook(name, default):
     """Look up ``name`` on ``pdfmanager.gui`` if loaded so tests that
     monkeypatch attributes on ``gui`` continue to take effect without creating
@@ -97,7 +101,7 @@ class UserError(Exception):
 
 
 # Errors whose message is shown to the user as it is.
-EXPECTED_ERRORS = (UserError, core.PdfManagerError, PageRangeError, ValueError,
+EXPECTED_ERRORS = (UserError, PdfManagerError, PageRangeError, ValueError,
                    FileNotFoundError, NotADirectoryError)
 
 
@@ -655,8 +659,20 @@ class HandlerBase(BaseHTTPRequestHandler):
             if not target.is_file():
                 return self._error(HTTPStatus.NOT_FOUND, "not found")
             data = target.read_bytes()
-            cached = _STATIC_CACHE[rel] = (data, '"%s"' % hashlib.blake2b(data, digest_size=8).hexdigest())
-        data, etag = cached
+            etag = '"%s"' % hashlib.blake2b(data, digest_size=8).hexdigest()
+            gz = None
+            ext = Path(rel).suffix.lower()
+            if len(data) >= 4096 and ext in (".js", ".mjs", ".css", ".svg", ".json"):
+                import gzip
+                gz_bytes = gzip.compress(data, compresslevel=6)
+                if len(gz_bytes) < len(data) * 0.9:
+                    gz = gz_bytes
+            cached = _STATIC_CACHE[rel] = (data, etag, gz)
+        if len(cached) == 2:  # backwards compat if tests inject 2-tuples
+            data, etag = cached
+            gz = None
+        else:
+            data, etag, gz = cached
         if etag in self.headers.get("If-None-Match", ""):
             self.send_response(HTTPStatus.NOT_MODIFIED)
             self.send_header("ETag", etag)
@@ -664,6 +680,12 @@ class HandlerBase(BaseHTTPRequestHandler):
             self.end_headers()
             return None
         ctype = STATIC_TYPES.get(Path(rel).suffix.lower(), "application/octet-stream")
+        if gz is not None and "gzip" in self.headers.get("Accept-Encoding", "").lower():
+            return self._send(
+                HTTPStatus.OK, gz, ctype,
+                {"ETag": etag, "Content-Encoding": "gzip", "Vary": "Accept-Encoding"},
+                cache=True,
+            )
         return self._send(HTTPStatus.OK, data, ctype, {"ETag": etag}, cache=True)
 
     def _opened_path(self, key):

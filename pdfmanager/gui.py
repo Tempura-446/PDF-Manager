@@ -39,10 +39,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
-from pypdf import PdfReader
-
-from pdfmanager import (__version__, applog, core, filefacts, filetools, privacy,
-                        progress, quickactions, recipes, update)
+from pdfmanager import (__version__, applog, filefacts, privacy,
+                        progress, quickactions, update)
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 from pdfmanager.server.common import (
@@ -62,6 +60,8 @@ certcrypt = lazy_module("pdfmanager.certcrypt")
 certsign = lazy_module("pdfmanager.certsign")
 comments = lazy_module("pdfmanager.comments")
 compare = lazy_module("pdfmanager.compare")
+core = lazy_module("pdfmanager.core")
+filetools = lazy_module("pdfmanager.filetools")
 formdetect = lazy_module("pdfmanager.formdetect")
 forms = lazy_module("pdfmanager.forms")
 layers = lazy_module("pdfmanager.layers")
@@ -73,6 +73,7 @@ outline = lazy_module("pdfmanager.outline")
 pageimages = lazy_module("pdfmanager.pageimages")
 pdfacheck = lazy_module("pdfmanager.pdfacheck")
 protection = lazy_module("pdfmanager.protection")
+recipes = lazy_module("pdfmanager.recipes")
 redact = lazy_module("pdfmanager.redact")
 risks = lazy_module("pdfmanager.risks")
 scan = lazy_module("pdfmanager.scan")
@@ -416,6 +417,8 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._i18n_pack_download(body)
             if path == "/api/translate/test":
                 return self._translate_test(body)
+            if path == "/api/translate/unload":
+                return self._translate_unload()
             if path == "/api/shellmenu":
                 from pdfmanager import winsetup
 

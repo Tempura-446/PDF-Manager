@@ -142,7 +142,10 @@ def steps(entry):
 
     do = entry["do"]
     if "tool" in do:
-        return [{"op": do["tool"], "options": default_options(do["tool"]) if default_options else {}}]
+        fn = default_options
+        if fn is None:
+            from pdfmanager.server.operations import default_options as fn
+        return [{"op": do["tool"], "options": fn(do["tool"]) if fn else {}}]
     return recipes.get(do["recipe"])["steps"]
 
 

@@ -8,13 +8,14 @@ import time
 import urllib.parse
 from http import HTTPStatus
 
-from pdfmanager import applog, privacy, progress, recipes, update
+from pdfmanager import applog, privacy, progress, update
 from pdfmanager.server.common import (
     UserError, _bool, _num, _parse_multipart, gui_hook, lazy_module,
 )
 
 background = lazy_module("pdfmanager.background")
 ocr = lazy_module("pdfmanager.ocr")
+recipes = lazy_module("pdfmanager.recipes")
 scanner = lazy_module("pdfmanager.scanner")
 scanpdf = lazy_module("pdfmanager.scanpdf")
 watchfolders = lazy_module("pdfmanager.watchfolders")
@@ -365,4 +366,11 @@ class ScanWatchRoutesMixin:
         sample = fn(["Hello world"])[0]
         ms = int((time.monotonic() - t0) * 1000)
         return self._send(HTTPStatus.OK, {"ok": True, "model": model, "sample": sample, "ms": ms})
+
+    def _translate_unload(self):
+        mod = sys.modules.get("pdfmanager.translate")
+        if mod is None:
+            return self._send(HTTPStatus.OK, {"unloaded": 0, "freed_bytes": 0})
+        return self._send(HTTPStatus.OK, mod.unload_cached_models())
+
 

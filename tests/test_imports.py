@@ -30,7 +30,6 @@ NOT_IMPORTED = {"__main__"}
 # longer need each other; never add one (see the failure message for how).
 ALLOWED_PAIRS = {
     ("core", "ocr"),         # core.ocr() is the public entry; ocr builds on core
-    ("gui", "recipes"),      # recipes runs gui's tools; gui lists the recipes
     ("gui", "update"),       # the relaunch helper starts the app again
     ("archive", "pdfafix"),  # PDF/A conversion; pdfafix uses archive's sanitize and colour profile
     ("ocr", "scan"),         # ocr finds Tesseract through scan; scan's auto-rotate reads with ocr

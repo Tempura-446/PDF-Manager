@@ -12,12 +12,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from pypdf import PdfReader
-
-from pdfmanager import (
-    applog, core, filefacts, filetools, privacy, progress, quickactions,
-    recipes,
-)
+from pdfmanager import applog, filefacts, privacy, progress, quickactions
 from pdfmanager.server.common import (
     EXPECTED_ERRORS, UserError, _bool, _file_mentions, _log, _num, _pages,
     _safe_name, lazy_module,
@@ -29,6 +24,8 @@ certcrypt = lazy_module("pdfmanager.certcrypt")
 certsign = lazy_module("pdfmanager.certsign")
 comments = lazy_module("pdfmanager.comments")
 compare = lazy_module("pdfmanager.compare")
+core = lazy_module("pdfmanager.core")
+filetools = lazy_module("pdfmanager.filetools")
 formdetect = lazy_module("pdfmanager.formdetect")
 forms = lazy_module("pdfmanager.forms")
 layers = lazy_module("pdfmanager.layers")
@@ -38,18 +35,28 @@ organize = lazy_module("pdfmanager.organize")
 outline = lazy_module("pdfmanager.outline")
 pdfacheck = lazy_module("pdfmanager.pdfacheck")
 protection = lazy_module("pdfmanager.protection")
+recipes = lazy_module("pdfmanager.recipes")
 redact = lazy_module("pdfmanager.redact")
 risks = lazy_module("pdfmanager.risks")
 scan = lazy_module("pdfmanager.scan")
 search = lazy_module("pdfmanager.search")
 watchfolders = lazy_module("pdfmanager.watchfolders")
 
-# Lightweight copies of static choice tuples so OPERATIONS can be built without
-# eagerly importing certsign (cryptography), pdfacheck, or organize at startup.
+# Lightweight copies of static choice tuples/dicts so OPERATIONS can be built
+# without eagerly importing pypdf, cryptography, or heavy submodules at startup.
 _CERT_POSITIONS = ("bottom-right", "bottom-left", "bottom-center",
                    "top-right", "top-left", "top-center")
 _PDFA_LEVELS = ("1a", "1b", "2a", "2b", "2u", "3a", "3b", "3u")
 _ORGANIZE_GROUPINGS = ("year", "month", "author", "pages", "size", "title-letter")
+_STYLE_NAMES = {"1": "1, 2, 3", "i": "i, ii, iii", "I": "I, II, III",
+                "a": "a, b, c", "A": "A, B, C", "": "no number (prefix only)"}
+_CHANGES_TEXT = {
+    "any": "any changes except extracting pages",
+    "comments": "commenting, filling in forms and signing",
+    "forms": "filling in forms and signing",
+    "pages": "inserting, deleting and turning pages",
+    "none": "no changes",
+}
 
 _TRANSLATE_LANGS = [
     ["en", "English"],
@@ -241,7 +248,7 @@ OPERATIONS = [
      "fields": [_f("roman", "Front pages numbered i, ii, iii", "number", 0, min=0,
                    hint="e.g. 4 for a cover and three pages of contents; 0 for none"),
                 _f("style", "Then number", "select", "1",
-                   choices=[[k, v] for k, v in filetools.STYLE_NAMES.items()]),
+                   choices=[[k, v] for k, v in _STYLE_NAMES.items()]),
                 _f("prefix", "Prefix", "text", "", placeholder="e.g. A-"),
                 _f("start", "Starting at", "number", 1, min=1),
                 _f("custom", "Or write them out", "text", "", placeholder="1: Cover; 2-4: i; 5-: 1",
@@ -459,7 +466,7 @@ OPERATIONS = [
                    choices=[["high", "Allowed"], ["low", "Low quality only"],
                             ["none", "Not allowed"]]),
                 _f("changes", "Changes", "select", "any",
-                   choices=[[k, v[0].upper() + v[1:]] for k, v in filetools.CHANGES_TEXT.items()]),
+                   choices=[[k, v[0].upper() + v[1:]] for k, v in _CHANGES_TEXT.items()]),
                 _f("copy", "Allow copying text and pictures", "check", True),
                 _f("owner_password", "Permissions password", "password", "",
                    hint="Needed for the limits above, and different from the password to "
@@ -884,6 +891,7 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
                                 at_start=at_start, password=password)
     elif op == "booklet":
         core.booklet(src, out, opts.get("size") or None, password)
+        from pypdf import PdfReader
         sheets = len(PdfReader(str(out)).pages) // 2
         notes.append(f"{src.name}: {sheets} sheet{'s' if sheets != 1 else ''} of paper. Print on "
                      "both sides, flipping on the short edge, then fold in the middle.")
@@ -1578,6 +1586,7 @@ def _was_protected(path, password):
     if not password or path.suffix.lower() != ".pdf":
         return False
     try:
+        from pypdf import PdfReader
         return PdfReader(str(path)).is_encrypted
     except Exception:
         return False  # not a readable PDF: the tool itself reports that
@@ -1875,9 +1884,6 @@ def default_options(op):
             continue
         opts[field["key"]] = ("true" if value else "false") if isinstance(value, bool) else str(value)
     return opts
-
-
-watchfolders.default_options = default_options
 
 
 def run_action(action, paths, work):
