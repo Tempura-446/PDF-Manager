@@ -9,7 +9,7 @@ import time
 from http import HTTPStatus
 from pathlib import Path
 
-from pdfmanager import applog, core, filefacts, progress
+from pdfmanager import applog, filefacts, progress
 from pdfmanager.server.common import (
     EXPECTED_ERRORS, UserError, _bool, _file_mentions, _parse_multipart,
     _safe_name, gui_hook, lazy_module,
@@ -17,6 +17,7 @@ from pdfmanager.server.common import (
 
 accessibility = lazy_module("pdfmanager.accessibility")
 certsign = lazy_module("pdfmanager.certsign")
+core = lazy_module("pdfmanager.core")
 preflight = lazy_module("pdfmanager.preflight")
 redact = lazy_module("pdfmanager.redact")
 from pdfmanager.server.operations import (

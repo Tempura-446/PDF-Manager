@@ -204,6 +204,23 @@ function renderLanguageState(info) {
   activate("general");
 })();
 
+$("set-translate-unload")?.addEventListener("click", async () => {
+  try {
+    const res = await jsonApi("/api/translate/unload", {});
+    const n = Number(res?.unloaded || 0);
+    const bytes = Number(res?.freed_bytes || 0);
+    if (!n) {
+      updateStatus("lang-status", "No translation models are currently loaded in RAM.");
+    } else {
+      const sz = bytes >= 1_000_000_000 ? `${(bytes / 1_000_000_000).toFixed(1)} GB`
+        : (bytes >= 1_000_000 ? `${Math.round(bytes / 1_000_000)} MB` : "");
+      updateStatus("lang-status", `Unloaded ${n} model${n === 1 ? "" : "s"} from RAM${sz ? ` (~${sz} freed)` : ""}.`);
+    }
+  } catch (err) {
+    updateStatus("lang-status", err.message || String(err), true);
+  }
+});
+
 let langCatalogCache = null;
 let langDlBusy = false;
 

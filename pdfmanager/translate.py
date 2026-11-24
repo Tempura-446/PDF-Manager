@@ -288,9 +288,11 @@ def _get_cached_ct2(ct2_dir, sp_src_path, sp_tgt_path, ctranslate2, spm):
         if tr is None:
             import os
 
-            threads = min(8, max(2, (os.cpu_count() or 4) // 2))
+            cpus = os.cpu_count() or 4
+            inter = 2 if cpus >= 6 else 1
+            intra = min(8, max(2, cpus // (2 * inter)))
             try:
-                tr = ctranslate2.Translator(str(ct2_dir), device="cpu", intra_threads=threads, inter_threads=1)
+                tr = ctranslate2.Translator(str(ct2_dir), device="cpu", intra_threads=intra, inter_threads=inter)
             except TypeError:
                 tr = ctranslate2.Translator(str(ct2_dir), device="cpu")
         entry = (tr, sp_src, sp_tgt)
@@ -303,6 +305,28 @@ def _get_cached_ct2(ct2_dir, sp_src_path, sp_tgt_path, ctranslate2, spm):
                 total_bytes -= evicted_bytes
             _CT2_KEY_LOCKS.pop(key, None)
         return entry
+
+
+def cached_models_info():
+    """Return count and estimated RAM bytes of currently cached CTranslate2 models."""
+    with _CT2_CACHE_LOCK:
+        return {
+            "count": len(_CT2_CACHE),
+            "bytes": sum(b for _, b in _CT2_CACHE.values()),
+        }
+
+
+def unload_cached_models():
+    """Release all cached CTranslate2 translators from RAM and run GC."""
+    import gc
+
+    with _CT2_CACHE_LOCK:
+        count = len(_CT2_CACHE)
+        freed = sum(b for _, b in _CT2_CACHE.values())
+        _CT2_CACHE.clear()
+        _CT2_KEY_LOCKS.clear()
+    gc.collect()
+    return {"unloaded": count, "freed_bytes": freed}
 
 
 _ZH_TRAD_CHARS = set("這為們個說會時國學體點對關開門車書長發經與從進還實務業")
@@ -462,10 +486,13 @@ def _load_single_translator(s, d, mdir):
     )
 
 
-def _translate_ct2_bucketed(tr, tokenized, *, target_prefix_token=None):
-    """Run ``tr.translate_batch()`` with length-adaptive ``max_decoding_length``,
-    ``repetition_penalty=1.2``, and a tighter retry if a short input hallucinates
-    an abnormally long tail."""
+_CT2_SUB_BATCH = 32
+
+
+def _translate_ct2_bucketed(tr, tokenized, *, target_prefix_token=None, beam_size=4):
+    """Run ``tr.translate_batch()`` with length-sorted token-bounded sub-batches,
+    length-adaptive ``max_decoding_length``, ``repetition_penalty=1.2``, and a
+    tighter retry if a short input hallucinates an abnormally long tail."""
     if not tokenized:
         return []
     buckets = {"short": [], "med": [], "long": []}
@@ -482,43 +509,50 @@ def _translate_ct2_bucketed(tr, tokenized, *, target_prefix_token=None):
     for name, items in buckets.items():
         if not items:
             continue
-        progress.check()
-        batch_toks = [t for _, t in items]
-        max_src = max(len(t) for t in batch_toks)
-        if name == "short":
-            max_dec = max(36, min(64, int(max_src * 3.0) + 12))
-        elif name == "med":
-            max_dec = max(96, min(192, int(max_src * 2.6) + 16))
-        else:
-            max_dec = min(512, max(200, int(max_src * 2.5) + 16))
-        kwargs = {
-            "beam_size": 4,
-            "repetition_penalty": 1.2,
-            "replace_unknowns": True,
-            "no_repeat_ngram_size": 4,
-            "max_decoding_length": max_dec,
-        }
-        if target_prefix_token is not None:
-            kwargs["target_prefix"] = [[target_prefix_token]] * len(batch_toks)
-        results = tr.translate_batch(batch_toks, **kwargs)
-        for (orig_idx, src_toks), res in zip(items, results):
-            hyp = list(res.hypotheses[0])
-            # Guard against short-heading runaway hallucinations (> 3.5x source token count)
-            if len(src_toks) <= 24 and len(hyp) > max(32, int(len(src_toks) * 3.5)):
-                progress.check()
-                retry_kwargs = {
-                    "beam_size": 2,
-                    "repetition_penalty": 1.35,
-                    "replace_unknowns": True,
-                    "no_repeat_ngram_size": 3,
-                    "max_decoding_length": max(24, int(len(src_toks) * 2.0) + 8),
-                }
-                if target_prefix_token is not None:
-                    retry_kwargs["target_prefix"] = [[target_prefix_token]]
-                retry_res = tr.translate_batch([src_toks], **retry_kwargs)
-                if retry_res and retry_res[0].hypotheses:
-                    hyp = list(retry_res[0].hypotheses[0])
-            hyps[orig_idx] = hyp
+        # Sort by token length within each bucket to minimize padding waste.
+        items.sort(key=lambda pair: len(pair[1]))
+        for start in range(0, len(items), _CT2_SUB_BATCH):
+            progress.check()
+            sub = items[start : start + _CT2_SUB_BATCH]
+            batch_toks = [t for _, t in sub]
+            max_src = max(len(t) for t in batch_toks)
+            if name == "short":
+                max_dec = max(36, min(64, int(max_src * 3.0) + 12))
+            elif name == "med":
+                max_dec = max(96, min(192, int(max_src * 2.6) + 16))
+            else:
+                max_dec = min(512, max(200, int(max_src * 2.5) + 16))
+            kwargs = {
+                "beam_size": beam_size,
+                "repetition_penalty": 1.2,
+                "replace_unknowns": True,
+                "no_repeat_ngram_size": 4,
+                "max_decoding_length": max_dec,
+            }
+            if target_prefix_token is not None:
+                kwargs["target_prefix"] = [[target_prefix_token]] * len(batch_toks)
+            try:
+                results = tr.translate_batch(batch_toks, max_batch_size=2048, batch_type="tokens", **kwargs)
+            except TypeError:
+                results = tr.translate_batch(batch_toks, **kwargs)
+            for (orig_idx, src_toks), res in zip(sub, results):
+                hyp = list(res.hypotheses[0])
+                # Guard against short-heading runaway hallucinations (> 3.5x source token count)
+                if len(src_toks) <= 24 and len(hyp) > max(32, int(len(src_toks) * 3.5)):
+                    progress.check()
+                    retry_kwargs = {
+                        "beam_size": min(2, beam_size),
+                        "repetition_penalty": 1.35,
+                        "replace_unknowns": True,
+                        "no_repeat_ngram_size": 3,
+                        "max_decoding_length": max(24, int(len(src_toks) * 2.0) + 8),
+                    }
+                    if target_prefix_token is not None:
+                        retry_kwargs["target_prefix"] = [[target_prefix_token]]
+                    retry_res = tr.translate_batch([src_toks], **retry_kwargs)
+                    if retry_res and retry_res[0].hypotheses:
+                        hyp = list(retry_res[0].hypotheses[0])
+                hyps[orig_idx] = hyp
     return hyps
 
 
@@ -776,12 +810,25 @@ def _load_madlad_translator(s, d, mdir):
     dst_tag = f"<2{dst_code}>"
 
     def _madlad_batch(batch):
-        tokenized = [[dst_tag, *sp.encode(text, out_type=str), "</s>"] for text in batch]
-        hyps = _translate_ct2_bucketed(tr, tokenized)
-        return [
+        if not batch:
+            return []
+        unique = []
+        index_of = {}
+        mapping = []
+        for text in batch:
+            idx = index_of.get(text)
+            if idx is None:
+                idx = len(unique)
+                index_of[text] = idx
+                unique.append(text)
+            mapping.append(idx)
+        tokenized = [[dst_tag, *sp.encode(text, out_type=str), "</s>"] for text in unique]
+        hyps = _translate_ct2_bucketed(tr, tokenized, beam_size=2)
+        decoded = [
             _clean_mt_output(sp.decode([t for t in hyp if t not in ("</s>", "<s>", "<unk>")]), d)
             for hyp in hyps
         ]
+        return [decoded[i] for i in mapping]
 
     _madlad_batch._neural = True
     _madlad_batch._context_window = 360

@@ -45,8 +45,7 @@ PAPER_SIZES = {
 }
 
 
-class PdfManagerError(Exception):
-    pass
+from pdfmanager.errors import PdfManagerError  # noqa: F401 - re-exported for callers
 
 
 # --------------------------------------------------------------------------

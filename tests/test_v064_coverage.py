@@ -259,7 +259,8 @@ def test_form_routes_full_lifecycle(live_server, tmp_path):
 def test_gui_import_keeps_heavy_modules_lazy():
     code = (
         "import sys, pdfmanager.gui; "
-        "heavy = ['numpy', 'pikepdf', 'pdfmanager.search', 'pdfmanager.ocr', "
+        "heavy = ['pypdf', 'cryptography', 'PIL', 'numpy', 'pikepdf', "
+        "'pdfmanager.core', 'pdfmanager.search', 'pdfmanager.ocr', "
         "'pdfmanager.accessibility', 'pdfmanager.certsign', 'pdfmanager.layers', "
         "'pdfmanager.compare', 'pdfmanager.redact', 'pdfmanager.preflight', 'pdfmanager.office']; "
         "loaded = [m for m in heavy if m in sys.modules]; "
@@ -382,4 +383,44 @@ def test_translate_language_options_cover_madlad():
     for code in codes:
         mapped = translate.bcp47_to_madlad(code)
         assert mapped, f"missing MADLAD mapping for {code}"
+
+
+def test_translate_unload_route(live_server):
+    host, port, token, _ = live_server
+    status, data, _ = _req(host, port, token, "POST", "/api/translate/unload", b"{}")
+    assert status == 200
+    payload = json.loads(data)
+    assert "unloaded" in payload and "freed_bytes" in payload
+
+
+def test_static_gzip_compression(live_server):
+    import gzip
+
+    host, port, token, _ = live_server
+    conn = http.client.HTTPConnection(host, port, timeout=10)
+    conn.request("GET", "/static/app.css", headers={"Accept-Encoding": "gzip"})
+    resp = conn.getresponse()
+    body = resp.read()
+    enc = resp.getheader("Content-Encoding")
+    conn.close()
+    assert resp.status == 200
+    assert enc == "gzip"
+    text = gzip.decompress(body).decode("utf-8")
+    assert ".settings-dialog" in text
+
+
+def test_ocr_reusable_pool_lifecycle():
+    try:
+        pool1, shared1 = ocr._acquire_ocr_pool(2)
+        assert shared1 is True
+        ocr._release_ocr_pool(pool1, shared1, broken=False)
+
+        pool2, shared2 = ocr._acquire_ocr_pool(2)
+        assert shared2 is True
+        assert pool2 is pool1
+        ocr._release_ocr_pool(pool2, shared2, broken=False)
+    finally:
+        ocr.shutdown_ocr_pool()
+    assert ocr._OCR_POOL_STATE["pool"] is None
+
 

@@ -6,9 +6,10 @@ import tempfile
 from http import HTTPStatus
 from pathlib import Path
 
-from pdfmanager import core, filefacts
+from pdfmanager import filefacts
 from pdfmanager.server.common import UserError, _bool, _parse_multipart, _safe_name, lazy_module
 
+core = lazy_module("pdfmanager.core")
 formdetect = lazy_module("pdfmanager.formdetect")
 forms = lazy_module("pdfmanager.forms")
 

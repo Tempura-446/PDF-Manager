@@ -31,7 +31,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from pdfmanager import __version__, core, progress
+from pdfmanager import __version__, errors as core, progress
 from pdfmanager.appdata import data_dir, write_private
 
 REPO = "Tempura-446/PDF-Manager"          # development: a branch, read with a token
