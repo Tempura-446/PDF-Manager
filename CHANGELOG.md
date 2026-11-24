@@ -4,6 +4,20 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.64.1
+
+Translation pack cleanup & expanded MADLAD-400 language options.
+
+- **Removable legacy language packs.** Fixed `remove_pack()` in `i18n.py` so
+  previously downloaded retired packs (such as `nllb-200-1.3b` and
+  `nllb-200-3.3b`) can be cleanly removed from **Settings → Language** while
+  keeping strict path-traversal protection.
+- **94 languages in Translate PDF & Reader.** Expanded the **From language**
+  and **To language** dropdowns in both **Translate PDF** (including the Reader
+  File Panel) and Reader's **Translate this page…** dialog (plus MADLAD-400
+  code mappings in `translate.py`) from 18 to 94 major world languages, with
+  **Auto-detect** enabled by default in Reader page translation.
+
 ## 0.64.0
 
 Speed, Polish & Full Coverage: faster startup, virtualized large-PDF page board, OCR worker caching, Smart Filing Rules editor, full i18n/ARIA polish, and complete HTTP route test coverage.

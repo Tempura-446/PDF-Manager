@@ -340,3 +340,46 @@ def test_filing_rules_http_roundtrip(live_server, tmp_path):
     preview = json.loads(data_prev)
     assert preview["matched"] is True and preview["rule"] == "Custom Invoices"
     assert "inv_1001.pdf" in preview["target"]
+
+
+def test_remove_legacy_nllb_pack_and_reject_traversal(live_server, tmp_path):
+    from pdfmanager import core, i18n
+
+    host, port, token, _ = live_server
+    # Simulate an old pre-v0.63.2 NLLB-200 pack installed on disk
+    legacy_dir = i18n.packs_dir() / "nllb-200-1.3b"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    (legacy_dir / "manifest.json").write_text(
+        json.dumps({"code": "nllb-200-1.3b", "name": "NLLB-200 1.3B (legacy)", "version": "1.0"}),
+        encoding="utf-8",
+    )
+    (legacy_dir / "model.bin").write_bytes(b"fake-weights")
+
+    installed_codes = [p["code"] for p in i18n.list_installed_packs()]
+    assert "nllb-200-1.3b" in installed_codes
+
+    # Remove via live HTTP endpoint
+    status, data, _ = _req(
+        host, port, token, "POST", "/api/i18n/packs/remove",
+        json.dumps({"code": "nllb-200-1.3b"}).encode("utf-8"),
+    )
+    assert status == 200
+    assert json.loads(data)["removed"] == "nllb-200-1.3b"
+    assert not legacy_dir.exists()
+
+    # Path traversal must still be rejected
+    with pytest.raises(core.PdfManagerError):
+        i18n.remove_pack("../outside")
+
+
+def test_translate_language_options_cover_madlad():
+    from pdfmanager import translate
+    from pdfmanager.server import operations
+
+    assert len(operations._TRANSLATE_LANGS) >= 80
+    codes = [code for code, _ in operations._TRANSLATE_LANGS]
+    assert {"th", "id", "sv", "el", "he", "fa", "ro", "hu", "sw", "bn", "ta", "tl"} <= set(codes)
+    for code in codes:
+        mapped = translate.bcp47_to_madlad(code)
+        assert mapped, f"missing MADLAD mapping for {code}"
+
