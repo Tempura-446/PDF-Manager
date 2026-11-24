@@ -134,12 +134,12 @@ def translate_pdf(
                     with core.PDFIUM_LOCK:
                         pil_img = pdfium_doc[idx].render(scale=2.0).to_pil()
                     page_img_sizes[idx] = pil_img.size
-                    bubbles = _manga.detect_speech_bubbles(pil_img, reading_dir=reading_dir)
+                    p_page = plumber_doc.pages[idx] if (plumber_doc is not None and idx < len(plumber_doc.pages)) else None
+                    bubbles = _manga.detect_speech_bubbles(pil_img, reading_dir=reading_dir, plumber_page=p_page)
                     page_bubbles[idx] = bubbles
                     if not bubbles:
                         empty_pages += 1
                         continue
-                    p_page = plumber_doc.pages[idx] if (plumber_doc is not None and idx < len(plumber_doc.pages)) else None
                     for b_i, bubble in enumerate(bubbles):
                         txt = _manga.extract_bubble_text(
                             pil_img, bubble, src_hint, ocr_fn=ocr_fn, plumber_page=p_page,

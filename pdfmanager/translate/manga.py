@@ -104,7 +104,35 @@ def _eroded_mask_image(filled_mask):
     return img.filter(ImageFilter.MinFilter(size=5))
 
 
-def _scan_polarity_components(gray, rgb_arr, mask, *, inverted, orig_w, orig_h):
+def _has_plumber_chars_in_box(plumber_page, ox0, oy0, ox1, oy1, orig_w, orig_h):
+    """Return True if ``plumber_page`` has non-whitespace selectable chars inside pixel box."""
+    if plumber_page is None:
+        return False
+    try:
+        raw_chars = plumber_page.chars or []
+    except Exception as _exc:
+        logging.getLogger("zpdf").debug("manga._has_plumber_chars_in_box: %s", _exc)
+        return False
+    if not raw_chars:
+        return False
+    page_w = float(plumber_page.width or 1.0)
+    page_h = float(plumber_page.height or 1.0)
+    sx = page_w / max(1.0, float(orig_w))
+    sy = page_h / max(1.0, float(orig_h))
+    bx0, bx1 = ox0 * sx, ox1 * sx
+    btop, bbot = oy0 * sy, oy1 * sy
+    for ch in raw_chars:
+        txt = str(ch.get("text") or "")
+        if not txt or txt.isspace():
+            continue
+        cx = (float(ch.get("x0", 0.0)) + float(ch.get("x1", 0.0))) / 2.0
+        cy = (float(ch.get("top", 0.0)) + float(ch.get("bottom", 0.0))) / 2.0
+        if bx0 <= cx <= bx1 and btop <= cy <= bbot:
+            return True
+    return False
+
+
+def _scan_polarity_components(gray, rgb_arr, mask, *, inverted, orig_w, orig_h, plumber_page=None):
     """Find enclosed speech-bubble candidates for one polarity (light or dark/inverted)."""
     import numpy as np
 
@@ -214,7 +242,12 @@ def _scan_polarity_components(gray, rgb_arr, mask, *, inverted, orig_w, orig_h):
         if raw_solidity < 0.30:
             continue
 
-        # Check inner box for contrasting dialogue ink
+        ox0 = int(round(min_x * inv_sx))
+        oy0 = int(round(min_y * inv_sy))
+        ox1 = int(round((max_x + 1) * inv_sx))
+        oy1 = int(round((max_y + 1) * inv_sy))
+
+        # Check inner box for contrasting dialogue ink (or digital selectable chars)
         pad_x = max(2, int(round(bw * 0.14)))
         pad_y = max(2, int(round(bh * 0.14)))
         ix0, ix1 = min_x + pad_x, max_x - pad_x + 1
@@ -226,7 +259,8 @@ def _scan_polarity_components(gray, rgb_arr, mask, *, inverted, orig_w, orig_h):
             ink_ratio = float(np.mean(inner_gray >= 190))
         else:
             ink_ratio = float(np.mean(inner_gray < 140))
-        if not (0.01 <= ink_ratio <= 0.45):
+        has_ink = 0.01 <= ink_ratio <= 0.45
+        if not has_ink and not _has_plumber_chars_in_box(plumber_page, ox0, oy0, ox1, oy1, orig_w, orig_h):
             continue
 
         comp_mask = label_img[min_y:max_y + 1, min_x:max_x + 1] == root
@@ -246,10 +280,6 @@ def _scan_polarity_components(gray, rgb_arr, mask, *, inverted, orig_w, orig_h):
             bg_rgb = (0.07, 0.07, 0.08) if inverted else (1.0, 1.0, 1.0)
         text_rgb = (0.96, 0.96, 0.98) if inverted else (0.06, 0.06, 0.08)
 
-        ox0 = int(round(min_x * inv_sx))
-        oy0 = int(round(min_y * inv_sy))
-        ox1 = int(round((max_x + 1) * inv_sx))
-        oy1 = int(round((max_y + 1) * inv_sy))
         candidates.append({
             "x0": ox0,
             "y0": oy0,
@@ -268,7 +298,7 @@ def _scan_polarity_components(gray, rgb_arr, mask, *, inverted, orig_w, orig_h):
     return candidates
 
 
-def detect_speech_bubbles(pil_img, *, max_dim=480, reading_dir="rtl", detect_inverted=True):
+def detect_speech_bubbles(pil_img, *, max_dim=480, reading_dir="rtl", detect_inverted=True, plumber_page=None):
     """Detect enclosed speech bubbles (both light and dark/inverted) on a raster manga/comic page.
 
     Returns a list of bubble dicts sorted in reading order:
@@ -292,11 +322,13 @@ def detect_speech_bubbles(pil_img, *, max_dim=480, reading_dir="rtl", detect_inv
 
     candidates = _scan_polarity_components(
         gray, rgb_arr, gray >= 232, inverted=False, orig_w=orig_w, orig_h=orig_h,
+        plumber_page=plumber_page,
     )
     if detect_inverted:
         candidates.extend(
             _scan_polarity_components(
                 gray, rgb_arr, gray <= 45, inverted=True, orig_w=orig_w, orig_h=orig_h,
+                plumber_page=plumber_page,
             )
         )
 
