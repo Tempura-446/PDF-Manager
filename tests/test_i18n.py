@@ -323,11 +323,11 @@ def test_download_size_and_byte_progress(tmp_path, monkeypatch):
         i18n._http_download_to_file,
         "https://example.invalid/model.bin",
         dest,
-        progress_label="Downloading NLLB-200",
+        progress_label="Downloading MADLAD-400 3B",
         frac_start=0.1,
         frac_end=0.9,
     )
     assert job.state == "done"
     assert dest.read_bytes() == payload
-    assert any("Downloading NLLB-200" in (m or "") and "%" in (m or "") for m, _ in seen)
+    assert any("Downloading MADLAD-400 3B" in (m or "") and "%" in (m or "") for m, _ in seen)
     assert seen[-1][1] == pytest.approx(0.9)

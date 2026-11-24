@@ -169,6 +169,21 @@ def _vendored():
          "Permissive (Gerard D.C. Kuiken; Donald E. Knuth's hyphen.tex)", HYPHEN_EN_US),
         *((f"{name} font (static/fonts)", "5.3.0 (Fontsource)", "OFL-1.1 (SIL Open Font License 1.1)",
            _read(fonts / f"OFL-{key}.txt")) for name, key in FONTS),
+        ("Google MADLAD-400 3B MT (optional user download, not bundled)", "3B int8 (CTranslate2)",
+         "Apache-2.0 (Google; CTranslate2 conversion by Nextcloud-AI)",
+         "Optional offline universal translation model downloaded on demand from Hugging Face "
+         "(Nextcloud-AI/madlad400-3b-mt-ct2-int8, derived from google/madlad400-3b-mt). "
+         "Licensed under the Apache License, Version 2.0."),
+        ("Helsinki-NLP OPUS-MT (optional user download, not bundled)", "ct2fast int8",
+         "CC-BY-4.0 / Apache-2.0 (University of Helsinki; CTranslate2 conversion by michaelfeil)",
+         "Optional per-pair offline translation models downloaded on demand from Hugging Face "
+         "(michaelfeil/ct2fast-opus-mt-*, derived from Helsinki-NLP/opus-mt-*). "
+         "Original OPUS-MT models by Language Technology Research Group at the University of Helsinki "
+         "(CC-BY-4.0); CTranslate2 checkpoints published under Apache-2.0."),
+        ("Argos Translate models (optional user download, not bundled)", "argospm-index",
+         "MIT or CC0 (Argos Translate project)",
+         "Optional per-pair offline translation models downloaded on demand from argosopentech/argospm-index, "
+         "dual-licensed under the MIT License or Creative Commons CC0."),
     ]
 
 

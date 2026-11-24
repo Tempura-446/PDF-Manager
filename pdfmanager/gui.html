@@ -173,7 +173,7 @@
     <ul class="watch-list" id="set-packs-list" aria-label="Installed language packs"></ul>
     <label class="dlg-field" style="margin-top:8px;"><span>PDF translation engine</span>
       <select id="set-translate-engine">
-        <option value="offline">Built-in offline (NLLB-200 / Language Packs)</option>
+        <option value="offline">Built-in offline (MADLAD-400 / OPUS-MT / Language Packs)</option>
         <option value="llm">Smart AI (Local Ollama / LM Studio or OpenAI-compatible API)</option>
       </select></label>
     <div id="set-translate-llm-wrap" hidden style="margin:6px 0 8px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;">
@@ -196,7 +196,7 @@
       <textarea id="set-translate-glossary" rows="3" placeholder="One per line: keep verbatim (e.g. Acme Corp) or map (e.g. Force Majeure = 不可抗力)" style="width:100%;box-sizing:border-box;font-family:inherit;"></textarea></label>
     <div style="display:flex;gap:6px;align-items:center;margin:2px 0 6px;">
       <button type="button" class="btn secondary" id="set-translate-glossary-save">Save glossary</button>
-      <span class="dlg-hint" style="margin:0;">Applies to both offline (NLLB-200 / Language Packs) and Smart AI translation.</span>
+      <span class="dlg-hint" style="margin:0;">Applies to both offline (MADLAD-400 / OPUS-MT / Language Packs) and Smart AI translation.</span>
     </div>
     <div id="lang-dl-wrap" hidden style="display:flex;align-items:center;gap:8px;margin:6px 0 4px;">
       <span class="job-progress" id="lang-dl-bar" role="progressbar" aria-label="Language pack download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="flex:1;"><span></span></span>

@@ -420,11 +420,18 @@ def _load_single_translator(s, d, mdir):
             sp_src_path = sp_tgt_path = sp_files[0]
 
         tr, sp_src, sp_tgt = _get_cached_ct2(ct2_dir, sp_src_path, sp_tgt_path, ctranslate2, spm)
+        is_opus_spm = sp_src_path.name == "source.spm"
 
         def _ct2_batch(batch):
-            tokenized = [sp_src.encode(text, out_type=str) for text in batch]
+            if is_opus_spm:
+                tokenized = [sp_src.encode(text, out_type=str) + ["</s>"] for text in batch]
+            else:
+                tokenized = [sp_src.encode(text, out_type=str) for text in batch]
             hyps = _translate_ct2_bucketed(tr, tokenized)
-            return [_clean_mt_output(sp_tgt.decode(hyp), d) for hyp in hyps]
+            return [
+                _clean_mt_output(sp_tgt.decode([t for t in hyp if t not in ("</s>", "<s>", "<unk>")]), d)
+                for hyp in hyps
+            ]
 
         _ct2_batch._neural = True
         return _ct2_batch
@@ -608,80 +615,80 @@ def _extract_paragraphs(raw_text):
     return paragraphs
 
 
-_FLORES200_CODES = {
-    "en": "eng_Latn",
-    "zh": "zho_Hans",
-    "zh-Hans": "zho_Hans",
-    "zh-Hant": "zho_Hant",
-    "es": "spa_Latn",
-    "fr": "fra_Latn",
-    "de": "deu_Latn",
-    "ja": "jpn_Jpan",
-    "ko": "kor_Hang",
-    "ar": "arb_Arab",
-    "pt": "por_Latn",
-    "pt-BR": "por_Latn",
-    "pt-PT": "por_Latn",
-    "ru": "rus_Cyrl",
-    "it": "ita_Latn",
-    "nl": "nld_Latn",
-    "pl": "pol_Latn",
-    "tr": "tur_Latn",
-    "vi": "vie_Latn",
-    "th": "tha_Thai",
-    "hi": "hin_Deva",
-    "id": "ind_Latn",
-    "uk": "ukr_Cyrl",
-    "sv": "swe_Latn",
-    "da": "dan_Latn",
-    "fi": "fin_Latn",
-    "no": "nob_Latn",
-    "nb": "nob_Latn",
-    "cs": "ces_Latn",
-    "el": "ell_Grek",
-    "he": "heb_Hebr",
-    "fa": "pes_Arab",
-    "ro": "ron_Latn",
-    "hu": "hun_Latn",
-    "bg": "bul_Cyrl",
-    "hr": "hrv_Latn",
-    "sk": "slk_Latn",
-    "sl": "slv_Latn",
-    "ca": "cat_Latn",
-    "ms": "zsm_Latn",
-    "tl": "tgl_Latn",
-    "bn": "ben_Beng",
-    "ta": "tam_Taml",
-    "ur": "urd_Arab",
+_MADLAD_CODES = {
+    "en": "en",
+    "zh": "zh",
+    "zh-Hans": "zh",
+    "zh-CN": "zh",
+    "zh-Hant": "zh_Hant",
+    "zh-TW": "zh_Hant",
+    "es": "es",
+    "fr": "fr",
+    "de": "de",
+    "ja": "ja",
+    "ko": "ko",
+    "ar": "ar",
+    "pt": "pt",
+    "pt-BR": "pt",
+    "pt-PT": "pt",
+    "ru": "ru",
+    "it": "it",
+    "nl": "nl",
+    "pl": "pl",
+    "tr": "tr",
+    "vi": "vi",
+    "th": "th",
+    "hi": "hi",
+    "id": "id",
+    "uk": "uk",
+    "sv": "sv",
+    "da": "da",
+    "fi": "fi",
+    "no": "no",
+    "nb": "no",
+    "cs": "cs",
+    "el": "el",
+    "he": "he",
+    "fa": "fa",
+    "ro": "ro",
+    "hu": "hu",
+    "bg": "bg",
+    "hr": "hr",
+    "sk": "sk",
+    "sl": "sl",
+    "ca": "ca",
+    "ms": "ms",
+    "tl": "tl",
+    "bn": "bn",
+    "ta": "ta",
+    "ur": "ur",
 }
 
 
-def bcp47_to_flores(code):
-    """Map a ZPDF BCP-47 tag (e.g. ``en``, ``zh-Hans``, ``es``) to a Meta NLLB-200 FLORES-200 code."""
+def bcp47_to_madlad(code):
+    """Map a ZPDF BCP-47 tag (e.g. ``en``, ``zh-Hans``, ``zh-Hant``) to a Google MADLAD-400 language tag."""
     norm = i18n.normalize_code(code)
-    if norm in _FLORES200_CODES:
-        return _FLORES200_CODES[norm]
+    if norm in _MADLAD_CODES:
+        return _MADLAD_CODES[norm]
     base = norm.split("-", 1)[0].lower()
-    return _FLORES200_CODES.get(base)
+    return _MADLAD_CODES.get(base, base if re.fullmatch(r"[a-z]{2,3}", base) else None)
 
 
-def nllb_model_dir():
-    """Return the best installed NLLB-200 CTranslate2 model directory (preferring
-    ``nllb-200-3.3b`` > ``nllb-200-1.3b`` > ``nllb-200`` 600M), else ``None``."""
+def madlad_model_dir():
+    """Return the installed Google MADLAD-400 3B CTranslate2 model directory (Apache-2.0), else ``None``."""
     root = i18n.packs_dir()
-    for code in (i18n.NLLB_XL_PACK_CODE, i18n.NLLB_LARGE_PACK_CODE, i18n.NLLB_PACK_CODE):
-        for cand in (root / code / "models" / code, root / code):
-            if (cand / "model.bin").is_file() and list(cand.glob("*.model")):
-                return cand
+    code = i18n.MADLAD_PACK_CODE
+    for cand in (root / code / "models" / code, root / code):
+        if (cand / "model.bin").is_file() and list(cand.glob("*.model")):
+            return cand
     return None
 
 
-def _load_nllb_translator(s, d, mdir):
-    """Load Meta NLLB-200 (600M or 1.3B CTranslate2 int8) for direct ``s -> d`` translation."""
-    src_flores = bcp47_to_flores(s)
-    dst_flores = bcp47_to_flores(d)
-    if not src_flores or not dst_flores:
-        raise core.PdfManagerError(f"NLLB-200 does not have a language mapping for {s} → {d}")
+def _load_madlad_translator(s, d, mdir):
+    """Load Google MADLAD-400 3B (CTranslate2 int8, Apache-2.0) for direct ``s -> d`` translation."""
+    dst_code = bcp47_to_madlad(d)
+    if not dst_code:
+        raise core.PdfManagerError(f"MADLAD-400 does not have a language mapping for {d}")
 
     ct2_loaded = False
     for attempt in range(2):
@@ -697,30 +704,29 @@ def _load_nllb_translator(s, d, mdir):
 
     if not ct2_loaded:
         raise core.PdfManagerError(
-            f"found NLLB-200 model at {mdir}, but no offline translation runtime "
+            f"found MADLAD-400 model at {mdir}, but no offline translation runtime "
             "(ctranslate2 + sentencepiece) is installed. "
             "Update ZPDF, re-run Install ZPDF.cmd, or run: pip install ctranslate2 sentencepiece"
         )
 
     sp_file = next(
-        (mdir / name for name in ("sentencepiece.bpe.model", "sentencepiece.model") if (mdir / name).is_file()),
+        (mdir / name for name in ("spiece.model", "sentencepiece.model") if (mdir / name).is_file()),
         None,
     ) or sorted(mdir.glob("*.model"))[0]
     tr, sp, _ = _get_cached_ct2(mdir, sp_file, sp_file, ctranslate2, spm)
+    dst_tag = f"<2{dst_code}>"
 
-    def _nllb_batch(batch):
-        tokenized = [[src_flores, *sp.encode(text, out_type=str), "</s>"] for text in batch]
-        hyps = _translate_ct2_bucketed(tr, tokenized, target_prefix_token=dst_flores)
-        out = []
-        for hyp in hyps:
-            if hyp and hyp[0] == dst_flores:
-                hyp = hyp[1:]
-            out.append(_clean_mt_output(sp.decode(hyp), d))
-        return out
+    def _madlad_batch(batch):
+        tokenized = [[dst_tag, *sp.encode(text, out_type=str), "</s>"] for text in batch]
+        hyps = _translate_ct2_bucketed(tr, tokenized)
+        return [
+            _clean_mt_output(sp.decode([t for t in hyp if t not in ("</s>", "<s>", "<unk>")]), d)
+            for hyp in hyps
+        ]
 
-    _nllb_batch._neural = True
-    _nllb_batch._context_window = 360
-    return _nllb_batch
+    _madlad_batch._neural = True
+    _madlad_batch._context_window = 360
+    return _madlad_batch
 
 
 def _parse_llm_json_list(raw_content, expected_len):
@@ -824,7 +830,7 @@ def _load_llm_translator(src_lang, dst_lang, *, api_url, model, api_key="", glos
 def _load_offline_translator(src_lang, dst_lang):
     """Return a batch callable ``fn(list[str]) -> list[str]`` backed by the
     configured translation engine (Smart AI LLM when enabled in Settings,
-    otherwise NLLB-200 when installed, otherwise CTranslate2/Argos language
+    otherwise MADLAD-400 3B when installed, otherwise OPUS-MT / Argos language
     pack models with automatic English pivot)."""
     s = i18n.normalize_code(src_lang)
     d = i18n.normalize_code(dst_lang)
@@ -844,10 +850,10 @@ def _load_offline_translator(src_lang, dst_lang):
             glossary=cfg.get("translate_glossary") or "",
         )
 
-    # Prefer NLLB-200 universal high-quality model when installed and both languages are supported
-    nllb_dir = nllb_model_dir()
-    if nllb_dir is not None and bcp47_to_flores(s) and bcp47_to_flores(d):
-        return _load_nllb_translator(s, d, nllb_dir)
+    # Prefer MADLAD-400 3B universal model (Apache-2.0) when installed
+    madlad_dir = madlad_model_dir()
+    if madlad_dir is not None and bcp47_to_madlad(d):
+        return _load_madlad_translator(s, d, madlad_dir)
 
     mdir = model_dir_for(s, d)
     if mdir is not None:
@@ -991,7 +997,7 @@ def _split_structural_affixes(text, dst_lang):
 
 def _chunk_sentences_for_context(sents, max_chars):
     """Group consecutive sentences into multi-sentence chunks up to ``max_chars``
-    so context-capable models (NLLB-200, LLM) translate with paragraph context."""
+    so context-capable models (MADLAD-400, LLM) translate with paragraph context."""
     if not sents or max_chars <= 0 or len(sents) <= 1:
         return list(sents)
     chunks = []
