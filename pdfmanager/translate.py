@@ -1268,10 +1268,16 @@ def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32
                 unique_sentences.append(s)
 
     total = len(unique_sentences)
-    for start in range(0, total, max(1, int(batch_size))):
+    eff_batch = max(1, int(batch_size))
+    if is_neural and not is_llm and eff_batch < 128:
+        # CTranslate2 engines internally sort by token length and slice into
+        # _CT2_SUB_BATCH chunks with mid-batch progress.check(); feeding 128
+        # unique sentences per call minimizes padding waste across book pages.
+        eff_batch = 128
+    for start in range(0, total, eff_batch):
         progress.check()
         progress.report(start, max(1, total), "translating text")
-        chunk = unique_sentences[start : start + batch_size]
+        chunk = unique_sentences[start : start + eff_batch]
         translated_chunk = fn(chunk)
         if len(translated_chunk) != len(chunk):
             raise core.PdfManagerError("translation engine returned mismatched batch size")

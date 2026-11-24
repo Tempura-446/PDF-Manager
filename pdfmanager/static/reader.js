@@ -1122,132 +1122,95 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
   }
 
   /** Translate the currently visible page offline without modifying the PDF. */
-  async translateCurrentPage() {
+  async _translateLanguages() {
+    if (this._cachedTranslateLangs) return this._cachedTranslateLangs;
+    const fallback = [
+      ["en", "English"], ["es", "Español (Spanish)"], ["fr", "Français (French)"],
+      ["de", "Deutsch (German)"], ["zh-Hans", "简体中文 (Chinese Simplified)"],
+      ["zh-Hant", "繁體中文 (Chinese Traditional)"], ["ja", "日本語 (Japanese)"],
+      ["ko", "한국어 (Korean)"], ["ar", "العربية (Arabic)"], ["pt", "Português (Portuguese)"],
+      ["ru", "Русский (Russian)"], ["it", "Italiano (Italian)"],
+    ];
+    try {
+      const res = await fetch("/api/ops", {
+        headers: this.token ? { "X-Pdfm-Token": this.token } : {},
+      });
+      if (res.ok) {
+        const ops = await res.json();
+        const tr = Array.isArray(ops) ? ops.find((o) => o.id === "translate") : null;
+        const field = tr?.fields?.find((f) => f.name === "target_lang");
+        if (Array.isArray(field?.choices) && field.choices.length) {
+          this._cachedTranslateLangs = field.choices;
+          return this._cachedTranslateLangs;
+        }
+      }
+    } catch (_) {}
+    return fallback;
+  }
+
+  async translateCurrentPage(opts = null) {
     const tab = this.activeTab;
     if (!tab?.doc) return;
-    const langs = [
-      ["en", "English"],
-      ["zh-Hans", "简体中文 (Chinese Simplified)"],
-      ["zh-Hant", "繁體中文 (Chinese Traditional)"],
-      ["es", "Español (Spanish)"],
-      ["fr", "Français (French)"],
-      ["de", "Deutsch (German)"],
-      ["ja", "日本語 (Japanese)"],
-      ["ko", "한국어 (Korean)"],
-      ["ar", "العربية (Arabic)"],
-      ["pt", "Português (Portuguese)"],
-      ["ru", "Русский (Russian)"],
-      ["it", "Italiano (Italian)"],
-      ["nl", "Nederlands (Dutch)"],
-      ["pl", "Polski (Polish)"],
-      ["tr", "Türkçe (Turkish)"],
-      ["hi", "हिन्दी (Hindi)"],
-      ["vi", "Tiếng Việt (Vietnamese)"],
-      ["uk", "Українська (Ukrainian)"],
-      ["af", "Afrikaans"],
-      ["sq", "Shqip (Albanian)"],
-      ["am", "አማርኛ (Amharic)"],
-      ["hy", "Հայերեն (Armenian)"],
-      ["az", "Azərbaycan (Azerbaijani)"],
-      ["eu", "Euskara (Basque)"],
-      ["be", "Беларуская (Belarusian)"],
-      ["bn", "বাংলা (Bengali)"],
-      ["bs", "Bosanski (Bosnian)"],
-      ["bg", "Български (Bulgarian)"],
-      ["my", "မြန်မာ (Burmese)"],
-      ["ca", "Català (Catalan)"],
-      ["ceb", "Cebuano"],
-      ["hr", "Hrvatski (Croatian)"],
-      ["cs", "Čeština (Czech)"],
-      ["da", "Dansk (Danish)"],
-      ["eo", "Esperanto"],
-      ["et", "Eesti (Estonian)"],
-      ["tl", "Filipino / Tagalog"],
-      ["fi", "Suomi (Finnish)"],
-      ["gl", "Galego (Galician)"],
-      ["ka", "ქართული (Georgian)"],
-      ["el", "Ελληνικά (Greek)"],
-      ["gu", "ગુજરાતી (Gujarati)"],
-      ["ht", "Kreyòl Ayisyen (Haitian Creole)"],
-      ["ha", "Hausa"],
-      ["he", "עברית (Hebrew)"],
-      ["hu", "Magyar (Hungarian)"],
-      ["is", "Íslenska (Icelandic)"],
-      ["ig", "Igbo"],
-      ["id", "Bahasa Indonesia (Indonesian)"],
-      ["ga", "Gaeilge (Irish)"],
-      ["jv", "Basa Jawa (Javanese)"],
-      ["kn", "ಕನ್ನಡ (Kannada)"],
-      ["kk", "Қазақша (Kazakh)"],
-      ["km", "ខ្មែរ (Khmer)"],
-      ["ku", "Kurdî (Kurdish)"],
-      ["ky", "Кыргызча (Kyrgyz)"],
-      ["lo", "ລາວ (Lao)"],
-      ["la", "Latina (Latin)"],
-      ["lv", "Latviešu (Latvian)"],
-      ["lt", "Lietuvių (Lithuanian)"],
-      ["lb", "Lëtzebuergesch (Luxembourgish)"],
-      ["mk", "Македонски (Macedonian)"],
-      ["ms", "Bahasa Melayu (Malay)"],
-      ["ml", "മലയാളം (Malayalam)"],
-      ["mt", "Malti (Maltese)"],
-      ["mr", "मराठी (Marathi)"],
-      ["mn", "Монгол (Mongolian)"],
-      ["ne", "नेपाली (Nepali)"],
-      ["no", "Norsk (Norwegian)"],
-      ["ps", "پښتو (Pashto)"],
-      ["fa", "فارسی (Persian)"],
-      ["pa", "ਪੰਜਾਬੀ (Punjabi)"],
-      ["ro", "Română (Romanian)"],
-      ["sr", "Српски (Serbian)"],
-      ["sd", "سنڌي (Sindhi)"],
-      ["si", "සිංහල (Sinhala)"],
-      ["sk", "Slovenčina (Slovak)"],
-      ["sl", "Slovenščina (Slovenian)"],
-      ["so", "Soomaali (Somali)"],
-      ["su", "Basa Sunda (Sundanese)"],
-      ["sw", "Kiswahili (Swahili)"],
-      ["sv", "Svenska (Swedish)"],
-      ["tg", "Тоҷикӣ (Tajik)"],
-      ["ta", "தமிழ் (Tamil)"],
-      ["te", "తెలుగు (Telugu)"],
-      ["th", "ไทย (Thai)"],
-      ["tk", "Türkmen (Turkmen)"],
-      ["ur", "اردو (Urdu)"],
-      ["uz", "Oʻzbek (Uzbek)"],
-      ["cy", "Cymraeg (Welsh)"],
-      ["xh", "isiXhosa (Xhosa)"],
-      ["yi", "ייִדיש (Yiddish)"],
-      ["yo", "Yorùbá (Yoruba)"],
-      ["zu", "isiZulu (Zulu)"],
-    ];
-    const mkSel = (list, def) => {
-      const sel = el("select");
-      for (const [code, label] of list) {
-        const opt = el("option", { value: code }, label);
-        if (code === def) opt.selected = true;
-        sel.append(opt);
-      }
-      return sel;
-    };
-    const fromSel = mkSel([["auto", "Auto-detect"], ...langs], "auto");
-    const toSel = mkSel(langs, "es");
-    const form = el("div", { class: "rd-translate-pick" },
-      el("label", { class: "dlg-field" }, el("span", {}, "From language"), fromSel),
-      el("label", { class: "dlg-field" }, el("span", {}, "To language"), toSel),
-    );
-    const go = await this._dialog(`Translate page ${this.currentPage}`, [form], [
-      ["cancel", "Cancel", false],
-      ["go", "Translate", true],
-    ]);
-    if (go !== "go") return;
+    let fromCode = opts?.from ?? store.get("pdfm-tr-from", "auto");
+    let toCode = opts?.to ?? store.get("pdfm-tr-to", "es");
+    if (!opts?.skipPicker) {
+      const langs = await this._translateLanguages();
+      const mkSel = (list, def) => {
+        const sel = el("select");
+        for (const [code, label] of list) {
+          const opt = el("option", { value: code }, label);
+          if (code === def) opt.selected = true;
+          sel.append(opt);
+        }
+        return sel;
+      };
+      const fromSel = mkSel([["auto", "Auto-detect"], ...langs], fromCode);
+      const toSel = mkSel(langs, toCode);
+      const swapBtn = el("button", {
+        type: "button",
+        class: "btn sm",
+        title: "Swap source and target languages",
+        style: "align-self:flex-end;margin-bottom:2px;",
+      }, "⇄ Swap");
+      const syncSwap = () => { swapBtn.disabled = fromSel.value === "auto"; };
+      syncSwap();
+      fromSel.addEventListener("change", syncSwap);
+      swapBtn.addEventListener("click", () => {
+        if (fromSel.value === "auto") return;
+        const tmp = fromSel.value;
+        fromSel.value = toSel.value;
+        toSel.value = tmp;
+        syncSwap();
+      });
+      const form = el("div", { class: "rd-translate-pick" },
+        el("label", { class: "dlg-field" }, el("span", {}, "From language"), fromSel),
+        el("label", { class: "dlg-field" }, el("span", {}, "To language"), toSel),
+        swapBtn,
+      );
+      const go = await this._dialog(`Translate page ${this.currentPage}`, [form], [
+        ["cancel", "Cancel", false],
+        ["go", "Translate", true],
+      ]);
+      if (go !== "go") return;
+      fromCode = fromSel.value;
+      toCode = toSel.value;
+      store.set("pdfm-tr-from", fromCode);
+      store.set("pdfm-tr-to", toCode);
+    }
+
+    const pageNum = this.currentPage;
     const runTranslate = async () => {
-      const bytes = await this._currentBytes();
       const fd = new FormData();
-      fd.append("file", new Blob([bytes], { type: "application/pdf" }), tab.name || "document.pdf");
-      fd.append("page", String(this.currentPage));
-      fd.append("from", fromSel.value);
-      fd.append("to", toSel.value);
+      // Fast path: reference the already-open file by ID when unmodified instead of re-uploading the whole PDF.
+      if (tab.fileId && this.isPristine()) {
+        fd.append("id", tab.fileId);
+      } else {
+        const bytes = await this._currentBytes();
+        fd.append("file", new Blob([bytes], { type: "application/pdf" }), tab.name || "document.pdf");
+      }
+      fd.append("page", String(pageNum));
+      fd.append("from", fromCode);
+      fd.append("to", toCode);
       if (tab.password) fd.append("password", tab.password);
       const res = await fetch("/api/translate/page", {
         method: "POST",
@@ -1258,21 +1221,30 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       if (!res.ok) throw new Error(payload.error || res.statusText);
       return payload;
     };
-    this.toast("Translating page offline…");
+
+    this.toast(`Translating page ${pageNum}…`);
     let data;
     try {
       data = await runTranslate();
     } catch (e) {
       const msg = e?.message || String(e);
       if (/language pack|madlad|pack not installed/i.test(msg)) {
+        const smallPacks = new Set([
+          "ar", "az", "bg", "bn", "ca", "cs", "da", "de", "el", "eo", "es", "et", "eu", "fa", "fi",
+          "fr", "ga", "gl", "he", "hi", "hu", "id", "it", "ja", "ko", "lt", "lv", "ms", "nb", "nl",
+          "no", "pl", "pt", "ro", "ru", "sk", "sl", "sq", "sr", "sv", "th", "tl", "tr", "uk", "ur",
+          "vi", "zh", "zh-Hans", "zh-Hant",
+        ]);
+        const explicit = [...new Set([fromCode, toCode].filter((c) => c && c !== "en" && c !== "auto"))];
+        const useMadlad = !explicit.length || explicit.some((c) => !smallPacks.has(c));
+        const needed = useMadlad ? ["madlad-400-3b"] : explicit;
+        const packLabel = useMadlad ? "MADLAD-400 (400+ languages)" : `pack (${needed.join(", ")})`;
         const dlChoice = await this._dialog("Offline translation", [el("p", {}, msg)], [
           ["cancel", "Close", false],
-          ["download", "Download pack now", true],
+          ["download", `Download ${packLabel}`, true],
         ]);
         if (dlChoice !== "download") return;
-        const explicit = [...new Set([fromSel.value, toSel.value].filter((c) => c && c !== "en" && c !== "auto"))];
-        const needed = explicit.length ? explicit : ["madlad-400-3b"];
-        this.toast(`Downloading language pack (${needed.join(", ")})…`);
+        this.toast(`Downloading ${packLabel}…`);
         try {
           for (const code of needed) {
             const dlRes = await fetch("/api/i18n/pack/download", {
@@ -1286,30 +1258,57 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
             const dlData = await dlRes.json();
             if (!dlRes.ok) throw new Error(dlData.error || dlRes.statusText);
           }
-          this.toast("Translating page offline…");
+          this.toast(`Translating page ${pageNum}…`);
           data = await runTranslate();
         } catch (dlErr) {
-          await this._dialog("Offline translation", [el("p", {}, dlErr?.message || String(dlErr))], [["ok", "Close", true]]);
+          await this._dialog("Translation", [el("p", {}, dlErr?.message || String(dlErr))], [["ok", "Close", true]]);
           return;
         }
       } else {
-        await this._dialog("Offline translation", [el("p", {}, msg)], [["ok", "Close", true]]);
+        await this._dialog("Translation", [el("p", {}, msg)], [["ok", "Close", true]]);
         return;
       }
     }
+
+    const translatedText = data.translated || "(No extractable text on this page — run OCR first.)";
+    const originalText = data.original || "(No extractable text on this page.)";
+    let showingOriginal = false;
     const out = el("textarea", {
       readonly: "readonly",
+      dir: "auto",
       rows: "14",
-      style: "width:100%;font:inherit;padding:8px;box-sizing:border-box;",
+      style: "width:100%;font:inherit;line-height:1.55;padding:10px;box-sizing:border-box;",
     });
-    out.value = data.translated || "(No extractable text on this page — run OCR first.)";
+    out.value = translatedText;
+
+    const btnTrans = el("button", { type: "button", class: "btn sm seal" }, "Translated");
+    const btnOrig = el("button", { type: "button", class: "btn sm" }, "Original");
+    const setView = (orig) => {
+      showingOriginal = orig;
+      out.value = orig ? originalText : translatedText;
+      btnTrans.classList.toggle("seal", !orig);
+      btnOrig.classList.toggle("seal", orig);
+    };
+    btnTrans.addEventListener("click", () => setView(false));
+    btnOrig.addEventListener("click", () => setView(true));
+    const bar = el("div", { style: "display:flex;gap:6px;margin-bottom:8px;align-items:center;" }, btnTrans, btnOrig);
+
+    const hasNext = pageNum < (tab.doc.numPages || 1);
+    const buttons = [
+      ["copy", "Copy text", false],
+      ...(hasNext ? [["next", "Next page →", false]] : []),
+      ["ok", "Close", true],
+    ];
     const choice = await this._dialog(
       `Page ${data.page} (${data.src_lang} → ${data.dst_lang})`,
-      [out],
-      [["copy", "Copy text", false], ["ok", "Close", true]],
+      [bar, out],
+      buttons,
     );
     if (choice === "copy" && navigator.clipboard?.writeText) {
-      try { await navigator.clipboard.writeText(out.value); this.toast("Copied translation."); } catch (_) {}
+      try { await navigator.clipboard.writeText(out.value); this.toast(showingOriginal ? "Copied original text." : "Copied translation."); } catch (_) {}
+    } else if (choice === "next" && hasNext) {
+      this.goToPage(pageNum + 1);
+      await this.translateCurrentPage({ from: fromCode, to: toCode, skipPicker: true });
     }
   }
 
