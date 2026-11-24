@@ -283,36 +283,39 @@ def test_neural_entity_fallback_when_sentinel_dropped():
     assert "support@example.com" in res[0] and "电邮" in res[0] and "今天" in res[0]
 
 
-def test_nllb200_mapping_and_catalog_entry(tmp_path, monkeypatch):
+def test_madlad400_mapping_and_catalog_entry(tmp_path, monkeypatch):
     from pdfmanager import appdata
 
     monkeypatch.setattr(appdata, "data_dir", lambda: tmp_path / "appdata")
-    assert translate.bcp47_to_flores("en") == "eng_Latn"
-    assert translate.bcp47_to_flores("zh-Hans") == "zho_Hans"
-    assert translate.bcp47_to_flores("zh-Hant") == "zho_Hant"
-    assert translate.bcp47_to_flores("es") == "spa_Latn"
-    assert translate.bcp47_to_flores("ja") == "jpn_Jpan"
-    assert translate.nllb_model_dir() is None
+    assert translate.bcp47_to_madlad("en") == "en"
+    assert translate.bcp47_to_madlad("zh-Hans") == "zh"
+    assert translate.bcp47_to_madlad("zh-Hant") == "zh_Hant"
+    assert translate.bcp47_to_madlad("es") == "es"
+    assert translate.bcp47_to_madlad("ja") == "ja"
+    assert translate.madlad_model_dir() is None
 
     catalog = i18n.list_catalog_packs(fetch=False)
-    assert catalog["packs"] and catalog["packs"][0]["code"] == "nllb-200"
+    assert catalog["packs"] and catalog["packs"][0]["code"] == "madlad-400-3b"
+    assert catalog["packs"][0]["license"] == "Apache-2.0"
     assert catalog["packs"][0]["installed"] is False
+    # Ensure no CC-BY-NC NLLB packs remain in catalog
+    assert not any("nllb" in p["code"].lower() for p in catalog["packs"])
 
-    # Simulate installed NLLB-200 model
-    mdir = i18n.packs_dir() / "nllb-200" / "models" / "nllb-200"
+    # Simulate installed MADLAD-400 3B model
+    mdir = i18n.packs_dir() / "madlad-400-3b" / "models" / "madlad-400-3b"
     mdir.mkdir(parents=True)
     (mdir / "model.bin").write_bytes(b"fake")
-    (mdir / "sentencepiece.bpe.model").write_bytes(b"fake")
-    assert translate.nllb_model_dir() == mdir
+    (mdir / "spiece.model").write_bytes(b"fake")
+    assert translate.madlad_model_dir() == mdir
 
     catalog2 = i18n.list_catalog_packs(fetch=False)
     assert catalog2["packs"][0]["installed"] is True
 
-    # _load_offline_translator prefers NLLB-200 automatically when installed
+    # _load_offline_translator prefers MADLAD-400 3B automatically when installed
     called = []
     monkeypatch.setattr(
         translate,
-        "_load_nllb_translator",
+        "_load_madlad_translator",
         lambda s, d, p: (called.append((s, d, p)) or (lambda batch: batch)),
     )
     translate._load_offline_translator("en", "zh-Hans")
@@ -418,41 +421,29 @@ def test_all_caps_normalization_and_structural_affixes():
     ]
 
 
-def test_nllb_paragraph_context_and_13b_preference(tmp_path, monkeypatch):
+def test_madlad_paragraph_context_and_opus_mt_catalog(tmp_path, monkeypatch):
     monkeypatch.setattr(i18n, "packs_dir", lambda: tmp_path / "locales")
     catalog = i18n.list_catalog_packs(fetch=False)
     codes = [p["code"] for p in catalog["packs"]]
-    assert "nllb-200" in codes
-    assert "nllb-200-1.3b" in codes
+    assert "madlad-400-3b" in codes
+    assert "opus-es" in codes
+    assert "opus-fr" in codes
+    assert "opus-de" in codes
 
-    # Install 600M first
-    m600 = i18n.packs_dir() / "nllb-200" / "models" / "nllb-200"
-    m600.mkdir(parents=True)
-    (m600 / "model.bin").write_bytes(b"600m")
-    (m600 / "sentencepiece.bpe.model").write_bytes(b"sp")
-    assert translate.nllb_model_dir() == m600
-
-    # Installing 1.3B takes priority automatically
-    m13b = i18n.packs_dir() / "nllb-200-1.3b" / "models" / "nllb-200-1.3b"
-    m13b.mkdir(parents=True)
-    (m13b / "model.bin").write_bytes(b"1.3b")
-    (m13b / "sentencepiece.bpe.model").write_bytes(b"sp")
-    assert translate.nllb_model_dir() == m13b
-
-    # Context chunking groups short consecutive sentences together for NLLB
+    # Context chunking groups short consecutive sentences together for MADLAD-400
     received = []
 
-    def fake_nllb(batch):
+    def fake_madlad(batch):
         received.extend(batch)
         return [f"TR:{s}" for s in batch]
 
-    fake_nllb._neural = True
-    fake_nllb._context_window = 360
+    fake_madlad._neural = True
+    fake_madlad._context_window = 360
     out = translate.translate_texts(
         ["First sentence is short. It continues with a pronoun."],
         "en",
         "es",
-        translator=fake_nllb,
+        translator=fake_madlad,
         glossary="",
     )
     assert received == ["First sentence is short. It continues with a pronoun."]
@@ -724,19 +715,33 @@ def test_bilingual_mode_page_range_and_bookmarks(tmp_path):
     assert r_ip.outline and r_ip.outline[0].title == "ES:Introduction"
 
 
-def test_nllb_33b_pack_and_priority(tmp_path, monkeypatch):
+def test_madlad_and_opus_mt_packs_and_notices(tmp_path, monkeypatch):
+    from pdfmanager import notices
+
     monkeypatch.setattr(i18n, "packs_dir", lambda: tmp_path / "locales")
     cat = i18n.list_catalog_packs(fetch=False)
     by_code = {p["code"]: p for p in cat["packs"]}
-    assert "nllb-200-3.3b" in by_code
-    assert by_code["nllb-200-3.3b"]["size_bytes"] >= 3_000_000_000
+    assert "madlad-400-3b" in by_code
+    assert by_code["madlad-400-3b"]["size_bytes"] >= 2_900_000_000
+    assert by_code["madlad-400-3b"]["license"] == "Apache-2.0"
 
-    for code in ("nllb-200", "nllb-200-1.3b", "nllb-200-3.3b"):
-        mdir = i18n.packs_dir() / code / "models" / code
+    # Simulate installed OPUS-MT en-es + es-en pair bundle
+    for pair in ("en-es", "es-en"):
+        mdir = i18n.packs_dir() / "es" / "models" / pair
         mdir.mkdir(parents=True)
         (mdir / "model.bin").write_bytes(b"bin")
-        (mdir / "sentencepiece.bpe.model").write_bytes(b"sp")
-    assert translate.nllb_model_dir().name == "nllb-200-3.3b"
+        (mdir / "source.spm").write_bytes(b"sp")
+        (mdir / "target.spm").write_bytes(b"sp")
+    cat2 = i18n.list_catalog_packs(fetch=False)
+    by_code2 = {p["code"]: p for p in cat2["packs"]}
+    assert by_code2["opus-es"]["installed"] is True
+    assert translate.model_dir_for("en", "es") == i18n.packs_dir() / "es" / "models" / "en-es"
+
+    # Third-party notices must attribute MADLAD-400, OPUS-MT, and Argos Translate
+    text = notices.third_party_notices()
+    assert "Google MADLAD-400 3B MT" in text
+    assert "Helsinki-NLP OPUS-MT" in text
+    assert "Argos Translate" in text
 
 
 

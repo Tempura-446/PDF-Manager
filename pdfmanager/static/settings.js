@@ -175,7 +175,9 @@ function renderLangCatalog(catalog) {
     const li = document.createElement("li");
     li.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;";
     const label = document.createElement("span");
-    const srcTag = p.source === "nllb" ? "NLLB-200 universal" : (p.source === "zpdf" ? "ZPDF pack" : "Argos offline model");
+    const srcTag = p.source === "madlad" ? "MADLAD-400 universal · Apache-2.0"
+      : (p.source === "opus" ? "OPUS-MT fast pair · CC-BY-4.0"
+        : (p.source === "zpdf" ? "ZPDF pack" : "Argos offline model · MIT/CC0"));
     const sizeText = formatPackSize(p.size_bytes, p.size_approx);
     const sizePart = sizeText ? ` · ${sizeText}` : "";
     const pairsText = p.available_pairs?.length ? ` · ${p.available_pairs.join(", ")}` : "";

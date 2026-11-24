@@ -30,39 +30,50 @@ _CODE_RE = re.compile(r"^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8}){0,2}$")
 _BUILTIN_DIR = Path(__file__).resolve().parent / "locales"
 
 LANGPACKS_RELEASE_TAG = "langpacks-v1"
-NLLB_PACK_CODE = "nllb-200"
-NLLB_LARGE_PACK_CODE = "nllb-200-1.3b"
-NLLB_XL_PACK_CODE = "nllb-200-3.3b"
-NLLB_BASE_URL = "https://huggingface.co/JustFrederik/nllb-200-distilled-600M-ct2-int8/resolve/main"
-NLLB_LARGE_BASE_URL = "https://huggingface.co/JustFrederik/nllb-200-distilled-1.3B-ct2-int8/resolve/main"
-NLLB_XL_BASE_URL = "https://huggingface.co/OpenNMT/nllb-200-3.3B-ct2-int8/resolve/main"
-NLLB_FILES = ("config.json", "shared_vocabulary.txt", "sentencepiece.bpe.model", "model.bin")
-NLLB_PACKS = {
-    NLLB_PACK_CODE: {
-        "name": "High-Quality Universal (NLLB-200 600M · 200 languages)",
-        "base_url": NLLB_BASE_URL,
-        "size_bytes": 645_000_000,
-        "pair_label": "200 languages (direct, fast & high quality)",
-        "files": [(f, f"{NLLB_BASE_URL}/{f}") for f in NLLB_FILES],
+MADLAD_PACK_CODE = "madlad-400-3b"
+MADLAD_BASE_URL = "https://huggingface.co/Nextcloud-AI/madlad400-3b-mt-ct2-int8/resolve/main"
+MADLAD_FILES = ("config.json", "shared_vocabulary.json", "spiece.model", "model.bin")
+UNIVERSAL_PACKS = {
+    MADLAD_PACK_CODE: {
+        "name": "Universal Offline Translator (MADLAD-400 3B · 400+ languages · Apache-2.0)",
+        "base_url": MADLAD_BASE_URL,
+        "size_bytes": 2_960_000_000,
+        "license": "Apache-2.0",
+        "pair_label": "400+ languages (direct, commercial-safe Apache-2.0)",
+        "files": [(f, f"{MADLAD_BASE_URL}/{f}") for f in MADLAD_FILES],
     },
-    NLLB_LARGE_PACK_CODE: {
-        "name": "Best Offline Quality (NLLB-200 1.3B · 200 languages)",
-        "base_url": NLLB_LARGE_BASE_URL,
-        "size_bytes": 1_400_000_000,
-        "pair_label": "200 languages (smartest phrasing, balanced RAM)",
-        "files": [(f, f"{NLLB_LARGE_BASE_URL}/{f}") for f in NLLB_FILES],
+}
+_OPUS_MT_FILES = ("config.json", "shared_vocabulary.txt", "source.spm", "target.spm", "model.bin")
+OPUS_MT_PACKS = {
+    "opus-es": {
+        "name": "OPUS-MT Fast Pair: English ↔ Spanish (CC-BY-4.0 / Apache-2.0)",
+        "lang": "es",
+        "size_bytes": 312_000_000,
+        "license": "CC-BY-4.0 / Apache-2.0",
+        "pairs": {
+            "en-es": "https://huggingface.co/michaelfeil/ct2fast-opus-mt-en-es/resolve/main",
+            "es-en": "https://huggingface.co/michaelfeil/ct2fast-opus-mt-es-en/resolve/main",
+        },
     },
-    NLLB_XL_PACK_CODE: {
-        "name": "Maximum Offline Quality (NLLB-200 3.3B · 200 languages)",
-        "base_url": NLLB_XL_BASE_URL,
-        "size_bytes": 3_380_000_000,
-        "pair_label": "200 languages (flagship offline model, 8+ GB RAM)",
-        "files": [
-            ("config.json", f"{NLLB_XL_BASE_URL}/config.json"),
-            ("shared_vocabulary.json", f"{NLLB_XL_BASE_URL}/shared_vocabulary.json"),
-            ("sentencepiece.bpe.model", f"{NLLB_BASE_URL}/sentencepiece.bpe.model"),
-            ("model.bin", f"{NLLB_XL_BASE_URL}/model.bin"),
-        ],
+    "opus-fr": {
+        "name": "OPUS-MT Fast Pair: English ↔ French (CC-BY-4.0 / Apache-2.0)",
+        "lang": "fr",
+        "size_bytes": 312_000_000,
+        "license": "CC-BY-4.0 / Apache-2.0",
+        "pairs": {
+            "en-fr": "https://huggingface.co/michaelfeil/ct2fast-opus-mt-en-fr/resolve/main",
+            "fr-en": "https://huggingface.co/michaelfeil/ct2fast-opus-mt-fr-en/resolve/main",
+        },
+    },
+    "opus-de": {
+        "name": "OPUS-MT Fast Pair: English ↔ German (CC-BY-4.0 / Apache-2.0)",
+        "lang": "de",
+        "size_bytes": 312_000_000,
+        "license": "CC-BY-4.0 / Apache-2.0",
+        "pairs": {
+            "en-de": "https://huggingface.co/michaelfeil/ct2fast-opus-mt-en-de/resolve/main",
+            "de-en": "https://huggingface.co/michaelfeil/ct2fast-opus-mt-de-en/resolve/main",
+        },
     },
 }
 ARGOS_INDEX_URL = "https://raw.githubusercontent.com/argosopentech/argospm-index/main/index.json"
@@ -93,7 +104,7 @@ def normalize_code(code):
     raw = str(code or "").strip()
     if not raw or raw.lower() == "auto":
         return "auto"
-    if raw.lower() in NLLB_PACKS:
+    if raw.lower() in UNIVERSAL_PACKS or raw.lower() in OPUS_MT_PACKS:
         return raw.lower()
     if not _CODE_RE.match(raw):
         raise core.PdfManagerError(f"invalid language code: {raw!r}")
@@ -794,21 +805,45 @@ def list_catalog_packs(fetch=True):
 
     # Annotate with local installation status
     out = []
-    for nllb_code, meta in NLLB_PACKS.items():
-        nllb_dir = packs_dir() / nllb_code / "models" / nllb_code
-        nllb_installed = (nllb_dir / "model.bin").is_file() and bool(list(nllb_dir.glob("*.model")))
+    for univ_code, meta in UNIVERSAL_PACKS.items():
+        univ_dir = packs_dir() / univ_code / "models" / univ_code
+        univ_installed = (univ_dir / "model.bin").is_file() and bool(list(univ_dir.glob("*.model")))
         out.append({
-            "code": nllb_code,
+            "code": univ_code,
             "name": meta["name"],
             "version": "1.0",
-            "source": "nllb",
+            "source": "madlad",
+            "license": meta.get("license", "Apache-2.0"),
             "available_pairs": [meta["pair_label"]],
             "size_bytes": meta["size_bytes"],
             "size_approx": False,
             "dir": "ltr",
-            "installed": nllb_installed,
-            "has_translate": nllb_installed,
-            "installed_pairs": [nllb_code] if nllb_installed else [],
+            "installed": univ_installed,
+            "has_translate": univ_installed,
+            "installed_pairs": [univ_code] if univ_installed else [],
+        })
+    for opus_code, meta in OPUS_MT_PACKS.items():
+        lang_code = meta["lang"]
+        pairs = list(meta["pairs"].keys())
+        installed_pairs = [
+            p for p in pairs
+            if (packs_dir() / lang_code / "models" / p / "model.bin").is_file()
+            and (packs_dir() / lang_code / "models" / p / "source.spm").is_file()
+        ]
+        opus_installed = len(installed_pairs) == len(pairs)
+        out.append({
+            "code": opus_code,
+            "name": meta["name"],
+            "version": "1.0",
+            "source": "opus",
+            "license": meta.get("license", "CC-BY-4.0 / Apache-2.0"),
+            "available_pairs": pairs,
+            "size_bytes": meta["size_bytes"],
+            "size_approx": False,
+            "dir": language_dir(lang_code),
+            "installed": opus_installed,
+            "has_translate": opus_installed,
+            "installed_pairs": installed_pairs,
         })
     for code in sorted(merged):
         item = dict(merged[code])
@@ -822,7 +857,8 @@ def list_catalog_packs(fetch=True):
     return {
         "packs": out,
         "sources": {
-            "nllb": len(NLLB_PACKS),
+            "madlad": len(UNIVERSAL_PACKS),
+            "opus": len(OPUS_MT_PACKS),
             "zpdf": len(zpdf_packs),
             "argos": len(argos_by_lang),
         },
@@ -944,17 +980,15 @@ def _http_post_json(url, payload, *, headers=None, timeout=180):
         raise core.PdfManagerError(f"could not reach AI translation endpoint {url}{hint}: {exc}") from None
 
 
-def _download_and_install_nllb(pack_code=NLLB_PACK_CODE):
-    """Download Meta NLLB-200 (600M, 1.3B, or 3.3B CTranslate2 int8) into ``<packs_dir>/<pack_code>/``."""
-    meta = NLLB_PACKS[pack_code]
+def _download_and_install_madlad(pack_code=MADLAD_PACK_CODE):
+    """Download Google MADLAD-400 3B (CTranslate2 int8, Apache-2.0, 400+ languages)
+    into ``<packs_dir>/<pack_code>/``."""
+    meta = UNIVERSAL_PACKS[pack_code]
     pack_dest = packs_dir() / pack_code
     model_dest = pack_dest / "models" / pack_code
     model_dest.mkdir(parents=True, exist_ok=True)
-    file_entries = meta.get("files") or [(f, f"{meta['base_url']}/{f}") for f in NLLB_FILES]
-    label = {
-        NLLB_XL_PACK_CODE: "NLLB-200 3.3B",
-        NLLB_LARGE_PACK_CODE: "NLLB-200 1.3B",
-    }.get(pack_code, "NLLB-200")
+    file_entries = meta.get("files") or [(f, f"{meta['base_url']}/{f}") for f in MADLAD_FILES]
+    label = "MADLAD-400 3B"
     # Small tokenizer/config files occupy 0–5%, model.bin occupies 5–96%, finalization 96–100%.
     small_files = [f for f, _ in file_entries if f != "model.bin"]
     small_step = 0.05 / max(1, len(small_files))
@@ -986,14 +1020,15 @@ def _download_and_install_nllb(pack_code=NLLB_PACK_CODE):
         "name": meta["name"],
         "version": "1.0",
         "dir": "ltr",
-        "source": "nllb",
+        "source": "madlad",
+        "license": meta.get("license", "Apache-2.0"),
     }
     (pack_dest / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     if not (pack_dest / "ui.json").is_file():
         (pack_dest / "ui.json").write_text("{}\n", encoding="utf-8")
     ensure_translation_runtime()
     progress.report(message=f"Installed {label} universal translation model", fraction_in_part=1.0)
-    return {"code": pack_code, "source": "nllb", "installed": manifest}
+    return {"code": pack_code, "source": "madlad", "installed": manifest}
 
 
 def _parse_sha256_text(text):
@@ -1004,17 +1039,69 @@ def _parse_sha256_text(text):
     return token if re.fullmatch(r"[0-9a-f]{64}", token) else None
 
 
+def _download_and_install_opus_mt(pack_code):
+    """Download an optional Helsinki-NLP OPUS-MT CTranslate2 pair bundle
+    (Apache-2.0 / CC-BY-4.0) into ``<packs_dir>/<lang>/models/<pair>/``."""
+    meta = OPUS_MT_PACKS[pack_code]
+    lang_code = meta["lang"]
+    pack_dest = packs_dir() / lang_code
+    pairs = list(meta["pairs"].items())
+    per_pair_span = 0.94 / max(1, len(pairs))
+    installed_pairs = []
+    for pair_idx, (pair_name, base_url) in enumerate(pairs):
+        progress.check()
+        model_dest = pack_dest / "models" / pair_name
+        model_dest.mkdir(parents=True, exist_ok=True)
+        base_frac = 0.02 + pair_idx * per_pair_span
+        for filename in _OPUS_MT_FILES:
+            progress.check()
+            is_weights = filename == "model.bin"
+            frac_start = base_frac + (0.05 * per_pair_span if is_weights else 0.0)
+            frac_end = base_frac + (per_pair_span if is_weights else 0.05 * per_pair_span)
+            dl_label = f"Downloading OPUS-MT {pair_name}" + ("" if is_weights else f" ({filename})")
+            progress.report(message=f"{dl_label}…", fraction_in_part=frac_start)
+            _http_download_to_file(
+                f"{base_url}/{filename}",
+                model_dest / filename,
+                progress_label=dl_label,
+                expected_bytes=155_000_000 if is_weights else 0,
+                frac_start=frac_start,
+                frac_end=frac_end,
+            )
+        installed_pairs.append(pair_name)
+    manifest_path = pack_dest / "manifest.json"
+    existing_manifest = _read_json(manifest_path) if manifest_path.is_file() else {}
+    manifest = {
+        **existing_manifest,
+        "code": lang_code,
+        "name": existing_manifest.get("name") or meta["name"],
+        "version": existing_manifest.get("version") or "1.0",
+        "dir": language_dir(lang_code),
+        "source": "opus",
+        "license": meta.get("license", "CC-BY-4.0 / Apache-2.0"),
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    if not (pack_dest / "ui.json").is_file():
+        (pack_dest / "ui.json").write_text("{}\n", encoding="utf-8")
+    ensure_translation_runtime()
+    progress.report(message=f"Installed OPUS-MT ({', '.join(installed_pairs)})", fraction_in_part=1.0)
+    return {"code": lang_code, "source": "opus", "installed_pairs": installed_pairs, "installed": manifest}
+
+
 def download_and_install_pack(code, *, pair=None, source=None):
     """Download and install a language pack using the hybrid strategy:
-    - ``nllb-200`` / ``nllb-200-1.3b``: downloads Meta NLLB-200 (CTranslate2 int8, 200 languages).
+    - ``madlad-400-3b``: downloads Google MADLAD-400 3B (CTranslate2 int8, Apache-2.0, 400+ languages).
+    - ``opus-*``: downloads optional Helsinki-NLP OPUS-MT fast pair bundles (CC-BY-4.0 / Apache-2.0).
     - Prefer curated ZPDF pack on ``Tempura-446/ZPDF-releases`` (SHA-256 verified)
       when ``pair`` is not specified and ``source != 'argos'``.
-    - Fall back to Argos Translate's open-source CTranslate2 models for any other
-      language or explicit ``src-dst`` pair.
+    - Fall back to Argos Translate's open-source CTranslate2 models (MIT/CC0) for any
+      other language or explicit ``src-dst`` pair.
     """
     norm_code = normalize_code(code)
-    if norm_code in NLLB_PACKS:
-        return _download_and_install_nllb(norm_code)
+    if norm_code in UNIVERSAL_PACKS:
+        return _download_and_install_madlad(norm_code)
+    if norm_code in OPUS_MT_PACKS:
+        return _download_and_install_opus_mt(norm_code)
     if norm_code in ("auto", DEFAULT_LANG) and not pair:
         raise core.PdfManagerError(f"cannot download a language pack for {norm_code!r}")
 
