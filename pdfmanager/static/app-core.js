@@ -755,7 +755,53 @@ async function fpRun(item) {
       done.hidden = false;
     }
   } catch (e) {
-    fail(capital(e.message || e));
+    const rawMsg = String(e.message || e);
+    if (op.id === "translate" && /language pack|madlad|pack not installed/i.test(rawMsg) && item.box.isConnected) {
+      const needed = [...new Set([opts.source_lang, opts.target_lang].filter((c) => c && c !== "en" && c !== "auto"))];
+      const packs = needed.length ? needed : ["madlad-400-3b"];
+      const btn = el("button", { type: "button", class: "btn seal sm", style: "margin-top:6px;" },
+        icon("download"), `Download pack (${packs.join(", ")}) & translate`);
+      btn.addEventListener("click", async () => {
+        if (item.running) return;
+        error.hidden = true;
+        item.running = true;
+        runBtn.disabled = true; runBtn.classList.add("busy");
+        status.textContent = `Downloading language pack (${packs.join(", ")})…`;
+        item.bar.firstChild.style.width = "0";
+        item.progress.hidden = false;
+        const dlUi = {
+          start(id) { item.job = id; item.cancel.hidden = false; item.cancel.disabled = false; item.cancel.textContent = "Cancel"; },
+          message(text) { status.textContent = text; },
+          progress(fraction) { const pct = Math.round(fraction * 100); item.bar.firstChild.style.width = `${Math.max(4, pct)}%`; item.bar.setAttribute("aria-valuenow", String(pct)); },
+          cancelled() { item.cancelled = true; },
+          end() { item.job = null; },
+        };
+        let ok = true;
+        try {
+          for (const code of packs) {
+            const dlRes = await runJob("/api/i18n/pack/download", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ code }),
+            }, dlUi);
+            if (!dlRes) { ok = false; break; }
+          }
+        } catch (dlErr) {
+          ok = false;
+          fail(capital(dlErr.message || dlErr));
+        } finally {
+          item.running = false;
+          runBtn.disabled = false; runBtn.classList.remove("busy");
+          item.progress.hidden = true;
+          item.cancel.hidden = true;
+        }
+        if (ok) await fpRun(item);
+      });
+      error.replaceChildren(el("div", {}, capital(rawMsg)), btn);
+      error.hidden = false;
+    } else {
+      fail(capital(rawMsg));
+    }
   } finally {
     item.running = false;
     runBtn.disabled = false; runBtn.classList.remove("busy");

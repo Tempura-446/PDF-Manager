@@ -4,6 +4,30 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.64.0
+
+Speed, Polish & Full Coverage: faster startup, virtualized large-PDF page board, OCR worker caching, Smart Filing Rules editor, full i18n/ARIA polish, and complete HTTP route test coverage.
+
+- **Faster startup & large-PDF performance.** Lazy-imported heavy backend
+  modules (`numpy`/`search`, `pikepdf`/`layers`, `ocr`, `accessibility`,
+  `certsign`, `compare`, `redact`, `preflight`, `office`) in `gui.py` and
+  `server/*`; cached `PdfDocument` handles per OCR worker process instead of
+  re-parsing the PDF on every page; and virtualized the `pages.js` page-picker
+  grid for 120+ page PDFs with windowed row rendering and overscan.
+- **Full i18n catalog & UI/accessibility polish.** Expanded `data-i18n`
+  attributes across navigation, tool cards, Settings, Translate, and dialogs
+  with 100% key parity across all 5 locales (`en`, `es`, `fr`, `de`,
+  `zh-Hans`); added a Smart Filing Rules viewer/editor (add, edit, reorder,
+  delete) in Settings; added shared arrow-key navigation across Reader
+  `role="menu"` popups and `role="tablist"` strips; added 1-click missing-pack
+  download recovery in the Reader File Panel; and matched desktop window
+  startup background color (`#0f1114` / `#f6f6f3`) to OS dark mode.
+- **Full HTTP route coverage & bug fixes.** Added live HTTP integration tests
+  for all `/api/form/*`, `/api/recent/restore`, `/api/comments/markdown`,
+  `/api/quantities`, `/api/password/strength`, and `/api/filing/*` endpoints,
+  fixing a missing `_safe_name` import in `POST /api/form/import` and filename
+  glob / response parsing in `POST /api/filing/preview`.
+
 ## 0.63.2
 
 100% commercial-safe offline translation stack: Google MADLAD-400 (3B / 7B / 10.7B, Apache-2.0) and optional Helsinki-NLP OPUS-MT fast pairs.

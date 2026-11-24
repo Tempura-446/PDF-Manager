@@ -6,8 +6,11 @@ import tempfile
 from http import HTTPStatus
 from pathlib import Path
 
-from pdfmanager import core, filefacts, formdetect, forms
-from pdfmanager.server.common import UserError, _bool, _parse_multipart
+from pdfmanager import core, filefacts
+from pdfmanager.server.common import UserError, _bool, _parse_multipart, _safe_name, lazy_module
+
+formdetect = lazy_module("pdfmanager.formdetect")
+forms = lazy_module("pdfmanager.forms")
 
 
 class FormRoutesMixin:

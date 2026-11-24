@@ -22,6 +22,8 @@ import { DOC_OPTIONS, destroyTask, loadPdfjs, openDocument } from "./pdfjs.js";
 
 const THUMB = 132;   // CSS pixels for the longest side of a preview
 const RENDERERS = 2; // pages rendered at the same time
+const VIRTUAL_THRESHOLD = 120; // virtualize DOM when page count exceeds this
+const VIRTUAL_OVERSCAN = 3;    // extra rows rendered above & below viewport
 
 const ICON = {
   left: '<path d="m15 18-6-6 6-6"/>', right: '<path d="m9 18 6-6-6-6"/>',
@@ -114,6 +116,13 @@ export class PageBoard {
     this.mode = "order"; this.effect = null; this.rotation = 90;
     this.picked = new Set(); this.anchor = null;
     this.starts = new Set();  // split mode: pages that start a new file
+    this._order = [];         // canonical page list (used for virtualization)
+    this._virtual = false;
+    this._vStart = 0; this._vEnd = 0;
+    this._vCols = 4; this._vRowH = 190;
+    this._vScrollRaf = 0;
+    this._topSpacer = el("div", { class: "pb-spacer", "aria-hidden": "true", hidden: true });
+    this._botSpacer = el("div", { class: "pb-spacer", "aria-hidden": "true", hidden: true });
 
     const button = (label, fn, name, title) => el("button", { type: "button", class: "btn secondary pb-small", title, onclick: fn }, name ? icon(name) : null, label);
     this.status = el("span", { class: "pb-status" });
@@ -145,6 +154,20 @@ export class PageBoard {
       }
     }, { root: this.grid, rootMargin: "200px 0px" });
 
+    this.grid.addEventListener("scroll", () => {
+      if (!this._virtual || this._vScrollRaf) return;
+      this._vScrollRaf = requestAnimationFrame(() => {
+        this._vScrollRaf = 0;
+        this.#renderVirtualWindow(false);
+      });
+    }, { passive: true });
+    if (typeof ResizeObserver !== "undefined") {
+      this._ro = new ResizeObserver(() => {
+        if (this._virtual) this.#renderVirtualWindow(true);
+      });
+      this._ro.observe(this.grid);
+    }
+
     this.grid.addEventListener("pointerdown", (e) => this.#pointerDown(e));
     this.grid.addEventListener("click", (e) => this.#click(e));
     this.grid.addEventListener("keydown", (e) => this.#keyDown(e));
@@ -153,7 +176,8 @@ export class PageBoard {
     this.#state("empty");
   }
 
-  get order() { return [...this.grid.children].map((t) => Number(t.dataset.page)); }
+  #tiles() { return [...this.grid.querySelectorAll(":scope > .pb-tile")]; }
+  get order() { return this._virtual ? this._order.slice() : this.#tiles().map((t) => Number(t.dataset.page)); }
   get selection() { return [...this.picked].sort((a, b) => a - b); }
 
   /** Switch mode ("order", "select" or "view") and effect; the open PDF is kept.
@@ -261,6 +285,7 @@ export class PageBoard {
     this.#endDrag(false);
     this.observer.disconnect();
     this.grid.replaceChildren();
+    this._order = []; this._virtual = false; this._vStart = 0; this._vEnd = 0;
     for (const url of this.thumbs.values()) URL.revokeObjectURL(url);
     this.thumbs.clear(); this.rendering.clear(); this.queue = [];
     this.file = null; this.password = null; this.doc = null; this.total = 0;
@@ -290,15 +315,90 @@ export class PageBoard {
   #build(order) {
     this.observer.disconnect();
     this.grid.setAttribute("role", this.mode === "select" ? "listbox" : "list");
-    this.grid.replaceChildren(...order.map((p) => this.#tile(p)));
-    for (const t of this.grid.children) this.observer.observe(t);
+    this._order = order.slice();
+    this._virtual = this._order.length > VIRTUAL_THRESHOLD;
+    if (!this._virtual) {
+      this._vStart = 0; this._vEnd = this._order.length;
+      this.grid.replaceChildren(...this._order.map((p, i) => this.#tile(p, i)));
+      for (const t of this.#tiles()) this.observer.observe(t);
+      return;
+    }
+    this._vStart = -1; this._vEnd = -1;
+    this.#renderVirtualWindow(true);
   }
 
-  #tile(page) {
+  #measureGrid() {
+    const cs = getComputedStyle(this.grid);
+    const gap = parseFloat(cs.rowGap || cs.gap) || 14;
+    const colGap = parseFloat(cs.columnGap || cs.gap) || 14;
+    const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+    const innerW = Math.max(120, (this.grid.clientWidth || 600) - padX);
+    const minTileW = innerW < 420 ? 96 : 118;
+    const cols = Math.max(1, Math.floor((innerW + colGap) / (minTileW + colGap)));
+    const first = this.grid.querySelector(":scope > .pb-tile");
+    const tileH = first && first.offsetHeight > 40 ? first.offsetHeight : Math.round((innerW / cols) * 1.25 + 34);
+    this._vCols = cols;
+    this._vRowH = tileH + gap;
+    return { cols, rowH: this._vRowH, gap };
+  }
+
+  #renderVirtualWindow(force = false) {
+    if (!this._virtual) return;
+    const n = this._order.length;
+    const { cols, rowH, gap } = this.#measureGrid();
+    const totalRows = Math.ceil(n / cols);
+    const scrollTop = this.grid.scrollTop;
+    const viewH = this.grid.clientHeight || 560;
+    const firstRow = Math.max(0, Math.floor(scrollTop / rowH) - VIRTUAL_OVERSCAN);
+    const lastRow = Math.min(totalRows, Math.ceil((scrollTop + viewH) / rowH) + VIRTUAL_OVERSCAN);
+    const start = firstRow * cols;
+    const end = Math.min(n, lastRow * cols);
+    if (!force && start === this._vStart && end === this._vEnd) return;
+    this._vStart = start;
+    this._vEnd = end;
+
+    const topH = firstRow > 0 ? Math.max(0, firstRow * rowH - gap) : 0;
+    const botRows = Math.max(0, totalRows - lastRow);
+    const botH = botRows > 0 ? Math.max(0, botRows * rowH - gap) : 0;
+    this._topSpacer.hidden = topH <= 0;
+    this._topSpacer.style.height = topH > 0 ? `${topH}px` : "0px";
+    this._botSpacer.hidden = botH <= 0;
+    this._botSpacer.style.height = botH > 0 ? `${botH}px` : "0px";
+
+    this.observer.disconnect();
+    const frag = document.createDocumentFragment();
+    frag.append(this._topSpacer);
+    for (let i = start; i < end; i++) frag.append(this.#tile(this._order[i], i));
+    frag.append(this._botSpacer);
+    this.grid.replaceChildren(frag);
+    for (const t of this.#tiles()) this.observer.observe(t);
+    this.#update();
+  }
+
+  #focusVirtualIndex(idx) {
+    if (!this._virtual) {
+      const t = this.#tiles()[idx];
+      if (t) { t.focus(); t.scrollIntoView({ block: "nearest" }); }
+      return;
+    }
+    const clamped = Math.max(0, Math.min(this._order.length - 1, idx));
+    const row = Math.floor(clamped / this._vCols);
+    const rowTop = row * this._vRowH;
+    const rowBot = rowTop + this._vRowH;
+    if (rowTop < this.grid.scrollTop) this.grid.scrollTop = rowTop;
+    else if (rowBot > this.grid.scrollTop + this.grid.clientHeight) {
+      this.grid.scrollTop = Math.max(0, rowBot - this.grid.clientHeight);
+    }
+    this.#renderVirtualWindow(true);
+    const t = this.grid.querySelector(`:scope > .pb-tile[data-idx="${clamped}"]`);
+    if (t) t.focus({ preventScroll: true });
+  }
+
+  #tile(page, idx = 0) {
     const thumb = el("div", { class: "pb-thumb" });
     const url = this.thumbs.get(page);
     thumb.append(url ? el("img", { src: url, alt: "", draggable: "false" }) : el("span", { class: "loading" }));
-    const tile = el("div", { class: "pb-tile", role: this.mode === "select" ? "option" : "listitem", tabindex: "-1", "data-page": page, "data-key": ++this.seq },
+    const tile = el("div", { class: "pb-tile", role: this.mode === "select" ? "option" : "listitem", tabindex: "-1", "data-page": page, "data-idx": idx, "data-key": ++this.seq },
       thumb,
       el("span", { class: "pb-pos" }),
       el("span", { class: "pb-check", "aria-hidden": "true" }, icon(this.effect === "remove" ? "x" : this.effect === "rotate" ? "cw" : "check")),
@@ -380,13 +480,15 @@ export class PageBoard {
     const before = this.order;
     if (order.join() === before.join()) return;
     this.history.push(before);
-    this.#animate(() => this.#build(order));
+    if (this._virtual || order.length > VIRTUAL_THRESHOLD) this.#build(order);
+    else this.#animate(() => this.#build(order));
     this.#update();
     this.onChange(this.order);
   }
 
   /** Report a change made directly in the DOM (drag, move, duplicate, remove). */
   #changed(before) {
+    if (!this._virtual) this._order = this.#tiles().map((t) => Number(t.dataset.page));
     if (before.join() === this.order.join()) return;
     this.history.push(before);
     this.#update();
@@ -394,7 +496,19 @@ export class PageBoard {
   }
 
   #moveBy(tile, delta) {
-    const tiles = [...this.grid.children];
+    if (this._virtual) {
+      const i = Number(tile.dataset.idx);
+      const to = i + delta;
+      if (to < 0 || to >= this._order.length) return;
+      const before = this.order;
+      const [item] = this._order.splice(i, 1);
+      this._order.splice(to, 0, item);
+      this.#changed(before);
+      this.#focusVirtualIndex(to);
+      this.#say(`Page ${item + 1} moved to position ${to + 1} of ${this._order.length}.`);
+      return;
+    }
+    const tiles = this.#tiles();
     const to = tiles.indexOf(tile) + delta;
     if (to < 0 || to >= tiles.length) return;
     const before = this.order;
@@ -405,31 +519,53 @@ export class PageBoard {
   }
 
   #duplicate(tile) {
+    const page = Number(tile.dataset.page);
+    if (this._virtual) {
+      const i = Number(tile.dataset.idx);
+      const before = this.order;
+      this._order.splice(i + 1, 0, page);
+      this.#changed(before);
+      this.#focusVirtualIndex(i + 1);
+      this.#say(`Page ${page + 1} duplicated.`);
+      return;
+    }
     const before = this.order;
-    const copy = this.#tile(Number(tile.dataset.page));
+    const copy = this.#tile(page);
     this.#animate(() => tile.after(copy));
     this.observer.observe(copy);
     this.#changed(before);
     copy.focus();
-    this.#say(`Page ${Number(tile.dataset.page) + 1} duplicated.`);
+    this.#say(`Page ${page + 1} duplicated.`);
   }
 
   #remove(tile) {
+    const page = Number(tile.dataset.page);
+    if (this._virtual) {
+      const i = Number(tile.dataset.idx);
+      const before = this.order;
+      this._order.splice(i, 1);
+      this._virtual = this._order.length > VIRTUAL_THRESHOLD;
+      this.#changed(before);
+      if (this._order.length) this.#focusVirtualIndex(Math.min(i, this._order.length - 1));
+      else { this.grid.replaceChildren(); this.grid.focus(); }
+      this.#say(`Page ${page + 1} removed. Undo with Ctrl+Z.`);
+      return;
+    }
     const before = this.order;
     const next = tile.nextElementSibling || tile.previousElementSibling;
     this.#animate(() => tile.remove());
     this.#changed(before);
     if (next) next.focus(); else this.grid.focus();
-    this.#say(`Page ${Number(tile.dataset.page) + 1} removed. Undo with Ctrl+Z.`);
+    this.#say(`Page ${page + 1} removed. Undo with Ctrl+Z.`);
   }
 
   /** Slide tiles from where they were to where they end up after mutate(). */
   #animate(mutate) {
-    const keep = new Map([...this.grid.children].map((t) => [t.dataset.key, t.getBoundingClientRect()]));
+    const keep = new Map(this.#tiles().map((t) => [t.dataset.key, t.getBoundingClientRect()]));
     mutate();
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const moves = [];
-    for (const t of this.grid.children) {
+    for (const t of this.#tiles()) {
       const was = keep.get(t.dataset.key);
       if (!was || (this.drag && t === this.drag.tile)) continue;
       t.style.transition = "none"; t.style.transform = "";
@@ -502,7 +638,7 @@ export class PageBoard {
     const d = this.drag, grid = this.grid, gr = grid.getBoundingClientRect();
     const px = x - gr.left - grid.clientLeft + grid.scrollLeft, py = y - gr.top - grid.clientTop + grid.scrollTop;
     let target = null, after = false, last = null;
-    for (const t of grid.children) {
+    for (const t of this.#tiles()) {
       if (t === d.tile) continue;
       last = t;
       if (px >= t.offsetLeft && px < t.offsetLeft + t.offsetWidth && py >= t.offsetTop && py < t.offsetTop + t.offsetHeight) {
@@ -514,6 +650,18 @@ export class PageBoard {
       target = last; after = true;  // past the last page
     }
     if (!target) return;
+    if (this._virtual) {
+      const fromIdx = Number(d.tile.dataset.idx);
+      let toIdx = Number(target.dataset.idx) + (after ? 1 : 0);
+      if (fromIdx < toIdx) toIdx--;
+      if (toIdx === fromIdx || toIdx < 0 || toIdx >= this._order.length) return;
+      const [item] = this._order.splice(fromIdx, 1);
+      this._order.splice(toIdx, 0, item);
+      this.#renderVirtualWindow(true);
+      const moved = this.grid.querySelector(`:scope > .pb-tile[data-idx="${toIdx}"]`);
+      if (moved) { d.tile = moved; moved.classList.add("pb-placeholder"); }
+      return;
+    }
     const ref = after ? target.nextElementSibling : target;
     if (ref === d.tile || ref === d.tile.nextElementSibling) return;
     this.#animate(() => grid.insertBefore(d.tile, ref));
@@ -549,7 +697,7 @@ export class PageBoard {
     document.body.classList.remove("pb-dragging");
     if (!commit) { if (this.doc && d.tile.isConnected) { this.#build(d.before); this.#update(); } return; }
     this.#changed(d.before);
-    const pos = [...this.grid.children].indexOf(d.tile);
+    const pos = this._virtual ? Number(d.tile.dataset.idx) : this.#tiles().indexOf(d.tile);
     this.#say(`Page ${Number(d.tile.dataset.page) + 1} moved to position ${pos + 1}.`);
   }
 
@@ -562,23 +710,23 @@ export class PageBoard {
     if (!tile) return;
     if (this.mode === "select" && (e.key === " " || e.key === "Enter")) { e.preventDefault(); this.#toggle(tile, e.shiftKey); return; }
     if (this.mode === "split" && (e.key === " " || e.key === "Enter")) { e.preventDefault(); this.#toggleSplit(tile); return; }
-    const tiles = [...this.grid.children], i = tiles.indexOf(tile);
-    const cols = Math.max(1, tiles.filter((t) => t.offsetTop === tiles[0].offsetTop).length);
+    const tiles = this.#tiles();
+    const totalLen = this._virtual ? this._order.length : tiles.length;
+    const i = this._virtual ? Number(tile.dataset.idx) : tiles.indexOf(tile);
+    const cols = this._virtual ? this._vCols : Math.max(1, tiles.filter((t) => t.offsetTop === tiles[0].offsetTop).length);
     const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -cols, ArrowDown: cols }[e.key];
     if (this.mode !== "order" && !step && e.key !== "Home" && e.key !== "End") return;
     if (step && (e.altKey || e.shiftKey) && this.mode === "order") {
       e.preventDefault();
-      const to = Math.max(0, Math.min(tiles.length - 1, i + step));
+      const to = Math.max(0, Math.min(totalLen - 1, i + step));
       if (to !== i) this.#moveBy(tile, to - i);
     } else if (step) {
       if (this.mode !== "order" && (e.altKey || e.shiftKey)) return;
       e.preventDefault();
-      const t = tiles[Math.max(0, Math.min(tiles.length - 1, i + step))];
-      t.focus(); t.scrollIntoView({ block: "nearest" });
+      this.#focusVirtualIndex(Math.max(0, Math.min(totalLen - 1, i + step)));
     } else if (e.key === "Home" || e.key === "End") {
       e.preventDefault();
-      const t = e.key === "Home" ? tiles[0] : tiles[tiles.length - 1];
-      t.focus(); t.scrollIntoView({ block: "nearest" });
+      this.#focusVirtualIndex(e.key === "Home" ? 0 : totalLen - 1);
     } else if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault(); this.#remove(tile);
     } else if (e.key.toLowerCase() === "d" && !e.ctrlKey && !e.metaKey) {
@@ -640,50 +788,59 @@ export class PageBoard {
   // ---- status ----------------------------------------------------------------------
 
   #update() {
-    const tiles = [...this.grid.children];
+    const tiles = this.#tiles();
     if (tiles.length && !tiles.some((t) => t.tabIndex === 0)) tiles[0].tabIndex = 0;
     if (this.mode === "select") return this.#updateSelect(tiles);
     if (this.mode === "split") return this.#updateSplit(tiles);
-    tiles.forEach((t, i) => {
+    const order = this.order;
+    const totalLen = order.length;
+    tiles.forEach((t, localIdx) => {
+      const i = this._virtual ? Number(t.dataset.idx) : localIdx;
+      t.dataset.idx = i;
       t.querySelector(".pb-pos").textContent = i + 1;
       const page = Number(t.dataset.page);
       t.classList.toggle("moved", page !== i);
-      t.setAttribute("aria-label", `Page ${page + 1}, position ${i + 1} of ${tiles.length}`);
+      t.setAttribute("aria-label", `Page ${page + 1}, position ${i + 1} of ${totalLen}`);
     });
     if (this.mode === "view") {
-      this.status.textContent = `${tiles.length} ${tiles.length === 1 ? "page" : "pages"} in the order they will have`;
+      this.status.textContent = `${totalLen} ${totalLen === 1 ? "page" : "pages"} in the order they will have`;
       this.message.hidden = true;
       return;
     }
-    const order = this.order, used = new Set(order);
-    const removed = this.total - used.size, extra = order.length - used.size;
-    const bits = [`${order.length} ${order.length === 1 ? "page" : "pages"}`];
+    const used = new Set(order);
+    const removed = this.total - used.size, extra = totalLen - used.size;
+    const bits = [`${totalLen} ${totalLen === 1 ? "page" : "pages"}`];
     if (removed) bits.push(`${removed} removed`);
     if (extra) bits.push(`${extra} duplicated`);
-    if (order.join() === [...Array(this.total).keys()].join()) bits.push("original order");
+    if (totalLen === this.total && order.every((p, idx) => p === idx)) bits.push("original order");
     this.status.textContent = bits.join(" · ");
     this.undoBtn.disabled = !this.history.length;
-    this.message.hidden = tiles.length > 0;
-    if (!tiles.length) this.message.textContent = "All pages removed. Use Undo or Reset to bring them back.";
+    this.message.hidden = totalLen > 0;
+    if (!totalLen) this.message.textContent = "All pages removed. Use Undo or Reset to bring them back.";
   }
 
   #updateSplit(tiles) {
     let file = 0;
     const ranges = [];
-    tiles.forEach((t) => {
-      const page = Number(t.dataset.page);
+    const fileByPage = new Map();
+    for (const page of this._order) {
       if (page === 0 || this.starts.has(page)) { file++; ranges.push([page, page]); }
       ranges[ranges.length - 1][1] = page;
+      fileByPage.set(page, file);
+    }
+    tiles.forEach((t) => {
+      const page = Number(t.dataset.page);
+      const f = fileByPage.get(page) || 1;
       t.querySelector(".pb-pos").textContent = page + 1;
       t.classList.toggle("split-start", page > 0 && this.starts.has(page));
-      t.dataset.file = file;
-      t.style.setProperty("--file-tint", file % 2 ? "transparent" : "var(--surface-2)");
-      t.setAttribute("aria-label", `Page ${page + 1}, file ${file}${this.starts.has(page) ? ", starts a new file" : ""}`);
+      t.dataset.file = f;
+      t.style.setProperty("--file-tint", f % 2 ? "transparent" : "var(--surface-2)");
+      t.setAttribute("aria-label", `Page ${page + 1}, file ${f}${this.starts.has(page) ? ", starts a new file" : ""}`);
       const label = t.querySelector(".pb-file") || t.appendChild(el("span", { class: "pb-file" }));
-      label.textContent = page === 0 || this.starts.has(page) ? `File ${file}` : "";
+      label.textContent = page === 0 || this.starts.has(page) ? `File ${f}` : "";
     });
     const span = ([a, b]) => (a === b ? `${a + 1}` : `${a + 1}–${b + 1}`);
-    this.status.textContent = ranges.length === 1 ? "1 file — click a page to start a new file there"
+    this.status.textContent = ranges.length <= 1 ? "1 file — click a page to start a new file there"
       : `${ranges.length} files: pages ${ranges.slice(0, 6).map(span).join(", ")}${ranges.length > 6 ? ", …" : ""}`;
     this.message.hidden = true;
   }

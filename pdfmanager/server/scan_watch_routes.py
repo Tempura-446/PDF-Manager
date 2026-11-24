@@ -8,8 +8,16 @@ import time
 import urllib.parse
 from http import HTTPStatus
 
-from pdfmanager import applog, background, ocr, privacy, progress, recipes, scanner, scanpdf, update, watchfolders
-from pdfmanager.server.common import UserError, _bool, _num, _parse_multipart, gui_hook
+from pdfmanager import applog, privacy, progress, recipes, update
+from pdfmanager.server.common import (
+    UserError, _bool, _num, _parse_multipart, gui_hook, lazy_module,
+)
+
+background = lazy_module("pdfmanager.background")
+ocr = lazy_module("pdfmanager.ocr")
+scanner = lazy_module("pdfmanager.scanner")
+scanpdf = lazy_module("pdfmanager.scanpdf")
+watchfolders = lazy_module("pdfmanager.watchfolders")
 
 
 def _shell_menu_available():
@@ -190,12 +198,16 @@ class ScanWatchRoutesMixin:
             raise UserError("choose a sample PDF to preview filing rules")
         raw_rules = fields.get("rules")
         rules = json.loads(raw_rules) if raw_rules else filing.load_app_rules()
+        from pdfmanager.server.common import _safe_name
+        sample_name = _safe_name(uploads[0][1] or "sample.pdf")
+        if not sample_name.lower().endswith(".pdf"):
+            sample_name += ".pdf"
         with tempfile.TemporaryDirectory(prefix="pdfm-filing-") as tmp:
-            sample = Path(tmp) / "sample.pdf"
+            sample = Path(tmp) / sample_name
             sample.write_bytes(uploads[0][2])
             plan = filing.plan_filing([sample], rules, base_dir=Path(tmp), password=fields.get("password") or None)
             item = plan[0]
-            rel_dst = str(Path(item["dst"]).relative_to(Path(tmp).resolve())) if item["matched"] else "sample.pdf"
+            rel_dst = str(Path(item["dst"]).relative_to(Path(tmp).resolve())) if item["matched"] else sample_name
         return self._send(HTTPStatus.OK, {
             "matched": item["matched"],
             "rule": item["rule"],

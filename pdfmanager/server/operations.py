@@ -15,15 +15,41 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from pdfmanager import (
-    accessibility, applog, archive, certcrypt, certsign, comments, compare,
-    core, filefacts, filetools, formdetect, forms, layers, ocr, office,
-    organize, outline, pdfacheck, privacy, progress, protection, quickactions,
-    recipes, redact, risks, scan, search, watchfolders,
+    applog, core, filefacts, filetools, privacy, progress, quickactions,
+    recipes,
 )
 from pdfmanager.server.common import (
     EXPECTED_ERRORS, UserError, _bool, _file_mentions, _log, _num, _pages,
-    _safe_name,
+    _safe_name, lazy_module,
 )
+
+accessibility = lazy_module("pdfmanager.accessibility")
+archive = lazy_module("pdfmanager.archive")
+certcrypt = lazy_module("pdfmanager.certcrypt")
+certsign = lazy_module("pdfmanager.certsign")
+comments = lazy_module("pdfmanager.comments")
+compare = lazy_module("pdfmanager.compare")
+formdetect = lazy_module("pdfmanager.formdetect")
+forms = lazy_module("pdfmanager.forms")
+layers = lazy_module("pdfmanager.layers")
+ocr = lazy_module("pdfmanager.ocr")
+office = lazy_module("pdfmanager.office")
+organize = lazy_module("pdfmanager.organize")
+outline = lazy_module("pdfmanager.outline")
+pdfacheck = lazy_module("pdfmanager.pdfacheck")
+protection = lazy_module("pdfmanager.protection")
+redact = lazy_module("pdfmanager.redact")
+risks = lazy_module("pdfmanager.risks")
+scan = lazy_module("pdfmanager.scan")
+search = lazy_module("pdfmanager.search")
+watchfolders = lazy_module("pdfmanager.watchfolders")
+
+# Lightweight copies of static choice tuples so OPERATIONS can be built without
+# eagerly importing certsign (cryptography), pdfacheck, or organize at startup.
+_CERT_POSITIONS = ("bottom-right", "bottom-left", "bottom-center",
+                   "top-right", "top-left", "top-center")
+_PDFA_LEVELS = ("1a", "1b", "2a", "2b", "2u", "3a", "3b", "3u")
+_ORGANIZE_GROUPINGS = ("year", "month", "author", "pages", "size", "title-letter")
 
 
 PAPER = ["a4", "letter", "legal", "a3", "a5", "a6", "tabloid", "executive"]
@@ -441,7 +467,7 @@ OPERATIONS = [
                    placeholder="last", hint="a page number, or last"),
                 _f("position", "Position", "select", "bottom-right",
                    show_if={"appearance": "visible"},
-                   choices=[[p, p.replace("-", " ").capitalize()] for p in certsign.POSITIONS]),
+                   choices=[[p, p.replace("-", " ").capitalize()] for p in _CERT_POSITIONS]),
                 _f("size", "Size", "select", "medium", show_if={"appearance": "visible"},
                    choices=[["small", "Small"], ["medium", "Medium"], ["large", "Large"]]),
                 _f("pades_level", "PAdES level (ETSI EN 319 142)", "select", "B-B",
@@ -486,7 +512,7 @@ OPERATIONS = [
              "reference checker, when it's installed.",
      "fields": [_f("level", "Check against", "select", "",
                    choices=[["", "What the file says"]]
-                   + [[lv, f"PDF/A-{lv}"] for lv in pdfacheck.LEVELS],
+                   + [[lv, f"PDF/A-{lv}"] for lv in _PDFA_LEVELS],
                    hint="A file that doesn't say is checked against PDF/A-2b."),
                 _f("engine", "Checker", "select", "auto",
                    choices=[["auto", "veraPDF if installed"], ["builtin", "ZPDF's own checks"]],
@@ -670,7 +696,7 @@ OPERATIONS = [
                    required=True),
                 _f("dest", "Put sub-folders in (blank = same folder)", "text", ""),
                 _f("by", "Group by", "select", "year",
-                   choices=[[g, g.replace("-", " ").capitalize()] for g in organize.GROUPINGS]),
+                   choices=[[g, g.replace("-", " ").capitalize()] for g in _ORGANIZE_GROUPINGS]),
                 _f("duplicates", "Identical files", "select", "keep",
                    choices=[["keep", "Organize anyway"], ["skip", "Skip"],
                             ["folder", "Put in a Duplicates folder"]]),
