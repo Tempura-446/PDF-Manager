@@ -4,6 +4,23 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.63.2
+
+100% commercial-safe offline translation stack: Google MADLAD-400 (3B / 7B / 10.7B, Apache-2.0) and optional Helsinki-NLP OPUS-MT fast pairs.
+
+- **Replaced Meta NLLB-200 (`CC-BY-NC-4.0`) with Google MADLAD-400 (`Apache-2.0`).**
+  Added all three CTranslate2 `int8` universal tiers covering 400+ languages
+  directly: **MADLAD-400 3B** (2.96 GB, fast, 8+ GB RAM), **MADLAD-400 7B**
+  (8.32 GB, back-translated, 16+ GB RAM), and **MADLAD-400 10.7B** (10.74 GB,
+  flagship offline quality, 24+ GB RAM / GPU), automatically preferring the
+  highest installed tier (`10.7B > 7B > 3B`).
+- **Optional Helsinki-NLP OPUS-MT fast pairs (`CC-BY-4.0 / Apache-2.0`).**
+  Added lightweight bidirectional pairs (`opus-es`, `opus-fr`, `opus-de`,
+  ~312 MB each) for fast CPU translation on lower-RAM machines.
+- **License notices.** Added third-party attributions for Google MADLAD-400,
+  Helsinki-NLP OPUS-MT, and Argos Translate (`MIT / CC0`) in **Settings → About**
+  and `THIRD-PARTY-NOTICES.txt`.
+
 ## 0.63.1
 
 Post-release audit hardening: broken API endpoint fixes, security & SSRF/checksum guards, major OCR/translation memory reductions, and UI/UX/i18n fixes.

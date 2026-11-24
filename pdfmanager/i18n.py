@@ -31,16 +31,39 @@ _BUILTIN_DIR = Path(__file__).resolve().parent / "locales"
 
 LANGPACKS_RELEASE_TAG = "langpacks-v1"
 MADLAD_PACK_CODE = "madlad-400-3b"
+MADLAD_7B_PACK_CODE = "madlad-400-7b"
+MADLAD_10B_PACK_CODE = "madlad-400-10b"
 MADLAD_BASE_URL = "https://huggingface.co/Nextcloud-AI/madlad400-3b-mt-ct2-int8/resolve/main"
+MADLAD_7B_BASE_URL = "https://huggingface.co/Nextcloud-AI/madlad400-7b-mt-bt-ct2-int8/resolve/main"
+MADLAD_10B_BASE_URL = "https://huggingface.co/Heng666/madlad400-10b-mt-ct2-int8/resolve/main"
 MADLAD_FILES = ("config.json", "shared_vocabulary.json", "spiece.model", "model.bin")
 UNIVERSAL_PACKS = {
     MADLAD_PACK_CODE: {
         "name": "Universal Offline Translator (MADLAD-400 3B · 400+ languages · Apache-2.0)",
+        "label": "MADLAD-400 3B",
         "base_url": MADLAD_BASE_URL,
         "size_bytes": 2_960_000_000,
         "license": "Apache-2.0",
-        "pair_label": "400+ languages (direct, commercial-safe Apache-2.0)",
+        "pair_label": "400+ languages (direct, fast · 8+ GB RAM · Apache-2.0)",
         "files": [(f, f"{MADLAD_BASE_URL}/{f}") for f in MADLAD_FILES],
+    },
+    MADLAD_7B_PACK_CODE: {
+        "name": "High-Quality Universal (MADLAD-400 7B · 400+ languages · Apache-2.0)",
+        "label": "MADLAD-400 7B",
+        "base_url": MADLAD_7B_BASE_URL,
+        "size_bytes": 8_320_000_000,
+        "license": "Apache-2.0",
+        "pair_label": "400+ languages (back-translated · 16+ GB RAM · Apache-2.0)",
+        "files": [(f, f"{MADLAD_7B_BASE_URL}/{f}") for f in MADLAD_FILES],
+    },
+    MADLAD_10B_PACK_CODE: {
+        "name": "Flagship Universal (MADLAD-400 10.7B · 400+ languages · Apache-2.0)",
+        "label": "MADLAD-400 10.7B",
+        "base_url": MADLAD_10B_BASE_URL,
+        "size_bytes": 10_740_000_000,
+        "license": "Apache-2.0",
+        "pair_label": "400+ languages (maximum offline quality · 24+ GB RAM / GPU · Apache-2.0)",
+        "files": [(f, f"{MADLAD_10B_BASE_URL}/{f}") for f in MADLAD_FILES],
     },
 }
 _OPUS_MT_FILES = ("config.json", "shared_vocabulary.txt", "source.spm", "target.spm", "model.bin")
@@ -981,14 +1004,14 @@ def _http_post_json(url, payload, *, headers=None, timeout=180):
 
 
 def _download_and_install_madlad(pack_code=MADLAD_PACK_CODE):
-    """Download Google MADLAD-400 3B (CTranslate2 int8, Apache-2.0, 400+ languages)
-    into ``<packs_dir>/<pack_code>/``."""
+    """Download Google MADLAD-400 (3B, 7B, or 10.7B CTranslate2 int8, Apache-2.0,
+    400+ languages) into ``<packs_dir>/<pack_code>/``."""
     meta = UNIVERSAL_PACKS[pack_code]
     pack_dest = packs_dir() / pack_code
     model_dest = pack_dest / "models" / pack_code
     model_dest.mkdir(parents=True, exist_ok=True)
     file_entries = meta.get("files") or [(f, f"{meta['base_url']}/{f}") for f in MADLAD_FILES]
-    label = "MADLAD-400 3B"
+    label = meta.get("label") or "MADLAD-400"
     # Small tokenizer/config files occupy 0–5%, model.bin occupies 5–96%, finalization 96–100%.
     small_files = [f for f, _ in file_entries if f != "model.bin"]
     small_step = 0.05 / max(1, len(small_files))
