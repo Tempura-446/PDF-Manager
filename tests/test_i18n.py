@@ -85,7 +85,9 @@ def test_i18n_http_endpoints(tmp_path, monkeypatch):
         # Verify static/i18n.js is served
         with urllib.request.urlopen(base + "/static/i18n.js") as res:
             assert res.status == 200
-            assert "export function applyTranslations" in res.read().decode("utf-8")
+            body = res.read().decode("utf-8")
+            assert "function applyTranslations" in body
+            assert "ZpdfI18n" in body
 
         # GET /api/i18n
         req = urllib.request.Request(base + "/api/i18n", headers={"X-Pdfm-Token": token})

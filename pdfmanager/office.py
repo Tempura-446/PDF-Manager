@@ -877,9 +877,41 @@ def html_to_pdf(source, output, timeout=120):
             raise core.PdfManagerError(f"{path.name} isn't a web page (.html, .htm, .mht)")
         address = path.resolve().as_uri()
         local = path
-    elif re.match(r"(?i)^https?://(localhost|127\.|0\.0\.0\.0|\[?::1)", address):
-        raise core.PdfManagerError("addresses on this computer (localhost) can't be printed")
     else:
+        import ipaddress
+        import socket
+        import urllib.parse
+        from pdfmanager import policy
+
+        try:
+            policy.check_network_allowed("Web to PDF")
+        except policy.PolicyError as exc:
+            raise core.PdfManagerError(str(exc)) from None
+        parsed = urllib.parse.urlsplit(address)
+        host = (parsed.hostname or "").strip().lower()
+        if not host or host in ("localhost", "localhost.localdomain") or host.endswith(".localhost"):
+            raise core.PdfManagerError("addresses on this computer (localhost) can't be printed")
+        # Check literal IP first (handles IPv4, IPv6, IPv6-mapped IPv4, decimal/hex via getaddrinfo).
+        def _is_blocked_ip(ip_str: str) -> bool:
+            try:
+                ip = ipaddress.ip_address(ip_str.split("%", 1)[0])
+            except ValueError:
+                return False
+            if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+                ip = ip.ipv4_mapped
+            return ip.is_loopback or ip.is_link_local or ip.is_unspecified
+
+        if _is_blocked_ip(host):
+            raise core.PdfManagerError("addresses on this computer (localhost) can't be printed")
+        try:
+            infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+            for info in infos:
+                if _is_blocked_ip(info[4][0]):
+                    raise core.PdfManagerError("addresses on this computer (localhost) can't be printed")
+        except core.PdfManagerError:
+            raise
+        except OSError:
+            pass
         local = None
     browser = find_browser()
     if browser:

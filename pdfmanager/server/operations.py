@@ -581,11 +581,11 @@ OPERATIONS = [
                 _f("images", "Extract pictures to an assets folder", "check", False),
                 _f("page_breaks", "Insert page separators", "check", False),
                 _f("front_matter", "Include YAML metadata front matter", "check", False)]},
-    {"id": "translate", "group": "Convert", "label": "Translate PDF (offline)", "files": "pdf",
+    {"id": "translate", "group": "Convert", "label": "Translate PDF", "files": "pdf",
      "action": "Translate",
-     "help": "Translate PDFs completely offline using an installed language pack. Numbers, dates, "
-             "URLs, emails, and reference codes (such as INV-2026-118) stay unchanged. Download "
-             "language packs with one click under Settings → Language (English pivoting works automatically).",
+     "help": "Translate PDFs offline using an installed language pack, or via a local/cloud OpenAI-compatible "
+             "model configured under Settings → Translation. Numbers, dates, URLs, emails, code blocks, "
+             "and reference codes (such as INV-2026-118) stay unchanged.",
      "fields": [_f("source_lang", "From language", "select", "auto",
                    choices=[["auto", "Auto-detect"], ["en", "English"], ["zh-Hans", "简体中文 (Chinese Simplified)"],
                             ["zh-Hant", "繁體中文 (Chinese Traditional)"], ["es", "Español (Spanish)"],
@@ -613,7 +613,7 @@ OPERATIONS = [
                             ["text", "Plain text (.txt)"]]),
                 _f("pages", "Pages (optional)", "text", "",
                    placeholder="All pages, or e.g. 1-5, 8"),
-                _f("auto_ocr", "Auto-OCR scanned pages (if no selectable text)", "checkbox", False)]},
+                _f("auto_ocr", "Auto-OCR scanned pages (if no selectable text)", "check", False)]},
     # Quantities: a schedule of what was measured on a drawing (pdfmanager/quantities.py)
     {"id": "quantities", "group": "Convert", "label": "Quantities from a drawing", "files": "pdf",
      "help": "A schedule (takeoff) of everything measured on a drawing: the dimensions and measurements "
@@ -646,7 +646,7 @@ OPERATIONS = [
                    choices=[["A4", "A4"], ["A3", "A3"], ["A2", "A2"], ["A1", "A1"], ["A0", "A0"],
                             ["Letter", "Letter"], ["Tabloid", "Tabloid"], ["Arch D", "Arch D"]]),
                 _f("scale", "Plot scale", "text", "fit", placeholder="fit or 1:100"),
-                _f("monochrome", "Monochrome (black lines)", "checkbox", False)]},
+                _f("monochrome", "Monochrome (black lines)", "check", False)]},
     {"id": "sheet-sets", "group": "Convert", "label": "Sheet sets", "files": "pdf",
      "help": "Work with multi-sheet architectural or engineering drawing sets: split into "
              "one file per sheet named from its title block, label pages with sheet numbers, "
@@ -1239,7 +1239,8 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         if mode not in translate.MODES:
             raise UserError(f"unknown translation layout {mode!r}")
         ext = ".txt" if mode == "text" else ".pdf"
-        out = out_dir / f"{src.stem}_{target_lang}{ext}"
+        safe_lang = _safe_name(re.sub(r"[^A-Za-z0-9_-]+", "-", str(target_lang)).strip("-") or "out")
+        out = out_dir / f"{src.stem}_{safe_lang}{ext}"
         pages_spec = str(opts.get("pages") or "").strip() or None
         auto_ocr = _bool(opts.get("auto_ocr", False))
         made = translate.translate_pdf(
@@ -1703,6 +1704,8 @@ def _run_files(op, files, opts, password, extra_files, work, notes):
         outputs = [res["output"]] if res["output"] else []
     elif op == "web" and not files:  # a web address
         address = opts["url"].strip()
+        if office._web_address(address) is None:
+            raise UserError("enter a web address starting with http:// or https:// (or upload a saved .html/.mht file)")
         name = re.sub(r"[^\w.-]+", "-", re.sub(r"(?i)^https?://(www\.)?", "", address)).strip("-.")[:60]
         out = out_dir / f"{name or 'page'}.pdf"
         _, program = office.html_to_pdf(address, out)

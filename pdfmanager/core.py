@@ -655,14 +655,15 @@ def _size_chunks(path, reader, max_size, notes=None):
     while start < total:
         progress.report(start, total, "page")
         left = total - start
-        sizes, data = {}, {}  # pages tried -> file size, and the bytes of those that fit
+        sizes = {}  # pages tried -> file size
+        best_blob = None
         fits, too_big = 0, left + 1  # most pages known to fit; fewest known not to
         tries = min(left, max(1, int(limit * 0.97 / per_page)))
         while True:
             blob = _pages_bytes(reader, range(start, start + tries))
             sizes[tries] = len(blob)
             if len(blob) <= limit:
-                fits, data[tries] = tries, blob
+                fits, best_blob = tries, blob
             else:
                 too_big = tries
             if fits == left or too_big == fits + 1:
@@ -676,7 +677,7 @@ def _size_chunks(path, reader, max_size, notes=None):
                 guess = fits + int((limit - low) * (too_big - fits) / max(1, high - low))
             tries = min(max(guess, fits + 1), too_big - 1, left)
         if fits:
-            yield list(range(start, start + fits)), data[fits]
+            yield list(range(start, start + fits)), best_blob
             per_page = max(1.0, sizes[fits] / fits)
             start += fits
         else:  # one page is larger than the limit by itself
@@ -1113,23 +1114,26 @@ def trim_margins(path, output, padding=10, same=False, pages=None, tolerance=24,
             doc = pdfium.PdfDocument(str(path), password=password)
         except pdfium.PdfiumError as exc:
             raise PdfManagerError(f"{path} can't be rendered ({exc})") from None
-        try:
-            doc.init_forms()  # filled-in form fields count as content
-            for n, i in enumerate(targets):
-                progress.report(n, len(targets), "page")
+        doc.init_forms()  # filled-in form fields count as content
+    try:
+        for n, i in enumerate(targets):
+            progress.report(n, len(targets), "page")
+            with PDFIUM_LOCK:
                 page = doc[i]
                 try:
-                    image = page.render(scale=render_scale(page, dpi / 72), may_draw_forms=True).to_pil().convert("L")
+                    image = page.render(scale=render_scale(page, dpi / 72), may_draw_forms=True).to_pil()
                 finally:
                     page.close()
-                box = image.point(lambda v: 255 if v < white else 0).getbbox()
-                if box is None:
-                    blank.append(i)
-                    continue
-                w, h = image.size
-                x0, y0, x1, y1 = box
-                found[i] = (x0 / w, (h - y1) / h, (w - x1) / w, y0 / h)
-        finally:
+            gray = image.convert("L")
+            box = gray.point(lambda v: 255 if v < white else 0).getbbox()
+            if box is None:
+                blank.append(i)
+                continue
+            w, h = gray.size
+            x0, y0, x1, y1 = box
+            found[i] = (x0 / w, (h - y1) / h, (w - x1) / w, y0 / h)
+    finally:
+        with PDFIUM_LOCK:
             doc.close()
     writer = clone_document(reader)
     margins = {}  # page -> margins to trim as the page is shown, in points
@@ -2109,35 +2113,39 @@ def pdf_to_images(path, outdir, dpi=150, fmt="png", pages=None, password=None):
     import pypdfium2 as pdfium
 
     outdir = Path(outdir)
+    open_pdf(path, password)  # a plain error for a damaged file or a wrong password
     with PDFIUM_LOCK:
-        open_pdf(path, password)  # a plain error for a damaged file or a wrong password
         try:
             doc = pdfium.PdfDocument(str(path), password=password)
         except pdfium.PdfiumError as exc:
             raise PdfManagerError(f"{path} can't be rendered ({exc})") from None
-        try:
-            total = len(doc)
-            indices = parse_page_ranges(pages, total) if pages else range(total)
-            outdir.mkdir(parents=True, exist_ok=True)
-            width = len(str(total))
-            written, notes_said = [], []
-            for n, i in enumerate(indices):
-                progress.report(n, len(indices), "page")
+        total = len(doc)
+    try:
+        indices = parse_page_ranges(pages, total) if pages else range(total)
+        outdir.mkdir(parents=True, exist_ok=True)
+        width = len(str(total))
+        written, notes_said = [], []
+        for n, i in enumerate(indices):
+            progress.report(n, len(indices), "page")
+            with PDFIUM_LOCK:
                 page = show_whole_page(doc[i])
-                scale = render_scale(page, dpi / 72)
-                image = page.render(scale=scale).to_pil()
-                page.close()
-                if scale < dpi / 72 and not notes_said:
-                    notes_said.append(i)
-                    progress.say(f"page {i + 1} is very large: drawn at {scale * 72:.0f} dpi")
-                if fmt.lower() in ("jpg", "jpeg") and image.mode != "RGB":
-                    image = image.convert("RGB")
-                target = outdir / f"{Path(path).stem}_{i + 1:0{width}d}.{fmt}"
-                shown = round(scale * 72, 2)
-                image.save(target, dpi=(shown, shown))  # so the pictures keep their size
-                written.append(target)
-            return written
-        finally:
+                try:
+                    scale = render_scale(page, dpi / 72)
+                    image = page.render(scale=scale).to_pil()
+                finally:
+                    page.close()
+            if scale < dpi / 72 and not notes_said:
+                notes_said.append(i)
+                progress.say(f"page {i + 1} is very large: drawn at {scale * 72:.0f} dpi")
+            if fmt.lower() in ("jpg", "jpeg") and image.mode != "RGB":
+                image = image.convert("RGB")
+            target = outdir / f"{Path(path).stem}_{i + 1:0{width}d}.{fmt}"
+            shown = round(scale * 72, 2)
+            image.save(target, dpi=(shown, shown))  # so the pictures keep their size
+            written.append(target)
+        return written
+    finally:
+        with PDFIUM_LOCK:
             doc.close()
 
 

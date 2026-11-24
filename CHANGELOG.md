@@ -4,6 +4,39 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.63.1
+
+Post-release audit hardening: broken API endpoint fixes, security & SSRF/checksum guards, major OCR/translation memory reductions, and UI/UX/i18n fixes.
+
+- **Critical API & translation fixes.** Fixed `POST /api/preflight/fix`,
+  `GET /api/audit`, and `GET /api/policy` (`AttributeError` / top-level `do_GET`
+  error handling); preserved non-text image/diagram pages in `translate_pdf`
+  `in-place` mode; propagated `progress.Cancelled` during OCR/layout/LLM/CT2
+  translation; scoped annotation translation to selected `pages`; and added
+  `ctranslate2|sentencepiece` to the self-updater's `_NO_BUILD` fallback regex.
+- **Security & privacy hardening.** Enforced `policy.check_network_allowed()`
+  and IP/DNS-level SSRF checks in Web-to-PDF (blocking local paths in URL mode),
+  prevented stored AI API key fallback when `/api/translate/test` overrides the
+  endpoint URL, made curated language-pack SHA-256 verification fail-closed with
+  safe 3xx redirect validation and zip-bomb/symlink extraction guards, sanitized
+  `target_lang` and `_form_import` filenames, and blocked metadata hosts in eSCL.
+- **Performance & memory ceilings.** Eliminated 2–5 GB PIL bitmap retention in
+  OCR Pass 1 (72-DPI preview hashing + on-demand full-DPI rendering), capped
+  `_CT2_CACHE` with a 4 GB byte budget + single-flight loading lock and bounded
+  `_SubwordBpe._cache` / `ocr._engines`, released upload buffers before running
+  async jobs, cached `make_safe_on_open` across HTTP Range requests, narrowed
+  `PDFIUM_LOCK` per-page in `pdf_to_images` and `trim_margins`, bounded
+  concurrent background jobs, capped Reader undo history to 192 MB per tab, and
+  cleaned up leaked thumbnail canvases/blob URLs.
+- **UI/UX, accessibility & i18n fixes.** Fixed `auto_ocr` and `monochrome`
+  rendering as text boxes (`kind="check"`), fixed `show_if` array conditions
+  (Comments `author`/`kind` filters), fixed `static/i18n.js` loading and
+  `window.ZpdfI18n` registration, unified Settings primary `Save` to include AI
+  Translation & Glossary fields, stopped 2 s Watch-folder polling from stealing
+  focus or collapsing dropdowns, serialized language-pack downloads, added
+  destructive-action confirmations, fixed `from-drawing` file picker filters,
+  and styled Settings `<textarea>` / search controls and `.btn.sm` buttons.
+
 ## 0.63.0
 
 Bilingual stacked mode, page range & auto-OCR translation, GPU acceleration, code/math/RTL/rotated/bookmark fidelity, and NLLB-200 3.3B.

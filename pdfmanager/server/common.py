@@ -233,20 +233,30 @@ class Events:
     """Messages for the app's pages, numbered; pages ask for the ones after
     the last they've seen and wait for new ones."""
 
+    MAX_ITEMS = 500
+
     def __init__(self):
         self.items = []
+        self._offset = 0
         self.cond = threading.Condition()
 
     def push(self, event):
         with self.cond:
             self.items.append(event)
+            if len(self.items) > self.MAX_ITEMS:
+                drop = len(self.items) - self.MAX_ITEMS
+                del self.items[:drop]
+                self._offset += drop
             self.cond.notify_all()
 
     def wait(self, after, timeout=20):
         with self.cond:
-            if len(self.items) <= after:
+            total = self._offset + len(self.items)
+            if total <= after:
                 self.cond.wait(timeout)
-            return self.items[after:], len(self.items)
+                total = self._offset + len(self.items)
+            start = max(0, after - self._offset)
+            return self.items[start:], total
 
 
 class RecentFiles:

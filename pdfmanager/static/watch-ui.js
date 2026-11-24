@@ -12,25 +12,46 @@ function watchState(f) {
   const head = { paused: "Paused", watching: "Watching", starting: "Starting…" }[s.state] || s.detail || s.state;
   return [head, counts, s.last ? `Last: ${s.last.message}` : ""].filter(Boolean).join(" · ");
 }
+let _watchDoKey = "";
+let _watchListKey = "";
 function renderWatch() {
   const list = $("watch-list");
-  list.replaceChildren(...watchInfo.folders.map((f) => {
-    const bad = ["missing", "error", "elsewhere"].includes(f.status.state) || (f.status.last && !f.status.last.ok);
-    const pause = el("button", { type: "button", class: "btn secondary pb-small", "aria-label": `${f.paused ? "Resume" : "Pause"} watching ${f.folder}`,
-      onclick: () => watchCall("/api/watch/pause", { id: f.id, paused: !f.paused }) }, f.paused ? "Resume" : "Pause");
-    const remove = el("button", { type: "button", class: "btn ghost pb-small", "aria-label": `Stop watching ${f.folder}`,
-      onclick: () => watchCall("/api/watch/remove", { id: f.id }, `${f.folder} isn’t watched any more. Its files are left as they are.`) }, "Remove");
-    return el("li", { class: "watch-item", "data-id": f.id },
-      el("div", { class: "wi-text" }, el("span", { class: "wi-folder" }, f.folder), el("span", { class: "wi-what" }, f.describe),
-        el("span", { class: "wi-state" + (bad ? " err" : ""), "aria-live": "polite" }, watchState(f))),
-      el("div", { class: "wi-buttons" }, pause, remove));
-  }));
+  const listKey = watchInfo.folders.map((f) => `${f.id}|${f.paused ? 1 : 0}|${f.folder}|${f.describe}`).join("\n");
+  if (listKey === _watchListKey && list.children.length === watchInfo.folders.length) {
+    // Patch status text in-place so 2s polling never steals focus from Pause/Remove buttons.
+    watchInfo.folders.forEach((f, idx) => {
+      const bad = ["missing", "error", "elsewhere"].includes(f.status.state) || (f.status.last && !f.status.last.ok);
+      const st = list.children[idx]?.querySelector(".wi-state");
+      if (st) {
+        st.textContent = watchState(f);
+        st.classList.toggle("err", !!bad);
+      }
+    });
+  } else {
+    _watchListKey = listKey;
+    list.replaceChildren(...watchInfo.folders.map((f) => {
+      const bad = ["missing", "error", "elsewhere"].includes(f.status.state) || (f.status.last && !f.status.last.ok);
+      const pause = el("button", { type: "button", class: "btn secondary pb-small", "aria-label": `${f.paused ? "Resume" : "Pause"} watching ${f.folder}`,
+        onclick: () => watchCall("/api/watch/pause", { id: f.id, paused: !f.paused }) }, f.paused ? "Resume" : "Pause");
+      const remove = el("button", { type: "button", class: "btn ghost pb-small", "aria-label": `Stop watching ${f.folder}`,
+        onclick: () => watchCall("/api/watch/remove", { id: f.id }, `${f.folder} isn’t watched any more. Its files are left as they are.`) }, "Remove");
+      return el("li", { class: "watch-item", "data-id": f.id },
+        el("div", { class: "wi-text" }, el("span", { class: "wi-folder" }, f.folder), el("span", { class: "wi-what" }, f.describe),
+          el("span", { class: "wi-state" + (bad ? " err" : ""), "aria-live": "polite" }, watchState(f))),
+        el("div", { class: "wi-buttons" }, pause, remove));
+    }));
+  }
   list.hidden = !watchInfo.folders.length;
-  const pick = $("watch-do"), was = pick.value;
-  pick.replaceChildren(
-    el("optgroup", { label: "A tool, with its usual settings" }, ...watchInfo.tools.map((t) => el("option", { value: "tool:" + t.id }, t.label))),
-    ...(watchInfo.recipes.length ? [el("optgroup", { label: "A saved recipe" }, ...watchInfo.recipes.map((r) => el("option", { value: "recipe:" + r }, r)))] : []));
-  if ([...pick.options].some((o) => o.value === was)) pick.value = was;
+  const pick = $("watch-do");
+  const doKey = watchInfo.tools.map((t) => `${t.id}:${t.label}`).join("|") + "||" + watchInfo.recipes.join("|");
+  if (doKey !== _watchDoKey) {
+    _watchDoKey = doKey;
+    const was = pick.value;
+    pick.replaceChildren(
+      el("optgroup", { label: "A tool, with its usual settings" }, ...watchInfo.tools.map((t) => el("option", { value: "tool:" + t.id }, t.label))),
+      ...(watchInfo.recipes.length ? [el("optgroup", { label: "A saved recipe" }, ...watchInfo.recipes.map((r) => el("option", { value: "recipe:" + r }, r)))] : []));
+    if ([...pick.options].some((o) => o.value === was)) pick.value = was;
+  }
   $("watch-browse").hidden = !(isDesktop() && window.pywebview.api.pick_folder);
 }
 async function watchCall(path, data, said = "") {
@@ -78,6 +99,16 @@ $("filing-load-starters")?.addEventListener("click", async () => {
     const data = await loadFilingRules();
     const starters = data.starters || [];
     if (!starters.length) return;
+    if ((data.rules || []).length && typeof appAsk === "function") {
+      const ok = await appAsk({
+        title: "Replace existing filing rules?",
+        text: `This will replace your ${data.rules.length} saved filing rule(s) with the ${starters.length} starter rules.`,
+        yes: "Replace",
+        no: "Cancel",
+        danger: true,
+      });
+      if (!ok) return;
+    }
     await jsonApi("/api/filing/rules", { rules: starters });
     await loadFilingRules();
     updateStatus("filing-status", `Loaded ${starters.length} starter filing rules.`);

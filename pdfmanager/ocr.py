@@ -467,6 +467,8 @@ def _engine(script=None, quality="standard", use_gpu=None, rec_model_path=None):
             try:
                 from rapidocr import RapidOCR
 
+                while len(_engines) >= 2:
+                    _engines.pop(next(iter(_engines)))
                 _engines[key] = RapidOCR(params=params)
             except Exception as exc:  # a broken install, or model files missing from a build
                 if gpu:
@@ -477,6 +479,8 @@ def _engine(script=None, quality="standard", use_gpu=None, rec_model_path=None):
                     try:
                         from rapidocr import RapidOCR
 
+                        while len(_engines) >= 2:
+                            _engines.pop(next(iter(_engines)))
                         _engines[key] = RapidOCR(params=params)
                     except Exception as cpu_exc:
                         raise core.PdfManagerError(
@@ -1815,17 +1819,23 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
 
             with core.PDFIUM_LOCK:
                 pdfium_page = core.show_whole_page(doc[i])
-                page_w, page_h = pdfium_page.get_width(), pdfium_page.get_height()
-                scale = render_scale(page_w, page_h)
-                image = pdfium_page.render(scale=scale).to_pil()
-            if _is_blank_image(image):
+                try:
+                    page_w, page_h = pdfium_page.get_width(), pdfium_page.get_height()
+                    scale = render_scale(page_w, page_h)
+                    # Render a lightweight 72-DPI preview for blank detection & dedup hashing
+                    # so large scans never pin gigabytes of full-DPI bitmaps across passes.
+                    preview = pdfium_page.render(scale=min(1.0, scale)).to_pil()
+                finally:
+                    pdfium_page.close()
+            if _is_blank_image(preview):
                 _record_skip(report, "blank page", i + 1)
                 done_count += 1
                 continue
-            img_hash = _image_hash(image)
-            scan_pages.append((i, img_hash, page_w, page_h, scale, image if force else None))
+            img_hash = _image_hash(preview)
+            del preview
+            scan_pages.append((i, img_hash, page_w, page_h, scale))
             if img_hash not in first_for_hash:
-                first_for_hash[img_hash] = (i, page_w, page_h, scale, image)
+                first_for_hash[img_hash] = (i, page_w, page_h, scale)
 
         # Pass 2: recognise each unique non-blank scan page (in parallel when beneficial).
         results_by_hash = {}
@@ -1867,15 +1877,22 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
             else:
                 executor.shutdown(wait=True)
         else:
-            for img_hash, (page_idx, page_w, page_h, scale, image) in unique_items:
+            for img_hash, (page_idx, page_w, page_h, scale) in unique_items:
                 progress.report(min(done_count, total - 1), total, "page")
                 try:
                     if _page_worker is not None:
                         _p, lines, turn, angle, img_size = _page_worker(
                             (str(source), page_idx, rotate, deskew, script, quality))
                     else:
+                        with core.PDFIUM_LOCK:
+                            pdfium_page = core.show_whole_page(doc[page_idx])
+                            try:
+                                image = pdfium_page.render(scale=scale).to_pil()
+                            finally:
+                                pdfium_page.close()
                         lines, turn, angle, img_size = _recognise_scan_page(
                             image, doc, page_idx, page_w, page_h, scale, rotate, deskew, script, quality)
+                        del image
                 except progress.Cancelled:
                     raise
                 except Exception as exc:  # engine trouble: say which page
@@ -1885,7 +1902,7 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
                 progress.report(min(done_count, total - 1), total, "page")
 
         # Pass 3: apply results to pages in deterministic page order.
-        for i, img_hash, page_w, page_h, scale, kept_image in scan_pages:
+        for i, img_hash, page_w, page_h, scale in scan_pages:
             progress.report(min(i, total - 1), total, "page")
             page = writer.pages[i]
             lines, turn, angle, img_size = results_by_hash[img_hash]
@@ -1897,12 +1914,18 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
                 # Turn the page with the deskewed picture so words and page stay in step.
                 _turn_page(page, -angle, Transformation)
             if force:
-                img = kept_image
+                with core.PDFIUM_LOCK:
+                    pdfium_page = core.show_whole_page(doc[i])
+                    try:
+                        img = pdfium_page.render(scale=scale).to_pil()
+                    finally:
+                        pdfium_page.close()
                 if turn:
                     img = img.rotate(turn, expand=True)
                 if angle:
                     img = img.rotate(-angle, resample=Image.BICUBIC, fillcolor="white")
                 _rasterise(writer, page, img, scale)
+                del img
                 textlayer._write_page_unsure_list(page, [])
                 rasterised = True
             words = [w for line in lines for w in line.words]

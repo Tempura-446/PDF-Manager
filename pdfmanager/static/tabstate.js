@@ -226,7 +226,12 @@ export class TabState {
   pageEdited(before, after, { redacted = false } = {}) {
     this.#redo = [];
     this.#undo.push({ bytes: before, redacted: this.#redacted, saved: !this.#dirty });
-    if (this.#undo.length > UNDO_KEPT) this.#undo.shift();
+    const UNDO_MAX_BYTES = 192 * 1024 * 1024;
+    let totalBytes = this.#undo.reduce((sum, e) => sum + (e.bytes?.byteLength || 0), 0);
+    while (this.#undo.length > 1 && (this.#undo.length > UNDO_KEPT || totalBytes > UNDO_MAX_BYTES)) {
+      const dropped = this.#undo.shift();
+      totalBytes -= dropped?.bytes?.byteLength || 0;
+    }
     this.#bytes = this.#afterEdit = after;
     this.#edited = true;
     this.#dirty = true;

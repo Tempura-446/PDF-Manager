@@ -290,7 +290,7 @@ def _extract(data, target):
 
 
 # pip's words when a package has no build for this Python at all.
-_NO_BUILD = re.compile(r"No matching distribution found for (onnxruntime|rapidocr)", re.I)
+_NO_BUILD = re.compile(r"No matching distribution found for (onnxruntime|rapidocr|ctranslate2|sentencepiece)", re.I)
 
 
 def install(python=None, notes=None, *, allow_downgrade=False):
