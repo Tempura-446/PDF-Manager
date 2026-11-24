@@ -31,7 +31,7 @@ _PROTECT_RE = re.compile(
 )
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s+")
 _APPROX_PACK_MB = 45
-MODES = ("side-by-side", "bilingual", "in-place", "text")
+MODES = ("side-by-side", "bilingual-pages", "bilingual", "in-place", "text")
 
 
 def protect_tokens(text):
@@ -1531,72 +1531,155 @@ def _detect_rotation(words):
     return 270 if direction == "ttb" else 90
 
 
-def _make_bilingual_pages(width, height, blocks, translated_texts, dst_lang):
-    """Build clean paginated bilingual-stacked PDF pages where every original
-    block is followed directly underneath by its translation in a subtle accent
-    color (ideal for reading contracts, manuals, and papers on laptop screens)."""
+_STANDALONE_PAGENUM_RE = re.compile(r"^(?:[-–—]\s*)?(?:p\.?\s*)?(?:\d{1,5}|[ivxlcdm]{1,8})(?:\s*[-–—])?$", re.I)
+
+
+def _detect_running_margin_texts(pages_blocks, pages_heights):
+    """Identify repetitive book running headers/footers appearing in the top or
+    bottom 8% margin band across 2+ pages so reflowed bilingual reading isn't
+    interrupted by repeated chapter titles or page numbers."""
+    from collections import Counter
+
+    counts = Counter()
+    for blks, h in zip(pages_blocks, pages_heights):
+        if not h:
+            continue
+        seen_on_page = set()
+        for blk in blks:
+            top = float(blk.get("top") or 0.0)
+            bottom = float(blk.get("bottom") or top)
+            in_band = (bottom <= h * 0.09) or (top >= h * 0.91)
+            if not in_band:
+                continue
+            txt = re.sub(r"\s+", " ", str(blk.get("text") or "")).strip()
+            if txt and len(txt) <= 90:
+                norm = re.sub(r"\d+", "#", txt).lower()
+                seen_on_page.add(norm)
+        for norm in seen_on_page:
+            counts[norm] += 1
+    return {k for k, v in counts.items() if v >= 2}
+
+
+def _is_running_margin_block(blk, page_h, repeated_margin_texts):
+    if not page_h:
+        return False
+    top = float(blk.get("top") or 0.0)
+    bottom = float(blk.get("bottom") or top)
+    in_band = (bottom <= page_h * 0.09) or (top >= page_h * 0.91)
+    if not in_band:
+        return False
+    txt = re.sub(r"\s+", " ", str(blk.get("text") or "")).strip()
+    if not txt:
+        return True
+    if _STANDALONE_PAGENUM_RE.match(txt):
+        return True
+    if len(txt) <= 90 and re.sub(r"\d+", "#", txt).lower() in repeated_margin_texts:
+        return True
+    return False
+
+
+def _make_bilingual_pages(width, height, blocks, translated_texts, dst_lang, page_num=None):
+    """Build clean book-styled paginated bilingual-stacked PDF pages where every
+    original paragraph is followed directly underneath by its translation with a
+    subtle left accent bar, preserved heading hierarchy, and quiet page reference."""
     from pypdf import PdfReader
 
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(width, height))
-    margin = 36.0
-    max_w = max(72.0, width - 2 * margin)
-    y = height - margin
+    margin_x = min(50.0, max(36.0, width * 0.08))
+    margin_top = 44.0
+    margin_bot = 42.0
+    max_w = max(72.0, width - 2 * margin_x)
+    trans_indent = 10.0
+    trans_max_w = max(64.0, max_w - trans_indent)
+    y = height - margin_top
     is_rtl = i18n.language_dir(dst_lang) == "rtl"
+
+    def _draw_footer():
+        if page_num is None:
+            return
+        c.saveState()
+        c.setFillColorRGB(0.52, 0.54, 0.58)
+        c.setFont("Helvetica", 8.0)
+        c.drawCentredString(width / 2.0, 20.0, f"Original p. {page_num}")
+        c.restoreState()
 
     def _new_page():
         nonlocal y
+        _draw_footer()
         c.showPage()
-        y = height - margin
+        y = height - margin_top
 
     for blk, trans in zip(blocks, translated_texts):
         orig_text = str(blk.get("text") or "").strip()
         trans_text = str(trans or "").strip()
         if not orig_text and not trans_text:
             continue
-        base_size = max(8.5, min(14.0, float(blk.get("size") or 10.0)))
-        orig_font = fonts.font_for(orig_text, family=blk.get("family", "sans"), bold=bool(blk.get("bold", False)))
+        raw_size = float(blk.get("size") or 10.5)
+        is_heading = bool(blk.get("bold", False)) or raw_size >= 13.5
+        base_size = max(9.0, min(18.0 if is_heading else 13.0, raw_size))
+        orig_font = fonts.font_for(orig_text, family=blk.get("family", "serif"), bold=bool(blk.get("bold", False)))
         orig_lines = _wrap_text(orig_text, orig_font, base_size, max_w)
-        orig_leading = base_size * 1.32
+        orig_leading = base_size * (1.28 if is_heading else 1.38)
 
         same_verbatim = (orig_text == trans_text) or not trans_text
         trans_display = _shape_rtl(trans_text, dst_lang) if not same_verbatim else ""
-        trans_font = fonts.font_for(trans_display) if trans_display else orig_font
-        trans_size = max(8.5, min(13.0, base_size * 0.96))
-        trans_lines = _wrap_text(trans_display, trans_font, trans_size, max_w) if trans_display else []
-        trans_leading = trans_size * 1.35
+        trans_font = fonts.font_for(trans_display, bold=is_heading) if trans_display else orig_font
+        trans_size = max(8.8, min(16.0 if is_heading else 12.2, base_size * 0.95))
+        trans_lines = _wrap_text(trans_display, trans_font, trans_size, trans_max_w) if trans_display else []
+        trans_leading = trans_size * (1.30 if is_heading else 1.40)
 
-        # Keep at least the first line of a pair together on a page
-        min_block_h = orig_leading + (trans_leading if trans_lines else 0) + 6.0
-        if y - min_block_h < margin:
+        if is_heading and y < height - margin_top - 8.0:
+            y -= base_size * 0.45
+
+        # Keep at least the heading/first lines of a pair together on a page
+        min_block_h = orig_leading + (trans_leading if trans_lines else 0) + 8.0
+        if y - min_block_h < margin_bot:
             _new_page()
 
-        c.setFillColorRGB(0.12, 0.12, 0.14)
+        c.setFillColorRGB(0.10, 0.11, 0.13)
         c.setFont(orig_font, base_size)
         for line in orig_lines:
-            if y - orig_leading < margin:
+            if y - orig_leading < margin_bot:
                 _new_page()
-                c.setFillColorRGB(0.12, 0.12, 0.14)
+                c.setFillColorRGB(0.10, 0.11, 0.13)
                 c.setFont(orig_font, base_size)
-            c.drawString(margin, y, line)
+            c.drawString(margin_x, y, line)
             y -= orig_leading
 
         if trans_lines:
-            y -= 2.0
-            c.setFillColorRGB(0.12, 0.25, 0.68)  # subtle slate-blue accent for translation
+            y -= 3.0
+            bar_top = y + trans_size * 0.85
+            c.setFillColorRGB(0.13, 0.27, 0.62)  # crisp book-slate accent for translation
             c.setFont(trans_font, trans_size)
+            seg_top = bar_top
             for line in trans_lines:
-                if y - trans_leading < margin:
+                if y - trans_leading < margin_bot:
+                    # Close vertical accent bar on current page before page break
+                    c.saveState()
+                    c.setStrokeColorRGB(0.68, 0.76, 0.92)
+                    c.setLineWidth(1.5)
+                    bar_x = (width - margin_x - 3.0) if is_rtl else (margin_x + 2.5)
+                    c.line(bar_x, seg_top, bar_x, y + trans_leading * 0.6)
+                    c.restoreState()
                     _new_page()
-                    c.setFillColorRGB(0.12, 0.25, 0.68)
+                    seg_top = y + trans_size * 0.85
+                    c.setFillColorRGB(0.13, 0.27, 0.62)
                     c.setFont(trans_font, trans_size)
                 if is_rtl:
-                    c.drawRightString(width - margin, y, line)
+                    c.drawRightString(width - margin_x - trans_indent, y, line)
                 else:
-                    c.drawString(margin, y, line)
+                    c.drawString(margin_x + trans_indent, y, line)
                 y -= trans_leading
-        y -= base_size * 0.65
+            c.saveState()
+            c.setStrokeColorRGB(0.68, 0.76, 0.92)
+            c.setLineWidth(1.5)
+            bar_x = (width - margin_x - 3.0) if is_rtl else (margin_x + 2.5)
+            c.line(bar_x, seg_top, bar_x, y + trans_leading * 0.7)
+            c.restoreState()
+        y -= base_size * (0.75 if is_heading else 0.70)
 
+    _draw_footer()
     c.showPage()
     c.save()
     buf.seek(0)
@@ -2184,9 +2267,10 @@ def translate_pdf(
     pages=None,
     auto_ocr=False,
 ):
-    """Translate a PDF into one of four output modes:
+    """Translate a PDF into one of five output modes:
     - ``side-by-side``: double-width PDF with original page left, layout-preserved translation right.
-    - ``bilingual``: stacked bilingual PDF with original paragraph + translation directly underneath.
+    - ``bilingual-pages``: alternating original + layout-preserved translated pages (ideal for books with covers, images, and tables; pure-image pages appear once).
+    - ``bilingual``: book-styled stacked bilingual PDF with original paragraph + translation directly underneath (preserves pure-image pages verbatim and strips repetitive running headers/footers).
     - ``in-place``: layout-preserving translation overlaid on the original pages + translated annotations, form fields, and bookmarks.
     - ``text``: plain-text ``.txt`` file with page markers.
 
@@ -2321,10 +2405,15 @@ def translate_pdf(
         for (page_idx, b_idx), tr_text in zip(block_positions, translated_flat):
             pages_trans_blocks[page_idx][b_idx] = tr_text
 
-        # Bilingual stacked mode: clean flowing pages with original + translation underneath
+        # Bilingual stacked mode: book-styled reflowed pages with original + translation underneath
         if mode == "bilingual":
             writer = PdfWriter()
             empty_pages = 0
+            pages_heights = [float(reader.pages[i].mediabox.height) for i in selected_indices]
+            repeated_margins = _detect_running_margin_texts(
+                [pages_blocks[i] for i in selected_indices],
+                pages_heights,
+            )
             for step_i, idx in enumerate(selected_indices):
                 progress.check()
                 progress.report(
@@ -2336,17 +2425,28 @@ def translate_pdf(
                 h = float(orig_page.mediabox.height)
                 blks = pages_blocks[idx]
                 trans_blks = pages_trans_blocks[idx]
-                if not blks:
+                if blks:
+                    filtered_pairs = [
+                        (b, t) for b, t in zip(blks, trans_blks)
+                        if not _is_running_margin_block(b, h, repeated_margins)
+                    ]
+                    if not filtered_pairs:
+                        # Page only had a running header/footer or page number (e.g. full-page illustration)
+                        writer.add_page(orig_page)
+                        continue
+                    blks = [b for b, _ in filtered_pairs]
+                    trans_blks = [t for _, t in filtered_pairs]
+                else:
                     raw_txt = (orig_page.extract_text() or "").strip()
                     if not raw_txt:
+                        # Pure-image cover or full-page illustration: keep verbatim
                         empty_pages += 1
-                        blks = [{"text": f"Page {idx + 1}: (no selectable text)", "size": 10.0}]
-                        trans_blks = [""]
-                    else:
-                        paras = _extract_paragraphs(raw_txt)
-                        blks = [{"text": p, "size": 10.0} for p in paras]
-                        trans_blks = translate_texts(paras, resolved_src, dst_lang, translator=fn)
-                for bpage in _make_bilingual_pages(w, h, blks, trans_blks, dst_lang):
+                        writer.add_page(orig_page)
+                        continue
+                    paras = _extract_paragraphs(raw_txt)
+                    blks = [{"text": p, "size": 10.0} for p in paras]
+                    trans_blks = translate_texts(paras, resolved_src, dst_lang, translator=fn)
+                for bpage in _make_bilingual_pages(w, h, blks, trans_blks, dst_lang, page_num=idx + 1):
                     writer.add_page(bpage)
             with open(dst, "wb") as fh:
                 writer.write(fh)
@@ -2377,6 +2477,57 @@ def translate_pdf(
         empty_pages = 0
         try:
             writer = PdfWriter()
+            if mode == "bilingual-pages":
+                total_sel = max(1, len(selected_indices))
+                for step_i, idx in enumerate(selected_indices):
+                    progress.check()
+                    progress.report(
+                        message=f"Rendering bilingual book page {idx + 1}/{total_doc_pages}…",
+                        fraction_in_part=0.84 + 0.14 * ((step_i + 1) / total_sel),
+                    )
+                    orig_page = reader.pages[idx]
+                    blks = pages_blocks[idx]
+                    trans_blks = pages_trans_blocks[idx]
+                    w = float(orig_page.mediabox.width)
+                    h = float(orig_page.mediabox.height)
+                    cx0, cy0 = _page_crop_origin(orig_page)
+                    # Always emit the untouched original page first (preserves covers, art, tables)
+                    writer.add_page(orig_page)
+                    if blks:
+                        bg_img = _render_page_bg(pdfium_doc, idx)
+                        overlay = _make_layout_overlay(
+                            w, h, blks, trans_blks,
+                            bg_image=bg_img, draw_bg=not use_stripped,
+                            crop_x0=cx0, crop_y0=cy0, dst_lang=dst_lang,
+                        )
+                        if use_stripped:
+                            tr_page = writer.add_page(stripped_reader.pages[idx])
+                            tr_page.merge_page(overlay)
+                        else:
+                            tr_page = writer.add_blank_page(width=w, height=h)
+                            tr_page.merge_page(orig_page)
+                            tr_page.merge_page(overlay)
+                    else:
+                        raw_txt = (orig_page.extract_text() or "").strip()
+                        if not raw_txt:
+                            # Pure-image cover / illustration: emit once without duplicating
+                            empty_pages += 1
+                        else:
+                            fallback = "\n\n".join(
+                                translate_texts(_extract_paragraphs(raw_txt), resolved_src, dst_lang, translator=fn)
+                            )
+                            writer.add_page(_make_text_page(w, h, _shape_rtl(fallback, dst_lang)))
+                with open(dst, "wb") as fh:
+                    writer.write(fh)
+                return {
+                    "mode": mode,
+                    "pages": len(selected_indices),
+                    "src_lang": resolved_src,
+                    "empty_pages": empty_pages,
+                    "ocr_applied": ocr_applied,
+                    "output": str(dst),
+                }
+
             if mode == "side-by-side":
                 total_sel = max(1, len(selected_indices))
                 for step_i, idx in enumerate(selected_indices):
