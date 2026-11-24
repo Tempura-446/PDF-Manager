@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Output protection, damaged-PDF repair-before-run, and error translation helpers."""
 
+import logging
 import re
 import shutil
 from pathlib import Path
@@ -136,8 +137,8 @@ def _mend_inputs(op, files, password, work, notes):
                     core.keep_size(pdf).save(target, encryption=pdf.is_encrypted or None)  # (still locked if it was)
                 notes.append(f"{path.name} was damaged; it was mended first, as Repair does")
                 path = target
-            except Exception:  # noqa: BLE001 (it couldn't be mended: the tool tries the file as it is)
-                pass
+            except Exception as _exc:  # noqa: BLE001 (it couldn't be mended: the tool tries the file as it is)
+                logging.getLogger("zpdf").debug("repair._mend_inputs: %s", _exc)
         mended.append(path)
     return mended
 

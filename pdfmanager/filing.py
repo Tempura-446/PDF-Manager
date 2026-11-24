@@ -7,6 +7,7 @@ and render safe cross-platform target paths with collision avoidance and an
 undo manifest.
 """
 
+import logging
 import fnmatch
 import json
 import re
@@ -168,8 +169,8 @@ def extract_fields(path, password=None, ocr_if_scanned=False):
                 ocr_reader = core.open_pdf(tmp_out)
                 page1_text = (ocr_reader.pages[0].extract_text() or "").strip() if ocr_reader.pages else ""
                 full_text = "\n".join((p.extract_text() or "").strip() for p in ocr_reader.pages[:3]).strip()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.getLogger("zpdf").debug("filing.extract_fields: %s", _exc)
 
     meta = reader.metadata or {}
     title = str(meta.get("/Title") or "").strip()

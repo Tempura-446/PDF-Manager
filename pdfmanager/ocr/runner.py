@@ -259,8 +259,8 @@ def _close_worker_doc():
     if doc is not None:
         try:
             doc.close()
-        except Exception:  # noqa: BLE001 - best-effort cleanup on worker shutdown
-            pass
+        except Exception as _exc:  # noqa: BLE001 - best-effort cleanup on worker shutdown
+            logging.getLogger("zpdf").debug("runner._close_worker_doc: %s", _exc)
 
 
 def _worker_pdf_doc(source_str):
@@ -321,8 +321,8 @@ def shutdown_ocr_pool():
     if pool is not None:
         try:
             pool.shutdown(wait=False, cancel_futures=True)
-        except Exception:  # noqa: BLE001 - best-effort shutdown
-            pass
+        except Exception as _exc:  # noqa: BLE001 - best-effort shutdown
+            logging.getLogger("zpdf").debug("runner.shutdown_ocr_pool: %s", _exc)
 
 
 def _acquire_ocr_pool(max_workers, *, custom_worker=False):
@@ -361,8 +361,8 @@ def _acquire_ocr_pool(max_workers, *, custom_worker=False):
     if old_pool is not None:
         try:
             old_pool.shutdown(wait=False, cancel_futures=True)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as _exc:  # noqa: BLE001
+            logging.getLogger("zpdf").debug("runner._acquire_ocr_pool: %s", _exc)
     return pool, True
 
 

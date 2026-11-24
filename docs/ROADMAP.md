@@ -2,7 +2,7 @@
 
 Master index of ZPDF's completed, in-progress, and planned feature tracks. Each track links to its detailed plan in [`docs/superpowers/plans/`](superpowers/plans/).
 
-*Last updated: 2026-11-24 (after `v0.63.2` Commercial-Safe Translation Stack and `v0.64.0` Speed, Polish & Full Coverage)*
+*Last updated: 2026-11-24 (after `v0.65.0` Backend Modularization Wave 2)*
 
 ---
 
@@ -26,17 +26,17 @@ Master index of ZPDF's completed, in-progress, and planned feature tracks. Each 
 | Engineering Hardening Phases 1–6 | Shipped in `0.60.4`–`0.61.0` (Redaction security, text editing integrity, compare engine, security/reliability, perf benchmarks, release readiness) | PRs #128–#133, [`RELEASE_READINESS.md`](RELEASE_READINESS.md) |
 | Security Phases 5–8 | Shipped in `0.61.0`–`0.61.8` (PAdES/DocMDP/FieldMDP, security profiles & audit log, GPO/ADMX, FIPS, offline updates, process isolation; Authenticode/MSI gated on code-signing) | PR #135, [`2026-11-14-security.md`](superpowers/plans/2026-11-14-security.md) |
 | Smart AI + Advanced Offline PDF Translation | Shipped in `0.61.9`–`0.63.0` (Smart AI OpenAI-compatible engine + Test connection, smarter offline chunking/glossary/CJK polish, live download progress/cancel, offline language auto-detect, code/math protection, bold lead-in, rotated text, outline bookmark translation, RTL shaping, page ranges, auto-OCR, CUDA GPU, bilingual stacked mode) | PRs #169–#176 |
-| Post-v0.63.0 Audit Remediation (P0–P3 Core) | Shipped in `0.63.1` (fixed `/api/preflight/fix`, `/api/audit`, `/api/policy`, `do_GET` error handling; Web-to-PDF policy/SSRF/local-path guards; `/api/translate/test` key guard; fail-closed pack SHA-256, redirect & zip-bomb/symlink guards; `translate_pdf` in-place image preservation & cancel propagation; OCR Pass 1 72-DPI preview hashing; `_CT2_CACHE` 4 GB byte cap + single-flight lock; upload buffer release; `make_safe_on_open` LRU cache; per-page `PDFIUM_LOCK`; bounded job concurrency; 192 MB Reader undo cap; `auto_ocr`/`monochrome` checkbox fix; `show_if` array fix; `static/i18n.js` fix; Settings Save unification; Watch polling focus fix) | `v0.63.1` (PR #177) |
-| Commercial-Safe Offline Translation Stack | Shipped in `0.63.2` (replaced `CC-BY-NC-4.0` NLLB-200 with `Apache-2.0` Google MADLAD-400 3B/7B/10.7B tiers + optional `CC-BY-4.0`/`Apache-2.0` Helsinki-NLP OPUS-MT fast pairs + third-party license notices) | `v0.63.2` (PRs #178–#179) |
-| Speed, Polish & Full Coverage (P1–P3) | Ready for `0.64.0` (live HTTP integration tests for all `/api/form/*`, `/api/recent/restore`, `/api/comments/markdown`, `/api/quantities`, `/api/password/strength` routes; fixed `_form_import` `_safe_name` import and `/api/filing/preview` filename/response parsing; lazy-imported heavy backend modules in `gui.py` & `server/*`; per-process OCR `PdfDocument` cache; virtualized `pages.js` grid for 120+ page PDFs; OS dark-mode desktop startup background color; expanded `data-i18n` & 5-locale catalog parity; Smart Filing Rules rule viewer/editor; Reader ARIA arrow-key navigation for menus & tabs; Reader File Panel 1-click missing-pack download recovery) | `v0.64.0` |
+| Post-v0.63.0 Audit Remediation (P0–P3 Core) | Shipped in `0.63.1` | `v0.63.1` (PR #177) |
+| Commercial-Safe Offline Translation Stack | Shipped in `0.63.2` (Apache-2.0 Google MADLAD-400 + optional Helsinki-NLP OPUS-MT) | `v0.63.2` (PRs #178–#179) |
+| Speed, Polish & Full Coverage (P1–P3) | Shipped in `0.64.0` (full HTTP route tests, lazy imports, OCR doc cache, virtualized `pages.js`, 5-locale parity, Filing Rules UI, ARIA nav, 1-click pack recovery) | `v0.64.0` (PR #180) |
+| Translation Pack Cleanup, Settings Redesign & Performance | Shipped in `0.64.1`–`0.64.4` (94 MADLAD languages, 5-tab Settings redesign, ~4× faster cold startup, 2–3× faster MADLAD translation, warm OCR pool, gzip static cache, Free model RAM, `bilingual-pages` book mode, book-styled stacked reflow, Reader quick-translate UX) | `v0.64.1`–`v0.64.4` (PRs #181–#184) |
+| Backend Modularization (Wave 2 — P4) | Shipped in `0.65.0` (split `accessibility`, `server/operations`, `cli`, `translate`, `core`, `ocr` into cohesive subpackages; replaced all 44 silent `except Exception: pass` sites with scrubbed `zpdf` diagnostics + AST guard; extended `test_imports.py` to subpackages) | [`2026-11-24-backend-modularization-wave2.md`](superpowers/plans/2026-11-24-backend-modularization-wave2.md) |
 
 ---
 
 ## Active & Planned Tracks
 
-| Priority | Track | Scope & Key Items | Target |
-| --- | --- | --- | --- |
-| **P4** | **Backend Modularization (Wave 2)** | Break down remaining >2,000-LOC monoliths (`accessibility.py`, `cli.py`, `translate.py`, `core.py`, `ocr.py`, `server/operations.py`) and replace silent `except Exception: pass` sites with typed handling + `applog` diagnostics. | `v0.65.0` |
+All planned roadmap tracks through `v0.65.0` are complete. Next tracks will be scoped as new priorities emerge.
 
 ---
 

@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Top-level PDF translation orchestrator (side-by-side, bilingual-pages, bilingual, in-place, text)."""
 
+import logging
 import sys
 from pathlib import Path
 
@@ -78,8 +79,8 @@ def translate_pdf(
                     ocr_applied = True
             except progress.Cancelled:
                 raise
-            except Exception:  # noqa: BLE001 - continue gracefully if OCR unavailable
-                pass
+            except Exception as _exc:  # noqa: BLE001 - continue gracefully if OCR unavailable
+                logging.getLogger("zpdf").debug("pipeline.translate_pdf: %s", _exc)
 
     want_auto = str(src_lang or "").strip().lower() in ("", "auto")
 
@@ -385,8 +386,8 @@ def translate_pdf(
                     outlines_ref = reader.root_object.get("/Outlines")
                     if outlines_ref is not None:
                         writer._root_object[NameObject("/Outlines")] = outlines_ref.clone(writer)
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as _exc:  # noqa: BLE001
+                    logging.getLogger("zpdf").debug("pipeline.translate_pdf: %s", _exc)
             updated_items = _translate_annotations_and_fields(
                 writer, resolved_src, dst_lang, fn, selected_pages=selected_set
             )
@@ -408,8 +409,8 @@ def translate_pdf(
                 try:
                     with core.PDFIUM_LOCK:
                         pdfium_doc.close()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as _exc:  # noqa: BLE001
+                    logging.getLogger("zpdf").debug("pipeline.translate_pdf: %s", _exc)
     finally:
         if ocr_tmp_dir is not None:
             ocr_tmp_dir.cleanup()

@@ -10,6 +10,7 @@ start-up, and only localhost Host headers are accepted, so other web pages
 and other machines can't drive the server.
 """
 
+import logging
 import base64
 import hashlib
 import hmac
@@ -837,8 +838,8 @@ def _allow_foreground():
         import ctypes
 
         ctypes.windll.user32.AllowSetForegroundWindow(-1)  # ASFW_ANY
-    except Exception:  # noqa: BLE001 - a courtesy; the file is handed over all the same
-        pass
+    except Exception as _exc:  # noqa: BLE001 - a courtesy; the file is handed over all the same
+        logging.getLogger("zpdf").debug("gui._allow_foreground: %s", _exc)
 
 
 def forward_to_running_app(paths=(), action=None, quiet=False):
@@ -1018,8 +1019,8 @@ def _os_prefers_dark():
             )
             if out.returncode == 0 and "dark" in out.stdout.lower():
                 return True
-    except Exception:  # noqa: BLE001 - fallback to light theme on any OS probe error
-        pass
+    except Exception as _exc:  # noqa: BLE001 - fallback to light theme on any OS probe error
+        logging.getLogger("zpdf").debug("gui._os_prefers_dark: %s", _exc)
     return False
 
 
@@ -1435,8 +1436,8 @@ def _raise_window(window):
         window.show()
         window.on_top = True
         window.on_top = False
-    except Exception:
-        pass
+    except Exception as _exc:
+        logging.getLogger("zpdf").debug("gui._raise_window: %s", _exc)
 
 
 def _rename_old_install():

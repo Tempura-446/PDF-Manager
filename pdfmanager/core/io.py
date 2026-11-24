@@ -242,8 +242,8 @@ def _recount(writer):
     try:
         root = writer.root_object["/Pages"]
         walk(root)
-    except Exception:  # an odd tree pypdf read pages from all the same: leave it as it is
-        pass
+    except Exception as _exc:  # an odd tree pypdf read pages from all the same: leave it as it is
+        logging.getLogger("zpdf").debug("io._recount: %s", _exc)
 
 
 def _content_refs(page):

@@ -10,6 +10,7 @@ Both work on a ``PdfWriter`` in place:
   grayscale, RGB or CMYK, optionally through an ICC profile.
 """
 
+import logging
 import io
 import math
 import zlib
@@ -573,8 +574,8 @@ def downsample_images(writer, max_dpi, jpeg_quality, scan_layers=None):
                         _store_layers(writer, obj, encoded)
                         changed, saved, sharp = changed + 1, saved + original - size, sharp + 1
                         continue
-                except Exception:  # the engine never fails a compression
-                    pass
+                except Exception as _exc:  # the engine never fails a compression
+                    logging.getLogger("zpdf").debug("imaging.downsample_images: %s", _exc)
             if len(data) >= original:
                 continue
             _resize_smask(obj, image.size)

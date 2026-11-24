@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Structure tree construction, per-page autotagging, and PDF writing."""
 
+import logging
 import re
 from collections import Counter
 from io import BytesIO
@@ -586,8 +587,8 @@ def _set_title(pdf, title):
     try:
         with pdf.open_metadata(set_pikepdf_as_editor=False, update_docinfo=False) as meta:
             meta["dc:title"] = title
-    except Exception:  # damaged XMP: the information dictionary still has it
-        pass
+    except Exception as _exc:  # damaged XMP: the information dictionary still has it
+        logging.getLogger("zpdf").debug("tagger._set_title: %s", _exc)
 
 
 def _finish_document(pdf, lang, title):
@@ -774,8 +775,8 @@ def _tag_pages(pdf, path, password, alt, result):
                             text = textpage.get_text_bounded(min(r[0], r[2]), min(r[1], r[3]),
                                                              max(r[0], r[2]), max(r[1], r[3]))
                             links[index] = " ".join(text.split())
-                        except Exception:  # a damaged rectangle: described by its address
-                            pass
+                        except Exception as _exc:  # a damaged rectangle: described by its address
+                            logging.getLogger("zpdf").debug("tagger._tag_pages: %s", _exc)
                 pages.append({"view": view, "size": view.size, "links": links,
                               "segs": _page_segments(textpage, view)})
                 textpage.close()

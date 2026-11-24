@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Single-file operation dispatcher and domain-specific tool helpers."""
 
+import logging
 import json
 import re
 import shutil
@@ -325,8 +326,8 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         try:
             checked = pdfacheck.check(out, level=f"{level}b", engine="builtin")
             notes.append(f"{src.name}: checked: {pdfacheck.summary(checked)}")
-        except Exception:  # the check is extra; the file is made either way
-            pass
+        except Exception as _exc:  # the check is extra; the file is made either way
+            logging.getLogger("zpdf").debug("dispatch._run_file_op: %s", _exc)
     elif op == "watermark":
         core.watermark(src, out, text=opts.get("text") or "CONFIDENTIAL",
                        opacity=_num(opts.get("opacity"), float, 0.15),

@@ -162,3 +162,22 @@ def test_open_pikepdf_no_warning_and_handles_encryption(tmp_path):
 
     with pytest.raises(pikepdf.PasswordError):
         core.open_pikepdf(locked, password="wrong")
+
+
+def test_no_silent_broad_except_pass():
+    """Guard against silent broad `except Exception: pass` or bare `except: pass`
+    blocks across pdfmanager/ — log diagnostics to the scrubbed `zpdf` logger
+    or narrow the exception type instead."""
+    hits = []
+    for path in sorted((ROOT / "pdfmanager").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ExceptHandler):
+                is_broad = (
+                    node.type is None
+                    or (isinstance(node.type, ast.Name) and node.type.id == "Exception")
+                )
+                if is_broad and len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
+                    hits.append(f"{path.relative_to(ROOT)}:{node.lineno}")
+    assert not hits, f"Silent broad except: pass blocks found: {hits}"
+

@@ -5,6 +5,8 @@ automatic cross-sheet detail links, and revision set comparison.
 
 from __future__ import annotations
 
+import logging
+
 import io
 import re
 from pathlib import Path
@@ -281,8 +283,8 @@ def _find_reference_rects(page, known_sheets: dict[str, int], current_page: int)
                     continue
                 try:
                     boxes.append(tp.get_charbox(ci))
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.getLogger("zpdf").debug("sheetsets._find_reference_rects: %s", _exc)
             if boxes:
                 rect = [
                     min(b[0] for b in boxes) - 1.0,

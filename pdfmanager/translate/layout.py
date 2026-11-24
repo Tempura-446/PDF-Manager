@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """PDF layout extraction, text stripping, RTL shaping, bilingual pages, and translated overlays."""
 
+import logging
 import io
 import re
 from pathlib import Path
@@ -184,8 +185,8 @@ def _shape_rtl(text, dst_lang):
     try:
         import arabic_reshaper  # type: ignore[import-not-found]
         out = arabic_reshaper.reshape(out)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as _exc:  # noqa: BLE001
+        logging.getLogger("zpdf").debug("layout._shape_rtl: %s", _exc)
     try:
         from bidi.algorithm import get_display  # type: ignore[import-not-found]
         return get_display(out)

@@ -2,6 +2,7 @@
 """Archiving and privacy: flatten forms and comments into the page, remove
 hidden data, and convert to PDF/A for long-term archiving."""
 
+import logging
 import os
 import re
 import shutil
@@ -153,8 +154,8 @@ def flatten(path, output, forms=True, comments=True, password=None):
             values = _text_values(reader, all_fields=stale)
             if values:
                 writer.update_page_form_field_values(None, values, auto_regenerate=False)
-        except Exception:
-            pass  # keep whatever appearances the file has
+        except Exception as _exc:
+            logging.getLogger("zpdf").debug("archive.flatten: %s", _exc)  # keep whatever appearances the file has
     for number, page in enumerate(writer.pages):
         _flatten_page(writer, page, forms, comments, number)
     if forms:

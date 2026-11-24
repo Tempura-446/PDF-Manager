@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Operation preview thumbnails and PDF inspection helpers."""
 
+import logging
 import base64
 import io
 import tempfile
@@ -99,6 +100,6 @@ def _inspect_pdf(path, password=None):
         buf = io.BytesIO()
         image.save(buf, "JPEG", quality=82)
         info["thumb"] = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
-    except Exception:
-        pass  # thumbnails are a nicety; never fail because of them
+    except Exception as _exc:
+        logging.getLogger("zpdf").debug("preview._inspect_pdf: %s", _exc)  # thumbnails are a nicety; never fail because of them
     return info

@@ -401,8 +401,8 @@ def _recount(writer, pages):
             return
         tree["/Count"] = generic.NumberObject(pages)
         writer.mark_update(ref)
-    except Exception:  # noqa: BLE001 (an odd tree: signed as it is)
-        pass
+    except Exception as _exc:  # noqa: BLE001 (an odd tree: signed as it is)
+        logging.getLogger("zpdf").debug("certsign._recount: %s", _exc)
 
 
 def _widget_refs(field_ref):
@@ -414,8 +414,8 @@ def _widget_refs(field_ref):
     try:
         for kid in field_ref.get_object().get("/Kids") or []:
             found.add(getattr(kid, "idnum", None))
-    except Exception:
-        pass
+    except Exception as _exc:
+        logging.getLogger("zpdf").debug("certsign._widget_refs: %s", _exc)
     found.discard(None)
     return found
 
@@ -652,8 +652,8 @@ def _signing_time(data, field_name, password):
             from pyhanko.pdf_utils.misc import parse_pdf_date
 
             return parse_pdf_date(str(value.get_object()["/M"]))
-    except Exception:
-        pass
+    except Exception as _exc:
+        logging.getLogger("zpdf").debug("certsign._signing_time: %s", _exc)
     return dt.datetime.now(dt.timezone.utc).astimezone()
 
 
@@ -880,8 +880,8 @@ def _check_one(reader, fq_name, value, ref, roots, pages):
     try:
         entry["certificate_expires"] = _when(validity["not_after"].native)
         entry["lasting"] = _lasting(entry, validity["not_after"].native)
-    except Exception:  # noqa: BLE001 - an odd certificate date: nothing said about it
-        pass
+    except Exception as _exc:  # noqa: BLE001 - an odd certificate date: nothing said about it
+        logging.getLogger("zpdf").debug("certsign._check_one: %s", _exc)
     return entry
 
 

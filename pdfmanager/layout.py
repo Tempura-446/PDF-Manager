@@ -21,6 +21,7 @@ the page is left out, and so is a copy of the page's text that doesn't show
 layer); what is left out is in the page's ``dropped``.
 """
 
+import logging
 import bisect
 import ctypes
 import io
@@ -658,8 +659,8 @@ class Document:
                             try:
                                 _strip_text(pdf, pdf.pages[index])
                                 self.stripped.add(index)
-                            except Exception:  # a damaged page: drawn as it is
-                                pass
+                            except Exception as _exc:  # a damaged page: drawn as it is
+                                logging.getLogger("zpdf").debug("layout.Document.__enter__: %s", _exc)
                         buf = io.BytesIO()
                         pdf.save(buf)
                         self.bare = pdfium.PdfDocument(buf.getvalue())
