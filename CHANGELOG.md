@@ -4,6 +4,32 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.68.0
+
+Manga / Comic Speech-Bubble Mode v2.
+
+- **Shape-Aware Interior Cleaning & Pixel-Accurate Masks (`pdfmanager/translate/manga.py`).**
+  - Automatically classifies detected bubbles into rectangular narration boxes
+    (`rect` → inset rounded-rect), standard speech bubbles (`oval` → inset
+    ellipse), and irregular/spiky shout bursts (`polygon` → hole-filled,
+    inward-eroded RGBA mask patch) so the artist's borders and surrounding
+    artwork stay completely intact.
+- **Dark / Inverted Speech Bubbles (`inverted=True`).**
+  - Detects dramatic dark/black bubbles with white text alongside standard light
+    bubbles, cleaning with the sampled dark interior color and typesetting
+    translated dialogue in crisp white.
+- **Digital Manga Zero-OCR Fast Path (`extract_digital_bubble_text`).**
+  - When a manga or comic PDF already contains selectable glyphs inside a
+    bubble, extracts them directly (with vertical CJK RTL column ordering and
+    furigana stripping) without running OCR.
+- **OCR Pre-Processing & Comic Lettering Polish.**
+  - Added `preprocess_bubble_for_ocr` (auto-inversion for dark bubbles, 2×
+    LANCZOS upscaling for small crops, autocontrast, and white margin padding).
+  - Added automatic reading direction (`default_reading_dir`: RTL for
+    Japanese/Chinese/Korean manga, LTR for Western comics) and balanced
+    multi-line comic wrapping (`_wrap_balanced`) to eliminate single-word orphan
+    lines inside bubbles.
+
 ## 0.67.0
 
 Vertical CJK (*Tategaki*) Book Translation & Manga / Comic Speech-Bubble Mode.

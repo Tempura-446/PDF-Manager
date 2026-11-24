@@ -102,11 +102,21 @@ def translate_pdf(
                 logging.getLogger("zpdf").debug("pipeline.translate_pdf.manga.pdfium: %s", _exc)
                 pdfium_doc = None
 
+            plumber_doc = None
+            try:
+                import pdfplumber
+
+                plumber_doc = pdfplumber.open(str(work_src), password=password or "")
+            except Exception as _exc:
+                logging.getLogger("zpdf").debug("pipeline.translate_pdf.manga.pdfplumber: %s", _exc)
+                plumber_doc = None
+
             page_bubbles = {}
             page_img_sizes = {}
             all_bubble_texts = []
             bubble_refs = []
             src_hint = None if want_auto else i18n.normalize_code(src_lang)
+            reading_dir = _manga.default_reading_dir(src_hint)
             empty_pages = 0
             total_sel = max(1, len(selected_indices))
 
@@ -124,17 +134,25 @@ def translate_pdf(
                     with core.PDFIUM_LOCK:
                         pil_img = pdfium_doc[idx].render(scale=2.0).to_pil()
                     page_img_sizes[idx] = pil_img.size
-                    bubbles = _manga.detect_speech_bubbles(pil_img)
+                    p_page = plumber_doc.pages[idx] if (plumber_doc is not None and idx < len(plumber_doc.pages)) else None
+                    bubbles = _manga.detect_speech_bubbles(pil_img, reading_dir=reading_dir, plumber_page=p_page)
                     page_bubbles[idx] = bubbles
                     if not bubbles:
                         empty_pages += 1
                         continue
                     for b_i, bubble in enumerate(bubbles):
-                        txt = _manga.extract_bubble_text(pil_img, bubble, src_hint, ocr_fn=ocr_fn)
+                        txt = _manga.extract_bubble_text(
+                            pil_img, bubble, src_hint, ocr_fn=ocr_fn, plumber_page=p_page,
+                        )
                         if txt:
                             all_bubble_texts.append(txt)
                             bubble_refs.append((idx, b_i))
             finally:
+                if plumber_doc is not None:
+                    try:
+                        plumber_doc.close()
+                    except Exception as _exc:
+                        logging.getLogger("zpdf").debug("pipeline.translate_pdf.manga.plumber_close: %s", _exc)
                 if pdfium_doc is not None:
                     try:
                         with core.PDFIUM_LOCK:
