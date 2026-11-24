@@ -196,3 +196,87 @@ def test_translate_pdf_renders_cjk_unicode_without_error(tmp_path):
     assert res["pages"] == 1
     assert out_pdf.is_file() and out_pdf.read_bytes().startswith(b"%PDF")
 
+
+def _make_book_pdf(path):
+    """Create a 3-page sample book: cover art (no text) + 2 text pages with running headers & page numbers."""
+    c = canvas.Canvas(str(path), pagesize=(612, 792))
+    # Page 1: Pure graphic cover page (no selectable text)
+    c.setFillColorRGB(0.15, 0.25, 0.45)
+    c.rect(72, 200, 468, 420, stroke=0, fill=1)
+    c.showPage()
+
+    # Page 2: Running header, chapter heading + body, standalone page number
+    c.setFont("Helvetica", 9)
+    c.drawString(72, 760, "The Great Novel")
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(72, 680, "Chapter One")
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 640, "Alice stepped through the quiet garden gate.")
+    c.setFont("Helvetica", 9)
+    c.drawCentredString(306, 22, "2")
+    c.showPage()
+
+    # Page 3: Same running header, next chapter body, standalone page number
+    c.setFont("Helvetica", 9)
+    c.drawString(72, 760, "The Great Novel")
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(72, 680, "Chapter Two")
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 640, "The evening lanterns glowed along the river.")
+    c.setFont("Helvetica", 9)
+    c.drawCentredString(306, 22, "3")
+    c.showPage()
+    c.save()
+    return path
+
+
+def test_bilingual_pages_book_mode_alternates_and_keeps_cover_once(tmp_path):
+    src = _make_book_pdf(tmp_path / "book.pdf")
+    out_pdf = tmp_path / "book_bilingual_pages.pdf"
+    res = translate.translate_pdf(
+        src, out_pdf, "en", "fr", mode="bilingual-pages", translator=_fake_translator,
+    )
+    assert res["mode"] == "bilingual-pages"
+    assert res["pages"] == 3
+    assert res["empty_pages"] == 1
+
+    reader = PdfReader(str(out_pdf))
+    # Cover (1) + Orig p2 + Trans p2 + Orig p3 + Trans p3 = 5 pages
+    assert len(reader.pages) == 5
+    for p in reader.pages:
+        assert float(p.mediabox.width) == pytest.approx(612.0, abs=1.0)
+    # Page 1 (index 0): cover untouched (no text)
+    assert (reader.pages[0].extract_text() or "").strip() == ""
+    # Page 2 (index 1): original Chapter One; Page 3 (index 2): translated Chapter One
+    assert "Alice stepped" in (reader.pages[1].extract_text() or "")
+    assert "[FR:Alice]" in (reader.pages[2].extract_text() or "")
+    # Page 4 (index 3): original Chapter Two; Page 5 (index 4): translated Chapter Two
+    assert "evening lanterns" in (reader.pages[3].extract_text() or "")
+    assert "[FR:evening]" in (reader.pages[4].extract_text() or "")
+
+
+def test_bilingual_stacked_preserves_cover_and_strips_running_headers(tmp_path):
+    src = _make_book_pdf(tmp_path / "book_stack.pdf")
+    out_pdf = tmp_path / "book_bilingual_stacked.pdf"
+    res = translate.translate_pdf(
+        src, out_pdf, "en", "fr", mode="bilingual", translator=_fake_translator,
+    )
+    assert res["mode"] == "bilingual"
+    assert res["pages"] == 3
+    assert res["empty_pages"] == 1
+
+    reader = PdfReader(str(out_pdf))
+    assert len(reader.pages) >= 3
+    # Cover page is kept verbatim (no "(no selectable text)" placeholder!)
+    cover_txt = reader.pages[0].extract_text() or ""
+    assert "no selectable text" not in cover_txt.lower()
+    # Reflowed pages contain original + translated body and quiet page reference,
+    # while repetitive running header "The Great Novel" is stripped.
+    body_txt = "\n".join((p.extract_text() or "") for p in reader.pages[1:])
+    assert "Alice stepped" in body_txt
+    assert "[FR:Alice]" in body_txt
+    assert "Original p. 2" in body_txt
+    assert "Original p. 3" in body_txt
+    assert "The Great Novel" not in body_txt
+
+

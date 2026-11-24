@@ -944,34 +944,40 @@ async function run(preview) {
     const said = plainError(err.message);
     let action = null;
     if (current.id === "translate" && /language pack|madlad|pack not installed/i.test(String(err.message || ""))) {
+      const smallPacks = new Set([
+        "ar", "az", "bg", "bn", "ca", "cs", "da", "de", "el", "eo", "es", "et", "eu", "fa", "fi",
+        "fr", "ga", "gl", "he", "hi", "hu", "id", "it", "ja", "ko", "lt", "lv", "ms", "nb", "nl",
+        "no", "pl", "pt", "ro", "ru", "sk", "sl", "sq", "sr", "sv", "th", "tl", "tr", "uk", "ur",
+        "vi", "zh", "zh-Hans", "zh-Hant",
+      ]);
       const explicit = [...new Set([opts.source_lang, opts.target_lang].filter((c) => c && c !== "en" && c !== "auto"))];
-      const needed = explicit.length ? explicit : ["madlad-400-3b"];
-      if (needed.length) {
-        const downloadAndTranslate = async () => {
-          clearMessages();
-          busy(true, `Downloading language pack (${needed.join(", ")})…`);
-          try {
-            for (const code of needed) {
-              const dlRes = await runJob("/api/i18n/pack/download", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ code }),
-              });
-              if (!dlRes) {
-                busy(false);
-                return;
-              }
+      const useMadlad = !explicit.length || explicit.some((c) => !smallPacks.has(c));
+      const needed = useMadlad ? ["madlad-400-3b"] : explicit;
+      const packLabel = useMadlad ? "MADLAD-400 (400+ languages)" : `pack (${needed.join(", ")})`;
+      const downloadAndTranslate = async () => {
+        clearMessages();
+        busy(true, `Downloading ${packLabel}…`);
+        try {
+          for (const code of needed) {
+            const dlRes = await runJob("/api/i18n/pack/download", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ code }),
+            });
+            if (!dlRes) {
+              busy(false);
+              return;
             }
-          } catch (dlErr) {
-            busy(false);
-            showError(dlErr.message || String(dlErr), { focus: true });
-            return;
           }
+        } catch (dlErr) {
           busy(false);
-          await run(preview);
-        };
-        action = { label: `Download pack (${needed.join(", ")}) & translate`, onClick: downloadAndTranslate };
-      }
+          showError(dlErr.message || String(dlErr), { focus: true });
+          return;
+        }
+        busy(false);
+        await run(preview);
+      };
+      action = { label: `Download ${packLabel} & translate`, onClick: downloadAndTranslate };
     }
     showError(said, { detail: err.message, focus: true, action });
     // …and by the button too, where the eyes are.

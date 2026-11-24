@@ -4,6 +4,32 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.64.4
+
+Book-focused bilingual translation + Reader & Translate PDF UI/UX and batching optimizations.
+
+- **New `bilingual-pages` mode (Bilingual book).** Outputs alternating Original
+  Page N → Translated Page N at normal single-page book width, preserving covers,
+  illustrations, diagrams, charts, tables, and formatting; pure-image covers and
+  full-page illustrations are emitted once without duplication.
+- **Book-optimized `bilingual` (stacked paragraph reflow).** Preserves pure-image
+  covers and full-page illustrations verbatim instead of replacing them with a
+  placeholder, detects and strips repetitive running headers/footers and
+  standalone page numbers in the top/bottom 9% margin bands, and upgrades
+  typography with chapter heading hierarchy, a left accent bar for translations,
+  and a quiet `Original p. N` footer.
+- **Faster book translation & zero-upload Reader quick-translate.** Increased
+  outer neural batch size to 128 in `translate_texts()` for better CTranslate2
+  length-sorted bucketing across pages, and switched Reader's
+  `translateCurrentPage()` to reference open unmodified PDFs by `fileId` instead
+  of re-uploading the entire PDF blob over HTTP.
+- **Translation UI & UX polish.** Moved `English` to the top of the `To language`
+  selector, shortened layout dropdown labels with a book-focused hint, fixed
+  1-click pack recovery for MADLAD-only languages (`madlad-400-3b`), removed the
+  duplicate language list in `reader.js`, and upgraded Reader quick-translate
+  with persisted languages, `⇄ Swap`, `dir="auto"` RTL support, a
+  `Translated / Original` toggle, and a `Next page →` reading flow.
+
 ## 0.64.3
 
 Performance & memory release: ~4× faster cold startup, 2–3× faster offline MADLAD-400 translation, warm OCR batch pool, gzipped static assets, and 1-click model RAM release.

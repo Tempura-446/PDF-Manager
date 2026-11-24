@@ -719,12 +719,15 @@ OPERATIONS = [
      "fields": [_f("source_lang", "From language", "select", "auto",
                    choices=[["auto", "Auto-detect"], *_TRANSLATE_LANGS]),
                 _f("target_lang", "To language", "select", "es",
-                   choices=[*[c for c in _TRANSLATE_LANGS if c[0] != "en"], ["en", "English"]]),
+                   choices=list(_TRANSLATE_LANGS)),
                 _f("mode", "Output layout", "select", "side-by-side",
-                   choices=[["side-by-side", "Side by side (original + translation PDF)"],
-                            ["bilingual", "Bilingual stacked (original + translation underneath)"],
-                            ["in-place", "Translated copy, same layout (PDF)"],
-                            ["text", "Plain text (.txt)"]]),
+                   choices=[["side-by-side", "Side by side (2-page spread)"],
+                            ["bilingual-pages", "Bilingual book (alternating pages)"],
+                            ["bilingual", "Bilingual stacked (paragraph reflow)"],
+                            ["in-place", "In-place (same layout)"],
+                            ["text", "Plain text (.txt)"]],
+                   hint="For books with covers, images & tables, use Bilingual book or Side by side. "
+                        "Bilingual stacked reflows paragraphs cleanly and keeps full-page images."),
                 _f("pages", "Pages (optional)", "text", "",
                    placeholder="All pages, or e.g. 1-5, 8"),
                 _f("auto_ocr", "Auto-OCR scanned pages (if no selectable text)", "check", False)]},
@@ -1371,9 +1374,13 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         extra = []
         if made.get("ocr_applied"):
             extra.append("OCR applied")
-        if empty > 0:
+        if empty >= int(made.get("pages") or 0) and empty > 0:
             extra.append(
-                f"{empty} page{'s' if empty != 1 else ''} had no selectable text — enable Auto-OCR or run Make searchable (OCR) first"
+                "no selectable text found — enable Auto-OCR or run Make searchable (OCR) first"
+            )
+        elif empty > 0:
+            extra.append(
+                f"{empty} image-only page{'s' if empty != 1 else ''} kept as-is"
             )
         extra_note = ("; " + "; ".join(extra)) if extra else ""
         notes.append(
