@@ -675,12 +675,14 @@ def bcp47_to_madlad(code):
 
 
 def madlad_model_dir():
-    """Return the installed Google MADLAD-400 3B CTranslate2 model directory (Apache-2.0), else ``None``."""
+    """Return the best installed Google MADLAD-400 CTranslate2 model directory
+    (preferring ``madlad-400-10b`` > ``madlad-400-7b`` > ``madlad-400-3b``,
+    Apache-2.0), else ``None``."""
     root = i18n.packs_dir()
-    code = i18n.MADLAD_PACK_CODE
-    for cand in (root / code / "models" / code, root / code):
-        if (cand / "model.bin").is_file() and list(cand.glob("*.model")):
-            return cand
+    for code in (i18n.MADLAD_10B_PACK_CODE, i18n.MADLAD_7B_PACK_CODE, i18n.MADLAD_PACK_CODE):
+        for cand in (root / code / "models" / code, root / code):
+            if (cand / "model.bin").is_file() and list(cand.glob("*.model")):
+                return cand
     return None
 
 

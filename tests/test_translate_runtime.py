@@ -721,9 +721,22 @@ def test_madlad_and_opus_mt_packs_and_notices(tmp_path, monkeypatch):
     monkeypatch.setattr(i18n, "packs_dir", lambda: tmp_path / "locales")
     cat = i18n.list_catalog_packs(fetch=False)
     by_code = {p["code"]: p for p in cat["packs"]}
-    assert "madlad-400-3b" in by_code
-    assert by_code["madlad-400-3b"]["size_bytes"] >= 2_900_000_000
-    assert by_code["madlad-400-3b"]["license"] == "Apache-2.0"
+    for code, min_size in (
+        ("madlad-400-3b", 2_900_000_000),
+        ("madlad-400-7b", 8_000_000_000),
+        ("madlad-400-10b", 10_000_000_000),
+    ):
+        assert code in by_code
+        assert by_code[code]["size_bytes"] >= min_size
+        assert by_code[code]["license"] == "Apache-2.0"
+
+    # Priority order: 10.7B > 7B > 3B
+    for code in ("madlad-400-3b", "madlad-400-7b", "madlad-400-10b"):
+        mdir = i18n.packs_dir() / code / "models" / code
+        mdir.mkdir(parents=True)
+        (mdir / "model.bin").write_bytes(b"bin")
+        (mdir / "spiece.model").write_bytes(b"sp")
+        assert translate.madlad_model_dir().name == code
 
     # Simulate installed OPUS-MT en-es + es-en pair bundle
     for pair in ("en-es", "es-en"):
@@ -739,7 +752,7 @@ def test_madlad_and_opus_mt_packs_and_notices(tmp_path, monkeypatch):
 
     # Third-party notices must attribute MADLAD-400, OPUS-MT, and Argos Translate
     text = notices.third_party_notices()
-    assert "Google MADLAD-400 3B MT" in text
+    assert "Google MADLAD-400 MT" in text
     assert "Helsinki-NLP OPUS-MT" in text
     assert "Argos Translate" in text
 
