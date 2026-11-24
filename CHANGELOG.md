@@ -4,6 +4,26 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.63.0
+
+Bilingual stacked mode, page range & auto-OCR translation, GPU acceleration, code/math/RTL/rotated/bookmark fidelity, and NLLB-200 3.3B.
+
+- **Layout & content fidelity.** Preserves monospace code blocks and math
+  formulas verbatim, keeps bold lead-in labels (e.g. **Note:** / **Skills:**),
+  renders 90°/270° rotated margin text at its original orientation, translates
+  PDF bookmarks (`/Outlines`) in `in-place` mode, and applies BiDi visual
+  ordering + right-alignment for Arabic/Hebrew/Persian/Urdu (RTL) targets.
+- **Bilingual stacked mode.** New `bilingual` output layout renders clean
+  paginated PDFs with each translated paragraph stacked directly underneath its
+  original in a subtle slate-blue accent.
+- **Page range, Auto-OCR & GPU acceleration.** Added optional **Pages** range
+  (`1-5, 8`) and **Auto-OCR scanned pages** checkbox to **Translate PDF**, plus
+  automatic CUDA GPU detection (with CPU fallback) and tuned CPU threading in
+  CTranslate2.
+- **Maximum Offline Quality pack: NLLB-200 3.3B (`int8`, 3.38 GB).** Available
+  as a 1-click download (`nllb-200-3.3b`) under **Settings → Language**,
+  automatically preferred over 1.3B and 600M when installed.
+
 ## 0.62.1
 
 Language module download sizes & progress bar, model caching, auto-detect, vertical headroom, and Smart AI connection test.
