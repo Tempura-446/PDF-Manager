@@ -32,23 +32,39 @@ _BUILTIN_DIR = Path(__file__).resolve().parent / "locales"
 LANGPACKS_RELEASE_TAG = "langpacks-v1"
 NLLB_PACK_CODE = "nllb-200"
 NLLB_LARGE_PACK_CODE = "nllb-200-1.3b"
+NLLB_XL_PACK_CODE = "nllb-200-3.3b"
 NLLB_BASE_URL = "https://huggingface.co/JustFrederik/nllb-200-distilled-600M-ct2-int8/resolve/main"
 NLLB_LARGE_BASE_URL = "https://huggingface.co/JustFrederik/nllb-200-distilled-1.3B-ct2-int8/resolve/main"
+NLLB_XL_BASE_URL = "https://huggingface.co/OpenNMT/nllb-200-3.3B-ct2-int8/resolve/main"
+NLLB_FILES = ("config.json", "shared_vocabulary.txt", "sentencepiece.bpe.model", "model.bin")
 NLLB_PACKS = {
     NLLB_PACK_CODE: {
         "name": "High-Quality Universal (NLLB-200 600M · 200 languages)",
         "base_url": NLLB_BASE_URL,
         "size_bytes": 645_000_000,
         "pair_label": "200 languages (direct, fast & high quality)",
+        "files": [(f, f"{NLLB_BASE_URL}/{f}") for f in NLLB_FILES],
     },
     NLLB_LARGE_PACK_CODE: {
         "name": "Best Offline Quality (NLLB-200 1.3B · 200 languages)",
         "base_url": NLLB_LARGE_BASE_URL,
         "size_bytes": 1_400_000_000,
-        "pair_label": "200 languages (largest offline model, smartest phrasing)",
+        "pair_label": "200 languages (smartest phrasing, balanced RAM)",
+        "files": [(f, f"{NLLB_LARGE_BASE_URL}/{f}") for f in NLLB_FILES],
+    },
+    NLLB_XL_PACK_CODE: {
+        "name": "Maximum Offline Quality (NLLB-200 3.3B · 200 languages)",
+        "base_url": NLLB_XL_BASE_URL,
+        "size_bytes": 3_380_000_000,
+        "pair_label": "200 languages (flagship offline model, 8+ GB RAM)",
+        "files": [
+            ("config.json", f"{NLLB_XL_BASE_URL}/config.json"),
+            ("shared_vocabulary.json", f"{NLLB_XL_BASE_URL}/shared_vocabulary.json"),
+            ("sentencepiece.bpe.model", f"{NLLB_BASE_URL}/sentencepiece.bpe.model"),
+            ("model.bin", f"{NLLB_XL_BASE_URL}/model.bin"),
+        ],
     },
 }
-NLLB_FILES = ("config.json", "shared_vocabulary.txt", "sentencepiece.bpe.model", "model.bin")
 ARGOS_INDEX_URL = "https://raw.githubusercontent.com/argosopentech/argospm-index/main/index.json"
 _ZPDF_PACK_RE = re.compile(r"^ZPDF-lang-([A-Za-z0-9-]+)-(\d+(?:\.\d+)*)\.zip$")
 _ARGOS_TO_BCP47 = {"zh": "zh-Hans", "zt": "zh-Hant", "pb": "pt-BR"}
@@ -830,18 +846,21 @@ def _http_post_json(url, payload, *, headers=None, timeout=180):
 
 
 def _download_and_install_nllb(pack_code=NLLB_PACK_CODE):
-    """Download Meta NLLB-200 (600M or 1.3B CTranslate2 int8) into ``<packs_dir>/<pack_code>/``."""
+    """Download Meta NLLB-200 (600M, 1.3B, or 3.3B CTranslate2 int8) into ``<packs_dir>/<pack_code>/``."""
     meta = NLLB_PACKS[pack_code]
     pack_dest = packs_dir() / pack_code
     model_dest = pack_dest / "models" / pack_code
     model_dest.mkdir(parents=True, exist_ok=True)
-    base_url = meta["base_url"]
-    label = "NLLB-200 1.3B" if pack_code == NLLB_LARGE_PACK_CODE else "NLLB-200"
+    file_entries = meta.get("files") or [(f, f"{meta['base_url']}/{f}") for f in NLLB_FILES]
+    label = {
+        NLLB_XL_PACK_CODE: "NLLB-200 3.3B",
+        NLLB_LARGE_PACK_CODE: "NLLB-200 1.3B",
+    }.get(pack_code, "NLLB-200")
     # Small tokenizer/config files occupy 0–5%, model.bin occupies 5–96%, finalization 96–100%.
-    small_files = [f for f in NLLB_FILES if f != "model.bin"]
+    small_files = [f for f, _ in file_entries if f != "model.bin"]
     small_step = 0.05 / max(1, len(small_files))
     small_idx = 0
-    for filename in NLLB_FILES:
+    for filename, file_url in file_entries:
         progress.check()
         if filename == "model.bin":
             frac_start, frac_end = 0.05, 0.96
@@ -855,7 +874,7 @@ def _download_and_install_nllb(pack_code=NLLB_PACK_CODE):
             dl_label = f"Downloading {label} ({filename})"
         progress.report(message=f"{dl_label}…", fraction_in_part=frac_start)
         _http_download_to_file(
-            f"{base_url}/{filename}",
+            file_url,
             model_dest / filename,
             progress_label=dl_label,
             expected_bytes=expected,

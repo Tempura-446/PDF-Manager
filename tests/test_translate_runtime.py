@@ -600,6 +600,146 @@ def test_vertical_headroom_prevents_clipping_longer_translation():
     assert "second line" in extracted
 
 
+def test_code_and_math_blocks_preserved_verbatim(tmp_path):
+    assert translate._is_code_or_math_block({"family": "mono", "text": "def foo(x): return x + 1"}) is True
+    assert translate._is_code_or_math_block({"family": "sans", "text": "∑ α_i = β · √n"}) is True
+    assert translate._is_code_or_math_block({"family": "sans", "text": "Normal contract paragraph."}) is False
+
+    from reportlab.pdfgen import canvas
+
+    src = tmp_path / "code_doc.pdf"
+    c = canvas.Canvas(str(src), pagesize=(612, 792))
+    c.setFont("Helvetica", 12)
+    c.drawString(72, 700, "Regular prose sentence.")
+    c.setFont("Courier", 10)
+    c.drawString(72, 660, "def compute_total(a, b): return a + b;")
+    c.showPage()
+    c.save()
+
+    seen = []
+
+    def fake_tr(batch):
+        seen.extend(batch)
+        return [f"ES:{s}" for s in batch]
+
+    out = tmp_path / "code_out.pdf"
+    translate.translate_pdf(src, out, "en", "es", mode="in-place", translator=fake_tr)
+    assert any("Regular prose" in s for s in seen)
+    assert not any("compute_total" in s for s in seen)
+
+
+def test_bold_prefix_rotated_text_and_rtl_shaping():
+    words_bp = [
+        {"text": "Note:", "fontname": "Helvetica-Bold"},
+        {"text": "Keep", "fontname": "Helvetica"},
+        {"text": "safe.", "fontname": "Helvetica"},
+    ]
+    assert translate._detect_bold_prefix(words_bp, block_bold=False) is True
+    assert translate._detect_bold_prefix(words_bp, block_bold=True) is False
+    assert translate._detect_rotation([{"upright": False, "direction": "btt"}]) == 90
+    assert translate._detect_rotation([{"upright": False, "direction": "ttb"}]) == 270
+    assert translate._detect_rotation([{"upright": True}]) == 0
+
+    shaped = translate._shape_rtl("مرحبا 2026", "ar")
+    assert "2026" in shaped
+    assert shaped != ""
+
+    blocks = [
+        {
+            "text": "Note: Keep safe.",
+            "x0": 72.0, "top": 100.0, "x1": 300.0, "bottom": 114.0,
+            "box_x0": 72.0, "box_x1": 300.0, "size": 11.0,
+            "color": (0.0, 0.0, 0.0), "family": "sans", "bold": False,
+            "italic": False, "bold_prefix": True, "rotation": 0,
+            "align": "left", "lines": 1, "in_table": False,
+        },
+        {
+            "text": "CONFIDENTIAL",
+            "x0": 20.0, "top": 200.0, "x1": 34.0, "bottom": 360.0,
+            "box_x0": 20.0, "box_x1": 34.0, "size": 10.0,
+            "color": (0.5, 0.0, 0.0), "family": "sans", "bold": True,
+            "italic": False, "bold_prefix": False, "rotation": 90,
+            "align": "left", "lines": 1, "in_table": False,
+        },
+    ]
+    overlay = translate._make_layout_overlay(
+        612.0, 792.0, blocks, ["Nota: Mantener seguro.", "CONFIDENCIAL"], dst_lang="es"
+    )
+    txt = overlay.extract_text() or ""
+    assert "Nota:" in txt and "CONFIDENCIAL" in txt
+
+
+def test_bilingual_mode_page_range_and_bookmarks(tmp_path):
+    from pypdf import PdfReader, PdfWriter
+    from reportlab.pdfgen import canvas
+
+    raw = tmp_path / "two_pages.pdf"
+    c = canvas.Canvas(str(raw), pagesize=(612, 792))
+    c.setFont("Helvetica", 12)
+    c.drawString(72, 700, "First page heading.")
+    c.showPage()
+    c.setFont("Helvetica", 12)
+    c.drawString(72, 700, "Second page content.")
+    c.showPage()
+    c.save()
+
+    # Add a bookmark to page 1
+    src = tmp_path / "bookmarked.pdf"
+    w = PdfWriter()
+    r0 = PdfReader(str(raw))
+    for p in r0.pages:
+        w.add_page(p)
+    w.add_outline_item(title="Introduction", page_number=0)
+    with open(src, "wb") as fh:
+        w.write(fh)
+
+    # 1. Bilingual stacked mode with page range "1"
+    out_bi = tmp_path / "bilingual.pdf"
+    res_bi = translate.translate_pdf(
+        src, out_bi, "en", "es",
+        mode="bilingual",
+        pages="1",
+        translator=lambda batch: [f"ES:{s}" for s in batch],
+    )
+    assert res_bi["pages"] == 1
+    bi_txt = (PdfReader(str(out_bi)).pages[0].extract_text() or "")
+    assert "First page heading." in bi_txt and "ES:First page heading." in bi_txt
+    assert "Second page" not in bi_txt
+
+    # 2. In-place mode with page range "1" translates page 1 + bookmarks and keeps page 2 untouched
+    out_ip = tmp_path / "inplace.pdf"
+    res_ip = translate.translate_pdf(
+        src, out_ip, "en", "es",
+        mode="in-place",
+        pages="1",
+        translator=lambda batch: [f"ES:{s}" for s in batch],
+    )
+    assert res_ip["pages"] == 1
+    assert res_ip["bookmarks_translated"] == 1
+    r_ip = PdfReader(str(out_ip))
+    assert len(r_ip.pages) == 2
+    assert "ES:First page heading." in (r_ip.pages[0].extract_text() or "")
+    assert "Second page content." in (r_ip.pages[1].extract_text() or "")
+    assert "ES:" not in (r_ip.pages[1].extract_text() or "")
+    assert r_ip.outline and r_ip.outline[0].title == "ES:Introduction"
+
+
+def test_nllb_33b_pack_and_priority(tmp_path, monkeypatch):
+    monkeypatch.setattr(i18n, "packs_dir", lambda: tmp_path / "locales")
+    cat = i18n.list_catalog_packs(fetch=False)
+    by_code = {p["code"]: p for p in cat["packs"]}
+    assert "nllb-200-3.3b" in by_code
+    assert by_code["nllb-200-3.3b"]["size_bytes"] >= 3_000_000_000
+
+    for code in ("nllb-200", "nllb-200-1.3b", "nllb-200-3.3b"):
+        mdir = i18n.packs_dir() / code / "models" / code
+        mdir.mkdir(parents=True)
+        (mdir / "model.bin").write_bytes(b"bin")
+        (mdir / "sentencepiece.bpe.model").write_bytes(b"sp")
+    assert translate.nllb_model_dir().name == "nllb-200-3.3b"
+
+
+
 
 
 
