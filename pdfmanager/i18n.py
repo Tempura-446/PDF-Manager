@@ -356,15 +356,29 @@ def install_pack_from_zip(zip_path, expected_sha256=None):
     }
 
 
+_SAFE_PACK_DIR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
 def remove_pack(code):
-    """Remove an installed language pack and reset language to English if it was active."""
-    norm = normalize_code(code)
+    """Remove an installed language pack (including retired/legacy packs such as
+    ``nllb-200-1.3b``) and reset language to English if it was active."""
+    raw = str(code or "").strip()
+    try:
+        norm = normalize_code(raw)
+    except core.PdfManagerError:
+        if not raw or ".." in raw or not _SAFE_PACK_DIR_RE.match(raw):
+            raise
+        norm = raw
     if norm in ("auto", DEFAULT_LANG):
         raise core.PdfManagerError("built-in English cannot be removed")
-    dest = (packs_dir() / norm).resolve()
     root = packs_dir().resolve()
+    dest = (root / norm).resolve()
     if root not in dest.parents:
         raise core.PdfManagerError("unsafe language pack path")
+    if not dest.is_dir() and raw and _SAFE_PACK_DIR_RE.match(raw) and ".." not in raw:
+        alt = (root / raw).resolve()
+        if root in alt.parents and alt.is_dir():
+            dest = alt
     if dest.is_dir():
         shutil.rmtree(dest)
     if get_language() == norm:
