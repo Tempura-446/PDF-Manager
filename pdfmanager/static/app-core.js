@@ -237,15 +237,26 @@ function fadeAway(node) {
  *  main?], named by what they do. Resolves with the pressed button's value;
  *  Cancel and Escape give "cancel" and do nothing. Focus goes back where it was. */
 function appAsk(title, text, buttons) {
+  let objMode = false, danger = false;
+  if (title && typeof title === "object" && !Array.isArray(title)) {
+    objMode = true;
+    const opts = title;
+    title = opts.title || "";
+    text = opts.text || "";
+    danger = !!opts.danger;
+    buttons = [[ "cancel", opts.no || "Cancel", false ], [ "ok", opts.yes || "OK", true ]];
+  }
+  buttons = Array.isArray(buttons) && buttons.length ? buttons : [[ "cancel", "Cancel", false ], [ "ok", "OK", true ]];
   return new Promise((resolve) => {
     const before = document.activeElement;
     const form = el("form", { method: "dialog" }, el("h3", {}, title), ...[text].flat().filter(Boolean).map((t) => el("p", {}, t)),
       el("div", { class: "actions" }, ...buttons.map(([value, label, main]) => el("button", main
-        ? { value, class: "primary", type: "submit" } : { value, type: "button", onclick: () => dialog.close(value) }, label))));
+        ? { value, class: danger ? "primary danger" : "primary", type: "submit" } : { value, type: "button", onclick: () => dialog.close(value) }, label))));
     const dialog = el("dialog", { class: "rd-dialog app-ask", "aria-label": title }, form);
     dialog.addEventListener("cancel", () => { dialog.returnValue = "cancel"; });
     dialog.addEventListener("close", () => {
-      resolve(dialog.returnValue || "cancel");
+      const val = dialog.returnValue || "cancel";
+      resolve(objMode ? val === "ok" : val);
       dialog.remove();
       if (before && before.isConnected && before !== document.body) before.focus({ preventScroll: true });
     });

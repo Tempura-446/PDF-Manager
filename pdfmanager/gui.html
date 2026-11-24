@@ -150,176 +150,235 @@
 </dialog>
 <div class="action-cards" id="action-cards"></div>
 
-<dialog class="app-dialog" id="settings-dialog" aria-labelledby="settings-title">
+<dialog class="app-dialog settings-dialog" id="settings-dialog" aria-labelledby="settings-title">
   <form method="dialog" id="settings-form" tabindex="-1">
-    <h2 id="settings-title" data-i18n="nav.settings">Settings</h2>
-    <p class="dlg-version" id="settings-version"></p>
-    <h3 data-i18n="settings.appearance">Appearance</h3>
-    <label class="dlg-field inline"><span data-i18n="settings.theme">Theme</span>
-      <select id="theme" autofocus><option value="" data-i18n="settings.theme.system">System</option><option value="light" data-i18n="settings.theme.light">Light</option><option value="dark" data-i18n="settings.theme.dark">Dark</option></select></label>
-    <h3 data-i18n="settings.language">Language</h3>
-    <label class="dlg-field inline"><span data-i18n="settings.interface_language">Interface language</span>
-      <select id="set-language"><option value="en">English</option></select></label>
-    <p class="dlg-hint">Starter locales are automatic translations. Language packs also carry offline translation, OCR, and search-by-meaning models.</p>
-    <div class="dlg-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0;">
-      <button type="button" class="btn secondary" id="set-pack-browse" data-i18n="settings.language.browse">Download language packs…</button>
-      <button type="button" class="btn secondary" id="set-pack-install" data-i18n="settings.language.install_file">Install language pack from file…</button>
-      <input type="file" id="set-pack-file" accept=".zip,.argosmodel" hidden>
-    </div>
-    <div id="set-pack-catalog-wrap" hidden style="margin:6px 0 10px;">
-      <input type="search" id="set-pack-filter" placeholder="Filter languages (e.g. Spanish, Japanese, zh-Hans)…" data-i18n-placeholder="settings.language.filter" aria-label="Filter downloadable language packs" style="width:100%;box-sizing:border-box;margin-bottom:6px;">
-      <ul class="watch-list" id="set-pack-catalog" aria-label="Downloadable language packs" style="max-height:220px;overflow:auto;"></ul>
-    </div>
-    <ul class="watch-list" id="set-packs-list" aria-label="Installed language packs"></ul>
-    <label class="dlg-field" style="margin-top:8px;"><span data-i18n="settings.translate.engine">PDF translation engine</span>
-      <select id="set-translate-engine">
-        <option value="offline" data-i18n="settings.translate.offline">Built-in offline (MADLAD-400 / OPUS-MT / Language Packs)</option>
-        <option value="llm" data-i18n="settings.translate.llm">Smart AI (Local Ollama / LM Studio or OpenAI-compatible API)</option>
-      </select></label>
-    <div id="set-translate-llm-wrap" hidden style="margin:6px 0 8px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;">
-      <p class="dlg-hint" style="margin-top:0;">Context-aware AI translation. Works 100% offline &amp; free with local <strong>Ollama</strong> (<code>http://localhost:11434/v1</code>, e.g. <code>qwen2.5:7b</code>) or any OpenAI-compatible HTTPS API.</p>
-      <label class="dlg-field"><span data-i18n="settings.translate.endpoint">Endpoint URL</span>
-        <input type="text" id="set-translate-url" placeholder="http://localhost:11434/v1" autocomplete="off"></label>
-      <label class="dlg-field"><span data-i18n="settings.translate.model">Model name</span>
-        <input type="text" id="set-translate-model" placeholder="qwen2.5:7b" autocomplete="off"></label>
-      <label class="dlg-field"><span data-i18n="settings.translate.api_key">API key (optional for local Ollama)</span> <em id="set-translate-key-state"></em>
-        <div style="display:flex;gap:6px;align-items:center;">
-          <input type="password" id="set-translate-key" placeholder="Leave blank for local Ollama / LM Studio" autocomplete="off" style="flex:1;">
-          <button type="button" class="btn secondary" id="set-translate-key-clear" hidden data-i18n="common.clear">Clear</button>
-        </div></label>
-      <div style="display:flex;gap:6px;margin-top:4px;">
-        <button type="button" class="btn secondary" id="set-translate-save" data-i18n="settings.translate.save">Save AI translation settings</button>
-        <button type="button" class="btn secondary" id="set-translate-test" data-i18n="settings.translate.test">Test connection</button>
+    <div class="set-head">
+      <div>
+        <h2 id="settings-title" data-i18n="nav.settings">Settings</h2>
+        <p class="dlg-version" id="settings-version"></p>
+      </div>
+      <div class="set-tabs" id="set-tabs" role="tablist" aria-label="Settings sections">
+        <button type="button" class="set-tab" role="tab" aria-selected="true" aria-controls="set-pane-general" data-tab="general">General</button>
+        <button type="button" class="set-tab" role="tab" aria-selected="false" aria-controls="set-pane-language" data-tab="language" data-i18n="settings.language">Language</button>
+        <button type="button" class="set-tab" role="tab" aria-selected="false" aria-controls="set-pane-automation" data-tab="automation">Automation</button>
+        <button type="button" class="set-tab" role="tab" aria-selected="false" aria-controls="set-pane-privacy" data-tab="privacy" data-i18n="settings.privacy">Privacy</button>
+        <button type="button" class="set-tab" role="tab" aria-selected="false" aria-controls="set-pane-about" data-tab="about" data-i18n="settings.about">About</button>
       </div>
     </div>
-    <label class="dlg-field" style="margin-top:6px;"><span data-i18n="settings.translate.glossary">Translation glossary &amp; keep-verbatim terms (optional)</span>
-      <textarea id="set-translate-glossary" rows="3" placeholder="One per line: keep verbatim (e.g. Acme Corp) or map (e.g. Force Majeure = 不可抗力)" style="width:100%;box-sizing:border-box;font-family:inherit;"></textarea></label>
-    <div style="display:flex;gap:6px;align-items:center;margin:2px 0 6px;">
-      <button type="button" class="btn secondary" id="set-translate-glossary-save" data-i18n="settings.translate.save_glossary">Save glossary</button>
-      <span class="dlg-hint" style="margin:0;">Applies to both offline (MADLAD-400 / OPUS-MT / Language Packs) and Smart AI translation.</span>
-    </div>
-    <div id="lang-dl-wrap" hidden style="display:flex;align-items:center;gap:8px;margin:6px 0 4px;">
-      <span class="job-progress" id="lang-dl-bar" role="progressbar" aria-label="Language pack download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="flex:1;"><span></span></span>
-      <button type="button" class="btn secondary pb-small" id="lang-dl-cancel" data-i18n="common.cancel">Cancel</button>
-    </div>
-    <p class="dlg-status" id="lang-status" aria-live="polite"></p>
-    <h3 data-i18n="settings.ocr">OCR (Make searchable)</h3>
-    <label class="dlg-field"><span data-i18n="settings.ocr.accuracy">Reading accuracy</span>
-      <select id="set-ocr-quality">
-        <option value="standard" data-i18n="settings.ocr.standard">Standard (built-in, fast)</option>
-        <option value="best" data-i18n="settings.ocr.best">Best accuracy (larger models, fetched once, slower)</option>
-      </select></label>
-    <p class="dlg-hint">Default for Make searchable (OCR); you can still override it per file in the tool.</p>
-    <div id="ocr-gpu-wrap" hidden>
-      <label class="dlg-check"><input type="checkbox" id="set-ocr-gpu"> Use graphics card for OCR (DirectML, experimental)</label>
-      <p class="dlg-hint">Tries ONNX Runtime's DirectML provider on Windows; falls back to the CPU automatically if anything goes wrong.</p>
-    </div>
-    <div id="shell-menu" hidden>
-      <h3 data-i18n="settings.shell_menu">Right-click menu</h3>
-      <label class="dlg-check"><input type="checkbox" id="set-shell-menu"> Show ZPDF in the right-click menu</label>
-      <p class="dlg-hint">Right-click PDFs in File Explorer for ZPDF › Combine, Make searchable (OCR), Make smaller
-        or Open, and pictures for Make a PDF with ZPDF. On Windows 11 they're under <em>Show more options</em>.
-        This changes at once; it's for you only.</p>
-    </div>
-    <h3 data-i18n="settings.watch">Watch folders</h3>
-    <p class="dlg-hint">PDFs put in a watched folder are done one by one while ZPDF is open, each once. A note
-      shows when a file is done or couldn't be. Files still downloading or being copied are left until they're complete.</p>
-    <ul class="watch-list" id="watch-list" aria-label="Watched folders"></ul>
-    <div class="watch-behind" id="watch-behind" role="group" aria-label="Watching with the window closed">
-      <label class="dlg-field"><span>When I close the window while a folder is being watched</span><select id="set-background">
-        <option value="ask">Ask me</option>
-        <option value="yes">Keep watching in the background (ZPDF stays as an icon by the clock)</option>
-        <option value="no">Close ZPDF (folders are watched again next time it's open)</option></select></label>
-      <label class="dlg-check"><input type="checkbox" id="set-login"> Start ZPDF in the background when I sign in to Windows, to keep watching</label>
-      <p class="dlg-hint" id="watch-behind-quit" hidden>While ZPDF keeps watching, closing the window doesn't quit it. To quit for good: right-click its icon by the clock, or
-        <button type="button" class="link-btn" id="set-quit">quit ZPDF now</button>.</p>
-      <p class="dlg-hint" id="watch-behind-why" hidden></p>
-      <p class="dlg-status" id="behind-status" aria-live="polite"></p>
-    </div>
-    <div class="watch-add" id="watch-add" role="group" aria-labelledby="watch-add-title">
-      <b id="watch-add-title" data-i18n="settings.watch.add">Watch a folder</b>
-      <div class="dlg-field"><label for="watch-folder"><span data-i18n="settings.watch.folder">Folder</span></label>
-        <div class="watch-row"><input type="text" id="watch-folder" spellcheck="false" autocomplete="off" placeholder="C:\Users\you\Scans">
-          <button type="button" class="btn secondary pb-small" id="watch-browse" hidden data-i18n="common.browse">Browse…</button></div></div>
-      <label class="dlg-field"><span>What to do</span><select id="watch-do"></select></label>
-      <label class="dlg-field"><span>Results go</span><select id="watch-results">
-        <option value="done">Into a “Done” folder inside it</option>
-        <option value="beside">Next to the original, the name ending “(searchable)”, “(smaller)”…</option></select></label>
-      <label class="dlg-field"><span>The originals</span><select id="watch-originals">
-        <option value="keep">Stay where they are</option>
-        <option value="move">Move to an “Originals” folder inside it</option></select></label>
-      <label class="dlg-check"><input type="checkbox" id="watch-images"> Pictures too (scans saved as JPG, PNG or TIFF become PDFs)</label>
-      <label class="dlg-check"><input type="checkbox" id="watch-batch"> Files that arrive together become one document (a scanner that saves a file per page)</label>
-      <label class="dlg-check"><input type="checkbox" id="watch-auto-file"> Auto-rename &amp; file results using Smart Filing Rules</label>
-      <div><button type="button" class="btn secondary" id="watch-add-btn" data-i18n="settings.watch.start">Watch this folder</button></div>
-      <p class="dlg-status" id="watch-status" aria-live="polite"></p>
-    </div>
-    <div id="filing-rules-box" style="margin-top:10px;">
-      <h3 data-i18n="settings.filing">Smart filing rules</h3>
-      <p class="dlg-hint" id="filing-rules-summary">Automatically rename and sort PDFs by date, vendor, or text rules.</p>
-      <ul class="watch-list" id="filing-rules-list" aria-label="Smart filing rules"></ul>
-      <div id="filing-rule-editor" hidden style="margin:6px 0 8px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;">
-        <b id="filing-editor-title">Add rule</b>
-        <label class="dlg-field"><span>Rule name</span>
-          <input type="text" id="filing-rule-name" placeholder="e.g. Invoices & Receipts" autocomplete="off"></label>
-        <label class="dlg-field"><span>Text contains (comma-separated, optional)</span>
-          <input type="text" id="filing-rule-contains" placeholder="e.g. invoice, receipt" autocomplete="off"></label>
-        <label class="dlg-field"><span>Regex pattern (optional, supports (?P&lt;name&gt;...) groups)</span>
-          <input type="text" id="filing-rule-regex" placeholder="e.g. (?i)invoice\s*#?\s*(?P<invoice_no>[A-Z0-9-]+)" autocomplete="off" spellcheck="false"></label>
-        <label class="dlg-field"><span>Filename glob (optional)</span>
-          <input type="text" id="filing-rule-filename" placeholder="e.g. scan_*.pdf" autocomplete="off" spellcheck="false"></label>
-        <label class="dlg-check"><input type="checkbox" id="filing-rule-has-date"> Require a detected date on page 1</label>
-        <label class="dlg-field"><span>Output path template</span>
-          <input type="text" id="filing-rule-template" placeholder="{year}/Invoices/{date}_{orig_name}.pdf" autocomplete="off" spellcheck="false"></label>
-        <div class="dlg-row" style="display:flex;gap:6px;margin-top:6px;">
-          <button type="button" class="btn secondary" id="filing-rule-save" data-i18n="common.save">Save</button>
-          <button type="button" class="btn secondary" id="filing-rule-cancel" data-i18n="common.cancel">Cancel</button>
+
+    <div class="set-pane" id="set-pane-general" role="tabpanel" data-pane="general">
+      <section class="set-card">
+        <h3 data-i18n="settings.appearance">Appearance</h3>
+        <label class="dlg-field inline"><span data-i18n="settings.theme">Theme</span>
+          <select id="theme" autofocus><option value="" data-i18n="settings.theme.system">System</option><option value="light" data-i18n="settings.theme.light">Light</option><option value="dark" data-i18n="settings.theme.dark">Dark</option></select></label>
+      </section>
+      <section class="set-card">
+        <h3 data-i18n="settings.ocr">OCR (Make searchable)</h3>
+        <label class="dlg-field"><span data-i18n="settings.ocr.accuracy">Reading accuracy</span>
+          <select id="set-ocr-quality">
+            <option value="standard" data-i18n="settings.ocr.standard">Standard (built-in, fast)</option>
+            <option value="best" data-i18n="settings.ocr.best">Best accuracy (larger models, fetched once, slower)</option>
+          </select></label>
+        <p class="dlg-hint">Default for Make searchable (OCR); you can still override it per file in the tool.</p>
+        <div id="ocr-gpu-wrap" hidden>
+          <label class="dlg-check"><input type="checkbox" id="set-ocr-gpu"> Use graphics card for OCR (DirectML, experimental)</label>
+          <p class="dlg-hint">Tries ONNX Runtime's DirectML provider on Windows; falls back to the CPU automatically if anything goes wrong.</p>
         </div>
-      </div>
-      <div class="dlg-row" style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0;">
-        <button type="button" class="btn secondary" id="filing-add-btn" data-i18n="settings.filing.add">Add rule</button>
-        <button type="button" class="btn secondary" id="filing-load-starters" data-i18n="settings.filing.starters">Load starter rules</button>
-        <button type="button" class="btn secondary" id="filing-preview-btn" data-i18n="settings.filing.preview">Preview on a sample PDF…</button>
-        <input type="file" id="filing-preview-file" accept=".pdf,application/pdf" hidden>
-      </div>
-      <p class="dlg-status" id="filing-status" aria-live="polite"></p>
+      </section>
+      <section class="set-card" id="shell-menu" hidden>
+        <h3 data-i18n="settings.shell_menu">Right-click menu</h3>
+        <label class="dlg-check"><input type="checkbox" id="set-shell-menu"> Show ZPDF in the right-click menu</label>
+        <p class="dlg-hint">Right-click PDFs in File Explorer for ZPDF › Combine, Make searchable (OCR), Make smaller
+          or Open, and pictures for Make a PDF with ZPDF. On Windows 11 they're under <em>Show more options</em>.
+          This changes at once; it's for you only.</p>
+      </section>
     </div>
-    <h3 data-i18n="settings.privacy">Privacy</h3>
-    <label class="dlg-check"><input type="checkbox" id="set-remember"> Remember the files I open</label>
-    <p class="dlg-hint" id="set-history">The Recent list, where you were in each file, what ZPDF read from it, and the text kept by Search a folder.</p>
-    <div><button type="button" class="btn secondary" id="set-clear-history" data-i18n="settings.privacy.clear">Clear history</button></div>
-    <p class="dlg-status" id="privacy-status" aria-live="polite"></p>
-    <p class="dlg-hint">ZPDF's working files stay in its own folder, not the shared temporary one. They're deleted when a
-      tool finishes, at the latest when ZPDF closes, and after a crash at the next start. Measurements and drawing
-      scales you set are your work: they stay until you remove them.</p>
-    <details class="dlg-online"><summary>When ZPDF goes online</summary>
-      <p class="dlg-hint">ZPDF has no telemetry: nothing about you or your files is ever sent. It connects only on these occasions:</p>
-      <ul id="set-online"></ul></details>
-    <h3 data-i18n="settings.audit">Security audit log &amp; policies</h3>
-    <p class="dlg-hint" id="policy-status">No administrator policies active.</p>
-    <div class="dlg-row" style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0;">
-      <button type="button" class="btn secondary" id="show-audit" data-i18n="settings.audit.view">View audit log</button>
-      <button type="button" class="btn secondary" id="verify-audit" data-i18n="settings.audit.verify">Verify integrity</button>
+
+    <div class="set-pane" id="set-pane-language" role="tabpanel" data-pane="language" hidden>
+      <section class="set-card">
+        <h3 data-i18n="settings.language">Language</h3>
+        <label class="dlg-field inline"><span data-i18n="settings.interface_language">Interface language</span>
+          <select id="set-language"><option value="en">English</option></select></label>
+        <p class="dlg-hint">Starter locales are automatic translations. Offline translation models and language packs are stored locally on this computer.</p>
+        <div class="set-actions">
+          <button type="button" class="btn secondary" id="set-pack-browse" data-i18n="settings.language.browse">Download language packs…</button>
+          <button type="button" class="btn secondary" id="set-pack-install" data-i18n="settings.language.install_file">Install language pack from file…</button>
+          <input type="file" id="set-pack-file" accept=".zip,.argosmodel" hidden>
+        </div>
+        <div id="set-pack-catalog-wrap" hidden class="set-subbox">
+          <input type="search" id="set-pack-filter" placeholder="Filter languages (e.g. Spanish, Japanese, zh-Hans)…" data-i18n-placeholder="settings.language.filter" aria-label="Filter downloadable language packs">
+          <ul class="watch-list set-catalog-list" id="set-pack-catalog" aria-label="Downloadable language packs"></ul>
+        </div>
+        <div id="lang-dl-wrap" hidden class="set-dl-row">
+          <span class="job-progress" id="lang-dl-bar" role="progressbar" aria-label="Language pack download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></span>
+          <button type="button" class="btn secondary pb-small" id="lang-dl-cancel" data-i18n="common.cancel">Cancel</button>
+        </div>
+        <p class="dlg-status" id="lang-status" aria-live="polite"></p>
+        <div class="set-subhead">Installed offline models &amp; packs</div>
+        <ul class="watch-list" id="set-packs-list" aria-label="Installed language packs"></ul>
+      </section>
+
+      <section class="set-card">
+        <h3 data-i18n="settings.translate.engine">PDF translation engine</h3>
+        <label class="dlg-field">
+          <select id="set-translate-engine" aria-label="PDF translation engine">
+            <option value="offline" data-i18n="settings.translate.offline">Built-in offline (MADLAD-400 / OPUS-MT / Language Packs)</option>
+            <option value="llm" data-i18n="settings.translate.llm">Smart AI (Local Ollama / LM Studio or OpenAI-compatible API)</option>
+          </select></label>
+        <div id="set-translate-llm-wrap" hidden class="set-subbox">
+          <p class="dlg-hint">Context-aware AI translation. Works 100% offline &amp; free with local <strong>Ollama</strong> (<code>http://localhost:11434/v1</code>, e.g. <code>qwen2.5:7b</code>) or any OpenAI-compatible HTTPS API.</p>
+          <label class="dlg-field"><span data-i18n="settings.translate.endpoint">Endpoint URL</span>
+            <input type="text" id="set-translate-url" placeholder="http://localhost:11434/v1" autocomplete="off"></label>
+          <label class="dlg-field"><span data-i18n="settings.translate.model">Model name</span>
+            <input type="text" id="set-translate-model" placeholder="qwen2.5:7b" autocomplete="off"></label>
+          <label class="dlg-field"><span data-i18n="settings.translate.api_key">API key (optional for local Ollama)</span> <em id="set-translate-key-state"></em>
+            <div class="set-inline-row">
+              <input type="password" id="set-translate-key" placeholder="Leave blank for local Ollama / LM Studio" autocomplete="off">
+              <button type="button" class="btn secondary" id="set-translate-key-clear" hidden data-i18n="common.clear">Clear</button>
+            </div></label>
+          <div class="set-actions">
+            <button type="button" class="btn secondary" id="set-translate-save" data-i18n="settings.translate.save">Save AI translation settings</button>
+            <button type="button" class="btn secondary" id="set-translate-test" data-i18n="settings.translate.test">Test connection</button>
+          </div>
+        </div>
+        <label class="dlg-field"><span data-i18n="settings.translate.glossary">Translation glossary &amp; keep-verbatim terms (optional)</span>
+          <textarea id="set-translate-glossary" rows="3" placeholder="One per line: keep verbatim (e.g. Acme Corp) or map (e.g. Force Majeure = 不可抗力)"></textarea></label>
+        <div class="set-actions">
+          <button type="button" class="btn secondary" id="set-translate-glossary-save" data-i18n="settings.translate.save_glossary">Save glossary</button>
+          <span class="dlg-hint">Applies to both offline (MADLAD-400 / OPUS-MT / Language Packs) and Smart AI translation.</span>
+        </div>
+      </section>
     </div>
-    <p class="dlg-status" id="audit-status" aria-live="polite"></p>
-    <h3 data-i18n="settings.updates">Updates</h3>
-    <label class="dlg-check"><input type="checkbox" id="set-check"> Check for new versions when ZPDF starts</label>
-    <label class="dlg-field"><span>GitHub repository</span><input type="text" id="set-repo" spellcheck="false" autocomplete="off" placeholder="owner/name"></label>
-    <label class="dlg-field"><span>GitHub token <em id="set-token-state"></em></span>
-      <input type="password" id="set-token" autocomplete="off" spellcheck="false" placeholder="paste a token to change it"></label>
-    <p class="dlg-hint">New versions come from ZPDF's releases on GitHub (Tempura-446/ZPDF-releases): nothing to set up.
-      The token is only for a development copy that follows the private repository (Tempura-446/PDF-Manager):
-      on GitHub, <em>Settings → Developer settings → Fine-grained tokens</em>, give it access to that repository
-      with <em>Contents: Read-only</em>. It's kept on this computer only.
-      <button type="button" class="link-btn" id="set-token-clear">Forget the token</button></p>
-    <h3 data-i18n="settings.about">About</h3>
-    <p class="dlg-hint">ZPDF is shared with friends under the PolyForm Internal Use License 1.0.0, with personal use
-      added: use it at home or at work and change it for your own use, but don't pass it on. It comes as is,
-      without warranty. <button type="button" class="link-btn" id="show-licence">Licence</button> ·
-      <button type="button" class="link-btn" id="show-notices">Third-party notices</button></p>
-    <p class="dlg-hint">Something not working? <button type="button" class="link-btn" id="copy-diagnostics">Copy diagnostics</button>
-      and paste them into a message: the versions, what ZPDF can use and the end of its log, without file names.
-      <button type="button" class="link-btn" id="open-logs">Open log folder</button></p>
+
+    <div class="set-pane" id="set-pane-automation" role="tabpanel" data-pane="automation" hidden>
+      <section class="set-card">
+        <h3 data-i18n="settings.watch">Watch folders</h3>
+        <p class="dlg-hint">PDFs put in a watched folder are processed one by one while ZPDF is open. Files still downloading or being copied are left until complete.</p>
+        <ul class="watch-list" id="watch-list" aria-label="Watched folders"></ul>
+        <div class="watch-behind" id="watch-behind" role="group" aria-label="Watching with the window closed">
+          <label class="dlg-field"><span>When I close the window while a folder is being watched</span><select id="set-background">
+            <option value="ask">Ask me</option>
+            <option value="yes">Keep watching in the background (ZPDF stays as an icon by the clock)</option>
+            <option value="no">Close ZPDF (folders are watched again next time it's open)</option></select></label>
+          <label class="dlg-check"><input type="checkbox" id="set-login"> Start ZPDF in the background when I sign in to Windows, to keep watching</label>
+          <p class="dlg-hint" id="watch-behind-quit" hidden>While ZPDF keeps watching, closing the window doesn't quit it. To quit for good: right-click its icon by the clock, or
+            <button type="button" class="link-btn" id="set-quit">quit ZPDF now</button>.</p>
+          <p class="dlg-hint" id="watch-behind-why" hidden></p>
+          <p class="dlg-status" id="behind-status" aria-live="polite"></p>
+        </div>
+        <details class="set-details">
+          <summary data-i18n="settings.watch.add">Watch a folder</summary>
+          <div class="watch-add" id="watch-add" role="group" aria-labelledby="watch-add-title">
+            <b id="watch-add-title" class="sr-only" data-i18n="settings.watch.add">Watch a folder</b>
+            <div class="dlg-field"><label for="watch-folder"><span data-i18n="settings.watch.folder">Folder</span></label>
+              <div class="watch-row"><input type="text" id="watch-folder" spellcheck="false" autocomplete="off" placeholder="C:\Users\you\Scans">
+                <button type="button" class="btn secondary pb-small" id="watch-browse" hidden data-i18n="common.browse">Browse…</button></div></div>
+            <label class="dlg-field"><span>What to do</span><select id="watch-do"></select></label>
+            <label class="dlg-field"><span>Results go</span><select id="watch-results">
+              <option value="done">Into a “Done” folder inside it</option>
+              <option value="beside">Next to the original, the name ending “(searchable)”, “(smaller)”…</option></select></label>
+            <label class="dlg-field"><span>The originals</span><select id="watch-originals">
+              <option value="keep">Stay where they are</option>
+              <option value="move">Move to an “Originals” folder inside it</option></select></label>
+            <label class="dlg-check"><input type="checkbox" id="watch-images"> Pictures too (scans saved as JPG, PNG or TIFF become PDFs)</label>
+            <label class="dlg-check"><input type="checkbox" id="watch-batch"> Files that arrive together become one document (a scanner that saves a file per page)</label>
+            <label class="dlg-check"><input type="checkbox" id="watch-auto-file"> Auto-rename &amp; file results using Smart Filing Rules</label>
+            <div><button type="button" class="btn secondary" id="watch-add-btn" data-i18n="settings.watch.start">Watch this folder</button></div>
+            <p class="dlg-status" id="watch-status" aria-live="polite"></p>
+          </div>
+        </details>
+      </section>
+
+      <section class="set-card" id="filing-rules-box">
+        <h3 data-i18n="settings.filing">Smart filing rules</h3>
+        <p class="dlg-hint" id="filing-rules-summary">Automatically rename and sort PDFs by date, vendor, or text rules.</p>
+        <ul class="watch-list" id="filing-rules-list" aria-label="Smart filing rules"></ul>
+        <div id="filing-rule-editor" hidden class="set-subbox">
+          <b id="filing-editor-title">Add rule</b>
+          <label class="dlg-field"><span>Rule name</span>
+            <input type="text" id="filing-rule-name" placeholder="e.g. Invoices & Receipts" autocomplete="off"></label>
+          <label class="dlg-field"><span>Text contains (comma-separated, optional)</span>
+            <input type="text" id="filing-rule-contains" placeholder="e.g. invoice, receipt" autocomplete="off"></label>
+          <label class="dlg-field"><span>Regex pattern (optional, supports (?P&lt;name&gt;...) groups)</span>
+            <input type="text" id="filing-rule-regex" placeholder="e.g. (?i)invoice\s*#?\s*(?P<invoice_no>[A-Z0-9-]+)" autocomplete="off" spellcheck="false"></label>
+          <label class="dlg-field"><span>Filename glob (optional)</span>
+            <input type="text" id="filing-rule-filename" placeholder="e.g. scan_*.pdf" autocomplete="off" spellcheck="false"></label>
+          <label class="dlg-check"><input type="checkbox" id="filing-rule-has-date"> Require a detected date on page 1</label>
+          <label class="dlg-field"><span>Output path template</span>
+            <input type="text" id="filing-rule-template" placeholder="{year}/Invoices/{date}_{orig_name}.pdf" autocomplete="off" spellcheck="false"></label>
+          <div class="set-actions">
+            <button type="button" class="btn secondary" id="filing-rule-save" data-i18n="common.save">Save</button>
+            <button type="button" class="btn secondary" id="filing-rule-cancel" data-i18n="common.cancel">Cancel</button>
+          </div>
+        </div>
+        <div class="set-actions">
+          <button type="button" class="btn secondary" id="filing-add-btn" data-i18n="settings.filing.add">Add rule</button>
+          <button type="button" class="btn secondary" id="filing-load-starters" data-i18n="settings.filing.starters">Load starter rules</button>
+          <button type="button" class="btn secondary" id="filing-preview-btn" data-i18n="settings.filing.preview">Preview on a sample PDF…</button>
+          <input type="file" id="filing-preview-file" accept=".pdf,application/pdf" hidden>
+        </div>
+        <p class="dlg-status" id="filing-status" aria-live="polite"></p>
+      </section>
+    </div>
+
+    <div class="set-pane" id="set-pane-privacy" role="tabpanel" data-pane="privacy" hidden>
+      <section class="set-card">
+        <h3 data-i18n="settings.privacy">Privacy</h3>
+        <label class="dlg-check"><input type="checkbox" id="set-remember"> Remember the files I open</label>
+        <p class="dlg-hint" id="set-history">The Recent list, where you were in each file, what ZPDF read from it, and the text kept by Search a folder.</p>
+        <div class="set-actions"><button type="button" class="btn secondary" id="set-clear-history" data-i18n="settings.privacy.clear">Clear history</button></div>
+        <p class="dlg-status" id="privacy-status" aria-live="polite"></p>
+        <p class="dlg-hint">ZPDF's working files stay in its own folder, not the shared temporary one. They're deleted when a
+          tool finishes, at the latest when ZPDF closes, and after a crash at the next start. Measurements and drawing
+          scales you set are your work: they stay until you remove them.</p>
+        <details class="dlg-online"><summary>When ZPDF goes online</summary>
+          <p class="dlg-hint">ZPDF has no telemetry: nothing about you or your files is ever sent. It connects only on these occasions:</p>
+          <ul id="set-online"></ul></details>
+      </section>
+
+      <section class="set-card">
+        <h3 data-i18n="settings.audit">Security audit log &amp; policies</h3>
+        <p class="dlg-hint" id="policy-status">No administrator policies active.</p>
+        <div class="set-actions">
+          <button type="button" class="btn secondary" id="show-audit" data-i18n="settings.audit.view">View audit log</button>
+          <button type="button" class="btn secondary" id="verify-audit" data-i18n="settings.audit.verify">Verify integrity</button>
+        </div>
+        <p class="dlg-status" id="audit-status" aria-live="polite"></p>
+      </section>
+    </div>
+
+    <div class="set-pane" id="set-pane-about" role="tabpanel" data-pane="about" hidden>
+      <section class="set-card">
+        <h3 data-i18n="settings.updates">Updates</h3>
+        <label class="dlg-check"><input type="checkbox" id="set-check"> Check for new versions when ZPDF starts</label>
+        <details class="set-details">
+          <summary>Developer / custom GitHub repository settings</summary>
+          <div class="set-subbox">
+            <label class="dlg-field"><span>GitHub repository</span><input type="text" id="set-repo" spellcheck="false" autocomplete="off" placeholder="owner/name"></label>
+            <label class="dlg-field"><span>GitHub token <em id="set-token-state"></em></span>
+              <input type="password" id="set-token" autocomplete="off" spellcheck="false" placeholder="paste a token to change it"></label>
+            <p class="dlg-hint">New versions come from ZPDF's releases on GitHub (Tempura-446/ZPDF-releases): nothing to set up.
+              The token is only for a development copy that follows a private repository (<em>Contents: Read-only</em>).
+              It's kept on this computer only.
+              <button type="button" class="link-btn" id="set-token-clear">Forget the token</button></p>
+          </div>
+        </details>
+      </section>
+
+      <section class="set-card">
+        <h3 data-i18n="settings.about">About</h3>
+        <p class="dlg-hint">ZPDF is shared under the PolyForm Internal Use License 1.0.0, with personal use
+          added: use it at home or at work and change it for your own use, but don't pass it on. It comes as is,
+          without warranty.</p>
+        <div class="set-actions">
+          <button type="button" class="btn secondary sm" id="show-licence">Licence</button>
+          <button type="button" class="btn secondary sm" id="show-notices">Third-party notices</button>
+          <button type="button" class="btn secondary sm" id="copy-diagnostics">Copy diagnostics</button>
+          <button type="button" class="btn secondary sm" id="open-logs">Open log folder</button>
+        </div>
+      </section>
+    </div>
+
     <p class="dlg-status" id="set-status" aria-live="polite"></p>
     <div class="dlg-buttons">
       <button type="button" class="btn secondary" id="set-check-now" data-i18n="settings.updates.check_now">Check now</button>
