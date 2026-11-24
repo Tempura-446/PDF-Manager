@@ -1149,12 +1149,65 @@ export const Annotating = (Base) => class extends Base {
       remove.addEventListener("click", (e) => {
         e.stopPropagation();
         list.splice(i, 1);
+        if (this._redactSel?.page === n && this._redactSel?.index >= list.length) this._redactSel = null;
         this._drawRedactions(n);
         this.#showRedactCount();
       });
-      view.div.append(el("div", { class: "rd-redactmark", title: "Marked for redaction",
-        style: `left:${Math.min(a, c)}px;top:${Math.min(b, d)}px;width:${Math.abs(c - a)}px;height:${Math.abs(d - b)}px` }, remove));
+      const isSel = this._redactSel?.page === n && this._redactSel?.index === i;
+      const box = el("div", {
+        class: isSel ? "rd-redactmark rd-redact-sel" : "rd-redactmark",
+        tabindex: "0",
+        role: "button",
+        "aria-label": `Redaction mark ${i + 1} on page ${n} (Arrow keys move, Delete removes)`,
+        title: "Marked for redaction (click or Tab to select, Arrow keys to nudge, Delete to remove)",
+        style: `left:${Math.min(a, c)}px;top:${Math.min(b, d)}px;width:${Math.abs(c - a)}px;height:${Math.abs(d - b)}px`,
+      }, remove);
+      const selectMe = () => {
+        this._redactSel = { page: n, index: i };
+        view.div.querySelectorAll(".rd-redactmark").forEach((elItem, idx) => {
+          elItem.classList.toggle("rd-redact-sel", idx === i);
+        });
+      };
+      box.addEventListener("click", (e) => { e.stopPropagation(); selectMe(); box.focus(); });
+      box.addEventListener("focus", selectMe);
+      view.div.append(box);
     });
+  }
+
+  /** Keyboard controls for selected redaction marks (returns true if handled). */
+  _redactKey(e) {
+    if (this.markupMode !== "REDACT") return false;
+    const n = this._redactSel?.page || this.currentPage || 1;
+    const list = this.#redactMarks()[n] || [];
+    if (e.key === "Escape") {
+      if (this._redactSel) {
+        const p = this._redactSel.page;
+        this._redactSel = null;
+        this._drawRedactions(p);
+        return true;
+      }
+      return false;
+    }
+    if (!list.length) return false;
+    const idx = (this._redactSel && this._redactSel.page === n) ? this._redactSel.index : 0;
+    if (idx < 0 || idx >= list.length) return false;
+    if (e.key === "Delete" || e.key === "Backspace") {
+      list.splice(idx, 1);
+      this._redactSel = list.length ? { page: n, index: Math.min(idx, list.length - 1) } : null;
+      this._drawRedactions(n);
+      this.#showRedactCount();
+      return true;
+    }
+    const step = e.shiftKey ? 10 : 1;
+    const rect = list[idx];
+    if (e.key === "ArrowLeft") { rect[0] -= step; rect[2] -= step; }
+    else if (e.key === "ArrowRight") { rect[0] += step; rect[2] += step; }
+    else if (e.key === "ArrowUp") { rect[1] += step; rect[3] += step; }
+    else if (e.key === "ArrowDown") { rect[1] -= step; rect[3] -= step; }
+    else return false;
+    this._redactSel = { page: n, index: idx };
+    this._drawRedactions(n);
+    return true;
   }
 
   /** Mark the selected words (one box per line piece, a little padded). */

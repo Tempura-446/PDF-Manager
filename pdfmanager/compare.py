@@ -534,6 +534,7 @@ def compare_summary(old, new, old_password=None, new_password=None, all_pages=Tr
         "new_name": Path(new).name,
         "old_pages": len(a),
         "new_pages": len(b),
+        "dpi": dpi,
         "mode": mode,
         "counts": counts,
         "changes": [r for r in rows if all_pages or r["kind"] != "same"],

@@ -508,6 +508,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       this.#menuItem("rect", "Crop pages visually…", () => this.openCropMode(), this.cropMode),
       this.#menuItem("print", "Print preflight check…", () => this.checkPreflight()),
       this.#menuItem("edittext", "Translate this page…", () => this.translateCurrentPage()),
+      this.#menuItem("split", "Live bilingual reading…", () => this.openSplitView("__translate__")),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
       this.#menuItem("access", "Check accessibility", () => this.checkAccessibility()),  // -- accessibility --
       this.#menuItem("x", "Close this document", () => this.closeTab()),
@@ -812,8 +813,10 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); this.pdfViewer.increaseScale(); return; }
     if (mod && e.key === "-") { e.preventDefault(); this.pdfViewer.decreaseScale(); return; }
     if (mod && e.key === "0") { e.preventDefault(); this.pdfViewer.currentScaleValue = "auto"; return; }
+    if (this.cropMode && !mod && !isTyping(e) && this._cropKey?.(e)) { e.preventDefault(); return; }
     if (mod || e.altKey || isTyping(e)) return;
     if (this.measureMode && this._measureKey(e)) { e.preventDefault(); return; }
+    if (this.markupMode === "REDACT" && this._redactKey?.(e)) { e.preventDefault(); return; }
     // (Not a key another part already took, or one pressed in a side panel: Delete in the page list removes pages.)
     if (!e.defaultPrevented && !this.side?.contains(e.target) && !this.sidebar?.contains(e.target) && this._markHasKeys() && this._markKey(e)) { e.preventDefault(); return; }   // a selected markup: Delete, Esc, the arrows
     if (e.key === "Escape" && !this.findbar.hidden) { this.closeFind(); return; }
@@ -1017,14 +1020,72 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     const dl = el("dl", { class: "rd-props" });
     for (const [k, v] of rows) dl.append(el("dt", {}, k), el("dd", {}, v));
     const parts = [dl];
+    let pendingAction = null;
+    const attachInput = el("input", { type: "file", multiple: "multiple", hidden: "hidden" });
+    const attachHead = el("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px;" },
+      el("h3", { style: "margin:0;" }, `Attached files (${attached.length})`),
+      el("button", {
+        type: "button", class: "rd-btn",
+        onclick: () => attachInput.click(),
+      }, "Attach file…"),
+      attachInput,
+    );
+    parts.push(attachHead);
     if (attached.length) {
-      parts.push(el("h3", {}, `Attached files (${attached.length})`), el("ul", { class: "rd-attached" },
-        ...attached.map((a) => el("li", {}, el("span", {}, a.filename, a.description ? el("small", {}, " — " + a.description) : null),
+      parts.push(el("ul", { class: "rd-attached" },
+        ...attached.map((a) => el("li", {},
+          el("span", {}, a.filename, a.description ? el("small", {}, " — " + a.description) : null),
           el("small", {}, size(a.content?.length || 0)),
-          el("button", { type: "button", class: "rd-btn", onclick: () => this._saveBytes(a.content, a.filename, () => {}, this.activeTab?.fileId) }, "Save…")))));
+          el("button", { type: "button", class: "rd-btn", onclick: () => this._saveBytes(a.content, a.filename, () => {}, this.activeTab?.fileId) }, "Save…"),
+          el("button", {
+            type: "button", class: "rd-btn",
+            onclick: () => {
+              pendingAction = { type: "remove", name: a.filename };
+              this.root.querySelector("dialog.rd-dialog button[value='ok']")?.click();
+            },
+          }, "Remove"),
+        ))));
+    } else {
+      parts.push(el("p", { style: "margin:6px 0 0;color:var(--muted);font-size:13px;" }, "No embedded files."));
     }
+    attachInput.addEventListener("change", () => {
+      if (attachInput.files?.length) {
+        pendingAction = { type: "add", files: Array.from(attachInput.files) };
+        this.root.querySelector("dialog.rd-dialog button[value='ok']")?.click();
+      }
+    });
     // -- end of limits and attached files --
     await this._dialog("Document properties", parts, [["ok", "Close", true]]);
+    if (pendingAction) {
+      await this._updateAttachments(pendingAction);
+      await this.showProperties();
+    }
+  }
+
+  async _updateAttachments(action) {
+    if (!this.activeTab) return;
+    await this._changeDocument(async (bytes, tab) => {
+      const body = new FormData();
+      body.append("file", new Blob([bytes], { type: "application/pdf" }), tab.name || "file.pdf");
+      if (tab.password) body.append("password", tab.password);
+      if (action.type === "remove") {
+        body.append("remove", JSON.stringify([action.name]));
+      } else if (action.type === "add") {
+        for (const f of action.files || []) body.append("attach", f, f.name);
+      }
+      const res = await fetch("/api/attachments/update", {
+        method: "POST",
+        headers: this.token ? { "X-Pdfm-Token": this.token } : {},
+        body,
+      });
+      if (!res.ok) {
+        let msg = res.statusText;
+        try { msg = (await res.json()).error || msg; } catch (_) {}
+        throw new Error(msg);
+      }
+      return res;
+    }, { failure: "Could not update attachments: " });
+    this.toast(action.type === "remove" ? `Removed attachment "${action.name}".` : `Attached ${action.files.length} file${action.files.length === 1 ? "" : "s"}.`);
   }
 
   // -- accessibility --
@@ -1464,6 +1525,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       { icon: "rect", label: "Crop pages visually", words: "trim margins box cut", run: () => this.openCropMode() },
       { icon: "print", label: "Print preflight check", words: "dpi cmyk rgb bleed fonts hairline press", run: () => this.checkPreflight() },
       { icon: "edittext", label: "Translate this page", words: "translate language offline page spanish french german chinese", run: () => this.translateCurrentPage() },
+      { icon: "split", label: "Live bilingual reading", words: "translate bilingual book split view side by side language", run: () => this.openSplitView("__translate__") },
       ...(this.activeTab?.fileId ? [{ icon: "save", label: "Save", keys: "Ctrl+S", words: "write file", run: () => this.save() }] : []),
       { icon: "save", label: this.activeTab?.fileId ? "Save as" : this._edited() ? "Save a copy with your changes" : "Save a copy",
         keys: this.activeTab?.fileId ? "Ctrl+Shift+S" : "Ctrl+S", words: "download export copy", run: () => this.saveCopy() },

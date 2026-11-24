@@ -21,6 +21,8 @@ export const ReaderNav = (Base) => class extends Base {
     const total = v.pagesCount || this.doc.numPages;  // before layout, pagesCount is 0
     this.pageInput.value = this.labels ? v.currentPageLabel || n : n;
     this.pageCount.textContent = this.labels ? `(${n} of ${total})` : `of ${total}`;
+    const pct = Math.min(100, Math.round((n / Math.max(1, total)) * 100));
+    this.pageCount.title = total > 1 ? `Reading progress: ${pct}% (page ${n} of ${total})` : "";
     this.prevBtn.disabled = n <= 1;
     this.nextBtn.disabled = n >= total;
     const t = this.thumbs;

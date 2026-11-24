@@ -12,7 +12,7 @@ from pdfmanager import filefacts
 from pdfmanager.server.common import (
     MARKUPS_IN_HEADER, RecentFiles, SavedOver, UserError,
     _bool, _byte_range, _download_headers, _file_stamp, _parse_multipart,
-    _replace_file, gui_hook, lazy_module, reveal_in_file_manager,
+    _replace_file, _safe_name, gui_hook, lazy_module, reveal_in_file_manager,
 )
 
 comments = lazy_module("pdfmanager.comments")
@@ -605,3 +605,109 @@ class ReaderRoutesMixin:
                 core.encrypt(out, out, password)
             data = out.read_bytes()
         return self._send(HTTPStatus.OK, data, "application/pdf")
+
+    def _reader_compare(self, body):
+        """Compute a structured JSON diff summary for the Reader's interactive split-view diff mode."""
+        from pdfmanager import compare
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        by_field = {}
+        for field_name, filename, data in uploads:
+            by_field[field_name] = (filename, data)
+
+        old_id = (fields.get("old_id") or "").strip()
+        new_id = (fields.get("new_id") or "").strip()
+        old_opened = self.opened.get(old_id) if (old_id and self.opened is not None) else None
+        new_opened = self.opened.get(new_id) if (new_id and self.opened is not None) else None
+
+        mode = (fields.get("mode") or "both").strip().lower()
+        if mode not in compare.MODES:
+            raise UserError(f"unknown compare mode: {mode!r}")
+        try:
+            dpi = max(36, min(150, int(fields.get("dpi") or compare.DPI)))
+        except ValueError:
+            dpi = compare.DPI
+        old_pw = fields.get("old_password") or None
+        new_pw = fields.get("new_password") or None
+
+        with tempfile.TemporaryDirectory(prefix="pdfm-cmp-") as tmp:
+            tmp_dir = Path(tmp)
+            if "file_old" in by_field:
+                old_path = tmp_dir / "old.pdf"
+                old_path.write_bytes(by_field["file_old"][1])
+            elif old_opened is not None and old_opened.is_file():
+                old_path = old_opened
+            else:
+                raise UserError("missing first PDF to compare")
+
+            if "file_new" in by_field:
+                new_path = tmp_dir / "new.pdf"
+                new_path.write_bytes(by_field["file_new"][1])
+            elif new_opened is not None and new_opened.is_file():
+                new_path = new_opened
+            else:
+                raise UserError("missing second PDF to compare")
+
+            summary = compare.compare_summary(
+                old_path,
+                new_path,
+                old_password=old_pw,
+                new_password=new_pw,
+                all_pages=True,
+                dpi=dpi,
+                mode=mode,
+            )
+        return self._send(HTTPStatus.OK, summary)
+
+    def _attachments_update(self, body):
+        """Add or remove embedded attachments on the open PDF and return updated PDF bytes."""
+        from pdfmanager import filetools
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        pdf_upload = None
+        attach_uploads = []
+        for field_name, filename, data in uploads:
+            if field_name == "file" and pdf_upload is None:
+                pdf_upload = (filename, data)
+            elif field_name in ("attach", "attachment", "attachments"):
+                attach_uploads.append((filename, data))
+        if pdf_upload is None:
+            raise UserError("no file")
+        try:
+            remove = json.loads(fields.get("remove") or "[]")
+            if not isinstance(remove, list):
+                remove = []
+        except ValueError:
+            raise UserError("invalid remove list") from None
+        remove_all = _bool(fields.get("remove_all"))
+        description = str(fields.get("description") or "").strip()
+        password = fields.get("password") or None
+
+        with tempfile.TemporaryDirectory(prefix="pdfm-att-") as tmp:
+            tmp_dir = Path(tmp)
+            src = tmp_dir / "in.pdf"
+            out = tmp_dir / "out.pdf"
+            src.write_bytes(pdf_upload[1])
+            att_dir = tmp_dir / "files"
+            att_dir.mkdir()
+            add_paths = []
+            for idx, (fname, data) in enumerate(attach_uploads):
+                safe = _safe_name(fname) or f"attachment_{idx + 1}.bin"
+                target = att_dir / safe
+                if target.exists():
+                    target = att_dir / f"{target.stem}_{idx + 1}{target.suffix}"
+                target.write_bytes(data)
+                add_paths.append(target)
+            filetools.attach(
+                src,
+                out,
+                files=add_paths,
+                remove=[str(x) for x in remove],
+                remove_all=remove_all,
+                password=password,
+                description=description,
+            )
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)
+            result_bytes = out.read_bytes()
+        return self._send(HTTPStatus.OK, result_bytes, "application/pdf")

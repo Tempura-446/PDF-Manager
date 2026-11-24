@@ -120,7 +120,12 @@ export const CropMode = (Base) => class extends Base {
   _mountCropOverlay(pageDiv, vp) {
     this._cropOverlay?.remove();
     const overlay = el("div", { class: "rd-crop-overlay" });
-    const box = el("div", { class: "rd-crop-box" });
+    const box = el("div", {
+      class: "rd-crop-box",
+      tabindex: "0",
+      role: "region",
+      "aria-label": "Crop area (Arrow keys move, Shift+Arrow faster, Alt+Arrow resize, Enter apply, Escape cancel)",
+    });
     const handles = ["nw", "n", "ne", "e", "se", "s", "sw", "w"].map((dir) =>
       el("div", { class: `rd-crop-handle rd-crop-h-${dir}`, "data-dir": dir })
     );
@@ -142,6 +147,7 @@ export const CropMode = (Base) => class extends Base {
       box.style.height = `${heightPct}%`;
       this._updateCropReadout();
     };
+    this._renderCropBox = renderBox;
     renderBox();
 
     let mode = null;
@@ -209,6 +215,34 @@ export const CropMode = (Base) => class extends Base {
     };
     overlay.addEventListener("pointerup", endDrag);
     overlay.addEventListener("pointercancel", endDrag);
+  }
+
+  /** Keyboard nudge/resize for the visual crop rectangle (returns true if handled). */
+  _cropKey(e) {
+    if (!this.cropMode || !this._cropRect || !this._cropPageSize) return false;
+    if (e.key === "Escape") { this.closeCropMode(); return true; }
+    if (e.key === "Enter") { this.applyCrop(); return true; }
+    const step = e.shiftKey ? 10 : 1;
+    const [vw, vh] = this._cropPageSize;
+    let [x0, y0, x1, y1] = this._cropRect;
+    const w = x1 - x0, h = y1 - y0;
+    const minGap = 12;
+    if (e.altKey) {
+      if (e.key === "ArrowRight") x1 = Math.min(vw, x1 + step);
+      else if (e.key === "ArrowLeft") x1 = Math.max(x0 + minGap, x1 - step);
+      else if (e.key === "ArrowUp") y1 = Math.min(vh, y1 + step);
+      else if (e.key === "ArrowDown") y1 = Math.max(y0 + minGap, y1 - step);
+      else return false;
+    } else {
+      if (e.key === "ArrowRight") { x0 = Math.min(vw - w, x0 + step); x1 = x0 + w; }
+      else if (e.key === "ArrowLeft") { x0 = Math.max(0, x0 - step); x1 = x0 + w; }
+      else if (e.key === "ArrowUp") { y0 = Math.min(vh - h, y0 + step); y1 = y0 + h; }
+      else if (e.key === "ArrowDown") { y0 = Math.max(0, y0 - step); y1 = y0 + h; }
+      else return false;
+    }
+    this._cropRect = [x0, y0, x1, y1];
+    this._renderCropBox?.();
+    return true;
   }
 
   /** Apply the current crop rectangle through /api/crop with full Undo/Redo support. */

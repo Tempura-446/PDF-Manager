@@ -2,7 +2,7 @@
 
 Master index of ZPDF's completed, in-progress, and planned feature tracks. Each track links to its detailed plan in [`docs/superpowers/plans/`](superpowers/plans/).
 
-*Last updated: 2026-11-24 (after `v0.65.0` Backend Modularization Wave 2)*
+*Last updated: 2026-11-24 (after `v0.66.0` Interactive Diff, Live Bilingual Reading, Attachments GUI & Keyboard Crop/Redaction)*
 
 ---
 
