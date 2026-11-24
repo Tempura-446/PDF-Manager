@@ -608,8 +608,12 @@ OPERATIONS = [
                             ["uk", "Українська (Ukrainian)"], ["en", "English"]]),
                 _f("mode", "Output layout", "select", "side-by-side",
                    choices=[["side-by-side", "Side by side (original + translation PDF)"],
-                            ["text", "Plain text (.txt)"],
-                            ["in-place", "Translated copy, same layout (PDF)"]])]},
+                            ["bilingual", "Bilingual stacked (original + translation underneath)"],
+                            ["in-place", "Translated copy, same layout (PDF)"],
+                            ["text", "Plain text (.txt)"]]),
+                _f("pages", "Pages (optional)", "text", "",
+                   placeholder="All pages, or e.g. 1-5, 8"),
+                _f("auto_ocr", "Auto-OCR scanned pages (if no selectable text)", "checkbox", False)]},
     # Quantities: a schedule of what was measured on a drawing (pdfmanager/quantities.py)
     {"id": "quantities", "group": "Convert", "label": "Quantities from a drawing", "files": "pdf",
      "help": "A schedule (takeoff) of everything measured on a drawing: the dimensions and measurements "
@@ -1236,22 +1240,29 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             raise UserError(f"unknown translation layout {mode!r}")
         ext = ".txt" if mode == "text" else ".pdf"
         out = out_dir / f"{src.stem}_{target_lang}{ext}"
+        pages_spec = str(opts.get("pages") or "").strip() or None
+        auto_ocr = _bool(opts.get("auto_ocr", False))
         made = translate.translate_pdf(
             src, out, source_lang, target_lang,
             mode=mode,
             password=password,
+            pages=pages_spec,
+            auto_ocr=auto_ocr,
         )
         eff_src = made.get("src_lang") or source_lang
         src_note = f"auto→{eff_src}" if source_lang == "auto" else eff_src
         empty = int(made.get("empty_pages") or 0)
-        ocr_hint = (
-            f"; {empty} page{'s' if empty != 1 else ''} had no selectable text — run Make searchable (OCR) first if scanned"
-            if empty > 0
-            else ""
-        )
+        extra = []
+        if made.get("ocr_applied"):
+            extra.append("OCR applied")
+        if empty > 0:
+            extra.append(
+                f"{empty} page{'s' if empty != 1 else ''} had no selectable text — enable Auto-OCR or run Make searchable (OCR) first"
+            )
+        extra_note = ("; " + "; ".join(extra)) if extra else ""
         notes.append(
             f"{src.name}: translated {made['pages']} page{'s' if made['pages'] != 1 else ''} "
-            f"({src_note} → {target_lang}, {made['mode']}{ocr_hint})"
+            f"({src_note} → {target_lang}, {made['mode']}{extra_note})"
         )
     # -- end of pptx and html --
     elif op == "from-office":
