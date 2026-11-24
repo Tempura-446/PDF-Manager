@@ -103,98 +103,96 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
     def do_GET(self):
         if not self._host_ok():
             return self._error(HTTPStatus.FORBIDDEN, "bad host")
-        try:
-            path = self.path.split("?", 1)[0]
-            if path == "/":
-                page = resources.files("pdfmanager").joinpath("gui.html").read_text("utf-8")
-                return self._send(HTTPStatus.OK, page, "text/html; charset=utf-8",
-                                  {"Content-Security-Policy": _page_csp(self.allow_eval)})
-            if path.startswith("/static/"):
-                return self._static(path[len("/static/"):])
-            if not self._token_ok():
-                return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
-            if path == "/api/operations":
-                return self._send(HTTPStatus.OK, {"operations": OPERATIONS, "version": __version__})
-            if path == "/api/recipes":
-                return self._send(HTTPStatus.OK, {"recipes": list(recipes.load_all().values()),
-                                                  "step_ops": list(recipes.STEP_OPS)})
-            if path.startswith("/api/file/"):
-                return self._open_file(path[len("/api/file/"):])
-            if path.startswith("/api/job/"):
-                return self._job(path, "GET")
-            if path.startswith("/api/facts/"):
-                target = self.opened.get(path[len("/api/facts/"):]) if self.opened is not None else None
-                if target is None or not target.is_file():
-                    return self._error(HTTPStatus.NOT_FOUND, "that file is no longer available")
-                found = filefacts.remembered(target)
-                made_by = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("made_by", [None])[0]
-                return self._send(HTTPStatus.OK, {**found, "suggestions": filefacts.suggestions(found, made_by)})
-            if path == "/api/recent":
-                return self._recent()
-            if path.startswith("/api/scan/"):
+        path = self.path.split("?", 1)[0]
+        if path == "/":
+            page = resources.files("pdfmanager").joinpath("gui.html").read_text("utf-8")
+            return self._send(HTTPStatus.OK, page, "text/html; charset=utf-8",
+                              {"Content-Security-Policy": _page_csp(self.allow_eval)})
+        if path.startswith("/static/"):
+            return self._static(path[len("/static/"):])
+        if not self._token_ok():
+            return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
+        if path == "/api/operations":
+            return self._send(HTTPStatus.OK, {"operations": OPERATIONS, "version": __version__})
+        if path == "/api/recipes":
+            return self._send(HTTPStatus.OK, {"recipes": list(recipes.load_all().values()),
+                                              "step_ops": list(recipes.STEP_OPS)})
+        if path.startswith("/api/file/"):
+            return self._open_file(path[len("/api/file/"):])
+        if path.startswith("/api/job/"):
+            return self._job(path, "GET")
+        if path.startswith("/api/facts/"):
+            target = self.opened.get(path[len("/api/facts/"):]) if self.opened is not None else None
+            if target is None or not target.is_file():
+                return self._error(HTTPStatus.NOT_FOUND, "that file is no longer available")
+            found = filefacts.remembered(target)
+            made_by = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("made_by", [None])[0]
+            return self._send(HTTPStatus.OK, {**found, "suggestions": filefacts.suggestions(found, made_by)})
+        if path == "/api/recent":
+            return self._recent()
+        if path.startswith("/api/scan/"):
+            try:
                 return self._scan_get(path[len("/api/scan/"):])
-            if path == "/api/events":
-                return self._events()
-            if path.startswith("/api/action/"):
-                return self._action(path[len("/api/action/"):])
-            if path == "/api/watch":
-                return self._watch_list()
-            if path == "/api/filing/rules":
-                return self._filing_rules_get()
-            if path == "/api/watch/news":
-                query = urllib.parse.parse_qs(self.path.partition("?")[2])
-                try:
-                    after = int(query.get("after", ["0"])[0])
-                except ValueError:
-                    after = 0
-                news, last = self.watcher.news_after(after)
-                # A result can be opened in the reader from its toast.
-                news = [{**item, "id": self.opened.add(item["result"])
-                         if item["result"] and Path(item["result"]).is_file() else None} for item in news]
-                return self._send(HTTPStatus.OK, {"news": news, "last": last})
-            if path == "/api/i18n":
-                return self._i18n_get()
-            if path == "/api/i18n/catalog":
-                return self._i18n_catalog()
-            if path == "/api/shellmenu":
-                from pdfmanager import winsetup
+            except EXPECTED_ERRORS as exc:
+                return self._error(HTTPStatus.BAD_REQUEST, str(exc))
+        if path == "/api/events":
+            return self._events()
+        if path.startswith("/api/action/"):
+            return self._action(path[len("/api/action/"):])
+        if path == "/api/watch":
+            return self._watch_list()
+        if path == "/api/filing/rules":
+            return self._filing_rules_get()
+        if path == "/api/watch/news":
+            query = urllib.parse.parse_qs(self.path.partition("?")[2])
+            try:
+                after = int(query.get("after", ["0"])[0])
+            except ValueError:
+                after = 0
+            news, last = self.watcher.news_after(after)
+            # A result can be opened in the reader from its toast.
+            news = [{**item, "id": self.opened.add(item["result"])
+                     if item["result"] and Path(item["result"]).is_file() else None} for item in news]
+            return self._send(HTTPStatus.OK, {"news": news, "last": last})
+        if path == "/api/i18n":
+            return self._i18n_get()
+        if path == "/api/i18n/catalog":
+            return self._i18n_catalog()
+        if path == "/api/shellmenu":
+            from pdfmanager import winsetup
 
-                available = _shell_menu_available()
-                return self._send(HTTPStatus.OK, {"available": available,
-                                                  "on": available and winsetup.context_menu_registered()})
-            if path == "/api/settings":
-                return self._send(HTTPStatus.OK, _settings_for_page(type(self).instance_mode))
-            if path == "/api/stamps":  # the stamps of your own (stamps.py)
-                from pdfmanager import stamps
+            available = _shell_menu_available()
+            return self._send(HTTPStatus.OK, {"available": available,
+                                              "on": available and winsetup.context_menu_registered()})
+        if path == "/api/settings":
+            return self._send(HTTPStatus.OK, _settings_for_page(type(self).instance_mode))
+        if path == "/api/stamps":  # the stamps of your own (stamps.py)
+            from pdfmanager import stamps
 
-                return self._send(HTTPStatus.OK, {"stamps": stamps.saved(), "most": stamps.MOST})
-            if path == "/api/update":
-                return self._send(HTTPStatus.OK, {**update.check(), "can_restart": self._can_restart()})
-            if path == "/api/diagnostics":
-                return self._send(HTTPStatus.OK, applog.diagnostics(), "text/plain; charset=utf-8")
-            if path == "/api/licence":
-                from pdfmanager import notices
+            return self._send(HTTPStatus.OK, {"stamps": stamps.saved(), "most": stamps.MOST})
+        if path == "/api/update":
+            return self._send(HTTPStatus.OK, {**update.check(), "can_restart": self._can_restart()})
+        if path == "/api/diagnostics":
+            return self._send(HTTPStatus.OK, applog.diagnostics(), "text/plain; charset=utf-8")
+        if path == "/api/licence":
+            from pdfmanager import notices
 
-                return self._send(HTTPStatus.OK, notices.licence_text(), "text/plain; charset=utf-8")
-            if path == "/api/notices":
-                from pdfmanager import notices
+            return self._send(HTTPStatus.OK, notices.licence_text(), "text/plain; charset=utf-8")
+        if path == "/api/notices":
+            from pdfmanager import notices
 
-                return self._send(HTTPStatus.OK, notices.third_party_notices(), "text/plain; charset=utf-8")
-            if path == "/api/audit":
-                from pdfmanager import auditlog
+            return self._send(HTTPStatus.OK, notices.third_party_notices(), "text/plain; charset=utf-8")
+        if path == "/api/audit":
+            from pdfmanager import auditlog
 
-                return self._send(HTTPStatus.OK, {"entries": auditlog.read_entries(limit=100), "integrity": auditlog.verify_chain()})
-            if path == "/api/policy":
-                from pdfmanager import policy
+            return self._send(HTTPStatus.OK, {"entries": auditlog.read_entries(limit=100), "integrity": auditlog.verify_chain()})
+        if path == "/api/policy":
+            from pdfmanager import policy
 
-                return self._send(HTTPStatus.OK, {"policies": policy.snapshot()})
-            if path == "/api/debug/stacks" and os.environ.get("PDFM_LOG"):
-                return self._send(HTTPStatus.OK, _thread_stacks(), "text/plain; charset=utf-8")
-            self._error(HTTPStatus.NOT_FOUND, "not found")
-        except EXPECTED_ERRORS as exc:
-            return self._error(HTTPStatus.BAD_REQUEST, str(exc))
-        except Exception as exc:  # report, don't kill the server
-            return self._error(HTTPStatus.INTERNAL_SERVER_ERROR, applog.unexpected(exc))
+            return self._send(HTTPStatus.OK, {"policies": policy.snapshot()})
+        if path == "/api/debug/stacks" and os.environ.get("PDFM_LOG"):
+            return self._send(HTTPStatus.OK, _thread_stacks(), "text/plain; charset=utf-8")
+        self._error(HTTPStatus.NOT_FOUND, "not found")
 
 
 
