@@ -563,8 +563,11 @@ def add(address):
     if not re.match(r"^https?://", text, re.I):
         text = "http://" + text
     parts = urllib.parse.urlsplit(text)
-    if not parts.hostname or not re.fullmatch(r"[A-Za-z0-9.\-:\[\]]+", parts.netloc):
+    host = (parts.hostname or "").strip().lower()
+    if not host or not re.fullmatch(r"[A-Za-z0-9.\-:\[\]]+", parts.netloc):
         raise EsclError("that doesn't look like an address: try something like 192.168.1.40", "refused")
+    if host in ("169.254.169.254", "metadata.google.internal", "0.0.0.0", "::"):
+        raise EsclError("that address can't be used as a network scanner", "refused")
     tries = [text.rstrip("/")] if parts.path.strip("/") else [f"{parts.scheme}://{parts.netloc}/eSCL"]
     if not parts.path.strip("/") and parts.scheme == "http" and not parts.port:
         tries.append(f"https://{parts.netloc}/eSCL")       # (some answer on HTTPS only)

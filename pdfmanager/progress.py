@@ -73,12 +73,19 @@ class Job:
             _job.reset(token)
 
     def start(self, func, *args, **kwargs):
-        """Run ``func`` as this job in a background thread."""
+        """Run ``func`` as this job in a background thread (bounded concurrency)."""
         context = contextvars.copy_context()
-        self.thread = threading.Thread(target=context.run, args=(self.run, func, *args),
-                                       kwargs=kwargs, daemon=True)
+
+        def _bounded():
+            with _JOB_SLOTS:
+                self.run(func, *args, **kwargs)
+
+        self.thread = threading.Thread(target=context.run, args=(_bounded,), daemon=True)
         self.thread.start()
         return self
+
+
+_JOB_SLOTS = threading.Semaphore(4)
 
 
 # Called with an unexpected exception from a job; returns what to tell the

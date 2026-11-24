@@ -250,7 +250,7 @@ class FormRoutesMixin:
         if not pdf_up or not data_up:
             raise UserError("choose a data file to import")
         password = fields.get("password") or None
-        data_name = Path(data_up[1] or "data.json").name
+        data_name = f"data_{_safe_name(data_up[1] or 'data.json')}"
         with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
             src = Path(tmp) / "file.pdf"
             dpath = Path(tmp) / data_name

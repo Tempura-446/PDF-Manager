@@ -16,6 +16,37 @@ from pdfmanager.server.common import (
 )
 
 
+import collections
+import threading
+
+_SAFE_OPEN_CACHE = collections.OrderedDict()
+_SAFE_OPEN_LOCK = threading.Lock()
+_SAFE_OPEN_MAX = 4
+
+
+def _get_safe_open_cached(cache_key, path):
+    from pdfmanager import risks
+
+    with _SAFE_OPEN_LOCK:
+        hit = _SAFE_OPEN_CACHE.get(cache_key)
+        if hit is not None:
+            _SAFE_OPEN_CACHE.move_to_end(cache_key)
+            return hit
+    with tempfile.TemporaryDirectory(prefix="pdfm-safe-") as tmp:
+        safe_path = Path(tmp) / "safe.pdf"
+        try:
+            risks.make_safe(path, safe_path)
+        except Exception as exc:  # noqa: BLE001 - fail closed when policy requires Make Safe
+            return exc
+        safe_bytes = safe_path.read_bytes()
+    with _SAFE_OPEN_LOCK:
+        _SAFE_OPEN_CACHE[cache_key] = safe_bytes
+        _SAFE_OPEN_CACHE.move_to_end(cache_key)
+        while len(_SAFE_OPEN_CACHE) > _SAFE_OPEN_MAX:
+            _SAFE_OPEN_CACHE.popitem(last=False)
+    return safe_bytes
+
+
 class ReaderRoutesMixin:
     """Reader, annotation, layer, text-edit, OCR-correction, and markup endpoints."""
 
@@ -36,16 +67,14 @@ class ReaderRoutesMixin:
 
         if policy.requires_make_safe_on_open():
             # Administrator policy requires Make Safe sanitization before opening.
-            with tempfile.TemporaryDirectory(prefix="pdfm-safe-") as tmp:
-                safe_path = Path(tmp) / "safe.pdf"
-                try:
-                    risks.make_safe(path, safe_path)
-                except Exception as exc:  # noqa: BLE001 - fail closed when policy requires Make Safe
-                    return self._error(
-                        HTTPStatus.UNPROCESSABLE_ENTITY,
-                        f"cannot open file: administrator policy requires Make Safe sanitization ({exc})",
-                    )
-                safe_bytes = safe_path.read_bytes()
+            # Cache sanitized bytes by (path, stamp) so multi-range pdf.js loads don't re-run make_safe per chunk.
+            cache_key = (str(path), headers["X-Pdfm-Stamp"])
+            safe_bytes = _get_safe_open_cached(cache_key, path)
+            if isinstance(safe_bytes, Exception):
+                return self._error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    f"cannot open file: administrator policy requires Make Safe sanitization ({safe_bytes})",
+                )
             headers["X-Pdfm-Made-Safe"] = "1"
             size = len(safe_bytes)
             wanted = self.headers.get("Range")

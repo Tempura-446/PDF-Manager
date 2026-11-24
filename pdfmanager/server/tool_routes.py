@@ -59,6 +59,7 @@ class ToolRoutesMixin:
                     elif data:  # extra file field, e.g. an ICC profile
                         extra.setdefault(name, path)
                         extra.setdefault(name + "[]", []).append(path)  # all of them
+                uploads.clear()
                 notes = []
                 started, outcome = gui_hook("time", time).monotonic(), "failed"
                 try:
@@ -247,20 +248,32 @@ class ToolRoutesMixin:
                 color_strategy=(fields.get("color_strategy") or None),
                 flatten_transparency=(fields.get("flatten_transparency") == "true"),
             )
-            return self._send_bytes(dst.read_bytes(), "application/pdf", "preflight-fixed.pdf")
+            return self._send(
+                HTTPStatus.OK,
+                dst.read_bytes(),
+                "application/pdf",
+                {"Content-Disposition": 'attachment; filename="preflight-fixed.pdf"'},
+            )
 
     def _translate_page(self, body):
         """Translate a single page of a PDF without modifying the document."""
         from pdfmanager import translate
 
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
-        if not uploads:
+        file_id = (fields.get("id") or "").strip()
+        opened_path = self.opened.get(file_id) if (file_id and self.opened is not None) else None
+        if not uploads and (opened_path is None or not opened_path.is_file()):
             raise UserError("no file")
         page_num = int(fields.get("page") or 1)
         src_lang = fields.get("from") or "en"
         dst_lang = fields.get("to") or ""
         if not dst_lang:
             raise UserError("choose a target language")
+        if opened_path is not None and opened_path.is_file() and not uploads:
+            result = translate.translate_page(
+                opened_path, page_num, src_lang, dst_lang, password=fields.get("password") or None,
+            )
+            return self._send(HTTPStatus.OK, result)
         with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
             path = Path(tmp) / "file.pdf"
             path.write_bytes(uploads[0][2])

@@ -272,10 +272,18 @@ def install_pack_from_zip(zip_path, expected_sha256=None):
         (dest / "ui.json").write_text(json.dumps(ui_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
         # Safely extract optional asset folders (ocr/, meaning/, models/)
+        import stat as _stat
+
         extracted_assets = []
-        for info in zf.infolist():
+        infos = zf.infolist()
+        if len(infos) > _MAX_PACK_MEMBERS:
+            raise core.PdfManagerError("language pack contains too many files; refusing to install")
+        total_written = 0
+        for info in infos:
             if info.is_dir():
                 continue
+            if _stat.S_ISLNK(info.external_attr >> 16):
+                raise core.PdfManagerError("language pack contains a symbolic link; refusing to install")
             member_norm = info.filename.replace("\\", "/").lstrip("/")
             parts = [p for p in member_norm.split("/") if p]
             if not parts or ".." in parts or "." in parts:
@@ -291,7 +299,15 @@ def install_pack_from_zip(zip_path, expected_sha256=None):
             if dest not in target.parents:
                 raise core.PdfManagerError("unsafe asset path inside language pack")
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(zf.read(info))
+            with zf.open(info, "r") as src_fh, open(target, "wb") as dst_fh:
+                while True:
+                    chunk = src_fh.read(262_144)
+                    if not chunk:
+                        break
+                    total_written += len(chunk)
+                    if total_written > _MAX_PACK_BYTES:
+                        raise core.PdfManagerError("language pack exceeds maximum extracted size; refusing to install")
+                    dst_fh.write(chunk)
             extracted_assets.append("/".join(rel_parts))
 
     _reset_meaning_cache()
@@ -393,6 +409,50 @@ def _download_progress(label, *, expected_bytes=0, frac_start=0.0, frac_end=1.0)
         _dl_progress.reset(token)
 
 
+_MAX_PACK_MEMBERS = 4096
+_MAX_PACK_BYTES = 1_500_000_000  # 1.5 GB extracted cap
+_MAX_HTTP_BYTES = 500_000_000    # 500 MB cap for in-memory _http_get_bytes
+_MAX_JSON_BYTES = 20_000_000     # 20 MB cap for AI JSON responses
+_ARGOS_CACHE_TTL_S = 86_400      # 24 h local cache TTL
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-validate redirect targets: enforce HTTPS (or loopback for local AI)
+    and strip Authorization headers on cross-origin redirects."""
+
+    def __init__(self, *, allow_local_http=False):
+        super().__init__()
+        self._allow_local_http = allow_local_http
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        import urllib.parse
+
+        orig = urllib.parse.urlsplit(req.full_url)
+        dest = urllib.parse.urlsplit(urllib.parse.urljoin(req.full_url, newurl))
+        host = (dest.hostname or "").lower()
+        is_local = host in ("localhost", "127.0.0.1", "::1")
+        if dest.scheme != "https" and not (self._allow_local_http and dest.scheme == "http" and is_local):
+            raise core.PdfManagerError(f"refusing insecure redirect to {newurl!r}")
+        if host in ("169.254.169.254", "metadata.google.internal", "0.0.0.0", "::"):
+            raise core.PdfManagerError(f"refusing unsafe redirect target {newurl!r}")
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is not None and (dest.scheme, dest.netloc) != (orig.scheme, orig.netloc):
+            for h in ("Authorization", "authorization"):
+                new_req.remove_header(h)
+                new_req.unredirected_hdrs.pop(h, None)
+        return new_req
+
+
+_ORIG_URLOPEN = urllib.request.urlopen
+
+
+def _safe_urlopen(req, *, timeout=30, allow_local_http=False):
+    if urllib.request.urlopen is not _ORIG_URLOPEN:
+        return urllib.request.urlopen(req, timeout=timeout)
+    opener = urllib.request.build_opener(_SafeRedirectHandler(allow_local_http=allow_local_http))
+    return opener.open(req, timeout=timeout)
+
+
 def _http_get_bytes(url, *, headers=None, timeout=30):
     """Download ``url`` over HTTPS and return its raw bytes (reporting byte-level
     progress when called inside ``_download_progress(...)``)."""
@@ -407,9 +467,12 @@ def _http_get_bytes(url, *, headers=None, timeout=30):
     req = urllib.request.Request(url, headers={"User-Agent": "ZPDF", **(headers or {})})
     ctx = _dl_progress.get()
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _safe_urlopen(req, timeout=timeout) as resp:
             if not ctx:
-                return resp.read()
+                data = resp.read(_MAX_HTTP_BYTES + 1)
+                if len(data) > _MAX_HTTP_BYTES:
+                    raise core.PdfManagerError("download exceeds maximum allowed size")
+                return data
             label, expected_bytes, frac_start, frac_end = ctx
             raw_len = resp.headers.get("Content-Length") if getattr(resp, "headers", None) else None
             try:
@@ -425,6 +488,8 @@ def _http_get_bytes(url, *, headers=None, timeout=30):
                     break
                 buf.extend(chunk)
                 got = len(buf)
+                if got > _MAX_HTTP_BYTES:
+                    raise core.PdfManagerError("download exceeds maximum allowed size")
                 if total_bytes > 0:
                     pct = min(100, int(got * 100 / total_bytes))
                     frac = frac_start + span * min(1.0, got / total_bytes)
@@ -438,6 +503,8 @@ def _http_get_bytes(url, *, headers=None, timeout=30):
                         fraction_in_part=frac_start,
                     )
             return bytes(buf)
+    except core.PdfManagerError:
+        raise
     except urllib.error.HTTPError as exc:
         raise core.PdfManagerError(f"download failed (HTTP {exc.code}) for {url}") from None
     except OSError as exc:
@@ -451,12 +518,17 @@ def install_argos_model_zip(zip_path, *, src_lang=None, dst_lang=None, name=None
     Only CTranslate2 weights/vocabularies and SentencePiece ``.model`` files are
     extracted (Stanza sentence-splitting data is skipped to save disk space).
     """
+    import stat as _stat
+
     src_file = Path(zip_path)
     if not src_file.is_file():
         raise core.PdfManagerError(f"model archive not found: {src_file}")
 
     with zipfile.ZipFile(src_file, "r") as zf:
-        names = zf.namelist()
+        infos = zf.infolist()
+        if len(infos) > _MAX_PACK_MEMBERS:
+            raise core.PdfManagerError("model archive contains too many files; refusing to install")
+        names = [i.filename for i in infos]
         meta_member = next(
             (n for n in names if Path(n).name == "metadata.json" and ".." not in Path(n).parts),
             None,
@@ -492,9 +564,12 @@ def install_argos_model_zip(zip_path, *, src_lang=None, dst_lang=None, name=None
         model_dest.mkdir(parents=True, exist_ok=True)
 
         extracted = []
-        for info in zf.infolist():
+        total_written = 0
+        for info in infos:
             if info.is_dir():
                 continue
+            if _stat.S_ISLNK(info.external_attr >> 16):
+                raise core.PdfManagerError("model archive contains a symbolic link; refusing to install")
             member_norm = info.filename.replace("\\", "/").lstrip("/")
             parts = [p for p in member_norm.split("/") if p]
             if not parts or ".." in parts or "." in parts:
@@ -517,7 +592,15 @@ def install_argos_model_zip(zip_path, *, src_lang=None, dst_lang=None, name=None
             if model_dest not in target.parents and target != model_dest:
                 raise core.PdfManagerError("unsafe file path inside model archive")
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(zf.read(info))
+            with zf.open(info, "r") as src_fh, open(target, "wb") as dst_fh:
+                while True:
+                    chunk = src_fh.read(262_144)
+                    if not chunk:
+                        break
+                    total_written += len(chunk)
+                    if total_written > _MAX_PACK_BYTES:
+                        raise core.PdfManagerError("model archive exceeds maximum extracted size; refusing to install")
+                    dst_fh.write(chunk)
             extracted.append("/".join(rel_parts))
 
     if not extracted:
@@ -629,8 +712,19 @@ def _parse_argos_entries(raw_list):
 
 
 def fetch_argos_index(use_cache=True):
-    """Fetch the public Argos Translate package index (with local cache fallback)."""
+    """Fetch the public Argos Translate package index (with local 24 h TTL cache)."""
+    import time as _time
+
     cache_path = packs_dir() / _ARGOS_INDEX_CACHE
+    if use_cache and cache_path.is_file():
+        try:
+            age = _time.time() - cache_path.stat().st_mtime
+            if 0 <= age < _ARGOS_CACHE_TTL_S:
+                cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                if isinstance(cached, list) and cached:
+                    return _parse_argos_entries(cached)
+        except (OSError, ValueError):
+            pass
     try:
         raw = _http_get_bytes(ARGOS_INDEX_URL, timeout=15)
         parsed = json.loads(raw.decode("utf-8"))
@@ -770,7 +864,7 @@ def _http_download_to_file(
     req = urllib.request.Request(url, headers={"User-Agent": "ZPDF"})
     tmp_path = Path(dest_path).with_suffix(Path(dest_path).suffix + ".part")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp, open(tmp_path, "wb") as fh:
+        with _safe_urlopen(req, timeout=timeout) as resp, open(tmp_path, "wb") as fh:
             raw_len = resp.headers.get("Content-Length") if getattr(resp, "headers", None) else None
             try:
                 total_bytes = int(raw_len) if raw_len else int(expected_bytes or 0)
@@ -831,8 +925,13 @@ def _http_post_json(url, payload, *, headers=None, timeout=180):
     req_headers = {"Content-Type": "application/json", "User-Agent": "ZPDF", **(headers or {})}
     req = urllib.request.Request(url, data=body, headers=req_headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        with _safe_urlopen(req, timeout=timeout, allow_local_http=is_local) as resp:
+            raw = resp.read(_MAX_JSON_BYTES + 1)
+            if len(raw) > _MAX_JSON_BYTES:
+                raise core.PdfManagerError("AI translation response exceeded maximum size")
+            return json.loads(raw.decode("utf-8"))
+    except core.PdfManagerError:
+        raise
     except urllib.error.HTTPError as exc:
         detail = ""
         try:
@@ -928,11 +1027,10 @@ def download_and_install_pack(code, *, pair=None, source=None):
         if zpack:
             expected_sha = None
             if zpack.get("sha256_url"):
-                try:
-                    sha_raw = _http_get_bytes(zpack["sha256_url"], timeout=20).decode("utf-8", errors="ignore")
-                    expected_sha = _parse_sha256_text(sha_raw)
-                except core.PdfManagerError:
-                    expected_sha = None
+                sha_raw = _http_get_bytes(zpack["sha256_url"], timeout=20).decode("utf-8", errors="ignore")
+                expected_sha = _parse_sha256_text(sha_raw)
+                if not expected_sha:
+                    raise core.PdfManagerError("invalid language pack checksum file; refusing to install")
             progress.check()
             dl_label = f"Downloading {norm_code} language pack"
             progress.report(message=f"{dl_label}…", fraction_in_part=0.05)

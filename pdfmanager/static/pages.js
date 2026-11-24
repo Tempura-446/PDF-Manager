@@ -345,19 +345,30 @@ export class PageBoard {
     if (this.rendering.has(page)) return this.rendering.get(page);
     const gen = this.gen, doc = this.doc;
     const job = (async () => {
-      const pg = await doc.getPage(page + 1);
-      const base = pg.getViewport({ scale: 1 });
-      const ratio = Math.min(window.devicePixelRatio || 1, 2);
-      const viewport = pg.getViewport({ scale: (THUMB * ratio) / Math.max(base.width, base.height) });
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
-      await pg.render({ canvas, viewport }).promise;
-      pg.cleanup();
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
-      if (gen !== this.gen || !blob) return null;
-      const url = URL.createObjectURL(blob);
-      this.thumbs.set(page, url);
-      return url;
+      try {
+        const pg = await doc.getPage(page + 1);
+        const base = pg.getViewport({ scale: 1 });
+        const ratio = Math.min(window.devicePixelRatio || 1, 2);
+        const viewport = pg.getViewport({ scale: (THUMB * ratio) / Math.max(base.width, base.height) });
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+        await pg.render({ canvas, viewport }).promise;
+        pg.cleanup();
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+        canvas.width = 0; canvas.height = 0;
+        if (gen !== this.gen || !blob) return null;
+        const url = URL.createObjectURL(blob);
+        this.thumbs.set(page, url);
+        if (this.thumbs.size > 120) {
+          const oldest = this.thumbs.keys().next().value;
+          const oldUrl = this.thumbs.get(oldest);
+          if (oldUrl) URL.revokeObjectURL(oldUrl);
+          this.thumbs.delete(oldest);
+        }
+        return url;
+      } finally {
+        this.rendering.delete(page);
+      }
     })();
     this.rendering.set(page, job);
     return job;

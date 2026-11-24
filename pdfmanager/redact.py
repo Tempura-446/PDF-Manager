@@ -392,7 +392,13 @@ def redact(path, output, terms=(), patterns=(), boxes=None, case_sensitive=False
     from pdfmanager import auditlog
 
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    who = str(actor) if actor else getpass.getuser()
+    if actor:
+        who = str(actor)
+    else:
+        try:
+            who = getpass.getuser()
+        except Exception:
+            who = "unknown"
     reason_str = str(reason_code).strip() if reason_code else ""
     redaction_log = [
         {

@@ -205,6 +205,8 @@ class _SubwordBpe:
                 out.append(sym + "@@")
             else:
                 out.append(sym[:-4] if sym.endswith("</w>") else sym)
+        if len(self._cache) >= 50_000:
+            self._cache.clear()
         self._cache[word] = out
         return out
 
@@ -235,9 +237,11 @@ def _load_tokenizer(model_path, spm):
 import collections
 import threading
 
-_CT2_CACHE = collections.OrderedDict()
+_CT2_CACHE = collections.OrderedDict()  # key -> (entry, est_bytes)
 _CT2_CACHE_LOCK = threading.Lock()
+_CT2_KEY_LOCKS = {}
 _CT2_CACHE_MAX = 2
+_CT2_CACHE_MAX_BYTES = 4_000_000_000  # 4 GB byte budget (allows 1× 3.3B or 2× smaller models)
 
 
 def clear_model_cache():
@@ -247,44 +251,58 @@ def clear_model_cache():
 
 
 def _get_cached_ct2(ct2_dir, sp_src_path, sp_tgt_path, ctranslate2, spm):
-    """Return ``(translator, sp_src, sp_tgt)`` from an in-memory LRU cache (size 2),
-    keyed by model directory, tokenizer paths, and ``model.bin`` mtime so re-downloaded
-    packs automatically invalidate stale entries."""
+    """Return ``(translator, sp_src, sp_tgt)`` from a byte-budgeted in-memory LRU
+    cache with per-key single-flight loading, keyed by model directory, tokenizer
+    paths, and ``model.bin`` mtime so re-downloaded packs invalidate stale entries."""
     resolved = str(Path(ct2_dir).resolve())
     model_bin = Path(ct2_dir) / "model.bin"
     try:
-        mtime = model_bin.stat().st_mtime_ns
+        st = model_bin.stat()
+        mtime = st.st_mtime_ns
+        est_bytes = st.st_size
     except OSError:
         mtime = 0
+        est_bytes = 0
     key = (resolved, str(sp_src_path), str(sp_tgt_path), mtime, id(ctranslate2))
     with _CT2_CACHE_LOCK:
         hit = _CT2_CACHE.get(key)
         if hit is not None:
             _CT2_CACHE.move_to_end(key)
-            return hit
-    sp_src = _load_tokenizer(sp_src_path, spm)
-    sp_tgt = sp_src if sp_tgt_path == sp_src_path else _load_tokenizer(sp_tgt_path, spm)
-    tr = None
-    try:
-        if hasattr(ctranslate2, "get_cuda_device_count") and ctranslate2.get_cuda_device_count() > 0:
-            tr = ctranslate2.Translator(str(ct2_dir), device="cuda")
-    except Exception:  # noqa: BLE001 - fall back cleanly to CPU
-        tr = None
-    if tr is None:
-        import os
+            return hit[0]
+        key_lock = _CT2_KEY_LOCKS.setdefault(key, threading.Lock())
 
-        threads = min(8, max(2, (os.cpu_count() or 4) // 2))
+    with key_lock:
+        with _CT2_CACHE_LOCK:
+            hit = _CT2_CACHE.get(key)
+            if hit is not None:
+                _CT2_CACHE.move_to_end(key)
+                return hit[0]
+        sp_src = _load_tokenizer(sp_src_path, spm)
+        sp_tgt = sp_src if sp_tgt_path == sp_src_path else _load_tokenizer(sp_tgt_path, spm)
+        tr = None
         try:
-            tr = ctranslate2.Translator(str(ct2_dir), device="cpu", intra_threads=threads, inter_threads=1)
-        except TypeError:
-            tr = ctranslate2.Translator(str(ct2_dir), device="cpu")
-    entry = (tr, sp_src, sp_tgt)
-    with _CT2_CACHE_LOCK:
-        _CT2_CACHE[key] = entry
-        _CT2_CACHE.move_to_end(key)
-        while len(_CT2_CACHE) > _CT2_CACHE_MAX:
-            _CT2_CACHE.popitem(last=False)
-    return entry
+            if hasattr(ctranslate2, "get_cuda_device_count") and ctranslate2.get_cuda_device_count() > 0:
+                tr = ctranslate2.Translator(str(ct2_dir), device="cuda")
+        except Exception:  # noqa: BLE001 - fall back cleanly to CPU
+            tr = None
+        if tr is None:
+            import os
+
+            threads = min(8, max(2, (os.cpu_count() or 4) // 2))
+            try:
+                tr = ctranslate2.Translator(str(ct2_dir), device="cpu", intra_threads=threads, inter_threads=1)
+            except TypeError:
+                tr = ctranslate2.Translator(str(ct2_dir), device="cpu")
+        entry = (tr, sp_src, sp_tgt)
+        with _CT2_CACHE_LOCK:
+            _CT2_CACHE[key] = (entry, est_bytes)
+            _CT2_CACHE.move_to_end(key)
+            total_bytes = sum(b for _, b in _CT2_CACHE.values())
+            while len(_CT2_CACHE) > 1 and (len(_CT2_CACHE) > _CT2_CACHE_MAX or total_bytes > _CT2_CACHE_MAX_BYTES):
+                _, (_, evicted_bytes) = _CT2_CACHE.popitem(last=False)
+                total_bytes -= evicted_bytes
+            _CT2_KEY_LOCKS.pop(key, None)
+        return entry
 
 
 _ZH_TRAD_CHARS = set("這為們個說會時國學體點對關開門車書長發經與從進還實務業")
@@ -457,6 +475,7 @@ def _translate_ct2_bucketed(tr, tokenized, *, target_prefix_token=None):
     for name, items in buckets.items():
         if not items:
             continue
+        progress.check()
         batch_toks = [t for _, t in items]
         max_src = max(len(t) for t in batch_toks)
         if name == "short":
@@ -479,6 +498,7 @@ def _translate_ct2_bucketed(tr, tokenized, *, target_prefix_token=None):
             hyp = list(res.hypotheses[0])
             # Guard against short-heading runaway hallucinations (> 3.5x source token count)
             if len(src_toks) <= 24 and len(hyp) > max(32, int(len(src_toks) * 3.5)):
+                progress.check()
                 retry_kwargs = {
                     "beam_size": 2,
                     "repetition_penalty": 1.35,
@@ -763,6 +783,7 @@ def _load_llm_translator(src_lang, dst_lang, *, api_url, model, api_key="", glos
     def _call_batch(items):
         import json
 
+        progress.check()
         payload = {
             "model": model_name,
             "temperature": 0.1,
@@ -771,7 +792,7 @@ def _load_llm_translator(src_lang, dst_lang, *, api_url, model, api_key="", glos
                 {"role": "user", "content": json.dumps(items, ensure_ascii=False)},
             ],
         }
-        resp = i18n._http_post_json(endpoint, payload, headers=headers)
+        resp = i18n._http_post_json(endpoint, payload, headers=headers, timeout=60)
         choices = resp.get("choices") or []
         content = ((choices[0].get("message") or {}).get("content") or "") if choices else ""
         parsed = _parse_llm_json_list(content, len(items))
@@ -780,12 +801,17 @@ def _load_llm_translator(src_lang, dst_lang, *, api_url, model, api_key="", glos
         if len(items) == 1:
             return [content.strip() or items[0]]
         # Fallback: translate individually if the model returned a mismatched JSON array length
-        return [_call_batch([item])[0] for item in items]
+        out_single = []
+        for item in items:
+            progress.check()
+            out_single.append(_call_batch([item])[0])
+        return out_single
 
     def _llm_batch(batch):
         out = []
         chunk_size = 10
         for i in range(0, len(batch), chunk_size):
+            progress.check()
             out.extend(_call_batch(list(batch[i : i + chunk_size])))
         return out
 
@@ -1261,10 +1287,12 @@ def _make_text_page(width, height, text, font_name=None, font_size=10):
     return PdfReader(buf).pages[0]
 
 
-def _translate_annotations_and_fields(writer, src_lang, dst_lang, translator):
+def _translate_annotations_and_fields(writer, src_lang, dst_lang, translator, selected_pages=None):
     """Translate annotation /Contents and text form field values in-place on ``writer``."""
     targets = []
-    for page in writer.pages:
+    for page_idx, page in enumerate(writer.pages):
+        if selected_pages is not None and page_idx not in selected_pages:
+            continue
         annots = page.get("/Annots")
         if hasattr(annots, "get_object"):
             annots = annots.get_object()
@@ -2013,7 +2041,11 @@ def _render_page_bg(pdfium_doc, page_index):
         return None
     try:
         with core.PDFIUM_LOCK:
-            return pdfium_doc[page_index].render(scale=1.0).to_pil().convert("RGB")
+            page = pdfium_doc[page_index]
+            try:
+                return page.render(scale=1.0).to_pil().convert("RGB")
+            finally:
+                page.close()
     except Exception:  # noqa: BLE001
         return None
 
@@ -2085,6 +2117,8 @@ def translate_pdf(
                     work_src = ocr_out
                     reader = core.open_pdf(work_src, password=password)
                     ocr_applied = True
+            except progress.Cancelled:
+                raise
             except Exception:  # noqa: BLE001 - continue gracefully if OCR unavailable
                 pass
 
@@ -2139,6 +2173,8 @@ def translate_pdf(
                         fraction_in_part=0.05 + 0.10 * ((step_i + 1) / total_sel),
                     )
                     pages_blocks[page_idx] = _extract_layout_blocks(pdoc.pages[page_idx])
+        except progress.Cancelled:
+            raise
         except Exception:  # noqa: BLE001 - fall back to plain text pages if pdfplumber fails
             pages_blocks = [[] for _ in range(total_doc_pages)]
 
@@ -2307,13 +2343,15 @@ def translate_pdf(
                     raw_txt = (orig_page.extract_text() or "").strip()
                     if not raw_txt:
                         empty_pages += 1
-                    fallback = "\n\n".join(
-                        translate_texts(_extract_paragraphs(raw_txt), resolved_src, dst_lang, translator=fn)
-                    ) if raw_txt else ""
-                    new_page = _make_text_page(w, h, _shape_rtl(fallback, dst_lang))
-                    if "/Annots" in orig_page:
-                        new_page[NameObject("/Annots")] = orig_page["/Annots"]
-                    writer.add_page(new_page)
+                        writer.add_page(orig_page)
+                    else:
+                        fallback = "\n\n".join(
+                            translate_texts(_extract_paragraphs(raw_txt), resolved_src, dst_lang, translator=fn)
+                        )
+                        new_page = _make_text_page(w, h, _shape_rtl(fallback, dst_lang))
+                        if "/Annots" in orig_page:
+                            new_page[NameObject("/Annots")] = orig_page["/Annots"]
+                        writer.add_page(new_page)
             # Copy & translate document bookmarks (/Outlines) when present
             if "/Outlines" in reader.root_object:
                 try:
@@ -2323,7 +2361,9 @@ def translate_pdf(
                         writer._root_object[NameObject("/Outlines")] = outlines_ref.clone(writer)
                 except Exception:  # noqa: BLE001
                     pass
-            updated_items = _translate_annotations_and_fields(writer, resolved_src, dst_lang, fn)
+            updated_items = _translate_annotations_and_fields(
+                writer, resolved_src, dst_lang, fn, selected_pages=selected_set
+            )
             translated_bookmarks = _translate_outlines(writer, resolved_src, dst_lang, fn)
             with open(dst, "wb") as fh:
                 writer.write(fh)

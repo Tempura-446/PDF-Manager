@@ -52,11 +52,11 @@ async function openSettings() {
   $("set-token-clear").hidden = !s.token_set;
   updateStatus("set-status", "");
   updateStatus("lang-status", "");
+  updateStatus("watch-status", "");
   updateStatus("filing-status", "");
   try { await loadLanguages(); } catch (e) { updateStatus("lang-status", e.message, true); }
   try { await loadWatch(); } catch (e) { updateStatus("watch-status", e.message, true); }
   try { if (typeof loadFilingRules === "function") await loadFilingRules(); } catch (e) { updateStatus("filing-status", e.message, true); }
-  updateStatus("watch-status", "");
   try {
     const menu = await jsonApi("/api/shellmenu");
     $("shell-menu").hidden = !menu.available;
@@ -121,6 +121,16 @@ function renderLanguageState(info) {
     rm.className = "link-btn";
     rm.textContent = "Remove";
     rm.addEventListener("click", async () => {
+      if (typeof appAsk === "function") {
+        const ok = await appAsk({
+          title: `Remove ${p.name} language pack?`,
+          text: `This deletes the downloaded offline pack (${p.code}) from disk. You can re-download it later.`,
+          yes: "Remove",
+          no: "Cancel",
+          danger: true,
+        });
+        if (!ok) return;
+      }
       try {
         await jsonApi("/api/i18n/packs/remove", { code: p.code });
         await loadLanguages();
@@ -134,6 +144,7 @@ function renderLanguageState(info) {
 }
 
 let langCatalogCache = null;
+let langDlBusy = false;
 
 function renderLangCatalog(catalog) {
   const list = $("set-pack-catalog");
@@ -157,6 +168,9 @@ function renderLangCatalog(catalog) {
     if (n >= 1_000_000) return `${prefix}${Math.round(n / 1_000_000)} MB`;
     return `${prefix}${Math.max(1, Math.round(n / 1_000))} KB`;
   };
+  const setAllDownloadBtns = (disabled) => {
+    for (const b of list.querySelectorAll("button.lang-dl-btn")) b.disabled = disabled;
+  };
   list.replaceChildren(...items.map((p) => {
     const li = document.createElement("li");
     li.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;";
@@ -168,11 +182,14 @@ function renderLangCatalog(catalog) {
     label.textContent = `${p.name} (${p.code}) — ${srcTag}${sizePart}${pairsText}`;
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "link-btn";
+    btn.className = "link-btn lang-dl-btn";
     const idleLabel = p.has_translate ? "Re-download" : (sizeText ? `Download (${sizeText})` : "Download");
     btn.textContent = idleLabel;
+    btn.disabled = langDlBusy;
     btn.addEventListener("click", async () => {
-      btn.disabled = true;
+      if (langDlBusy) return;
+      langDlBusy = true;
+      setAllDownloadBtns(true);
       btn.textContent = "Downloading…";
       const dlWrap = $("lang-dl-wrap"), dlBar = $("lang-dl-bar"), dlCancel = $("lang-dl-cancel");
       let activeJobId = null, wasCancelled = false;
@@ -217,7 +234,6 @@ function renderLangCatalog(catalog) {
             body: JSON.stringify({ code: p.code, source: p.source }),
           }, langDlUi);
           if (!resp || wasCancelled) {
-            btn.disabled = false;
             btn.textContent = idleLabel;
             updateStatus("lang-status", `Cancelled downloading ${p.name}.`);
             return;
@@ -229,13 +245,16 @@ function renderLangCatalog(catalog) {
         await loadLanguages();
         const fresh = await jsonApi("/api/i18n/catalog");
         langCatalogCache = fresh;
+        langDlBusy = false;
         renderLangCatalog(fresh);
         const pairs = res.installed_pairs?.length ? ` (${res.installed_pairs.join(", ")})` : "";
         updateStatus("lang-status", `Installed ${p.name}${pairs}. Ready for offline translation.`);
       } catch (err) {
-        btn.disabled = false;
         btn.textContent = idleLabel;
         updateStatus("lang-status", err.message, true);
+      } finally {
+        langDlBusy = false;
+        setAllDownloadBtns(false);
       }
     });
     li.append(label, btn);
@@ -253,7 +272,7 @@ $("set-language")?.addEventListener("change", async (e) => {
   try {
     const info = await jsonApi("/api/i18n/language", { language: e.target.value });
     renderLanguageState(info);
-    if (window.ZpdfI18n?.load) await window.ZpdfI18n.load(TOKEN);
+    if (window.ZpdfI18n?.load) await window.ZpdfI18n.load(token);
     updateStatus("lang-status", `Language set to ${e.target.value}.`);
   } catch (err) { updateStatus("lang-status", err.message, true); }
 });
@@ -368,6 +387,16 @@ $("set-remember").addEventListener("change", async (e) => {
   } catch (err) { e.target.checked = !e.target.checked; updateStatus("privacy-status", err.message, true); }
 });
 $("set-clear-history").addEventListener("click", async () => {
+  if (typeof appAsk === "function") {
+    const ok = await appAsk({
+      title: "Clear history?",
+      text: "This forgets recent files and saved reading positions on this computer.",
+      yes: "Clear history",
+      no: "Cancel",
+      danger: true,
+    });
+    if (!ok) return;
+  }
   try {
     const s = await jsonApi("/api/history/clear", {});
     const places = forgetPlaces();
@@ -454,10 +483,25 @@ async function saveSettings() {
   const data = { check: $("set-check").checked, repo: $("set-repo").value.trim(),
                  ocr_quality: $("set-ocr-quality").value, ocr_gpu: $("set-ocr-gpu").checked };
   if ($("set-token").value.trim()) data.token = $("set-token").value.trim();
+  if ($("set-translate-engine")) {
+    data.translate_engine = $("set-translate-engine").value;
+    if ($("set-translate-url")) data.translate_api_url = $("set-translate-url").value.trim();
+    if ($("set-translate-model")) data.translate_model = $("set-translate-model").value.trim();
+    const tKey = $("set-translate-key")?.value.trim();
+    if (tKey) data.translate_api_key = tKey;
+  }
+  if ($("set-translate-glossary")) {
+    data.translate_glossary = $("set-translate-glossary").value.trim();
+  }
   const s = await jsonApi("/api/settings", data);
   $("set-token").value = "";
   $("set-token-state").textContent = s.token_set ? "· saved" : "";
   $("set-token-clear").hidden = !s.token_set;
+  if ($("set-translate-key")) {
+    $("set-translate-key").value = "";
+    $("set-translate-key-state").textContent = s.translate_key_set ? "· saved" : "";
+    $("set-translate-key-clear").hidden = !s.translate_key_set;
+  }
   return s;
 }
 $("settings-btn").addEventListener("click", () => openSettings().catch((e) => showError(e.message)));
@@ -637,5 +681,5 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) ping
 
 // In the desktop window, re-render once pywebview's API is ready (adds Browse… buttons).
 window.addEventListener("pywebviewready", () => { if (current && current.fields) renderForm(); });
-window.ZpdfI18n?.load?.(TOKEN)?.catch?.(() => {});
+window.ZpdfI18n?.load?.(token)?.catch?.(() => {});
 load();

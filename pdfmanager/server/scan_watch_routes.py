@@ -129,7 +129,7 @@ class ScanWatchRoutesMixin:
     def _scan_make(self, box, data):
         """The PDF from the box's pages, in the order and turned as asked."""
         wanted = data.get("pages") or []
-        if not isinstance(wanted, list) or not wanted:
+        if not isinstance(wanted, list) or not wanted or not all(isinstance(p, dict) for p in wanted):
             raise UserError("there are no pages yet: scan or add some first")
         pages = [box.page(str(p.get("id", "")), _num(p.get("turn"), int, 0)) for p in wanted]
         options = {"straighten": _bool(data.get("straighten", True)),
@@ -336,9 +336,18 @@ class ScanWatchRoutesMixin:
 
         data = json.loads(body or b"{}")
         cfg = update.settings()
-        api_url = str(data.get("translate_api_url") or cfg.get("translate_api_url") or "http://localhost:11434/v1").strip()
+        saved_url = str(cfg.get("translate_api_url") or "http://localhost:11434/v1").strip()
+        req_url = str(data.get("translate_api_url") or "").strip()
+        api_url = req_url or saved_url
         model = str(data.get("translate_model") or cfg.get("translate_model") or "qwen2.5:7b").strip()
-        api_key = str(data.get("translate_api_key") or cfg.get("translate_api_key") or "").strip()
+        req_key = str(data.get("translate_api_key") or "").strip()
+        # Only fall back to the stored key when testing the saved endpoint (prevents key exfiltration).
+        if req_key:
+            api_key = req_key
+        elif not req_url or req_url.rstrip("/") == saved_url.rstrip("/"):
+            api_key = str(cfg.get("translate_api_key") or "").strip()
+        else:
+            api_key = ""
         t0 = time.monotonic()
         fn = translate._load_llm_translator("en", "es", api_url=api_url, model=model, api_key=api_key)
         sample = fn(["Hello world"])[0]

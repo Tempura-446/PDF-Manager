@@ -936,6 +936,11 @@ const SYNONYMS = {
   search: "find look for folder", rotate: "turn", delete: "remove pages", repair: "fix mend broken damaged",
   scan: "scanner paper camera photo phone digitise digitize feeder flatbed wia",
   "flatten-layers": "layers optional content ocg cad drawing dwg plan blueprint hide",
+  translate: "language bilingual spanish chinese french german japanese korean arabic offline ai llm",
+  "from-drawing": "cad dxf dwg autocad blueprint plan",
+  "to-dxf": "cad dxf vector autocad export",
+  "sheet-sets": "cad sheets titleblock drawing set split",
+  "compare-sets": "cad sheets revision diff drawing set",
 };
 
 // ---- keyboard shortcuts (?, or "shortcuts" in the palette) ------------------------
@@ -1003,7 +1008,11 @@ function renderPalette() {
   list.replaceChildren();
   palette.shown = paletteMatch($("palette-input").value);
   palette.at = Math.min(palette.at, Math.max(0, palette.shown.length - 1));
-  if (!palette.shown.length) { list.append(el("li", { class: "palette-empty" }, "Nothing matches. Try another word.")); return; }
+  if (!palette.shown.length) {
+    $("palette-input").removeAttribute("aria-activedescendant");
+    list.append(el("li", { class: "palette-empty" }, "Nothing matches. Try another word."));
+    return;
+  }
   const grouped = !$("palette-input").value.trim();
   let group = null;
   palette.shown.forEach((c, i) => {
@@ -1238,11 +1247,12 @@ async function select(id) {
   $("run-label").textContent = current.action || (folder ? "Apply" : "Run");
   $("run").classList.toggle("secondary", previews);
   $("preview").classList.toggle("secondary", !previews);
-  $("file-input").accept = { images: "image/*", office: OFFICE_ACCEPT, web: WEB_ACCEPT }[current.files] || ".pdf,application/pdf";
+  $("file-input").accept = { images: "image/*", office: OFFICE_ACCEPT, web: WEB_ACCEPT, drawing: DRAWING_ACCEPT }[current.files] || ".pdf,application/pdf";
   $("drop-hint").textContent = {
     images: "JPG, PNG, TIFF… one page per image, in this order",
     office: "Word, Excel, PowerPoint, OpenDocument, RTF, text or web page files",
     web: "Saved web pages (.html, .mht) — or type an address under Options",
+    drawing: "CAD drawings (.dxf, .dwg)",
     pdf2: current.id === "compare" ? "Two PDFs: the original first, then the changed version" : "Two PDFs: front sides first, then back sides",
   }[current.files] || (current.id === "merge" ? "Add PDFs in the order to combine them" : "One or more PDFs");
   if (keep) { syncDropFirst(); return; }

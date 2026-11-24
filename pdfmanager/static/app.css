@@ -267,7 +267,8 @@ main:focus { outline: none; }  /* the skip link's target: the page itself needs 
 .dlg-field { display: flex; flex-direction: column; gap: 5px; font-size: var(--fs-sm); color: var(--muted); }
 .dlg-field > span { font-weight: 600; color: var(--text-2); }
 .dlg-field em { font-style: normal; color: var(--ok); }
-.dlg-field input, .dlg-field select { height: 38px; padding: 0 11px; border: 1px solid var(--input-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; transition: border-color var(--t), box-shadow var(--t); }
+.dlg-field input, .dlg-field select, .dlg-field textarea, #set-pack-filter { height: 38px; padding: 0 11px; border: 1px solid var(--input-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; transition: border-color var(--t), box-shadow var(--t); }
+.dlg-field textarea { height: auto; min-height: 76px; padding: 8px 11px; resize: vertical; }
 .dlg-field.inline { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
 .dlg-field.inline select { min-width: 160px; }
 .dlg-status { min-height: 1.3em; flex-shrink: 0; font-size: var(--fs-sm) !important; line-height: 1.5; color: var(--ok); }  /* (never squeezed to one line by the scrolling dialog) */
@@ -626,7 +627,7 @@ select.re-name { width: auto; max-width: 128px; }
   .palette-item[aria-selected="true"] .sub { color: HighlightText; background: none; }
   :focus-visible { outline-color: Highlight !important; }
 }
-.field input:focus, .field select:focus, .pw-row input:focus, .dlg-field input:focus, .dlg-field select:focus,
+.field input:focus, .field select:focus, .pw-row input:focus, .dlg-field input:focus, .dlg-field select:focus, .dlg-field textarea:focus, #set-pack-filter:focus,
 .rc-picker:focus, .rc-add:focus, .rc-name:focus, .re-name:focus, .bm-title:focus, .bm-page:focus,
 .find:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--accent); box-shadow: none; }  /* 3:1, like every other ring */
 .field input[aria-invalid="true"], .field select[aria-invalid="true"] { border-color: var(--err); }
@@ -738,8 +739,10 @@ body:has(.btn.busy) .btn:disabled { cursor: progress; }  /* waiting for a job, n
 .message .err-more code { display: block; margin-top: 2px; font: var(--fs-xs)/1.4 var(--mono); color: var(--text-2); overflow-wrap: anywhere; }
 .message.err { background: var(--err-soft); color: var(--err); }
 /* What went wrong with the last run, by the button that ran it (the full message is at the top). */
+.btn.sm { height: 28px; padding: 0 10px; font-size: var(--fs-sm); }
 .action-bar .run-err { color: var(--err); font-size: var(--fs-sm); line-height: 1.4;
   overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.action-bar .run-err:has(button) { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; -webkit-line-clamp: unset; overflow: visible; }
 .action-bar .run-err[hidden] { display: none; }
 .action-bar .run-err svg.i { width: 14px; height: 14px; vertical-align: -2px; margin-right: 5px; stroke-width: 2; }
 /* Files kept from the last tool: said, with Clear. */

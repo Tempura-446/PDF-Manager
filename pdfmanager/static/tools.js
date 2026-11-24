@@ -17,7 +17,7 @@ function addFiles(list) {
   renderFiles();
   clearMessages();
   if (twice && !rejected) appToast(twice === 1 ? "That file is already in the list." : `${plural(twice, "file")} were already in the list.`);
-  if (rejected) showError(`${plural(rejected, "file")} skipped — only ${{ images: "images", office: "Word, Excel, PowerPoint, OpenDocument, RTF, text or web page files", web: "saved web pages (.html, .mht)" }[current.files] || "PDFs"} can be used here.`);
+  if (rejected) showError(`${plural(rejected, "file")} skipped — only ${{ images: "images", office: "Word, Excel, PowerPoint, OpenDocument, RTF, text or web page files", web: "saved web pages (.html, .mht)", drawing: "DXF or DWG drawings" }[current.files] || "PDFs"} can be used here.`);
 }
 
 async function inspect(it) {
@@ -230,6 +230,11 @@ const TAGLINES = {
   /* -- pptx and html -- */
   "to-pptx": "Turn pages into editable slides", "to-html": "Make a web page from a PDF",
   "to-md": "Convert PDFs to structured Markdown",
+  translate: "Translate PDFs offline or with Smart AI (side-by-side, bilingual, or in-place)",
+  "to-dxf": "Export vector lines, layers and text to CAD DXF",
+  "from-drawing": "Convert DXF or DWG CAD drawings to layered PDFs",
+  "sheet-sets": "Split, name or cross-link multi-sheet drawing sets",
+  "compare-sets": "Compare two drawing-set revisions sheet by sheet",
   /* -- end of pptx and html -- */
   recipe: "Run several tools in one go", organize: "Sort a folder into subfolders", rename: "Rename files from their details",
   duplicates: "Find identical PDFs", search: "Find words, or answer a question, across a folder",
@@ -276,15 +281,14 @@ async function renderHome() {
   const host = $("home-host");
   const input = el("input", { type: "file", accept: ".pdf,application/pdf", multiple: true, hidden: true });
   input.addEventListener("change", () => { if (input.files.length) openFilesInReader(input.files); input.value = ""; });
-  const drop = el("div", { class: "start-drop", role: "button", tabindex: "0", "aria-label": "Open PDFs to read" },
+  const drop = el("div", { class: "start-drop" },
     icon("upload"),
     el("div", {}, el("b", {}, "Drop PDFs here"), ", or choose them from your computer.", el("br"), "Nothing leaves this PC."),
     el("div", { class: "start-acts" },
       el("button", { type: "button", class: "btn seal", onclick: (e) => { e.stopPropagation(); input.click(); } }, icon("reader"), "Open a PDF"),
       ops.some((o) => o.id === "scan") ? el("button", { type: "button", class: "btn secondary", "data-tool": "scan", title: TAGLINES.scan,
         onclick: (e) => { e.stopPropagation(); select("scan"); } }, icon("scan"), "Scan paper") : null));
-  drop.addEventListener("click", () => input.click());
-  drop.addEventListener("keydown", (e) => { if (e.target === drop && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); input.click(); } });
+  drop.addEventListener("click", (e) => { if (!e.target.closest("button")) input.click(); });
   drop.addEventListener("dragover", (e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); drop.classList.add("over"); } });
   drop.addEventListener("dragleave", () => drop.classList.remove("over"));
   drop.addEventListener("drop", (e) => { drop.classList.remove("over"); if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); openFilesInReader(e.dataTransfer.files); } });
@@ -764,7 +768,7 @@ function renderFields(op, form, prefix, empty) {
       // Limits first, then the value: set the other way, the browser rounds it to the default step.
       input = el("input", { id, name: f.key, type: "range", min: f.min, max: f.max, step: f.step || "any" });
       input.value = f.default ?? "";
-    } else if (f.kind === "check") {
+    } else if (f.kind === "check" || f.kind === "checkbox") {
       input = el("input", { id, name: f.key, type: "checkbox", checked: !!f.default });
     } else if (f.kind === "file") {
       input = el("input", { id, name: f.key, type: "file", accept: f.accept || "", multiple: !!f.multiple });
@@ -787,7 +791,7 @@ function renderFields(op, form, prefix, empty) {
       } }, "Browse…"));
     }
     const wide = PATH_FIELDS.has(f.key) || (f.hint && f.hint.length > 60);
-    const wrap = f.kind === "check"
+    const wrap = (f.kind === "check" || f.kind === "checkbox")
       ? el("div", { class: "field check" + (wide ? " wide" : ""), "data-key": f.key }, input, el("label", { for: id }, f.label))
       : el("div", { class: "field" + (wide ? " wide" : ""), "data-key": f.key }, el("label", { for: id }, f.label), control);
     if (f.strength) {
@@ -871,7 +875,11 @@ function updateVisibility(op = current, form = $("form"), prefix = "f-") {
   for (const f of op.fields) {
     if (!f.show_if) continue;
     // (In the form, which may not be on the page yet.)
-    const ok = Object.entries(f.show_if).every(([k, v]) => form.querySelector("#" + CSS.escape(prefix + k))?.value === v);
+    const ok = Object.entries(f.show_if).every(([k, v]) => {
+      const el = form.querySelector("#" + CSS.escape(prefix + k));
+      const val = el?.type === "checkbox" ? el.checked : el?.value;
+      return Array.isArray(v) ? v.includes(val) : val === v;
+    });
     form.querySelector(`.field[data-key="${f.key}"]`).hidden = !ok;
   }
 }
@@ -879,14 +887,21 @@ function collectOptions(op = current, prefix = "f-") {
   const opts = {}, extra = {};
   for (const f of op.fields) {
     const input = $(prefix + f.key);
-    if (f.kind === "check") opts[f.key] = input.checked ? "true" : "false";
+    if (f.kind === "check" || f.kind === "checkbox") opts[f.key] = input.checked ? "true" : "false";
     else if (f.kind === "file") { if (input.files[0]) extra[f.key] = f.multiple ? [...input.files] : input.files[0]; }
     else opts[f.key] = input.value;
   }
   return { opts, extra };
 }
-/** The first required field left empty, if any. */
-function firstMissing(op, prefix) { return op.fields.find((f) => f.required && !$(prefix + f.key).value.trim()); }
+/** The first required visible field left empty, if any. */
+function firstMissing(op, prefix) {
+  return op.fields.find((f) => {
+    if (!f.required) return false;
+    const inp = $(prefix + f.key);
+    if (inp?.closest(".field")?.hidden) return false;
+    return !inp.value.trim();
+  });
+}
 function missingField() {
   const f = firstMissing(current, "f-");
   if (f) foldForm(null);  // (a folded form opens to show the field)

@@ -327,12 +327,17 @@ export const ReaderNav = (Base) => class extends Base {
         const canvas = el("canvas", { width: Math.ceil(viewport.width), height: Math.ceil(viewport.height) });
         await page.render({ canvas, viewport, annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS,
           optionalContentConfigPromise: this._layerConfigPromise() }).promise;  // (the layers shown)
-        if (t !== this.thumbs || doc !== this.doc) break;
+        page.cleanup();
+        if (t !== this.thumbs || doc !== this.doc) { canvas.width = 0; canvas.height = 0; break; }
         // Drawn thumbnails are kept for when their row comes back; not all of a long document's.
         t.canvases.set(n, canvas);
         for (const old of t.canvases.keys()) {
           if (t.canvases.size <= THUMBS_KEPT) break;
-          if (!t.rows.has(old)) t.canvases.delete(old);
+          if (!t.rows.has(old)) {
+            const c = t.canvases.get(old);
+            if (c) { c.width = 0; c.height = 0; }
+            t.canvases.delete(old);
+          }
         }
         const height = Math.round(128 * viewport.height / viewport.width);
         const box = t.rows.get(n)?.firstChild;
@@ -353,6 +358,7 @@ export const ReaderNav = (Base) => class extends Base {
   _redrawThumbs() {
     const t = this.thumbs;
     if (!t || t.doc !== this.doc) return;
+    for (const c of t.canvases.values()) { c.width = 0; c.height = 0; }
     t.canvases.clear();
     for (const n of t.rows.keys()) if (!t.queue.includes(n)) t.queue.push(n);
     if (!t.busy) this._drainThumbs();

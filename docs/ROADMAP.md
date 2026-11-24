@@ -2,7 +2,7 @@
 
 Master index of ZPDF's completed, in-progress, and planned feature tracks. Each track links to its detailed plan in [`docs/superpowers/plans/`](superpowers/plans/).
 
-*Last updated: 2026-11-22 (after `v0.60.3` and Engineering Hardening Phases 1–6)*
+*Last updated: 2026-11-23 (after `v0.63.0` and Post-Release Source, UI/UX & Performance Audits)*
 
 ---
 
@@ -16,35 +16,34 @@ Master index of ZPDF's completed, in-progress, and planned feature tracks. Each 
 | Interactive form authoring | Shipped in `0.57.0` (Phases 1–4; optional QR barcode field deferred) | [`2026-11-14-form-authoring.md`](superpowers/plans/2026-11-14-form-authoring.md) |
 | Drawing tools (CAD-adjacent) | Shipped in `0.57.0` (Phases 1–5; minor Phase 2/2b polish items remain) | [`2026-11-13-drawing-tools.md`](superpowers/plans/2026-11-13-drawing-tools.md) |
 | Multi-line paragraph reflow | Shipped in `0.57.0` (Phases 1–5; minor editor-box polish items remain) | [`2026-11-13-paragraph-reflow.md`](superpowers/plans/2026-11-13-paragraph-reflow.md) |
+| Markdown & Review Exports | Done (PRs #93, #94) | [`2026-11-18-markdown-and-exports.md`](superpowers/plans/2026-11-18-markdown-and-exports.md) |
+| Better OCR (Phases 1–5) | Done (hard pages, Check OCR UI, tables/forms, speed) | [`2026-11-14-ocr-improvements.md`](superpowers/plans/2026-11-14-ocr-improvements.md) |
+| Architecture Modularization (Phases 1–3) | Done (split `gui.py`, `gui.html`, `reader.js`, `textedit.py`, `forms.py`) | [`2026-11-18-architecture-modularization.md`](superpowers/plans/2026-11-18-architecture-modularization.md) |
+| Reader Productivity & Print Preflight (Phases 1–3) | Done (split view, visual crop, N-up/poster, print preflight) | [`2026-11-18-reader-productivity.md`](superpowers/plans/2026-11-18-reader-productivity.md) |
+| Smart Auto-Rename & Filing Rules (Phases 1–2) | Done (rule-based renaming & routing in Organize & Watch folders) | [`2026-11-18-smart-filing-rules.md`](superpowers/plans/2026-11-18-smart-filing-rules.md) |
+| macOS & Linux Builds (Phases 1–3) | Done (`.dmg`/`.zip`, `.deb`/`.zip`, unified 3-OS updater) | [`2026-11-15-macos-linux-builds.md`](superpowers/plans/2026-11-15-macos-linux-builds.md) |
 | Hybrid offline translation packs | Shipped in `0.60.3` (bundled `ctranslate2` + `sentencepiece`, hybrid `ZPDF-releases` `langpacks-v1` + Argos catalog) | PR #126, PR #127 |
-| Phase 1: Redaction Security Remediation | Done (R-001 coordinate scrub, R-002 content-stream safety, R-003 verification) | PR #128 |
-| Phase 2: Text Editing Integrity | Done (T-001 `require_permanent`, T-002 layout/font safety, T-003 `verify_visual`) | PR #129 |
-| Phase 3: PDF Comparison Engine | Done (C-001 multi-signal alignment, C-002 streaming memory, C-003 aspect-preserving diff) | PR #130 |
-| Phase 4: Security & Reliability Hardening | Done (S-001–S-006 encryption, certsign, safe attachments, temp/log scrubbing) | PR #131 |
-| Phase 5: Performance & Scalability | Done (P-001 `packaging/benchmark.py`, P-004 streaming raster redaction, P-005/P-006 `core.batch_run`) | PR #132 |
-| Phase 6: Product Quality & Release Readiness | Done (Q-001–Q-009 release readiness, CLI/GUI parity, dependency & notice sync) | [`RELEASE_READINESS.md`](RELEASE_READINESS.md) |
+| Engineering Hardening Phases 1–6 | Shipped in `0.60.4`–`0.61.0` (Redaction security, text editing integrity, compare engine, security/reliability, perf benchmarks, release readiness) | PRs #128–#133, [`RELEASE_READINESS.md`](RELEASE_READINESS.md) |
+| Security Phases 5–8 | Shipped in `0.61.0`–`0.61.8` (PAdES/DocMDP/FieldMDP, security profiles & audit log, GPO/ADMX, FIPS, offline updates, process isolation; Authenticode/MSI gated on code-signing) | PR #135, [`2026-11-14-security.md`](superpowers/plans/2026-11-14-security.md) |
+| Smart AI + Advanced Offline PDF Translation | Shipped in `0.61.9`–`0.63.0` (Smart AI OpenAI-compatible engine + Test connection, smarter offline chunking/glossary/CJK polish, NLLB-200 1.3B & 3.3B packs, live download progress/cancel, offline language auto-detect, code/math protection, bold lead-in, rotated text, outline bookmark translation, RTL shaping, page ranges, auto-OCR, CUDA GPU, bilingual stacked mode) | PRs #169–#176 |
+| Post-v0.63.0 Audit Remediation (P0–P3 Core) | Shipped in `0.63.1` (fixed `/api/preflight/fix`, `/api/audit`, `/api/policy`, `do_GET` error handling; Web-to-PDF policy/SSRF/local-path guards; `/api/translate/test` key guard; fail-closed pack SHA-256, redirect & zip-bomb/symlink guards; `translate_pdf` in-place image preservation & cancel propagation; OCR Pass 1 72-DPI preview hashing; `_CT2_CACHE` 4 GB byte cap + single-flight lock; upload buffer release; `make_safe_on_open` LRU cache; per-page `PDFIUM_LOCK`; bounded job concurrency; 192 MB Reader undo cap; `auto_ocr`/`monochrome` checkbox fix; `show_if` array fix; `static/i18n.js` fix; Settings Save unification; Watch polling focus fix) | `v0.63.1` |
 
 ---
 
-## Active & Planned Tracks (Recommended Order)
+## Active & Planned Tracks (Post-v0.63.1 Priorities)
 
-| Priority | Track | Current State | Plan |
+| Priority | Track | Scope & Key Items | Target |
 | --- | --- | --- | --- |
-| 1 | **Markdown & Review Exports** (PDF → Markdown, annotation/comment summary export) | Done (PRs #93, #94) | [`2026-11-18-markdown-and-exports.md`](superpowers/plans/2026-11-18-markdown-and-exports.md) |
-| 2 | **Better OCR** (Phase 2: hard pages, Phase 3: Check OCR UI, Phase 4: tables/forms, Phase 5: speed) | Done (Phases 1–5) | [`2026-11-14-ocr-improvements.md`](superpowers/plans/2026-11-14-ocr-improvements.md) |
-| 3 | **Architecture Modularization** (split `gui.py`, `gui.html`, `reader.js`, `textedit.py`, `forms.py` before i18n / new UI modes) | Done (Phases 1–3) | [`2026-11-18-architecture-modularization.md`](superpowers/plans/2026-11-18-architecture-modularization.md) |
-| 4 | **Security — Phase 5** (signed releases, lockfile verification, supply-chain hardening) | Code done (owner key setup remaining) | [`2026-11-14-security.md`](superpowers/plans/2026-11-14-security.md) |
-| 5 | **Reader Productivity & Print Preflight** (split view with sync scroll, interactive visual crop, N-up/poster preview, print preflight) | Done (Phases 1–3) | [`2026-11-18-reader-productivity.md`](superpowers/plans/2026-11-18-reader-productivity.md) |
-| 6 | **Smart Auto-Rename & Filing Rules** (rule-based renaming & routing in Organize and Watch folders) | Done (Phases 1–2) | [`2026-11-18-smart-filing-rules.md`](superpowers/plans/2026-11-18-smart-filing-rules.md) |
-| 7 | **Language Packs & Offline Translation** (i18n framework, UI packs, offline PDF translation, multilingual OCR/search) | Done (Phases 1–4 + hybrid packs) | [`2026-11-13-language-packs.md`](superpowers/plans/2026-11-13-language-packs.md) |
-| 8 | **macOS & Linux Builds** (Linux AppImage/`.deb`, macOS `.app`/`.dmg`, unified 3-OS updater) | Done (Phases 1–3) | [`2026-11-15-macos-linux-builds.md`](superpowers/plans/2026-11-15-macos-linux-builds.md) |
-| 9 | **Security — Phases 6–8** (PAdES/DocMDP/FieldMDP, security profiles & tamper-evident audit log, GPO/ADMX policies, FIPS mode, offline update channel, process isolation) | Done (Phases 6–8; MSI & Authenticode signing gated on code-signing cert) | [`2026-11-14-security.md`](superpowers/plans/2026-11-14-security.md) |
-| 10 | **Closer to Windows — Phase 4** (Explorer thumbnail COM DLL — gated on code-signing decision) | Phases 1–3 done | [`2026-11-15-windows-integration.md`](superpowers/plans/2026-11-15-windows-integration.md) |
+| **P1** | **Full HTTP Route Integration Coverage** | Add live HTTP integration tests for remaining untested `/api/form/*`, `/api/recent/restore`, `/api/comments/markdown`, `/api/quantities`, and `/api/password/strength` routes. | `v0.64.0` |
+| **P2** | **Startup Latency & Large-Doc Frontend Virtualization** | Lazy-import heavy backend modules in `gui.py` (`search`/`meaning`/`numpy`, `layers`/`pikepdf`, `accessibility`, `certsign`, `ocr`, `office`, `compare`, `redact`, `preflight`) to cut ~750 ms cold-start import latency; virtualize `pages.js` page-picker grid for 500+ page PDFs; cache `PdfDocument` per OCR worker process. | `v0.64.0` |
+| **P3** | **Full i18n Catalog & Accessibility Polish** | Expand `data-i18n` attributes and `locales/*.json` keys across Settings, Translate, and tool panels; add Smart Filing Rules rule viewer/editor; add shared arrow-key navigation across Reader `role="menu"` popups and sidebar tabs; add Reader File Panel one-click missing-pack download recovery; match desktop window startup background color to OS dark mode. | `v0.64.0` |
+| **P4** | **Backend Modularization (Wave 2)** | Break down remaining >2,000-LOC monoliths (`accessibility.py`, `cli.py`, `translate.py`, `core.py`, `ocr.py`, `server/operations.py`) and replace silent `except Exception: pass` sites with typed handling + `applog` diagnostics. | `v0.65.0` |
 
 ---
 
-## Small Maintenance / Polish Tail
-- ~~Suppress false "This looks like a form to fill in" banner on plain CAD drawings~~ (fixed in `formdetect.py`).
-- Keep [`release.yml`](../.github/workflows/release.yml) dispatching `build-app.yml` and `lock.yml` automatically on published tags (fixed in PR #105).
-- Close out remaining minor visual polish notes from paragraph reflow and drawing markups as those files are touched.
-- See [`docs/RELEASE_READINESS.md`](RELEASE_READINESS.md) for the release-readiness classification, competitive matrix, and post-release priorities.
+## Deferred / Externally Gated
+- **Code-signing-gated Windows items**: Authenticode signing, MSI enterprise installer, and Explorer thumbnail COM DLL (`Closer to Windows — Phase 4`, [`2026-11-15-windows-integration.md`](superpowers/plans/2026-11-15-windows-integration.md)) — paused unless a code-signing certificate is adopted.
+- **Security Phase 5 owner key setup**: Code complete; release-signing key setup optional.
+- **Small Maintenance / Polish Tail**:
+  - Close out remaining minor visual polish notes from paragraph reflow and drawing markups as those files are touched.
+  - See [`docs/RELEASE_READINESS.md`](RELEASE_READINESS.md) for the release-readiness classification and competitive matrix.
