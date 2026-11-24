@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Tool operation specs (OPERATIONS) and execution helpers for the ZPDF local web app."""
 
+from pdfmanager.server.common import EXPECTED_ERRORS, UserError  # noqa: F401
 from pdfmanager.server.operations._deps import (
     accessibility, archive, certcrypt, certsign, comments, compare, core,
     filetools, formdetect, forms, layers, ocr, office, organize, outline,
