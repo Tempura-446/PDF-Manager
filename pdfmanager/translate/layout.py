@@ -532,8 +532,15 @@ def _detect_align(x0, x1, container_x0, container_x1, *, is_cell=False, lines=1,
 
 def _extract_layout_blocks(plumber_page):
     """Extract positioned text blocks from a ``pdfplumber`` page, respecting
-    real multi-row/multi-column table cells, columns, headings, font sizes,
-    bold/italic styles, and left/center/right alignment."""
+    vertical CJK (tategaki) columns, real multi-row/multi-column table cells,
+    columns, headings, font sizes, bold/italic styles, and alignment."""
+    from pdfmanager.translate import vertical as _vertical
+
+    if _vertical.is_vertical_cjk_page(plumber_page):
+        vblocks = _vertical.extract_vertical_cjk_blocks(plumber_page)
+        if vblocks:
+            return vblocks
+
     words = plumber_page.extract_words(
         extra_attrs=["size", "fontname", "non_stroking_color"],
         keep_blank_chars=False,

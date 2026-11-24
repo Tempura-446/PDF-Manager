@@ -2,7 +2,7 @@
 
 Master index of ZPDF's completed, in-progress, and planned feature tracks. Each track links to its detailed plan in [`docs/superpowers/plans/`](superpowers/plans/).
 
-*Last updated: 2026-11-24 (after `v0.66.0` Interactive Diff, Live Bilingual Reading, Attachments GUI & Keyboard Crop/Redaction)*
+*Last updated: 2026-11-24 (after `v0.67.0` Vertical CJK Tategaki & Manga Speech-Bubble Translation)*
 
 ---
 
@@ -31,12 +31,14 @@ Master index of ZPDF's completed, in-progress, and planned feature tracks. Each 
 | Speed, Polish & Full Coverage (P1–P3) | Shipped in `0.64.0` (full HTTP route tests, lazy imports, OCR doc cache, virtualized `pages.js`, 5-locale parity, Filing Rules UI, ARIA nav, 1-click pack recovery) | `v0.64.0` (PR #180) |
 | Translation Pack Cleanup, Settings Redesign & Performance | Shipped in `0.64.1`–`0.64.4` (94 MADLAD languages, 5-tab Settings redesign, ~4× faster cold startup, 2–3× faster MADLAD translation, warm OCR pool, gzip static cache, Free model RAM, `bilingual-pages` book mode, book-styled stacked reflow, Reader quick-translate UX) | `v0.64.1`–`v0.64.4` (PRs #181–#184) |
 | Backend Modularization (Wave 2 — P4) | Shipped in `0.65.0` (split `accessibility`, `server/operations`, `cli`, `translate`, `core`, `ocr` into cohesive subpackages; replaced all 44 silent `except Exception: pass` sites with scrubbed `zpdf` diagnostics + AST guard; extended `test_imports.py` to subpackages) | [`2026-11-24-backend-modularization-wave2.md`](superpowers/plans/2026-11-24-backend-modularization-wave2.md) |
+| Reader Diff, Live Bilingual, Attachments GUI & Keyboard Crop | Shipped in `0.66.0` (side-by-side Reader diff, live bilingual split-view, remapped bilingual-pages outlines, persistent reading progress, attachments GUI, keyboard crop/redaction, `batch_run` process mode) | [`2026-11-24-v066-reader-diff-and-books.md`](superpowers/plans/2026-11-24-v066-reader-diff-and-books.md) |
+| Vertical CJK (*Tategaki*) & Manga Speech-Bubble Mode | Shipped in `0.67.0` (automatic vertical CJK detection, furigana stripping, vertical punctuation normalization, RTL column merging, pure-NumPy/Pillow `mode="manga"` speech-bubble detector & centered dialogue typesetter) | [`2026-11-24-vertical-cjk-and-manga-translation.md`](superpowers/plans/2026-11-24-vertical-cjk-and-manga-translation.md) |
 
 ---
 
 ## Active & Planned Tracks
 
-All planned roadmap tracks through `v0.65.0` are complete. Next tracks will be scoped as new priorities emerge.
+All planned roadmap tracks through `v0.67.0` are complete. Next tracks will be scoped as new priorities emerge.
 
 ---
 

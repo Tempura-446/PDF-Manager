@@ -684,9 +684,10 @@ OPERATIONS = [
                             ["bilingual-pages", "Bilingual book (alternating pages)"],
                             ["bilingual", "Bilingual stacked (paragraph reflow)"],
                             ["in-place", "In-place (same layout)"],
+                            ["manga", "Manga / Comic (speech bubbles)"],
                             ["text", "Plain text (.txt)"]],
                    hint="For books with covers, images & tables, use Bilingual book or Side by side. "
-                        "Bilingual stacked reflows paragraphs cleanly and keeps full-page images."),
+                        "Vertical CJK (tategaki) is detected automatically. Use Manga / Comic for speech bubbles."),
                 _f("pages", "Pages (optional)", "text", "",
                    placeholder="All pages, or e.g. 1-5, 8"),
                 _f("auto_ocr", "Auto-OCR scanned pages (if no selectable text)", "check", False)]},

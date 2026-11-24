@@ -468,11 +468,11 @@ def build_parser():
     sp.add_argument("--json", action="store_true", help="print JSON")
 
     sp = other("translate", cmd_translate,
-               "translate a PDF offline using an installed language pack (side-by-side, bilingual-pages, bilingual, in-place, or text)")
+               "translate a PDF offline using an installed language pack (side-by-side, bilingual-pages, bilingual, in-place, manga, or text)")
     sp.add_argument("input", metavar="input.pdf", help="PDF to translate")
     sp.add_argument("--from", dest="from_lang", default="en", help="source language code (default: en)")
     sp.add_argument("--to", dest="to_lang", required=True, help="target language code (e.g. fr, es, de, zh-Hans)")
-    sp.add_argument("--mode", choices=("side-by-side", "bilingual-pages", "bilingual", "in-place", "text"), default="side-by-side",
+    sp.add_argument("--mode", choices=("side-by-side", "bilingual-pages", "bilingual", "in-place", "manga", "text"), default="side-by-side",
                     help="output layout mode (default: side-by-side)")
     sp.add_argument("-o", "--output", help="output file path")
     sp.add_argument("--password", help=f"password for encrypted input (or set {PASSWORD_ENV})")

@@ -30,16 +30,19 @@ def translate_pdf(
     translator=None,
     pages=None,
     auto_ocr=False,
+    ocr_fn=None,
 ):
-    """Translate a PDF into one of five output modes:
+    """Translate a PDF into one of six output modes:
     - ``side-by-side``: double-width PDF with original page left, layout-preserved translation right.
     - ``bilingual-pages``: alternating original + layout-preserved translated pages (ideal for books with covers, images, and tables; pure-image pages appear once).
     - ``bilingual``: book-styled stacked bilingual PDF with original paragraph + translation directly underneath (preserves pure-image pages verbatim and strips repetitive running headers/footers).
     - ``in-place``: layout-preserving translation overlaid on the original pages + translated annotations, form fields, and bookmarks.
+    - ``manga``: detects speech bubbles in right-to-left manga order, cleans bubble interiors while preserving borders & artwork, and typesets centered dialogue inside each bubble.
     - ``text``: plain-text ``.txt`` file with page markers.
 
     Optional ``pages`` (e.g. ``"1-5, 8"``) limits translation to those 1-based pages.
     Optional ``auto_ocr=True`` runs built-in offline OCR first if selected pages have no selectable text.
+    Optional ``ocr_fn(pil_crop, src_lang) -> str`` overrides built-in OCR for ``mode="manga"`` bubbles.
     """
     import tempfile
     from pdfmanager import pageranges
@@ -65,7 +68,7 @@ def translate_pdf(
     ocr_tmp_dir = None
     ocr_applied = False
     work_src = src
-    if auto_ocr and selected_indices:
+    if auto_ocr and mode != "manga" and selected_indices:
         has_any_text = any((reader.pages[i].extract_text() or "").strip() for i in selected_indices)
         if not has_any_text:
             progress.report(message="Running offline OCR on scanned pages…", fraction_in_part=0.03)
@@ -85,6 +88,101 @@ def translate_pdf(
     want_auto = str(src_lang or "").strip().lower() in ("", "auto")
 
     try:
+        if mode == "manga":
+            from pdfmanager.translate import manga as _manga
+
+            progress.report(message="Detecting speech bubbles…", fraction_in_part=0.05)
+            pdfium_doc = None
+            try:
+                import pypdfium2 as pdfium
+
+                with core.PDFIUM_LOCK:
+                    pdfium_doc = pdfium.PdfDocument(str(work_src), password=password)
+            except Exception as _exc:
+                logging.getLogger("zpdf").debug("pipeline.translate_pdf.manga.pdfium: %s", _exc)
+                pdfium_doc = None
+
+            page_bubbles = {}
+            page_img_sizes = {}
+            all_bubble_texts = []
+            bubble_refs = []
+            src_hint = None if want_auto else i18n.normalize_code(src_lang)
+            empty_pages = 0
+            total_sel = max(1, len(selected_indices))
+
+            try:
+                for step_i, idx in enumerate(selected_indices):
+                    progress.check()
+                    progress.report(
+                        message=f"Scanning bubbles (page {idx + 1}/{total_doc_pages})…",
+                        fraction_in_part=0.05 + 0.35 * ((step_i + 1) / total_sel),
+                    )
+                    if pdfium_doc is None or idx >= len(pdfium_doc):
+                        page_bubbles[idx] = []
+                        empty_pages += 1
+                        continue
+                    with core.PDFIUM_LOCK:
+                        pil_img = pdfium_doc[idx].render(scale=2.0).to_pil()
+                    page_img_sizes[idx] = pil_img.size
+                    bubbles = _manga.detect_speech_bubbles(pil_img)
+                    page_bubbles[idx] = bubbles
+                    if not bubbles:
+                        empty_pages += 1
+                        continue
+                    for b_i, bubble in enumerate(bubbles):
+                        txt = _manga.extract_bubble_text(pil_img, bubble, src_hint, ocr_fn=ocr_fn)
+                        if txt:
+                            all_bubble_texts.append(txt)
+                            bubble_refs.append((idx, b_i))
+            finally:
+                if pdfium_doc is not None:
+                    try:
+                        with core.PDFIUM_LOCK:
+                            pdfium_doc.close()
+                    except Exception as _exc:
+                        logging.getLogger("zpdf").debug("pipeline.translate_pdf.manga.close: %s", _exc)
+
+            resolved_src = detect_language(" ".join(all_bubble_texts[:30])) if want_auto else i18n.normalize_code(src_lang)
+            fn = translator if translator is not None else getattr(sys.modules.get("pdfmanager.translate"), "_load_offline_translator", _load_offline_translator)(resolved_src, dst_lang)
+            if all_bubble_texts:
+                with progress.section(1, 3, "Translating dialogue"):
+                    translated_bubbles = translate_texts(all_bubble_texts, resolved_src, dst_lang, translator=fn)
+            else:
+                translated_bubbles = []
+
+            page_trans = {idx: [""] * len(page_bubbles.get(idx, ())) for idx in selected_indices}
+            for (idx, b_i), tr_txt in zip(bubble_refs, translated_bubbles):
+                page_trans[idx][b_i] = tr_txt
+
+            writer = PdfWriter()
+            for step_i, idx in enumerate(selected_indices):
+                progress.check()
+                progress.report(
+                    message=f"Typesetting bubbles (page {idx + 1}/{total_doc_pages})…",
+                    fraction_in_part=0.75 + 0.22 * ((step_i + 1) / total_sel),
+                )
+                orig_page = reader.pages[idx]
+                page_out = writer.add_page(orig_page)
+                bubbles = page_bubbles.get(idx) or []
+                if bubbles and any(page_trans[idx]):
+                    w = float(orig_page.mediabox.width)
+                    h = float(orig_page.mediabox.height)
+                    img_w, img_h = page_img_sizes[idx]
+                    overlay = _manga.make_manga_overlay(w, h, img_w, img_h, bubbles, page_trans[idx], dst_lang)
+                    page_out.merge_page(overlay)
+
+            with open(dst, "wb") as fh:
+                writer.write(fh)
+            return {
+                "mode": mode,
+                "pages": len(selected_indices),
+                "bubbles": len(bubble_refs),
+                "src_lang": resolved_src,
+                "empty_pages": empty_pages,
+                "ocr_applied": ocr_applied,
+                "output": str(dst),
+            }
+
         if mode == "text":
             progress.report(message="Extracting text…", fraction_in_part=0.05)
             pages_raw = []
