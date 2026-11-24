@@ -40,6 +40,8 @@ from pdfmanager.translate.vertical import (
     extract_vertical_cjk_blocks, is_vertical_cjk_page, normalize_vertical_punct,
 )
 from pdfmanager.translate.manga import (
-    detect_speech_bubbles, extract_bubble_text, make_manga_overlay, order_manga_bubbles,
+    default_reading_dir, detect_speech_bubbles, extract_bubble_text,
+    extract_digital_bubble_text, make_manga_overlay, order_manga_bubbles,
+    preprocess_bubble_for_ocr,
 )
 from pdfmanager.translate.pipeline import translate_pdf
