@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Regression tests for post-v0.63.0 source, security, UI/UX, and performance audit fixes."""
 
 from __future__ import annotations

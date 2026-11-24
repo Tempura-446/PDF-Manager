@@ -192,10 +192,9 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._send(HTTPStatus.OK, _thread_stacks(), "text/plain; charset=utf-8")
             self._error(HTTPStatus.NOT_FOUND, "not found")
         except EXPECTED_ERRORS as exc:
-            self._error(HTTPStatus.BAD_REQUEST, str(exc))
-        except Exception as exc:
-            applog.error(f"GET {self.path}", exc)
-            self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "something went wrong")
+            return self._error(HTTPStatus.BAD_REQUEST, str(exc))
+        except Exception as exc:  # report, don't kill the server
+            return self._error(HTTPStatus.INTERNAL_SERVER_ERROR, applog.unexpected(exc))
 
 
 
