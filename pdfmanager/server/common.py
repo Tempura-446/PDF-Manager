@@ -3,6 +3,7 @@
 
 import hashlib
 import hmac
+import importlib
 import json
 import os
 import re
@@ -38,6 +39,49 @@ STATIC_TYPES = {
 }
 
 _PARAM = re.compile(r';\s*([\w*-]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;\s]*))')
+
+
+class _LazyModule:
+    """Defer importing a heavy submodule until its first attribute access.
+
+    Transparently forwards attribute lookups, monkeypatches (``setattr`` /
+    ``delattr``), and ``dir()`` to the underlying module once loaded.
+    """
+
+    __slots__ = ("_mod_name", "_mod_obj")
+
+    def __init__(self, mod_name):
+        object.__setattr__(self, "_mod_name", mod_name)
+        object.__setattr__(self, "_mod_obj", None)
+
+    def _load(self):
+        mod = object.__getattribute__(self, "_mod_obj")
+        if mod is None:
+            name = object.__getattribute__(self, "_mod_name")
+            mod = importlib.import_module(name)
+            object.__setattr__(self, "_mod_obj", mod)
+        return mod
+
+    def __getattr__(self, item):
+        return getattr(self._load(), item)
+
+    def __setattr__(self, item, value):
+        setattr(self._load(), item, value)
+
+    def __delattr__(self, item):
+        delattr(self._load(), item)
+
+    def __dir__(self):
+        return dir(self._load())
+
+    def __repr__(self):
+        name = object.__getattribute__(self, "_mod_name")
+        loaded = object.__getattribute__(self, "_mod_obj") is not None
+        return f"<_LazyModule {name!r} ({'loaded' if loaded else 'unloaded'})>"
+
+
+def lazy_module(mod_name):
+    return _LazyModule(mod_name)
 
 
 def gui_hook(name, default):

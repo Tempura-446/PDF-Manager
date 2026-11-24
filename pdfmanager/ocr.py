@@ -1585,23 +1585,55 @@ def _recognise_scan_page(image, doc, page_idx, page_w, page_h, scale, rotate, de
     return lines, turn, angle, image.size
 
 
-def _recognise_scan_page_worker(task):
-    """Top-level picklable worker for ProcessPoolExecutor: opens its own pdfium
-    handle and ONNX engine, renders ``page_idx``, and returns
-    ``(page_idx, lines, turn, angle, image_size)``."""
+_WORKER_DOC_CACHE = {"key": None, "doc": None}
+
+
+def _close_worker_doc():
+    doc = _WORKER_DOC_CACHE.get("doc")
+    _WORKER_DOC_CACHE["key"] = None
+    _WORKER_DOC_CACHE["doc"] = None
+    if doc is not None:
+        try:
+            doc.close()
+        except Exception:  # noqa: BLE001 - best-effort cleanup on worker shutdown
+            pass
+
+
+def _worker_pdf_doc(source_str):
+    """Return a cached ``pdfium.PdfDocument`` for ``source_str`` in the current
+    worker process, reopening only when the file path or stat changes."""
+    import atexit
     import pypdfium2 as pdfium
 
-    source_str, page_idx, rotate, deskew, script, quality = task
+    st = os.stat(source_str)
+    key = (source_str, st.st_mtime_ns, st.st_size)
+    if _WORKER_DOC_CACHE["key"] == key and _WORKER_DOC_CACHE["doc"] is not None:
+        return _WORKER_DOC_CACHE["doc"]
+    _close_worker_doc()
     doc = pdfium.PdfDocument(source_str)
+    _WORKER_DOC_CACHE["key"] = key
+    _WORKER_DOC_CACHE["doc"] = doc
+    if not getattr(_worker_pdf_doc, "_atexit_registered", False):
+        atexit.register(_close_worker_doc)
+        _worker_pdf_doc._atexit_registered = True
+    return doc
+
+
+def _recognise_scan_page_worker(task):
+    """Top-level picklable worker for ProcessPoolExecutor: reuses a cached
+    per-process pdfium handle and ONNX engine, renders ``page_idx``, and
+    returns ``(page_idx, lines, turn, angle, image_size)``."""
+    source_str, page_idx, rotate, deskew, script, quality = task
+    doc = _worker_pdf_doc(source_str)
+    pdfium_page = core.show_whole_page(doc[page_idx])
     try:
-        pdfium_page = core.show_whole_page(doc[page_idx])
         page_w, page_h = pdfium_page.get_width(), pdfium_page.get_height()
         scale = render_scale(page_w, page_h)
         image = pdfium_page.render(scale=scale).to_pil()
-        lines, turn, angle, img_size = _recognise_scan_page(
-            image, doc, page_idx, page_w, page_h, scale, rotate, deskew, script, quality)
     finally:
-        doc.close()
+        pdfium_page.close()
+    lines, turn, angle, img_size = _recognise_scan_page(
+        image, doc, page_idx, page_w, page_h, scale, rotate, deskew, script, quality)
     return page_idx, lines, turn, angle, img_size
 
 

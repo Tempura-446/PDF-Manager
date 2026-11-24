@@ -416,6 +416,56 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     }, { capture: true });
     this.host.append(this.root);
     this.#wire();
+    this.#wireAriaNav();
+  }
+
+  /** Shared keyboard navigation across all Reader role="menu" popups and
+   *  role="tablist" strips (sidebar tabs + open-document tabbar). */
+  #wireAriaNav() {
+    this.root.addEventListener("keydown", (e) => {
+      const menu = e.target.closest('[role="menu"]');
+      if (menu && !menu.hidden) {
+        const items = [...menu.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], button')]
+          .filter((b) => !b.disabled && !b.hidden && b.offsetParent !== null);
+        if (!items.length) return;
+        const idx = items.indexOf(e.target.closest("button"));
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          items[(idx + 1 + items.length) % items.length].focus();
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          items[(idx - 1 + items.length) % items.length].focus();
+        } else if (e.key === "Home") {
+          e.preventDefault();
+          items[0].focus();
+        } else if (e.key === "End") {
+          e.preventDefault();
+          items[items.length - 1].focus();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          this.#closeMenu();
+        }
+        return;
+      }
+      const tab = e.target.closest('[role="tab"]');
+      const tablist = tab && tab.closest('[role="tablist"]');
+      if (tab && tablist) {
+        const tabs = [...tablist.querySelectorAll('[role="tab"]')]
+          .filter((t) => !t.disabled && !t.hidden && t.offsetParent !== null);
+        if (tabs.length < 2) return;
+        const idx = tabs.indexOf(tab);
+        let next = -1;
+        if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (idx + 1) % tabs.length;
+        else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (idx - 1 + tabs.length) % tabs.length;
+        else if (e.key === "Home") next = 0;
+        else if (e.key === "End") next = tabs.length - 1;
+        if (next >= 0) {
+          e.preventDefault();
+          tabs[next].focus();
+          if (tablist.classList.contains("rd-tabs")) tabs[next].click();
+        }
+      }
+    });
   }
 
   #menuItem(icon, label, onclick, checkable = null) {
@@ -1138,13 +1188,14 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       data = await runTranslate();
     } catch (e) {
       const msg = e?.message || String(e);
-      if (msg.includes("language pack")) {
+      if (/language pack|madlad|pack not installed/i.test(msg)) {
         const dlChoice = await this._dialog("Offline translation", [el("p", {}, msg)], [
           ["cancel", "Close", false],
           ["download", "Download pack now", true],
         ]);
         if (dlChoice !== "download") return;
-        const needed = [...new Set([fromSel.value, toSel.value].filter((c) => c && c !== "en"))];
+        const explicit = [...new Set([fromSel.value, toSel.value].filter((c) => c && c !== "en" && c !== "auto"))];
+        const needed = explicit.length ? explicit : ["madlad-400-3b"];
         this.toast(`Downloading language pack (${needed.join(", ")})…`);
         try {
           for (const code of needed) {

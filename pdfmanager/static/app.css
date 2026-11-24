@@ -422,6 +422,8 @@ body.drop-first.opts-later.has-files #options-card, body.drop-first.opts-later.h
   position: relative; display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 14px;
   max-height: min(68vh, 720px); overflow-y: auto; padding: 4px 4px 8px; margin: -4px; overscroll-behavior: contain;
 }
+.pb-spacer { grid-column: 1 / -1; pointer-events: none; }
+.pb-spacer[hidden] { display: none; }
 .pb-tile {
   position: relative; border-radius: var(--radius-sm); padding: 6px 6px 4px; cursor: grab; user-select: none;
   -webkit-user-select: none; touch-action: none; outline: none; border: 1.5px solid transparent;

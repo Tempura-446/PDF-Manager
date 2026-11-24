@@ -7,13 +7,21 @@ import urllib.parse
 from http import HTTPStatus
 from pathlib import Path
 
-from pdfmanager import (comments, core, crop, filefacts, layers, markup, outline,
-                        pageimages, textedit, viewports)
+from pdfmanager import core, filefacts
 from pdfmanager.server.common import (
     MARKUPS_IN_HEADER, RecentFiles, SavedOver, UserError,
     _bool, _byte_range, _download_headers, _file_stamp, _parse_multipart,
-    _replace_file, gui_hook, reveal_in_file_manager,
+    _replace_file, gui_hook, lazy_module, reveal_in_file_manager,
 )
+
+comments = lazy_module("pdfmanager.comments")
+crop = lazy_module("pdfmanager.crop")
+layers = lazy_module("pdfmanager.layers")
+markup = lazy_module("pdfmanager.markup")
+outline = lazy_module("pdfmanager.outline")
+pageimages = lazy_module("pdfmanager.pageimages")
+textedit = lazy_module("pdfmanager.textedit")
+viewports = lazy_module("pdfmanager.viewports")
 
 
 import collections

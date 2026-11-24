@@ -82,6 +82,104 @@ $("watch-browse").addEventListener("click", async () => {
 });
 
 let filingState = { rules: [], starters: [] };
+let filingEditIndex = -1;
+
+function _filingRuleSummary(rule) {
+  const c = rule.conditions || {};
+  const bits = [];
+  if (Array.isArray(c.contains) && c.contains.length) bits.push(`contains: ${c.contains.join(", ")}`);
+  if (c.regex) bits.push(`regex: ${c.regex}`);
+  if (c.filename) bits.push(`file: ${c.filename}`);
+  if (c.has_date) bits.push("has date");
+  return bits.length ? bits.join(" · ") : "matches any PDF";
+}
+
+function openFilingEditor(index = -1) {
+  const wrap = $("filing-rule-editor");
+  if (!wrap) return;
+  filingEditIndex = index;
+  const rule = index >= 0 ? (filingState.rules || [])[index] : null;
+  const c = (rule && rule.conditions) || {};
+  const title = $("filing-editor-title");
+  if (title) title.textContent = rule ? `Edit rule: ${rule.name || ""}` : "Add rule";
+  $("filing-rule-name").value = rule ? (rule.name || "") : "";
+  $("filing-rule-contains").value = Array.isArray(c.contains) ? c.contains.join(", ") : (c.contains || "");
+  $("filing-rule-regex").value = c.regex || "";
+  $("filing-rule-filename").value = c.filename || "";
+  $("filing-rule-has-date").checked = Boolean(c.has_date);
+  $("filing-rule-template").value = rule ? (rule.template || "") : "{year}/{orig_name}.pdf";
+  wrap.hidden = false;
+  $("filing-rule-name").focus();
+}
+
+function closeFilingEditor() {
+  const wrap = $("filing-rule-editor");
+  if (wrap) wrap.hidden = true;
+  filingEditIndex = -1;
+}
+
+async function saveFilingRulesList(rules, message) {
+  await jsonApi("/api/filing/rules", { rules });
+  await loadFilingRules();
+  if (message) updateStatus("filing-status", message);
+}
+
+function renderFilingRules() {
+  const list = $("filing-rules-list");
+  if (!list) return;
+  list.replaceChildren();
+  const rules = filingState.rules || [];
+  rules.forEach((rule, idx) => {
+    const li = document.createElement("li");
+    li.className = "watch-item";
+    const info = document.createElement("div");
+    info.style.flex = "1";
+    const strong = document.createElement("strong");
+    strong.textContent = rule.name || `Rule ${idx + 1}`;
+    const meta = document.createElement("div");
+    meta.className = "dlg-hint";
+    meta.style.margin = "2px 0 0";
+    meta.textContent = `${_filingRuleSummary(rule)} → ${rule.template || ""}`;
+    info.append(strong, meta);
+
+    const actions = document.createElement("div");
+    actions.style.display = "flex";
+    actions.style.gap = "4px";
+    actions.style.flexWrap = "wrap";
+    const mkBtn = (label, fn, disabled = false) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn secondary sm";
+      b.textContent = label;
+      b.disabled = disabled;
+      b.addEventListener("click", fn);
+      return b;
+    };
+    actions.append(
+      mkBtn("Edit", () => openFilingEditor(idx)),
+      mkBtn("↑", async () => {
+        const next = rules.slice();
+        [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+        try { await saveFilingRulesList(next, "Rule order updated."); } catch (err) { updateStatus("filing-status", err.message, true); }
+      }, idx === 0),
+      mkBtn("↓", async () => {
+        const next = rules.slice();
+        [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+        try { await saveFilingRulesList(next, "Rule order updated."); } catch (err) { updateStatus("filing-status", err.message, true); }
+      }, idx === rules.length - 1),
+      mkBtn("Delete", async () => {
+        const next = rules.filter((_, i) => i !== idx);
+        try {
+          closeFilingEditor();
+          await saveFilingRulesList(next, `Deleted rule "${rule.name || idx + 1}".`);
+        } catch (err) { updateStatus("filing-status", err.message, true); }
+      })
+    );
+    li.append(info, actions);
+    list.append(li);
+  });
+}
+
 async function loadFilingRules() {
   const data = await jsonApi("/api/filing/rules");
   filingState = data || { rules: [], starters: [] };
@@ -90,10 +188,37 @@ async function loadFilingRules() {
   if (sum) {
     sum.textContent = n
       ? `${n} smart filing rule${n === 1 ? "" : "s"} active (used by Watch folders with auto-filing enabled and pdfm auto-file).`
-      : "No smart filing rules saved yet. Load starter rules (Invoices, Receipts, Contracts, Statements) or preview on a sample PDF.";
+      : "No smart filing rules saved yet. Add a rule, load starter rules (Invoices, Receipts, Contracts, Statements), or preview on a sample PDF.";
   }
+  renderFilingRules();
   return filingState;
 }
+
+$("filing-add-btn")?.addEventListener("click", () => openFilingEditor(-1));
+$("filing-rule-cancel")?.addEventListener("click", closeFilingEditor);
+$("filing-rule-save")?.addEventListener("click", async () => {
+  const name = ($("filing-rule-name")?.value || "").trim();
+  const template = ($("filing-rule-template")?.value || "").trim();
+  if (!name) { updateStatus("filing-status", "Enter a rule name.", true); return; }
+  if (!template) { updateStatus("filing-status", "Enter an output path template.", true); return; }
+  const conditions = {};
+  const containsRaw = ($("filing-rule-contains")?.value || "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (containsRaw.length) conditions.contains = containsRaw;
+  const regex = ($("filing-rule-regex")?.value || "").trim();
+  if (regex) conditions.regex = regex;
+  const filename = ($("filing-rule-filename")?.value || "").trim();
+  if (filename) conditions.filename = filename;
+  if ($("filing-rule-has-date")?.checked) conditions.has_date = true;
+  const rule = { name, conditions, template };
+  const next = (filingState.rules || []).slice();
+  if (filingEditIndex >= 0 && filingEditIndex < next.length) next[filingEditIndex] = rule;
+  else next.push(rule);
+  try {
+    closeFilingEditor();
+    await saveFilingRulesList(next, `Saved rule "${name}".`);
+  } catch (err) { updateStatus("filing-status", err.message, true); }
+});
+
 $("filing-load-starters")?.addEventListener("click", async () => {
   try {
     const data = await loadFilingRules();
@@ -109,9 +234,8 @@ $("filing-load-starters")?.addEventListener("click", async () => {
       });
       if (!ok) return;
     }
-    await jsonApi("/api/filing/rules", { rules: starters });
-    await loadFilingRules();
-    updateStatus("filing-status", `Loaded ${starters.length} starter filing rules.`);
+    closeFilingEditor();
+    await saveFilingRulesList(starters, `Loaded ${starters.length} starter filing rules.`);
   } catch (err) { updateStatus("filing-status", err.message, true); }
 });
 $("filing-preview-btn")?.addEventListener("click", () => $("filing-preview-file")?.click());
@@ -124,9 +248,9 @@ $("filing-preview-file")?.addEventListener("change", async (e) => {
     fd.append("file", file, file.name);
     const res = await api("/api/filing/preview", { method: "POST", body: fd });
     const data = await res.json();
-    const item = (data.plan || [])[0];
+    const item = data.plan ? data.plan[0] : data;
     if (item && item.matched) {
-      updateStatus("filing-status", `Matched "${item.rule}": ${file.name} → ${item.target_name || item.destination}`);
+      updateStatus("filing-status", `Matched "${item.rule}": ${file.name} → ${item.target || item.target_name || item.destination}`);
     } else {
       updateStatus("filing-status", `No rule matched ${file.name}.`);
     }

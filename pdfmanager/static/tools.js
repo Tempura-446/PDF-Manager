@@ -943,8 +943,9 @@ async function run(preview) {
   } catch (err) {
     const said = plainError(err.message);
     let action = null;
-    if (current.id === "translate" && /language pack/i.test(String(err.message || ""))) {
-      const needed = [...new Set([opts.source_lang, opts.target_lang].filter((c) => c && c !== "en" && c !== "auto"))];
+    if (current.id === "translate" && /language pack|madlad|pack not installed/i.test(String(err.message || ""))) {
+      const explicit = [...new Set([opts.source_lang, opts.target_lang].filter((c) => c && c !== "en" && c !== "auto"))];
+      const needed = explicit.length ? explicit : ["madlad-400-3b"];
       if (needed.length) {
         const downloadAndTranslate = async () => {
           clearMessages();

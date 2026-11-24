@@ -41,22 +41,8 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-from pdfmanager import (__version__, archive, compare, core, office, organize, outline, progress,
-                        forms, recipes, redact, scan, search, textedit, update, viewports, markup, pageimages,
-                        formdetect, pdfacheck, filetools, comments, filefacts)
-from pdfmanager import certsign
-from pdfmanager import accessibility  # -- accessibility --
-from pdfmanager import applog
-from pdfmanager import ocr  # which OCR engines are installed
-from pdfmanager import scanner, scanpdf  # Scan: paper to a searchable PDF
-from pdfmanager import quickactions  # Explorer's right-click actions
-from pdfmanager import watchfolders  # Settings > Watch folders
-from pdfmanager import layers  # layers (optional content) of drawings
-from pdfmanager import risks  # what a PDF can do, and Make safe
-from pdfmanager import protection  # password strength, old encryption and its upgrade
-from pdfmanager import privacy  # working files, history, and when ZPDF goes online
-from pdfmanager import background  # watching with the window closed, from the notification area
-from pdfmanager import certcrypt  # protecting a PDF for people's certificates
+from pdfmanager import (__version__, applog, core, filefacts, filetools, privacy,
+                        progress, quickactions, recipes, update)
 from pdfmanager.appdata import data_dir, write_private
 from pdfmanager.pageranges import PageRangeError
 from pdfmanager.server.common import (
@@ -64,8 +50,38 @@ from pdfmanager.server.common import (
     Events, HandlerBase, OpenFiles, RecentFiles, ResultCache, SavedOver,
     UnsavedWork, UserError, WorkFolders, _bool, _byte_range, _download_headers,
     _file_mentions, _file_stamp, _log, _num, _page_csp, _pages, _parse_multipart,
-    _proof, _replace_file, _safe_name, _thread_stacks, reveal_in_file_manager,
+    _proof, _replace_file, _safe_name, _thread_stacks, lazy_module,
+    reveal_in_file_manager,
 )
+
+# Heavy backend modules are loaded lazily on first use to keep startup fast.
+accessibility = lazy_module("pdfmanager.accessibility")
+archive = lazy_module("pdfmanager.archive")
+background = lazy_module("pdfmanager.background")
+certcrypt = lazy_module("pdfmanager.certcrypt")
+certsign = lazy_module("pdfmanager.certsign")
+comments = lazy_module("pdfmanager.comments")
+compare = lazy_module("pdfmanager.compare")
+formdetect = lazy_module("pdfmanager.formdetect")
+forms = lazy_module("pdfmanager.forms")
+layers = lazy_module("pdfmanager.layers")
+markup = lazy_module("pdfmanager.markup")
+ocr = lazy_module("pdfmanager.ocr")
+office = lazy_module("pdfmanager.office")
+organize = lazy_module("pdfmanager.organize")
+outline = lazy_module("pdfmanager.outline")
+pageimages = lazy_module("pdfmanager.pageimages")
+pdfacheck = lazy_module("pdfmanager.pdfacheck")
+protection = lazy_module("pdfmanager.protection")
+redact = lazy_module("pdfmanager.redact")
+risks = lazy_module("pdfmanager.risks")
+scan = lazy_module("pdfmanager.scan")
+scanner = lazy_module("pdfmanager.scanner")
+scanpdf = lazy_module("pdfmanager.scanpdf")
+search = lazy_module("pdfmanager.search")
+textedit = lazy_module("pdfmanager.textedit")
+viewports = lazy_module("pdfmanager.viewports")
+watchfolders = lazy_module("pdfmanager.watchfolders")
 from pdfmanager.server.form_routes import FormRoutesMixin
 from pdfmanager.server.reader_routes import ReaderRoutesMixin
 from pdfmanager.server.scan_watch_routes import (
@@ -971,6 +987,43 @@ def _window_note():
     return data_dir() / "window-error.txt"
 
 
+def _os_prefers_dark():
+    """Best-effort detection of OS dark mode so the desktop window does not
+    flash bright white before CSS loads."""
+    try:
+        if sys.platform == "win32":
+            import winreg
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            ) as key:
+                val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+                return int(val) == 0
+        if sys.platform == "darwin":
+            out = subprocess.run(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                capture_output=True, text=True, timeout=0.5,
+            )
+            return out.returncode == 0 and "dark" in out.stdout.lower()
+        gtk = os.environ.get("GTK_THEME", "")
+        if "dark" in gtk.lower():
+            return True
+        if shutil.which("gsettings"):
+            out = subprocess.run(
+                ["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+                capture_output=True, text=True, timeout=0.5,
+            )
+            if out.returncode == 0 and "dark" in out.stdout.lower():
+                return True
+    except Exception:  # noqa: BLE001 - fallback to light theme on any OS probe error
+        pass
+    return False
+
+
+def _startup_background_color():
+    return "#0f1114" if _os_prefers_dark() else "#f6f6f3"
+
+
 def run_desktop(port=0, open_paths=(), action=None, hidden=False):
     """Open ZPDF in its own window (needs pywebview). Returns False if
     no window could be opened, so the caller can fall back to the browser.
@@ -999,7 +1052,7 @@ def run_desktop(port=0, open_paths=(), action=None, hidden=False):
 
         shape = {"hidden": True} if hidden and "hidden" in inspect.signature(webview.create_window).parameters else {}
         window = webview.create_window("ZPDF", url, js_api=api, width=1180, height=820,
-                                       min_size=(400, 560), background_color="#f6f6f3", **shape)
+                                       min_size=(400, 560), background_color=_startup_background_color(), **shape)
         api._window = window
         _no_autofill(window)
         # Closing with the window's X: while a folder is watched ZPDF can stay
