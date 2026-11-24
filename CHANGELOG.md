@@ -4,6 +4,30 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.67.0
+
+Vertical CJK (*Tategaki*) Book Translation & Manga / Comic Speech-Bubble Mode.
+
+- **Vertical CJK (*Tategaki*) Support (`pdfmanager/translate/vertical.py`).**
+  - Automatic page-level detection of vertical Japanese and Traditional/Simplified
+    Chinese layouts (`is_vertical_cjk_page`) across all translation modes
+    (`side-by-side`, `bilingual-pages`, `bilingual`, `in-place`, `text`).
+  - Automatic furigana / ruby annotation stripping (`size <= 0.62 × body_size`),
+    Unicode vertical presentation punctuation normalization (`﹁﹂﹃﹄︵︶︱` →
+    `「」『』（）—`), top-to-bottom column grouping, and right-to-left paragraph
+    merging so novels and light novels translate cleanly without cross-column
+    scrambling.
+- **Manga / Comic Speech-Bubble Translation Mode (`mode="manga"`, `pdfmanager/translate/manga.py`).**
+  - 100% offline, commercial-safe pure Python + NumPy + Pillow + ReportLab
+    connected-component speech-bubble detector (`detect_speech_bubbles`) that
+    filters out page margins and empty panels, orders bubbles in manga reading
+    order (top-to-bottom bands, right-to-left within each band), extracts bubble
+    dialogue, cleans strictly inside each bubble's inset ellipse (preserving the
+    artist's black outline and surrounding artwork), and typesets centered,
+    auto-fitted dialogue inside each bubble.
+  - Available in the Translate tool UI (**Manga / Comic (speech bubbles)**) and
+    CLI (`zpdf translate --mode manga`).
+
 ## 0.66.0
 
 Interactive Reader Diff Viewer, Live Bilingual Book Reading, Attachments GUI, Keyboard Crop/Redaction & Batch Hardening.

@@ -36,4 +36,10 @@ from pdfmanager.translate.layout import (
     _sample_bg_rgb, _shape_rtl, _strip_bt_et_ops, _strip_text_from_pdf,
     _translate_annotations_and_fields, _translate_outlines, _wrap_text,
 )
+from pdfmanager.translate.vertical import (
+    extract_vertical_cjk_blocks, is_vertical_cjk_page, normalize_vertical_punct,
+)
+from pdfmanager.translate.manga import (
+    detect_speech_bubbles, extract_bubble_text, make_manga_overlay, order_manga_bubbles,
+)
 from pdfmanager.translate.pipeline import translate_pdf
