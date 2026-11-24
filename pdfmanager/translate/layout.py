@@ -155,6 +155,56 @@ def _translate_outlines(writer, src_lang, dst_lang, translator):
     return len(items)
 
 
+def _clone_and_remap_outlines(reader, writer, page_map, src_lang, dst_lang, translator):
+    """Copy nested PDF bookmarks from ``reader`` into ``writer``, remapping
+    each bookmark's destination page through ``page_map`` (0-based src_idx ->
+    0-based dst_idx) and translating bookmark titles in a single batch."""
+    try:
+        outline = reader.outline
+    except Exception as _exc:
+        logging.getLogger("zpdf").debug("layout._clone_and_remap_outlines: %s", _exc)
+        return 0
+    if not outline:
+        return 0
+
+    # Flatten outline tree into (title, target_page_idx, parent_slot) entries
+    entries = []
+
+    def _collect(nodes, parent_idx):
+        last_added = None
+        for node in nodes:
+            if isinstance(node, list):
+                if last_added is not None:
+                    _collect(node, last_added)
+                continue
+            title = str(getattr(node, "title", "") or node.get("/Title") or "").strip()
+            if not title:
+                continue
+            src_page = None
+            try:
+                src_page = reader.get_destination_page_number(node)
+            except Exception as _exc:
+                logging.getLogger("zpdf").debug("layout._clone_and_remap_outlines.dest: %s", _exc)
+            dst_page = page_map.get(src_page) if src_page is not None else None
+            if dst_page is None:
+                continue
+            slot = len(entries)
+            entries.append((title, dst_page, parent_idx))
+            last_added = slot
+
+    _collect(outline, None)
+    if not entries:
+        return 0
+
+    translated = translate_texts([t for t, _, _ in entries], src_lang, dst_lang, translator=translator)
+    created = []
+    for (_, dst_page, parent_idx), tr_title in zip(entries, translated):
+        parent_ref = created[parent_idx] if parent_idx is not None else None
+        ref = writer.add_outline_item(title=tr_title, page_number=dst_page, parent=parent_ref)
+        created.append(ref)
+    return len(created)
+
+
 _MATH_SYMBOL_RE = re.compile(r"[∑∫∏√∞≈≠≤≥±×÷∂∇∈∉⊂⊃∪∩∀∃⇒⇔→←αβγδεζηθλμπρστφψωΔΣΩ]")
 _CODE_SYNTAX_RE = re.compile(r"(?:[{}\[\];]|=>|->|==|!=|::|\b(?:def|class|return|import|const|let|var|func|SELECT|FROM|WHERE)\b)")
 _EQUATION_RE = re.compile(r"(?:^|\s)[A-Za-z]\s*=\s*[-+0-9A-Za-z(]")

@@ -11,10 +11,10 @@ from pypdf.generic import NameObject
 from pdfmanager import core, i18n, progress
 from pdfmanager.translate.engines import _extract_paragraphs, _load_offline_translator
 from pdfmanager.translate.layout import (
-    _detect_running_margin_texts, _extract_layout_blocks, _is_code_or_math_block,
-    _is_running_margin_block, _make_bilingual_pages, _make_layout_overlay,
-    _make_text_page, _page_crop_origin, _render_page_bg, _shape_rtl,
-    _strip_text_from_pdf, _translate_annotations_and_fields, _translate_outlines,
+    _clone_and_remap_outlines, _detect_running_margin_texts, _extract_layout_blocks,
+    _is_code_or_math_block, _is_running_margin_block, _make_bilingual_pages,
+    _make_layout_overlay, _make_text_page, _page_crop_origin, _render_page_bg,
+    _shape_rtl, _strip_text_from_pdf, _translate_annotations_and_fields, _translate_outlines,
 )
 from pdfmanager.translate.models import detect_language
 from pdfmanager.translate.text import MODES, translate_texts
@@ -243,6 +243,7 @@ def translate_pdf(
             writer = PdfWriter()
             if mode == "bilingual-pages":
                 total_sel = max(1, len(selected_indices))
+                orig_page_map = {}
                 for step_i, idx in enumerate(selected_indices):
                     progress.check()
                     progress.report(
@@ -255,7 +256,7 @@ def translate_pdf(
                     w = float(orig_page.mediabox.width)
                     h = float(orig_page.mediabox.height)
                     cx0, cy0 = _page_crop_origin(orig_page)
-                    # Always emit the untouched original page first (preserves covers, art, tables)
+                    orig_page_map[idx] = len(writer.pages)
                     writer.add_page(orig_page)
                     if blks:
                         bg_img = _render_page_bg(pdfium_doc, idx)
@@ -281,6 +282,9 @@ def translate_pdf(
                                 translate_texts(_extract_paragraphs(raw_txt), resolved_src, dst_lang, translator=fn)
                             )
                             writer.add_page(_make_text_page(w, h, _shape_rtl(fallback, dst_lang)))
+                translated_bookmarks = _clone_and_remap_outlines(
+                    reader, writer, orig_page_map, resolved_src, dst_lang, fn,
+                )
                 with open(dst, "wb") as fh:
                     writer.write(fh)
                 return {
@@ -288,6 +292,7 @@ def translate_pdf(
                     "pages": len(selected_indices),
                     "src_lang": resolved_src,
                     "empty_pages": empty_pages,
+                    "bookmarks_translated": translated_bookmarks,
                     "ocr_applied": ocr_applied,
                     "output": str(dst),
                 }

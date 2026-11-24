@@ -374,6 +374,10 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._preflight_fix(body)
             if path == "/api/crop":
                 return self._crop(body)
+            if path == "/api/reader/compare":
+                return self._reader_compare(body)
+            if path == "/api/attachments/update":
+                return self._attachments_update(body)
             if path == "/api/translate/page":
                 return self._translate_page(body)
             if path == "/api/settings":

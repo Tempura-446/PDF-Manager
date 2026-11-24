@@ -354,7 +354,7 @@ def default_workers(max_workers=None):
     return max(1, int(max_workers))
 
 
-def batch_run(items, fn, *, max_workers=None, on_progress=None, processes=False):
+def batch_run(items, fn, *, max_workers=None, on_progress=None, processes=False, mode=None):
     """Run ``fn(item)`` over ``items`` with bounded concurrency and error isolation.
 
     Returns a list of result dicts in the same order as ``items``:
@@ -368,13 +368,20 @@ def batch_run(items, fn, *, max_workers=None, on_progress=None, processes=False)
         cancels queued tasks on ``progress.Cancelled``.
       - Propagates ``progress.Cancelled`` immediately while isolating all
         other per-item exceptions so one bad document does not abort the batch.
-      - When ``processes=True``, executes ``fn`` in a spawned
-        ``ProcessPoolExecutor`` (``fn`` and ``items`` must be picklable) to
-        bypass the Python GIL on CPU-bound PDF workloads.
+      - When ``processes=True`` or ``mode="process"``, executes ``fn`` in a
+        spawned ``ProcessPoolExecutor`` (``fn`` and ``items`` must be picklable)
+        to bypass the Python GIL on CPU-bound PDF workloads.
     """
     from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
+    from concurrent.futures.process import BrokenProcessPool
     import contextvars
     import multiprocessing
+
+    if mode is not None:
+        m = str(mode).strip().lower()
+        if m not in ("thread", "process"):
+            raise PdfManagerError(f"unknown batch_run mode: {mode!r} (expected 'thread' or 'process')")
+        processes = m == "process"
 
     item_list = list(items)
     total = len(item_list)
@@ -440,6 +447,10 @@ def batch_run(items, fn, *, max_workers=None, on_progress=None, processes=False)
                     for pending in in_flight:
                         pending.cancel()
                     raise
+                except BrokenProcessPool as exc:
+                    wrapped = PdfManagerError(f"batch worker process crashed: {exc}")
+                    results[idx] = {"index": idx, "item": item, "ok": False,
+                                    "error": str(wrapped), "exception": wrapped}
                 except Exception as exc:  # noqa: BLE001 (per-item error isolation)
                     results[idx] = {"index": idx, "item": item, "ok": False,
                                     "error": str(exc), "exception": exc}
