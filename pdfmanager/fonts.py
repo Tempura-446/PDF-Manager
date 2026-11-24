@@ -7,6 +7,7 @@ TrueType font that has them, or a font that PDF readers supply themselves
 for Chinese, Japanese and Korean.
 """
 
+import logging
 import unicodedata
 from pathlib import Path
 
@@ -194,8 +195,8 @@ def pdf_font_codes(font):
                 # (Word's maps can name it a space beside the real one).
                 if len(text) == 1 and any(code):
                     codes.setdefault(text, code)
-        except Exception:  # noqa: BLE001 - a broken map: the encoding alone
-            pass
+        except Exception as _exc:  # noqa: BLE001 - a broken map: the encoding alone
+            logging.getLogger("zpdf").debug("fonts.pdf_font_codes: %s", _exc)
     if subtype == "/Type0" and "/ToUnicode" not in font:
         return {}
     return codes

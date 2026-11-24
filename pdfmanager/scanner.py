@@ -35,6 +35,7 @@ COM objects are apartment threaded: each call here runs in a thread that
 joins a single-threaded apartment first (CoInitializeEx through ctypes).
 """
 
+import logging
 import contextlib
 import sys
 import tempfile
@@ -430,8 +431,8 @@ def _devices(com):
         name = ""
         try:
             name = str(com.get(com.get(com.get(info, "Properties"), "Item", "Name"), "Value"))
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.getLogger("zpdf").debug("scanner._devices: %s", _exc)
         found.append((str(com.get(info, "DeviceID")), name or "Scanner", info))
     return found
 
@@ -493,8 +494,8 @@ def _learn(com, ids):
                                 item_caps = _read(com, com.get(items, "Item", i), DOCUMENT_HANDLING_CAPABILITIES)
                                 if item_caps is not None:
                                     handling = (handling or 0) | _int(item_caps)
-                        except Exception:
-                            pass
+                        except Exception as _exc:
+                            logging.getLogger("zpdf").debug("scanner._learn: %s", _exc)
                 except Exception:
                     continue
                 finally:
@@ -504,8 +505,8 @@ def _learn(com, ids):
                     feeder, flatbed = bool(_int(handling) & FEEDER), bool(_int(handling) & FLATBED)
                 with _caps_lock:
                     _caps[device_id] = (feeder, flatbed)
-    except Exception:  # noqa: BLE001 - the list does without
-        pass
+    except Exception as _exc:  # noqa: BLE001 - the list does without
+        logging.getLogger("zpdf").debug("scanner._learn: %s", _exc)
     finally:
         with _caps_lock:
             _asking.difference_update(ids)
@@ -557,8 +558,8 @@ def _configure(com, device, item, mode, dpi, source, before=None):
         if prop is not None:
             try:
                 com.put(prop, "Value", _int(com.get(prop, "SubTypeMax")))
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.getLogger("zpdf").debug("scanner._configure: %s", _exc)
     return was
 
 
@@ -747,16 +748,16 @@ def all_scanners(network=True, look=True):
 
     try:
         out += naps2.devices()
-    except Exception:  # noqa: BLE001 - the others are listed all the same
-        pass
+    except Exception as _exc:  # noqa: BLE001 - the others are listed all the same
+        logging.getLogger("zpdf").debug("scanner.all_scanners: %s", _exc)
     # SANE scanners on Linux / macOS when scanimage is installed (sane.py).
     if sys.platform != "win32":
         from pdfmanager import sane
 
         try:
             out += sane.devices()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as _exc:  # noqa: BLE001
+            logging.getLogger("zpdf").debug("scanner.all_scanners: %s", _exc)
     return out
 
 

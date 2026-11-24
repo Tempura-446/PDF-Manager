@@ -7,6 +7,7 @@ packs live in ``<data_dir>/locales/<code>/`` (containing ``manifest.json`` and
 ``ui.json``) so they survive ZPDF updates.
 """
 
+import logging
 import hashlib
 import importlib
 import importlib.util
@@ -255,8 +256,8 @@ def _reset_meaning_cache():
     try:
         from pdfmanager import meaning
         meaning.reset()
-    except Exception:
-        pass
+    except Exception as _exc:
+        logging.getLogger("zpdf").debug("i18n._reset_meaning_cache: %s", _exc)
 
 
 def install_pack_from_zip(zip_path, expected_sha256=None):

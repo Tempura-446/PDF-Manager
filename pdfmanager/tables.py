@@ -35,6 +35,7 @@ Coordinates in the results are PDF points with the origin at the bottom left
 of the page, before the page's rotation, like the rest of ZPDF.
 """
 
+import logging
 import csv
 import re
 import statistics
@@ -96,8 +97,8 @@ def close(plumber):
     except Exception:
         try:
             plumber.stream.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.getLogger("zpdf").debug("tables.close: %s", _exc)
 
 
 def _clean(cell):

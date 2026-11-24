@@ -6,6 +6,7 @@ Quick by design: it reads the file's structure and the first few pages'
 instructions, and never draws a page. It never fails either: a file it
 can't read says so in its facts.
 """
+import logging
 import json
 import re
 from pathlib import Path
@@ -36,8 +37,8 @@ def _strings(operands):
             if hasattr(item, "__bytes__"):
                 try:
                     out.append(bytes(item).decode("latin-1"))
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.getLogger("zpdf").debug("filefacts._strings: %s", _exc)
     return "".join(out)
 
 
@@ -115,8 +116,8 @@ def _page_look(page, pikepdf):
                 if abs(q[1] - p[1]) <= 2:
                     mid = (p[1] + q[1]) / 2
                     flat((p[0], mid), (q[0], mid), abs(q[1] - p[1]))
-    except Exception:
-        pass
+    except Exception as _exc:
+        logging.getLogger("zpdf").debug("filefacts._page_look: %s", _exc)
     said = " ".join(words)
     sign = bool(SIGN_WORDS.search(said)) and (bool(rules) or bool(UNDERSCORES.search(said)))
     return text, visible, picture, sign, rules

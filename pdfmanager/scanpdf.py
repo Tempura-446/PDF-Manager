@@ -14,6 +14,7 @@ of pictures), so they can be put in order, turned, taken out and scanned
 again before the PDF is made.
 """
 
+import logging
 import io
 import secrets
 import shutil
@@ -88,8 +89,8 @@ def _skew(image):
     if ocr.builtin_available():
         try:
             return ocr.skew_angle(image.convert("RGB"))
-        except Exception:  # engine trouble: the plain way
-            pass
+        except Exception as _exc:  # engine trouble: the plain way
+            logging.getLogger("zpdf").debug("scanpdf._skew: %s", _exc)
     return pagephoto.skew_angle(image)
 
 

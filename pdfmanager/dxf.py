@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import math
 import os
 import re
@@ -203,16 +205,16 @@ def _parse_tounicode(font_obj) -> dict[int, str]:
         for src_h, dst_h in re.findall(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", block):
             try:
                 cmap[int(src_h, 16)] = bytes.fromhex(dst_h).decode("utf-16-be", errors="ignore")
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.getLogger("zpdf").debug("dxf._parse_tounicode: %s", _exc)
     for block in re.findall(r"beginbfrange(.*?)endbfrange", text, re.S):
         for lo_h, hi_h, dst_h in re.findall(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", block):
             try:
                 lo, hi, base = int(lo_h, 16), int(hi_h, 16), int(dst_h, 16)
                 for code in range(lo, min(hi + 1, lo + 256)):
                     cmap[code] = chr(base + (code - lo))
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.getLogger("zpdf").debug("dxf._parse_tounicode: %s", _exc)
     return cmap
 
 
@@ -814,8 +816,8 @@ def _collect_dxf_geometry(layout, doc, monochrome: bool):
                     for x, y in pts:
                         touch(x, y)
                     bucket.append(("poly", pts, False, rgb, lw))
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.getLogger("zpdf").debug("dxf._collect_dxf_geometry: %s", _exc)
         elif t == "SPLINE":
             try:
                 pts = [(p.x, p.y) for p in ent.flattening(0.05)]
@@ -823,8 +825,8 @@ def _collect_dxf_geometry(layout, doc, monochrome: bool):
                     for x, y in pts:
                         touch(x, y)
                     bucket.append(("poly", pts, False, rgb, lw))
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.getLogger("zpdf").debug("dxf._collect_dxf_geometry: %s", _exc)
         elif t in ("SOLID", "3DFACE"):
             pts = [(ent.dxf.vtx0.x, ent.dxf.vtx0.y), (ent.dxf.vtx1.x, ent.dxf.vtx1.y),
                    (ent.dxf.vtx2.x, ent.dxf.vtx2.y), (ent.dxf.vtx3.x, ent.dxf.vtx3.y)]

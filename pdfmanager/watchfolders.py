@@ -26,6 +26,7 @@ Only one running copy of ZPDF watches: the thread holds watch.lock in the
 data folder while it runs.
 """
 
+import logging
 import itertools
 import json
 import secrets
@@ -406,5 +407,5 @@ class WatchFolders:
         if told is not None:   # (the notification-area icon says it while the window is hidden)
             try:
                 told(message, ok)
-            except Exception:  # noqa: BLE001 - telling is a courtesy
-                pass
+            except Exception as _exc:  # noqa: BLE001 - telling is a courtesy
+                logging.getLogger("zpdf").debug("watchfolders.WatchFolders._report: %s", _exc)

@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Reader HTTP route handlers (file streaming, save/undo, layers, text edit, OCR fix, markups, comments)."""
 
+import logging
 import json
 import tempfile
 import urllib.parse
@@ -316,8 +317,8 @@ class ReaderRoutesMixin:
         raw_name = self.headers.get("X-Pdfm-Filename") or "drawing.dxf"
         try:
             raw_name = urllib.parse.unquote(raw_name)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.getLogger("zpdf").debug("reader_routes.ReaderRoutesMixin._drawing_open: %s", _exc)
         name = Path(raw_name).name or "drawing.dxf"
         ext = Path(name).suffix.lower()
         if ext == ".dwg":
@@ -501,8 +502,8 @@ class ReaderRoutesMixin:
                 now = json.dumps(markup.describe_all(out, password), ensure_ascii=True, separators=(",", ":"))
                 if len(now) <= gui_hook("MARKUPS_IN_HEADER", MARKUPS_IN_HEADER):
                     headers["X-Pdfm-Markups"] = now
-            except Exception:  # noqa: BLE001 - the reader asks for them the usual way
-                pass
+            except Exception as _exc:  # noqa: BLE001 - the reader asks for them the usual way
+                logging.getLogger("zpdf").debug("reader_routes.ReaderRoutesMixin._markup: %s", _exc)
         return self._send(HTTPStatus.OK, data, "application/pdf", headers)
 
     def _quantities(self, body):

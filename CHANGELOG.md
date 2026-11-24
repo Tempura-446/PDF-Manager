@@ -4,6 +4,24 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.65.0
+
+Backend Modularization (Wave 2) & diagnostic error-handling hardening.
+
+- **Modularized all six remaining >2,000-LOC backend monoliths (~14,500 LOC)
+  into cohesive, domain-focused subpackages** with 100% public API compatibility:
+  - `pdfmanager/accessibility/` (`geometry`, `scanner`, `layout`, `tagger`, `checker`)
+  - `pdfmanager/server/operations/` (`_deps`, `catalog`, `dispatch`, `repair`, `runner`, `preview`)
+  - `pdfmanager/cli/` (`common`, `commands_edit`, `commands_convert`, `commands_multi`, `parser`)
+  - `pdfmanager/translate/` (`models`, `engines`, `text`, `layout`, `pipeline`)
+  - `pdfmanager/core/` (`io`, `geometry`, `pages`, `security`, `stamp`, `convert`)
+  - `pdfmanager/ocr/` (`_facade`, `engines`, `models`, `preprocess`, `layout`, `runner`)
+- **Replaced all 44 silent `except Exception: pass` sites across `pdfmanager/`**
+  with scrubbed `zpdf` (`applog`) debug diagnostics and added a permanent
+  AST regression guard in `tests/test_code_quality.py`.
+- **Extended `tests/test_imports.py`** to verify independent importability and
+  two-way dependency guards across both top-level `.py` modules and subpackages.
+
 ## 0.64.4
 
 Book-focused bilingual translation + Reader & Translate PDF UI/UX and batching optimizations.
