@@ -716,8 +716,20 @@ export const ReaderRender = (Base) => class extends Base {
   _key() { return this.doc ? this.doc.fingerprints[0] : ""; }
   _remember() {
     if (!this.doc) return;
-    store.set("pdfm-pos:" + this._key(), {
-      page: this.pdfViewer.currentPageNumber, scale: this.pdfViewer.currentScaleValue, rotation: this.pdfViewer.pagesRotation,
+    const key = "pdfm-pos:" + this._key();
+    const prev = store.get(key, null) || {};
+    const page = this.pdfViewer.currentPageNumber || 1;
+    const total = this.pdfViewer.pagesCount || this.doc.numPages || 1;
+    const maxPage = Math.max(page, Number(prev.maxPage) || 1);
+    const percent = Math.min(100, Math.round((page / Math.max(1, total)) * 100));
+    store.set(key, {
+      page,
+      scale: this.pdfViewer.currentScaleValue,
+      rotation: this.pdfViewer.pagesRotation,
+      maxPage,
+      totalPages: total,
+      percent,
+      updatedAt: Date.now(),
     });
   }
 

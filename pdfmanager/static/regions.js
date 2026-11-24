@@ -584,7 +584,25 @@ export class RegionEditor {
     if (e.key === "PageUp" || (e.key === "ArrowLeft" && e.altKey)) { e.preventDefault(); this.goTo(this.pageIndex - 1); return; }
     if (this.mode !== "crop" && this.selected >= 0 && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); this.#remove(this.selected); return; }
     if (this.selectedOld >= 0 && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); this.#removeOld(this.selectedOld); return; }
-    if (this.mode !== "crop" && e.key === "Escape") { this.selected = -1; this.selectedOld = -1; this.#draw(); }
+    if (this.mode !== "crop" && e.key === "Escape") { this.selected = -1; this.selectedOld = -1; this.#draw(); return; }
+    if (this.mode !== "crop" && this.selected >= 0 && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      const list = this.boxes[this.pageIndex] || [];
+      const r = list[this.selected];
+      if (r) {
+        const step = e.shiftKey ? 10 : 1;
+        let dx = 0, dy = 0;
+        if (e.key === "ArrowLeft") dx = -step;
+        else if (e.key === "ArrowRight") dx = step;
+        else if (e.key === "ArrowUp") dy = step;
+        else if (e.key === "ArrowDown") dy = -step;
+        if (dx || dy) {
+          e.preventDefault();
+          r[0] += dx; r[2] += dx; r[1] += dy; r[3] += dy;
+          this.#draw();
+          this.#emit();
+        }
+      }
+    }
   }
 
   #emit() {

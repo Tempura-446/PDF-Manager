@@ -4,6 +4,33 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.66.0
+
+Interactive Reader Diff Viewer, Live Bilingual Book Reading, Attachments GUI, Keyboard Crop/Redaction & Batch Hardening.
+
+- **Interactive Side-by-Side Diff Viewer in Reader Split View.** Added
+  `POST /api/reader/compare` (supporting both opened `fileId`s and uploads) and
+  a **Highlight diff** mode in Split View with red/green change overlays,
+  aligned page syncing (`row.old <-> row.new`), and Prev/Next change navigation.
+- **Book & Reading Experience Suite.**
+  - **Live bilingual split-view reading (`__translate__`)**: read the original
+    PDF on the left with a live, cached translated pane on the right as you flip
+    pages (`From`/`To` selectors, `dir="auto"` RTL, Original/Translated toggle).
+  - **Preserved & remapped bookmarks in `bilingual-pages`**: chapter outlines
+    are now cloned, remapped to the interleaved page numbers, and translated.
+  - **Persistent reading progress**: tracks `maxPage`, `totalPages`, and
+    percentage per document fingerprint in `reader-render.js` / `reader-nav.js`.
+- **Embedded Attachments GUI + Keyboard Crop & Redaction.**
+  - Added `POST /api/attachments/update` and **Attach file… / Remove** controls
+    in Reader Document Properties with full Undo/Redo + Save support.
+  - Added Arrow-key nudge (`1 pt`, `Shift` = `10 pt`), `Alt+Arrow` resize,
+    `Enter` apply, `Delete` remove, and `Escape` cancel to Reader visual crop
+    (`cropmode.js`), redaction marks (`annotate.js`), and `RegionEditor`
+    (`regions.js`).
+- **Multiprocessing `core.batch_run` & Docs Refresh.** Added explicit
+  `mode="thread" | "process"` support and `BrokenProcessPool` hardening to
+  `core.batch_run`, and refreshed `docs/RELEASE_READINESS.md` for `v0.66.0`.
+
 ## 0.65.0
 
 Backend Modularization (Wave 2) & diagnostic error-handling hardening.
