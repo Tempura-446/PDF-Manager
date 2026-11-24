@@ -37,7 +37,9 @@ ALLOWED_PAIRS = {
 
 
 def _modules():
-    return sorted(p.stem for p in PACKAGE.glob("*.py") if p.stem not in NOT_IMPORTED)
+    mods = {p.stem for p in PACKAGE.glob("*.py") if p.stem not in NOT_IMPORTED}
+    mods.update(p.name for p in PACKAGE.iterdir() if p.is_dir() and (p / "__init__.py").is_file())
+    return sorted(mods)
 
 
 def _import_alone(name):
@@ -60,7 +62,7 @@ def test_every_module_imports_on_its_own():
         f"`import pdfmanager.{name}` fails in a fresh interpreter:\n{err.strip()}" for name, err in failed)
 
 
-def _imported_modules(path, modules):
+def _imported_modules(path, modules, self_name=None):
     """The package's modules that ``path`` imports, at the top or in a function."""
     found = set()
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -75,13 +77,22 @@ def _imported_modules(path, modules):
         elif isinstance(node, ast.Import):
             names += [a.name.split(".")[1] for a in node.names if a.name.startswith("pdfmanager.")]
         found.update(n for n in names if n in modules)
-    found.discard(path.stem)
+    found.discard(self_name or path.stem)
     return found
 
 
 def two_way_pairs():
-    modules = {p.stem for p in PACKAGE.glob("*.py")}
-    uses = {m: _imported_modules(PACKAGE / f"{m}.py", modules) for m in modules}
+    modules = set(_modules()) - {"__init__"}
+    uses = {}
+    for m in modules:
+        mod_file = PACKAGE / f"{m}.py"
+        if mod_file.is_file():
+            uses[m] = _imported_modules(mod_file, modules, self_name=m)
+        else:
+            deps = set()
+            for sub in (PACKAGE / m).rglob("*.py"):
+                deps.update(_imported_modules(sub, modules, self_name=m))
+            uses[m] = deps
     return {tuple(sorted((a, b))) for a in uses for b in uses[a] if a in uses.get(b, ())}
 
 
