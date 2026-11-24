@@ -165,6 +165,7 @@ def test_publishing_uploads_to_the_releases_repo_and_tags(release, tmp_path, mon
     assert any(arg.endswith("ZPDF-9.9.9-windows.zip.sha256") for arg in create)
     notes = Path(create[create.index("--notes-file") + 1]).read_text(encoding="utf-8")
     assert "- Thing one." in notes and "Install ZPDF.cmd" in notes
+    assert "ZPDF-9.9.9-macos.dmg" in notes and "zpdf_9.9.9_amd64.deb" in notes
     assert ["git", "tag", "-a", "v9.9.9", "-m", "ZPDF 9.9.9"] in runner.commands
     assert ["git", "push", "origin", "v9.9.9"] in runner.commands
 
