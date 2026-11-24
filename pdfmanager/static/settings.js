@@ -103,7 +103,8 @@ function renderLanguageState(info) {
   }
   list.replaceChildren(...packs.map((p) => {
     const li = document.createElement("li");
-    li.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;";
+    li.className = "watch-item";
+    li.style.alignItems = "center";
     const caps = [
       p.has_translate && (p.pairs?.length ? `translate: ${p.pairs.join(", ")}` : "translate"),
       p.has_ocr && "OCR",
@@ -114,34 +115,94 @@ function renderLanguageState(info) {
       : (sz >= 1_000_000 ? `${Math.round(sz / 1_000_000)} MB`
         : (sz >= 1_000 ? `${Math.round(sz / 1_000)} KB` : ""));
     const metaParts = [szText, caps.join("; ")].filter(Boolean);
-    const label = document.createElement("span");
-    label.textContent = `${p.name} (${p.code})` + (metaParts.length ? ` — ${metaParts.join(" · ")}` : "");
+    const infoBox = document.createElement("div");
+    infoBox.className = "wi-text";
+    const titleEl = document.createElement("div");
+    titleEl.className = "wi-folder";
+    titleEl.textContent = `${p.name} (${p.code})`;
+    if (/^nllb-/i.test(p.code || "")) {
+      const badge = document.createElement("span");
+      badge.className = "set-badge retired";
+      badge.textContent = "Retired · safe to remove";
+      titleEl.append(badge);
+    }
+    infoBox.append(titleEl);
+    if (metaParts.length) {
+      const metaEl = document.createElement("div");
+      metaEl.className = "wi-what";
+      metaEl.textContent = metaParts.join(" · ");
+      infoBox.append(metaEl);
+    }
     const rm = document.createElement("button");
     rm.type = "button";
-    rm.className = "link-btn";
+    rm.className = "btn secondary sm";
     rm.textContent = "Remove";
     rm.addEventListener("click", async () => {
-      if (typeof appAsk === "function") {
-        const ok = await appAsk({
-          title: `Remove ${p.name} language pack?`,
-          text: `This deletes the downloaded offline pack (${p.code}) from disk. You can re-download it later.`,
-          yes: "Remove",
-          no: "Cancel",
-          danger: true,
-        });
-        if (!ok) return;
-      }
       try {
+        if (typeof appAsk === "function") {
+          const ok = await appAsk({
+            title: `Remove ${p.name}?`,
+            text: `This deletes the downloaded offline pack (${p.code}) from disk. You can re-download active packs later.`,
+            yes: "Remove",
+            no: "Cancel",
+            danger: true,
+          });
+          if (!ok) return;
+        }
+        rm.disabled = true;
+        rm.textContent = "Removing…";
         await jsonApi("/api/i18n/packs/remove", { code: p.code });
         await loadLanguages();
         if (langCatalogCache) renderLangCatalog(langCatalogCache);
-        updateStatus("lang-status", `Removed ${p.code} language pack.`);
-      } catch (err) { updateStatus("lang-status", err.message, true); }
+        updateStatus("lang-status", `Removed ${p.code}.`);
+      } catch (err) {
+        rm.disabled = false;
+        rm.textContent = "Remove";
+        updateStatus("lang-status", err.message || String(err), true);
+      }
     });
-    li.append(label, rm);
+    li.append(infoBox, rm);
     return li;
   }));
 }
+
+// Settings section tabs (General · Language · Automation · Privacy · About)
+(function wireSettingsTabs() {
+  const bar = $("set-tabs");
+  if (!bar) return;
+  const tabs = [...bar.querySelectorAll('[role="tab"]')];
+  const panes = [...document.querySelectorAll("#settings-dialog .set-pane")];
+  const activate = (name, focusTab = false) => {
+    for (const t of tabs) {
+      const on = t.dataset.tab === name;
+      t.setAttribute("aria-selected", String(on));
+      t.tabIndex = on ? 0 : -1;
+      if (on && focusTab) t.focus();
+    }
+    for (const p of panes) p.hidden = p.dataset.pane !== name;
+    const form = $("settings-form");
+    if (form) form.scrollTop = 0;
+  };
+  bar.addEventListener("click", (e) => {
+    const t = e.target.closest('[role="tab"]');
+    if (t) activate(t.dataset.tab);
+  });
+  bar.addEventListener("keydown", (e) => {
+    const t = e.target.closest('[role="tab"]');
+    if (!t) return;
+    const idx = tabs.indexOf(t);
+    let next = -1;
+    if (e.key === "ArrowRight") next = (idx + 1) % tabs.length;
+    else if (e.key === "ArrowLeft") next = (idx - 1 + tabs.length) % tabs.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = tabs.length - 1;
+    if (next >= 0) {
+      e.preventDefault();
+      activate(tabs[next].dataset.tab, true);
+    }
+  });
+  activate("general");
+})();
 
 let langCatalogCache = null;
 let langDlBusy = false;

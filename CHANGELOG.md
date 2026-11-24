@@ -4,6 +4,23 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.64.2
+
+Fixed pack removal confirmation dialog and redesigned Settings with clean section tabs.
+
+- **Fixed Remove language pack / Clear history / Starter rules confirmation.**
+  `appAsk()` in `app-core.js` previously only accepted positional arguments
+  `(title, text, buttons)`, causing object-style confirmation calls in
+  `settings.js` and `watch-ui.js` to throw before the removal API call ever ran.
+  `appAsk()` now supports both signatures cleanly, with danger-styled confirm
+  buttons and proper error feedback.
+- **Redesigned Settings dialog.** Organized Settings into 5 focused tabs
+  (**General**, **Language**, **Automation**, **Privacy**, **About**) with
+  keyboard arrow-key navigation, grouped surface cards, collapsible secondary
+  forms (Add watched folder, Developer GitHub repo/token), and polished
+  installed-pack cards with a **Retired · safe to remove** badge for legacy
+  `nllb-200-*` packs.
+
 ## 0.64.1
 
 Translation pack cleanup & expanded MADLAD-400 language options.
