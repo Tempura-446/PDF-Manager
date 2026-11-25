@@ -53,11 +53,9 @@ def test_translation_llm_entity_protection_and_long_neural_chunking():
         translator=fake_llm,
         glossary="ZPDF Studio = ZPDF Estudio",
     )
-    assert "https://zpdf.local" in res[0]
-    assert "INV-2026-99" in res[0]
-    assert "ZPDF Estudio" in res[0]
-    # Confirm URL and ref code were masked before hitting the LLM
-    assert all("https://zpdf.local" not in inp for inp in seen_llm_inputs)
+    assert res[0] == "Visite https://zpdf.local for INV-2026-99 and ZPDF Estudio."
+    # Confirm glossary term and ref code were masked before hitting the LLM
+    assert all("ZPDF Studio" not in inp and "INV-2026-99" not in inp for inp in seen_llm_inputs)
 
     # 2. Offline neural path automatically chunks overlong sentences (> 450 chars)
     seen_mt_lens = []

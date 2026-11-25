@@ -287,6 +287,8 @@ def _restore_neural_entities(translated, mapping):
         pattern = re.compile(r"[\s,.\u00a0\u202f]*".join(digit_pats))
         m = pattern.search(out)
         if not m:
+            if original in out:
+                continue
             all_found = False
             continue
         before = out[: m.start()]
@@ -398,7 +400,10 @@ def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32
             per_text_plan.append(("verbatim", text_str))
             continue
         if is_neural and is_llm:
-            masked, mapping = _protect_neural_entities(text_str, compiled_glossary)
+            if compiled_glossary:
+                masked, mapping = _protect_neural_entities(text_str, compiled_glossary)
+            else:
+                masked, mapping = text_str, ()
             sents = _chunk_sentences_for_context(split_sentences(masked), context_window)
             per_text_plan.append(("neural", "", "", text_str, sents, mapping))
         elif is_neural:
