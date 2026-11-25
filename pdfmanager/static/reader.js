@@ -26,6 +26,7 @@ import { COLORS, el, fadeOut, heldTimer, ICON, isTyping, MIN_ZOOM, MAX_ZOOM, pdf
 import { Annotating } from "./annotate.js";
 import { CheckOcrMode } from "./checkocr.js";
 import { CropMode } from "./cropmode.js";
+import { attachMobileTouch } from "./mobile-touch.js";
 import { Finding } from "./find.js";
 import { FormMode } from "./formmode.js";
 import { Layering } from "./layers.js";
@@ -147,6 +148,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     this.active = false;
     this.#build();
     this.setPageTheme(this.pageTheme());
+    attachMobileTouch(this);
   }
 
   // ---- DOM ------------------------------------------------------------------

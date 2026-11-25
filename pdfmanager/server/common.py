@@ -36,6 +36,7 @@ STATIC_TYPES = {
     ".mjs": "text/javascript", ".js": "text/javascript", ".css": "text/css",
     ".svg": "image/svg+xml", ".gif": "image/gif", ".png": "image/png",
     ".wasm": "application/wasm", ".json": "application/json",
+    ".webmanifest": "application/manifest+json",
     ".woff2": "font/woff2",  # the interface's fonts (static/fonts)
 }
 
