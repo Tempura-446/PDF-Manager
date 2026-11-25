@@ -440,6 +440,121 @@ class ReaderRoutesMixin:
         return self._send(HTTPStatus.OK, data, "application/pdf",
                           {"X-Pdfm-Changed": str(len(edits))})
 
+    def _ocr_words(self, body):
+        """Return all invisible OCR words (high and low confidence) for in-place editing."""
+        from pdfmanager import textlayer
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        page_str = (fields.get("page") or "").strip()
+        page_num = int(page_str) if page_str.isdigit() else None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            src.write_bytes(uploads[0][2])
+            found = textlayer.read_all_ocr_words(src, fields.get("password") or None, page=page_num)
+        return self._send(HTTPStatus.OK, found)
+
+    def _ocr_replace(self, body):
+        """Batch find-and-replace across invisible OCR words; sends back the updated PDF."""
+        from pdfmanager import textlayer
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        find_text = fields.get("find") or ""
+        if not find_text:
+            raise UserError("enter text to find in the OCR layer")
+        replace_text = fields.get("replace") or ""
+        case_sensitive = _bool(fields.get("case_sensitive"))
+        password = fields.get("password") or None
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src, out = Path(tmp) / "file.pdf", Path(tmp) / "replaced.pdf"
+            src.write_bytes(uploads[0][2])
+            res = textlayer.replace_ocr_text(
+                src, out, find_text, replace_text,
+                password=password, case_sensitive=case_sensitive,
+            )
+            if password and core.open_pdf(src, password).is_encrypted:
+                core.encrypt(out, out, password)
+            data = out.read_bytes()
+        return self._send(HTTPStatus.OK, data, "application/pdf",
+                          {"X-Pdfm-Changed": str(res["replaced"])})
+
+    def _sessions_list(self):
+        """Return saved workspace sessions with fresh OpenFiles IDs for existing files."""
+        from pdfmanager import sessions
+
+        out = []
+        for s in sessions.list_sessions():
+            tabs_out = []
+            for tab in s.get("tabs") or []:
+                p = Path(tab.get("path") or "")
+                exists = p.is_file()
+                file_id = self.opened.add(p) if (exists and self.opened is not None) else None
+                tabs_out.append({
+                    "id": file_id,
+                    "name": tab.get("name") or p.name,
+                    "page": tab.get("page", 1),
+                    "scale": tab.get("scale", "auto"),
+                    "rotation": tab.get("rotation", 0),
+                    "missing": not exists,
+                })
+            out.append({
+                "id": s.get("id"),
+                "name": s.get("name"),
+                "saved_at": s.get("saved_at"),
+                "active_index": s.get("active_index", 0),
+                "tabs": tabs_out,
+                "split": s.get("split") or {"open": False},
+            })
+        return self._send(HTTPStatus.OK, {"sessions": out})
+
+    def _sessions_save(self, body):
+        """Save a named workspace session. Only accepts fileIds registered in self.opened."""
+        from pdfmanager import sessions
+
+        data = self._json(body)
+        name = str(data.get("name") or "").strip()
+        raw_tabs = data.get("tabs") or []
+        if not isinstance(raw_tabs, list):
+            raise UserError("tabs must be a list")
+        resolved = []
+        for t in raw_tabs:
+            if not isinstance(t, dict):
+                continue
+            fid = str(t.get("fileId") or "").strip()
+            known = self.opened.get(fid) if (fid and self.opened is not None) else None
+            if known is None or not known.is_file():
+                continue
+            resolved.append({
+                "path": str(known),
+                "name": str(t.get("name") or known.name),
+                "page": int(t.get("page") or 1),
+                "scale": t.get("scale", "auto"),
+                "rotation": int(t.get("rotation") or 0),
+            })
+        if not resolved:
+            raise UserError("open at least one saved PDF from disk before saving a workspace session")
+        try:
+            saved = sessions.save_session(
+                name=name,
+                tabs=resolved,
+                active_index=int(data.get("active_index") or 0),
+                split=data.get("split") if isinstance(data.get("split"), dict) else None,
+            )
+        except ValueError as exc:
+            raise UserError(str(exc)) from None
+        return self._send(HTTPStatus.OK, {"session": saved})
+
+    def _sessions_delete(self, body):
+        """Delete a saved workspace session by ID."""
+        from pdfmanager import sessions
+
+        data = self._json(body)
+        deleted = sessions.delete_session(str(data.get("id") or ""))
+        return self._send(HTTPStatus.OK, {"deleted": deleted})
+
     def _images_list(self, body):
         """The pictures on the reader's pages (see pageimages.py)."""
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)

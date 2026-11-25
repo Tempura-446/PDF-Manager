@@ -309,6 +309,9 @@ export const SplitView = (Base) => class extends Base {
     this.splitDivider.hidden = false;
     this.splitPane.hidden = false;
     this.root.classList.add("rd-split-open");
+    const pageTheme = this.container.getAttribute("data-page-theme");
+    if (pageTheme) this.splitContainer.setAttribute("data-page-theme", pageTheme);
+    else this.splitContainer.removeAttribute("data-page-theme");
     this.splitContainer.classList.toggle("dark", this.container.classList.contains("dark"));
     this._applySplitSizes();
     this._setSplitActivePane("left");

@@ -453,3 +453,184 @@ def correct_words(path, output, edits, password=None):
     with open(out, "wb") as f:
         writer.write(f)
     return out
+
+
+def _tm_to_display_box(tm_ops, text: str, display_w: float, display_h: float):
+    """Convert a /FZPDFOCR Tm matrix + decoded word into a top-left display box."""
+    if not tm_ops or len(tm_ops) != 6:
+        return [0.0, 0.0, 10.0, 10.0]
+    a, b, c, d, e, f = (float(v) for v in tm_ops)
+    span = max(len(text), 1) * (GLYPH_WIDTH / 1000.0)
+    wx, wy = a * span, b * span
+    pts = [
+        (e, f),
+        (e + wx, f + wy),
+        (e + c, f + d),
+        (e + wx + c, f + wy + d),
+    ]
+    xs = [max(0.0, min(display_w, p[0])) for p in pts]
+    ys = [max(0.0, min(display_h, display_h - p[1])) for p in pts]
+    x0, x1 = min(xs), max(xs)
+    y0, y1 = min(ys), max(ys)
+    if x1 <= x0:
+        x1 = min(display_w, x0 + 4.0)
+    if y1 <= y0:
+        y1 = min(display_h, y0 + 4.0)
+    return [round(x0, 2), round(y0, 2), round(x1, 2), round(y1, 2)]
+
+
+def read_all_ocr_words(path, password=None, page=None):
+    """Return all invisible /FZPDFOCR words with page-space boxes and unsure flags.
+
+    Allows clicking and fixing *any* OCR word in place, even when confidence was
+    high or /PieceInfo /OCRUnsure is empty.
+    """
+    from pypdf.generic import ContentStream
+
+    from pdfmanager import core
+
+    reader = core.open_pdf(path, password)
+    font_name = NameObject(GLYPHLESS_FONT_RESOURCE)
+    pages_out = {}
+    total = 0
+
+    page_indices = [int(page)] if page is not None else list(range(1, len(reader.pages) + 1))
+    for page_num in page_indices:
+        if not 1 <= page_num <= len(reader.pages):
+            continue
+        pg = reader.pages[page_num - 1]
+        display_w, display_h = _display_size(pg)
+        unsure_map = {int(it.get("id", -1)): it for it in _page_unsure_list(pg)}
+        contents = pg.get("/Contents")
+        if contents is None:
+            continue
+        cobj = contents.get_object()
+        streams = list(cobj) if isinstance(cobj, ArrayObject) else [contents]
+        word_idx = 0
+        items = []
+        for ref in streams:
+            stream_obj = ref.get_object()
+            if GLYPHLESS_FONT_RESOURCE.encode() not in stream_obj.get_data():
+                continue
+            cs = ContentStream(stream_obj, reader)
+            in_ocr = False
+            last_tm = None
+            for operands, operator in cs.operations:
+                if operator == b"Tf":
+                    in_ocr = bool(operands) and operands[0] == font_name
+                elif operator == b"ET":
+                    in_ocr = False
+                    last_tm = None
+                elif operator == b"Tm" and in_ocr:
+                    last_tm = operands
+                elif operator == b"Tj" and in_ocr and operands:
+                    text = _decode_tj(operands[0])
+                    if text == " ":
+                        continue
+                    unsure_entry = unsure_map.get(word_idx)
+                    box = (
+                        unsure_entry["box"]
+                        if unsure_entry and isinstance(unsure_entry.get("box"), list)
+                        else _tm_to_display_box(last_tm, text, display_w, display_h)
+                    )
+                    items.append({
+                        "id": word_idx,
+                        "text": text,
+                        "confidence": unsure_entry.get("confidence", 1.0) if unsure_entry else 1.0,
+                        "unsure": unsure_entry is not None,
+                        "box": box,
+                        "page_size": [round(display_w, 2), round(display_h, 2)],
+                    })
+                    word_idx += 1
+        if items:
+            pages_out[str(page_num)] = items
+            total += len(items)
+    return {"pages": pages_out, "total": total}
+
+
+def replace_ocr_text(path, output, find_text, replace_text, password=None, case_sensitive=False):
+    """Batch find-and-replace across invisible /FZPDFOCR words in ``path``.
+
+    Rescales each modified word's ``Tm`` matrix proportionally and leaves all
+    drawn/image page content pixel-identical.
+    """
+    import re
+    from pathlib import Path
+    from pypdf import PdfWriter
+    from pypdf.generic import ByteStringObject, ContentStream, FloatObject
+
+    from pdfmanager import core
+
+    needle = str(find_text or "")
+    if not needle:
+        raise core.PdfManagerError("find_text cannot be empty")
+    repl = str(replace_text if replace_text is not None else "")
+
+    flags = 0 if case_sensitive else re.IGNORECASE
+    pattern = re.compile(re.escape(needle), flags)
+
+    reader = core.open_pdf(path, password)
+    writer = PdfWriter()
+    writer.clone_document_from_reader(reader)
+    font_name = NameObject(GLYPHLESS_FONT_RESOURCE)
+
+    replaced = 0
+    touched_pages = []
+
+    for page_num, page in enumerate(writer.pages, start=1):
+        contents = page.get("/Contents")
+        if contents is None:
+            continue
+        cobj = contents.get_object()
+        streams = list(cobj) if isinstance(cobj, ArrayObject) else [contents]
+        page_hits = 0
+        fixed_ids = set()
+        word_idx = 0
+        for ref in streams:
+            stream_obj = ref.get_object()
+            if GLYPHLESS_FONT_RESOURCE.encode() not in stream_obj.get_data():
+                continue
+            cs = ContentStream(stream_obj, writer)
+            in_ocr = False
+            last_tm_pos = None
+            modified = False
+            for pos, (operands, operator) in enumerate(cs.operations):
+                if operator == b"Tf":
+                    in_ocr = bool(operands) and operands[0] == font_name
+                elif operator == b"ET":
+                    in_ocr = False
+                    last_tm_pos = None
+                elif operator == b"Tm" and in_ocr:
+                    last_tm_pos = pos
+                elif operator == b"Tj" and in_ocr and operands:
+                    old_text = _decode_tj(operands[0])
+                    if old_text == " ":
+                        continue
+                    new_text, count = pattern.subn(lambda _m: repl, old_text)
+                    if count > 0 and new_text != old_text:
+                        operands[0] = ByteStringObject(_encode(new_text))
+                        if last_tm_pos is not None and new_text:
+                            tm_ops = cs.operations[last_tm_pos][0]
+                            if len(tm_ops) == 6:
+                                ratio = max(len(old_text), 1) / max(len(new_text), 1)
+                                tm_ops[0] = FloatObject(round(float(tm_ops[0]) * ratio, 4))
+                                tm_ops[1] = FloatObject(round(float(tm_ops[1]) * ratio, 4))
+                        modified = True
+                        page_hits += count
+                        fixed_ids.add(word_idx)
+                    word_idx += 1
+            if modified:
+                stream_obj.set_data(cs.get_data())
+        if page_hits:
+            replaced += page_hits
+            touched_pages.append(page_num)
+            if fixed_ids:
+                remaining = [it for it in _page_unsure_list(page) if int(it.get("id", -1)) not in fixed_ids]
+                _write_page_unsure_list(page, remaining)
+
+    out = Path(output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "wb") as f:
+        writer.write(f)
+    return {"replaced": replaced, "pages": touched_pages}
+

@@ -19,9 +19,20 @@ export const CheckOcrMode = (Base) => class extends Base {
       title: "Next unsure word (Tab)", "aria-label": "Next unsure word",
       html: svg("down"),
     });
+    this.checkOcrAllBtn = el("button", {
+      class: "rd-btn compact", type: "button",
+      title: "Show all invisible OCR words (even high-confidence) to fix any typo",
+      "aria-pressed": "false",
+    }, "All words");
+    this.checkOcrReplaceBtn = el("button", {
+      class: "rd-btn compact", type: "button",
+      title: "Find and replace text across the invisible OCR text layer",
+    }, "Find & Replace");
     const done = el("button", { class: "rd-btn", type: "button", title: "Close Check OCR (Esc)" }, "Done");
     this.checkOcrPrevBtn.addEventListener("click", () => this._stepCheckOcr(-1));
     this.checkOcrNextBtn.addEventListener("click", () => this._stepCheckOcr(1));
+    this.checkOcrAllBtn.addEventListener("click", () => this._toggleCheckOcrAllWords());
+    this.checkOcrReplaceBtn.addEventListener("click", () => this._promptOcrFindReplace());
     done.addEventListener("click", () => this.closeCheckOcr());
     this.checkocrbar = el("div", { class: "rd-bar rd-ocr-bar", hidden: true },
       el("span", { class: "rd-ocr-title" }, "Check OCR"),
@@ -29,9 +40,12 @@ export const CheckOcrMode = (Base) => class extends Base {
       el("span", { class: "rd-sep" }),
       this.checkOcrPrevBtn,
       this.checkOcrNextBtn,
+      this.checkOcrAllBtn,
+      this.checkOcrReplaceBtn,
       el("span", { style: "flex:1" }),
       done);
     this.checkOcrMode = false;
+    this._ocrAllWords = false;
     this._ocrUnsure = { pages: {}, total: 0 };
     this._ocrActive = null; // { page, id }
     this._ocrPop = null;
@@ -39,11 +53,13 @@ export const CheckOcrMode = (Base) => class extends Base {
   }
 
   /** Enter Check OCR mode for the active document. */
-  async openCheckOcr(pageNumber = null, { autoOpen = true } = {}) {
+  async openCheckOcr(pageNumber = null, { autoOpen = true, allWords = false } = {}) {
     if (!this.doc) return;
     if (this.annotOpen) this.closeAnnotate();
     if (this.formMode) this.closeFormMode();
     this.checkOcrMode = true;
+    this._ocrAllWords = !!allWords;
+    this.checkOcrAllBtn.setAttribute("aria-pressed", String(this._ocrAllWords));
     this.checkocrbar.hidden = false;
     this.container.classList.add("rd-check-ocr");
     this.checkOcrStatus.textContent = "Checking…";
@@ -56,6 +72,39 @@ export const CheckOcrMode = (Base) => class extends Base {
     if (autoOpen) {
       const target = this._findCheckOcrTarget(pageNumber || this.pdfViewer.currentPageNumber);
       if (target) this._focusCheckOcrWord(target.page, target.word);
+    }
+  }
+
+  async _toggleCheckOcrAllWords() {
+    this._ocrAllWords = !this._ocrAllWords;
+    this.checkOcrAllBtn.setAttribute("aria-pressed", String(this._ocrAllWords));
+    this._closeCheckOcrPop();
+    this.checkOcrStatus.textContent = "Loading OCR words…";
+    await this._loadCheckOcrWords();
+    if (this.checkOcrMode) this._drawCheckOcrOverlays();
+  }
+
+  async _promptOcrFindReplace() {
+    if (!this.doc || !this.activeTab) return;
+    const findText = window.prompt("Find text in invisible OCR layer:");
+    if (!findText) return;
+    const replaceText = window.prompt(`Replace “${findText}” with:`, findText);
+    if (replaceText === null) return;
+    try {
+      let changed = 0;
+      await this._changeDocument(async (bytes, tab) => {
+        const res = await this._post("/api/ocr/replace", bytes, tab, {
+          find: findText, replace: replaceText, case_sensitive: "false",
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+        changed = Number(res.headers.get("X-Pdfm-Changed") || 0);
+        return new Uint8Array(await res.arrayBuffer());
+      });
+      await this._loadCheckOcrWords();
+      if (this.checkOcrMode) this._drawCheckOcrOverlays();
+      this.toast(changed ? `Replaced ${changed} OCR occurrence${changed === 1 ? "" : "s"}.` : `No OCR occurrences of “${findText}” found.`);
+    } catch (e) {
+      this.toast("OCR find & replace failed: " + (e.message || e));
     }
   }
 
@@ -75,14 +124,15 @@ export const CheckOcrMode = (Base) => class extends Base {
     if (!tab) return;
     try {
       const bytes = await this._currentBytes();
-      const res = await this._post("/api/ocr/unsure", bytes, tab);
+      const endpoint = this._ocrAllWords ? "/api/ocr/words" : "/api/ocr/unsure";
+      const res = await this._post(endpoint, bytes, tab);
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
       const data = await res.json();
       if (tab !== this.activeTab) return;
       this._ocrUnsure = data && data.pages ? data : { pages: {}, total: 0 };
     } catch (e) {
       this._ocrUnsure = { pages: {}, total: 0 };
-      this.toast("Could not load unsure OCR words: " + (e.message || e));
+      this.toast("Could not load OCR words: " + (e.message || e));
     }
     this._updateCheckOcrStatus();
   }
@@ -91,9 +141,12 @@ export const CheckOcrMode = (Base) => class extends Base {
     const n = this._ocrUnsure?.total || 0;
     const pages = Object.keys(this._ocrUnsure?.pages || {}).length;
     if (n === 0) {
-      this.checkOcrStatus.textContent = "No unsure words left to check.";
+      this.checkOcrStatus.textContent = this._ocrAllWords
+        ? "No invisible OCR text layer found on this PDF."
+        : "No unsure words left — click “All words” to edit any OCR word.";
     } else {
-      this.checkOcrStatus.textContent = `${n} unsure word${n === 1 ? "" : "s"} on ${pages} page${pages === 1 ? "" : "s"} — click a box to fix, Tab for next`;
+      const kind = this._ocrAllWords ? "OCR word" : "unsure word";
+      this.checkOcrStatus.textContent = `${n} ${kind}${n === 1 ? "" : "s"} on ${pages} page${pages === 1 ? "" : "s"} — click a box to fix, Tab for next`;
     }
     this.checkOcrPrevBtn.disabled = n === 0;
     this.checkOcrNextBtn.disabled = n === 0;
@@ -146,9 +199,9 @@ export const CheckOcrMode = (Base) => class extends Base {
         const isActive = this._ocrActive && this._ocrActive.page === p && this._ocrActive.id === w.id;
         const btn = el("button", {
           type: "button",
-          class: "rd-ocr-unsure" + (isActive ? " active" : ""),
+          class: "rd-ocr-unsure" + (w.unsure === false ? " rd-ocr-word-ok" : "") + (isActive ? " active" : ""),
           "data-ocr-id": String(w.id),
-          title: `“${w.text}” (${Math.round((w.confidence || 0) * 100)}% sure) — click to check`,
+          title: `“${w.text}” (${Math.round((w.confidence || 0) * 100)}% sure) — click to fix`,
           "aria-label": `Check OCR word ${w.text}`,
         });
         Object.assign(btn.style, {

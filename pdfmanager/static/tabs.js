@@ -299,4 +299,154 @@ export const Tabs = (Base) => class extends Base {
     if (current.length !== order.length || current.some((n, i) => n !== order[i])) this.tabbar.replaceChildren(...order, this.addTabBtn);
     else if (!this.addTabBtn.isConnected) this.tabbar.append(this.addTabBtn);
   }
+
+  /** Capture current disk-backed tabs + split-view state and open Workspace Sessions modal. */
+  async openWorkspaceSessions() {
+    let sessions = [];
+    try {
+      const res = await fetch("/api/sessions");
+      if (res.ok) sessions = (await res.json()).sessions || [];
+    } catch {
+      sessions = [];
+    }
+    const overlay = el("div", { class: "rd-modal-backdrop", role: "dialog", "aria-modal": "true", "aria-label": "Workspace sessions" });
+    Object.assign(overlay.style, {
+      position: "fixed", inset: "0", zIndex: "1200", background: "rgb(0 0 0 / .45)",
+      display: "grid", placeItems: "center", padding: "16px",
+    });
+    const card = el("div", { class: "rd-modal-card" });
+    Object.assign(card.style, {
+      width: "min(520px, 100%)", maxHeight: "80vh", overflowY: "auto",
+      background: "var(--surface)", color: "var(--text)", borderRadius: "12px",
+      border: "1px solid var(--border)", boxShadow: "var(--shadow-pop)", padding: "18px 20px",
+    });
+    const close = () => overlay.remove();
+    const header = el("div", { style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:12px" },
+      el("strong", { style: "font-size:15px" }, "Workspace Sessions"),
+      el("button", { type: "button", class: "rd-btn compact", title: "Close", html: svg("x"), onclick: close }));
+
+    const diskTabs = (this.tabs || []).filter((t) => t.fileId);
+    const nameInput = el("input", {
+      type: "text", class: "rd-input", placeholder: "Session name (e.g. Thesis Review)…",
+      style: "flex:1;min-width:0;padding:6px 10px;border:1px solid var(--border-strong);border-radius:6px;background:var(--bg);color:var(--text)",
+    });
+    const saveBtn = el("button", { type: "button", class: "rd-btn", disabled: !diskTabs.length }, "Save current");
+    const listWrap = el("div", { style: "display:flex;flex-direction:column;gap:8px;margin-top:12px" });
+
+    const renderList = (items) => {
+      listWrap.replaceChildren();
+      if (!items.length) {
+        listWrap.append(el("div", { style: "color:var(--muted);font-size:13px;padding:10px 0" }, "No saved workspace sessions yet."));
+        return;
+      }
+      for (const s of items) {
+        const avail = (s.tabs || []).filter((t) => !t.missing && t.id).length;
+        const total = (s.tabs || []).length;
+        const meta = `${avail}/${total} file${total === 1 ? "" : "s"}${s.split?.open ? " · Split view" : ""}`;
+        const openBtn = el("button", { type: "button", class: "rd-btn compact", disabled: avail === 0 }, "Restore");
+        openBtn.addEventListener("click", async () => { close(); await this.restoreWorkspaceSession(s); });
+        const delBtn = el("button", { type: "button", class: "rd-btn compact", title: "Delete session", html: svg("x") });
+        delBtn.addEventListener("click", async () => {
+          await fetch("/api/sessions/delete", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: s.id }),
+          });
+          sessions = sessions.filter((x) => x.id !== s.id);
+          renderList(sessions);
+        });
+        const row = el("div", {
+          style: "display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg)",
+        },
+          el("div", { style: "flex:1;min-width:0" },
+            el("div", { style: "font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" }, s.name),
+            el("div", { style: "font-size:12px;color:var(--muted)" }, meta)),
+          openBtn, delBtn);
+        listWrap.append(row);
+      }
+    };
+
+    saveBtn.addEventListener("click", async () => {
+      const name = (nameInput.value || "").trim() || `Workspace ${new Date().toLocaleDateString()}`;
+      const tabsPayload = diskTabs.map((t) => {
+        const isCurrent = t === this.activeTab && this.pdfViewer;
+        return {
+          fileId: t.fileId,
+          name: t.name,
+          page: isCurrent ? (this.pdfViewer.currentPageNumber || 1) : (t.goto?.page || 1),
+          scale: isCurrent ? (this.pdfViewer.currentScaleValue || "auto") : (t.goto?.scale || "auto"),
+          rotation: isCurrent ? (this.pdfViewer.pagesRotation || 0) : (t.goto?.rotation || 0),
+        };
+      });
+      const activeIdx = Math.max(0, diskTabs.indexOf(this.activeTab));
+      let splitPayload = { open: false };
+      if (this.splitOpen) {
+        const special = (this._splitSourceValue === "__same__" || this._splitSourceValue === "__translate__")
+          ? this._splitSourceValue : null;
+        const srcIdx = special ? null : diskTabs.findIndex((t) => String(t.id) === String(this._splitSourceValue));
+        splitPayload = {
+          open: true,
+          source_special: special,
+          source_index: srcIdx >= 0 ? srcIdx : null,
+          ratio: this._splitRatio || 0.5,
+          sync: !!this.splitSync?.checked,
+          offset: Number(this.splitOffset?.value || 0),
+        };
+      }
+      const res = await fetch("/api/sessions", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, tabs: tabsPayload, active_index: activeIdx, split: splitPayload }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        this.toast(err.error || "Could not save workspace session.");
+        return;
+      }
+      nameInput.value = "";
+      const fresh = await fetch("/api/sessions").then((r) => (r.ok ? r.json() : { sessions: [] }));
+      sessions = fresh.sessions || [];
+      renderList(sessions);
+      this.toast(`Saved workspace “${name}”.`);
+    });
+
+    const formRow = el("div", { style: "display:flex;gap:8px;align-items:center" }, nameInput, saveBtn);
+    const hint = !diskTabs.length
+      ? el("div", { style: "font-size:12px;color:var(--muted);margin-top:6px" }, "Open one or more PDFs from disk to save a workspace session.")
+      : el("span");
+    renderList(sessions);
+    card.append(header, formRow, hint, listWrap);
+    overlay.append(card);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    document.body.append(overlay);
+    nameInput.focus();
+  }
+
+  /** Restore a saved workspace session (tabs, reading positions, active tab, and split view). */
+  async restoreWorkspaceSession(session) {
+    const items = (session?.tabs || []).filter((t) => !t.missing && t.id);
+    if (!items.length) {
+      this.toast("None of the files in that workspace session are available on disk.");
+      return;
+    }
+    const openedTabs = [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      await this.openById(it.id, { page: it.page || 1, scale: it.scale, rotation: it.rotation || 0 }, i === 0 && !this.tabs.length);
+      if (this.activeTab) openedTabs.push(this.activeTab);
+    }
+    const targetIdx = Math.max(0, Math.min(session.active_index || 0, openedTabs.length - 1));
+    if (openedTabs[targetIdx] && openedTabs[targetIdx] !== this.activeTab) {
+      await this.showTab(openedTabs[targetIdx]);
+    }
+    if (session.split?.open) {
+      this._splitRatio = session.split.ratio || 0.5;
+      if (this.splitSync) this.splitSync.checked = !!session.split.sync;
+      if (this.splitOffset) this.splitOffset.value = String(session.split.offset || 0);
+      let target = session.split.source_special || null;
+      if (!target && Number.isInteger(session.split.source_index) && openedTabs[session.split.source_index]) {
+        target = String(openedTabs[session.split.source_index].id);
+      }
+      await this.openSplitView(target || "__same__");
+    }
+    this.toast(`Restored workspace “${session.name}” (${openedTabs.length} tab${openedTabs.length === 1 ? "" : "s"}).`);
+  }
 };
