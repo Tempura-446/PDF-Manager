@@ -108,15 +108,19 @@ def cbz_to_pdf(cbz_path, output_pdf, *, rtl_viewer=False):
             raw = zf.read(info)
             try:
                 with Image.open(io.BytesIO(raw)) as im:
-                    im_rgb = im.convert("RGB")
-                    w_px, h_px = im_rgb.size
+                    is_gray = im.mode in ("1", "L", "LA")
+                    im_out = im.convert("L") if is_gray else im.convert("RGB")
+                    w_px, h_px = im_out.size
                     # Target 150 DPI -> PDF points (72 pt/in) with reasonable page bounds
                     scale = 72.0 / 150.0
                     w_pt = max(72.0, min(1440.0, w_px * scale))
                     h_pt = w_pt * (float(h_px) / max(1.0, float(w_px)))
                     c.setPageSize((w_pt, h_pt))
                     img_buf = io.BytesIO()
-                    im_rgb.save(img_buf, format="JPEG", quality=92)
+                    if is_gray:
+                        im_out.save(img_buf, format="PNG", optimize=True)
+                    else:
+                        im_out.save(img_buf, format="JPEG", quality=92)
                     img_buf.seek(0)
                     c.drawImage(ImageReader(img_buf), 0, 0, width=w_pt, height=h_pt)
                     c.showPage()

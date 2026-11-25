@@ -9,6 +9,7 @@ extraction, OCR pre-processing, and balanced comic lettering.
 
 import io
 import logging
+import re
 from collections import deque
 
 from PIL import Image, ImageFilter, ImageOps
@@ -97,11 +98,11 @@ def _classify_bubble_shape(filled_mask):
 
 
 def _eroded_mask_image(filled_mask):
-    """Return a Pillow ``'L'`` image of ``filled_mask`` eroded inward to preserve bubble outlines."""
+    """Return a feathered Pillow ``'L'`` image of ``filled_mask`` eroded inward to preserve bubble outlines."""
     import numpy as np
 
     img = Image.fromarray((filled_mask.astype(np.uint8) * 255), mode="L")
-    return img.filter(ImageFilter.MinFilter(size=5))
+    return img.filter(ImageFilter.MinFilter(size=5)).filter(ImageFilter.GaussianBlur(radius=1.0))
 
 
 def _has_plumber_chars_in_box(plumber_page, ox0, oy0, ox1, oy1, orig_w, orig_h):
@@ -320,8 +321,10 @@ def detect_speech_bubbles(pil_img, *, max_dim=480, reading_dir="rtl", detect_inv
     gray = np.asarray(small.convert("L"), dtype=np.uint8)
     rgb_arr = np.asarray(small.convert("RGB"), dtype=np.uint8)
 
+    paper_lum = float(np.percentile(gray, 90))
+    light_thresh = max(205, min(236, int(round(paper_lum - 22.0))))
     candidates = _scan_polarity_components(
-        gray, rgb_arr, gray >= 232, inverted=False, orig_w=orig_w, orig_h=orig_h,
+        gray, rgb_arr, gray >= light_thresh, inverted=False, orig_w=orig_w, orig_h=orig_h,
         plumber_page=plumber_page,
     )
     if detect_inverted:
@@ -461,7 +464,56 @@ def extract_digital_bubble_text(plumber_page, bubble, img_w, img_h):
     return normalize_vertical_punct("".join(out)).strip()
 
 
-def extract_bubble_text(pil_img, bubble, src_lang, *, ocr_fn=None, plumber_page=None):
+_MANGA_CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]")
+
+
+def _order_and_clean_bubble_lines(lines, *, reading_order="rtl"):
+    """Filter raster furigana/ruby columns and sort vertical CJK columns RTL (or LTR).
+
+    For horizontal / non-CJK bubbles, falls back to standard top-to-bottom order.
+    """
+    if not lines:
+        return ""
+    items = []
+    for ln in lines:
+        xs = [p[0] for p in ln.quad]
+        ys = [p[1] for p in ln.quad]
+        x0, x1 = min(xs), max(xs)
+        y0, y1 = min(ys), max(ys)
+        w = max(1.0, x1 - x0)
+        h = max(1.0, y1 - y0)
+        items.append({"line": ln, "x0": x0, "y0": y0, "x1": x1, "y1": y1, "w": w, "h": h, "cx": (x0 + x1) / 2.0})
+
+    tall_cjk = [it for it in items if it["h"] > it["w"] * 1.15 and _MANGA_CJK_RE.search(it["line"].text or "")]
+    if len(tall_cjk) >= max(1, len(items) // 2):
+        # Strip narrow furigana/ruby columns (width < 62% of median main-column width)
+        widths = sorted(it["w"] for it in tall_cjk)
+        ref_w = widths[len(widths) // 2]
+        # Prefer the wider half when a bubble has 1 main column + 1 ruby column
+        if len(widths) >= 2 and widths[0] < widths[-1] * 0.62:
+            ref_w = widths[-1]
+        kept = []
+        for it in items:
+            is_ruby = it["w"] < ref_w * 0.62 and any(
+                other is not it and other["w"] >= ref_w * 0.75 and other["h"] >= it["h"] * 1.1
+                for other in items
+            )
+            if not is_ruby:
+                kept.append(it)
+        if not kept:
+            kept = items
+        if reading_order == "rtl":
+            kept.sort(key=lambda it: (-round(it["cx"] / max(ref_w * 0.6, 1.0)), it["y0"]))
+        else:
+            kept.sort(key=lambda it: (round(it["cx"] / max(ref_w * 0.6, 1.0)), it["y0"]))
+        return normalize_vertical_punct("".join((it["line"].text or "").strip() for it in kept)).strip()
+
+    from pdfmanager import ocr
+
+    return normalize_vertical_punct(ocr.text_of(lines)).strip()
+
+
+def extract_bubble_text(pil_img, bubble, src_lang, *, ocr_fn=None, plumber_page=None, reading_order="rtl"):
     """Extract dialogue text from a detected speech bubble (digital PDF fast path, else OCR)."""
     if plumber_page is not None:
         digital = extract_digital_bubble_text(plumber_page, bubble, pil_img.width, pil_img.height)
@@ -489,11 +541,30 @@ def extract_bubble_text(pil_img, bubble, src_lang, *, ocr_fn=None, plumber_page=
 
         script = ocr.script_for(src_lang) if src_lang and src_lang != "auto" else None
         lines = ocr.recognise(pre, script=script, quality="standard")
-        raw = ocr.text_of(lines) if lines else ""
-        return normalize_vertical_punct(raw).strip()
+        return _order_and_clean_bubble_lines(lines, reading_order=reading_order) if lines else ""
     except Exception as _exc:
         logging.getLogger("zpdf").debug("manga.extract_bubble_text: %s", _exc)
         return ""
+
+
+def _format_comic_text(text: str) -> tuple[str, str]:
+    """Normalize comic punctuation and infer dialogue style (``normal``, ``shout``, ``thought``)."""
+    t = str(text or "").strip()
+    if not t:
+        return "", "normal"
+    t = re.sub(r"\.\s+\.\s+\.", "...", t)
+    t = re.sub(r"\.{4,}", "...", t)
+    t = re.sub(r"\s*--\s*", "—", t)
+    t = re.sub(r"\?\s+!", "?!", t)
+    t = re.sub(r"!\s+\?", "!?", t)
+    t = re.sub(r"\s+([?!…])", r"\1", t)
+    t = re.sub(r"\s{2,}", " ", t).strip()
+
+    if (t.startswith("(") and t.endswith(")")) or (t.startswith("（") and t.endswith("）")):
+        return t, "thought"
+    if t.endswith("!") or "?!" in t or "!?" in t:
+        return t, "shout"
+    return t, "normal"
 
 
 def _wrap_balanced(text, font_name, font_size, max_w):
@@ -516,10 +587,53 @@ def _wrap_balanced(text, font_name, font_size, max_w):
     return best
 
 
+def _wrap_elliptical(text, font_name, font_size, rx, ry, leading):
+    """Wrap dialogue to fit an oval bubble's curved chord widths (diamond/hourglass shaping)."""
+    import math
+
+    words = (text or "").split()
+    if len(words) < 3 or rx <= 4.0 or ry <= 4.0:
+        return _wrap_balanced(text, font_name, font_size, max(12.0, rx * 1.6))
+
+    # Estimate line count using average chord width (~0.82 * 2*rx)
+    est_lines = max(1, len(_wrap_text(text, font_name, font_size, max(12.0, rx * 1.64))))
+    for n_lines in range(est_lines, est_lines + 4):
+        total_h = n_lines * leading
+        if total_h > ry * 2.15 and n_lines > est_lines:
+            break
+        # Compute per-line safe chord width along the ellipse
+        line_widths = []
+        for i in range(n_lines):
+            y_off = ((i + 0.5) / n_lines - 0.5) * total_h
+            norm_y = min(0.95, abs(y_off) / max(ry, 1.0))
+            chord = 2.0 * rx * math.sqrt(max(0.28, 1.0 - norm_y * norm_y))
+            line_widths.append(max(12.0, chord))
+
+        # Greedily pack words into the tapered line widths
+        packed = []
+        idx = 0
+        for max_lw in line_widths:
+            if idx >= len(words):
+                break
+            cur = words[idx]
+            idx += 1
+            while idx < len(words):
+                cand = cur + " " + words[idx]
+                if pdfmetrics.stringWidth(cand, font_name, font_size) <= max_lw:
+                    cur = cand
+                    idx += 1
+                else:
+                    break
+            packed.append(cur)
+        if idx >= len(words):
+            return packed
+    return _wrap_balanced(text, font_name, font_size, max(12.0, rx * 1.55))
+
+
 def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, dst_lang):
     """Create a transparent PDF overlay page that cleans each speech bubble interior
-    according to its shape (``rect``, ``oval``, or pixel-accurate ``polygon`` mask)
-    and typesets centered, balanced, auto-fitted dialogue inside each bubble."""
+    according to its shape (``rect``, ``oval``, or pixel-accurate feathered mask)
+    and typesets centered, diamond-shaped, auto-fitted dialogue inside each bubble."""
     from pypdf import PdfReader
 
     buf = io.BytesIO()
@@ -528,10 +642,10 @@ def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, d
     sy = float(height) / max(1.0, float(img_h))
 
     for bubble, trans in zip(bubbles, translated_texts):
-        text = str(trans or "").strip()
-        if not text:
+        raw_text, comic_style = _format_comic_text(str(trans or ""))
+        if not raw_text:
             continue
-        display_text = _shape_rtl(text, dst_lang)
+        display_text = _shape_rtl(raw_text, dst_lang)
 
         px0 = bubble["x0"] * sx
         px1 = bubble["x1"] * sx
@@ -546,8 +660,8 @@ def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, d
         poly_mask = bubble.get("mask")
 
         c.saveState()
-        if shape == "polygon" and poly_mask is not None:
-            # Pixel-accurate RGBA mask patch preserves irregular/spiky bubble borders
+        if shape in ("polygon", "oval") and poly_mask is not None:
+            # Feathered pixel-accurate RGBA mask preserves irregular/oval borders against screentones
             mw, mh = poly_mask.size
             rgba = Image.new(
                 "RGBA",
@@ -559,7 +673,7 @@ def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, d
             rgba.save(pbuf, format="PNG")
             pbuf.seek(0)
             c.drawImage(ImageReader(pbuf), px0, py0, width=pw, height=ph, mask="auto")
-            inset_y = ph * 0.10
+            inset_y = ph * 0.09
         elif shape == "rect":
             inset_x = pw * 0.05
             inset_y = ph * 0.05
@@ -576,27 +690,39 @@ def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, d
             c.ellipse(px0 + inset_x, py0 + inset_y, px1 - inset_x, py1 - inset_y, stroke=0, fill=1)
         c.restoreState()
 
-        # Inscribed dialogue box tailored to bubble shape
-        w_frac, h_frac = (0.84, 0.80) if shape == "rect" else (0.68, 0.66)
+        # Inscribed dialogue box tailored to bubble shape & comic emphasis
+        w_frac, h_frac = (0.84, 0.80) if shape == "rect" else (0.74, 0.72)
         inner_w = max(12.0, pw * w_frac)
         inner_h = max(12.0, ph * h_frac)
-        chosen_font = fonts.font_for(display_text, family="sans", bold=True)
+        use_bold = comic_style != "thought"
+        use_italic = comic_style == "thought"
+        chosen_font = fonts.font_for(display_text, family="sans", bold=use_bold, italic=use_italic)
 
-        max_sz = max(7.0, min(13.0, ph * 0.19))
-        best_sz = 6.0
+        # Higher dynamic ceiling for short exclamations, binary search for exact fit
+        hi = max(7.0, min(22.0 if comic_style == "shout" else 15.0, ph * (0.25 if comic_style == "shout" else 0.21)))
+        lo = 5.5
+        best_sz = lo
         best_lines = [display_text]
-        for step in range(10):
-            cand_sz = max(6.0, max_sz * (1.0 - step * 0.09))
-            lines = _wrap_balanced(display_text, chosen_font, cand_sz, inner_w)
-            leading = cand_sz * 1.22
-            if len(lines) * leading <= inner_h:
-                best_sz = cand_sz
-                best_lines = lines
-                break
-            best_sz = cand_sz
-            best_lines = lines
+        rx, ry = pw * 0.42, ph * 0.42
 
-        leading = best_sz * 1.22
+        words_in_txt = display_text.split()
+        for _ in range(9):
+            mid = (lo + hi) / 2.0
+            cand_leading = mid * 1.18
+            if shape == "oval":
+                lines = _wrap_elliptical(display_text, chosen_font, mid, rx, ry, cand_leading)
+            else:
+                lines = _wrap_balanced(display_text, chosen_font, mid, inner_w)
+            max_lw = max((pdfmetrics.stringWidth(ln, chosen_font, mid) for ln in lines), default=0.0)
+            max_word_w = max((pdfmetrics.stringWidth(w, chosen_font, mid) for w in words_in_txt), default=0.0)
+            if len(lines) * cand_leading <= inner_h and max_lw <= inner_w * 1.04 and max_word_w <= inner_w:
+                best_sz = mid
+                best_lines = lines
+                lo = mid
+            else:
+                hi = mid
+
+        leading = best_sz * 1.18
         total_h = len(best_lines) * leading
         center_x = (px0 + px1) / 2.0
         center_y = (py0 + py1) / 2.0
@@ -607,11 +733,11 @@ def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, d
         c.setFont(chosen_font, best_sz)
         for idx, line in enumerate(best_lines):
             ly = start_y - idx * leading
-            if ly < py0 + inset_y:
+            if ly < py0 + inset_y * 0.75:
                 break
             lw = pdfmetrics.stringWidth(line, chosen_font, best_sz)
             if lw > inner_w and lw > 0:
-                fit_sz = max(5.5, best_sz * (inner_w / lw))
+                fit_sz = max(5.2, best_sz * (inner_w / lw))
                 c.setFont(chosen_font, fit_sz)
                 c.drawCentredString(center_x, ly, line)
                 c.setFont(chosen_font, best_sz)
