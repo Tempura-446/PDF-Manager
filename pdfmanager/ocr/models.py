@@ -98,6 +98,9 @@ def _fetch(url, target):
     import urllib.request
     from pdfmanager import policy
 
+    if not str(url or "").startswith("https://"):
+        raise core.PdfManagerError(f"OCR model download URL must use https:// (got {url!r})")
+
     try:
         policy.check_network_allowed("OCR model download")
     except policy.PolicyError as exc:

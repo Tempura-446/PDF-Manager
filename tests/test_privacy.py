@@ -156,3 +156,12 @@ def test_every_way_online_is_stated():
     assert others == ["escl.py"], others
     page = (root / "gui.html").read_text(encoding="utf-8")
     assert "no telemetry" in page and 'id="set-clear-history"' in page and 'id="set-remember"' in page
+
+
+def test_ocr_fetch_rejects_non_https_urls(tmp_path):
+    from pdfmanager import core
+    from pdfmanager.ocr import models as ocr_models
+
+    for bad_url in ("file:///etc/passwd", "http://example.com/model.onnx", "", "ftp://host/x"):
+        with pytest.raises(core.PdfManagerError, match="https://"):
+            ocr_models._fetch(bad_url, tmp_path / "model.onnx")

@@ -213,3 +213,28 @@ def test_manga_v2_digital_pdf_zero_ocr_fast_path(tmp_path):
     assert ocr_calls["n"] == 0
     text = " ".join((PdfReader(str(out_pdf)).pages[0].extract_text() or "").split())
     assert "Let's go!" in text
+
+
+def test_manga_mode_clamps_giant_page_render_scale(tmp_path, monkeypatch):
+    from pdfmanager import core
+
+    src_pdf = tmp_path / "giant_poster.pdf"
+    c = canvas.Canvas(str(src_pdf), pagesize=(6000.0, 6000.0))
+    c.setFillColorRGB(0.2, 0.2, 0.2)
+    c.rect(0, 0, 6000, 6000, stroke=0, fill=1)
+    c.showPage()
+    c.save()
+
+    seen_scales = []
+    orig_render_scale = core.render_scale
+
+    def spy_render_scale(pg, scale, limit=None):
+        clamped = orig_render_scale(pg, scale, limit=limit)
+        seen_scales.append(clamped)
+        return clamped
+
+    monkeypatch.setattr(core, "render_scale", spy_render_scale)
+    out_pdf = tmp_path / "giant_out.pdf"
+    translate.translate_pdf(src_pdf, out_pdf, "ja", "en", mode="manga", translator=lambda xs: xs)
+    assert len(seen_scales) == 1
+    assert seen_scales[0] < 2.0
