@@ -63,13 +63,13 @@ def models_dir():
     return appdata.data_dir() / "ocr-models"
 
 
-def _model_entry(key, label):
-    """(address, SHA-256) of a PP-OCRv5 ONNX model from rapidocr's own list."""
+def _model_entry(key, label, version="PP-OCRv5"):
+    """(address, SHA-256) of a PP-OCR ONNX model from rapidocr's own list."""
     import rapidocr
     import yaml
 
     listing = yaml.safe_load((Path(rapidocr.__file__).parent / "default_models.yaml").read_text(encoding="utf-8"))
-    stack = [listing.get("onnxruntime", {}).get("PP-OCRv5", {})]
+    stack = [listing.get("onnxruntime", {}).get(version, {})]
     while stack:
         node = stack.pop()
         if isinstance(node, dict):
@@ -88,10 +88,16 @@ def _model_source(script):
 
 
 def _best_model_source(kind):
-    """(address, SHA-256) of the larger ('best accuracy') detector or reader."""
-    key = "ch_PP-OCRv5_det_server" if kind == "det" else "ch_PP-OCRv5_rec_server"
+    """(address, SHA-256) of the higher-accuracy ('best') detector or reader.
+    Prefers PP-OCRv6 Medium (5.2x faster on CPU and +5% more accurate than
+    PP-OCRv5 Server); falls back to PP-OCRv5 Server on older rapidocr builds."""
     label = "best-accuracy detection" if kind == "det" else "best-accuracy reading"
-    return _model_entry(key, label)
+    v6_key = "multi_PP-OCRv6_det_medium" if kind == "det" else "multi_PP-OCRv6_rec_medium"
+    try:
+        return _model_entry(v6_key, label, version="PP-OCRv6")
+    except core.PdfManagerError:
+        v5_key = "ch_PP-OCRv5_det_server" if kind == "det" else "ch_PP-OCRv5_rec_server"
+        return _model_entry(v5_key, label, version="PP-OCRv5")
 
 
 def _fetch(url, target, label=None):
@@ -244,12 +250,15 @@ def _language_model(script):
 
 
 def _best_model(kind):
-    """The path of the larger ('best accuracy') detector ('det') or reader ('rec'),
+    """The path of the higher-accuracy ('best') detector ('det') or reader ('rec'),
     fetched once and SHA-256 checked into _ocr_attr("models_dir", models_dir)()."""
     url, digest = _ocr_attr("_best_model_source", _best_model_source)(kind)
+    is_v6 = "PP-OCRv6" in str(url)
+    filename = f"best_v6_{kind}.onnx" if is_v6 else f"best_{kind}.onnx"
+    size_note = ("about 65 MB" if kind == "det" else "about 75 MB") if is_v6 else "about 80 MB"
     label = "best-accuracy detection model" if kind == "det" else "best-accuracy reading model"
-    return _ocr_attr("_download_model", _download_model)(label, url, digest, _ocr_attr("models_dir", models_dir)() / f"best_{kind}.onnx",
-                           size_note="about 80 MB", fallback_hint="choose Standard accuracy")
+    return _ocr_attr("_download_model", _download_model)(label, url, digest, _ocr_attr("models_dir", models_dir)() / filename,
+                           size_note=size_note, fallback_hint="choose Standard accuracy")
 
 
 def _engine(script=None, quality="standard", use_gpu=None, rec_model_path=None):
@@ -276,16 +285,28 @@ def _engine(script=None, quality="standard", use_gpu=None, rec_model_path=None):
             if quality == "best":
                 from rapidocr import ModelType, OCRVersion
 
+                det_path = _best_model("det")
+                use_v6_det = (
+                    det_path.name.startswith("best_v6_")
+                    and hasattr(OCRVersion, "PPOCRV6")
+                    and hasattr(ModelType, "MEDIUM")
+                )
                 params.update({
-                    "Det.ocr_version": OCRVersion.PPOCRV5,
-                    "Det.model_type": ModelType.SERVER,
-                    "Det.model_path": str(_best_model("det")),
+                    "Det.ocr_version": OCRVersion.PPOCRV6 if use_v6_det else OCRVersion.PPOCRV5,
+                    "Det.model_type": ModelType.MEDIUM if use_v6_det else ModelType.SERVER,
+                    "Det.model_path": str(det_path),
                 })
                 if script is None and not rec_key:
+                    rec_path = _best_model("rec")
+                    use_v6_rec = (
+                        rec_path.name.startswith("best_v6_")
+                        and hasattr(OCRVersion, "PPOCRV6")
+                        and hasattr(ModelType, "MEDIUM")
+                    )
                     params.update({
-                        "Rec.ocr_version": OCRVersion.PPOCRV5,
-                        "Rec.model_type": ModelType.SERVER,
-                        "Rec.model_path": str(_best_model("rec")),
+                        "Rec.ocr_version": OCRVersion.PPOCRV6 if use_v6_rec else OCRVersion.PPOCRV5,
+                        "Rec.model_type": ModelType.MEDIUM if use_v6_rec else ModelType.SERVER,
+                        "Rec.model_path": str(rec_path),
                     })
             if script is not None:
                 from rapidocr import ModelType, OCRVersion
