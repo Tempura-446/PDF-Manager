@@ -31,6 +31,7 @@ def translate_pdf(
     pages=None,
     auto_ocr=False,
     ocr_fn=None,
+    manga_ai=False,
 ):
     """Translate a PDF into one of six output modes:
     - ``side-by-side``: double-width PDF with original page left, layout-preserved translation right.
@@ -111,11 +112,21 @@ def translate_pdf(
                 logging.getLogger("zpdf").debug("pipeline.translate_pdf.manga.pdfplumber: %s", _exc)
                 plumber_doc = None
 
+            from pdfmanager.translate import manga_ai as _manga_ai
+
             page_bubbles = {}
             page_img_sizes = {}
+            page_inpaint_imgs = {}
+            page_bubble_texts = {}
+            page_bubble_idxs = {}
             all_bubble_texts = []
             bubble_refs = []
             src_hint = None if want_auto else i18n.normalize_code(src_lang)
+            if manga_ai:
+                comps = ["detector", "inpaint"]
+                if not src_hint or src_hint == "ja" or str(src_hint).startswith("ja-"):
+                    comps.append("ocr")
+                _manga_ai.ensure_manga_ai(tuple(comps), download=True)
             reading_dir = _manga.default_reading_dir(src_hint)
             empty_pages = 0
             total_sel = max(1, len(selected_indices))
@@ -142,13 +153,21 @@ def translate_pdf(
                     if not bubbles:
                         empty_pages += 1
                         continue
+                    if any(b.get("needs_inpaint") for b in bubbles) and _manga_ai.is_component_installed("inpaint"):
+                        page_inpaint_imgs[idx] = pil_img
+                    p_texts = []
+                    p_bidxs = []
                     for b_i, bubble in enumerate(bubbles):
                         txt = _manga.extract_bubble_text(
                             pil_img, bubble, src_hint, ocr_fn=ocr_fn, plumber_page=p_page,
                         )
                         if txt:
+                            p_texts.append(txt)
+                            p_bidxs.append(b_i)
                             all_bubble_texts.append(txt)
                             bubble_refs.append((idx, b_i))
+                    page_bubble_texts[idx] = p_texts
+                    page_bubble_idxs[idx] = p_bidxs
             finally:
                 if plumber_doc is not None:
                     try:
@@ -163,16 +182,25 @@ def translate_pdf(
                         logging.getLogger("zpdf").debug("pipeline.translate_pdf.manga.close: %s", _exc)
 
             resolved_src = detect_language(" ".join(all_bubble_texts[:30])) if want_auto else i18n.normalize_code(src_lang)
-            fn = translator if translator is not None else getattr(sys.modules.get("pdfmanager.translate"), "_load_offline_translator", _load_offline_translator)(resolved_src, dst_lang)
-            if all_bubble_texts:
-                with progress.section(1, 3, "Translating dialogue"):
-                    translated_bubbles = translate_texts(all_bubble_texts, resolved_src, dst_lang, translator=fn)
+            if translator is not None:
+                fn = translator
             else:
-                translated_bubbles = []
+                loader = getattr(sys.modules.get("pdfmanager.translate"), "_load_offline_translator", _load_offline_translator)
+                try:
+                    fn = loader(resolved_src, dst_lang, manga=True)
+                except TypeError:
+                    fn = loader(resolved_src, dst_lang)
 
             page_trans = {idx: [""] * len(page_bubbles.get(idx, ())) for idx in selected_indices}
-            for (idx, b_i), tr_txt in zip(bubble_refs, translated_bubbles):
-                page_trans[idx][b_i] = tr_txt
+            if all_bubble_texts:
+                ordered_pages = [page_bubble_texts.get(idx, []) for idx in selected_indices]
+                with progress.section(1, 3, "Translating dialogue"):
+                    translated_pages = _manga_ai.translate_manga_pages(
+                        ordered_pages, resolved_src, dst_lang, translator=fn
+                    )
+                for idx, tr_list in zip(selected_indices, translated_pages):
+                    for b_i, tr_txt in zip(page_bubble_idxs.get(idx, ()), tr_list):
+                        page_trans[idx][b_i] = tr_txt
 
             writer = PdfWriter()
             for step_i, idx in enumerate(selected_indices):
@@ -188,7 +216,10 @@ def translate_pdf(
                     w = float(orig_page.mediabox.width)
                     h = float(orig_page.mediabox.height)
                     img_w, img_h = page_img_sizes[idx]
-                    overlay = _manga.make_manga_overlay(w, h, img_w, img_h, bubbles, page_trans[idx], dst_lang)
+                    overlay = _manga.make_manga_overlay(
+                        w, h, img_w, img_h, bubbles, page_trans[idx], dst_lang,
+                        pil_img=page_inpaint_imgs.get(idx),
+                    )
                     page_out.merge_page(overlay)
 
             with open(dst, "wb") as fh:

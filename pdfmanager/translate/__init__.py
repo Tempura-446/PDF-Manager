@@ -44,4 +44,5 @@ from pdfmanager.translate.manga import (
     extract_digital_bubble_text, make_manga_overlay, order_manga_bubbles,
     preprocess_bubble_for_ocr,
 )
+from pdfmanager.translate import manga_ai
 from pdfmanager.translate.pipeline import translate_pdf
