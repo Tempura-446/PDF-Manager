@@ -154,6 +154,15 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
             return self._recent()
         if path == "/api/sessions":
             return self._sessions_list()
+        if path == "/api/companion/info":
+            port = self.server.server_address[1]
+            host = self.headers.get("Host") or f"127.0.0.1:{port}"
+            return self._send(HTTPStatus.OK, {
+                "lan_enabled": bool(getattr(self, "lan_enabled", False)),
+                "url": f"http://{host}/#token={self.token}",
+                "version": __version__,
+                "pwa_manifest": "/manifest.webmanifest",
+            })
         if path.startswith("/api/scan/"):
             try:
                 return self._scan_get(path[len("/api/scan/"):])
@@ -636,7 +645,7 @@ class _Server(ThreadingHTTPServer):
 
 
 
-def make_server(port=0, desktop=False, open_paths=(), prefer=None, action=None):
+def make_server(port=0, desktop=False, open_paths=(), prefer=None, action=None, lan=False):
     """Create (but don't start) the server. Returns (server, url). The
     server's result cache is ``server.RequestHandlerClass.results`` and its
     openable files ``server.RequestHandlerClass.opened``. ``open_paths``
@@ -658,14 +667,17 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None, action=None):
     handler.actions = quickactions.Batches(lambda batch: _start_action(handler, batch))
     handler.watcher = watchfolders.WatchFolders(log=_log)
     handler.watcher.start()  # (only once there's a folder to watch)
+    bind_host = "0.0.0.0" if lan else "127.0.0.1"
+    handler.lan_enabled = bool(lan)
     server = None
     if not port and prefer:
         try:
-            server = _Server(("127.0.0.1", prefer), handler)
+            server = _Server((bind_host, prefer), handler)
         except OSError:
             server = None  # in use
     if server is None:
-        server = _Server(("127.0.0.1", port), handler)
+        server = _Server((bind_host, port), handler)
+    server.token = token
     real_port = server.server_address[1]
     handler.allowed_hosts = {f"127.0.0.1:{real_port}", f"localhost:{real_port}"}
     url = f"http://127.0.0.1:{real_port}/#token={token}"

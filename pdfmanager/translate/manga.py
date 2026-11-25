@@ -658,7 +658,12 @@ def _wrap_elliptical(text, font_name, font_size, rx, ry, leading):
     return _wrap_balanced(text, font_name, font_size, max(12.0, rx * 1.55))
 
 
-def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, dst_lang):
+def _to_comic_caps(text: str) -> str:
+    """Convert Latin dialogue to authentic comic ALL-CAPS while preserving non-Latin scripts."""
+    return str(text or "").upper()
+
+
+def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, dst_lang, *, comic_caps=False):
     """Create a transparent PDF overlay page that cleans each speech bubble interior
     according to its shape (``rect``, ``oval``, or pixel-accurate feathered mask)
     and typesets centered, diamond-shaped, auto-fitted dialogue inside each bubble."""
@@ -673,6 +678,8 @@ def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, d
         raw_text, comic_style = _format_comic_text(str(trans or ""))
         if not raw_text:
             continue
+        if comic_caps:
+            raw_text = _to_comic_caps(raw_text)
         display_text = _shape_rtl(raw_text, dst_lang)
 
         px0 = bubble["x0"] * sx
@@ -722,7 +729,9 @@ def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, d
         w_frac, h_frac = (0.84, 0.80) if shape == "rect" else (0.74, 0.72)
         inner_w = max(12.0, pw * w_frac)
         inner_h = max(12.0, ph * h_frac)
-        use_bold = comic_style != "thought"
+        # Rectangular narration/caption boxes use crisp upright regular text; dialogue uses bold/italic
+        is_caption = shape == "rect" and comic_style == "normal"
+        use_bold = (not is_caption) and (comic_style != "thought")
         use_italic = comic_style == "thought"
         chosen_font = fonts.font_for(display_text, family="sans", bold=use_bold, italic=use_italic)
 

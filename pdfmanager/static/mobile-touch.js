@@ -1,9 +1,10 @@
 /* Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE. */
-// Touch-first mobile reader & translator enhancements for ZPDF Companion / PWA.
-// Provides swipe-left/right page turns, double-tap zoom toggle, and a 44px-target
-// floating bottom action dock on narrow / coarse-pointer viewports.
+// Touch-first mobile reader & translator enhancements for ZPDF Companion / PWA (Phase 2).
+// Provides LTR/RTL manga swipe page turns, double-tap zoom toggle, Android PDF intent
+// bridge (window.zpdfOpenBase64Pdf), and a 44px-target floating mobile bottom dock.
 
 import { el, svg } from "./readerkit.js";
+import { openAiAssistant } from "./ai-assistant.js";
 
 const THEMES = ["light", "night", "sepia", "eink"];
 
@@ -15,14 +16,29 @@ export function attachMobileTouch(reader) {
     navigator.serviceWorker.register("/sw.js").catch(() => undefined);
   }
 
+  // Android WebView bridge: lets MainActivity hand an ACTION_VIEW PDF directly to the Reader
+  globalThis.zpdfOpenBase64Pdf = async (b64, name = "document.pdf") => {
+    try {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      await reader.openBytes(bytes, name);
+    } catch (e) {
+      reader.toast("Could not open PDF from Android: " + (e.message || e));
+    }
+  };
+
   // 1. Floating mobile bottom dock (CSS shows only on <=760px / coarse pointer when a doc is open)
+  let rtlSwipe = false;
   const prevBtn = el("button", { type: "button", class: "rd-mob-btn", title: "Previous page", "aria-label": "Previous page", html: svg("up") });
   const pageLbl = el("span", { class: "rd-mob-page" }, "1 / 1");
   const nextBtn = el("button", { type: "button", class: "rd-mob-btn", title: "Next page", "aria-label": "Next page", html: svg("down") });
+  const rtlBtn = el("button", { type: "button", class: "rd-mob-btn", title: "Toggle RTL manga swipe direction", "aria-label": "Toggle RTL manga swipe direction", "aria-pressed": "false" }, "LTR");
   const themeBtn = el("button", { type: "button", class: "rd-mob-btn", title: "Cycle reading theme", "aria-label": "Cycle reading theme", html: svg("moon") });
   const transBtn = el("button", { type: "button", class: "rd-mob-btn", title: "Translate this page", "aria-label": "Translate this page", html: svg("edittext") });
+  const aiBtn = el("button", { type: "button", class: "rd-mob-btn", title: "Local AI Assistant", "aria-label": "Local AI Assistant", html: svg("command") });
 
-  const dock = el("div", { class: "rd-mobile-dock", hidden: true }, prevBtn, pageLbl, nextBtn, themeBtn, transBtn);
+  const dock = el("div", { class: "rd-mobile-dock", hidden: true }, prevBtn, pageLbl, nextBtn, rtlBtn, themeBtn, transBtn, aiBtn);
   reader.root.append(dock);
 
   const syncDock = () => {
@@ -44,6 +60,12 @@ export function attachMobileTouch(reader) {
       reader.goToPage(reader.pdfViewer.currentPageNumber + 1);
     }
   });
+  rtlBtn.addEventListener("click", () => {
+    rtlSwipe = !rtlSwipe;
+    rtlBtn.textContent = rtlSwipe ? "RTL" : "LTR";
+    rtlBtn.setAttribute("aria-pressed", String(rtlSwipe));
+    reader.toast(rtlSwipe ? "Manga RTL swipe enabled (swipe right for next page)." : "Standard LTR swipe enabled.");
+  });
   themeBtn.addEventListener("click", () => {
     const cur = reader.pageTheme ? reader.pageTheme() : "light";
     const next = THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length];
@@ -53,6 +75,9 @@ export function attachMobileTouch(reader) {
   transBtn.addEventListener("click", () => {
     if (reader.translateCurrentPage) reader.translateCurrentPage();
   });
+  aiBtn.addEventListener("click", () => {
+    openAiAssistant(reader, "ask");
+  });
 
   if (reader.eventBus) {
     reader.eventBus.on("pagesinit", syncDock);
@@ -60,7 +85,7 @@ export function attachMobileTouch(reader) {
   }
   reader._syncMobileDock = syncDock;
 
-  // 2. Touch swipe left/right to turn pages + double-tap zoom toggle
+  // 2. Touch swipe left/right to turn pages (LTR or RTL manga mode) + double-tap zoom toggle
   let startX = 0;
   let startY = 0;
   let startTime = 0;
@@ -82,9 +107,10 @@ export function attachMobileTouch(reader) {
     // Horizontal swipe (only when not scrolled horizontally, so zoomed panning isn't hijacked)
     const canSwipe = reader.container.scrollWidth <= reader.container.clientWidth + 8;
     if (canSwipe && dt < 450 && Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.8) {
-      if (dx < 0 && reader.pdfViewer.currentPageNumber < reader.pdfViewer.pagesCount) {
+      const goNext = rtlSwipe ? (dx > 0) : (dx < 0);
+      if (goNext && reader.pdfViewer.currentPageNumber < reader.pdfViewer.pagesCount) {
         reader.goToPage(reader.pdfViewer.currentPageNumber + 1);
-      } else if (dx > 0 && reader.pdfViewer.currentPageNumber > 1) {
+      } else if (!goNext && reader.pdfViewer.currentPageNumber > 1) {
         reader.goToPage(reader.pdfViewer.currentPageNumber - 1);
       }
       return;

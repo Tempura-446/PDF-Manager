@@ -27,6 +27,17 @@ def _normalize_ocr_text(text: str) -> str:
     return _CTRL_RE.sub("", text.translate(_LIGATURES))
 
 
+def _is_repeated_border_noise(text: str) -> bool:
+    """True when OCR hallucinated a table border, scan edge, or horizontal rule
+    (e.g. '||||||||', '========', '--------', '........')."""
+    compact = re.sub(r"\s+", "", text or "")
+    if len(compact) < 5:
+        return False
+    if any(ch.isalnum() for ch in compact):
+        return False
+    return len(set(compact)) <= 2
+
+
 def _lines(result):
     if not result.txts:
         return []
@@ -39,6 +50,9 @@ def _lines(result):
             continue
         # Drop isolated 1-character low-confidence punctuation speckles
         if len(stripped) == 1 and not stripped.isalnum() and float(score) < 0.65:
+            continue
+        # Drop hallucinated repeated-symbol border/ruler lines
+        if _is_repeated_border_noise(stripped):
             continue
         words = _words(clean, found) if found else [Word(clean, _quad(box), float(score))]
         words = [Word(_normalize_ocr_text(w.text), w.quad, w.confidence) for w in words]
