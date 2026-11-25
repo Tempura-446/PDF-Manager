@@ -4,6 +4,20 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.79.0
+
+Upgrade Built-in OCR Best Accuracy to **PP-OCRv6 Medium** (~5.2× faster on CPU & +5% higher accuracy).
+
+- **PP-OCRv6 Medium Best-Accuracy Models (`ocr/models.py`).**
+  - Upgraded Best-accuracy built-in OCR from `PP-OCRv5_server` (~173 MB) to
+    **`PP-OCRv6_medium`** (`PP-OCRv6_det_medium.onnx` + `PP-OCRv6_rec_medium.onnx`,
+    ~139 MB total, ~5.2× faster end-to-end on CPU, +4.6% detection Hmean and
+    +5.1% recognition accuracy, covering 50 languages in one model).
+  - Stored PP-OCRv6 medium weights separately (`best_v6_det.onnx` /
+    `best_v6_rec.onnx`) so cached PP-OCRv5 files never conflict, with automatic
+    fallback to PP-OCRv5 Server on older `rapidocr` installs and PP-OCRv5
+    script-specific recognizers for non-Latin/non-CJK scripts.
+
 ## 0.78.1
 
 Fix Built-in OCR Best-Accuracy Stalls & Add Live Model Download Progress.

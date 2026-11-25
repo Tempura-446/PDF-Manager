@@ -156,8 +156,8 @@ def test_faint_and_small_print_holdout_pages_read_accurately():
 
 @needs_builtin
 @pytest.mark.parametrize("kind, suffix", [
-    ("det", "/onnx/PP-OCRv5/det/ch_PP-OCRv5_det_server.onnx"),
-    ("rec", "/onnx/PP-OCRv5/rec/ch_PP-OCRv5_rec_server.onnx"),
+    ("det", "/onnx/PP-OCRv6/det/PP-OCRv6_det_medium.onnx"),
+    ("rec", "/onnx/PP-OCRv6/rec/PP-OCRv6_rec_medium.onnx"),
 ])
 def test_best_accuracy_models_are_onnx_models_rapidocr_lists(kind, suffix):
     url, digest = ocr._best_model_source(kind)

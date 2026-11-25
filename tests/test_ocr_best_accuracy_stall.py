@@ -199,3 +199,52 @@ def test_ocrtables_caps_cell_retries_and_propagates_cancel(monkeypatch):
 
     with pytest.raises(progress.Cancelled):
         ocrtables.refine_tables(img, lines, read_crop_fn=cancel_read_crop, max_cell_retries=10)
+
+
+def test_best_accuracy_prefers_pp_ocrv6_medium_models(tmp_path, monkeypatch):
+    ocr.reset()
+    models_root = tmp_path / "ocr-models"
+    monkeypatch.setattr(ocr, "models_dir", lambda: models_root)
+
+    fake_bytes = {"det": b"fake-v6-medium-det", "rec": b"fake-v6-medium-rec"}
+    digests = {k: hashlib.sha256(v).hexdigest() for k, v in fake_bytes.items()}
+    monkeypatch.setattr(
+        ocr,
+        "_best_model_source",
+        lambda kind: (f"https://example.invalid/onnx/PP-OCRv6/{kind}/PP-OCRv6_{kind}_medium.onnx", digests[kind]),
+    )
+    monkeypatch.setattr(
+        ocr,
+        "_fetch",
+        lambda url, target: target.write_bytes(fake_bytes["det" if "det" in url else "rec"]),
+    )
+
+    captured = []
+
+    class FakeRapidOCR:
+        def __init__(self, params=None):
+            captured.append(params)
+
+        def __call__(self, arr, **kwargs):
+            return SimpleNamespace(txts=None, boxes=None, scores=None, word_results=None)
+
+    fake_rapidocr = types.ModuleType("rapidocr")
+    fake_rapidocr.ModelType = SimpleNamespace(TINY="tiny", SMALL="small", MEDIUM="medium", MOBILE="mobile", SERVER="server")
+    fake_rapidocr.OCRVersion = SimpleNamespace(PPOCRV5="PP-OCRv5", PPOCRV6="PP-OCRv6")
+    fake_rapidocr.RapidOCR = FakeRapidOCR
+    monkeypatch.setitem(sys.modules, "rapidocr", fake_rapidocr)
+
+    try:
+        ocr.recognise(Image.new("L", (200, 200), 255), quality="best")
+        assert (models_root / "best_v6_det.onnx").is_file()
+        assert (models_root / "best_v6_rec.onnx").is_file()
+        assert len(captured) == 1
+        params = captured[0]
+        assert params["Det.ocr_version"] == fake_rapidocr.OCRVersion.PPOCRV6
+        assert params["Det.model_type"] == fake_rapidocr.ModelType.MEDIUM
+        assert params["Det.model_path"] == str(models_root / "best_v6_det.onnx")
+        assert params["Rec.ocr_version"] == fake_rapidocr.OCRVersion.PPOCRV6
+        assert params["Rec.model_type"] == fake_rapidocr.ModelType.MEDIUM
+        assert params["Rec.model_path"] == str(models_root / "best_v6_rec.onnx")
+    finally:
+        ocr.reset()
