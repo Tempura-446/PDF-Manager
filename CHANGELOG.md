@@ -4,6 +4,31 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.71.0
+
+Book & Manga Publishing Studio (CBZ Archives, RTL/Signature Booklet Imposition & Spine Calculator).
+
+- **CBZ Comic & Manga Archive Engine (`pdfmanager/cbz.py`).**
+  - `cbz_to_pdf`: natural-sorted image extraction (`page_2.png` before
+    `page_10.png`), zip-slip path-traversal & decompression-bomb guards, and
+    optional `/ViewerPreferences << /Direction /R2L >>` for right-to-left manga
+    reading.
+  - `pdf_to_cbz`: exports PDFs to `.cbz` archives (WebP, JPEG, or PNG pages)
+    with `ComicInfo.xml` metadata and `core.render_scale` OOM protection.
+  - `translate_cbz`: one-shot `.cbz` → Manga v2 speech-bubble translation →
+    `.cbz` or `.pdf` pipeline.
+  - Exposed in CLI (`zpdf cbz-to-pdf`, `zpdf pdf-to-cbz`) and GUI Convert tools
+    (**PDF → CBZ (Comic/Manga)**).
+- **Booklet Imposition v2 (`core.booklet`) & Print-on-Demand Spine Calculator (`core.spine_width_mm`).**
+  - Added **Right-to-Left (Manga / Japanese)** binding alongside Western LTR
+    saddle-stitch (`--binding ltr|rtl`), **multi-signature sections**
+    (`--signature 8|16|32`), and **creep compensation** (`--creep` mm) in both
+    CLI and the GUI **Booklet** tool.
+  - Added `core.spine_width_mm` and `zpdf spine` with commercial & POD paper
+    stock presets (`manga_60gsm`, `uncoated_80gsm`, `white_90gsm`,
+    `cream_90gsm`, `gloss_115gsm`, `matte_130gsm`) and full-wrap cover
+    dimensions.
+
 ## 0.70.0
 
 Print-Production CMYK Preflight v3 (Press-Room Grade).

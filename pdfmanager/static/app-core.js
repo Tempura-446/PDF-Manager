@@ -74,6 +74,7 @@ const ICONS = {
   "to-pptx": '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M12 17v4M8 21h8"/><path d="M10 8.5v5M10 8.5h2.5a1.5 1.5 0 0 1 0 3H10"/>',
   "to-html": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="m10 11-2 2.5 2 2.5M14 11l2 2.5-2 2.5"/>',
   "to-md": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M8 16v-5l2 2.5L12 11v5M15 11v5m0 0-1.5-1.5M15 16l1.5-1.5"/>',
+  "pdf-to-cbz": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M3 11h6M13 9h5M13 13h4"/>',
   translate: '<path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1"/><path d="M22 22l-5-10-5 10M14 18h6"/>',
   /* -- end of pptx and html -- */
   "from-office": '<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><path d="M17 14v6M14 17l3 3 3-3"/>',

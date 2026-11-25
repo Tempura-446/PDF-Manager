@@ -2,7 +2,7 @@
 
 Master index of ZPDF's completed, in-progress, and planned feature tracks. Each track links to its detailed plan in [`docs/superpowers/plans/`](superpowers/plans/).
 
-*Last updated: 2026-11-24 (after `v0.70.0` Print-Production CMYK Preflight v3 — Press-Room Grade)*
+*Last updated: 2026-11-24 (after `v0.71.0` Book & Manga Publishing Studio — CBZ, RTL/Signature Booklet & Spine Calculator)*
 
 ---
 
@@ -36,12 +36,15 @@ Master index of ZPDF's completed, in-progress, and planned feature tracks. Each 
 | Manga / Comic Speech-Bubble Mode v2 | Shipped in `0.68.0` (dark/inverted bubbles, `rect`/`oval`/`polygon` shape classification + eroded RGBA masks, digital-PDF zero-OCR fast path, OCR pre-processing, LTR/RTL comic reading order, balanced comic wrapping) | [`2026-11-24-manga-bubble-mode-v2.md`](superpowers/plans/2026-11-24-manga-bubble-mode-v2.md) |
 | Print-Production CMYK Preflight v2 & Output Preview | Shipped in `0.69.0` (PDF/X-1a & PDF/X-4 compliance, white overprint & knockout audit, vector + CMYK image TAC ink limits, true C/M/Y/K plate separation & TAC heatmap Output Preview in Reader, one-click white-overprint & OutputIntent fixes) | [`2026-11-24-cmyk-preflight-v2.md`](superpowers/plans/2026-11-24-cmyk-preflight-v2.md) |
 | Print-Production CMYK Preflight v3 (Press-Room Grade) | Shipped in `0.70.0` (recursive Form XObject inspection & plate separation, pure-Python rich-black text/TAC clamp/hairline/RGB→CMYK auto-fixes, spot ink inventory & `/Separation /All` registration hazard, live hover CMYK/TAC eyedropper + one-click Fix All Press Issues) | [`2026-11-24-cmyk-preflight-v3.md`](superpowers/plans/2026-11-24-cmyk-preflight-v3.md) |
+| Book & Manga Publishing Studio | Shipped in `0.71.0` (`cbz.py` archive import/export + one-shot manga CBZ translation, RTL/multi-signature/creep `core.booklet`, `core.spine_width_mm` POD cover calculator, CLI & GUI tools) | [`2026-11-24-book-manga-publishing-studio.md`](superpowers/plans/2026-11-24-book-manga-publishing-studio.md) |
 
 ---
 
 ## Active & Planned Tracks
 
-All planned roadmap tracks through `v0.70.0` are complete. Next tracks will be scoped as new priorities emerge.
+1. **Reader Comfort & Power-User Upgrade (`v0.72.0`)** — Smart Night / Sepia / E-Ink themes, Workspace Sessions, In-Place OCR Typo Editor.
+2. **Android Companion App (Phase 1 Foundation, `v0.73.0`)** — Touch-first mobile reader/translator shell.
+3. **Local AI Document Assistant (`v0.74.0`)** — Ask-this-PDF with citations, chapter summaries, structured table extraction using existing local LLM config.
 
 ---
 

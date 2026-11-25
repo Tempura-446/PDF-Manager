@@ -86,7 +86,15 @@ def run_insert_blank(a, src, out, pw):
 
 
 def run_booklet(a, src, out, pw):
-    result = core.booklet(src, out, a.size, pw)
+    result = core.booklet(
+        src,
+        out,
+        a.size,
+        pw,
+        binding=getattr(a, "binding", "ltr"),
+        signature_pages=getattr(a, "signature", 0),
+        creep_mm=getattr(a, "creep", 0.0),
+    )
     sheets = len(PdfReader(str(result)).pages) // 2
     return (f"{result}  ({sheets} sheet{'s' if sheets != 1 else ''}: print on both sides, "
             "flipping on the short edge, then fold in the middle)")
@@ -531,5 +539,58 @@ def cmd_translate(a):
         print(json.dumps(res, indent=2, ensure_ascii=False))
     else:
         print(f"Translated {res['pages']} page(s) ({res['mode']}) -> {res['output']}")
+    return 0
+
+
+def cmd_cbz_to_pdf(a):
+    from pdfmanager import cbz
+
+    src = Path(a.input)
+    out = Path(a.output) if a.output else src.with_suffix(".pdf")
+    res = cbz.cbz_to_pdf(src, out, rtl_viewer=bool(a.rtl))
+    if a.json:
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+    else:
+        print(f"Converted {res['pages']} CBZ page(s) -> {res['output']}")
+    return 0
+
+
+def cmd_pdf_to_cbz(a):
+    from pdfmanager import cbz
+
+    src = Path(a.input)
+    out = Path(a.output) if a.output else src.with_suffix(".cbz")
+    res = cbz.pdf_to_cbz(
+        src,
+        out,
+        password=a.password,
+        dpi=a.dpi,
+        image_format=a.format,
+        quality=a.quality,
+    )
+    if a.json:
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+    else:
+        print(f"Exported {res['pages']} page(s) ({res['format']}) -> {res['output']}")
+    return 0
+
+
+def cmd_spine(a):
+    res = core.spine_width_mm(
+        a.pages,
+        paper=a.paper,
+        caliper_mm=a.caliper,
+        cover_mm=a.cover_mm,
+        trim_w_mm=a.trim_w,
+        trim_h_mm=a.trim_h,
+        bleed_mm=a.bleed_mm,
+    )
+    if a.json:
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+    else:
+        msg = f"Spine width ({res['pages']} pages, {res['paper']}): {res['spine_mm']:.2f} mm ({res['spine_in']:.3f} in)"
+        if "cover_width_mm" in res:
+            msg += f" | Full wrap cover: {res['cover_width_mm']:.2f} × {res['cover_height_mm']:.2f} mm"
+        print(msg)
     return 0
 
