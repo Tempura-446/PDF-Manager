@@ -1,1513 +1,426 @@
 # ZPDF
 
-`pdfm` is a PDF toolkit you can use three ways: as a **desktop app**, from
-the **command line**, or as a **Python library**.
+**A local-first PDF studio — desktop app, `pdfm` CLI, and Python library — for Windows, macOS, and Linux.**
 
-It includes a full **PDF reader** with tabs, where you can also annotate,
-sign and change existing text, and it can merge, split (also at bookmarks or
-into files of a maximum size), compare, extract, reorder, insert blank pages,
-rotate, resize, crop (also trimming white margins automatically), n-up, make
-**booklets** for folded printing, compress (three levels), convert colours
-(grayscale / RGB / CMYK, with ICC profiles), OCR and clean up scans, redact,
-flatten, remove hidden data, convert to PDF/A (and check PDF/A), make PDFs
-**accessible** (tags for screen readers, and a check like Acrobat's), Word, Excel,
-**PowerPoint** and **HTML**, and from Office files or images, edit bookmarks, encrypt, watermark and number pages, add headers,
-footers and **Bates numbers**, create **fillable forms** (finding a printed
-form's fields by itself), pull out pictures
-and attached files, run several of these in a row as a **recipe**, and
-organize, rename, de-duplicate, **search** and watch whole folders of PDFs.
+ZPDF runs **100% on your own machine** with zero telemetry, no cloud uploads, and no subscriptions. It combines a fast, distraction-free PDF reader and editor with capabilities rarely found together in any offline tool: **press-room CMYK preflight**, **CAD blueprint takeoff & DXF conversion**, **offline book & manga translation**, **a local AI document assistant**, **true permanent redaction**, **PDF/A & PDF/UA compliance**, and **full CLI/watch-folder automation**.
+
+[Why ZPDF](#why-zpdf) · [Install](#install) · [Core Strengths](#core-strengths) · [Desktop App & Reader](#desktop-app--reader) · [Command Line](#command-line) · [Python Library](#python-library) · [Privacy & Security](#privacy--security) · [Tests & Releasing](#tests-benchmarks--releasing) · [Licence](#licence)
+
+---
+
+## Why ZPDF?
+
+Most PDF tools force a trade-off: pay recurring subscriptions for bloated desktop suites, upload confidential documents to cloud websites, or settle for bare-bones merge/split utilities. ZPDF is built to eliminate that trade-off:
+
+| Strength | What ZPDF Delivers |
+| --- | --- |
+| **Verifiable Offline Privacy** | Everything runs locally on `127.0.0.1` with a per-session random auth token and **zero telemetry**. Includes **true permanent redaction** (content-stream & Form XObject removal + post-write verification), AES-256 & certificate encryption, digital ID signing, SHA-256 tamper-evident audit logs, and enterprise admin policies. |
+| **Press-Room CMYK Preflight (No Ghostscript)** | PDF/X-1a & PDF/X-4 audits, recursive Form XObject inspection, true **C/M/Y/K plate separation & TAC heatmap**, a **live ink-density eyedropper** (`C% M% Y% K% · TAC%`), spot-ink & registration-color audits, and **one-click pure-Python press fixes** (white overprint, rich-black text, TAC clamping, hairlines, RGB → CMYK). |
+| **CAD, Blueprints & AEC Workflows** | Native **PDF ↔ DXF** conversion, **calibrated scale measuring & quantity takeoff** with vector snapping & a close-up magnifier (exporting to Excel/CSV or PDF annotations), CAD layer toggling & flattening, sheet-set splitting/naming/auto-linking/comparing, and red/blue **visual revision overlays**. |
+| **Offline Book, Document & Manga Translation** | Commercial-safe **Apache-2.0 MADLAD-400**, **OPUS-MT**, or your own local LLM (**Ollama / LM Studio**). Includes automatic **vertical CJK (*tategaki*)** support with furigana stripping, **Manga / Comic Speech-Bubble Mode v2** (shape-aware oval/rect/polygon masks, dark bubbles, comic lettering), `bilingual-pages` book export, and a **live bilingual reading pane**. |
+| **Local AI Document Assistant** | **Ask this PDF** with clickable `[p. N]` page citations, **Document / Chapter Summarizer** (Key Bullets, Executive, Study Notes), and **Structured Table / Invoice / Key-Value Extraction** to JSON & CSV — powered by your own Ollama, LM Studio, or OpenAI-compatible endpoint. |
+| **Book & Manga Publishing Studio** | Lossless **`.cbz` ↔ PDF** conversion (with `ComicInfo.xml` & RTL manga direction), one-shot `.cbz` speech-bubble translation, **LTR & RTL booklet imposition** with multi-signature sections (8/16/32) & creep compensation, and a **POD spine & full-wrap cover calculator**. |
+| **Built-in Multi-Script OCR & Typo Editor** | Shipped **PP-OCR / ONNX** engine (multi-column, vertical CJK, dark-banner inverted retries, ligature cleanup, warm worker pool) + optional Tesseract/OCRmyPDF. Fix any recognized word in place with **Check OCR** & **Find & Replace** directly on the invisible text layer — without touching page pixels. |
+| **True Automation Parity** | One modular engine powers the **Desktop App**, **65+ `pdfm` CLI commands**, the **Python library**, saved multi-step **Recipes**, background **Watch Folders** (with system tray support), **Smart Auto-Filing**, and **Local Semantic Folder Search**. |
+
+---
 
 ## Install
 
-### Easiest on Windows: the installer
+### Desktop Builds (Windows, macOS, Linux)
 
-1. Download **ZPDF-<version>-windows.zip** from the newest release on
-   [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases/latest)
-   (no GitHub account needed), and unzip it (right-click → *Extract All*).
-2. In the unzipped folder, double-click **Install ZPDF.cmd**. If
-   Windows asks, choose *More info → Run anyway* (it's a plain text script:
-   you can read what it does in `packaging/windows/install.ps1`). A
-   **ZPDF Setup** window opens: tick what you want (desktop shortcut,
-   "Open with", the right-click menu, Tesseract and Ghostscript), press
-   **Install**, and it shows each step as it goes, then **Open ZPDF**.
+Download the latest release (`v0.75.0`) from [**ZPDF-releases**](https://github.com/Tempura-446/ZPDF-releases/releases/latest) — no GitHub account required. Every artifact includes a matching `.sha256` checksum, and installed copies include an in-app **Update** button (**Settings → Updates**) that verifies SHA-256 before updating.
 
-It installs Python from python.org if you don't have it (with winget or the
-official, signed installer), installs ZPDF in its own folder
-(`%LOCALAPPDATA%\PDF Manager\app`), and adds **Start menu and desktop
-shortcuts**, **ZPDF in "Open with"** (and in *Settings → Default
-apps*) for PDFs, **ZPDF in File Explorer's right-click menu** (see
-[Right-click actions](#right-click-actions-in-file-explorer);
-`Install ZPDF.cmd -NoContextMenu` leaves it out), and an entry in
-**Settings → Apps** to uninstall it. No administrator rights are needed, and you can delete the unzipped folder
-afterwards. Running it again updates the installed copy (or use the
-**Update** button, below).
+| Platform | Recommended Download | Alternative / Portable | Notes |
+| --- | --- | --- | --- |
+| **Windows (x64)** | `ZPDF-<ver>-windows-standalone.zip` *(no Python needed)* | `ZPDF-<ver>-windows.zip` *(source installer)* | Unzip and run `ZPDF.exe`, or run `Install ZPDF.cmd` for Start menu shortcuts, "Open with", File Explorer right-click menu, and an entry in *Settings → Apps* (no admin rights required). |
+| **macOS (Apple Silicon / Intel)** | `ZPDF-<ver>-macos.dmg` | `ZPDF-<ver>-macos.zip` | Drag **ZPDF.app** to Applications. Because the app is not yet Apple-notarized, if Gatekeeper warns on first launch, run `xattr -cr /Applications/ZPDF.app`. |
+| **Linux (x86_64)** | `zpdf_<ver>_amd64.deb` *(Debian / Ubuntu)* | `ZPDF-<ver>-linux.zip` *(portable archive)* | Debian/Ubuntu: `sudo apt install ./zpdf_<ver>_amd64.deb`. Portable: unzip and run `./ZPDF`. |
 
-The setup window is drawn by Microsoft Edge (every Windows 10 and 11 has
-it) and talks only to the installer on your own PC. `Install ZPDF.cmd
--Console` does the same in the console window instead, as do automated
-runs and PCs where no window can be shown.
+<details>
+<summary><strong>Windows source installer options &amp; Smart App Control notes</strong></summary>
 
-OCR is built in, so scanned PDFs can be made searchable right away. The
-setup window offers to add **Tesseract and Ghostscript** too (about 150 MB;
-not ticked to begin with, and the console asks at the end): they add a second OCR engine and, for the few files ZPDF
-can't make PDF/A itself, a second PDF/A converter. OCRmyPDF goes into ZPDF's folder and the two programs are
-installed with winget (`UB-Mannheim.TesseractOCR`,
-`ArtifexSoftware.GhostScript`; Windows may ask for permission, as they
-install for all users). It doesn't ask when they're already there, and skips
-the programs when winget is missing. `Install ZPDF.cmd -WithExtras` adds
-them without asking, `-NoExtras` never does (the older `-WithOcr` and
-`-NoOcr` still work). ZPDF finds both programs where their installers put
-them, also when they aren't on the PATH.
+1. Download **`ZPDF-<version>-windows.zip`** from [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases/latest), unzip it, and double-click **`Install ZPDF.cmd`** (choose *More info → Run anyway* if SmartScreen prompts; it is a plain text script invoking `packaging/windows/install.ps1`).
+2. A **ZPDF Setup** window opens (drawn by Microsoft Edge, local-only) where you can choose Start menu & desktop shortcuts, "Open with" / Default apps, File Explorer right-click actions, and optional **Tesseract + Ghostscript** extras (~150 MB via `winget`, adding a second OCR engine and fallback PDF/A converter).
+3. It installs Python from python.org if missing, installs ZPDF into `%LOCALAPPDATA%\PDF Manager\app` with no administrator rights, and runs under PSF-signed `pythonw.exe` (so Windows **Smart App Control** allows it even where unsigned standalone `.exe` builds are blocked).
+4. Supported flags: `-Console` (terminal mode), `-NoContextMenu`, `-WithExtras`, `-NoExtras`. Running the installer again updates the installed copy.
 
-The app runs with Python's own `pythonw.exe`, which is signed by the Python
-Software Foundation, so Windows **Smart App Control** lets it start (it may
-block the unsigned standalone app below). The script only uses plain
-PowerShell commands, so it also works where Smart App Control limits scripts.
+</details>
 
-### The standalone app
+### With Python (`pip`)
 
-A single folder with **ZPDF.exe** in it, for trying ZPDF without
-installing it. It isn't published (Smart App Control blocks unsigned
-programs like it); build it yourself, including on Linux or a Mac:
+Requires **Python 3.10 or newer**:
+
+```bash
+pip install -e ".[all]"              # everything: desktop window, built-in OCR, offline translation & Tesseract OCRmyPDF
+pip install -e ".[app,ocr,translate]" # desktop window + built-in OCR + offline translation
+pip install -e ".[app,ocr]"          # desktop window + built-in OCR
+pip install -e ".[app]"              # desktop window only (~175 MB smaller)
+pip install -e .                     # CLI + Python library (GUI opens in your browser)
+```
+
+On Linux, the native desktop window also uses a web engine: `pip install "pywebview[qt]"` (or GTK packages; see [pywebview installation](https://pywebview.flowrl.com/guide/installation.html)). Without it, `pdfm gui` automatically falls back to an app window in Edge/Chrome/Chromium/Brave or your default browser.
+
+### Building a Standalone App from Source
 
 ```bash
 pip install -e ".[build]"
-python packaging/build_app.py      # result in dist/
+python packaging/build_app.py        # outputs standalone bundle into dist/
 ```
 
-### With Python
+---
 
-Requires Python 3.10 or newer.
+## Core Strengths
+
+### Local AI Document Assistant
+
+Run private AI workflows over sensitive PDFs using your own local **Ollama**, **LM Studio**, or any OpenAI-compatible endpoint (configured once in **Settings**; all requests honor ZPDF's loopback/HTTPS & enterprise network policies):
+
+- **Ask this PDF:** Lightweight local lexical page ranking fits large multi-hundred-page PDFs into local 7B model context windows and returns answers with **clickable `[p. N]` page citation chips** that jump straight to the source page.
+- **Document & Chapter Summarizer:** Summarize full documents or custom page ranges in **Key Bullets**, **Executive**, or **Study Notes** styles with page citations.
+- **Structured Extraction:** Pull invoices, forms, and tables into clean **JSON** or **CSV** with one-click Copy / Download buttons.
+
+Accessible from the Reader **More** menu and Command Palette (`Ctrl+K`).
+
+---
+
+### Offline PDF, Book & Manga Translation
+
+Translate entire PDFs, books, and comics offline with zero cloud API fees or data leaks:
+
+- **Multiple engines:** Commercial-safe **Apache-2.0 MADLAD-400** (400+ languages), fast **OPUS-MT** language packs, or your own local/remote LLM. Protects inline `` `code` ``, semantic versions (`v1.2.3`), `snake_case` identifiers, and currency amounts during neural translation.
+- **Layout modes:** `side-by-side`, `bilingual-pages` (book-focused alternating pages), `bilingual`, `in-place` (column-aware reading order, Unicode de-hyphenation, bold subheading separation, progressive line-leading tightening), `manga`, and `text` — plus a **Live Bilingual Reading Pane** inside the Reader.
+- **Vertical CJK (*Tategaki*) Books:** Automatic detection of vertical Japanese and Chinese layouts, furigana/ruby stripping, vertical punctuation normalization, and top-to-bottom / right-to-left paragraph merging.
+- **Manga / Comic Speech-Bubble Mode v2:** 100% offline connected-component bubble detector that classifies rectangular narration boxes, oval speech bubbles, and irregular/spiky shout bursts; handles **dark/inverted bubbles** with white text; uses a **zero-OCR fast path** for digital manga; strips furigana; erases with Gaussian-feathered masks that preserve artwork and outlines; and typesets with elliptical/balanced comic wrapping, bold shouts, and italic thoughts.
 
 ```bash
-pip install -e ".[all]"     # everything: the desktop window, OCR and the Tesseract engine's OCRmyPDF
-pip install -e ".[app,ocr]" # the desktop window and OCR
-pip install -e ".[app]"     # without OCR (about 175 MB less)
-pip install -e .            # without the desktop window too (the app opens in your browser)
+pdfm translate novel_jp.pdf --from ja --to en --mode bilingual-pages
+pdfm translate chapter01.pdf --from ja --to en --mode manga
 ```
 
-On Linux the desktop window also needs a web engine: `pip install "pywebview[qt]"`
-(or the GTK packages, see the [pywebview docs](https://pywebview.flowrl.com/guide/installation.html)).
-Without it, the app opens in your browser instead.
+---
 
-OCR is built in: no programs to install. The model ZPDF ships with reads
-English, most European languages, Chinese and Japanese without a language
-setting; for Russian, Ukrainian, Korean, Arabic, Persian, Hindi, Thai, Greek,
-Tamil or Telugu, give its code (`rus`, `kor`, `ara`, …) and that script's
-reading model is fetched once (about 10 MB, checked against its published
-checksum). It turns sideways and upside-down pages upright, reads
-multi-column pages column by column and keeps table rows together. A page
-that already has text is left as it is, with two exceptions: a scan whose
-text layer is unreadable (signs and broken letters from an older program)
-is read again, and scanned pictures on a page of real text (a figure, a
-scan with a stamp typed over it) are read and their words added.
-[Tesseract](https://tesseract-ocr.github.io/tessdoc/Installation.html) stays
-as a second OCR engine, for the scripts the built-in one has no model for
-and for PDF/A output straight from OCR: `pip install -e ".[tesseract]"` adds
-OCRmyPDF, and the program itself comes with `brew install tesseract`,
-`sudo apt install tesseract-ocr`, or the Windows installer. A few tools use
-other free programs if you have them: PDF/A turns to
-[Ghostscript](https://ghostscript.com/releases/gsdnld.html) for files ZPDF
-can't convert itself, and Office → PDF
-uses Microsoft Office or [LibreOffice](https://www.libreoffice.org).
+### Press-Room CMYK Preflight & Output Preview
 
-## Desktop app
+Built for print production without requiring Acrobat Pro or Ghostscript:
 
-Start it with **`pdfm-app`** (no terminal window; good for a desktop
-shortcut or the Start menu), `pdfm gui`, or `pyw -m pdfmanager gui` on
-Windows. It opens in its own window, the first way that works:
-
-1. a native window (pywebview, installed with `.[app]`), with the normal
-   Save and Open dialogs;
-2. otherwise an app window of Microsoft Edge (part of Windows 10 and 11),
-   Chrome, Chromium or Brave: no tabs or address bar, and results are
-   saved like downloads;
-3. otherwise a tab in your web browser (`pdfm gui --browser` forces that).
-
-If the native window can't open, for example because Windows **Smart App
-Control** blocks a library it needs, the reason is saved in
-`%LOCALAPPDATA%\PDF Manager\window-error.txt` (`~/.local/share/pdf-manager`
-on Linux) and the app uses the Edge window from then on. Delete that file
-to try the native window again. The app stops by itself when its window is
-closed.
-
-- The app opens on a **start screen**: open or drop PDFs to read them, or
-  reopen a recent file. Each recent file says what it is: its pages and
-  size, and whether it is scanned, searchable, protected, signed or a
-  form.
-- The tools are behind a slim **rail** at the side, by what you want to
-  do: Read, Pages, Improve (smaller, searchable, mended, accessible),
-  Convert, Protect and All. The tools for several files or a folder are on
-  the start screen under *Start from several files*. The search box at the
-  top (**Ctrl+K**, or **/**) finds any tool by name or by what it does.
-- **Pin** the tools you use most (the ☆ Pin button by a tool's name): they
-  show first under All and on the start screen. In a narrow window the
-  rail becomes a strip along the top.
-- Drop files anywhere on the window. Each file shows a **preview of its
-  first page**, its page count and size; drag the cards to change the
-  order (for merging, interleaving and images).
-- Pick a tool on the left, or press **/** to search for one. Set the
-  options and click **Run** (or Ctrl/⌘+Enter). Run waits until there are
-  enough files to work on.
-- **Live preview:** Watermark, Page numbers, Headers & footers, Resize and
-  Pages per sheet show page 1 as it will come out beside the options, and
-  redraw it as you change them (watermark opacity and angle are sliders).
-  Click the preview to see it larger.
-- The result appears with a preview; **Run again** after changing options,
-  or **Start over** to clear the files. In the app window, **Save…** opens
-  the normal save dialog and **Show in folder** reveals the file; in a
-  browser, the result downloads. Several files come back as a ZIP.
-- The **page tools** show a preview of every page (with one PDF added):
-  - **Reorder pages:** drag pages into the new order (or click a page and
-    use Alt+arrow keys), duplicate or remove pages, undo with Ctrl+Z.
-  - **Extract pages**, **Delete pages**, **Rotate:** click the pages to use
-    (Shift+click for a range, or All / Odd / Even / Invert / Clear). Pages
-    to delete are crossed out, and rotated pages are shown turned.
-  - **Insert blank pages:** click the pages to put a blank page after
-    (each the size of the page before it); *All* gives a page for notes
-    after every page.
-  - **Reverse order:** shows the pages in their new order.
-  - **Split:** choose *every few pages*, *at the pages I choose* (click
-    a page to start a new file there, or type the ranges), *at each
-    bookmark* (one file per chapter, named after it; the previews show
-    where each file starts), or *into files no larger than* a size, e.g.
-    for email.
-
-  The page box under Options updates as you go, and typing pages there
-  updates the previews.
-- **Crop margins** shows the page with a box to drag (the margins are as
-  the page is shown, also for turned pages). **Trim white margins** finds
-  the content of each page and cuts away the white around it (or the same
-  for every page). **Booklet** puts two pages on each sheet in the order
-  for a folded, stapled booklet: print it double-sided, flipping on the
-  short edge. **Redact** lets you
-  draw boxes to black out, and shows where the words you typed are found;
-  **How** chooses between removing what's under the boxes (the rest of the
-  page stays searchable) and turning the pages into pictures.
-- **Bookmarks** has an editor: rename, indent and reorder bookmarks, or
-  detect them from the document's headings.
-- **Recipes** run several tools in a row (for example *Clean up scans →
-  OCR → Compress*). Build one from steps, save it by name, and use it again
-  in the app, with `pdfm recipe run`, or in a watch folder.
-- Folder tools (organize, rename, find duplicates) have **Browse…**
-  buttons in the app window and always let you **Preview** before
-  anything changes.
-- **Add form fields** makes a fillable form. **Find fields** adds them
-  where a printed form has something to fill in: a line to write on
-  ("Name ______", drawn lines, underscores or dots), an empty box or table
-  cell (also one with a small caption at the top), or a tick box. Each
-  field is named after the words next to it ("Name:" gives "Name"), a line
-  labelled "Signature" becomes a signature field, and a row of ○ choices
-  becomes a group of radio buttons. It works on scanned forms too
-  (named Text 1, Text 2… unless the scan has had OCR). Check what it found,
-  then add more: pick a field type (text, multi-line text, checkbox, radio
-  button, dropdown, signature) and drag a box on the page or just click for
-  a box of the usual size. Radio buttons added one after another make one
-  group (each with its own value); a dropdown takes its choices separated by
-  commas. Click a field to move, resize, rename or remove it. Fields already
-  in the file are shown striped, and are changed the same way: click one to
-  move, resize or rename it, make it required, change its format or total
-  (**Format** and **Sum of**), switch its type (a text box, multi-line box,
-  dropdown and unsigned signature field into one another; a tick box into a
-  radio button or a radio group into separate tick boxes), or delete it
-  (marked in red until you run; its ↶ keeps it). A total that added up a
-  renamed field follows the new name. The fields work in any PDF reader,
-  including the one here. One of the file's own fields can also be sent to
-  another page (**Page** in the bar): it keeps its place on the paper.
-- **Digital ID** (the certificate tool) signs PDFs with your certificate (a .pfx or
-  .p12 file), like Acrobat: visible in a corner of a page (showing your
-  name, the date and the reason) or invisible, optionally with a time from
-  a timestamp server. **Check signatures** reports who signed each
-  signature, when, and whether the document was changed afterwards. See
-  [Digital ID signatures](#digital-id-signatures).
-- **Headers & footers** adds text at the top or bottom of every page: a
-  title, the date, *Page {n} of {total}*, the file name or **Bates
-  numbers** (e.g. ABC000123), which continue from one file to the next.
-- **Pictures & attachments** saves the pictures in a PDF and the files
-  attached to it, as a ZIP.
-- **PDF → Excel** puts the tables in PDFs into an Excel workbook (a sheet
-  per table, or all on one sheet, after a Summary sheet) with numbers as
-  real numbers, or into CSV files in a ZIP. See
-  [Excel (tables)](#excel-tables).
-- **PDF → PowerPoint** makes a slide of each page, with the text in text
-  boxes you can edit over the page's pictures and drawings (or each slide
-  a picture of the page). **PDF → HTML** makes a web page: flowing text
-  that fits any screen, or each page as it looks. No Office needed. See
-  [PowerPoint and HTML](#powerpoint-and-html).
-- **Search a folder** searches every PDF in a folder (and its sub-folders).
-  Type words or ask a question: "how much do I owe" finds the page that
-  says "balance due", because pages are ranked by what they are about as
-  well as by the words they share with the question, the closest first.
-  "These exact words" finds a phrase as typed instead. Each result shows
-  the part of the page that matched; click one to open that page in the
-  reader. Questions are understood in English; Chinese is matched by its
-  words. It all runs on this computer (a 4 MB table of word meanings comes
-  with ZPDF), and the text is kept in a small index, so searching the same
-  folder again is quick.
-- Long jobs show **progress** and can be **cancelled**.
-- **Save…** opens the computer's own Save dialog, also in the Edge window.
-- Password-protected PDFs: enter the password once under the options;
-  results stay protected with the same password.
-- Light and dark themes follow your system, or pick one in **Settings**.
-- Only **one copy** runs: opening a PDF from Explorer (or starting the app
-  again) brings the running app to the front with the file in the reader
-  (in the Edge window, the file opens in a new window of the running app).
-- **Updates:** when a newer version is published on
-  [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases), an
-  **Update** button appears on the rail; it downloads it, checks it
-  against its published SHA-256, installs it and starts the app again.
-  Nothing to set up. The check can be turned off in **Settings** (the gear
-  at the bottom of the rail), which also has an **About** section with
-  the licence and the third-party notices. A development copy can follow
-  the private repository's branch instead, with a GitHub token entered
-  there. (A copy running from a git checkout is updated with `git pull`,
-  the standalone app by building it again.)
-- **Reporting a problem:** an unexpected error shows a short error ID.
-  ZPDF keeps a small log (`logs/zpdf.log` in its data folder: the tools
-  run, how long they took, errors) with document names and your user
-  folder left out. **Settings › About › Copy diagnostics** copies the
-  version, setup and recent log lines to paste into a message; **Open log
-  folder** shows the log itself.
-
-Everything runs on your own computer. The app's built-in server only
-listens on `127.0.0.1` and requires a random token that only the app
-window (or the link `pdfm gui` prints) knows, so other websites and other
-computers can't use it.
-
-## Right-click actions in File Explorer
-
-On Windows, the installer adds ZPDF to File Explorer's right-click menu, for
-you only (no administrator rights). Right-click one or more PDFs and choose
-**ZPDF**, then:
-
-- **Combine in ZPDF**: all the selected PDFs in one, in name order (numbers
-  counted as numbers, so "Scan 2" comes before "Scan 10", as Explorer lists
-  them). Explorer doesn't tell programs the order you clicked them in.
-- **Make searchable (OCR)** and **Make smaller**: each selected PDF on its own.
-- **Open in ZPDF**: the same as *Open with → ZPDF*.
-
-Right-click pictures (JPG, PNG or TIFF) for **Make a PDF with ZPDF**: all
-the selected pictures in one PDF, a page each. HEIC photos from a phone
-can't be read yet: save them as JPG first.
-
-The action runs in the app: it opens (or comes to the front if it's
-already open), a card at the foot of the window shows how it's going (with
-Cancel), and the result opens as a new tab that **isn't saved yet**: Save
-asks where, starting in the folder the files came from. The tools use
-their usual settings (OCR: the built-in engine, English, pages turned
-upright; Make smaller: Medium). The files you chose aren't changed.
-
-On **Windows 11** the actions are under **Show more options** (or
-Shift+right-click): the short menu only lists programs that install a
-system component, which ZPDF doesn't. Explorer starts ZPDF once per
-selected file; the files that arrive within a couple of seconds of each
-other go into one job, so select them all and choose the action once.
-
-To take ZPDF out of the menu (or put it back), use **Settings → Show ZPDF
-in the right-click menu**. Uninstalling takes it away too.
-
-## Privacy: what ZPDF keeps, and when it goes online
-
-ZPDF works on your computer. It has **no telemetry**: nothing about you or
-your files is sent anywhere. **Settings → Privacy** shows and controls what
-it keeps:
-
-- **Remember the files I open** (on by default): the Recent list, where you
-  were in each file, what ZPDF read from it (pages, whether it's signed or a
-  scan), and the text kept by Search a folder so the next search is fast.
-  Turn it off and none of these is kept from one use to the next.
-- **Clear history** empties all of them now. Measurements and drawing scales
-  you set on a drawing are your work, not history: they stay until you
-  remove them.
-- **Working files.** What a tool writes on the way to its result goes into
-  ZPDF's own folder (`temp` in its data folder), not the shared temporary
-  folder. It's deleted when the tool finishes, at the latest when ZPDF
-  closes, and after a crash at the next start.
-- **When ZPDF goes online** lists every occasion: checking for a new
-  version (there's a switch), downloading an update or an OCR language when
-  you ask, a timestamp when you sign with a timestamp server, turning a web
-  address into a PDF, and opening a link you click.
-
-`pdfm privacy` prints the same; `--clear-history` and `--remember off` do
-it from the command line.
-
-## Watch folders
-
-**Settings → Watch folders** processes PDFs put in a folder while ZPDF is
-open: a scanner's folder, Downloads, a shared folder. For each folder,
-choose:
-
-- **What to do**: Make searchable (OCR), Make smaller, Archive (PDF/A),
-  each with its usual settings, or one of your saved
-  [recipes](#recipes).
-- **Where results go**: into a **Done** folder inside it, or next to the
-  original with the name ending in " (searchable)", " (smaller)",
-  " (PDF-A)" or " (done)".
-- **What happens to the originals**: they stay where they are, or move to
-  an **Originals** folder inside it.
-
-Each file is done once: ZPDF remembers which files it did (in its data
-folder), also after a restart, and a file that's replaced or changed gets
-another go. A file is only taken once it has stopped changing, and a
-download still under way (Chrome's `.crdownload`, Firefox's `.part` and
-the like) is left until it's complete. A note shows when a file is done
-(with **Open**) or couldn't be (with the reason); the folder's line in
-Settings shows what it's doing, how many were done and the last one.
-**Pause**, **Resume** and **Remove** are on that line; removing a folder
-leaves its files as they are. A folder that goes away (a USB stick) is
-waited for. If two copies of ZPDF are open, only one watches.
-
-Watching happens only while ZPDF is open; to process a folder without the
-app, use [`pdfm watch`](#watching-a-folder) (for example from a scheduled
-task).
-
-**With the window closed.** While a folder is being watched, closing the
-window can leave ZPDF in the notification area (by the clock), still doing
-each file that arrives; the first time it asks, and Settings → Watch
-folders keeps the choice (ask me, keep watching, close ZPDF). The icon
-opens ZPDF again with a click, and its right-click menu pauses watching or
-quits. **Start ZPDF in the background when I sign in to Windows** starts
-it that way with no window, so a scanner's folder is watched from sign-in
-on; it's off unless you turn it on, and Windows lists it under Startup
-apps. Nothing stays running when no folder is watched. This part needs
-Windows and ZPDF's own window.
-
-## Scan: paper to a searchable PDF
-
-**Scan paper** on the start screen (or Scan, under Convert) turns paper
-into a PDF in one place. The pages come from:
-
-- **a scanner** (Windows): ZPDF lists the scanners Windows knows (through
-  Windows Image Acquisition, part of Windows; no other program is needed).
-  Choose colour, greyscale or black and white, 150, 200 or 300 dpi
-  (300 greyscale is best for documents), and the glass or the document
-  feeder. The feeder gives every page in it; the glass one page each time
-  you press **Scan another page**. An empty feeder, a busy or offline
-  scanner are said plainly, and Cancel stops between pages.
-- **a network scanner, with no driver** (any computer): scanners and
-  multifunction printers on your network that offer AirScan (also called
-  eSCL or Mopria Scan: most network devices of the last ten years) are
-  found by themselves and listed with "(network)" after their name. If the
-  search finds nothing, **Add a network scanner…** takes its address (for
-  example 192.168.1.40) and remembers it. They scan the same way, and one
-  whose feeder turns the page offers **Both sides of each sheet**.
-  Everything stays on your network. (Written to the published protocol and
-  tested against a simulated device; not yet tried on a real scanner.)
-- **a scanner with only a TWAIN driver, through NAPS2** (Windows): if
-  [NAPS2](https://www.naps2.com) (a free scanning program, GPL) is
-  installed, the scanners it drives show in the list marked "through
-  NAPS2", and ZPDF scans from them by asking NAPS2: glass, feeder, both
-  sides. ZPDF doesn't contain NAPS2; without it nothing changes. (Built
-  from NAPS2's description of its command line and tested with a
-  stand-in; not yet tried on a real TWAIN scanner.)
-- **any other scanner, through a folder**: every scanner can save its
-  scans into a folder, with its own Scan button or its program. **My
-  scanner isn't listed…** on the Scan page takes that folder and watches
-  it: each scan put there (a PDF, or a picture: JPEG, PNG, BMP, TIFF with
-  one or many pages) becomes a searchable PDF in a "Done" folder inside
-  it, while ZPDF is open. With **Pages scanned together become one
-  document**, a scanner that saves a file per page gives one PDF per
-  stack of paper. This works for scanners with only a TWAIN driver too,
-  without installing anything. The folder is an ordinary watch folder (Settings → Watch
-  folders), where it can be paused or removed.
-- **photos** taken with a phone (any computer): ZPDF finds the page's four
-  edges in each photo, flattens it as if it had been scanned, crops and
-  straightens it, and gives it a clean look: shadows evened out, the paper
-  white, the ink dark (**Keep colours** keeps coloured ink and stamps;
-  **As taken** changes nothing). A page whose edges aren't clear (a white
-  page on a white table, a page that runs out of the photo) keeps the whole
-  photo, only straightened: a darker background behind the page helps.
-  Photos must be JPG or PNG (on an iPhone: Settings → Camera → Formats →
-  Most Compatible).
-
-The pages gather in a strip as they arrive: drag them into another order
-(or Alt+arrow keys), turn them, take them out, or scan one again. **Make
-PDF** straightens crooked pages, takes out blank ones, turns sideways
-pages upright, makes the text searchable (the built-in OCR engine, or
-Tesseract), sizes each page from the scan's resolution (photos go on A4
-or Letter, whichever fits their shape) and compresses it like Compress
-does for scans. The PDF opens in the reader as a new tab, not saved yet:
-Save asks where.
-
-From the command line:
+- **PDF/X-1a & PDF/X-4 Compliance (`--profile standard|pdfx-1a|pdfx-4`):** Audits ISO 15930 rules — `GTS_PDFX` `/OutputIntents`, `/Info /Trapped`, `/TrimBox`/`/ArtBox`, unembedded fonts, low-DPI images, bleed, hairlines, encryption/JavaScript prohibitions, and transparency rules.
+- **Recursive Form XObject Inspection:** Traverses nested `/Subtype /Form` XObjects (from InDesign, Illustrator, Figma, Canva) with CTM composition to catch hidden RGB logos, low-DPI placed art, >300% TAC fills, hairlines, and white overprint.
+- **Overprint, TAC & Spot-Ink Audit:** Flags critical **white overprint** hazards (white text/vectors that would vanish on press), small pure-black knockouts, over-limit **Total Ink Coverage (TAC)** across vectors and CMYK images, >2 spot inks, and accidental `/Separation /All` (400% registration ink).
+- **True CMYK Plate Separation, TAC Heatmap & Live Eyedropper:** Inside the Reader's Output Preview, inspect individual **C, M, Y, and K plates**, view a quantitative **TAC Heatmap**, and hover anywhere to read live **`C% · M% · Y% · K%` and `TAC%`** under your cursor.
+- **One-Click Pure-Python Press Fixes:** Fix white overprint, convert small rich-black text (`<= 12 pt`) to crisp `100% K` with overprint, clamp TAC with GCR preservation, thicken hairlines (`< 0.25 pt`), convert `DeviceRGB` vectors & images to `DeviceCMYK`, and attach PDF/X `OutputIntent` — all in pure Python.
 
 ```bash
-pdfm scan --list                               # the scanners
-pdfm scan -o letter.pdf                        # one page from the glass, Enter for the next
-pdfm scan --feeder --mode colour --dpi 200 -o pile.pdf
-pdfm photos-to-pdf IMG_0101.jpg IMG_0102.jpg -o receipt.pdf --look colour
+pdfm preflight brochure.pdf --profile pdfx-4 --max-tac 300
+pdfm color brochure.pdf --to cmyk --icc FOGRA39.icc
 ```
 
-Both take `--no-ocr`, `--language`, `--keep-blank`, `--no-straighten` and
-`--no-upright`.
+---
 
-## PDF reader
+### CAD, Blueprints, Takeoff & Sheet Sets
 
-Choose **Read** on the rail, run `pdfm view report.pdf`,
-or open a PDF with the standalone app ("Open with…" → ZPDF, or drop
-the file on the app). It is built on [pdf.js](https://mozilla.github.io/pdf.js/),
-the engine behind Firefox's PDF viewer, bundled with the app so it works offline.
+Purpose-built tools for architects, engineers, and estimators — comparable to Bluebeam workflows at zero subscription cost:
 
-- **Distraction-free:** an open document gets the whole window. The toolbar
-  keeps the page number, zoom, find, annotate and sign, and **More** (open,
-  rotate, print, save, properties, "Edit with" any tool).
-  The **Home** button (top left) goes back to the tools; your documents stay
-  open in the reader.
-- **The file panel** at the right says what the shown file is (pages, size,
-  scanned or not, signed, a form, protected), suggests what it may need
-  (make a scan searchable, make a big file smaller, check its signatures)
-  and offers common tools. A tool opens its options right there; **Run**
-  works on the open file and opens the result in a new tab beside it (a
-  Word or Excel file is offered to save instead). Tools that work on the
-  page itself (crop, redact, arranging pages) open their own page with the
-  file. The panel button in the toolbar, or the T key, shows or hides it;
-  in a window narrower than 1100 px it comes over the page when asked for.
-- **Save** and **Undo** appear in the toolbar as soon as a document has
-  changes not saved yet. **Save** (Ctrl+S) writes them into the file you
-  opened (safely: to a new file next to it that then takes its place; if
-  another program changed the file in the meantime you're asked first).
-  **Save as** (Ctrl+Shift+S) starts in the file's own folder. A PDF that
-  came from elsewhere (dropped from a browser, a tool's result) is saved
-  as a copy.
-- **Big files open fast:** a PDF of over 4 MB from your computer is read
-  a piece at a time as you go, so the first pages show at once (a 277 MB
-  drawing set: first page in about a second, using a few MB of memory).
-  Once the first page shows, a file of up to 64 MB is read in full in the
-  background, so it stays open as it was even if the file is then changed
-  or deleted. If a bigger file stops being readable, the reader says so
-  and the tab can be closed. The page thumbnails are made when you open their panel, and only those
-  near the page you are on.
-- A zoom that fits the page (Automatic, Fit width, Fit page) fits it again
-  when the window or the sidebar changes size.
-- **Tabs:** open several PDFs at once (the + button, or drop more files),
-  each with its own unsaved changes; a dot marks tabs with changes.
-- **Recent files** on the start screen, to open them again with one click.
-- **Reading:** continuous scrolling, page numbers (and the document's own
-  page labels), thumbnails, bookmarks, single or two-page view.
-- **Zoom:** automatic, fit page, fit width, actual size or 50–400%;
-  Ctrl/⌘ + mouse wheel or pinch to zoom around the pointer.
-- **Find** (Ctrl+F) with highlighting, match case and whole words.
-- **Select and copy text**; links work (web links open in your browser).
-- **Fill in forms** and save a copy with your entries. A printed form with
-  nothing to type in (lines, boxes and tick boxes only) gets a bar offering
-  **Make it fillable**, which adds its fields right there (also in *Tools*).
-  Forms' own scripts run as in Acrobat: amounts, dates and phone numbers
-  are checked and shown in their format as you type, totals add themselves
-  up, and values out of range are refused.
-- **Annotate and sign** (Tools → Annotate & sign): highlight, underline
-  or strike out text, add **notes** (click, type your comment), add text,
-  draw, draw **shapes** (rectangle, ellipse, revision cloud, arrow, line;
-  hold Shift for squares, circles and 45° lines), add pictures, and sign
-  by drawing, typing your name or using a picture of your signature
-  (remembered on this computer if you like). Colours and sizes,
-  undo/redo, and **Save** with your changes. Highlight, Note, Add text,
-  Draw and Sign are on the bar, with single keys while it's open (**H**,
-  **C**, **A**, **D**, **S**); the other tools are under **More tools**.
-  Saving over the file (**Ctrl+S**) can be undone for 10 seconds. Notes, underlines, strikeouts
-  and shapes are standard PDF annotations with their own appearance, so
-  Acrobat and other viewers show them the same, and they print. Use
-  *Flatten forms & comments* afterwards to make them part of the page.
-- **Markups for drawings** (Shapes → For drawings): a **revision cloud**
-  through the corners you click, a **line or arrow with corners**, a
-  **dimension** whose ends snap to the drawing and which carries the real
-  length from the sheet's scale, and a **callout** (words in a box with a
-  pointer). Other programs read them as the same kinds of markup.
-- **Changing a markup afterwards**: with Shapes, Stamps or Note on, press
-  on a markup you made with ZPDF. Handles appear on its corners, ends or
-  points: drag one to reshape it, or the markup itself to move it. A
-  dimension's length follows its ends (and they snap to the drawing again;
-  Alt puts them exactly where you let go). **Delete** removes it, the arrow
-  keys nudge it (Shift: ten points), **Esc** lets go; the bar's colour and
-  thickness change it, and a double-click changes a callout's words. It
-  stays the same annotation, with its replies. Markups from other programs
-  and measurements aren't changed this way yet.
-- **Stamps** (Annotate & sign → Stamp): Approved, Not approved, Reviewed,
-  Received, Draft, Final, Confidential, For comment, Void or your own
-  words, with your name and the date if you like; and for drawing reviews
-  Approved as noted, Revise and resubmit, Rejected, For information and
-  Not for construction. Click where it goes, or drag its size.
-  **Your stamps…** in the list keeps stamps of your own (their words,
-  colour, and with or without name and date); they show under Yours and
-  are there every time ZPDF starts.
-- **Comments tab**: every comment with its replies; **Summary** makes a
-  PDF listing them page by page (with the words each highlight or
-  strike-out marks), **Export** saves them as an XFDF file to send, and
-  **Import** adds comments from one (Acrobat reads and writes XFDF).
-- **Document properties** shows what a protected PDF allows (printing,
-  changes, copying) and the attached files, each with **Save**.
-- **Edit pictures** (Annotate & sign → More tools → Edit pictures): every picture on the
-  page is outlined; drag one to move it, drag a corner to resize it (it
-  keeps its proportions; hold Shift to stretch it), or **Replace** or
-  **Delete** it. Only the picture changes, the rest of the page stays as
-  it is; a picture Word or a browser clipped to its box can be moved out
-  of it.
-- **Links** (Tools → Annotate & sign → Links): links are outlined; click
-  one to change where it goes (a web or email address, or a page of the
-  document) or delete it, or drag a box to add one.
-- **Digital ID** (the badge button in Annotate & sign, or
-  More): drag a box where the signature goes, choose your digital ID
-  (.pfx or .p12) and its password. A signed document shows a bar saying
-  who signed it and whether it has been changed since; **Details** lists
-  every signature. ZPDF asks before changing a signed document, since
-  any change shows up as made after signing.
-- **Redact** (Tools → Annotate & sign → Redact): drag boxes over what
-  should go, or choose **Select words** and select them; marks are
-  outlined in red (click × to remove one). **Apply** asks first, then takes
-  what's under the marks out of the file and draws black boxes: the words,
-  the covered parts of pictures and drawings, and comments or form fields
-  there. The rest of the page stays real text. Undo with Ctrl+Z; it's for
-  good once you save. See [Redaction](#redaction). The Redact tool then
-  checks its result and says so: that nothing redacted is left anywhere in
-  the file, or where a redacted word is still kept (the title, an
-  attachment) and what takes it out.
-- **Encrypt for people**: instead of a password, choose the certificates
-  (.cer files) of the people who may open a PDF; only their Digital IDs
-  open it. **Open with Digital ID** opens one that was protected for you,
-  in the reader or as a tool.
-- **Passwords and old protection**: Add password says how strong the
-  password is as you type. A PDF protected with old encryption (RC4) is
-  marked "weak protection", and **Upgrade protection** writes it with
-  AES-256, keeping its password and limits.
-- **Comments** (a tab in the sidebar): every note, highlight, shape and
-  other markup in the document, page by page, with its author, date and
-  comment and the replies under it. Click one to go to it; add or change
-  its comment, reply, or delete it. Your name for comments is asked once.
-- **Edit text** (E, or Tools → Annotate & sign → Edit text): click a line
-  and retype it, **Shift+click** to rewrite its whole paragraph (it rewraps
-  to the same width and line spacing, and stays justified if it was), or
-  click an empty spot to add words that take the look of the text nearest
-  to them. **Text stays where it was:** you type over the page's own words,
-  in their font, size and colour; afterwards every letter you didn't change
-  is exactly where it was (a bold word stays bold), the new letters start
-  where the old ones did, spaced like the rest of the line, and the words
-  after them move by exactly the difference in width (a justified line
-  keeps its right edge, if its word gaps can take it up). The reader says
-  when a line got too long for its column or a paragraph too long for its
-  space. You can change the same line again and again. The new words keep the
-  **document's own font** when its copy has every letter needed; otherwise
-  the same font installed on your computer (found by name, e.g. Calibri),
-  and only then a similar standard font; the reader tells you when it
-  couldn't use the original. A bar above the text you're editing sets
-  **font, size, bold, italic, colour and alignment** (left, centre, right,
-  justified) for the line, paragraph or new text: the fonts this document
-  uses come first, then fonts installed on your computer, then the
-  standard PDF fonts (Helvetica, Times, Courier). A font from your
-  computer is embedded (only the letters used); in a PDF/A file a standard
-  font is swapped for an embedded one, and the reader says which font was
-  used. **Words keep their styles:** in a rewritten paragraph, bold,
-  italic and coloured words stay so (the editor shows them), **Ctrl+B**
-  and **Ctrl+I** change just the words you chose, and links move with
-  their words, as do highlights, underlines and strike-outs; footnote
-  marks and subscripts stay raised or lowered. Lines are broken looking at
-  the whole paragraph, and justified text divides long English words at
-  line ends. **Text flows:** when a rewritten paragraph gets longer or shorter,
-  the paragraphs below it in the same column move down or up to match,
-  with the rules (lines) between them; other columns, pictures and boxes
-  stay where they are, and the column ends at a big gap or at anything
-  that isn't text. If the text would no longer fit on the page, nothing
-  is moved and no words are lost: the reader says so and offers **Shrink
-  to fit** (the paragraph's size comes down a little, to three quarters at
-  most). The last paragraph of a column that no longer fits runs on at the
-  top of the next column on the page (its text moves down to make room),
-  as in linked text boxes; text doesn't run on to the next page. A rewritten
-  paragraph's old words are taken out of the page where they can be;
-  otherwise, as for a changed line, they're covered with the colour around
-  them (still in the file underneath, so use **Redact** to remove text for
-  good). Undo with Ctrl+Z.
-- **Pages:** in the thumbnails, drag pages to reorder them, click with
-  Ctrl or Shift to pick several, and turn, duplicate, delete or extract
-  them (the buttons on a thumbnail, the bar above them, or right-click).
-  **Insert PDF**, or drop a PDF between the thumbnails, puts its pages in.
-  Every change can be undone (Ctrl+Z) and is kept with **Save**.
-- **Right-click a page** for what you can do there: copy the selected
-  words, edit this text, rewrite this paragraph, add text here, turn,
-  duplicate, delete or extract the page, or insert a PDF after it.
-- **Drawings to scale** (house plans, blueprints): the **Scale** button
-  next to the zoom uses the exact scale CAD programs and Bluebeam store in
-  the PDF when there is one, else reads each sheet's scale from its title block
-  (`1/4" = 1'-0"`, `1" = 20'`, `1:100`, …), or you pick it, or **Set from a
-  dimension**: click both ends of a line you know (say a 24'-0" wall) and
-  type its length. The dialog shows what that line measures at the current
-  scale, the scale your length makes and the **standard scale it matches**
-  (pick that, or exactly as measured), and whether to use it for this sheet
-  or **every sheet** of the document.
-  - **True paper size** (in the zoom menu) shows the sheet exactly as big
-    as it would print, once you've calibrated your screen (hold a ruler, in
-    inches or centimetres, or a bank card to it, or type its diagonal; asked
-    the first time). **Zoom to scale** zooms so the drawing looks as if
-    printed at another scale, e.g. a 1/4" plan at 1/8" = 1'-0", and always
-    shows what's in effect ("Not to scale (67%)" otherwise).
-  - **Measure** (M): click two points for a length in feet and inches to
-    the sixteenth (or metres to the millimetre). Clicks **snap to the
-    drawing's own lines**, read from the file: a line's end, where two
-    lines cross, a line's middle, the foot of the perpendicular from the
-    last point (wall thicknesses), or a point on a line. A marker shows
-    what the click will land on and the line it's on is highlighted, so a
-    snapped measurement is exact to the drawing, not to the mouse.
-  - **Lines close together:** when there's more than one thing to snap to
-    under the pointer, a **magnifier** shows the lines there, the points to
-    choose from and the one chosen; **Tab** (Shift+Tab) picks the next.
-  - **Straight** keeps every line across or up and down (no slants); hold
-    Shift for steps of 45°, Alt to place a point freely. **Area**: click a
-    room's corners, then the first one again (or Enter), for its square feet
-    (or m²) and perimeter.
-  - **Path**: click along a run of lines (a wall run, a baseboard) for one
-    total length, each segment's length shown beside it; Enter, a
-    double-click or the Path button again finishes it.
-  - **Rectangle**: two opposite corners for a rectangular room's area.
-    **Cut-out**: click the corners of an opening (a stair, a shaft, a
-    column) inside an area; it's taken off that area, which then shows its
-    net size and how many cut-outs it has.
-  - **Count**: click each outlet, door or fixture; each gets a number and
-    the count shows by the first. Enter (or Count again) starts a new
-    count, e.g. for another kind of fixture; Backspace takes back a mark.
-  - **Angle**: a point on one line, the corner, a point on the other line.
-  - **Names and groups:** name a measurement ("Living room", "North wall")
-    and put it in a group ("Floors", "Outlets"); a group has its own
-    colour on the page and in the list, and its subtotal. Pick the group
-    new measurements go in at the top of the list.
-  - **Move a measurement:** drag it (its line, edge or label) to move it, or
-    drag one of its points to change it (the point snaps again). A click on
-    it without dragging measures from there.
-  - **Nudge:** the point last placed or moved is selected (shown filled);
-    the arrow keys move it a pixel at a time (Shift: ten). Click a
-    measurement in the list to select all of it. Delete removes the
-    selected one, Esc lets go of it.
-  - **Undo / redo** (Ctrl+Z, Ctrl+Y) while the scale bar is open: adding,
-    moving, nudging, deleting and clearing measurements.
-  - **List** shows every measurement with its name, value and page, by
-    group with subtotals, **totals** of lengths (distances and paths),
-    areas and counts, and **Show in**: feet and inches to 1/16", 1/8",
-    1/4", 1/2" or the inch, decimal feet, inches, metres or millimetres.
-    Labels sit on a white backing so the drawing's lines don't run through
-    them, and hints appear at the top of the page, clear of the title block.
-  - **Kept with the file:** measurements are remembered on this computer
-    for each file and come back when it's opened again. **Copy** (to paste
-    in a spreadsheet), **CSV** and **Excel** (a quantity schedule: these
-    measurements together with the dimension lines and measurements already
-    in the document, each with its sheet, kind, group, name, a plain number
-    and its unit, and totals per group; in the workbook the totals are on
-    their own sheet and numbers are numbers, ready to sum and price) and
-    **Into PDF**: the measurements become measurement annotations in the document
-    (with the drawing's scale), showing their values in Acrobat and other
-    viewers and when printed, and listed under Comments.
-  - **Compare revisions** (the layers button in the scale bar, or More →
-    Compare with another revision): another version of the drawing, open
-    in a tab or picked from a file, is drawn over this one page by page:
-    what both have is black, what only that version has red, what only this
-    one has blue, so a moved wall shows as a red line and a blue one.
-    *Changes only* fades what's the same; you can also show either version
-    alone, and if sheets moved, set the other version's page offset.
-  - Backspace takes back the last point or measurement, Esc stops. Scanned
-    sheets have no lines to snap to, and if a sheet's lines can't be read
-    ZPDF says so: points then go exactly where you click, so zoom in close.
-  - A scale read from the sheet is only as right as the sheet: measure one
-    written dimension to check it before relying on the numbers.
-- **Layers** (drawings exported from CAD with layers, which PDF calls
-  optional content): a **Layers** tab appears in the sidebar, beside Pages,
-  Bookmarks and Comments, only when the file has layers. It lists them in
-  the file's own order, nested as the file nests them and under its
-  headings, each with a box to show or hide it; **Show all** and **Hide
-  all** switch them together.
-  - A **locked** layer (the padlock) can't be switched. Layers in a **radio
-    group** (shown as round buttons) keep one on: showing one hides the
-    others.
-  - Hiding a layer redraws the pages and the thumbnails without it, its
-    words can no longer be selected, **measuring snaps only to the lines of
-    the layers shown**, and **Print** prints the layers shown.
-  - Each tab keeps its own choice of layers while you switch between them.
-    Showing and hiding is only how you look at the file; it doesn't change
-    it.
-  - **Save layer visibility** makes the file open with the layers as they
-    are now, in ZPDF, Acrobat and other readers (it writes the file's
-    default layer settings). It's a change like any other: Undo takes it
-    back, and Save keeps it.
-  - **Flatten layers…** makes the layers shown part of the page and
-    removes the hidden layers' lines, text and pictures from the file for
-    good; the file has no layers after it. For sending a clean set (Undo
-    takes it back). The **Flatten layers** tool does the same to files
-    without opening them, and `pdfm flatten-layers` on the command line.
-- **Command palette (Ctrl+K):** type what you want (a tool, an action like
-  "fit width" or "delete this page", a page number, or a zoom like "150%") and press Enter.
-- Rotate the view, hand tool (drag to scroll), dark pages for night
-  reading, full screen, print, document properties.
-- Password-protected PDFs ask for their password.
-- **Edit with…** sends the open document to any tool (compress, extract
-  pages, OCR, …), and every finished result has **Open in reader**.
-- Remembers the page and zoom of each document.
-
-| Key | Action |
-|---|---|
-| Ctrl/⌘+O | open a PDF |
-| Ctrl/⌘+F, Enter / Shift+Enter, Esc | find, next / previous match, close |
-| Ctrl/⌘ + / − / 0 | zoom in / out / automatic |
-| (zoom box) | type any percentage and press Enter; ↑ ↓ change it by 10% (Shift: 1%); the arrow beside it lists the presets |
-| N or J, P or K, Home, End | next, previous, first, last page |
-| R, Shift+R | rotate the view clockwise, counter-clockwise |
-| Ctrl/⌘+K | command palette |
-| E | Edit text on / off |
-| M | measure on / off (Esc stops, Backspace undoes a point, Shift straight, Alt no snapping) |
-| T | show / hide the tools |
-| Ctrl/⌘+Z | undo a text or page change |
-| Ctrl/⌘+P, Ctrl/⌘+S | print, save a copy |
-
-The bundled pdf.js (Apache-2.0, see `pdfmanager/static/pdfjs/LICENSE`) is
-updated with `python packaging/update_pdfjs.py <version>`.
-
-## Command line
-
-Every command that works on PDFs accepts **several files or wildcards**
-(`pdfm compress *.pdf`). With one input, `-o` names the output file; with
-several, `-o` is a folder and the original file names are kept (so is an
-`-o` that ends with a slash or names an existing folder). Without
-`-o`, results are written next to each input as `<name>_<command>.pdf`.
-If one file in a batch fails, the rest are still processed.
-
-Page ranges are 1-based: `1-3,5` · `7-` (7 to end) · `-3` (1 to 3) ·
-`end` · `5-1` (reversed) · `odd` · `even` · `all`.
-
-| Command | What it does | Example |
-|---|---|---|
-| `gui` | open the desktop app | `pdfm gui` |
-| `view` | read PDFs in the reader | `pdfm view report.pdf` |
-| `info` | page count, page sizes, metadata | `pdfm info *.pdf` |
-| `merge` | combine files (optionally picking pages) | `pdfm merge a.pdf b.pdf:1-3 -o all.pdf` |
-| `split` | one file per page, every N pages, per range, per bookmark, or files of at most N MB | `pdfm split book.pdf -r 1-10 11-20 21-` · `--bookmarks` · `--max-size 10` |
-| `extract` | copy selected pages to a new file | `pdfm extract doc.pdf -p 2,4-6` |
-| `delete` | remove pages | `pdfm delete doc.pdf -p 1,end` |
-| `reorder` | rearrange (or repeat) pages | `pdfm reorder doc.pdf --order 3,1,2,4-` |
-| `insert-blank` | insert blank pages (after pages, at the start, or after every page) | `pdfm insert-blank doc.pdf --after 3,7` · `--after all` |
-| `reverse` | reverse page order | `pdfm reverse scan.pdf` |
-| `interleave` | merge separately scanned fronts and backs | `pdfm interleave fronts.pdf backs.pdf -o book.pdf` |
-| `rotate` | rotate all or some pages | `pdfm rotate *.pdf -d 90 -p 2-3` |
-| `resize` | change paper size or scale pages | `pdfm resize doc.pdf -s a4` · `--scale 0.5` |
-| `crop` | trim margins (mm, CSS-style order, as the page is shown), or the white margins | `pdfm crop doc.pdf -m 10` · `-m 10 5 10 5` · `--auto --padding 3` |
-| `nup` | 2/4/6/8/9 pages per sheet | `pdfm nup slides.pdf -n 4` |
-| `booklet` | arrange pages for a folded, saddle-stitched booklet | `pdfm booklet zine.pdf` · `-s letter` |
-| `compress` | shrink files: `low`, `medium`, `high` | `pdfm compress *.pdf -l high -o small/` |
-| `color` | convert to grayscale, RGB or CMYK | `pdfm color doc.pdf --to cmyk --icc printer.icc` |
-| `ocr` | make scans searchable | `pdfm ocr scan.pdf` (Russian: `--language rus`; Tesseract: `--engine tesseract`) |
-| `encrypt` / `decrypt` | AES-256 password protection, limits on printing, copying, changes | `pdfm encrypt doc.pdf` (prompts) |
-| `metadata` | show or set title/author/subject/keywords | `pdfm metadata doc.pdf --title "Q3 Report"` |
-| `watermark` | stamp text or another PDF | `pdfm watermark doc.pdf -t CONFIDENTIAL` |
-| `number` | add page numbers | `pdfm number doc.pdf --format "Page {n} of {total}"` |
-| `headers` | headers, footers and Bates numbers | `pdfm headers *.pdf --bottom-right "{bates}" --bates ABC` |
-| `form` | add fillable form fields, find a printed form's, list them, or change the ones there (`--edit changes.json`) | `pdfm form doc.pdf --detect` |
-| `extract-media` | save the pictures and attached files | `pdfm extract-media doc.pdf` |
-| `text` | extract text | `pdfm text doc.pdf -o doc.txt` |
-| `clean` | remove blank pages, turn pages upright | `pdfm clean scan.pdf --rotate` |
-| `compare` | report what changed between two versions | `pdfm compare v1.pdf v2.pdf` |
-| `bookmarks` | list, set or detect bookmarks | `pdfm bookmarks doc.pdf --detect` |
-| `redact` | black out text, numbers or areas for good | `pdfm redact doc.pdf -t "John Smith" --find emails` |
-| `flatten` | make forms and comments part of the page | `pdfm flatten form.pdf` |
-| `sanitize` | remove hidden data (details, scripts, attachments) | `pdfm sanitize doc.pdf` |
-| `make-safe` | take out what could do harm in a PDF you were sent (`--check`: only list it) | `pdfm make-safe invoice.pdf` |
-| `privacy` | what ZPDF keeps on this computer and when it goes online (`--clear-history`, `--remember off`) | `pdfm privacy --clear-history` |
-| `encrypt-for` / `open-with-id` | protect a PDF for people's certificates (no password); open one with your Digital ID | `pdfm encrypt-for doc.pdf --cert ann.cer` |
-| `upgrade-protection` | replace old, weak encryption (RC4) with AES-256, same password and limits (`--check`: only say how each file is protected) | `pdfm upgrade-protection old.pdf` |
-| `sign-cert` | sign with a digital ID (.pfx/.p12), visible or invisible | `pdfm sign-cert doc.pdf --pfx me.pfx --page last --reason "Approved"` |
-| `verify` | check the digital signatures in PDFs | `pdfm verify signed.pdf` |
-| `pdfa` | convert to PDF/A for archiving | `pdfm pdfa doc.pdf --level 2` |
-| `check-pdfa` | check whether PDFs meet PDF/A, and what breaks it | `pdfm check-pdfa *.pdf` · `--level 1b` |
-| `tag` | make PDFs accessible: tag them for screen readers | `pdfm tag report.pdf --lang en` |
-| `check-access` | check PDFs for accessibility problems, and how to fix them | `pdfm check-access *.pdf` · `--json` |
-| `to-word` | convert to an editable Word document | `pdfm to-word doc.pdf` |
-| `to-excel` | put the tables into an Excel workbook (or CSV files) | `pdfm to-excel doc.pdf -p 2-5` · `--one-sheet` · `--csv` |
-| `quantities` | a quantity schedule (takeoff) of what was measured on a drawing, with totals per group, as a workbook or CSV | `pdfm quantities plan.pdf` · `--csv` |
-| `to-pptx` | convert to a PowerPoint presentation, a slide per page | `pdfm to-pptx doc.pdf` · `--pictures` · `-p 1-5` |
-| `to-html` | convert to a web page (one .html file, pictures inside) | `pdfm to-html doc.pdf` · `--exact` |
-| `from-office` | convert Word, Excel, PowerPoint, … (and web pages) to PDF | `pdfm from-office report.docx` |
-| `web` | save web pages as PDFs (as the browser prints them) | `pdfm web https://example.com` |
-| `attach` | attach files to PDFs, remove or list them | `pdfm attach doc.pdf --add data.xlsx` |
-| `labels` | page labels (i, ii, iii then 1, 2, 3) | `pdfm labels doc.pdf --set "1-4: i; 5-: 1"` |
-| `repair` | mend damaged PDFs, fast web view | `pdfm repair broken.pdf` |
-| `comments` | list comments, summary PDF, CSV, XFDF export/import | `pdfm comments doc.pdf --summary` |
-| `recipe` | save and run recipes (several tools in a row) | `pdfm recipe run "Scans" *.pdf` |
-| `from-images` | save pictures as a PDF (photos the right way up, scanners' multi-page TIFFs) | `pdfm from-images *.jpg -o photos.pdf -s a4 --margin 10` |
-| `to-images` | render pages to PNG/JPG | `pdfm to-images doc.pdf --dpi 200 -p 1` |
-| `organize` | sort a folder of PDFs into sub-folders | `pdfm organize ~/Downloads --by year --dest ~/PDFs --move` |
-| `rename` | rename PDFs from their metadata | `pdfm rename ~/PDFs --pattern "{date:%Y-%m-%d} {title}" -n` |
-| `duplicates` | find (and optionally delete) identical PDFs | `pdfm duplicates ~/PDFs -R` |
-| `catalog` | CSV inventory of a folder | `pdfm catalog ~/PDFs -o inventory.csv -R` |
-| `search` | find words in every PDF in a folder, or with `--best` the pages that answer a question | `pdfm search ~/PDFs "invoice 2024" -R`, `pdfm search ~/PDFs "how much do I owe" --best` |
-| `watch` | process new PDFs dropped into a folder | see below |
-| `setup-windows` | Windows shortcuts, Open with, uninstall entry (`--remove`) | used by the installer |
-
-Run `pdfm <command> -h` for all options.
-
-### Splitting, blank pages, booklets and white margins
-
-- `split --bookmarks` makes one file per top-level bookmark (`--level 2`
-  also splits at the bookmarks under them), named `01 Title.pdf`,
-  `02 …`; pages before the first bookmark go in `00 Opening pages.pdf`.
-  `split --max-size 10` makes files of at most 10 MB (1 MB = 1,000,000
-  bytes), each with as many pages as fit; a page larger than that on its
-  own gets a file of its own, and a note says so.
-- `insert-blank --after 3,7` puts a blank page after pages 3 and 7 (`end`
-  after the last page, `0` or `--at-start` before the first, `all` after
-  every page, e.g. to print slides with a page for notes); `--count 2`
-  inserts two at each place. Each blank page has the size of the page
-  before it.
-- `booklet` adds blank pages to make a multiple of four and puts two pages
-  side by side on each sheet in booklet order (8, 1 · 2, 7 · 6, 3 · 4, 5).
-  By default a sheet is twice the page size (A5 pages on A4, A4 on A3);
-  `-s a4` or `-s letter` scales them onto that paper instead. Print it
-  double-sided, **flipping on the short edge**, fold the stack in the
-  middle and staple it on the fold.
-- `crop --auto` draws each page and cuts away the white around its content,
-  keeping `--padding` mm (default 3.5); `--same` gives every page the same
-  crop. Blank pages are left as they are, and only the crop box changes, so
-  the margins are still in the file.
-
-### Compression levels
-
-| Level | What it does | Use for |
-|---|---|---|
-| `low` | lossless: recompresses page content, packs uncompressed fonts and pictures, drops the ASCII85/hex text wrapping some programs put around them (often 20% of the file), removes duplicate objects; images untouched | archiving, print masters |
-| `medium` (default) | also reduces images above **150 DPI** and re-encodes them as JPEG quality 75 | everyday sharing, office printing |
-| `high` (alias `large`) | images reduced to **96 DPI**, JPEG quality 50 | email, web, smallest files |
-
-Image resolution is measured as each image is actually drawn on the page,
-so a large photo shown small is reduced while small images are left alone.
-An image is only replaced if the new version is smaller. `--image-quality`
-and `--max-dpi` override a level's settings.
-
-**Scanned pages keep their text sharp.** At `medium` and `high`, a page
-that is one scanned picture isn't simply reduced, which would blur its
-text. It is split into a black-and-white text shape at the scan's full
-resolution (up to 300 DPI), the paper behind it at low resolution, and a
-small picture of the ink's colour, so stamps and pen stay in colour. The
-file comes out about as small as plain `high`, with the text as sharp as
-the scan. Photographs inside a scan stay whole, a page that is mostly
-photograph is compressed the usual way, and so is any page where the
-split wouldn't be smaller. The invisible OCR text, links and comments
-are untouched. Turn it off with the **Keep scanned text sharp** box in
-the app or `--no-sharp-scans`; `low` never uses it.
-
-At every level the result is then repacked with [qpdf](https://qpdf.readthedocs.io)
-(through pikepdf, installed with ZPDF): the many small objects a PDF
-is made of go into compressed object streams. It's lossless and takes a
-third or more off text-heavy documents; files that are mostly pictures
-barely change.
-
-### Colour conversion
-
-`pdfm color --to gray|rgb|cmyk` converts page colours (text, lines, fills
-and colours inside form XObjects) and images. With `--icc PROFILE.icc`
-images are converted through that ICC profile and the profile is embedded
-as the document's *output intent*, which is what print shops look for when
-they ask for a PDF in their colour profile.
-
-Without a profile, RGB↔CMYK uses the standard simple formula, so saturated
-colours may shift; use your printer's profile for accurate colour.
-Gradients (shadings), patterns, spot colours and inline images are left
-unchanged.
-
-### Passwords
-
-When an input is encrypted, `pdfm` asks for the password. You can also set
-the `PDFM_PASSWORD` environment variable (handy for batches) or pass
-`--password`, though that ends up in your shell history. Files that only
-have an owner password (printing/copying restrictions) open without
-asking.
-
-Results made from a password-protected PDF are **protected with the same
-password**, so editing a protected file never silently produces an
-unprotected one. Use `decrypt` to remove protection deliberately.
-
-### Organizing folders
-
-`organize --by` groups by `year`, `month` (from the PDF creation date, or
-the file date), `author`, `pages`, `size` or `title-letter`. Files are
-copied unless `--move` is given; `-n/--dry-run` previews the result.
-Unreadable files go into an `Unreadable` folder rather than stopping the run.
-
-`--duplicates` decides what happens to a file that is byte-for-byte
-identical to one already organized: `keep` (default), `skip`, or `folder`
-(put it in a `Duplicates` folder to review). `pdfm duplicates` lists
-identical files and, with `--delete`, removes all but the oldest copy.
-
-### Scan clean-up
-
-`clean` removes blank pages (`--sensitivity low` keeps any page with a mark
-on it, `high` also removes nearly empty ones) and, with `--rotate`, turns
-sideways or upside-down pages upright using Tesseract's orientation
-detection.
-
-### Comparing
-
-`compare old.pdf new.pdf` matches pages by their text (form answers
-included), so an inserted or removed page doesn't make every later page
-look different. The report PDF
-starts with a summary, then shows each changed page side by side with the
-changed areas outlined in red and the removed (−) and added (+) words.
-
-### Bookmarks
-
-`pdfm bookmarks doc.pdf` lists the bookmarks, one per line:
-
-```
-- Introduction (p. 1)
-  - Background (p. 2)
-- Results (p. 5)
-```
-
-Edit such a list and apply it with `--set list.txt`, create bookmarks from
-the document's headings with `--detect` (`-n` to preview), or remove them
-with `--clear`. Headings are found by font size and bold lines; running
-headers and footers are ignored. Scans need OCR first.
-
-### Redaction
-
-`redact` blacks out text (`-t`, repeatable), regular expressions
-(`--pattern`), all email addresses, phone numbers or long numbers
-(`--find emails|phones|numbers`) and areas (`--box PAGE:X0,Y0,X1,Y1` in
-points from the bottom left). What's under the boxes is taken out of the
-file, like Acrobat does, and black boxes are drawn over the places:
-
-- **letters** under a box are dropped from the text (one that's mostly
-  outside a box stays); every other letter stays real, searchable text,
-  exactly where it was;
-- **pictures** get their covered pixels painted black in the picture
-  itself (JPEGs stay JPEGs; a picture covered completely is removed);
-  **drawings** that lie completely under a box are removed (lines that
-  only cross one stay, covered);
-- **comments, links and form fields** touching a box are removed, and so
-  is replacement text in a tagged PDF (`/ActualText`, `/Alt`) that repeats
-  the removed words;
-- bookmark titles have the searched words replaced by `███`.
-
-Pages without redactions are untouched, and something used on several
-pages (a logo, a letterhead) is changed only where it was redacted. Every
-redacted page is checked afterwards: no letter may be left under a box and
-the searched words must be gone. A page that can't be edited safely (text
-in Type3 fonts, vertical text, unusual font encodings, damaged content,
-JPEG 2000 or CMYK JPEG pictures) or fails the check is turned into a picture
-instead, and `redact` says which pages and why. `--method image` turns every
-redacted page into a picture of itself (`--dpi`, default 200), the most
-thorough way; run OCR afterwards to make those pages searchable again.
-Metadata isn't changed, so use `sanitize` too.
-
-### Archiving and privacy
-
-- `flatten` draws filled-in form fields and comments (highlights, notes,
-  drawings, signatures) into the page. Links keep working, and so do
-  comments that have no drawing of their own (readers draw those themselves).
-- `flatten-layers` (drawings with layers): keeps the layers that show when
-  the file opens as part of the page, removes the hidden layers' content
-  (what they draw, the XObjects that belong to them, their annotations) and
-  removes the layers. `--hide NAME` and `--show NAME` change which layers
-  count as shown (repeat them, or separate names with commas), and `--list`
-  only lists the layers and whether they show:
-
-  ```
-  pdfm flatten-layers plan.pdf --list
-  pdfm flatten-layers plan.pdf --hide Dimensions,Notes -o plan_clean.pdf
-  ```
-- `sanitize` removes the document details (author, title, dates, XMP),
-
-  JavaScript and actions that launch programs, and attached files;
-  `--comments` also removes comments. Form fields are kept.
-- `make-safe` is for a PDF from someone else. It takes out scripts,
-  actions that start programs, send what's typed, open a web address by
-  themselves or point at other files, and attachments that can run; it
-  keeps the pages, text, comments, forms with their totals and formats,
-  and other attachments. `--check` only lists what the file can do. In the
-  app, the file panel warns about such a file when it's opened and offers
-  **Make it safe**, and the reader shows a link's real address before
-  opening it. ZPDF never runs a PDF's scripts or actions itself.
-- `pdfa` converts to PDF/A-1b, -2b (default) or -3b: fonts embedded,
-  colours tied to sRGB, no encryption or scripts. ZPDF does it itself,
-  with nothing else to install, and leaves the pages as they are: it adds
-  the PDF/A mark and the colour profile, sets links to print, brings CMYK
-  colours to RGB and takes out what PDF/A forbids. A font that isn't in
-  the file (Helvetica, Times, Courier in older PDFs) is embedded from the
-  computer's own font of the same letter widths (Arial, Times New Roman,
-  Courier New), so no line moves. What it can't put right (a font with no
-  such stand-in, transparency in PDF/A-1) goes to Ghostscript when that is
-  installed, and otherwise stops with a message saying what stood in the
-  way. `--engine builtin` or `--engine ghostscript` picks one. The result
-  is checked straight away (below) with ZPDF's own checks; for a full
-  check against the standard, use veraPDF.
-- `check-pdfa` (the **Check PDF/A** tool) says whether files meet PDF/A
-  and, if not, what breaks it, on which pages, with the clause of the
-  standard (ISO 19005):
-
-  ```
-  Checked against: PDF/A-2b (the file doesn't say it's PDF/A)
-  Result: FAILS
-    [6.2.11.4] The font Helvetica isn't embedded. (page 1)
-    [6.6.4] The file has no XMP metadata, so it doesn't say it's PDF/A.
-  ```
-
-  It checks against the level the file claims (else PDF/A-2b), or the one
-  given with `--level` (1a, 1b, 2a, 2b, 2u, 3a, 3b, 3u). With **veraPDF**
-  installed (free, from verapdf.org; the reference checker), ZPDF uses it
-  and every rule of the standard is checked. Without it, ZPDF's own checks
-  cover the rules files most often break: the file's header and trailer,
-  encryption, XMP metadata and the PDF/A claim, document details matching
-  the metadata, fonts embedded (and Unicode text for levels A and U),
-  colours with an output intent profile, transparency, pictures, LZW and
-  external streams, annotations (printable, not hidden, with their own
-  look), JavaScript and other forbidden actions, forms, attached files,
-  layers, tagging (level A) and the size limits. `--engine builtin` always
-  uses ZPDF's own checks; `--json` prints the results. The exit code is 0
-  when every file passes.
-
-### Accessibility
-
-Screen readers (and reflow on phones, and conversions to Word or HTML) need a
-*tagged* PDF: one that says, next to what's drawn, which text is a heading,
-a paragraph, a list, a table or a link, what each picture shows, and in
-which order it all reads. PDF/UA (ISO 14289) is the standard for that.
-
-- `tag` (the **Make accessible (tag)** tool, like Acrobat's Autotag) adds
-  the tags. It reads each page's layout: headings by their size, weight or
-  numbering ("1.2 Results"; levels never skip), paragraphs, bulleted and
-  numbered lists, tables (the first row becomes header cells), pictures
-  (described by a caption next to them, "Figure 3: …"), links, form fields
-  and comments, in reading order — columns left to right, top to bottom.
-  Running headers, footers and page numbers, borders and backgrounds are
-  marked as decoration, so they aren't read out. It also sets the
-  language (`--lang de`; by default guessed from the text), the title
-  (`--title`; by default the one the file has, else its first heading)
-  and shows it in the window's title bar, makes Tab follow the reading
-  order, and adds bookmarks from the headings to documents over 20 pages
-  that have none. What's drawn on the pages doesn't change.
-  `--alt FILE` gives descriptions for the pictures, from a JSON file:
-  `{"3": ["the first figure on page 3", "the second"]}`. A file that is
-  already tagged keeps its tags (only the language, title and tab order
-  are filled in) unless `--force` is given.
-- `check-access` (the **Check accessibility** tool, like Acrobat's
-  Accessibility Checker; also **Tools → ⋯ → Check accessibility** in the
-  reader) reports what keeps screen readers out, on which pages, and how
-  to fix it:
-
-  ```
-  Tagged: No
-  Language: (not set)
-  Result: 4 problems
-    - The document isn't tagged: screen readers can't tell its headings, …
-      How to fix: Use Make accessible (tag); on the command line, pdfm tag.
-  ```
-
-  It checks that the document is tagged and says so, its language and
-  title (and that the title is shown), security settings that lock screen
-  readers out, scanned pages with no text (they need OCR first), text
-  whose font doesn't say which characters it shows, page content that is
-  neither tagged nor marked as decoration, tags that don't match the
-  content, pictures without a description, tables without header cells or
-  with uneven rows, headings that skip levels, lists not built of items,
-  links, form fields and comments that aren't tagged, links without a
-  description, form fields without a tooltip, the tab order, and bookmarks
-  in documents over 20 pages. Reading order and colour contrast need a
-  person; the report says so. `--json` prints the results; the exit code
-  is 0 when no file has problems. The reader's **Document properties**
-  say whether a PDF is tagged, and its language.
-
-Tagging is automatic, like Acrobat's: check the result, and describe the
-pictures it couldn't (`tag` names the pages). Something drawn several
-times as one piece (a form XObject: a logo on every page, say) is tagged as
-a whole; vector drawings (charts drawn with lines) are marked as
-decoration, not figures.
-
-### Digital ID signatures
-
-A *digital ID* is a certificate with its private key, usually a `.pfx` or
-`.p12` file protected by a password (exported from Acrobat, Windows'
-certificate manager, or issued by a company or a certificate authority).
-Signing with it proves who signed and that nothing changed since:
+- **Native PDF ↔ DXF:** Export vector drawings from PDFs to CAD `.dxf` (`to-dxf`), or plot `.dxf` (and `.dwg` via ODA File Converter) into layered, scaled PDFs (`from-dxf`).
+- **Calibrated Measuring & Quantity Takeoff (`M`):** Reads embedded CAD/Bluebeam `/VP /Measure` scales or title-block scales (`1/4" = 1'-0"`, `1:100`, etc.), or calibrate from any known dimension. Supports **True paper size** and **Zoom to scale**.
+- **Exact Vector Snapping & Magnifier:** Snaps to endpoints, intersections, midpoints, perpendiculars, and line edges read directly from the PDF's vector geometry; a **magnifier** + `Tab` cycling handles dense lines.
+- **Full Takeoff Toolkit:** Distance, Path (wall runs), Area, Rectangle, **Cut-outs** (stairs/shafts subtracted for net area), Count (fixtures/outlets), and Angle — organized into named, color-coded **Groups** with subtotals. Export as an **Excel Quantity Schedule** (`pdfm quantities`), CSV, clipboard, or standard PDF measurement annotations (**Into PDF**).
+- **Drawing Markups & CAD Layers:** Revision clouds, polylines/arrows, snapping dimensions, callouts, and AEC review stamps (*Approved as noted*, *Revise and resubmit*, *Not for construction*). Toggle nested/locked/radio **PDF Layers (OCGs)** (snapping & printing respect visible layers), save default layer visibility, or permanently **Flatten layers** (`pdfm flatten-layers`).
+- **Sheet-Set Automation & Revision Overlay:** Split drawing sets by title-block number (`sheet-split`), label pages (`sheet-name`), auto-link detail callouts like `2/A-102` (`sheet-link`), compare two drawing sets sheet by sheet (`sheet-compare`), or overlay revisions in the Reader (**black** = unchanged, **red** = old, **blue** = new).
 
 ```bash
-pdfm sign-cert contract.pdf --pfx me.pfx --page last --reason "I agree"   # bottom right of the last page
-pdfm sign-cert contract.pdf --pfx me.pfx --page 2 --box 350,50,550,110    # a box, in points from the bottom left
-pdfm sign-cert form.pdf --pfx me.pfx --field "Signature 1"                # an empty signature field
-pdfm sign-cert contract.pdf --pfx me.pfx --timestamp http://timestamp.digicert.com
-pdfm verify contract_signed.pdf                                            # exit code 0 if all valid
+pdfm to-dxf floorplan.pdf --scale 1:100
+pdfm from-dxf site.dxf --paper A1 --scale 1:100
+pdfm sheet-link permit_set.pdf
+pdfm sheet-compare rev1.pdf rev2.pdf -o diff_overlay.pdf
+pdfm quantities plan.pdf                    # Excel quantity schedule
 ```
 
-- `pdfm` asks for the digital ID's password (or set `PDFM_PFX_PASSWORD`,
-  or pass `--pfx-password`). Without `--page` or `--field` the signature is
-  invisible: it shows in a reader's signature panel only. `--position`
-  (`bottom-right`, `bottom-left`, `top-right`, …) and `--size` (`small`,
-  `medium`, `large`) place it on `--page` without `--box`.
-- The visible signature shows the signer's name (from the certificate),
-  the date and time, and the reason and location if given.
-- The signature is **appended** to the file, so signatures already in it
-  stay valid: several people can sign one after the other. Sign last:
-  other tools (and the reader's edits) rewrite the file, which breaks the
-  signatures in it. A password-protected PDF stays protected.
-- With `--timestamp`, a timestamp server vouches for the time of signing
-  (it needs the internet; if the server can't be reached nothing is signed).
-- Expired digital IDs are refused: every reader would call their
-  signatures invalid.
+---
 
-`verify` (and **Check signatures** in the app) reports, for each signature:
-who signed, when (from the signer's clock or a timestamp), the reason and
-location, and one of:
+### Book & Manga Publishing Studio
 
-- **valid** — unchanged since signing, by a certificate you trust;
-- **valid, but the signer's identity isn't verified** — unchanged, but the
-  certificate isn't one you trust (ZPDF has no built-in list of trusted
-  authorities, so this is the usual result; add `--trust company-root.cer`
-  to trust a certificate);
-- **modified** — the signed part is intact, but the document was changed
-  afterwards in a way signatures don't allow (later signatures and, for
-  some files, form filling are allowed; pyHanko, which does the checking,
-  is stricter about later changes than Acrobat);
-- **invalid** — the document was altered after signing, the signature
-  doesn't match, or the certificate wasn't valid when it signed.
+- **CBZ Comic & Manga Archives:** Convert `.cbz` ↔ PDF with natural page sorting (`page_2.png` before `page_10.png`), lossless monochrome/grayscale preservation for crisp kanji & screentones, `ComicInfo.xml` metadata, zip-slip / decompression-bomb protection, and optional right-to-left (`/Direction /R2L`) viewer flags.
+- **Booklet Imposition v2:** Saddle-stitch imposition supporting both **Western LTR** and **Japanese/Manga RTL** binding (`--binding ltr|rtl`), **multi-signature sections** (`--signature 8|16|32`), and **creep compensation** (`--creep` mm).
+- **POD Spine & Cover Calculator:** Compute exact spine width and full-wrap cover dimensions with built-in paper stock presets (`manga_60gsm`, `uncoated_80gsm`, `white_90gsm`, `cream_90gsm`, `gloss_115gsm`, `matte_130gsm`) or custom caliper.
 
-`--json` prints all the details.
+```bash
+pdfm cbz-to-pdf volume01.cbz --rtl
+pdfm pdf-to-cbz volume01.pdf --format webp --dpi 150
+pdfm booklet zine.pdf --binding rtl --signature 16 --creep 0.25
+pdfm spine 240 --paper cream_90gsm --trim-w 148 --trim-h 210
+```
 
-### Word and Office
+---
 
-`to-word` converts with Microsoft Word when it's installed (the most
-editable result), otherwise with the built-in converter: headings,
-paragraphs, lists, tables and pictures in reading order, columns one
-after the other, with bold, italic and links kept. It reads pages the
-same way as the HTML and PowerPoint exports and the screen-reader
-tagging, and a scanned page that has been made searchable converts from
-its recognised text. It suits documents of text, tables and scans. On
-heavily designed pages (a brochure's side panels, an illustration built
-from many small drawings with its own lettering) some columns can still
-be read across and some labels come out as headings or loose lines; Word
-itself, when it's installed and works, does those better. If Word fails or doesn't finish in time (a minute plus two
-seconds a page), the built-in converter is used and the result says so;
-`--engine word` insists on Word and waits up to five minutes. `--engine
-layout` uses LibreOffice instead, which keeps the exact look but puts every
-line in its own text box.
+### Built-in OCR, Scanning & In-Place OCR Typo Editor
 
-`from-office` converts Word, Excel, PowerPoint, OpenDocument, RTF and text
-files to PDF with Microsoft Office or, without it, LibreOffice. Text files
-always work.
+- **Zero-Setup Built-in OCR:** Ships with PP-OCR on ONNX Runtime — reads English, European languages, Chinese, and Japanese out of the box (plus Russian, Ukrainian, Korean, Arabic, Persian, Hindi, Thai, Greek, Tamil, Telugu via one-time SHA-256-verified ~10 MB script packs). Handles auto-rotation, multi-column splitting, upright vertical CJK (*tategaki*), border-safe background flattening, 2× unsharp + inverted-polarity retries on dark banners, ligature normalization, and a warm worker pool. **Tesseract / OCRmyPDF** remains available as a second engine (`--engine tesseract`).
+- **In-Place OCR Typo Editor (`Check OCR`):** Inspect low-confidence words or switch to **All words** mode to click-edit *any* invisible OCR word — or run inline **Find & Replace** across the invisible text layer with proportional horizontal scaling and full Undo/Redo, without ever altering page pixels.
+- **Scan Paper & Phone Photos:** Scan directly from Windows WIA scanners, driverless network scanners (**AirScan / eSCL / Mopria** with duplex support), TWAIN scanners via **NAPS2**, any scanner's watch folder, or **phone photos** (automatic four-corner perspective flattening, shadow cleanup, deskew, blank-page removal, OCR, and sharp-scan compression).
 
-`web` saves web pages as PDFs the way the browser prints them, links
-included: `pdfm web https://example.com/page` or a saved page (`.html`,
-`.mht`). It uses Microsoft Edge (on every Windows), Chrome or Chromium; the
-**Web page → PDF** tool does the same in the app.
+```bash
+pdfm ocr scan.pdf                           # built-in OCR (add --language rus, kor, ara, ...)
+pdfm clean scan.pdf --rotate                # remove blank pages & auto-rotate upright
+pdfm scan --feeder --mode colour --dpi 300 -o pile.pdf
+pdfm photos-to-pdf IMG_01.jpg IMG_02.jpg -o receipt.pdf --look colour
+```
 
-### Excel (tables)
+---
 
-`to-excel` finds the tables in a PDF and writes `<name>.xlsx`: a
-**Summary** sheet listing each table (page, rows × columns, a link to it),
-then a sheet per table named like `p3 table 1` (`--one-sheet` stacks them
-all on one sheet under a title each). The first row is the header (bold,
-and frozen on its own sheet), columns are sized to fit, and numbers become
-real numbers: `1,234.50`, `(12)` (negative), `7.5%`, `$ € £` amounts and
-`1.234,50` keep their look as a number format. Codes with leading zeros
-(`00123`, ZIP codes) and anything unclear stay text. `--csv` writes a CSV
-file per table instead (UTF-8 with a byte-order mark, so Excel reads
-accents and € right) into `<name>_tables/`.
+### Permanent Redaction, Digital Signatures & Enterprise Security
 
-- Ruled tables (with cell borders) come out best. Tables without lines are
-  found from columns that line up with white space between them; dot
-  leaders (`Total ....... 12`) count as space.
-- A table that runs to the bottom of a page and goes on at the top of the
-  next with the same columns becomes one table; a repeated header row is
-  dropped.
-- It needs text in the PDF: **scanned pages need OCR first** (*Make
-  searchable*), otherwise it says that no tables were found.
-- Limits: cells that span several columns come out in the first of them;
-  headers on two lines become two rows; two tables side by side without
-  lines can come out as one; text in a cell that looks like a formula
-  stays text (in CSV files it starts with `'`).
+- **True Permanent Redaction (`redact`):** Removes underlying text operators from content streams and Form XObjects, blacks out covered pixels inside embedded images, strips intersecting annotations/links/form fields and structure-tree `/ActualText`/`/Alt`, scrubs bookmark titles, and runs a **post-write verification check** reporting if any redacted term remains anywhere in the file. Pages that cannot be safely vector-rewritten automatically fall back to rasterization (`--method image` forces full rasterization).
+- **Digital ID Signing & Verification (`sign-cert`, `verify`):** Sign with `.pfx`/`.p12` certificates or the Windows certificate store (visible or invisible, incremental append so prior signatures stay valid, optional RFC 3161 TSA timestamping) and verify integrity, certificate trust, and post-signing modifications via `pyHanko`.
+- **Encryption & Malware Disarming:** AES-256 password encryption with granular permissions (and automatic password retention on edits), **certificate encryption for recipients** (`encrypt-for` / `open-with-id`), weak RC4-to-AES-256 upgrades (`upgrade-protection`), metadata/script stripping (`sanitize`), and **`make-safe`** to disarm untrusted PDFs (stripping scripts, launch/URI actions, and executable attachments while preserving text, comments, and form calculations).
+- **Enterprise Governance:** Reusable **Security Profiles** (`pdfm profile`), a **SHA-256 hash-chained tamper-evident Audit Log** (`pdfm audit verify`), and **Enterprise Administrator Policies** (`pdfm policy`).
 
-### PowerPoint and HTML
+```bash
+pdfm redact contract.pdf -t "John Smith" --find emails --find phones
+pdfm sign-cert contract.pdf --pfx me.pfx --page last --timestamp http://timestamp.digicert.com
+pdfm verify contract_signed.pdf
+pdfm make-safe untrusted_invoice.pdf
+pdfm audit verify
+```
 
-Both work without Microsoft Office or any other program.
+---
 
-`to-pptx` writes `<name>.pptx`, one slide per page (slides have the size
-of most of the pages; pages of another size are scaled to fit, centred).
-By default the text stays **editable**: the slide's background is the page
-drawn without its text, and the text is put back on top in text boxes at
-the same places, with its font (Helvetica becomes Arial, Times becomes
-Times New Roman, Courier becomes Courier New; other fonts keep their name),
-size, bold, italic, colour, alignment and line spacing, and its links. The
-lines of a paragraph are joined, so the text rewraps when you edit it.
-Turned pages and turned text come out turned. The searchable text of an
-OCRed scan stays invisible over the scan. `--pictures` makes each slide
-a picture of the page instead.
+### Standards Compliance: PDF/A & PDF/UA Accessibility
 
-`to-html` writes `<name>.html`, a single file with the pictures inside
-and no scripts:
+- **PDF/A Archiving (`pdfa`, `check-pdfa`):** Converts to **PDF/A-1b, -2b, or -3b** directly in ZPDF with zero external installs (embedding matching-metric system fonts so lines never reflow, attaching sRGB output intents, and removing forbidden constructs; falls back to Ghostscript when needed). `check-pdfa` validates against ISO 19005 with exact clause numbers (and automatically delegates to **veraPDF** when installed).
+- **PDF/UA Accessibility (`tag`, `check-access`):** Auto-tags PDFs for screen readers (headings without skipped levels, paragraphs, lists, tables with header cells, figure captions, links, form fields, reading order, artifact decoration for headers/footers, document language, title, and tab order) and runs an Acrobat-style Accessibility Checker reporting every issue and how to fix it.
 
-- by default **flowing text** that fits any window: headings (from the
-  text's size), paragraphs (with hyphenated words joined back up), lists,
-  tables (found like `to-excel` finds them), pictures and links, with a
-  marker and an anchor (`#page-3`) where each page starts. Two columns are
-  read one after the other, and running headers and footers are left out;
-- `--exact`: each page as it looks, scaled to the window: the page drawn
-  without its text, with the text on top, so it can be selected, searched
-  and copied.
+```bash
+pdfm pdfa report.pdf --level 2
+pdfm check-pdfa *.pdf
+pdfm tag report.pdf --lang en
+pdfm check-access *.pdf
+```
 
-Limits: tables become text boxes over the drawn table in PowerPoint (not
-PowerPoint tables); in flowing HTML, drawings (charts made of lines)
-are left out unless a page has nothing else; text set in an unusual font
-shows in a similar common font.
+---
 
-### Recipes
+### Conversions
 
-A recipe is a list of tools run one after another. Save one with the steps
-and their options (the same options as in the app):
+All built-in conversions work offline with no cloud services:
+
+- **PDF → Word (`to-word`):** Uses Microsoft Word when installed, or ZPDF's built-in layout converter (headings, paragraphs, lists, tables, pictures, links in reading order) or LibreOffice (`--engine layout`).
+- **PDF → Excel / CSV (`to-excel`):** Detects ruled and borderless tables (joining multi-page tables and dropping repeated headers), writes real typed numbers/currencies/percentages, and adds a linked **Summary** sheet.
+- **PDF → PowerPoint (`to-pptx`):** One slide per page with **editable text boxes** over the non-text background (or `--pictures`), preserving fonts, styles, alignment, rotation, and links — no Office needed.
+- **PDF → HTML (`to-html`) & Markdown (`to-md`):** Single-file HTML with embedded images (flowing reflowable text or `--exact` visual layout) and structured Markdown with optional YAML front matter (`--front-matter`) and extracted image assets (`--images`).
+- **Office, Web & Images → PDF:** `from-office` (Word/Excel/PowerPoint/ODF/RTF via Office or LibreOffice), `web` (URLs & `.html`/`.mht` via Edge/Chrome), `from-images` (auto-oriented photos & multi-page TIFFs), `to-images` (PNG/JPG rendering).
+
+---
+
+### Automation: Recipes, Watch Folders, Auto-Filing & Semantic Search
+
+- **Multi-Step Recipes (`recipe`):** Chain any sequence of tools (e.g., *Clean up scans → OCR → Compress → Page numbers*), save by name, and reuse across the GUI, CLI, and Watch Folders.
+- **Watch Folders (`watch` & Settings → Watch folders):** Automatically process PDFs dropped into scanner inboxes or Downloads with OCR, compression, PDF/A, or any saved Recipe. Waits until downloads/copies finish (`.crdownload`/`.part`-safe), tracks processed files across restarts, and can stay running in the **Windows system tray** (with optional Start-at-sign-in).
+- **Smart Auto-Filing (`auto-file`):** Content-rule-based renaming and folder routing with dry-run preview by default and one-command batch `--undo`.
+- **Local Semantic Folder Search (`search`):** Search every PDF in a folder tree by exact phrase or natural-language question (e.g. `"how much do I owe"` finds `"balance due"` using a bundled 4 MB local semantic table + SQLite text index — 100% offline).
 
 ```bash
 pdfm recipe save "Scans" clean ocr language=eng compress level=high number "format=Page {n}"
 pdfm recipe run "Scans" *.pdf -o done/
-pdfm recipe list
+pdfm watch ~/Scans/inbox --dest ~/PDFs --by month --recipe "Scans" --skip-duplicates
+pdfm search ~/Documents "how much do I owe" --best -R
+pdfm auto-file ~/Inbox --apply
 ```
 
-Recipes are stored in `recipes.json` in the app's data folder
-(`%LOCALAPPDATA%\PDF Manager` on Windows, `~/.local/share/pdf-manager` on
-Linux), shared by the app, the command line and `pdfm watch --recipe NAME`.
+---
 
-### Watching a folder
+## Desktop App & Reader
 
-```bash
-pdfm watch ~/Scans/inbox --dest ~/Documents/PDFs --by month \
-    --rename "{date:%Y-%m-%d} {title}" --ocr --compress medium --skip-duplicates
-```
+Start the desktop app with **`pdfm-app`** (no terminal window), **`pdfm gui`**, or **`pdfm view report.pdf`**. It opens in a native window (`pywebview`), falling back seamlessly to an Edge/Chrome app window or browser tab.
 
-Every PDF that lands in the inbox is OCR'd, compressed, renamed and filed
-into the destination. Add `--clean` to drop blank pages, `--rotate` to turn
-pages upright and `--recipe NAME` to run a saved recipe. A file is only picked up once it has stopped
-changing, so large copies aren't grabbed half-written. Originals are moved
-to `inbox/originals` (or deleted with `--delete-originals`). A file that
-can't be processed is reported and skipped; watching continues. Use
-`--once` to process what's there and exit, e.g. from a scheduled task.
-The app's [watch folders](#watch-folders) use the same engine.
+- **Fast Streaming Reader (`pdf.js`):** Built on bundled offline `pdf.js`. Large PDFs (>4 MB) stream on demand — a 277 MB drawing set shows page 1 in ~1 second using a few MB of RAM.
+- **4 Reading Themes:** Switch between **Light**, **Smart Night**, **Warm Sepia**, and **E-Ink High Contrast**, synced across split-view panes.
+- **Split View & Interactive Side-by-Side Diff Viewer:** Compare two PDFs or two pages side by side with synced scrolling, diff highlights, and a change jumper — or open the **Live Bilingual Reading Pane** for instant page translation.
+- **Workspace Sessions:** Save, restore, and switch named multi-tab snapshots (open files, active tab, page positions, zoom, rotation, and split-view layout).
+- **Direct Text & Picture Editing (`E`):** Edit lines or `Shift+click` to rewrite full paragraphs with column-aware reflow, preserved bold/italic/color/links/superscripts, embedded fonts, `Shrink to fit`, and optional `require_permanent` & `verify_visual` checks. Move, resize, replace, or delete embedded pictures in place.
+- **Interactive Forms & Calculations:** Auto-detect fields on printed or scanned forms (**Make it fillable**), draw/edit text, multiline, checkbox, radio, dropdown, and signature fields, and run Acrobat-compatible validation, formatting, and calculations (`sum`, `average`, `product`, `min`, `max`).
+- **Full Annotation & Page Suite:** Highlights, notes, freehand drawing, shapes, custom reusable stamps, XFDF comment export/import & PDF summary reports, visual drag-and-drop page reordering/extract/delete/rotate/insert, visual + keyboard crop & redaction, live previews for watermarks/headers/Bates numbers/n-up, and **Ctrl+K** Command Palette.
+- **File Explorer Integration (Windows):** Right-click PDFs or images in Explorer for *Combine in ZPDF*, *Make searchable (OCR)*, *Make smaller*, *Open in ZPDF*, or *Make a PDF with ZPDF* (on Windows 11, under *Show more options* / `Shift+right-click`).
+- **Mobile & Touch Companion:** Built-in installable **PWA shell** (`manifest.webmanifest` + static-only `sw.js` that bypasses `/api/*`), touch-first swipe/double-tap reader with a 44px floating mobile bottom dock, and a ready-to-build **Android Kotlin WebView companion** in [`mobile/android/`](mobile/android/).
 
-### Headers, footers and Bates numbers
+<details>
+<summary><strong>Reader keyboard shortcuts</strong></summary>
 
-```bash
-pdfm headers report.pdf --top-right "{date}" --bottom-center "Page {n} of {total}"
-pdfm headers exhibits/*.pdf --bottom-right "{bates}" --bates ABC --bates-start 1000 -o stamped/
-```
+| Key | Action |
+| --- | --- |
+| `Ctrl/⌘+O` | Open a PDF |
+| `Ctrl/⌘+K` or `/` | Command palette (tools, actions, page numbers, zoom) |
+| `Ctrl/⌘+F`, `Enter` / `Shift+Enter`, `Esc` | Find, next / previous match, close |
+| `Ctrl/⌘ +` / `−` / `0` | Zoom in / out / automatic |
+| `N` or `J`, `P` or `K`, `Home`, `End` | Next, previous, first, last page |
+| `R`, `Shift+R` | Rotate view clockwise / counter-clockwise |
+| `E` | Edit text on / off |
+| `M` | Measure on / off (`Esc` stops, `Backspace` undoes point, `Shift` straight, `Alt` free) |
+| `H`, `C`, `A`, `D`, `S` | Highlight, Note, Add text, Draw, Sign (when Annotate bar is open) |
+| `T` | Show / hide the file & tools panel |
+| `Ctrl/⌘+Z` / `Ctrl/⌘+Y` | Undo / redo |
+| `Ctrl/⌘+S` / `Ctrl/⌘+Shift+S` / `Ctrl/⌘+P` | Save, Save as, Print |
 
-Six spots (`--top-left` … `--bottom-right`) take text with `{n}`, `{total}`,
-`{file}`, `{title}`, `{date}` and `{bates}`. Bates numbers continue from
-file to file in the order given (ABC001000, ABC001001, …); the command
-prints the range each file got.
+</details>
 
-### Form fields
+---
 
-```bash
-pdfm form application.pdf -f text:1:72,700,300,720:Name -f checkbox:1:72,650,84,662:Agree
-pdfm form application_form.pdf        # list the fields
-```
+## Command Line
 
-```bash
-pdfm form printed.pdf --detect        # add the fields of a printed form
-pdfm form survey.pdf -f radio:1:72,600,84,612:Size=Small -f radio:1:120,600,132,612:Size=Large \
-                     -f dropdown:1:72,560,220,580:Country=France|Spain|Italy
-```
+Every per-file command accepts **multiple files and wildcards** (`pdfm compress *.pdf`). With one input, `-o` names the output file; with several, `-o` is an output folder preserving original names. Without `-o`, results are written beside each input as `<name>_<command>.pdf`.
 
-Fields are `text`, `multiline`, `checkbox`, `radio`, `dropdown` or
-`signature`, with their page and box in points from the bottom-left corner
-(`--fields FILE` reads a JSON list). Radio buttons with the same name are
-one group; each one's value follows `=`. A dropdown's choices follow `=`,
-separated by `|`. Names are made unique automatically. `--detect` finds the
-fields of a printed form (lines, boxes and tick boxes to fill in), as well
-as any given with `-f`. Drawing them in the app is easier: **Add form
-fields**.
+Page ranges are 1-based: `1-3,5` · `7-` · `-3` · `end` · `5-1` (reversed) · `odd` · `even` · `all`. Run `pdfm <command> -h` for full options.
 
-Text fields can check and format what's typed and add themselves up
-(Acrobat's form scripts, which the reader here runs too). In the app:
-**Format** and **Sum of** when a text field is selected. In a `--fields`
-JSON file:
+### Compression Levels (`pdfm compress`)
 
-```json
-[{"type": "text", "page": 1, "rect": [150, 695, 300, 712], "name": "Price", "format": "currency", "currency": "€"},
- {"type": "text", "page": 1, "rect": [150, 665, 300, 682], "name": "Tax", "format": "amount", "min": 0, "max": 1000},
- {"type": "text", "page": 1, "rect": [150, 635, 300, 652], "name": "Total", "format": "currency", "currency": "€",
-  "calculate": "sum: Price, Tax"}]
-```
+| Level | What it does | Best for |
+| --- | --- | --- |
+| `low` | Lossless: recompresses streams, packs uncompressed fonts/images, strips ASCII85/hex wrappers, deduplicates objects, and repacks with `qpdf` object streams | Archiving, print masters |
+| `medium` *(default)* | Also downsamples images above **150 DPI** (JPEG q75) and splits scanned pages into sharp full-res text + low-res paper + color ink layers | Everyday sharing, office printing |
+| `high` | Images reduced to **96 DPI** (JPEG q50) with sharp-scan layer compression (`--no-sharp-scans` disables) | Email, web, smallest files |
 
-Formats: `number` (with `decimals`), `amount`, `currency`, `percent`, `date`
-(with `"date": "dd/mm/yyyy"`), `phone`, `zip`; `"separators": "1.234,56"`
-for continental numbers. Calculations: `sum`, `average`, `product`, `min`,
-`max` of other fields (the field becomes read-only). `min`/`max` refuse
-values out of range.
+<details>
+<summary><strong>Full CLI command reference (65+ commands)</strong></summary>
 
-### Attachments, page labels, repair, permissions, comments
+#### App, Reading & Inspection
+| Command | What it does | Example |
+| --- | --- | --- |
+| `gui` | Open the desktop app | `pdfm gui` |
+| `view` | Open PDF(s) directly in the reader | `pdfm view report.pdf` |
+| `info` | Page count, page sizes, metadata (`--json`) | `pdfm info *.pdf` |
+| `text` | Extract plain text | `pdfm text doc.pdf -o doc.txt` |
+| `compare` | Visual & text diff report between two PDFs | `pdfm compare v1.pdf v2.pdf` |
+| `comments` | List, summarize (PDF/Markdown), CSV, or XFDF export/import | `pdfm comments doc.pdf --summary` |
+| `privacy` | Inspect/clear local history and network policy | `pdfm privacy --clear-history` |
 
-```bash
-pdfm attach report.pdf --add data.xlsx --add photo.jpg   # attach (same name: replaced)
-pdfm attach report_attached.pdf                          # list
-pdfm attach report_attached.pdf --remove photo.jpg
-pdfm labels book.pdf --set "1: Cover; 2-5: i; 6-: 1; 120-: A-1"
-pdfm repair broken.pdf                                   # mend it; fast web view
-pdfm encrypt report.pdf --owner-password boss --printing low --changes comments --no-copy
-pdfm comments review.pdf                                  # list; --summary, --csv, --export
-pdfm comments clean.pdf --import review_comments.xfdf
-```
+#### Pages, Layout & Publishing
+| Command | What it does | Example |
+| --- | --- | --- |
+| `merge` | Combine PDFs (optionally picking page ranges) | `pdfm merge a.pdf b.pdf:1-3 -o all.pdf` |
+| `split` | Split per page, every N pages, by range, bookmark, or max MB | `pdfm split book.pdf --bookmarks` · `--max-size 10` |
+| `extract` / `delete` | Copy or remove selected pages | `pdfm extract doc.pdf -p 2,4-6` |
+| `reorder` / `reverse` | Rearrange, repeat, or reverse pages | `pdfm reorder doc.pdf --order 3,1,2,4-` |
+| `insert-blank` | Insert blank pages after specific pages or every page | `pdfm insert-blank slides.pdf --after all` |
+| `interleave` | Merge separately scanned fronts and backs | `pdfm interleave fronts.pdf backs.pdf -o book.pdf` |
+| `rotate` / `resize` | Rotate pages or resize (`a0`–`a6`, `letter`, `210x297mm`, `--scale`) | `pdfm resize doc.pdf -s a4` |
+| `crop` | Trim margins (mm) or auto-trim white margins (`--auto`) | `pdfm crop doc.pdf --auto --padding 3` |
+| `nup` | 2/4/6/8/9 pages per sheet (preserves internal links) | `pdfm nup slides.pdf -n 4` |
+| `booklet` | LTR/RTL saddle-stitch imposition, multi-signature & creep | `pdfm booklet zine.pdf --binding rtl --signature 16` |
+| `spine` | Print-on-demand spine width & full-wrap cover calculator | `pdfm spine 240 --paper cream_90gsm --trim-w 148 --trim-h 210` |
+| `watermark` / `number` | Text/PDF watermarks and page numbers | `pdfm watermark doc.pdf -t CONFIDENTIAL` |
+| `headers` | Headers, footers & continuous Bates numbers | `pdfm headers *.pdf --bottom-right "{bates}" --bates ABC` |
+| `bookmarks` / `labels` | Edit/detect bookmarks; set page labels (`i, ii, 1, 2`) | `pdfm bookmarks doc.pdf --detect` |
+| `metadata` / `attach` | View/edit metadata; add/list/remove embedded attachments | `pdfm attach report.pdf --add data.xlsx` |
+| `form` | Auto-detect, create, list, or edit fillable form fields & calculations | `pdfm form printed.pdf --detect` |
+| `flatten` / `repair` | Flatten forms & annotations; mend damaged PDFs / fast web view | `pdfm repair broken.pdf` |
 
-`encrypt` without `--user-password` but with limits and `--owner-password`
-makes a PDF anyone can open but not print, copy or change beyond what's
-allowed; the permissions password lifts the limits, and `decrypt` needs it
-for such a file. Page labels: each part gives the page it starts on, then
-its first label (`1`, `i`, `I`, `a`, `A`, with an optional prefix such as
-`A-1` or a plain word such as `Cover`).
+#### OCR, Translation, Print Preflight & Compliance
+| Command | What it does | Example |
+| --- | --- | --- |
+| `ocr` | Make scans searchable (built-in PP-OCR or `--engine tesseract`) | `pdfm ocr scan.pdf --language rus` |
+| `clean` | Remove blank pages and auto-rotate scans upright | `pdfm clean scan.pdf --rotate` |
+| `scan` / `photos-to-pdf` | Scan from WIA/AirScan/NAPS2 or flatten phone photos to searchable PDF | `pdfm photos-to-pdf IMG_*.jpg -o receipt.pdf` |
+| `translate` | Offline PDF/book/manga translation (`side-by-side`, `bilingual-pages`, `in-place`, `manga`, `text`) | `pdfm translate book.pdf --from ja --to en --mode bilingual-pages` |
+| `compress` / `color` | Compress (`low`/`medium`/`high`) or convert grayscale/RGB/CMYK + ICC | `pdfm compress *.pdf -l high -o small/` |
+| `preflight` | Print-production CMYK & PDF/X-1a/4 preflight (`--profile`, `--max-tac`) | `pdfm preflight brochure.pdf --profile pdfx-4` |
+| `pdfa` / `check-pdfa` | Convert to PDF/A-1b/2b/3b and validate against ISO 19005 (or veraPDF) | `pdfm pdfa doc.pdf --level 2` |
+| `tag` / `check-access` | Auto-tag PDFs for screen readers and audit PDF/UA accessibility | `pdfm tag report.pdf --lang en` |
 
-### Searching a folder
+#### CAD, Blueprints & Sheet Sets
+| Command | What it does | Example |
+| --- | --- | --- |
+| `to-dxf` / `from-dxf` | Convert vector PDFs ↔ CAD DXF (and DWG via ODA) | `pdfm to-dxf plan.pdf --scale 1:100` |
+| `quantities` | Export drawing measurements & takeoff schedule to Excel/CSV | `pdfm quantities plan.pdf` |
+| `flatten-layers` | List, selectively hide/show, and permanently flatten CAD layers (OCGs) | `pdfm flatten-layers plan.pdf --hide Notes` |
+| `sheet-split` / `sheet-name` | Split drawing sets or set page labels from title-block sheet numbers | `pdfm sheet-split set.pdf` |
+| `sheet-link` / `sheet-compare` | Auto-link detail callouts (`2/A-102`) or compare drawing sets sheet-by-sheet | `pdfm sheet-compare rev1.pdf rev2.pdf -o diff.pdf` |
 
-```bash
-pdfm search ~/Documents "purchase order" -R --whole-words
-```
+#### Conversions
+| Command | What it does | Example |
+| --- | --- | --- |
+| `to-word` / `to-excel` | Convert to `.docx` or extract tables to `.xlsx`/CSV | `pdfm to-excel report.pdf -p 2-5` |
+| `to-pptx` / `to-html` / `to-md` | Convert to editable `.pptx`, single-file `.html`, or structured `.md` | `pdfm to-md report.pdf --images --front-matter` |
+| `cbz-to-pdf` / `pdf-to-cbz` | Convert comic/manga `.cbz` archives ↔ PDF | `pdfm cbz-to-pdf vol1.cbz --rtl` |
+| `from-office` / `web` | Convert Office docs or web pages (`.html`/URL) to PDF | `pdfm web https://example.com` |
+| `from-images` / `to-images` / `extract-media` | Build PDFs from images, render pages to PNG/JPG, or extract media/attachments | `pdfm from-images *.jpg -o photos.pdf -s a4` |
 
-Prints each page with a match and the words around it. The text of each
-file is read once and kept in `search.sqlite` in the app's data folder, so
-later searches only read new or changed files. Scanned PDFs need OCR first.
+#### Security, Redaction & Governance
+| Command | What it does | Example |
+| --- | --- | --- |
+| `redact` | Permanent content-stream/image redaction + post-write verification | `pdfm redact doc.pdf -t "John Smith" --find emails` |
+| `encrypt` / `decrypt` | AES-256 password protection & permissions (preserved across edits) | `pdfm encrypt doc.pdf --no-copy` |
+| `encrypt-for` / `open-with-id` | Certificate-based encryption for specific recipients (`.cer`) | `pdfm encrypt-for doc.pdf --cert ann.cer` |
+| `upgrade-protection` | Upgrade weak RC4 encryption to AES-256 keeping passwords/limits | `pdfm upgrade-protection old.pdf` |
+| `sign-cert` / `verify` | Sign with `.pfx`/`.p12` Digital ID (with optional TSA) and verify | `pdfm sign-cert doc.pdf --pfx me.pfx --page last` |
+| `sanitize` / `make-safe` | Strip metadata/scripts/attachments or disarm untrusted PDFs | `pdfm make-safe invoice.pdf` |
+| `profile` / `audit` / `policy` | Apply security profiles, verify SHA-256 audit log, inspect admin policies | `pdfm audit verify` |
 
-### Resizing
+#### Batch, Folders & Automation
+| Command | What it does | Example |
+| --- | --- | --- |
+| `recipe` | Save, list, and run multi-step tool pipelines | `pdfm recipe run "Scans" *.pdf -o done/` |
+| `watch` | Watch a folder and auto-process incoming PDFs (`--once` for cron/Task Scheduler) | `pdfm watch ~/Scans --recipe "Scans"` |
+| `auto-file` | Content-rule-based renaming & filing (`--apply`, `--undo`) | `pdfm auto-file ~/Inbox --apply` |
+| `search` | Full-text and local semantic search (`--best`) across folder trees | `pdfm search ~/PDFs "balance due" --best -R` |
+| `organize` / `rename` | Sort PDFs by year/month/author/pages/size or rename from metadata | `pdfm organize ~/Downloads --by year --dest ~/PDFs --move` |
+| `duplicates` / `catalog` | Find/delete byte-identical PDFs or export a CSV folder inventory | `pdfm duplicates ~/PDFs -R` |
+| `setup-windows` | Manage Windows shortcuts, "Open with", and uninstall registration | `pdfm setup-windows` |
 
-`--size` accepts `a0`–`a6`, `b4`, `b5`, `letter`, `legal`, `tabloid`,
-`ledger`, `executive`, or custom sizes such as `210x297mm`, `8.5x11in`,
-`600x800` (points). Append `-landscape` to force landscape. By default the
-target size is turned to match each page's orientation; use
-`--keep-orientation` to disable that. `--fit` chooses how content is placed:
-`fit` (default, keep aspect ratio and pad), `fill` (keep aspect ratio and
-crop), `stretch`, or `none` (no scaling).
+</details>
 
-Links, form fields and comments move with the page content when resizing,
-rotating or placing several pages per sheet. In `nup` output, links to
-other pages point to the sheet that now holds that page.
+---
 
-## Library use
+## Python Library
 
 ```python
-from pdfmanager import core, organize
+from pdfmanager import core, organize, preflight
 
 core.merge(["a.pdf", ("b.pdf", "1-3")], "out.pdf")
 core.resize("letter.pdf", "a4.pdf", size="a4")
 core.compress("scan.pdf", "small.pdf", level="high")
 core.convert_color("report.pdf", "print.pdf", "cmyk", icc_profile="printer.icc")
 core.split("book.pdf", "chapters", ranges=["1-10", "11-"])
+core.booklet("zine.pdf", "zine_booklet.pdf", binding="rtl", signature=16, creep_mm=0.25)
+
+report = preflight.check("brochure.pdf", profile="pdfx-4", max_tac=300.0)
 organize.organize("inbox", by="author", dest="library", move=True, duplicates="skip")
 ```
 
-## Tests
+---
+
+## Privacy & Security
+
+- **Local-First & Zero Telemetry:** Nothing about you or your documents is ever sent anywhere. The embedded server binds exclusively to `127.0.0.1` with a per-session random token. Working files stay in ZPDF's private data folder and are cleaned up on completion/exit/crash recovery.
+- **Explicit Network Boundaries:** ZPDF only accesses the network when you ask: optional update checks (toggleable in Settings), downloading an update or OCR/translation model pack (verified against SHA-256), RFC 3161 signing timestamps, `web` URL-to-PDF conversion, clicking an external link, or calling a user-configured AI/translation endpoint.
+- **History Control:** **Settings → Privacy** (or `pdfm privacy --clear-history` / `--remember off`) controls recent files, reading positions, and the local folder search index.
+- **Security Hardening & Honest Limitations:**
+  - **Permanent redaction vs. visual covering:** `redact` (`method="remove"`) strips content-stream & Form XObject operators, blacks out covered image pixels, scrubs annotations/bookmarks/structure text, and verifies the written file; review the `still_in` report before sharing sensitive documents, and use `--method image` when text is baked into raster scans.
+  - **Text editing integrity:** `edit_text` supports `require_permanent=True` (refusing visual cover-up fallback) and `verify_visual=True` (before/after overlap/clipping checks).
+  - **Digital signatures:** Mutating a signed PDF invalidates prior cryptographic signatures; both GUI and CLI warn before editing signed files. Online OCSP/CRL revocation checks require explicit opt-in.
+  - **Password & path hygiene:** Passwords and private-key passphrases are scrubbed from logs (`logs/zpdf.log`) and errors; attachment and CBZ extraction guard against path traversal, symlinks, and decompression bombs.
+  - **Code signing:** Windows and macOS binaries are not yet Authenticode-signed or Apple-notarized (SmartScreen / Gatekeeper may warn on first launch). See [`docs/RELEASE_READINESS.md`](docs/RELEASE_READINESS.md) for the full competitive matrix and release-readiness assessment.
+
+---
+
+## Tests, Benchmarks & Releasing
 
 ```bash
 pip install -e ".[test]"
-pytest
-pytest --perf      # also the performance limits (a few minutes; the release check runs them)
+pytest                             # full test suite
+pytest --perf                      # memory & streaming performance limits
+python3 packaging/benchmark.py --pages 10 100
 ```
 
-`tests/test_robustness.py` runs every tool on a set of broken and hostile
-PDFs (`tests/badpdfs.py`): each must work or stop with a message, never
-crash or hang. The performance limits (`tests/test_perf.py`) check that
-memory follows a file's size rather than its page count (merge, compress,
-OCR) and that a 200 MB file reaches the reader in pieces.
+- **Robustness & Maturity Sweep:** `tests/test_robustness.py` tests every tool against malformed and hostile PDFs (`tests/badpdfs.py`), ensuring graceful errors with zero crashes or hangs. `tests/sweep/make_corpus.py` and `run_sweep.py` run isolated time- and memory-bounded sweeps across hundreds of real-world PDFs (plus `tests/test_imports.py` for circular-import prevention and `tests/test_missing_programs.py` for graceful degradation).
+- **Releasing:** Maintainers publish to [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases) via `python packaging/release.py` (`--check`, `--dry-run`, or full publish), reading the version from `pdfmanager/__init__.py` and release notes from `CHANGELOG.md`. Optional hash-pinned dependencies (`packaging/windows/requirements-lock.txt`, generated via `packaging/lock.py`) enforce `pip install --require-hashes`. See [`docs/pc-runner.md`](docs/pc-runner.md) for running full Windows CI locally.
 
-The maturity sweep goes wider, and only runs when asked: a corpus of a few
-hundred real-world and tricky PDFs, every tool run on each of them in a
-process of its own with a time and memory limit, plus the file facts,
-search indexing and (with `--reader`) opening files in the reader:
-
-```bash
-git clone --depth 1 https://github.com/py-pdf/sample-files /tmp/samples   # optional, read as data only
-python tests/sweep/make_corpus.py /tmp/corpus --samples /tmp/samples      # about 400 files and manifest.csv
-python tests/sweep/run_sweep.py /tmp/corpus /tmp/sweep --reader 80        # an hour or so on 4 cores
-pytest tests/sweep --sweep /tmp/corpus                                    # the same, as a test
-```
-
-Each run is sorted as ok, refused (with a message), crash, hang, oom, died
-or wrong (a result pypdf or pdfium can't read, pages or text lost); the
-report is `results.csv`, `summary.txt` and `tracebacks.txt` in the output
-folder. `--tools` and `--files` narrow a run, `--rerun results.csv` runs
-again only what wasn't ok.
-
-`make_corpus.py --quick` keeps a small corpus of about 60 files, some of
-every kind, and downloads nothing; `.github/workflows/sweep.yml` runs the
-sweep on it once a week (or by hand), keeps the report for 14 days and
-fails only on crash, hang, oom or died. `pytest tests/sweep --sweep CORPUS
---sweep-reader 15` also opens 15 of the files in the reader when Playwright
-for Node.js is installed.
-
-`tests/test_imports.py` imports each module of the package in a fresh
-interpreter and fails when two modules start importing each other; the
-pairs that still do are listed there and can only become fewer.
-`tests/test_missing_programs.py` runs the tools that use Word, LibreOffice,
-a browser, Tesseract, Ghostscript, the built-in OCR engine or scanning with
-each of them missing.
-
-The workflows in `.github/workflows` describe a fuller run (Linux and
-Windows, a job with Tesseract, Ghostscript and LibreOffice, and a Windows
-end-to-end job that installs, uses, updates and uninstalls the app), but
-GitHub's machines don't run jobs on this account. The test suite can run on
-your own Windows PC instead: see [docs/pc-runner.md](docs/pc-runner.md).
-Releases are checked locally in any case (below).
-
-## Security, redaction & known limitations
-
-- **Permanent redaction vs. visual covering:** `redact` (`method="remove"`) removes text operators from PDF content streams and Form XObjects, scrubs matching bookmark titles, annotations, form fields, and structure-tree `/ActualText`/`/Alt`, and re-checks the written file. When a page cannot be safely rewritten as vector content (or when `method="image"` is chosen), the page is rasterized one page at a time with black boxes burned into pixels. Always review the verification report (`still_in`) before sharing sensitive documents; scanned text inside embedded raster images is only removed when rasterized (`method="image"`).
-- **Text editing integrity:** `edit_text` supports `require_permanent=True` (refusing fallback to visual cover-up when underlying text operators cannot be cleanly removed) and `verify_visual=True` (rendering before/after crops to detect clipping or overlap).
-- **Digital signatures:** Modifying a signed PDF invalidates existing cryptographic signatures; both the Reader GUI and mutating CLI commands warn when a source file is digitally signed. Signature verification checks cryptographic integrity, certificate validity, and post-signing modifications via `pyhanko`; online OCSP/CRL revocation checks require explicit opt-in and network access.
-- **Encryption:** ZPDF writes AES-256 (or AES-128 when requested) via `pypdf`/`cryptography` and `pikepdf`. Passwords and private-key passphrases are scrubbed from diagnostic logs (`applog.py`) and formatted error messages.
-- **Attachments & archives:** Extracting embedded PDF attachments sanitizes filenames against path traversal (`../`, drive letters, null bytes) and rejects symlinks.
-- **Performance benchmarking:** Run `python3 packaging/benchmark.py --pages 10 100` to measure local wall-clock time, throughput, Python heap peak, and RSS across comparison, redaction, text editing, and batch workloads.
-- **Code signing:** Windows and macOS binaries are not yet Authenticode-signed or Apple-notarized (Windows SmartScreen may show a warning on first run). See [docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md) for the full release-readiness assessment and competitive matrix.
-
-## Releasing
-
-Releases are published on
-[ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases), the
-public repository friends download from and the app's **Update** button
-follows. On Windows, from a clean checkout of the commit to release, with
-[GitHub's `gh`](https://cli.github.com) signed in:
-
-```bash
-winget install --id GitHub.cli          # once, then: gh auth login
-git config user.name "Your Name"        # once: the version tag carries these
-git config user.email you@example.com
-pip install -e ".[test,build]"
-python packaging/release.py --check     # the tests (with --perf), the app build and its self-test
-python packaging/release.py --dry-run   # also makes the release files in dist/release
-python packaging/release.py             # checks, makes and publishes, and tags the version
-```
-
-The version is the one in `pdfmanager/__init__.py`, and `CHANGELOG.md`
-needs a section for it: that section becomes the release notes. The
-release is `ZPDF-<version>-windows.zip` (the installer, the source it
-installs from, the licence and the third-party notices) with a SHA-256
-file beside it, which the Update button checks before installing.
-
-**Pinned packages for the installer.** With
-`packaging/windows/requirements-lock.txt` in the release, the installer
-installs exactly the package versions it lists, each checked against its
-SHA-256 hash (`pip install --require-hashes`), so a hijacked or replaced
-package on PyPI is refused. Make the file before a release with
-`python packaging/lock.py` on Windows with Python 3.13 (the Python the
-installer puts in), or on GitHub: **Actions › Lock the installer's
-packages › Run workflow**, then download the `requirements-lock` artifact
-into `packaging/windows/`, and check it in. On a computer whose Python is
-another version, or without the file, the installer installs the newest
-versions as before. The weekly **Dependency audit** workflow checks the
-packages, and the file, for known vulnerabilities.
+---
 
 ## Licence
 
-ZPDF's source code is public so you can read it, but it is not open
-source. It is licensed under the
-[PolyForm Internal Use License 1.0.0](https://polyformproject.org/licenses/internal-use/1.0.0),
-with an added permission for personal use: you may use it, at home or at
-work, and change it for your own use, but not pass it on to anyone else,
-publish your own version of it or sell it. To use ZPDF, download it from
-[ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
-It comes as is, without warranty. See [LICENSE](LICENSE) for the full terms.
+ZPDF's source code is public so you can read it, but it is not open source. It is licensed under the [PolyForm Internal Use License 1.0.0](https://polyformproject.org/licenses/internal-use/1.0.0), with an added permission for personal use: you may use it, at home or at work, and change it for your own use, but not pass it on to anyone else, publish your own version of it, or sell it. To use ZPDF, download it from [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases). It comes as is, without warranty. See [LICENSE](LICENSE) for the full terms.
 
-The name ZPDF and its icon are for this software only; see
-[TRADEMARKS.md](TRADEMARKS.md). To report a security problem, see
-[SECURITY.md](SECURITY.md).
+The name ZPDF and its icon are for this software only; see [TRADEMARKS.md](TRADEMARKS.md). To report a security problem, see [SECURITY.md](SECURITY.md).
 
 ### Copies that break the licence
 
-If you find a copy of ZPDF on GitHub that someone has published, passed on
-or sold against the licence (a fork with its own releases, say, or ZPDF
-under another name), the owner can ask GitHub to take it down with a DMCA
-takedown notice: see
-[GitHub's DMCA Takedown Policy](https://docs.github.com/en/site-policy/content-removal-policies/dmca-takedown-policy)
-and the form at <https://github.com/contact/dmca>. A fork made only to
-read the code or to suggest a change here is fine and needs nothing. If you
-spot such a copy, open an issue with the link, or tell the owner privately.
+If you find a copy of ZPDF on GitHub that someone has published, passed on or sold against the licence (a fork with its own releases, say, or ZPDF under another name), the owner can ask GitHub to take it down with a DMCA takedown notice: see [GitHub's DMCA Takedown Policy](https://docs.github.com/en/site-policy/content-removal-policies/dmca-takedown-policy) and the form at <https://github.com/contact/dmca>. A fork made only to read the code or to suggest a change here is fine and needs nothing. If you spot such a copy, open an issue with the link, or tell the owner privately.
