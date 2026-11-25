@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - "packaging/**"
+      - "mobile/android/**"
       - "pdfmanager/gui.py"
       - "pdfmanager/gui.html"
       - "pyproject.toml"
@@ -152,3 +153,83 @@ jobs:
             dist/ZPDF-*-macos.dmg.sha256
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 3 || 90 }}
+
+  android:
+    name: android-apk
+    if: vars.PC_RUNNER != 'true' || github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+      - name: Build Android Companion APK
+        working-directory: mobile/android
+        run: gradle assembleDebug --no-daemon
+      - name: Package versioned APK + SHA-256
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, shutil
+          from pathlib import Path
+          import pdfmanager
+
+          ver = pdfmanager.__version__
+          src = Path("mobile/android/app/build/outputs/apk/debug/app-debug.apk")
+          if not src.is_file():
+              raise SystemExit(f"Expected APK not found at {src}")
+          dist = Path("dist")
+          dist.mkdir(parents=True, exist_ok=True)
+          out_apk = dist / f"ZPDF-{ver}-android.apk"
+          shutil.copyfile(src, out_apk)
+          sha = hashlib.sha256(out_apk.read_bytes()).hexdigest()
+          out_sha = dist / f"{out_apk.name}.sha256"
+          out_sha.write_text(f"{sha}  {out_apk.name}\n", encoding="ascii")
+          print(f"Packaged {out_apk.name} ({out_apk.stat().st_size} bytes)")
+          PY
+      - name: Publish Android APK to ZPDF-releases (on version tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "RELEASES_TOKEN not configured; skipping Android release upload"
+            exit 0
+          fi
+          python3 - <<'PY'
+          import os, subprocess
+          from pathlib import Path
+          import pdfmanager
+
+          ver = pdfmanager.__version__
+          tag = f"v{ver}"
+          dist = Path("dist")
+          files = [dist / f"ZPDF-{ver}-android.apk", dist / f"ZPDF-{ver}-android.apk.sha256"]
+          sig_key = os.environ.get("RELEASE_SIGNING_KEY", "").strip()
+          if sig_key:
+              from pdfmanager import relsign
+              sha_path = files[1]
+              sig_path = sha_path.with_name(sha_path.name[:-7] + ".sig")
+              sig_path.write_text(relsign.sign_checksum(sha_path.read_bytes(), sig_key), encoding="ascii")
+              files.append(sig_path)
+          cmd = ["gh", "release", "upload", tag, *(str(p) for p in files),
+                 "-R", "Tempura-446/ZPDF-releases", "--clobber"]
+          print("Uploading:", [p.name for p in files])
+          subprocess.run(cmd, check=True)
+          PY
+      - uses: actions/upload-artifact@v7
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        with:
+          name: ZPDF-android-apk
+          path: |
+            dist/ZPDF-*-android.apk
+            dist/ZPDF-*-android.apk.sha256
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 90 }}
+

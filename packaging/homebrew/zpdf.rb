@@ -4,7 +4,7 @@
 #   brew install --cask ./packaging/homebrew/zpdf.rb
 
 cask "zpdf" do
-  version "0.77.0"
+  version "0.78.0"
   sha256 :no_check
 
   url "https://github.com/Tempura-446/ZPDF-releases/releases/download/v#{version}/ZPDF-#{version}-macos.dmg"

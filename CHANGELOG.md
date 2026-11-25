@@ -4,6 +4,20 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.78.0
+
+Direct Android Companion APK Release Packaging (`ZPDF-<version>-android.apk` + SHA-256).
+
+- **Automated Android APK Release Pipeline (`.github/workflows/build-app.yml`).**
+  - Added a dedicated `android-apk` CI & release job (JDK 17 + Gradle 8.11.1 +
+    Android SDK 35) that compiles `mobile/android/`, packages
+    `ZPDF-<version>-android.apk` and `ZPDF-<version>-android.apk.sha256`, and
+    publishes them directly alongside Windows, macOS, and Linux downloads on
+    `Tempura-446/ZPDF-releases`.
+- **Direct Android APK Download Links (`packaging/release.py`).**
+  - Added direct Android APK download instructions to every release's install
+    notes and the `ZPDF-releases` landing page.
+
 ## 0.77.0
 
 OCR, Translation & Manga Formatting v5 + Android Companion App Phase 2.
