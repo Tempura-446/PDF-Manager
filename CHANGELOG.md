@@ -17,6 +17,12 @@ Direct Android Companion APK Release Packaging (`ZPDF-<version>-android.apk` + S
 - **Direct Android APK Download Links (`packaging/release.py`).**
   - Added direct Android APK download instructions to every release's install
     notes and the `ZPDF-releases` landing page.
+- **Make-It-Fillable Underline Text Alignment (`formdetect.py`).**
+  - Aligned detected single-line underline text fields vertically with adjacent
+    same-row labels (and extended the bottom slightly past the line stroke for
+    descenders) instead of placing a tall 19 pt box strictly above the line, so
+    typed text sits cleanly on the underline and lines up with the rest of the
+    row.
 
 ## 0.77.0
 
