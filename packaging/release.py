@@ -48,6 +48,7 @@ INSTALL_NOTE = """
 - **Windows (x64):** Download [`ZPDF-{version}-windows-standalone.zip`](https://github.com/Tempura-446/ZPDF-releases/releases/download/v{version}/ZPDF-{version}-windows-standalone.zip) (no Python required), unzip, and run `ZPDF.exe` — or download [`ZPDF-{version}-windows.zip`](https://github.com/Tempura-446/ZPDF-releases/releases/download/v{version}/ZPDF-{version}-windows.zip) and double-click `Install ZPDF.cmd`.
 - **macOS:** Download [`ZPDF-{version}-macos.dmg`](https://github.com/Tempura-446/ZPDF-releases/releases/download/v{version}/ZPDF-{version}-macos.dmg) (or [`ZPDF-{version}-macos.zip`](https://github.com/Tempura-446/ZPDF-releases/releases/download/v{version}/ZPDF-{version}-macos.zip)) and drag **ZPDF.app** to Applications. If Gatekeeper warns on first launch, run `xattr -cr /Applications/ZPDF.app`.
 - **Linux (x86_64):** Download [`zpdf_{version}_amd64.deb`](https://github.com/Tempura-446/ZPDF-releases/releases/download/v{version}/zpdf_{version}_amd64.deb) (`sudo apt install ./zpdf_{version}_amd64.deb`) or the portable [`ZPDF-{version}-linux.zip`](https://github.com/Tempura-446/ZPDF-releases/releases/download/v{version}/ZPDF-{version}-linux.zip).
+- **Android (Companion App):** Download [`ZPDF-{version}-android.apk`](https://github.com/Tempura-446/ZPDF-releases/releases/download/v{version}/ZPDF-{version}-android.apk) (Android 8.0+) and install the APK on your phone or tablet.
 
 Already have ZPDF? Use the **Update** button in the app on any platform.
 """
