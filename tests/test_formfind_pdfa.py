@@ -94,8 +94,8 @@ def test_detect_finds_the_fields_of_a_printed_form(tmp_path):
     fields = _by_name(found)
     assert set(fields) == {"Full name", "Email", "City", "Phone", "Date of birth",
                            "Yes, send me news", "I agree", "Comments", "Signature", "Date"}
-    assert _near(fields["Full name"]["rect"], [140, 699, 400, 718])     # above its line
-    assert _near(fields["Email"]["rect"][:2], [110, 670])                # on the underscores
+    assert _near(fields["Full name"]["rect"], [140, 696.5, 400, 709.5])  # aligned with label on its line
+    assert _near(fields["Email"]["rect"][:2], [110, 667])                # on the underscores
     assert fields["City"]["rect"][0] >= 90                               # after "City", on the dots
     assert _near(fields["Phone"]["rect"], [73, 561, 271, 588])           # under the caption
     assert fields["Yes, send me news"]["type"] == "checkbox"
@@ -128,7 +128,7 @@ def test_detect_reads_a_turned_page_and_a_slanted_scan(tmp_path):
     scanned = [f for items in formdetect.detect(tmp_path / "scan.pdf").values() for f in items]
     kinds = [f["type"] for f in scanned]
     assert kinds.count("checkbox") == 2 and kinds.count("multiline") == 1
-    assert any(_near(f["rect"], [140, 699, 400, 718], 4) for f in scanned)  # the name line
+    assert any(_near(f["rect"], [140, 696.5, 400, 710.5], 4) for f in scanned)  # the name line
     assert any(_near(f["rect"], [72, 561, 270, 587], 4) for f in scanned)   # the phone box
     assert all(f["name"].startswith(("Text", "Checkbox")) for f in scanned)
 
@@ -162,6 +162,68 @@ def test_detect_on_a_page_without_a_form(tmp_path):
     c.drawString(72, 700, "Dear reader, this is a plain letter with no form in it.")
     c.save()
     assert formdetect.detect(tmp_path / "letter.pdf") == {}
+
+
+def test_detect_underline_fields_align_with_label_and_line(tmp_path):
+    """Underline text boxes should sit on the line with descender room and
+    align vertically with adjacent same-row text instead of floating above it."""
+    path = tmp_path / "aligned.pdf"
+    c = canvas.Canvas(str(path), pagesize=letter)
+    # Standard 11pt label + line (baseline 700, cap ~708, center ~703, line 698)
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 700, "Full name:")
+    c.line(140, 698, 400, 698)
+    # Same row: descender label ("Signature:") vs no-descender label ("Date:")
+    c.drawString(72, 640, "Signature:")
+    c.line(140, 638, 320, 638)
+    c.drawString(350, 640, "Date:")
+    c.line(385, 638, 520, 638)
+    # Compact 8pt label (baseline 580, cap ~585.8, center ~583, line 578.5)
+    c.setFont("Helvetica", 8)
+    c.drawString(72, 580, "ID:")
+    c.line(90, 578.5, 220, 578.5)
+    # Larger 16pt label (baseline 520, cap ~531.5, center ~525.5, line 517)
+    c.setFont("Helvetica", 16)
+    c.drawString(72, 520, "Company:")
+    c.line(155, 517, 420, 517)
+    # Standalone stacked ruled lines (no inline label)
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 460, "Notes:")
+    c.line(72, 440, 420, 440)
+    c.line(72, 415, 420, 415)
+    c.showPage()
+    c.save()
+
+    fields = _by_name(formdetect.detect(path))
+    # 11pt "Full name:": bottom below line (descenders), center aligned with label (~703)
+    fn = fields["Full name"]["rect"]
+    assert fn[1] < 698.0, f"text box bottom {fn[1]} floats above underline at 698"
+    assert abs((fn[1] + fn[3]) / 2 - 703.0) <= 1.5, f"Full name center {(fn[1]+fn[3])/2} misaligned with label (~703)"
+    assert 10.0 <= fn[3] - fn[1] <= 16.0
+
+    # Same-row Signature & Date align with each other and sit on y=638
+    sig = fields["Signature"]["rect"]
+    dt = fields["Date"]["rect"]
+    assert sig[1] < 638.0 and dt[1] < 638.0
+    assert abs((sig[1] + sig[3]) / 2 - (dt[1] + dt[3]) / 2) <= 1.5
+
+    # Compact 8pt label gets a compact box aligned with 8pt text
+    small = fields["ID"]["rect"]
+    assert small[1] < 578.5
+    assert small[3] - small[1] <= 13.0
+    assert abs((small[1] + small[3]) / 2 - 582.5) <= 1.5
+
+    # Larger 16pt label gets a taller box aligned with 16pt text
+    big = fields["Company"]["rect"]
+    assert big[1] < 517.0
+    assert big[3] - big[1] >= 15.0
+    assert abs((big[1] + big[3]) / 2 - 525.0) <= 2.0
+
+    # Standalone ruled line rests on y=415 with natural single-line height
+    notes_lines = [f["rect"] for f in formdetect.detect(path)[1] if 405 <= f["rect"][1] <= 425]
+    assert notes_lines
+    r = notes_lines[0]
+    assert r[1] < 415.0 and 11.0 <= r[3] - r[1] <= 16.0
 
 
 # --------------------------------------------------------------------------

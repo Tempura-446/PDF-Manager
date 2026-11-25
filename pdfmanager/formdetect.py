@@ -501,6 +501,56 @@ def _blank_pictures(page, image, to_px):
         draw.rectangle(box, fill=255)
 
 
+def _line_field_span(words, fx0, fx1, ltop, lbottom, clear, page_h, pt):
+    """Vertical pixel span ``(y0, y1)`` for a single-line text field on a
+    horizontal line. Aligns to adjacent same-row label text when present so
+    vertically-centered typed text sits on the line and matches the rest of
+    the row; otherwise uses a natural single-line height resting on the line
+    with descender room below it."""
+    top = ltop - 1
+    row = _row_words(words, ltop - 16 * pt, lbottom + 4 * pt)
+    left_parts = []
+    for w in row:
+        if w[3] - w[1] > 24 * pt or w[0] >= fx0 - 2:
+            continue
+        chars = [box for ch, box in zip(w[4], w[5])
+                 if box[2] <= fx0 + 2 * pt and ch not in "_.…·"]
+        if chars:
+            left_parts.append((chars[0][0], chars[-1][2], chars))
+    adj_boxes = []
+    cursor = fx0
+    for wx0, wx1, chars in sorted(left_parts, key=lambda p: -p[1]):
+        gap = cursor - wx1
+        if gap > (40 * pt if not adj_boxes else 16 * pt):
+            break
+        adj_boxes.extend(chars)
+        cursor = wx0
+    if not adj_boxes:
+        cursor = fx1
+        for w in sorted((w for w in row if w[3] - w[1] <= 24 * pt and w[0] >= fx1 - 2),
+                        key=lambda w: w[0]):
+            gap = w[0] - cursor
+            if gap > (40 * pt if not adj_boxes else 16 * pt):
+                break
+            chars = [box for ch, box in zip(w[4], w[5]) if ch not in "_.…·"]
+            if chars:
+                adj_boxes.extend(chars)
+                cursor = w[2]
+    if adj_boxes:
+        ly0 = min(b[1] for b in adj_boxes)
+        ly1 = max(b[3] for b in adj_boxes)
+        lh = max(ly1 - ly0, 6 * pt)
+        pad = max(1.5 * pt, lh * 0.18)
+        y0 = max(top - clear + pt, ltop - 22 * pt, ly0 - pad)
+        y1 = min(page_h, max(lbottom + 1.5 * pt, ly1 + pad))
+        if y1 - y0 < 8 * pt:
+            y0 = max(top - clear + pt, y1 - max(lh + 2 * pad, 10 * pt))
+        return y0, y1
+    y0 = top - min(clear, 13 * pt) + pt
+    y1 = min(page_h, lbottom + 1.5 * pt)
+    return y0, y1
+
+
 def _detect_page(page, textpage, quick=False):
     core.show_whole_page(page)
     if quick and max(page.get_size()) > QUICK_MAX_SIDE:
@@ -576,7 +626,7 @@ def _detect_page(page, textpage, quick=False):
     # Lines to write on: the space above a line that isn't part of a box.
     dotted = _dot_leaders(chars, pt)  # "Name ........" counts as a line too
     lines = list(flat) + dotted
-    for i, (y, x0, x1, t, ltop, _lbottom) in enumerate(lines):
+    for i, (y, x0, x1, t, ltop, lbottom) in enumerate(lines):
         if i in used or x1 - x0 < MIN_LINE * pt:
             continue
         if x1 - x0 > 0.7 * page_w and not _clean(_join_leftwards(
@@ -595,8 +645,9 @@ def _detect_page(page, textpage, quick=False):
             if clear < 9 * pt:
                 continue
             fx0 = fx0 + 2 * pt if a else fx0
-            found.append(((fx0, top - min(clear, 20 * pt) + pt, fx1 - (2 * pt if b < x1 - x0 else 0),
-                           top), "text"))
+            box_x1 = fx1 - (2 * pt if b < x1 - x0 else 0)
+            box_y0, box_y1 = _line_field_span(words, fx0, box_x1, ltop, lbottom, clear, page_h, pt)
+            found.append(((fx0, box_y0, box_x1, box_y1), "text"))
 
     # Tick boxes and round buttons drawn as characters.
     for box in _glyph_boxes(words, BOX_GLYPHS):
