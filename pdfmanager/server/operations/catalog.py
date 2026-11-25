@@ -259,16 +259,24 @@ OPERATIONS = [
                 _f("size", "Sheet size", "select", "a4",
                    choices=[[p, p.upper() if p[0] == "a" else p.capitalize()] for p in PAPER])]},
     {"id": "booklet", "live": True, "group": "Layout", "label": "Booklet", "files": "pdf",
-     "help": "Print a folded booklet: two pages side by side on each sheet, in the order that "
-             "comes out right once the sheets are folded in the middle. Print it on both sides, "
-             "flipping on the short edge, then fold the stack and staple it on the fold. Blank "
-             "pages are added at the end to fill the last sheet.",
+     "help": "Print a folded booklet or multi-signature book: two pages side by side on each sheet, "
+             "supporting both Western left-to-right and Manga/Japanese right-to-left binding, "
+             "multi-signature sections, and creep compensation.",
      "fields": [_f("size", "Sheet size", "select", "",
                    choices=[["", "Twice the page size"]]
                    + [[p, p.upper() if p[0] == "a" else p.capitalize()]
                       for p in ("a4", "letter", "a3", "tabloid", "legal")],
                    hint="Used sideways, with two pages on each side. Twice the page size "
-                        "keeps the pages as they are: A5 pages on A4 paper, A4 on A3.")]},
+                        "keeps the pages as they are: A5 pages on A4 paper, A4 on A3."),
+                _f("binding", "Binding direction", "select", "ltr",
+                   choices=[["ltr", "Left-to-right (Western book)"],
+                            ["rtl", "Right-to-left (Manga / Japanese)"]]),
+                _f("signature", "Signature size", "select", "0",
+                   choices=[["0", "Single saddle-stitch booklet"],
+                            ["8", "8-page signatures"],
+                            ["16", "16-page signatures"],
+                            ["32", "32-page signatures"]]),
+                _f("creep_mm", "Creep compensation (mm)", "number", "0", min=0, max=10, step=0.25)]},
     {"id": "repair", "group": "Optimize", "label": "Repair & fast web view", "files": "pdf",
      "help": "Mend a damaged PDF (one that won't open, or shows errors), and optimize it so "
              "the first page shows before the whole file has downloaded.",
@@ -617,6 +625,14 @@ OPERATIONS = [
                 _f("dpi", "Resolution (DPI)", "number", 150, min=36, max=600),
                 _f("pages", "Pages (blank = all)", "text", "", placeholder="all")]},
     {"id": "text", "group": "Convert", "label": "PDF → text", "files": "pdf", "fields": []},
+    {"id": "pdf-to-cbz", "group": "Convert", "label": "PDF → CBZ (Comic/Manga)", "files": "pdf",
+     "help": "Export a PDF as a .cbz comic or manga archive with WebP, JPEG, or PNG pages and ComicInfo.xml metadata.",
+     "fields": [_f("format", "Image format", "select", "webp",
+                   choices=[["webp", "WebP (recommended — compact & sharp)"],
+                            ["jpg", "JPEG (universal)"],
+                            ["png", "PNG (lossless)"]]),
+                _f("dpi", "Resolution (DPI)", "number", 150, min=72, max=300),
+                _f("manga_rtl", "Tag as Right-to-Left Manga in ComicInfo.xml", "check", False)]},
     {"id": "media", "group": "Convert", "label": "Pictures & attachments", "files": "pdf",
      "help": "Save the pictures inside PDFs (in their own format, each once) and any files "
              "attached to them, as a ZIP.",

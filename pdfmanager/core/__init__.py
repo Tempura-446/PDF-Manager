@@ -11,11 +11,11 @@ from pdfmanager.core.io import (
     keep_size, open_pdf, open_pikepdf,
 )
 from pdfmanager.core.geometry import (
-    _LINK_TARGET, _describe_size, _impose, _insert_positions, _moved_points,
-    _page_size, _resolve_links, _retarget_links, _transfer_rotation,
+    PAPER_CALIPER_MM, _LINK_TARGET, _describe_size, _impose, _insert_positions,
+    _moved_points, _page_size, _resolve_links, _retarget_links, _transfer_rotation,
     _transform_annotations, _turn_appearances, _unturned, _visible_box,
     arrange, booklet, crop, insert_blank_pages, n_up, parse_paper_size,
-    quarter_turn, resize, rotate, trim_margins,
+    quarter_turn, resize, rotate, spine_width_mm, trim_margins,
 )
 from pdfmanager.core.pages import (
     _bookmark_groups, _pages_bytes, _size_chunks, _title_filename,

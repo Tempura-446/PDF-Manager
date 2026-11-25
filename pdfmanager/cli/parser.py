@@ -139,10 +139,16 @@ def build_parser():
 
     sp = per_file("booklet", run_booklet,
                   "arrange pages to print a booklet: double-sided, flip on the short edge, "
-                  "fold in the middle")
+                  "fold in the middle (supports RTL manga binding, signatures, and creep)")
     sp.add_argument("-s", "--size",
                     help="sheet size, e.g. a4 or letter, used landscape with two pages side by "
                          "side (default: twice the page size)")
+    sp.add_argument("--binding", choices=("ltr", "rtl"), default="ltr",
+                    help="binding direction: ltr (Western) or rtl (Manga / Japanese) (default: ltr)")
+    sp.add_argument("--signature", type=int, default=0,
+                    help="pages per folded signature (0 = single booklet, or 8, 16, 32)")
+    sp.add_argument("--creep", type=float, default=0.0,
+                    help="creep compensation in mm for inner nested sheets (default: 0.0)")
 
     sp = per_file("insert-blank", run_insert_blank,
                   "insert blank pages (e.g. a page for notes after every page)")
@@ -480,6 +486,35 @@ def build_parser():
                     help="output layout mode (default: side-by-side)")
     sp.add_argument("-o", "--output", help="output file path")
     sp.add_argument("--password", help=f"password for encrypted input (or set {PASSWORD_ENV})")
+    sp.add_argument("--json", action="store_true", help="print JSON")
+
+    sp = other("cbz-to-pdf", cmd_cbz_to_pdf,
+               "convert a .cbz comic/manga archive to a PDF (natural page sort + optional RTL viewer)")
+    sp.add_argument("input", metavar="input.cbz", help="CBZ archive to convert")
+    sp.add_argument("-o", "--output", help="output PDF path")
+    sp.add_argument("--rtl", action="store_true", help="set right-to-left manga viewer direction")
+    sp.add_argument("--json", action="store_true", help="print JSON")
+
+    sp = other("pdf-to-cbz", cmd_pdf_to_cbz,
+               "export a PDF as a .cbz comic/manga archive (WebP, JPEG, or PNG pages)")
+    sp.add_argument("input", metavar="input.pdf", help="PDF to export")
+    sp.add_argument("-o", "--output", help="output CBZ path")
+    sp.add_argument("--dpi", type=float, default=150.0, help="render DPI (default: 150)")
+    sp.add_argument("--format", choices=("webp", "jpg", "png"), default="webp", help="image format (default: webp)")
+    sp.add_argument("--quality", type=int, default=88, help="WebP/JPEG quality 50-100 (default: 88)")
+    sp.add_argument("--password", help=f"password for encrypted input (or set {PASSWORD_ENV})")
+    sp.add_argument("--json", action="store_true", help="print JSON")
+
+    sp = other("spine", cmd_spine,
+               "calculate book spine width and full-wrap cover dimensions for print-on-demand")
+    sp.add_argument("pages", type=int, help="total interior page count")
+    sp.add_argument("--paper", choices=tuple(core.PAPER_CALIPER_MM), default="white_90gsm",
+                    help="paper stock preset (default: white_90gsm)")
+    sp.add_argument("--caliper", type=float, help="custom sheet thickness in mm")
+    sp.add_argument("--cover-mm", type=float, default=0.35, help="cover stock allowance in mm (default: 0.35)")
+    sp.add_argument("--trim-w", type=float, help="trim page width in mm (to compute full cover wrap)")
+    sp.add_argument("--trim-h", type=float, help="trim page height in mm (to compute full cover wrap)")
+    sp.add_argument("--bleed-mm", type=float, default=3.0, help="cover bleed in mm (default: 3.0)")
     sp.add_argument("--json", action="store_true", help="print JSON")
 
     sp = per_file("bookmarks", run_bookmarks,

@@ -82,7 +82,15 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         core.insert_blank_pages(src, out, after, _num(opts.get("count"), int, 1),
                                 at_start=at_start, password=password)
     elif op == "booklet":
-        core.booklet(src, out, opts.get("size") or None, password)
+        core.booklet(
+            src,
+            out,
+            opts.get("size") or None,
+            password,
+            binding=opts.get("binding") or "ltr",
+            signature_pages=_num(opts.get("signature"), int, 0),
+            creep_mm=_num(opts.get("creep_mm"), float, 0.0),
+        )
         from pypdf import PdfReader
         sheets = len(PdfReader(str(out)).pages) // 2
         notes.append(f"{src.name}: {sheets} sheet{'s' if sheets != 1 else ''} of paper. Print on "
@@ -474,6 +482,23 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         return core.pdf_to_images(src, out_dir / f"{src.stem}_images",
                                   _num(opts.get("dpi"), int, 150), opts.get("format") or "png",
                                   _pages(opts), password)
+    elif op == "pdf-to-cbz":
+        from pdfmanager import cbz
+
+        out = out_dir / f"{src.stem}.cbz"
+        manga_rtl = _bool(opts.get("manga_rtl"))
+        res = cbz.pdf_to_cbz(
+            src,
+            out,
+            password=password,
+            dpi=_num(opts.get("dpi"), float, 150.0),
+            image_format=opts.get("format") or "webp",
+            comic_info={
+                "Title": src.stem,
+                "Manga": "YesAndRightToLeft" if manga_rtl else "No",
+            },
+        )
+        notes.append(f"{src.name}: exported {res['pages']} page(s) to CBZ ({res['format']}).")
     elif op == "text":
         out = out.with_suffix(".txt")
         if not core.extract_text(src, out, None, password).strip():

@@ -348,11 +348,13 @@ def n_up(path, output, per_sheet=2, size="a4", password=None):
     return _write(_impose(path, password, sheets, (sw, sh), cols, rows), output)
 
 
-def _impose(path, password, sheets, sheet_size, cols, rows, fill=0.95):
+def _impose(path, password, sheets, sheet_size, cols, rows, fill=0.95, slot_dx=None):
     """A writer with sheets of ``sheet_size`` holding the pages of ``path``
     in a grid of ``cols`` x ``rows`` cells: ``sheets`` lists, per sheet, the
     0-based page for each cell (row by row from the top left; None leaves
     the cell empty). Each page is scaled to ``fill`` of its cell, centred.
+    Optional ``slot_dx`` is a list of ``(dx_slot0, dx_slot1, ...)`` point
+    offsets per sheet (used for booklet creep compensation).
     Links, form fields and comments move with their page; links to other
     pages point to the sheet that holds that page."""
     sw, sh = sheet_size
@@ -369,6 +371,7 @@ def _impose(path, password, sheets, sheet_size, cols, rows, fill=0.95):
     for n, cells in enumerate(sheets):
         progress.report(n, len(sheets), "sheet")
         sheet = writer.add_blank_page(width=sw, height=sh)
+        dx_row = slot_dx[n] if (slot_dx is not None and n < len(slot_dx)) else None
         for slot, i in enumerate(cells):
             if i is None:
                 continue
@@ -381,7 +384,8 @@ def _impose(path, password, sheets, sheet_size, cols, rows, fill=0.95):
                 raise PdfManagerError(f"page {i + 1} has no size (its box is empty), so it can't be placed")
             s = min(cell_w / pw, cell_h / ph) * fill
             col, row = slot % cols, slot // cols
-            x = col * cell_w + (cell_w - pw * s) / 2
+            extra_x = float(dx_row[slot]) if (dx_row is not None and slot < len(dx_row)) else 0.0
+            x = col * cell_w + (cell_w - pw * s) / 2 + extra_x
             y = sh - (row + 1) * cell_h + (cell_h - ph * s) / 2
             op = Transformation().translate(-float(box.left), -float(box.bottom)).scale(s, s).translate(x, y)
             sheet.merge_transformed_page(src, op)  # also moves the annotations
@@ -389,17 +393,84 @@ def _impose(path, password, sheets, sheet_size, cols, rows, fill=0.95):
     return writer
 
 
-def booklet(path, output, size=None, password=None):
-    """Arrange pages for a booklet printed on both sides of the paper,
-    folded in the middle and stapled on the fold (saddle stitch): two pages
-    side by side on each landscape sheet, in the order that puts them in
-    sequence once folded (n, 1 | 2, n-1 | n-2, 3 | ...). Blank pages are
-    added at the end to make a multiple of four.
+# Typical paper calipers (thickness per sheet in mm) for commercial / POD book printing
+PAPER_CALIPER_MM = {
+    "manga_60gsm": 0.082,
+    "uncoated_80gsm": 0.100,
+    "white_90gsm": 0.105,
+    "cream_90gsm": 0.125,
+    "gloss_115gsm": 0.095,
+    "matte_130gsm": 0.115,
+}
 
-    ``size`` is the sheet (paper) size, e.g. "a4" or "letter", turned
-    landscape; by default a sheet is twice the first page (A5 pages give
-    A4 sheets, A4 pages A3 sheets). Print the result double-sided,
-    flipping on the short edge."""
+
+def spine_width_mm(
+    page_count,
+    paper="white_90gsm",
+    *,
+    caliper_mm=None,
+    cover_mm=0.35,
+    trim_w_mm=None,
+    trim_h_mm=None,
+    bleed_mm=3.0,
+):
+    """Calculate book spine width (mm & inches) and optional full-wrap cover dimensions.
+
+    ``page_count`` is the total interior page count (2 pages per sheet).
+    ``paper`` selects a built-in stock caliper from ``PAPER_CALIPER_MM`` unless
+    ``caliper_mm`` (mm per sheet) is supplied explicitly.
+    """
+    pages = max(2, int(page_count))
+    sheets = (pages + 1) // 2
+    if caliper_mm is not None and float(caliper_mm) > 0:
+        cal = float(caliper_mm)
+        stock = "custom"
+    else:
+        stock = str(paper or "white_90gsm").strip().lower()
+        if stock not in PAPER_CALIPER_MM:
+            raise PdfManagerError(f"unknown paper stock: {paper!r} (expected one of {tuple(PAPER_CALIPER_MM)})")
+        cal = PAPER_CALIPER_MM[stock]
+    spine = round(sheets * cal + max(0.0, float(cover_mm or 0.0)), 2)
+    out = {
+        "pages": pages,
+        "sheets": sheets,
+        "paper": stock,
+        "caliper_mm": cal,
+        "spine_mm": spine,
+        "spine_in": round(spine / 25.4, 3),
+    }
+    if trim_w_mm is not None and trim_h_mm is not None:
+        tw, th, bl = float(trim_w_mm), float(trim_h_mm), float(bleed_mm or 0.0)
+        out["cover_width_mm"] = round(2.0 * tw + spine + 2.0 * bl, 2)
+        out["cover_height_mm"] = round(th + 2.0 * bl, 2)
+        out["bleed_mm"] = bl
+    return out
+
+
+def booklet(
+    path,
+    output,
+    size=None,
+    password=None,
+    *,
+    binding="ltr",
+    signature_pages=0,
+    creep_mm=0.0,
+):
+    """Arrange pages for a folded booklet or multi-signature book printed double-sided:
+    - ``binding='ltr'`` (Western left-to-right) or ``binding='rtl'`` (Manga / Japanese right-to-left).
+    - ``signature_pages``: ``0`` for a single saddle-stitch booklet, or a multiple of 4
+      (e.g. ``8``, ``16``, ``32``) to divide a thick book into folded signatures.
+    - ``creep_mm``: progressive inward shift (mm) on inner nested sheets so outer margins
+      stay even after face-trimming thick saddle-stitched sections.
+    """
+    norm_bind = str(binding or "ltr").strip().lower()
+    if norm_bind not in ("ltr", "rtl"):
+        raise PdfManagerError(f"unknown booklet binding: {binding!r} (expected 'ltr' or 'rtl')")
+    sig_size = int(signature_pages or 0)
+    if sig_size < 0 or (sig_size > 0 and sig_size % 4 != 0):
+        raise PdfManagerError("signature_pages must be 0 or a positive multiple of 4 (e.g. 8, 16, 32)")
+
     reader = open_pdf(path, password)
     total = len(reader.pages)
     if size:
@@ -408,13 +479,39 @@ def booklet(path, output, size=None, password=None):
     else:
         w, h = _page_size(reader.pages[0])
         sheet = (2 * w, h)
-    padded = -(-total // 4) * 4
+
+    padded_total = -(-total // 4) * 4
+    sec_len = sig_size if sig_size > 0 else padded_total
+    creep_pt = float(creep_mm or 0.0) * (72.0 / 25.4)
+
     sides = []
-    for k in range(padded // 4):
-        sides.append([padded - 1 - 2 * k, 2 * k])      # front of sheet k + 1
-        sides.append([2 * k + 1, padded - 2 - 2 * k])  # its back
+    slot_dx = []
+    for base in range(0, padded_total, sec_len):
+        sec_pages = min(sec_len, padded_total - base)
+        sec_padded = -(-sec_pages // 4) * 4
+        n_sheets = sec_padded // 4
+        for k in range(n_sheets):
+            # k=0 is outermost sheet, k=n_sheets-1 is innermost sheet
+            frac = (float(k) / float(max(1, n_sheets - 1))) if n_sheets > 1 else 0.0
+            shift = creep_pt * frac
+            if norm_bind == "rtl":
+                # Right-to-left manga binding: front has page 1 on LEFT, last page on RIGHT
+                front = [base + 2 * k, base + sec_padded - 1 - 2 * k]
+                back = [base + sec_padded - 2 - 2 * k, base + 2 * k + 1]
+            else:
+                # Left-to-right Western binding: front has last page on LEFT, page 1 on RIGHT
+                front = [base + sec_padded - 1 - 2 * k, base + 2 * k]
+                back = [base + 2 * k + 1, base + sec_padded - 2 - 2 * k]
+            sides.append(front)
+            slot_dx.append((shift, -shift))  # push inner sheets slightly toward the center fold
+            sides.append(back)
+            slot_dx.append((shift, -shift))
+
     sides = [[i if i < total else None for i in side] for side in sides]
-    return _write(_impose(path, password, sides, sheet, 2, 1, fill=1.0), output)
+    return _write(
+        _impose(path, password, sides, sheet, 2, 1, fill=1.0, slot_dx=slot_dx if creep_pt > 0 else None),
+        output,
+    )
 
 
 _LINK_TARGET = NameObject("/PdfmTargetPage")
