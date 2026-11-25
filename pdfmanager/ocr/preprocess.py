@@ -270,6 +270,20 @@ def _map_lines(lines, matrix):
     return out
 
 
+def _adaptive_binarize_crop(crop):
+    """Local-mean adaptive binarization for faint or unevenly shaded line crops."""
+    import numpy as np
+    from PIL import Image, ImageFilter
+
+    grey = crop.convert("L")
+    arr = np.asarray(grey, np.float32)
+    bg = np.asarray(grey.filter(ImageFilter.GaussianBlur(radius=12)), np.float32)
+    diff = bg - arr
+    thresh = max(14.0, float(np.percentile(diff, 85)) * 0.65)
+    out = np.where(diff > thresh, 0, 255).astype(np.uint8)
+    return Image.fromarray(out, mode="L").convert("RGB")
+
+
 def _retry_low_confidence(image, lines, script=None, quality="standard"):
     """Re-read low-confidence lines from a cleaned/enlarged crop and keep
     whichever reading has higher confidence (never both)."""
@@ -323,6 +337,18 @@ def _retry_low_confidence(image, lines, script=None, quality="standard"):
                 cur_score = sum(cl.confidence * len(cl.text) for cl in cand_lines)
                 if inv_score > cur_score:
                     cand_lines = inv_lines
+        # If still low confidence on a light crop, try local adaptive binarization for faint/shaded ink.
+        best_c = max((cl.confidence for cl in cand_lines), default=0.0)
+        if raw_median >= 95.0 and best_c < RETRY_CONFIDENCE:
+            bin_crop = _adaptive_binarize_crop(crop)
+            with _call_lock:
+                bin_res = engine(_array(bin_crop), use_det=True, use_cls=False, use_rec=True)
+            bin_lines = _lines(bin_res)
+            if bin_lines:
+                bin_score = sum(cl.confidence * len(cl.text) for cl in bin_lines)
+                cur_score = sum(cl.confidence * len(cl.text) for cl in cand_lines)
+                if bin_score > cur_score:
+                    cand_lines = bin_lines
         if not cand_lines:
             updated.append(line)
             continue

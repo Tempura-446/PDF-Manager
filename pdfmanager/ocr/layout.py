@@ -227,8 +227,24 @@ def reading_order(lines):
 
 
 def _ordered(lines):
-    """``lines`` as rows in reading order, however crooked the scan."""
+    """``lines`` as rows in reading order, however crooked the scan.
+    For predominantly upright vertical CJK (tategaki) pages, columns are sorted
+    right-to-left and top-to-bottom."""
     level, real = _straight(lines)
+    if len(level) >= 2:
+        boxes = [_bbox(ln) for ln in level]
+        tall_cjk = sum(
+            1 for ln, b in zip(level, boxes)
+            if (b[3] - b[1]) > 1.2 * (b[2] - b[0]) and _CJK_CHAR_RE.search(ln.text or "")
+        )
+        if tall_cjk >= max(2, len(level) // 2):
+            widths = sorted(max(1.0, b[2] - b[0]) for b in boxes)
+            col_bin = max(4.0, widths[len(widths) // 2] * 0.65)
+            ordered_v = sorted(
+                zip(level, boxes),
+                key=lambda pair: (-round(((pair[1][0] + pair[1][2]) / 2.0) / col_bin), pair[1][1]),
+            )
+            return [[real.get(id(ln), ln)] for ln, _b in ordered_v]
     return [[real.get(id(line), line) for line in row] for row in _layout(level)]
 
 
@@ -264,10 +280,20 @@ def _straight(lines):
     return level, real
 
 
-def text_of(lines):
+def text_of(lines, *, dehyphenate=False):
     """The recognised text as a reader gets it: words separated by spaces,
     one line per row, columns one after the other."""
-    return "\n".join(" ".join(w.text for line in row for w in line.words) for row in _ordered(lines))
+    rows = [" ".join(w.text for line in row for w in line.words).replace("\u00ad", "") for row in _ordered(lines)]
+    if not dehyphenate or len(rows) < 2:
+        return "\n".join(rows)
+    merged = [rows[0]]
+    for nxt in rows[1:]:
+        prev = merged[-1]
+        if prev.endswith(("-", "\u2010", "\u2011")) and len(prev) >= 2 and prev[-2].isalpha() and nxt and nxt[0].islower():
+            merged[-1] = prev[:-1] + nxt
+        else:
+            merged.append(nxt)
+    return "\n".join(merged)
 
 
 def skew_angle(image):

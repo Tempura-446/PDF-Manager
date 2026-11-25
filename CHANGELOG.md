@@ -4,6 +4,30 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.76.0
+
+OCR, Translation & Manga Formatting v4 (Adaptive Binarization Retry, Full-Page Vertical CJK RTL Order, WCAG Contrast, Sentence-Aware Chunking & Broken-Outline Manga Recovery).
+
+- **OCR v4 (`pdfmanager/ocr/preprocess.py`, `pdfmanager/ocr/layout.py`).**
+  - Added local-mean adaptive binarization fallback (`_adaptive_binarize_crop`)
+    inside `_retry_low_confidence()` to recover faint/shaded ink on uneven
+    scans.
+  - Added full-page vertical CJK (*tategaki*) RTL column reading order in
+    `_ordered()` so scanned Japanese books and manga extract right-to-left,
+    top-to-bottom.
+  - Added soft-hyphen (`\u00ad`) cleanup and optional line-wrap de-hyphenation
+    in `text_of(lines, dehyphenate=True)`.
+- **Translation v4 (`pdfmanager/translate/text.py`, `layout.py`).**
+  - Added sentence-aware long-paragraph chunking (`_split_long_for_mt`) so
+    512-token neural MT models never truncate long paragraphs.
+  - Upgraded overlay text contrast selection to WCAG 2.1 linearized relative
+    luminance (`_contrast_ratio < 4.5`) for crisp legibility on tinted boxes.
+- **Manga Formatting v4 (`pdfmanager/translate/manga.py`).**
+  - Added 1px morphological closing before bubble CCL to recover hand-drawn
+    speech bubbles with tiny 1–2px ink outline gaps.
+  - Upgraded `order_manga_bubbles()` with panel/gutter-aware XY-cut RTL/LTR
+    ordering for 2-column and 4-koma manga pages.
+
 ## 0.75.0
 
 OCR, Translation & Manga Formatting Power Upgrade.
