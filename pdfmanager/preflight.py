@@ -1,18 +1,21 @@
 # Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
-"""Print-production CMYK preflight, PDF/X-1a & PDF/X-4 compliance, plate separation, and safe fixes.
+"""Print-production CMYK preflight, PDF/X-1a & PDF/X-4 compliance, plate separation, and pure-Python press fixes.
 
-Inspects a PDF for commercial-print issues:
+Inspects a PDF (including nested Form XObjects) for commercial-print issues:
   - Low-resolution images (effective rendered DPI from CTM + pixel dimensions)
   - Total Ink / Area Coverage (TAC %) across CMYK vectors and CMYK Image XObjects
   - Overprint & knockout hazards (white overprint disappearing on press, small black text knockout)
+  - Spot / Separation ink inventory and /Separation /All (Registration) inside trim
   - PDF/X-1a and PDF/X-4 structural & colour rules (/OutputIntents, /Trapped, /TrimBox, encryption, transparency)
   - Unembedded fonts and Type 3 fonts
   - Colour spaces (RGB vs CMYK vs Gray vs Spot/Separation) and transparency
   - Page box geometry (/MediaBox, /TrimBox, /BleedBox), mixed sizes, and bleed
   - Hairline strokes (< 0.25 pt) and rich-black small text
-  - True C / M / Y / K plate separation & TAC heatmap preview rendering
+  - True C / M / Y / K plate separation, TAC heatmap preview, and live CMYK ink-density grid
+  - Pure-Python press fixes (rich-black text -> 100% K, TAC clamping, hairline thickening, RGB -> CMYK, white overprint, PDF/X OutputIntent)
 """
 
+import base64
 import io
 import logging
 import math
@@ -21,7 +24,7 @@ import subprocess
 from collections import Counter
 from pathlib import Path
 
-from pypdf import PageObject, PdfReader, PdfWriter, Transformation
+from pypdf import PageObject, PdfWriter, Transformation
 from pypdf.generic import (
     ArrayObject, BooleanObject, ContentStream, DecodedStreamObject,
     DictionaryObject, FloatObject, NameObject, NumberObject, TextStringObject,
@@ -67,6 +70,19 @@ def _fnum(val, default=0.0):
         return default
 
 
+def _pbool(val):
+    """Extract a true Python bool from a pypdf BooleanObject, NameObject, or bool."""
+    if val is None:
+        return None
+    if hasattr(val, "get_object"):
+        val = val.get_object()
+    if isinstance(val, bool):
+        return val
+    if hasattr(val, "value"):
+        return bool(val.value)
+    return str(val).strip().lstrip("/").lower() == "true"
+
+
 def _cs_name(cs_obj):
     if cs_obj is None:
         return None
@@ -76,14 +92,34 @@ def _cs_name(cs_obj):
         return str(cs_obj).lstrip("/")
     if isinstance(cs_obj, ArrayObject) and cs_obj:
         kind = str(cs_obj[0]).lstrip("/")
-        if kind in ("Separation", "DeviceN") and len(cs_obj) > 1:
-            return f"{kind}:{str(cs_obj[1]).lstrip('/')}"
+        if kind == "Separation" and len(cs_obj) > 1:
+            return f"Separation:{str(cs_obj[1]).lstrip('/')}"
+        if kind == "DeviceN" and len(cs_obj) > 1:
+            names = cs_obj[1].get_object() if hasattr(cs_obj[1], "get_object") else cs_obj[1]
+            if isinstance(names, (list, ArrayObject)):
+                joined = ",".join(str(n).lstrip("/") for n in names)
+                return f"DeviceN:{joined}"
+            return f"DeviceN:{str(names).lstrip('/')}"
         if kind == "ICCBased" and len(cs_obj) > 1:
             stream = cs_obj[1].get_object() if hasattr(cs_obj[1], "get_object") else cs_obj[1]
             n = int(stream.get("/N", 0)) if hasattr(stream, "get") else 0
             return {1: "ICCBased(Gray)", 3: "ICCBased(RGB)", 4: "ICCBased(CMYK)"}.get(n, "ICCBased")
         return kind
     return str(cs_obj).lstrip("/")
+
+
+def _extract_spot_names(cs_label):
+    """Return named spot inks (excluding CMYK process plates and All/None) from ``_cs_name`` output."""
+    if not cs_label:
+        return []
+    skip = {"All", "None", "Cyan", "Magenta", "Yellow", "Black"}
+    if cs_label.startswith("Separation:"):
+        ink = cs_label.split(":", 1)[1]
+        return [] if ink in skip else [ink]
+    if cs_label.startswith("DeviceN:"):
+        inks = cs_label.split(":", 1)[1].split(",")
+        return [ink for ink in inks if ink and ink not in skip]
+    return []
 
 
 def _font_embedded(font_obj):
@@ -131,19 +167,6 @@ def _has_extgstate_transparency(resources):
     return False
 
 
-def _pbool(val):
-    """Extract a true Python bool from a pypdf BooleanObject, NameObject, or bool."""
-    if val is None:
-        return None
-    if hasattr(val, "get_object"):
-        val = val.get_object()
-    if isinstance(val, bool):
-        return val
-    if hasattr(val, "value"):
-        return bool(val.value)
-    return str(val).strip().lstrip("/").lower() == "true"
-
-
 def _parse_extgstate_overprint(resources):
     """Return ``{gs_name: (op_stroke_or_none, op_fill_or_none, opm_or_none)}``."""
     out = {}
@@ -158,7 +181,6 @@ def _parse_extgstate_overprint(resources):
             continue
         b_s = _pbool(gs.get("/OP"))
         op_f = _pbool(gs.get("/op"))
-        # Per PDF spec, if /op is absent but /OP is present, /OP also governs fill overprint
         b_f = op_f if op_f is not None else b_s
         opm = gs.get("/OPM")
         i_opm = int(_fnum(opm, 0)) if opm is not None else None
@@ -200,7 +222,6 @@ def _image_cmyk_tac_pct(xobj, px_w, px_h):
     if arr is None or arr.size == 0:
         return 0.0
 
-    # Respect explicit /Decode [1 0 1 0 1 0 1 0] inversion when present
     decode = xobj.get("/Decode")
     if hasattr(decode, "get_object"):
         decode = decode.get_object()
@@ -232,7 +253,6 @@ def _check_pdfx_document(reader, profile):
         root = root.get_object()
     root = root or {}
 
-    # 1. /OutputIntents with /S /GTS_PDFX
     intents = root.get("/OutputIntents")
     if hasattr(intents, "get_object"):
         intents = intents.get_object()
@@ -258,7 +278,6 @@ def _check_pdfx_document(reader, profile):
             "rect": None,
         })
 
-    # 2. /Info /Trapped must be /True or /False
     info_dict = reader.trailer.get("/Info")
     if hasattr(info_dict, "get_object"):
         info_dict = info_dict.get_object()
@@ -276,7 +295,6 @@ def _check_pdfx_document(reader, profile):
             "rect": None,
         })
 
-    # 3. Prohibited JavaScript actions
     names = root.get("/Names")
     if hasattr(names, "get_object"):
         names = names.get_object()
@@ -310,7 +328,7 @@ def check(
     max_tac=300.0,
     profile="standard",
 ):
-    """Run print-production preflight checks on ``path`` and return a structured report."""
+    """Run print-production preflight checks on ``path`` (recursing into nested Form XObjects)."""
     norm_profile = str(profile or "standard").strip().lower()
     if norm_profile not in PROFILES:
         raise core.PdfManagerError(f"unknown preflight profile: {profile!r} (expected one of {PROFILES})")
@@ -323,6 +341,7 @@ def check(
         issues.extend(_check_pdfx_document(reader, norm_profile))
 
     color_spaces = set()
+    spot_colors = set()
     page_sizes = []
     seen_unembedded = set()
     seen_type3 = set()
@@ -373,86 +392,36 @@ def check(
                     "rect": list(mb),
                 })
 
-        resources = page.get("/Resources")
-        if hasattr(resources, "get_object"):
-            resources = resources.get_object()
-        resources = resources or {}
+        page_resources = page.get("/Resources")
+        if hasattr(page_resources, "get_object"):
+            page_resources = page_resources.get_object()
+        page_resources = page_resources or {}
 
-        # Transparency group or ExtGState alpha/blend
         group = page.get("/Group")
         if hasattr(group, "get_object"):
             group = group.get_object()
         has_trans = (group is not None and hasattr(group, "get") and str(group.get("/S", "")).lstrip("/") == "Transparency")
-        if not has_trans:
-            has_trans = _has_extgstate_transparency(resources)
-        if has_trans:
-            trans_sev = "error" if norm_profile == "pdfx-1a" else ("info" if norm_profile == "pdfx-4" else "warning")
-            issues.append({
-                "severity": trans_sev,
-                "code": "transparency",
-                "page": page_idx,
-                "message": f"Page {page_idx}: uses live transparency",
-                "detail": "Flatten transparency if targeting older RIPs or PDF/X-1a (allowed in PDF/X-4).",
-                "rect": None,
-            })
 
-        # Named colour spaces in Resources
-        cs_map = resources.get("/ColorSpace")
-        if hasattr(cs_map, "get_object"):
-            cs_map = cs_map.get_object()
-        if cs_map and hasattr(cs_map, "items"):
-            for _, csref in cs_map.items():
-                name = _cs_name(csref)
-                if name:
-                    color_spaces.add(name)
-
-        gs_op_map = _parse_extgstate_overprint(resources)
-
-        # XObjects map for image DPI, colour spaces & CMYK TAC
-        xobjs = resources.get("/XObject")
-        if hasattr(xobjs, "get_object"):
-            xobjs = xobjs.get_object()
-        xobjs = xobjs if (xobjs and hasattr(xobjs, "get")) else {}
-
-        # Graphics state tracking
-        ctm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-        stack = []
-        line_width = 1.0
-        fill_cmyk = None
-        stroke_cmyk = None
-        fill_white = False
-        stroke_white = False
-        op_fill = False
-        op_stroke = False
-        op_fill_explicit = False
-        font_size = 12.0
-        current_font = None
-
-        page_rgb = False
-        hairline_flagged = False
-        rich_black_flagged = False
-        white_op_flagged = False
-        black_ko_flagged = False
-        vec_tac_flagged = False
-        page_max_tac = 0.0
-        used_fonts = set()
-
-        try:
-            cs = ContentStream(page.get_contents(), reader)
-            ops = cs.operations
-        except Exception as _exc:
-            logging.getLogger("zpdf").debug("preflight.check.stream: %s", _exc)
-            ops = []
+        page_state = {
+            "page_rgb": False,
+            "has_trans": has_trans,
+            "hairline_flagged": False,
+            "rich_black_flagged": False,
+            "white_op_flagged": False,
+            "black_ko_flagged": False,
+            "vec_tac_flagged": False,
+            "reg_flagged": False,
+            "page_max_tac": 0.0,
+        }
 
         def _record_vec_tac(cmyk_tuple):
-            nonlocal page_max_tac, vec_tac_flagged
             if cmyk_tuple is None:
                 return
             tac = sum(max(0.0, min(1.0, v)) for v in cmyk_tuple) * 100.0
-            if tac > page_max_tac:
-                page_max_tac = tac
-            if not vec_tac_flagged and tac > tac_limit:
-                vec_tac_flagged = True
+            if tac > page_state["page_max_tac"]:
+                page_state["page_max_tac"] = tac
+            if not page_state["vec_tac_flagged"] and tac > tac_limit:
+                page_state["vec_tac_flagged"] = True
                 sev = "error" if tac > tac_limit + 40.0 else "warning"
                 issues.append({
                     "severity": sev,
@@ -463,12 +432,11 @@ def check(
                     "rect": None,
                 })
 
-        def _check_white_overprint(is_fill_draw, is_stroke_draw):
-            nonlocal white_op_flagged
-            if white_op_flagged:
+        def _check_white_op(is_fill_draw, is_stroke_draw, op_fill, op_stroke, fill_white, stroke_white):
+            if page_state["white_op_flagged"]:
                 return
             if (is_fill_draw and op_fill and fill_white) or (is_stroke_draw and op_stroke and stroke_white):
-                white_op_flagged = True
+                page_state["white_op_flagged"] = True
                 issues.append({
                     "severity": "error",
                     "code": "white_overprint",
@@ -478,220 +446,322 @@ def check(
                     "rect": None,
                 })
 
-        for operands, operator in ops:
-            op = operator.decode("latin1") if isinstance(operator, bytes) else str(operator)
-            if op == "q":
-                stack.append((
-                    list(ctm), line_width, fill_cmyk, stroke_cmyk,
-                    fill_white, stroke_white, op_fill, op_stroke, op_fill_explicit,
-                    font_size, current_font,
-                ))
-            elif op == "Q" and stack:
-                (
-                    ctm, line_width, fill_cmyk, stroke_cmyk,
-                    fill_white, stroke_white, op_fill, op_stroke, op_fill_explicit,
-                    font_size, current_font,
-                ) = stack.pop()
-            elif op == "cm" and len(operands) == 6:
-                m = [_fnum(v) for v in operands]
-                ctm = _mul_ctm(m, ctm)
-            elif op == "w" and operands:
-                line_width = _fnum(operands[0], 1.0)
-            elif op == "gs" and operands:
-                gname = str(operands[0])
-                if gname in gs_op_map:
-                    b_s, b_f, _ = gs_op_map[gname]
-                    if b_s is not None:
-                        op_stroke = b_s
-                    if b_f is not None:
-                        op_fill = b_f
-                        op_fill_explicit = True
-            elif op in ("rg", "RG") and len(operands) >= 3:
-                color_spaces.add("DeviceRGB")
-                page_rgb = True
-                vals = tuple(_fnum(v) for v in operands[:3])
-                is_w = all(v >= 0.995 for v in vals)
-                if op == "rg":
-                    fill_cmyk = None
-                    fill_white = is_w
-                else:
-                    stroke_cmyk = None
-                    stroke_white = is_w
-            elif op in ("k", "K") and len(operands) >= 4:
-                color_spaces.add("DeviceCMYK")
-                vals = tuple(_fnum(v) for v in operands[:4])
-                is_w = all(v <= 0.005 for v in vals)
-                if op == "k":
-                    fill_cmyk = vals
-                    fill_white = is_w
-                else:
-                    stroke_cmyk = vals
-                    stroke_white = is_w
-            elif op in ("g", "G") and operands:
-                color_spaces.add("DeviceGray")
-                gv = _fnum(operands[0], 0.0)
-                is_w = gv >= 0.995
-                if op == "g":
-                    fill_cmyk = (0.0, 0.0, 0.0, max(0.0, min(1.0, 1.0 - gv)))
-                    fill_white = is_w
-                else:
-                    stroke_cmyk = (0.0, 0.0, 0.0, max(0.0, min(1.0, 1.0 - gv)))
-                    stroke_white = is_w
-            elif op == "Tf" and len(operands) >= 2:
-                current_font = str(operands[0])
-                font_size = abs(_fnum(operands[1], 12.0))
-            elif op in ("Tj", "TJ", "'", '"'):
-                if current_font is not None:
-                    used_fonts.add(current_font)
-                _record_vec_tac(fill_cmyk)
-                _check_white_overprint(True, False)
-                if (
-                    not rich_black_flagged
-                    and fill_cmyk is not None
-                    and font_size <= 12.0
-                    and sum(fill_cmyk) >= 2.4
-                    and fill_cmyk[3] >= 0.5
-                    and any(c >= 0.2 for c in fill_cmyk[:3])
-                ):
-                    rich_black_flagged = True
-                    issues.append({
-                        "severity": "warning",
-                        "code": "rich_black_text",
-                        "page": page_idx,
-                        "message": f"Page {page_idx}: small text ({font_size:.1f} pt) uses rich black CMYK",
-                        "detail": "Use pure 100% K (0/0/0/1) for small body text to avoid misregistration.",
-                        "rect": None,
-                    })
-                if (
-                    not black_ko_flagged
-                    and fill_cmyk is not None
-                    and font_size <= 12.0
-                    and fill_cmyk[3] >= 0.95
-                    and all(c <= 0.01 for c in fill_cmyk[:3])
-                    and op_fill_explicit
-                    and not op_fill
-                ):
-                    black_ko_flagged = True
-                    issues.append({
-                        "severity": "warning",
-                        "code": "black_knockout_text",
-                        "page": page_idx,
-                        "message": f"Page {page_idx}: small pure-black text ({font_size:.1f} pt) is set to knockout (/op false)",
-                        "detail": "Overprinting 100% K body text avoids white misregistration halos over coloured backgrounds.",
-                        "rect": None,
-                    })
-            elif op in ("f", "F", "f*"):
-                _record_vec_tac(fill_cmyk)
-                _check_white_overprint(True, False)
-            elif op in ("S", "s", "B", "B*", "b", "b*"):
-                is_both = op in ("B", "B*", "b", "b*")
-                if is_both:
+        def _check_reg_color(is_fill_draw, is_stroke_draw, fill_reg, stroke_reg):
+            if page_state["reg_flagged"]:
+                return
+            if (is_fill_draw and fill_reg) or (is_stroke_draw and stroke_reg):
+                page_state["reg_flagged"] = True
+                issues.append({
+                    "severity": "error",
+                    "code": "registration_color",
+                    "page": page_idx,
+                    "message": f"Page {page_idx}: Registration colour (/Separation /All = 400% ink) used inside page",
+                    "detail": "Registration ink prints 100% on every plate and should only be used on crop marks outside /TrimBox.",
+                    "rect": None,
+                })
+
+        def _walk_stream(stream_obj, cur_res, base_ctm, seen_forms, depth=0):
+            if depth > 12:
+                return
+            if not page_state["has_trans"] and _has_extgstate_transparency(cur_res):
+                page_state["has_trans"] = True
+
+            cs_key_map = {}
+            cs_map = cur_res.get("/ColorSpace") if hasattr(cur_res, "get") else None
+            if hasattr(cs_map, "get_object"):
+                cs_map = cs_map.get_object()
+            if cs_map and hasattr(cs_map, "items"):
+                for cs_k, csref in cs_map.items():
+                    name = _cs_name(csref)
+                    if name:
+                        color_spaces.add(name)
+                        cs_key_map[str(cs_k)] = name
+                        for sp in _extract_spot_names(name):
+                            spot_colors.add(sp)
+
+            gs_op_map = _parse_extgstate_overprint(cur_res)
+
+            xobjs = cur_res.get("/XObject") if hasattr(cur_res, "get") else None
+            if hasattr(xobjs, "get_object"):
+                xobjs = xobjs.get_object()
+            xobjs = xobjs if (xobjs and hasattr(xobjs, "get")) else {}
+
+            ctm = list(base_ctm)
+            stack = []
+            line_width = 1.0
+            fill_cmyk = None
+            stroke_cmyk = None
+            fill_white = False
+            stroke_white = False
+            fill_reg = False
+            stroke_reg = False
+            op_fill = False
+            op_stroke = False
+            op_fill_explicit = False
+            font_size = 12.0
+            current_font = None
+            used_fonts = set()
+
+            try:
+                cs = ContentStream(stream_obj, reader)
+                ops = cs.operations
+            except Exception as _exc:
+                logging.getLogger("zpdf").debug("preflight.check.stream: %s", _exc)
+                ops = []
+
+            for operands, operator in ops:
+                op = operator.decode("latin1") if isinstance(operator, bytes) else str(operator)
+                if op == "q":
+                    stack.append((
+                        list(ctm), line_width, fill_cmyk, stroke_cmyk,
+                        fill_white, stroke_white, fill_reg, stroke_reg,
+                        op_fill, op_stroke, op_fill_explicit, font_size, current_font,
+                    ))
+                elif op == "Q" and stack:
+                    (
+                        ctm, line_width, fill_cmyk, stroke_cmyk,
+                        fill_white, stroke_white, fill_reg, stroke_reg,
+                        op_fill, op_stroke, op_fill_explicit, font_size, current_font,
+                    ) = stack.pop()
+                elif op == "cm" and len(operands) == 6:
+                    ctm = _mul_ctm([_fnum(v) for v in operands], ctm)
+                elif op == "w" and operands:
+                    line_width = _fnum(operands[0], 1.0)
+                elif op == "gs" and operands:
+                    gname = str(operands[0])
+                    if gname in gs_op_map:
+                        b_s, b_f, _ = gs_op_map[gname]
+                        if b_s is not None:
+                            op_stroke = b_s
+                        if b_f is not None:
+                            op_fill = b_f
+                            op_fill_explicit = True
+                elif op in ("cs", "CS") and operands:
+                    cs_label = cs_key_map.get(str(operands[0]), str(operands[0]).lstrip("/"))
+                    is_reg = (cs_label == "Separation:All")
+                    if op == "cs":
+                        fill_reg = is_reg
+                        if is_reg:
+                            fill_white = False
+                    else:
+                        stroke_reg = is_reg
+                        if is_reg:
+                            stroke_white = False
+                elif op in ("rg", "RG") and len(operands) >= 3:
+                    color_spaces.add("DeviceRGB")
+                    page_state["page_rgb"] = True
+                    vals = tuple(_fnum(v) for v in operands[:3])
+                    is_w = all(v >= 0.995 for v in vals)
+                    if op == "rg":
+                        fill_cmyk = None
+                        fill_white = is_w
+                        fill_reg = False
+                    else:
+                        stroke_cmyk = None
+                        stroke_white = is_w
+                        stroke_reg = False
+                elif op in ("k", "K") and len(operands) >= 4:
+                    color_spaces.add("DeviceCMYK")
+                    vals = tuple(_fnum(v) for v in operands[:4])
+                    is_w = all(v <= 0.005 for v in vals)
+                    if op == "k":
+                        fill_cmyk = vals
+                        fill_white = is_w
+                        fill_reg = False
+                    else:
+                        stroke_cmyk = vals
+                        stroke_white = is_w
+                        stroke_reg = False
+                elif op in ("g", "G") and operands:
+                    color_spaces.add("DeviceGray")
+                    gv = _fnum(operands[0], 0.0)
+                    is_w = gv >= 0.995
+                    if op == "g":
+                        fill_cmyk = (0.0, 0.0, 0.0, max(0.0, min(1.0, 1.0 - gv)))
+                        fill_white = is_w
+                        fill_reg = False
+                    else:
+                        stroke_cmyk = (0.0, 0.0, 0.0, max(0.0, min(1.0, 1.0 - gv)))
+                        stroke_white = is_w
+                        stroke_reg = False
+                elif op == "Tf" and len(operands) >= 2:
+                    current_font = str(operands[0])
+                    font_size = abs(_fnum(operands[1], 12.0))
+                elif op in ("Tj", "TJ", "'", '"'):
+                    if current_font is not None:
+                        used_fonts.add(current_font)
                     _record_vec_tac(fill_cmyk)
-                _record_vec_tac(stroke_cmyk)
-                _check_white_overprint(is_both, True)
-                scale = math.sqrt(max(1e-9, abs(ctm[0] * ctm[3] - ctm[1] * ctm[2])))
-                eff_w = line_width * scale
-                if not hairline_flagged and 0.0 < eff_w < float(min_stroke_pt):
-                    hairline_flagged = True
-                    issues.append({
-                        "severity": "warning",
-                        "code": "hairline_stroke",
-                        "page": page_idx,
-                        "message": f"Page {page_idx}: hairline stroke ({eff_w:.2f} pt < {min_stroke_pt:.2f} pt)",
-                        "detail": "Very thin strokes may disappear on commercial presses.",
-                        "rect": None,
-                    })
-            elif op == "Do" and operands:
-                xname = operands[0]
-                xobj = xobjs.get(xname)
-                if hasattr(xobj, "get_object"):
-                    xobj = xobj.get_object()
-                if not xobj or not hasattr(xobj, "get"):
-                    continue
-                if str(xobj.get("/Subtype", "")).lstrip("/") == "Image":
-                    img_cs = _cs_name(xobj.get("/ColorSpace"))
-                    if img_cs:
-                        color_spaces.add(img_cs)
-                        if "RGB" in img_cs:
-                            page_rgb = True
-                    px_w = int(_fnum(xobj.get("/Width", 0)))
-                    px_h = int(_fnum(xobj.get("/Height", 0)))
-                    draw_w_in = math.hypot(ctm[0], ctm[1]) / 72.0
-                    draw_h_in = math.hypot(ctm[2], ctm[3]) / 72.0
-                    img_rect = _unit_box_rect(ctm)
-                    if px_w > 0 and px_h > 0 and draw_w_in > 1e-4 and draw_h_in > 1e-4:
-                        dpi_x = px_w / draw_w_in
-                        dpi_y = px_h / draw_h_in
-                        eff_dpi = min(dpi_x, dpi_y)
-                        if eff_dpi < float(min_dpi):
-                            sev = "error" if eff_dpi < float(error_dpi) else "warning"
-                            issues.append({
-                                "severity": sev,
-                                "code": "low_dpi",
-                                "page": page_idx,
-                                "message": f"Page {page_idx}: image at {round(eff_dpi)} DPI ({px_w}×{px_h} px)",
-                                "detail": f"Effective print resolution is below {min_dpi} DPI.",
-                                "rect": img_rect,
-                            })
-                    if img_cs and "CMYK" in img_cs:
-                        img_tac = _image_cmyk_tac_pct(xobj, px_w, px_h)
-                        if img_tac > page_max_tac:
-                            page_max_tac = img_tac
-                        if img_tac > tac_limit:
-                            sev = "error" if img_tac > tac_limit + 40.0 else "warning"
-                            issues.append({
-                                "severity": sev,
-                                "code": "high_tac",
-                                "page": page_idx,
-                                "message": f"Page {page_idx}: CMYK image total ink coverage reaches {img_tac:.0f}% (exceeds {tac_limit:.0f}%)",
-                                "detail": "Convert image with an ICC profile matching your paper stock's ink limit (e.g. 300% coated, 280% uncoated).",
-                                "rect": img_rect,
-                            })
+                    _check_white_op(True, False, op_fill, op_stroke, fill_white, stroke_white)
+                    _check_reg_color(True, False, fill_reg, stroke_reg)
+                    if (
+                        not page_state["rich_black_flagged"]
+                        and fill_cmyk is not None
+                        and font_size <= 12.0
+                        and sum(fill_cmyk) >= 2.4
+                        and fill_cmyk[3] >= 0.5
+                        and any(c >= 0.2 for c in fill_cmyk[:3])
+                    ):
+                        page_state["rich_black_flagged"] = True
+                        issues.append({
+                            "severity": "warning",
+                            "code": "rich_black_text",
+                            "page": page_idx,
+                            "message": f"Page {page_idx}: small text ({font_size:.1f} pt) uses rich black CMYK",
+                            "detail": "Use pure 100% K (0/0/0/1) for small body text to avoid misregistration.",
+                            "rect": None,
+                        })
+                    if (
+                        not page_state["black_ko_flagged"]
+                        and fill_cmyk is not None
+                        and font_size <= 12.0
+                        and fill_cmyk[3] >= 0.95
+                        and all(c <= 0.01 for c in fill_cmyk[:3])
+                        and op_fill_explicit
+                        and not op_fill
+                    ):
+                        page_state["black_ko_flagged"] = True
+                        issues.append({
+                            "severity": "warning",
+                            "code": "black_knockout_text",
+                            "page": page_idx,
+                            "message": f"Page {page_idx}: small pure-black text ({font_size:.1f} pt) is set to knockout (/op false)",
+                            "detail": "Overprinting 100% K body text avoids white misregistration halos over coloured backgrounds.",
+                            "rect": None,
+                        })
+                elif op in ("f", "F", "f*"):
+                    _record_vec_tac(fill_cmyk)
+                    _check_white_op(True, False, op_fill, op_stroke, fill_white, stroke_white)
+                    _check_reg_color(True, False, fill_reg, stroke_reg)
+                elif op in ("S", "s", "B", "B*", "b", "b*"):
+                    is_both = op in ("B", "B*", "b", "b*")
+                    if is_both:
+                        _record_vec_tac(fill_cmyk)
+                    _record_vec_tac(stroke_cmyk)
+                    _check_white_op(is_both, True, op_fill, op_stroke, fill_white, stroke_white)
+                    _check_reg_color(is_both, True, fill_reg, stroke_reg)
+                    scale = math.sqrt(max(1e-9, abs(ctm[0] * ctm[3] - ctm[1] * ctm[2])))
+                    eff_w = line_width * scale
+                    if not page_state["hairline_flagged"] and 0.0 < eff_w < float(min_stroke_pt):
+                        page_state["hairline_flagged"] = True
+                        issues.append({
+                            "severity": "warning",
+                            "code": "hairline_stroke",
+                            "page": page_idx,
+                            "message": f"Page {page_idx}: hairline stroke ({eff_w:.2f} pt < {min_stroke_pt:.2f} pt)",
+                            "detail": "Very thin strokes may disappear on commercial presses.",
+                            "rect": None,
+                        })
+                elif op == "Do" and operands:
+                    xname = operands[0]
+                    xref = xobjs.get(xname)
+                    xobj = xref.get_object() if hasattr(xref, "get_object") else xref
+                    if not xobj or not hasattr(xobj, "get"):
+                        continue
+                    sub = str(xobj.get("/Subtype", "")).lstrip("/")
+                    if sub == "Image":
+                        img_cs = _cs_name(xobj.get("/ColorSpace"))
+                        if img_cs:
+                            color_spaces.add(img_cs)
+                            if "RGB" in img_cs:
+                                page_state["page_rgb"] = True
+                            for sp in _extract_spot_names(img_cs):
+                                spot_colors.add(sp)
+                        px_w = int(_fnum(xobj.get("/Width", 0)))
+                        px_h = int(_fnum(xobj.get("/Height", 0)))
+                        draw_w_in = math.hypot(ctm[0], ctm[1]) / 72.0
+                        draw_h_in = math.hypot(ctm[2], ctm[3]) / 72.0
+                        img_rect = _unit_box_rect(ctm)
+                        if px_w > 0 and px_h > 0 and draw_w_in > 1e-4 and draw_h_in > 1e-4:
+                            eff_dpi = min(px_w / draw_w_in, px_h / draw_h_in)
+                            if eff_dpi < float(min_dpi):
+                                sev = "error" if eff_dpi < float(error_dpi) else "warning"
+                                issues.append({
+                                    "severity": sev,
+                                    "code": "low_dpi",
+                                    "page": page_idx,
+                                    "message": f"Page {page_idx}: image at {round(eff_dpi)} DPI ({px_w}×{px_h} px)",
+                                    "detail": f"Effective print resolution is below {min_dpi} DPI.",
+                                    "rect": img_rect,
+                                })
+                        if img_cs and "CMYK" in img_cs:
+                            img_tac = _image_cmyk_tac_pct(xobj, px_w, px_h)
+                            if img_tac > page_state["page_max_tac"]:
+                                page_state["page_max_tac"] = img_tac
+                            if img_tac > tac_limit:
+                                sev = "error" if img_tac > tac_limit + 40.0 else "warning"
+                                issues.append({
+                                    "severity": sev,
+                                    "code": "high_tac",
+                                    "page": page_idx,
+                                    "message": f"Page {page_idx}: CMYK image total ink coverage reaches {img_tac:.0f}% (exceeds {tac_limit:.0f}%)",
+                                    "detail": "Convert image with an ICC profile matching your paper stock's ink limit (e.g. 300% coated, 280% uncoated).",
+                                    "rect": img_rect,
+                                })
+                    elif sub == "Form":
+                        fid = getattr(xref, "idnum", None) or id(xobj)
+                        if fid in seen_forms:
+                            continue
+                        fgrp = xobj.get("/Group")
+                        if hasattr(fgrp, "get_object"):
+                            fgrp = fgrp.get_object()
+                        if fgrp is not None and hasattr(fgrp, "get") and str(fgrp.get("/S", "")).lstrip("/") == "Transparency":
+                            page_state["has_trans"] = True
+                        fmat_raw = xobj.get("/Matrix")
+                        if hasattr(fmat_raw, "get_object"):
+                            fmat_raw = fmat_raw.get_object()
+                        if isinstance(fmat_raw, (list, ArrayObject)) and len(fmat_raw) == 6:
+                            fmat = [_fnum(v) for v in fmat_raw]
+                            child_ctm = _mul_ctm(fmat, ctm)
+                        else:
+                            child_ctm = list(ctm)
+                        fres = xobj.get("/Resources")
+                        if hasattr(fres, "get_object"):
+                            fres = fres.get_object()
+                        _walk_stream(xobj, fres if fres is not None else cur_res, child_ctm, seen_forms | {fid}, depth + 1)
 
-        if page_max_tac > doc_max_tac:
-            doc_max_tac = page_max_tac
+            fonts_map = cur_res.get("/Font") if hasattr(cur_res, "get") else None
+            if hasattr(fonts_map, "get_object"):
+                fonts_map = fonts_map.get_object()
+            if fonts_map and hasattr(fonts_map, "items"):
+                for fkey, fref in fonts_map.items():
+                    if ops and str(fkey) not in used_fonts:
+                        continue
+                    embedded, subtype, fname = _font_embedded(fref)
+                    if subtype == "Type3" and (page_idx, fname) not in seen_type3:
+                        seen_type3.add((page_idx, fname))
+                        issues.append({
+                            "severity": "warning",
+                            "code": "type3_font",
+                            "page": page_idx,
+                            "message": f"Page {page_idx}: Type 3 font '{fname}'",
+                            "detail": "Type 3 fonts may render poorly or rasterize at print time.",
+                            "rect": None,
+                        })
+                    elif not embedded and (page_idx, fname) not in seen_unembedded:
+                        seen_unembedded.add((page_idx, fname))
+                        issues.append({
+                            "severity": "error",
+                            "code": "unembedded_font",
+                            "page": page_idx,
+                            "message": f"Page {page_idx}: font '{fname}' is not embedded",
+                            "detail": "Unembedded fonts can substitute unpredictably on a print press.",
+                            "rect": None,
+                        })
 
-        page_sizes.append({
-            "page": page_idx,
-            "width_pt": w_pt,
-            "height_pt": h_pt,
-            "has_trim": tb is not None,
-            "has_bleed": bb is not None,
-            "bleed_mm": bleed_mm,
-            "max_tac_pct": round(page_max_tac, 1),
-        })
+        _walk_stream(page.get_contents(), page_resources, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], set(), 0)
 
-        # Fonts actually used on this page (skips unused placeholder fonts in /Resources)
-        fonts_map = resources.get("/Font")
-        if hasattr(fonts_map, "get_object"):
-            fonts_map = fonts_map.get_object()
-        if fonts_map and hasattr(fonts_map, "items"):
-            for fkey, fref in fonts_map.items():
-                if ops and str(fkey) not in used_fonts:
-                    continue
-                embedded, subtype, fname = _font_embedded(fref)
-                if subtype == "Type3" and (page_idx, fname) not in seen_type3:
-                    seen_type3.add((page_idx, fname))
-                    issues.append({
-                        "severity": "warning",
-                        "code": "type3_font",
-                        "page": page_idx,
-                        "message": f"Page {page_idx}: Type 3 font '{fname}'",
-                        "detail": "Type 3 fonts may render poorly or rasterize at print time.",
-                        "rect": None,
-                    })
-                elif not embedded and (page_idx, fname) not in seen_unembedded:
-                    seen_unembedded.add((page_idx, fname))
-                    issues.append({
-                        "severity": "error",
-                        "code": "unembedded_font",
-                        "page": page_idx,
-                        "message": f"Page {page_idx}: font '{fname}' is not embedded",
-                        "detail": "Unembedded fonts can substitute unpredictably on a print press.",
-                        "rect": None,
-                    })
+        if page_state["has_trans"]:
+            trans_sev = "error" if norm_profile == "pdfx-1a" else ("info" if norm_profile == "pdfx-4" else "warning")
+            issues.append({
+                "severity": trans_sev,
+                "code": "transparency",
+                "page": page_idx,
+                "message": f"Page {page_idx}: uses live transparency",
+                "detail": "Flatten transparency if targeting older RIPs or PDF/X-1a (allowed in PDF/X-4).",
+                "rect": None,
+            })
 
-        if page_rgb:
+        if page_state["page_rgb"]:
             rgb_sev = "error" if is_pdfx else "warning"
             issues.append({
                 "severity": rgb_sev,
@@ -702,7 +772,29 @@ def check(
                 "rect": None,
             })
 
-    # Inconsistent page sizes across document
+        if page_state["page_max_tac"] > doc_max_tac:
+            doc_max_tac = page_state["page_max_tac"]
+
+        page_sizes.append({
+            "page": page_idx,
+            "width_pt": w_pt,
+            "height_pt": h_pt,
+            "has_trim": tb is not None,
+            "has_bleed": bb is not None,
+            "bleed_mm": bleed_mm,
+            "max_tac_pct": round(page_state["page_max_tac"], 1),
+        })
+
+    if len(spot_colors) > 2:
+        issues.append({
+            "severity": "warning",
+            "code": "many_spot_colors",
+            "page": None,
+            "message": f"Document uses {len(spot_colors)} spot inks ({', '.join(sorted(spot_colors))})",
+            "detail": "More than 2 spot plates significantly increases offset press cost; convert non-critical spots to CMYK.",
+            "rect": None,
+        })
+
     if len(page_sizes) > 1:
         first_w, first_h = page_sizes[0]["width_pt"], page_sizes[0]["height_pt"]
         for ps in page_sizes[1:]:
@@ -725,6 +817,7 @@ def check(
         "pages": len(page_sizes),
         "max_tac_pct": round(doc_max_tac, 1),
         "max_tac_limit": tac_limit,
+        "spot_colors": sorted(spot_colors),
         "summary": {"errors": errors, "warnings": warnings, "info": info},
         "color_spaces": sorted(color_spaces),
         "page_sizes": page_sizes,
@@ -751,41 +844,241 @@ def _crop_marks_stream(trim_box, bleed_pt):
     return "\n".join(lines).encode("ascii")
 
 
-def _neutralize_white_overprint_on_page(out_page, writer):
-    """Insert an ``/OP false /op false`` graphics state override whenever white
-    colour is selected while overprint is active, leaving non-white overprints intact."""
-    resources = out_page.get("/Resources")
-    if hasattr(resources, "get_object"):
-        resources = resources.get_object()
-    if not resources or not hasattr(resources, "get"):
-        return
-    gs_op_map = _parse_extgstate_overprint(resources)
-    if not gs_op_map:
-        return
+def _rgb_to_cmyk_tuple(r, g, b):
+    r = max(0.0, min(1.0, r))
+    g = max(0.0, min(1.0, g))
+    b = max(0.0, min(1.0, b))
+    k = 1.0 - max(r, g, b)
+    if k >= 0.9999:
+        return (0.0, 0.0, 0.0, 1.0)
+    inv = 1.0 / (1.0 - k)
+    return ((1.0 - r - k) * inv, (1.0 - g - k) * inv, (1.0 - b - k) * inv, k)
+
+
+def _clamp_cmyk_tuple(c, m, y, k, max_tac_frac):
+    """GCR-preserving TAC clamp: keeps K intact and trims C/M/Y proportionally."""
+    c = max(0.0, min(1.0, c))
+    m = max(0.0, min(1.0, m))
+    y = max(0.0, min(1.0, y))
+    k = max(0.0, min(1.0, k))
+    total = c + m + y + k
+    if total <= max_tac_frac or max_tac_frac <= 0.0:
+        return (c, m, y, k)
+    k_clamped = min(k, max_tac_frac)
+    cmy_sum = c + m + y
+    budget = max(0.0, max_tac_frac - k_clamped)
+    if cmy_sum <= 1e-6:
+        return (0.0, 0.0, 0.0, k_clamped)
+    scale = min(1.0, budget / cmy_sum)
+    return (c * scale, m * scale, y * scale, k_clamped)
+
+
+def _transform_image_xobject_for_fix(xobj, *, clamp_tac_limit=0.0, convert_rgb_to_cmyk=False):
+    """Apply pure-Python RGB->CMYK conversion and/or TAC clamping to an Image XObject."""
+    import numpy as np
+
+    px_w = int(_fnum(xobj.get("/Width", 0)))
+    px_h = int(_fnum(xobj.get("/Height", 0)))
+    if px_w <= 0 or px_h <= 0:
+        return False
+    cs = _cs_name(xobj.get("/ColorSpace")) or ""
+    is_rgb = "RGB" in cs
+    is_cmyk = "CMYK" in cs
+
+    if not ((convert_rgb_to_cmyk and is_rgb) or (clamp_tac_limit > 0.0 and is_cmyk)):
+        return False
+
+    cmyk_arr = None
+    if is_rgb and convert_rgb_to_cmyk:
+        rgb = None
+        try:
+            data = xobj.get_data()
+            if len(data) == px_w * px_h * 3:
+                rgb = np.frombuffer(data, dtype=np.uint8).reshape((px_h, px_w, 3)).astype(np.float32) / 255.0
+        except Exception as _exc:
+            logging.getLogger("zpdf").debug("preflight._transform_image.rgb_raw: %s", _exc)
+        if rgb is None:
+            try:
+                from PIL import Image
+
+                raw_bytes = getattr(xobj, "_data", None) or xobj.get_data()
+                with Image.open(io.BytesIO(raw_bytes)) as im:
+                    rgb = np.asarray(im.convert("RGB"), dtype=np.float32) / 255.0
+            except Exception as _exc:
+                logging.getLogger("zpdf").debug("preflight._transform_image.rgb_pil: %s", _exc)
+                return False
+        k = 1.0 - rgb.max(axis=2)
+        denom = np.maximum(1e-5, 1.0 - k)
+        c = np.where(k >= 0.999, 0.0, (1.0 - rgb[:, :, 0] - k) / denom)
+        m = np.where(k >= 0.999, 0.0, (1.0 - rgb[:, :, 1] - k) / denom)
+        y = np.where(k >= 0.999, 0.0, (1.0 - rgb[:, :, 2] - k) / denom)
+        cmyk_arr = np.stack([c, m, y, k], axis=2).astype(np.float32)
+    elif is_cmyk:
+        raw_u8 = None
+        try:
+            data = xobj.get_data()
+            if len(data) == px_w * px_h * 4:
+                raw_u8 = np.frombuffer(data, dtype=np.uint8).reshape((px_h, px_w, 4))
+        except Exception as _exc:
+            logging.getLogger("zpdf").debug("preflight._transform_image.cmyk_raw: %s", _exc)
+        if raw_u8 is None:
+            try:
+                from PIL import Image
+
+                raw_bytes = getattr(xobj, "_data", None) or xobj.get_data()
+                with Image.open(io.BytesIO(raw_bytes)) as im:
+                    if im.mode == "CMYK":
+                        raw_u8 = np.asarray(im, dtype=np.uint8)
+            except Exception as _exc:
+                logging.getLogger("zpdf").debug("preflight._transform_image.cmyk_pil: %s", _exc)
+                return False
+        if raw_u8 is None:
+            return False
+        decode = xobj.get("/Decode")
+        if hasattr(decode, "get_object"):
+            decode = decode.get_object()
+        if isinstance(decode, (list, ArrayObject)) and len(decode) >= 8:
+            if _fnum(decode[0], 0.0) == 1.0 and _fnum(decode[1], 1.0) == 0.0:
+                raw_u8 = 255 - raw_u8
+        cmyk_arr = raw_u8.astype(np.float32) / 255.0
+
+    if cmyk_arr is None:
+        return False
+
+    if clamp_tac_limit > 0.0:
+        max_frac = float(clamp_tac_limit) / 100.0
+        total = cmyk_arr.sum(axis=2)
+        if float(total.max()) > max_frac:
+            k_ch = np.minimum(cmyk_arr[:, :, 3], max_frac)
+            cmy_sum = np.maximum(1e-5, cmyk_arr[:, :, 0] + cmyk_arr[:, :, 1] + cmyk_arr[:, :, 2])
+            budget = np.maximum(0.0, max_frac - k_ch)
+            scale = np.where(total > max_frac, np.minimum(1.0, budget / cmy_sum), 1.0)
+            cmyk_arr[:, :, 0] *= scale
+            cmyk_arr[:, :, 1] *= scale
+            cmyk_arr[:, :, 2] *= scale
+            cmyk_arr[:, :, 3] = k_ch
+        elif not (is_rgb and convert_rgb_to_cmyk):
+            return False
+
+    quant = np.floor(cmyk_arr * 255.0) if clamp_tac_limit > 0.0 else np.round(cmyk_arr * 255.0)
+    out_u8 = np.clip(quant, 0, 255).astype(np.uint8)
+    for drop_key in ("/Filter", "/DecodeParms", "/Decode"):
+        if NameObject(drop_key) in xobj:
+            del xobj[NameObject(drop_key)]
+    xobj.set_data(out_u8.tobytes())
+    xobj[NameObject("/ColorSpace")] = NameObject("/DeviceCMYK")
+    xobj[NameObject("/BitsPerComponent")] = NumberObject(8)
+    xobj[NameObject("/Width")] = NumberObject(out_u8.shape[1])
+    xobj[NameObject("/Height")] = NumberObject(out_u8.shape[0])
+    return True
+
+
+def _apply_stream_press_fixes(
+    stream_owner,
+    writer,
+    resources,
+    *,
+    fix_white_overprint=False,
+    fix_rich_black_text=False,
+    clamp_tac_limit=0.0,
+    fix_hairlines_pt=0.0,
+    convert_rgb_to_cmyk=False,
+    base_ctm=None,
+    seen_forms=None,
+):
+    """Apply pure-Python CMYK press fixes to a page or Form XObject content stream & resources."""
+    if seen_forms is None:
+        seen_forms = set()
+    if base_ctm is None:
+        base_ctm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+
+    is_page = isinstance(stream_owner, PageObject) or hasattr(stream_owner, "get_contents")
+    gs_op_map = _parse_extgstate_overprint(resources) if resources else {}
+
+    # Transform Image XObjects and recurse into Form XObjects
+    if resources and hasattr(resources, "get"):
+        xobjs = resources.get("/XObject")
+        if hasattr(xobjs, "get_object"):
+            xobjs = xobjs.get_object()
+        if xobjs and hasattr(xobjs, "items"):
+            for xk, xref in list(xobjs.items()):
+                xobj = xref.get_object() if hasattr(xref, "get_object") else xref
+                if not xobj or not hasattr(xobj, "get"):
+                    continue
+                sub = str(xobj.get("/Subtype", "")).lstrip("/")
+                if sub == "Image" and (convert_rgb_to_cmyk or clamp_tac_limit > 0.0):
+                    cloned = DecodedStreamObject()
+                    for k, v in xobj.items():
+                        cloned[k] = v
+                    try:
+                        cloned.set_data(xobj.get_data())
+                    except Exception as _exc:
+                        logging.getLogger("zpdf").debug("preflight._apply_stream_press_fixes.img: %s", _exc)
+                        continue
+                    if _transform_image_xobject_for_fix(
+                        cloned, clamp_tac_limit=clamp_tac_limit, convert_rgb_to_cmyk=convert_rgb_to_cmyk,
+                    ):
+                        xobjs[xk] = writer._add_object(cloned)
+                elif sub == "Form":
+                    fid = getattr(xref, "idnum", None) or id(xobj)
+                    if fid in seen_forms:
+                        continue
+                    fres = xobj.get("/Resources")
+                    if hasattr(fres, "get_object"):
+                        fres = fres.get_object()
+                    _apply_stream_press_fixes(
+                        xobj,
+                        writer,
+                        fres if fres is not None else resources,
+                        fix_white_overprint=fix_white_overprint,
+                        fix_rich_black_text=fix_rich_black_text,
+                        clamp_tac_limit=clamp_tac_limit,
+                        fix_hairlines_pt=fix_hairlines_pt,
+                        convert_rgb_to_cmyk=convert_rgb_to_cmyk,
+                        base_ctm=base_ctm,
+                        seen_forms=seen_forms | {fid},
+                    )
+
     try:
-        cs = ContentStream(out_page.get_contents(), out_page.pdf)
+        raw_stream = stream_owner.get_contents() if is_page else stream_owner
+        cs = ContentStream(raw_stream, writer)
         ops = cs.operations
     except Exception as _exc:
-        logging.getLogger("zpdf").debug("preflight._neutralize_white_overprint_on_page: %s", _exc)
+        logging.getLogger("zpdf").debug("preflight._apply_stream_press_fixes.stream: %s", _exc)
         return
     if not ops:
         return
 
     noop_name = NameObject("/ZPDFNoOP")
-    new_ops = []
+    opfill_name = NameObject("/ZPDFOpFill")
+    need_noop_gs = False
+    need_opfill_gs = False
+    changed = False
+
+    ctm = list(base_ctm)
+    stack = []
+    fill_cmyk = None
+    font_size = 12.0
     op_fill = False
     op_stroke = False
-    stack = []
-    changed = False
+    max_tac_frac = float(clamp_tac_limit) / 100.0 if clamp_tac_limit > 0.0 else 0.0
+    new_ops = []
 
     for operands, operator in ops:
         op = operator.decode("latin1") if isinstance(operator, bytes) else str(operator)
-        new_ops.append((operands, operator))
         if op == "q":
-            stack.append((op_fill, op_stroke))
-        elif op == "Q" and stack:
-            op_fill, op_stroke = stack.pop()
-        elif op == "gs" and operands:
+            stack.append((list(ctm), fill_cmyk, font_size, op_fill, op_stroke))
+            new_ops.append((operands, operator))
+            continue
+        if op == "Q" and stack:
+            ctm, fill_cmyk, font_size, op_fill, op_stroke = stack.pop()
+            new_ops.append((operands, operator))
+            continue
+        if op == "cm" and len(operands) == 6:
+            ctm = _mul_ctm([_fnum(v) for v in operands], ctm)
+            new_ops.append((operands, operator))
+            continue
+        if op == "gs" and operands:
             gname = str(operands[0])
             if gname in gs_op_map:
                 b_s, b_f, _ = gs_op_map[gname]
@@ -793,44 +1086,115 @@ def _neutralize_white_overprint_on_page(out_page, writer):
                     op_stroke = b_s
                 if b_f is not None:
                     op_fill = b_f
-        elif op in ("k", "K") and len(operands) >= 4:
-            vals = tuple(_fnum(v) for v in operands[:4])
-            if all(v <= 0.005 for v in vals):
-                if (op == "k" and op_fill) or (op == "K" and op_stroke):
-                    new_ops.append(([noop_name], b"gs"))
-                    op_fill = False
-                    op_stroke = False
-                    changed = True
-        elif op in ("rg", "RG") and len(operands) >= 3:
-            vals = tuple(_fnum(v) for v in operands[:3])
-            if all(v >= 0.995 for v in vals):
-                if (op == "rg" and op_fill) or (op == "RG" and op_stroke):
-                    new_ops.append(([noop_name], b"gs"))
-                    op_fill = False
-                    op_stroke = False
-                    changed = True
-        elif op in ("g", "G") and operands:
-            if _fnum(operands[0], 0.0) >= 0.995:
-                if (op == "g" and op_fill) or (op == "G" and op_stroke):
-                    new_ops.append(([noop_name], b"gs"))
-                    op_fill = False
-                    op_stroke = False
-                    changed = True
+            new_ops.append((operands, operator))
+            continue
+        if op == "Tf" and len(operands) >= 2:
+            font_size = abs(_fnum(operands[1], 12.0))
+            new_ops.append((operands, operator))
+            continue
+        if op == "w" and operands and fix_hairlines_pt > 0.0:
+            lw = _fnum(operands[0], 1.0)
+            scale = math.sqrt(max(1e-9, abs(ctm[0] * ctm[3] - ctm[1] * ctm[2])))
+            if 0.0 < lw * scale < float(fix_hairlines_pt):
+                new_ops.append(([FloatObject(float(fix_hairlines_pt) / scale)], operator))
+                changed = True
+                continue
+        if op in ("rg", "RG") and len(operands) >= 3:
+            rr, gg, bb = (_fnum(v) for v in operands[:3])
+            is_w = (rr >= 0.995 and gg >= 0.995 and bb >= 0.995)
+            if convert_rgb_to_cmyk:
+                c, m, y, k = _rgb_to_cmyk_tuple(rr, gg, bb)
+                if max_tac_frac > 0.0:
+                    c, m, y, k = _clamp_cmyk_tuple(c, m, y, k, max_tac_frac)
+                new_ops.append(([FloatObject(c), FloatObject(m), FloatObject(y), FloatObject(k)], b"k" if op == "rg" else b"K"))
+                if op == "rg":
+                    fill_cmyk = (c, m, y, k)
+                changed = True
+            else:
+                new_ops.append((operands, operator))
+                if op == "rg":
+                    fill_cmyk = None
+            if fix_white_overprint and is_w and ((op == "rg" and op_fill) or (op == "RG" and op_stroke)):
+                new_ops.append(([noop_name], b"gs"))
+                op_fill = False
+                op_stroke = False
+                need_noop_gs = True
+                changed = True
+            continue
+        if op in ("k", "K") and len(operands) >= 4:
+            c, m, y, k = (_fnum(v) for v in operands[:4])
+            is_w = (c <= 0.005 and m <= 0.005 and y <= 0.005 and k <= 0.005)
+            if max_tac_frac > 0.0 and (c + m + y + k) > max_tac_frac:
+                c, m, y, k = _clamp_cmyk_tuple(c, m, y, k, max_tac_frac)
+                new_ops.append(([FloatObject(c), FloatObject(m), FloatObject(y), FloatObject(k)], operator))
+                changed = True
+            else:
+                new_ops.append((operands, operator))
+            if op == "k":
+                fill_cmyk = (c, m, y, k)
+            if fix_white_overprint and is_w and ((op == "k" and op_fill) or (op == "K" and op_stroke)):
+                new_ops.append(([noop_name], b"gs"))
+                op_fill = False
+                op_stroke = False
+                need_noop_gs = True
+                changed = True
+            continue
+        if op in ("g", "G") and operands:
+            gv = _fnum(operands[0], 0.0)
+            is_w = gv >= 0.995
+            new_ops.append((operands, operator))
+            if op == "g":
+                fill_cmyk = (0.0, 0.0, 0.0, max(0.0, min(1.0, 1.0 - gv)))
+            if fix_white_overprint and is_w and ((op == "g" and op_fill) or (op == "G" and op_stroke)):
+                new_ops.append(([noop_name], b"gs"))
+                op_fill = False
+                op_stroke = False
+                need_noop_gs = True
+                changed = True
+            continue
+        if op in ("Tj", "TJ", "'", '"') and fix_rich_black_text:
+            if (
+                fill_cmyk is not None
+                and font_size <= 12.0
+                and sum(fill_cmyk) >= 2.4
+                and fill_cmyk[3] >= 0.5
+                and any(ch >= 0.2 for ch in fill_cmyk[:3])
+            ):
+                new_ops.append(([FloatObject(0.0), FloatObject(0.0), FloatObject(0.0), FloatObject(1.0)], b"k"))
+                new_ops.append(([opfill_name], b"gs"))
+                fill_cmyk = (0.0, 0.0, 0.0, 1.0)
+                op_fill = True
+                need_opfill_gs = True
+                changed = True
+            new_ops.append((operands, operator))
+            continue
+
+        new_ops.append((operands, operator))
 
     if changed:
-        gs_dict = resources.get("/ExtGState")
-        if hasattr(gs_dict, "get_object"):
-            gs_dict = gs_dict.get_object()
-        if not isinstance(gs_dict, DictionaryObject):
-            gs_dict = DictionaryObject()
-            resources[NameObject("/ExtGState")] = gs_dict
-        gs_dict[noop_name] = writer._add_object(DictionaryObject({
-            NameObject("/Type"): NameObject("/ExtGState"),
-            NameObject("/OP"): BooleanObject(False),
-            NameObject("/op"): BooleanObject(False),
-        }))
+        if (need_noop_gs or need_opfill_gs) and resources is not None and hasattr(resources, "get"):
+            gs_dict = resources.get("/ExtGState")
+            if hasattr(gs_dict, "get_object"):
+                gs_dict = gs_dict.get_object()
+            if not isinstance(gs_dict, DictionaryObject):
+                gs_dict = DictionaryObject()
+                resources[NameObject("/ExtGState")] = gs_dict
+            if need_noop_gs:
+                gs_dict[noop_name] = writer._add_object(DictionaryObject({
+                    NameObject("/Type"): NameObject("/ExtGState"),
+                    NameObject("/OP"): BooleanObject(False),
+                    NameObject("/op"): BooleanObject(False),
+                }))
+            if need_opfill_gs:
+                gs_dict[opfill_name] = writer._add_object(DictionaryObject({
+                    NameObject("/Type"): NameObject("/ExtGState"),
+                    NameObject("/op"): BooleanObject(True),
+                }))
         cs.operations = new_ops
-        out_page[NameObject("/Contents")] = writer._add_object(cs)
+        if is_page:
+            stream_owner[NameObject("/Contents")] = writer._add_object(cs)
+        else:
+            stream_owner.set_data(cs.get_data())
 
 
 def _attach_pdfx_output_intent(writer, condition_id="CGATS TR 001", condition_desc="SWOP CGATS TR 001 Coated"):
@@ -879,6 +1243,10 @@ def fix(
     flatten_transparency=False,
     fix_white_overprint=False,
     add_pdfx_intent=False,
+    fix_rich_black_text=False,
+    clamp_tac=0.0,
+    fix_hairlines=0.0,
+    convert_rgb_to_cmyk=False,
 ):
     """Apply safe print-readiness fixes and write the resulting PDF to ``output_path``."""
     src = Path(input_path)
@@ -896,6 +1264,11 @@ def fix(
         dims = [(round(float(p.mediabox.width), 1), round(float(p.mediabox.height), 1)) for p in reader.pages]
         target_size = Counter(dims).most_common(1)[0][0]
 
+    any_stream_fix = bool(
+        fix_white_overprint or fix_rich_black_text or float(clamp_tac or 0.0) > 0.0
+        or float(fix_hairlines or 0.0) > 0.0 or convert_rgb_to_cmyk
+    )
+
     for page in reader.pages:
         w = float(page.mediabox.width)
         h = float(page.mediabox.height)
@@ -909,8 +1282,23 @@ def fix(
             w, h = tw, th
 
         out_page = writer.add_page(page)
-        if fix_white_overprint:
-            _neutralize_white_overprint_on_page(out_page, writer)
+        if any_stream_fix:
+            res = out_page.get("/Resources")
+            if hasattr(res, "get_object"):
+                res = res.get_object()
+            if not isinstance(res, DictionaryObject):
+                res = DictionaryObject()
+                out_page[NameObject("/Resources")] = res
+            _apply_stream_press_fixes(
+                out_page,
+                writer,
+                res,
+                fix_white_overprint=fix_white_overprint,
+                fix_rich_black_text=fix_rich_black_text,
+                clamp_tac_limit=float(clamp_tac or 0.0),
+                fix_hairlines_pt=float(fix_hairlines or 0.0),
+                convert_rgb_to_cmyk=convert_rgb_to_cmyk,
+            )
         if bleed_pt > 0.0:
             x0, y0, x1, y1 = _box_tuple(out_page.mediabox)
             trim = (x0, y0, x1, y1)
@@ -957,18 +1345,7 @@ def fix(
     return dst
 
 
-# ---- True CMYK Plate Separation & TAC Heatmap Preview ---------------------------------
-
-
-def _rgb_to_cmyk_tuple(r, g, b):
-    r = max(0.0, min(1.0, r))
-    g = max(0.0, min(1.0, g))
-    b = max(0.0, min(1.0, b))
-    k = 1.0 - max(r, g, b)
-    if k >= 0.9999:
-        return (0.0, 0.0, 0.0, 1.0)
-    inv = 1.0 / (1.0 - k)
-    return ((1.0 - r - k) * inv, (1.0 - g - k) * inv, (1.0 - b - k) * inv, k)
+# ---- True CMYK Plate Separation, TAC Heatmap & Live Ink Grid --------------------------
 
 
 def _plate_rgb_values(c, m, y, k, plate_ch, *, tinted=True):
@@ -995,7 +1372,7 @@ def _separate_image_xobject_for_plate(xobj, plate_ch, *, tinted=True):
     cs = _cs_name(xobj.get("/ColorSpace")) or ""
     ch_idx = {"c": 0, "m": 1, "y": 2, "k": 3}[plate_ch]
 
-    plate_v = None  # float32 0..1 ink intensity
+    plate_v = None
     try:
         data = xobj.get_data()
         if "CMYK" in cs and len(data) == px_w * px_h * 4:
@@ -1072,29 +1449,12 @@ def _separate_image_xobject_for_plate(xobj, plate_ch, *, tinted=True):
     xobj[NameObject("/Height")] = NumberObject(rgb_out.shape[0])
 
 
-def _render_pdf_bytes_page(pdf_bytes, dpi):
-    import pypdfium2 as pdfium
+def _separate_stream_and_resources(stream_owner, writer, resources, plate_ch, *, tinted=True, seen_forms=None):
+    """Recursively separate a page or Form XObject's content stream & XObjects for ``plate_ch``."""
+    if seen_forms is None:
+        seen_forms = set()
+    is_page = isinstance(stream_owner, PageObject) or hasattr(stream_owner, "get_contents")
 
-    with core.PDFIUM_LOCK:
-        doc = pdfium.PdfDocument(pdf_bytes)
-        try:
-            pg = doc[0]
-            scale = core.render_scale(pg, float(dpi) / 72.0)
-            pil_img = pg.render(scale=scale).to_pil().convert("RGB")
-        finally:
-            doc.close()
-    return pil_img
-
-
-def _build_single_plate_pdf_bytes(src_path, password, page_idx0, plate_ch, *, tinted=True):
-    """Build a 1-page PDF in memory with vectors and images separated for ``plate_ch``."""
-    reader = core.open_pdf(Path(src_path), password=password)
-    writer = PdfWriter()
-    out_page = writer.add_page(reader.pages[page_idx0])
-
-    resources = out_page.get("/Resources")
-    if hasattr(resources, "get_object"):
-        resources = resources.get_object()
     if resources and hasattr(resources, "get"):
         xobjs = resources.get("/XObject")
         if hasattr(xobjs, "get_object"):
@@ -1102,20 +1462,35 @@ def _build_single_plate_pdf_bytes(src_path, password, page_idx0, plate_ch, *, ti
         if xobjs and hasattr(xobjs, "items"):
             for xk, xref in list(xobjs.items()):
                 xobj_orig = xref.get_object() if hasattr(xref, "get_object") else xref
-                if xobj_orig and hasattr(xobj_orig, "get") and str(xobj_orig.get("/Subtype", "")).lstrip("/") == "Image":
+                if not xobj_orig or not hasattr(xobj_orig, "get"):
+                    continue
+                sub = str(xobj_orig.get("/Subtype", "")).lstrip("/")
+                if sub == "Image":
                     cloned = DecodedStreamObject()
                     for k, v in xobj_orig.items():
                         cloned[k] = v
                     try:
                         cloned.set_data(xobj_orig.get_data())
                     except Exception as _exc:
-                        logging.getLogger("zpdf").debug("preflight._build_single_plate_pdf_bytes.xobj: %s", _exc)
+                        logging.getLogger("zpdf").debug("preflight._separate_stream.img: %s", _exc)
                         continue
                     _separate_image_xobject_for_plate(cloned, plate_ch, tinted=tinted)
                     xobjs[xk] = writer._add_object(cloned)
+                elif sub == "Form":
+                    fid = getattr(xref, "idnum", None) or id(xobj_orig)
+                    if fid in seen_forms:
+                        continue
+                    fres = xobj_orig.get("/Resources")
+                    if hasattr(fres, "get_object"):
+                        fres = fres.get_object()
+                    _separate_stream_and_resources(
+                        xobj_orig, writer, fres if fres is not None else resources,
+                        plate_ch, tinted=tinted, seen_forms=seen_forms | {fid},
+                    )
 
     try:
-        cs = ContentStream(out_page.get_contents(), out_page.pdf)
+        raw_stream = stream_owner.get_contents() if is_page else stream_owner
+        cs = ContentStream(raw_stream, writer)
         new_ops = []
         for operands, operator in cs.operations:
             op = operator.decode("latin1") if isinstance(operator, bytes) else str(operator)
@@ -1135,13 +1510,76 @@ def _build_single_plate_pdf_bytes(src_path, password, page_idx0, plate_ch, *, ti
             else:
                 new_ops.append((operands, operator))
         cs.operations = new_ops
-        out_page[NameObject("/Contents")] = writer._add_object(cs)
+        if is_page:
+            stream_owner[NameObject("/Contents")] = writer._add_object(cs)
+        else:
+            stream_owner.set_data(cs.get_data())
     except Exception as _exc:
-        logging.getLogger("zpdf").debug("preflight._build_single_plate_pdf_bytes.stream: %s", _exc)
+        logging.getLogger("zpdf").debug("preflight._separate_stream.ops: %s", _exc)
+
+
+def _render_pdf_bytes_page(pdf_bytes, dpi):
+    import pypdfium2 as pdfium
+
+    with core.PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(pdf_bytes)
+        try:
+            pg = doc[0]
+            scale = core.render_scale(pg, float(dpi) / 72.0)
+            pil_img = pg.render(scale=scale).to_pil().convert("RGB")
+        finally:
+            doc.close()
+    return pil_img
+
+
+def _build_single_plate_pdf_bytes(src_path, password, page_idx0, plate_ch, *, tinted=True):
+    """Build a 1-page PDF in memory with vectors, Form XObjects, and images separated for ``plate_ch``."""
+    reader = core.open_pdf(Path(src_path), password=password)
+    writer = PdfWriter()
+    out_page = writer.add_page(reader.pages[page_idx0])
+
+    resources = out_page.get("/Resources")
+    if hasattr(resources, "get_object"):
+        resources = resources.get_object()
+    _separate_stream_and_resources(out_page, writer, resources, plate_ch, tinted=tinted)
 
     buf = io.BytesIO()
     writer.write(buf)
     return buf.getvalue()
+
+
+def compute_ink_grid(path, password=None, *, page=1, dpi=72, max_dim=480):
+    """Compute a 4-channel (C, M, Y, K) ink-percentage grid (0..100 uint8) for ``page``
+    to power the Reader's live hover ink-density eyedropper."""
+    import numpy as np
+    from PIL import Image
+
+    src = Path(path)
+    reader = core.open_pdf(src, password=password)
+    total = len(reader.pages)
+    page_idx0 = max(0, min(total - 1, int(page) - 1))
+
+    channels = []
+    for ch in ("c", "m", "y", "k"):
+        pbytes = _build_single_plate_pdf_bytes(src, password, page_idx0, ch, tinted=False)
+        im_gray = _render_pdf_bytes_page(pbytes, dpi).convert("L")
+        if max(im_gray.size) > max_dim:
+            ratio = float(max_dim) / float(max(im_gray.size))
+            im_gray = im_gray.resize(
+                (max(1, int(round(im_gray.width * ratio))), max(1, int(round(im_gray.height * ratio)))),
+                Image.Resampling.BILINEAR,
+            )
+        pct = np.clip(np.round((1.0 - np.asarray(im_gray, dtype=np.float32) / 255.0) * 100.0), 0, 100).astype(np.uint8)
+        channels.append(pct)
+
+    grid = np.stack(channels, axis=2)  # (H, W, 4) uint8 in 0..100
+    h, w, _ = grid.shape
+    return {
+        "page": page_idx0 + 1,
+        "width": int(w),
+        "height": int(h),
+        "cmyk_b64": base64.b64encode(grid.tobytes()).decode("ascii"),
+    }
 
 
 def render_plate_preview(path, password=None, *, page=1, plate="all", max_tac=300.0, dpi=110):
@@ -1181,7 +1619,6 @@ def render_plate_preview(path, password=None, *, page=1, plate="all", max_tac=30
         pil_img.save(out_buf, format="PNG")
         return out_buf.getvalue(), {"plate": norm_plate, "page": page_idx0 + 1}
 
-    # norm_plate == "tac": sum true C + M + Y + K plates and overlay hot-spots
     plate_arrays = []
     for ch in ("c", "m", "y", "k"):
         pbytes = _build_single_plate_pdf_bytes(src, password, page_idx0, ch, tinted=False)
@@ -1195,7 +1632,6 @@ def render_plate_preview(path, password=None, *, page=1, plate="all", max_tac=30
     warn_mask = (tac_pct >= max(0.0, tac_limit - 30.0)) & (~over_mask)
     over_pct = float(over_mask.mean() * 100.0) if tac_pct.size else 0.0
 
-    # Dimmed neutral grayscale base so amber & red ink warnings pop clearly
     comp_writer = PdfWriter()
     comp_writer.add_page(reader.pages[page_idx0])
     cbuf = io.BytesIO()
@@ -1230,6 +1666,8 @@ def report(result, name=""):
     ]
     if result["color_spaces"]:
         lines.append("  Colour spaces: " + ", ".join(result["color_spaces"]))
+    if result.get("spot_colors"):
+        lines.append("  Spot inks: " + ", ".join(result["spot_colors"]))
     if not result["issues"]:
         lines.append("  No print issues found.")
     else:

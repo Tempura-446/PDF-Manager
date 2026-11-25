@@ -1224,13 +1224,72 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       prevPageBtn, pageLabel, nextPageBtn, el("span", { style: "flex:1" }), previewMeta);
 
     const previewImg = el("img", { class: "rd-pf-preview-img", alt: "CMYK plate & TAC output preview" });
-    const previewBox = el("div", { class: "rd-pf-preview-box" }, plateBar, previewNav, previewImg);
+    const inkReadout = el("div", { class: "rd-pf-ink-readout" }, "Hover preview for live C / M / Y / K & TAC%");
+    const previewBox = el("div", { class: "rd-pf-preview-box" }, plateBar, previewNav, previewImg, inkReadout);
+
+    const inkCache = new Map();
+    const ensureInkGrid = async (pageNum) => {
+      if (inkCache.has(pageNum)) return inkCache.get(pageNum);
+      try {
+        const form = new FormData();
+        await appendDoc(form);
+        form.append("page", String(pageNum));
+        form.append("dpi", "72");
+        const res = await fetch("/api/preflight/inkmap", {
+          method: "POST", headers: { "X-Pdfm-Token": this.token }, body: form,
+        });
+        if (!res.ok) return null;
+        const g = await res.json();
+        const bin = atob(g.cmyk_b64 || "");
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const entry = { width: g.width, height: g.height, data: bytes };
+        inkCache.set(pageNum, entry);
+        return entry;
+      } catch {
+        return null;
+      }
+    };
+
+    previewImg.addEventListener("mousemove", (ev) => {
+      const grid = inkCache.get(curPage);
+      if (!grid || !previewImg.naturalWidth || !previewImg.naturalHeight) return;
+      const rect = previewImg.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      // Account for object-fit: contain letterboxing inside previewImg
+      const imgRatio = previewImg.naturalWidth / previewImg.naturalHeight;
+      const boxRatio = rect.width / rect.height;
+      let drawW = rect.width, drawH = rect.height, offX = 0, offY = 0;
+      if (boxRatio > imgRatio) {
+        drawW = rect.height * imgRatio;
+        offX = (rect.width - drawW) / 2;
+      } else {
+        drawH = rect.width / imgRatio;
+        offY = (rect.height - drawH) / 2;
+      }
+      const nx = (ev.clientX - rect.left - offX) / drawW;
+      const ny = (ev.clientY - rect.top - offY) / drawH;
+      if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
+      const gx = Math.min(grid.width - 1, Math.max(0, Math.floor(nx * grid.width)));
+      const gy = Math.min(grid.height - 1, Math.max(0, Math.floor(ny * grid.height)));
+      const idx = (gy * grid.width + gx) * 4;
+      const c = grid.data[idx], m = grid.data[idx + 1], y = grid.data[idx + 2], k = grid.data[idx + 3];
+      const tac = c + m + y + k;
+      const over = tac > Number(curMaxTac);
+      inkReadout.textContent = `C ${c}% · M ${m}% · Y ${y}% · K ${k}%  —  TAC ${tac}%${over ? " (OVER LIMIT)" : ""}`;
+      inkReadout.classList.toggle("over", over);
+    });
+    previewImg.addEventListener("mouseleave", () => {
+      inkReadout.textContent = "Hover preview for live C / M / Y / K & TAC%";
+      inkReadout.classList.remove("over");
+    });
 
     let previewSeq = 0;
     const refreshPreview = async () => {
       const seq = ++previewSeq;
       pageLabel.textContent = `Page ${curPage} / ${this.doc.numPages}`;
       previewMeta.textContent = "Rendering plate…";
+      ensureInkGrid(curPage);
       try {
         const form = new FormData();
         await appendDoc(form);
@@ -1262,9 +1321,10 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     const renderReport = (rep) => {
       const s = rep.summary || { errors: 0, warnings: 0 };
       const tacStr = rep.max_tac_pct ? ` · Peak TAC: ${rep.max_tac_pct}%` : "";
+      const spotStr = rep.spot_colors?.length ? ` · Spot inks: ${rep.spot_colors.join(", ")}` : "";
       head.textContent = (rep.passed ? "Ready to print" : `${s.errors} print error${s.errors === 1 ? "" : "s"} found`)
         + (s.warnings ? ` · ${s.warnings} warning${s.warnings === 1 ? "" : "s"}` : "")
-        + tacStr
+        + tacStr + spotStr
         + (rep.color_spaces?.length ? ` · Colour spaces: ${rep.color_spaces.join(", ")}` : "");
       list.replaceChildren();
       if (!rep.issues?.length) {
@@ -1315,10 +1375,10 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     const hasBleed = codes.has("missing_bleed") || !data.page_sizes?.every((p) => p.has_bleed);
     if (codes.has("mixed_page_size")) buttons.unshift(["normalize", "Normalize page sizes", false]);
     if (hasBleed) buttons.unshift(["bleed", "Add 3 mm bleed + crop marks", false]);
-    if (codes.has("missing_output_intent") || codes.has("missing_trapped_key") || !data.color_spaces?.includes("DeviceRGB")) {
-      buttons.unshift(["pdfx_intent", "Add PDF/X OutputIntent", false]);
-    }
     if (codes.has("white_overprint")) buttons.unshift(["white_op", "Fix white overprint", false]);
+    const hasAutoFixable = ["white_overprint", "rich_black_text", "hairline_stroke", "high_tac", "rgb_color", "missing_output_intent", "missing_trapped_key"]
+      .some((c) => codes.has(c));
+    if (hasAutoFixable) buttons.unshift(["fix_all", "Fix all CMYK press issues", false]);
 
     const layoutWrap = el("div", { class: "rd-pf-grid" },
       el("div", { class: "rd-pf-col-issues" }, controlsBar, head, list),
@@ -1327,14 +1387,19 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     const choice = await this._dialog("Print preflight & CMYK Output Preview", [layoutWrap], buttons);
     for (const u of blobUrls) URL.revokeObjectURL(u);
 
-    if (choice === "normalize" || choice === "bleed" || choice === "white_op" || choice === "pdfx_intent") {
+    if (choice === "normalize" || choice === "bleed" || choice === "white_op" || choice === "fix_all") {
+      const fixAll = choice === "fix_all";
       await this._changeDocument(
         (bytes, t) => this._post("/api/preflight/fix", bytes, t, {
           normalize_size: choice === "normalize" ? "true" : "false",
           add_bleed_mm: choice === "bleed" ? "3" : "0",
           add_crop_marks: choice === "bleed" ? "true" : "false",
-          fix_white_overprint: choice === "white_op" ? "true" : "false",
-          add_pdfx_intent: choice === "pdfx_intent" ? "true" : "false",
+          fix_white_overprint: (choice === "white_op" || fixAll) ? "true" : "false",
+          fix_rich_black_text: fixAll ? "true" : "false",
+          clamp_tac: fixAll ? curMaxTac : "0",
+          fix_hairlines: fixAll ? "0.25" : "0",
+          convert_rgb_to_cmyk: fixAll ? "true" : "false",
+          add_pdfx_intent: fixAll ? "true" : "false",
         }),
         { failure: "Could not apply print fix: " },
       );
@@ -1342,7 +1407,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
         normalize: "Normalized page sizes.",
         bleed: "Added 3 mm bleed and crop marks.",
         white_op: "Cleared overprint on white objects and text.",
-        pdfx_intent: "Added GTS_PDFX OutputIntent, /Trapped /False, and /TrimBox.",
+        fix_all: `Applied CMYK press fixes (RGB→CMYK, TAC ≤ ${curMaxTac}%, hairlines, rich-black text, overprint, PDF/X OutputIntent).`,
       };
       this.toast(msgMap[choice]);
     }
