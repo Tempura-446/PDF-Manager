@@ -324,8 +324,9 @@ def _scan_polarity_components(gray, rgb_arr, mask, *, inverted, orig_w, orig_h, 
     return candidates
 
 
-def detect_speech_bubbles(pil_img, *, max_dim=480, reading_dir="rtl", detect_inverted=True, plumber_page=None):
-    """Detect enclosed speech bubbles (both light and dark/inverted) on a raster manga/comic page.
+def detect_speech_bubbles(pil_img, *, max_dim=480, reading_dir="rtl", detect_inverted=True, plumber_page=None, use_ai=True):
+    """Detect speech bubbles (and borderless text when the optional neural
+    detector is installed) on a raster manga/comic page.
 
     Returns a list of bubble dicts sorted in reading order:
     ``{"x0", "y0", "x1", "y1", "w", "h", "cx", "cy", "bg_rgb", "text_rgb",
@@ -336,6 +337,16 @@ def detect_speech_bubbles(pil_img, *, max_dim=480, reading_dir="rtl", detect_inv
     orig_w, orig_h = pil_img.size
     if orig_w < 32 or orig_h < 32:
         return []
+
+    if use_ai:
+        try:
+            from pdfmanager.translate import manga_ai
+
+            neural = manga_ai.detect_bubbles_neural(pil_img, reading_dir=reading_dir)
+            if neural:
+                return neural
+        except Exception as _exc:
+            logging.getLogger("zpdf").debug("manga.detect_speech_bubbles.neural: %s", _exc)
 
     import numpy as np
 
@@ -541,8 +552,9 @@ def _order_and_clean_bubble_lines(lines, *, reading_order="rtl"):
     return normalize_vertical_punct(ocr.text_of(lines)).strip()
 
 
-def extract_bubble_text(pil_img, bubble, src_lang, *, ocr_fn=None, plumber_page=None, reading_order="rtl"):
-    """Extract dialogue text from a detected speech bubble (digital PDF fast path, else OCR)."""
+def extract_bubble_text(pil_img, bubble, src_lang, *, ocr_fn=None, plumber_page=None, reading_order="rtl", use_ai=True):
+    """Extract dialogue text from a detected speech bubble (digital PDF fast path,
+    then optional Japanese manga-ocr ONNX, else built-in PP-OCR)."""
     if plumber_page is not None:
         digital = extract_digital_bubble_text(plumber_page, bubble, pil_img.width, pil_img.height)
         if digital:
@@ -563,6 +575,16 @@ def extract_bubble_text(pil_img, bubble, src_lang, *, ocr_fn=None, plumber_page=
     if ocr_fn is not None:
         raw = ocr_fn(pre, src_lang)
         return normalize_vertical_punct(str(raw or "")).strip()
+
+    if use_ai and (not src_lang or str(src_lang).lower().startswith("ja") or src_lang == "auto"):
+        try:
+            from pdfmanager.translate import manga_ai
+
+            ai_txt = manga_ai.ocr_manga_crop(crop)
+            if ai_txt:
+                return normalize_vertical_punct(ai_txt).strip()
+        except Exception as _exc:
+            logging.getLogger("zpdf").debug("manga.extract_bubble_text.manga_ocr: %s", _exc)
 
     try:
         from pdfmanager import ocr
@@ -663,9 +685,11 @@ def _to_comic_caps(text: str) -> str:
     return str(text or "").upper()
 
 
-def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, dst_lang, *, comic_caps=False):
+def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, dst_lang, *, comic_caps=False,
+                       pil_img=None, use_ai=True):
     """Create a transparent PDF overlay page that cleans each speech bubble interior
-    according to its shape (``rect``, ``oval``, or pixel-accurate feathered mask)
+    according to its shape (LaMa-Manga neural inpainting for borderless/screentone
+    regions when installed, else ``rect``, ``oval``, or pixel-accurate feathered mask)
     and typesets centered, diamond-shaped, auto-fitted dialogue inside each bubble."""
     from pypdf import PdfReader
 
@@ -694,8 +718,24 @@ def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, d
         shape = bubble.get("shape", "oval")
         poly_mask = bubble.get("mask")
 
+        inpainted = None
+        if use_ai and pil_img is not None and bubble.get("needs_inpaint"):
+            try:
+                from pdfmanager.translate import manga_ai
+
+                box = bubble.get("box") or (bubble["x0"], bubble["y0"], bubble["x1"], bubble["y1"])
+                inpainted = manga_ai.inpaint_manga_region(pil_img, box, mask=poly_mask)
+            except Exception as _exc:
+                logging.getLogger("zpdf").debug("manga.make_manga_overlay.inpaint: %s", _exc)
+
         c.saveState()
-        if shape in ("polygon", "oval") and poly_mask is not None:
+        if inpainted is not None:
+            pbuf = io.BytesIO()
+            inpainted.save(pbuf, format="PNG")
+            pbuf.seek(0)
+            c.drawImage(ImageReader(pbuf), px0, py0, width=pw, height=ph)
+            inset_y = ph * 0.06
+        elif shape in ("polygon", "oval") and poly_mask is not None:
             # Feathered pixel-accurate RGBA mask preserves irregular/oval borders against screentones
             mw, mh = poly_mask.size
             rgba = Image.new(

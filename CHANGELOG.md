@@ -4,6 +4,29 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.80.0
+
+Optional **Manga AI Pack** (ONNX Neural Bubble & Borderless Text Detector, Japanese `manga-ocr`, LaMa-Manga Neural Inpainting, and Page-Context LLM Manga Script Translation).
+
+- **Neural Bubble & Borderless Text Detector (`translate/manga_ai.py`, `translate/manga.py`).**
+  - Added on-demand Apache-2.0 RT-DETR v2 ONNX detector (`ogkalu/comic-text-and-bubble-detector`,
+    `detector-v4-s_int8.onnx`, ~11 MB) to detect speech bubbles, jagged shout
+    bubbles, and borderless floating text over screentones/artwork, with
+    automatic fallback to the built-in CV detector when offline.
+- **Japanese `manga-ocr` ONNX (`translate/manga_ai.py`, `translate/manga.py`).**
+  - Added pure-ONNX ViT encoder-decoder support for `mayocream/manga-ocr-onnx`
+    (Apache-2.0, zero PyTorch) to read stylized manga fonts, vertical text with
+    furigana, and handwritten dialogue crops on Japanese manga.
+- **LaMa-Manga Neural Inpainting (`translate/manga_ai.py`, `translate/manga.py`).**
+  - Added INT8 `LaMa-Manga` ONNX inpainting (`Liiesl/lama-manga-onnx-quant`,
+    ~60 MB, Apache-2.0) triggered selectively on borderless text and high-variance
+    screentone/artwork backgrounds, while keeping instant flat/feathered fills
+    for clean white/black bubbles.
+- **Page-Context LLM Manga Script Mode (`translate/engines.py`, `translate/manga_ai.py`, `translate/pipeline.py`).**
+  - Added a dedicated manga/comic dialogue system prompt and page-by-page script
+    translation with trailing cross-page context when using a local or BYOK LLM,
+    plus an **Enhanced Manga AI** checkbox in the Translate PDF tool.
+
 ## 0.79.0
 
 Upgrade Built-in OCR Best Accuracy to **PP-OCRv6 Medium** (~5.2× faster on CPU & +5% higher accuracy).

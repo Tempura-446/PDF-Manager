@@ -575,12 +575,14 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
         out = out_dir / f"{src.stem}_{safe_lang}{ext}"
         pages_spec = str(opts.get("pages") or "").strip() or None
         auto_ocr = _bool(opts.get("auto_ocr", False))
+        manga_ai_opt = _bool(opts.get("manga_ai", False))
         made = translate.translate_pdf(
             src, out, source_lang, target_lang,
             mode=mode,
             password=password,
             pages=pages_spec,
             auto_ocr=auto_ocr,
+            manga_ai=manga_ai_opt,
         )
         eff_src = made.get("src_lang") or source_lang
         src_note = f"auto→{eff_src}" if source_lang == "auto" else eff_src

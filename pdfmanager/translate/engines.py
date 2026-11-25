@@ -467,7 +467,7 @@ def _parse_llm_json_list(raw_content, expected_len):
     return None
 
 
-def _load_llm_translator(src_lang, dst_lang, *, api_url, model, api_key="", glossary=""):
+def _load_llm_translator(src_lang, dst_lang, *, api_url, model, api_key="", glossary="", manga=False):
     """Context-aware batch translator using an OpenAI-compatible ``/chat/completions``
     endpoint (works offline with local Ollama / LM Studio, or online with any BYOK API)."""
     endpoint = str(api_url or "http://localhost:11434/v1").strip().rstrip("/")
@@ -487,26 +487,42 @@ def _load_llm_translator(src_lang, dst_lang, *, api_url, model, api_key="", glos
             for src, tgt in glossary_rules[:60]
         ]
         glossary_clause = " Follow these mandatory terminology rules:\n" + "\n".join(lines) + "\n"
-    system_prompt = (
-        f"You are an expert document translator translating from {src_label} ({src_lang}) "
-        f"to natural, idiomatic, publication-quality {dst_label} ({dst_lang}). "
-        "Maintain consistent terminology and formal document tone across all items. "
-        "Keep emails, URLs, phone numbers, dates, currency amounts, numbers, and ID codes verbatim. "
-        f"{glossary_clause}"
-        "Return ONLY a valid JSON array of translated strings with the exact same length and order as the input array. "
-        "Do not add explanations, notes, or markdown."
-    )
+    if manga:
+        system_prompt = (
+            f"You are an expert manga and comic dialogue translator translating from {src_label} ({src_lang}) "
+            f"to natural, punchy, idiomatic {dst_label} ({dst_lang}). "
+            "Translate each speech bubble as spoken dialogue matching character voice, emotion, stutters, and exclamations. "
+            "Use the sequence of bubbles on the page (and any prior-page context) to resolve pronouns and speaker continuity. "
+            "Keep translations concise so they fit cleanly inside speech bubbles. "
+            f"{glossary_clause}"
+            "Return ONLY a valid JSON array of translated strings with the exact same length and order as the input bubbles. "
+            "Do not add explanations, notes, or markdown."
+        )
+    else:
+        system_prompt = (
+            f"You are an expert document translator translating from {src_label} ({src_lang}) "
+            f"to natural, idiomatic, publication-quality {dst_label} ({dst_lang}). "
+            "Maintain consistent terminology and formal document tone across all items. "
+            "Keep emails, URLs, phone numbers, dates, currency amounts, numbers, and ID codes verbatim. "
+            f"{glossary_clause}"
+            "Return ONLY a valid JSON array of translated strings with the exact same length and order as the input array. "
+            "Do not add explanations, notes, or markdown."
+        )
 
-    def _call_batch(items):
+    def _call_batch(items, *, context=None):
         import json
 
         progress.check()
+        if context:
+            user_content = json.dumps({"previous_context": list(context), "bubbles": list(items)}, ensure_ascii=False)
+        else:
+            user_content = json.dumps(items, ensure_ascii=False)
         payload = {
             "model": model_name,
-            "temperature": 0.1,
+            "temperature": 0.2 if manga else 0.1,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(items, ensure_ascii=False)},
+                {"role": "user", "content": user_content},
             ],
         }
         resp = i18n._http_post_json(endpoint, payload, headers=headers, timeout=60)
@@ -524,21 +540,23 @@ def _load_llm_translator(src_lang, dst_lang, *, api_url, model, api_key="", glos
             out_single.append(_call_batch([item])[0])
         return out_single
 
-    def _llm_batch(batch):
+    def _llm_batch(batch, *, context=None):
         out = []
-        chunk_size = 10
+        chunk_size = 24 if manga else 10
         for i in range(0, len(batch), chunk_size):
             progress.check()
-            out.extend(_call_batch(list(batch[i : i + chunk_size])))
+            ctx = context if i == 0 else None
+            out.extend(_call_batch(list(batch[i : i + chunk_size]), context=ctx))
         return out
 
     _llm_batch._neural = True
     _llm_batch._llm = True
+    _llm_batch._supports_context = True
     _llm_batch._context_window = 1200
     return _llm_batch
 
 
-def _load_offline_translator(src_lang, dst_lang):
+def _load_offline_translator(src_lang, dst_lang, *, manga=False):
     """Return a batch callable ``fn(list[str]) -> list[str]`` backed by the
     configured translation engine (Smart AI LLM when enabled in Settings,
     otherwise MADLAD-400 3B when installed, otherwise OPUS-MT / Argos language
@@ -555,14 +573,15 @@ def _load_offline_translator(src_lang, dst_lang):
     _llm_loader = getattr(_pkg, "_load_llm_translator", _load_llm_translator)
     _single_loader = getattr(_pkg, "_load_single_translator", _load_single_translator)
     if (cfg.get("translate_engine") or "offline") == "llm":
-        return _llm_loader(
-            s,
-            d,
-            api_url=cfg.get("translate_api_url") or "http://localhost:11434/v1",
-            model=cfg.get("translate_model") or "qwen2.5:7b",
-            api_key=cfg.get("translate_api_key") or "",
-            glossary=cfg.get("translate_glossary") or "",
-        )
+        kwargs = {
+            "api_url": cfg.get("translate_api_url") or "http://localhost:11434/v1",
+            "model": cfg.get("translate_model") or "qwen2.5:7b",
+            "api_key": cfg.get("translate_api_key") or "",
+            "glossary": cfg.get("translate_glossary") or "",
+        }
+        if manga:
+            kwargs["manga"] = True
+        return _llm_loader(s, d, **kwargs)
 
     _madlad_loader = getattr(_pkg, "_load_madlad_translator", _load_madlad_translator)
     # Prefer MADLAD-400 3B universal model (Apache-2.0) when installed
