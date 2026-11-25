@@ -162,7 +162,37 @@
 .rd-container.hand.grabbing { cursor: grabbing; }
 .rd-container.hand .textLayer { pointer-events: none; }
 .rd-edittext .rd-container.hand .textLayer { pointer-events: auto; }  /* Edit text still needs the lines */
-.rd-container.dark .page .canvasWrapper { filter: invert(1) hue-rotate(180deg); }
+.rd-container.dark .page .canvasWrapper,
+.rd-container[data-page-theme="night"] .page .canvasWrapper {
+  filter: invert(0.92) hue-rotate(180deg) contrast(1.06) brightness(0.95);
+}
+.rd-container[data-page-theme="night"] {
+  background: #14161b;
+}
+.rd-container[data-page-theme="sepia"] {
+  background: #e6dcc6;
+}
+.rd-container[data-page-theme="sepia"] .page .canvasWrapper {
+  filter: sepia(0.32) contrast(0.96) brightness(0.98);
+}
+.rd-container[data-page-theme="eink"] {
+  background: #ecebe6;
+}
+.rd-container[data-page-theme="eink"] .page {
+  box-shadow: 0 0 0 1px rgb(0 0 0 / .16);
+}
+.rd-container[data-page-theme="eink"] .page .canvasWrapper {
+  filter: grayscale(1) contrast(1.28) brightness(1.03);
+}
+.rd-ocr-word-ok {
+  border-color: rgb(37 99 235 / .35);
+  background: rgb(37 99 235 / .06);
+}
+.rd-ocr-word-ok:hover,
+.rd-ocr-word-ok.active {
+  border-color: var(--accent);
+  background: rgb(37 99 235 / .16);
+}
 
 /* ---- Start screen (no document open) ---- */
 .rd-empty {

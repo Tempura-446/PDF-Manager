@@ -148,6 +148,8 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
             return self._send(HTTPStatus.OK, {**found, "suggestions": filefacts.suggestions(found, made_by)})
         if path == "/api/recent":
             return self._recent()
+        if path == "/api/sessions":
+            return self._sessions_list()
         if path.startswith("/api/scan/"):
             try:
                 return self._scan_get(path[len("/api/scan/"):])
@@ -356,8 +358,16 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
             # -- end of text reflow --
             if path == "/api/ocr/unsure":
                 return self._ocr_unsure(body)
+            if path == "/api/ocr/words":
+                return self._ocr_words(body)
             if path == "/api/ocr/fix":
                 return self._ocr_fix(body)
+            if path == "/api/ocr/replace":
+                return self._ocr_replace(body)
+            if path == "/api/sessions":
+                return self._sessions_save(body)
+            if path == "/api/sessions/delete":
+                return self._sessions_delete(body)
             if path == "/api/pages/arrange":
                 return self._arrange(body)
             if path == "/api/sign/cert":

@@ -58,10 +58,24 @@ export const ReaderNav = (Base) => class extends Base {
     this.pdfViewer.spreadMode = this.pdfViewer.spreadMode === SpreadMode.NONE ? SpreadMode.ODD : SpreadMode.NONE;
   }
   toggleHand() { this.container.classList.toggle("hand"); }
+  pageTheme() {
+    const saved = store.get("pdfm-reader-theme", null);
+    if (saved && ["light", "night", "sepia", "eink"].includes(saved)) return saved;
+    return store.get("pdfm-reader-dark", false) ? "night" : "light";
+  }
+  setPageTheme(theme = "light") {
+    const valid = ["light", "night", "sepia", "eink"].includes(theme) ? theme : "light";
+    for (const box of [this.container, this.splitContainer]) {
+      if (!box) continue;
+      if (valid === "light") box.removeAttribute("data-page-theme");
+      else box.setAttribute("data-page-theme", valid);
+      box.classList.toggle("dark", valid === "night");
+    }
+    store.set("pdfm-reader-theme", valid);
+    store.set("pdfm-reader-dark", valid === "night");
+  }
   toggleDarkPages() {
-    const on = this.container.classList.toggle("dark");
-    this.splitContainer?.classList.toggle("dark", on);
-    store.set("pdfm-reader-dark", on);
+    this.setPageTheme(this.pageTheme() === "night" ? "light" : "night");
   }
   toggleFullscreen() {
     if (document.fullscreenElement) document.exitFullscreen();

@@ -4,6 +4,30 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.72.0
+
+Reader Comfort & Power-User Upgrade (Smart Night/Sepia/E-Ink Themes, Workspace Sessions & In-Place OCR Typo Editor).
+
+- **Smart Reading Themes (Smart Night, Warm Sepia, E-Ink High Contrast).**
+  - Upgraded the Reader page display from a single dark toggle to four
+    persistent reading themes (`light`, `night`, `sepia`, `eink`) synced across
+    primary and split-view panes, accessible from the Reader More menu and
+    Command Palette.
+- **Workspace Sessions (`pdfmanager/sessions.py`).**
+  - Save, restore, and delete named multi-tab workspace snapshots including open
+    documents, active tab, per-tab reading positions/zoom/rotation, and
+    split-view layout/sync settings via `GET/POST /api/sessions` and
+    `POST /api/sessions/delete`.
+  - Respects ZPDF's privacy settings and strict `OpenFiles` filesystem
+    sandboxing (never accepts arbitrary paths from the browser).
+- **In-Place OCR Typo Editor (`pdfmanager/textlayer.py` + `checkocr.js`).**
+  - Added `read_all_ocr_words` (`POST /api/ocr/words`) and **All words** mode
+    in Check OCR so users can click and fix *any* invisible OCR word—even
+    high-confidence ones—without touching page pixels.
+  - Added `replace_ocr_text` (`POST /api/ocr/replace`) and inline **Find &
+    Replace** across the invisible OCR text layer with proportional `Tm`
+    horizontal scaling and full undo/redo integration.
+
 ## 0.71.0
 
 Book & Manga Publishing Studio (CBZ Archives, RTL/Signature Booklet Imposition & Spine Calculator).

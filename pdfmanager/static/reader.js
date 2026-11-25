@@ -146,7 +146,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     this.password = null;
     this.active = false;
     this.#build();
-    if (store.get("pdfm-reader-dark", false)) this.container.classList.add("dark");
+    this.setPageTheme(this.pageTheme());
   }
 
   // ---- DOM ------------------------------------------------------------------
@@ -483,8 +483,12 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     const has = !!this.doc;
     const spread = this.pdfViewer && this.pdfViewer.spreadMode !== viewer.SpreadMode.NONE;
     // (Open and the commands work without a document too.)
-    const always = [this.#menuItem("open", "Open a PDF…", () => this.chooseFile()),
-      ...(this.onCommands ? [this.#menuItem("command", "Search commands and tools…", () => this.onCommands())] : [])];
+    const pageTheme = this.pageTheme();
+    const always = [
+      this.#menuItem("open", "Open a PDF…", () => this.chooseFile()),
+      this.#menuItem("layers", "Workspace sessions…", () => this.openWorkspaceSessions()),
+      ...(this.onCommands ? [this.#menuItem("command", "Search commands and tools…", () => this.onCommands())] : []),
+    ];
     const items = [
       ...always,
       el("hr"),
@@ -493,7 +497,9 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       this.#menuItem("spread", "Two-page view", () => this.toggleSpread(), spread),
       this.#menuItem("spread", "Split view (side by side)", () => this.toggleSplitView(), this.splitOpen),
       this.#menuItem("hand", "Hand tool (drag to scroll)", () => this.toggleHand(), this.container.classList.contains("hand")),
-      this.#menuItem("moon", "Dark pages", () => this.toggleDarkPages(), this.container.classList.contains("dark")),
+      this.#menuItem("moon", "Page theme: Smart Night", () => this.setPageTheme(pageTheme === "night" ? "light" : "night"), pageTheme === "night"),
+      this.#menuItem("book", "Page theme: Warm Sepia", () => this.setPageTheme(pageTheme === "sepia" ? "light" : "sepia"), pageTheme === "sepia"),
+      this.#menuItem("screen", "Page theme: E-Ink High Contrast", () => this.setPageTheme(pageTheme === "eink" ? "light" : "eink"), pageTheme === "eink"),
       this.#menuItem("link", "Ask before opening web links", () => store.set("pdfm-link-ask", !store.get("pdfm-link-ask", true)), store.get("pdfm-link-ask", true)),
       el("hr"),
       this.#menuItem("full", "Full screen", () => this.toggleFullscreen()),
@@ -504,7 +510,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       this.#menuItem("badge", "Digital ID…", () => this.useTool("CERTSIGN")),
       this.#menuItem("fillable", "Prepare form (add or edit form fields)", () => this.openFormMode()),
       this.#menuItem("fillable", "Make it fillable (find the form's fields)", () => this.makeFillable()),
-      this.#menuItem("edittext", "Check OCR (fix unsure words)", () => this.openCheckOcr()),
+      this.#menuItem("edittext", "Check & Edit OCR text layer…", () => this.openCheckOcr()),
       this.#menuItem("rect", "Crop pages visually…", () => this.openCropMode(), this.cropMode),
       this.#menuItem("print", "Print preflight check…", () => this.checkPreflight()),
       this.#menuItem("edittext", "Translate this page…", () => this.translateCurrentPage()),
@@ -1749,7 +1755,11 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
         { icon: "spread", label: "Switch split pane", keys: "F6", words: "focus left right pane", run: () => this.switchSplitPane() },
         { icon: "spread", label: this.splitSync.checked ? "Turn off sync scroll in split view" : "Turn on sync scroll in split view", words: "lock scroll compare", run: () => { this.splitSync.checked = !this.splitSync.checked; } },
       ] : []),
-      { icon: "moon", label: "Dark pages", words: "night invert", run: () => this.toggleDarkPages() },
+      { icon: "moon", label: "Page theme: Smart Night", words: "dark pages night invert reading", run: () => this.setPageTheme(this.pageTheme() === "night" ? "light" : "night") },
+      { icon: "book", label: "Page theme: Warm Sepia", words: "sepia warm paper reading comfort", run: () => this.setPageTheme(this.pageTheme() === "sepia" ? "light" : "sepia") },
+      { icon: "screen", label: "Page theme: E-Ink High Contrast", words: "eink grayscale monochrome contrast paper", run: () => this.setPageTheme(this.pageTheme() === "eink" ? "light" : "eink") },
+      { icon: "layers", label: "Workspace sessions (save / restore tabs)", words: "workspace session tabs split view restore save", run: () => this.openWorkspaceSessions() },
+      { icon: "edittext", label: "Edit all OCR text-layer words", words: "ocr typo fix invisible text layer replace", run: () => this.openCheckOcr(null, { allWords: true }) },
       { icon: "hand", label: "Hand tool", words: "drag scroll pan", run: () => this.toggleHand() },
       { icon: "full", label: "Full screen", words: "presentation", run: () => this.toggleFullscreen() },
       { icon: "print", label: "Print", keys: "Ctrl+P", run: () => this.print() },
