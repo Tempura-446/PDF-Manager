@@ -4,6 +4,29 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.74.0
+
+Local AI Document Assistant (Ask this PDF with Clickable Page Citations, Document/Chapter Summarizer & Structured Table/Key-Value Extractor).
+
+- **Local AI Document Assistant Engine (`pdfmanager/assistant.py`).**
+  - Reuses the user's configured Ollama / LM Studio / OpenAI-compatible
+    endpoint from Settings (`translate_api_url`, `translate_model`,
+    `translate_api_key`) and routes all requests exclusively through
+    `i18n._http_post_json` (loopback-HTTP allowed, HTTPS-only remote, redirect
+    sanitization, and enterprise network policy enforcement).
+  - **Ask this PDF (`POST /api/ai/ask`)**: lightweight local lexical page
+    ranking fits large PDFs into local 7B model context windows and extracts
+    inline `[p. N]` citations.
+  - **Document / Chapter Summarizer (`POST /api/ai/summarize`)**: summarizes
+    full PDFs or custom page ranges in Key Bullets, Executive, or Study Notes
+    styles with page citations.
+  - **Structured Table & Key-Value Extraction (`POST /api/ai/extract`)**:
+    extracts invoices, forms, and tables to clean JSON and CSV.
+- **Reader UI (`static/ai-assistant.js`).**
+  - Added Local AI Assistant modal to the Reader More menu and Command Palette
+    with **clickable `[p. N]` page citation chips** and one-click **Copy /
+    Download JSON / Download CSV** export buttons.
+
 ## 0.73.0
 
 Android Companion App (Phase 1 Foundation) — Installable PWA Shell, Touch-First Mobile Reader & Kotlin WebView Project.

@@ -555,6 +555,65 @@ class ReaderRoutesMixin:
         deleted = sessions.delete_session(str(data.get("id") or ""))
         return self._send(HTTPStatus.OK, {"deleted": deleted})
 
+    def _ai_ask(self, body):
+        """Ask a question about the uploaded PDF using the configured local LLM."""
+        from pdfmanager import assistant
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        question = (fields.get("question") or "").strip()
+        if not question:
+            raise UserError("enter a question to ask about this PDF")
+        max_pages = max(1, min(16, int(fields.get("max_pages") or 6)))
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            src.write_bytes(uploads[0][2])
+            res = assistant.ask_pdf(
+                src, question,
+                password=fields.get("password") or None,
+                max_pages=max_pages,
+            )
+        return self._send(HTTPStatus.OK, res)
+
+    def _ai_summarize(self, body):
+        """Summarize the uploaded PDF (or a page range) using the configured local LLM."""
+        from pdfmanager import assistant
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            src.write_bytes(uploads[0][2])
+            res = assistant.summarize_pdf(
+                src,
+                password=fields.get("password") or None,
+                pages_spec=(fields.get("pages") or "").strip() or None,
+                style=(fields.get("style") or "bullets").strip(),
+            )
+        return self._send(HTTPStatus.OK, res)
+
+    def _ai_extract(self, body):
+        """Extract structured key-value pairs or tables to JSON/CSV using the local LLM."""
+        from pdfmanager import assistant
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+            src = Path(tmp) / "file.pdf"
+            src.write_bytes(uploads[0][2])
+            res = assistant.extract_structured(
+                src,
+                schema=(fields.get("schema") or "key_values").strip(),
+                fields=(fields.get("fields") or "").strip() or None,
+                fmt=(fields.get("format") or "json").strip(),
+                pages_spec=(fields.get("pages") or "").strip() or None,
+                password=fields.get("password") or None,
+            )
+        return self._send(HTTPStatus.OK, res)
+
     def _images_list(self, body):
         """The pictures on the reader's pages (see pageimages.py)."""
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
