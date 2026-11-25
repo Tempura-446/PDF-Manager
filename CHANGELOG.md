@@ -4,6 +4,26 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.73.0
+
+Android Companion App (Phase 1 Foundation) — Installable PWA Shell, Touch-First Mobile Reader & Kotlin WebView Project.
+
+- **Installable PWA & Offline UI Shell (`manifest.webmanifest`, `icon.svg`, `sw.js`).**
+  - Added `.webmanifest` MIME type (`application/manifest+json`) and pre-token
+    routes for `/manifest.webmanifest` and `/sw.js` in `pdfmanager/gui.py`.
+  - `sw.js` caches static UI shell assets (`/static/*`) while strictly
+    bypassing all `/api/*` private document endpoints.
+- **Touch-First Mobile Reader & Translator Shell (`static/mobile-touch.js` + `reader.css`).**
+  - Added swipe-left / swipe-right page turns (respecting horizontal scroll
+    when zoomed in), double-tap zoom toggle (`page-width` ↔ `150%`), and a
+    44px-target floating mobile bottom dock (Prev / Page / Next / Reading Theme
+    cycle / Translate page) on narrow and coarse-pointer screens.
+- **Android Companion Kotlin WebView Scaffold (`mobile/android/`).**
+  - Added ready-to-build Gradle/Kotlin Android project (`MainActivity.kt`,
+    `AndroidManifest.xml` with `application/pdf` `ACTION_VIEW` intent filter,
+    native file chooser, hardware back navigation, and saved companion URL
+    preference).
+
 ## 0.72.0
 
 Reader Comfort & Power-User Upgrade (Smart Night/Sepia/E-Ink Themes, Workspace Sessions & In-Place OCR Typo Editor).

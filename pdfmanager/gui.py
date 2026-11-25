@@ -128,6 +128,10 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                               {"Content-Security-Policy": _page_csp(self.allow_eval)})
         if path.startswith("/static/"):
             return self._static(path[len("/static/"):])
+        if path == "/manifest.webmanifest":
+            return self._static("manifest.webmanifest")
+        if path == "/sw.js":
+            return self._static("sw.js")
         if not self._token_ok():
             return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
         if path == "/api/operations":

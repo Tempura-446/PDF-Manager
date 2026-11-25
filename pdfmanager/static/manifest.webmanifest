@@ -1,0 +1,19 @@
+{
+  "name": "ZPDF — Offline PDF Reader & Translator",
+  "short_name": "ZPDF",
+  "description": "Offline PDF reader, editor, OCR, and manga/book translator.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#d93829",
+  "background_color": "#f8fafc",
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
