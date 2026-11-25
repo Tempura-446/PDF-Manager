@@ -372,6 +372,8 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._preflight_check(body)
             if path == "/api/preflight/fix":
                 return self._preflight_fix(body)
+            if path == "/api/preflight/preview":
+                return self._preflight_preview(body)
             if path == "/api/crop":
                 return self._crop(body)
             if path == "/api/reader/compare":

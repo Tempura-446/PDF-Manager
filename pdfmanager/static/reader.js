@@ -1120,65 +1120,231 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
   }
   // -- end of accessibility --
 
-  /** Print preflight check: inspect DPI, fonts, colour spaces, bleed & hairlines,
-   *  with click-to-jump and one-click safe fixes. */
+  /** Print-production CMYK preflight & Output Preview: inspect DPI, TAC ink limits,
+   *  overprint/knockout, PDF/X-1a & PDF/X-4 compliance, C/M/Y/K plate separations,
+   *  TAC heatmap, click-to-jump, and one-click press fixes. */
   async checkPreflight() {
     const tab = this.activeTab;
     if (!tab || !this.doc) return;
-    this._busy(true);
-    let data;
-    try {
-      const bytes = await this._currentBytes();
-      const form = new FormData();
-      form.append("file", new Blob([bytes], { type: "application/pdf" }), tab.name);
+
+    const useFastId = Boolean(tab.fileId && !tab.dirty && !(this.doc?.annotationStorage?.size > 0));
+    let cachedBytes = null;
+    const ensureBytes = async () => {
+      if (!cachedBytes) cachedBytes = await this._currentBytes();
+      return cachedBytes;
+    };
+
+    const appendDoc = async (form) => {
+      if (useFastId) {
+        form.append("id", tab.fileId);
+      } else {
+        const bytes = await ensureBytes();
+        form.append("file", new Blob([bytes], { type: "application/pdf" }), tab.name);
+      }
       if (this.password) form.append("password", this.password);
+    };
+
+    let curProfile = "standard";
+    let curMaxTac = "300";
+    let curPlate = "all";
+    let curPage = Math.max(1, Math.min(this.doc.numPages || 1, this.pdfViewer?.currentPageNumber || 1));
+    let blobUrls = [];
+
+    const runCheck = async () => {
+      const form = new FormData();
+      await appendDoc(form);
+      form.append("profile", curProfile);
+      form.append("max_tac", curMaxTac);
       const res = await fetch("/api/preflight/check", {
         method: "POST", headers: { "X-Pdfm-Token": this.token }, body: form,
       });
-      data = await res.json();
-      if (!res.ok) throw new Error(data.error || res.statusText);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || res.statusText);
+      return json;
+    };
+
+    this._busy(true);
+    let data;
+    try {
+      data = await runCheck();
     } catch (e) {
       this._busy(false);
       this.toast("Print preflight failed: " + (e?.message || e));
       return;
     }
     this._busy(false);
-    const s = data.summary || { errors: 0, warnings: 0 };
-    const head = el("p", { class: "rd-preflight-summary" },
-      data.passed ? "Ready to print" : `${s.errors} print error${s.errors === 1 ? "" : "s"} found`,
-      s.warnings ? ` · ${s.warnings} warning${s.warnings === 1 ? "" : "s"}` : "",
-      data.color_spaces?.length ? ` · Colour spaces: ${data.color_spaces.join(", ")}` : "");
+
+    const profileSel = el("select", { class: "rd-zoom", "aria-label": "Compliance profile" },
+      el("option", { value: "standard" }, "Standard Press"),
+      el("option", { value: "pdfx-1a" }, "PDF/X-1a (CMYK, flat)"),
+      el("option", { value: "pdfx-4" }, "PDF/X-4 (CMYK + alpha)"));
+    const tacSel = el("select", { class: "rd-zoom", "aria-label": "Maximum ink limit (TAC)" },
+      el("option", { value: "300" }, "300% (Coated)"),
+      el("option", { value: "280" }, "280% (Uncoated)"),
+      el("option", { value: "320" }, "320% (Sheetfed)"));
+    tacSel.value = curMaxTac;
+
+    const controlsBar = el("div", { class: "rd-pf-controls" },
+      el("label", {}, "Profile ", profileSel),
+      el("label", {}, "Max ink (TAC) ", tacSel));
+
+    const head = el("p", { class: "rd-preflight-summary" });
     const list = el("ul", { class: "rd-preflight-list" });
-    if (!data.issues?.length) {
-      list.append(el("li", {}, "No print issues detected."));
-    } else {
-      for (const issue of data.issues) {
-        const badge = el("span", { class: `rd-pf-sev rd-pf-${issue.severity}` }, issue.severity.toUpperCase());
-        const li = el("li", {}, badge, " ", issue.message);
-        if (issue.page) {
-          li.classList.add("rd-pf-jump");
-          li.title = "Jump to page " + issue.page;
-          li.addEventListener("click", () => this.goToPage(issue.page));
-        }
-        list.append(li);
-      }
+
+    // Output Preview: C / M / Y / K plate separation & TAC heatmap
+    const plateDefs = [
+      ["all", "Composite"],
+      ["c", "Cyan"],
+      ["m", "Magenta"],
+      ["y", "Yellow"],
+      ["k", "Black (K)"],
+      ["tac", "TAC Heatmap"],
+    ];
+    const plateBtns = new Map();
+    const plateBar = el("div", { class: "rd-pf-plates", role: "group", "aria-label": "CMYK plates and TAC preview" });
+    for (const [pid, plabel] of plateDefs) {
+      const b = el("button", {
+        type: "button",
+        class: `rd-btn rd-pf-plate rd-pf-plate-${pid}${pid === curPlate ? " on" : ""}`,
+      }, plabel);
+      b.addEventListener("click", () => {
+        curPlate = pid;
+        for (const [id, btn] of plateBtns) btn.classList.toggle("on", id === curPlate);
+        refreshPreview();
+      });
+      plateBtns.set(pid, b);
+      plateBar.append(b);
     }
+
+    const prevPageBtn = el("button", { type: "button", class: "rd-btn" }, "‹");
+    const pageLabel = el("span", { class: "rd-pf-page-status" }, `${curPage} / ${this.doc.numPages}`);
+    const nextPageBtn = el("button", { type: "button", class: "rd-btn" }, "›");
+    const previewMeta = el("span", { class: "rd-pf-preview-meta" });
+    const previewNav = el("div", { class: "rd-pf-preview-nav" },
+      prevPageBtn, pageLabel, nextPageBtn, el("span", { style: "flex:1" }), previewMeta);
+
+    const previewImg = el("img", { class: "rd-pf-preview-img", alt: "CMYK plate & TAC output preview" });
+    const previewBox = el("div", { class: "rd-pf-preview-box" }, plateBar, previewNav, previewImg);
+
+    let previewSeq = 0;
+    const refreshPreview = async () => {
+      const seq = ++previewSeq;
+      pageLabel.textContent = `Page ${curPage} / ${this.doc.numPages}`;
+      previewMeta.textContent = "Rendering plate…";
+      try {
+        const form = new FormData();
+        await appendDoc(form);
+        form.append("page", String(curPage));
+        form.append("plate", curPlate);
+        form.append("max_tac", curMaxTac);
+        form.append("dpi", "96");
+        const res = await fetch("/api/preflight/preview", {
+          method: "POST", headers: { "X-Pdfm-Token": this.token }, body: form,
+        });
+        if (!res.ok || seq !== previewSeq) return;
+        const maxTacHdr = res.headers.get("X-ZPDF-Max-TAC");
+        const overPctHdr = res.headers.get("X-ZPDF-Over-TAC-Pct");
+        const blob = await res.blob();
+        if (seq !== previewSeq) return;
+        const url = URL.createObjectURL(blob);
+        blobUrls.push(url);
+        previewImg.src = url;
+        if (curPlate === "tac" && maxTacHdr) {
+          previewMeta.textContent = `Peak TAC: ${maxTacHdr}% · Over ${curMaxTac}%: ${overPctHdr || "0"}%`;
+        } else {
+          previewMeta.textContent = curPlate === "all" ? "Composite preview" : `Plate: ${curPlate.toUpperCase()}`;
+        }
+      } catch {
+        if (seq === previewSeq) previewMeta.textContent = "Preview unavailable";
+      }
+    };
+
+    const renderReport = (rep) => {
+      const s = rep.summary || { errors: 0, warnings: 0 };
+      const tacStr = rep.max_tac_pct ? ` · Peak TAC: ${rep.max_tac_pct}%` : "";
+      head.textContent = (rep.passed ? "Ready to print" : `${s.errors} print error${s.errors === 1 ? "" : "s"} found`)
+        + (s.warnings ? ` · ${s.warnings} warning${s.warnings === 1 ? "" : "s"}` : "")
+        + tacStr
+        + (rep.color_spaces?.length ? ` · Colour spaces: ${rep.color_spaces.join(", ")}` : "");
+      list.replaceChildren();
+      if (!rep.issues?.length) {
+        list.append(el("li", {}, "No print issues detected."));
+      } else {
+        for (const issue of rep.issues) {
+          const badge = el("span", { class: `rd-pf-sev rd-pf-${issue.severity}` }, issue.severity.toUpperCase());
+          const li = el("li", {}, badge, " ", issue.message);
+          if (issue.page) {
+            li.classList.add("rd-pf-jump");
+            li.title = "Jump to page " + issue.page;
+            li.addEventListener("click", () => {
+              curPage = issue.page;
+              this.goToPage(issue.page);
+              refreshPreview();
+            });
+          }
+          list.append(li);
+        }
+      }
+    };
+
+    prevPageBtn.addEventListener("click", () => {
+      if (curPage > 1) { curPage--; refreshPreview(); }
+    });
+    nextPageBtn.addEventListener("click", () => {
+      if (curPage < this.doc.numPages) { curPage++; refreshPreview(); }
+    });
+    const onControlChange = async () => {
+      curProfile = profileSel.value;
+      curMaxTac = tacSel.value;
+      try {
+        data = await runCheck();
+        renderReport(data);
+        if (curPlate === "tac") refreshPreview();
+      } catch (e) {
+        this.toast("Preflight update failed: " + (e?.message || e));
+      }
+    };
+    profileSel.addEventListener("change", onControlChange);
+    tacSel.addEventListener("change", onControlChange);
+
+    renderReport(data);
+    refreshPreview();
+
     const buttons = [["ok", "Close", true]];
-    const hasMixed = (data.issues || []).some((i) => i.code === "mixed_page_size");
-    const hasBleed = (data.issues || []).some((i) => i.code === "missing_bleed") || !data.page_sizes?.every((p) => p.has_bleed);
-    if (hasMixed) buttons.unshift(["normalize", "Normalize page sizes", false]);
+    const codes = new Set((data.issues || []).map((i) => i.code));
+    const hasBleed = codes.has("missing_bleed") || !data.page_sizes?.every((p) => p.has_bleed);
+    if (codes.has("mixed_page_size")) buttons.unshift(["normalize", "Normalize page sizes", false]);
     if (hasBleed) buttons.unshift(["bleed", "Add 3 mm bleed + crop marks", false]);
-    const choice = await this._dialog("Print preflight", [head, list], buttons);
-    if (choice === "normalize" || choice === "bleed") {
+    if (codes.has("missing_output_intent") || codes.has("missing_trapped_key") || !data.color_spaces?.includes("DeviceRGB")) {
+      buttons.unshift(["pdfx_intent", "Add PDF/X OutputIntent", false]);
+    }
+    if (codes.has("white_overprint")) buttons.unshift(["white_op", "Fix white overprint", false]);
+
+    const layoutWrap = el("div", { class: "rd-pf-grid" },
+      el("div", { class: "rd-pf-col-issues" }, controlsBar, head, list),
+      previewBox);
+
+    const choice = await this._dialog("Print preflight & CMYK Output Preview", [layoutWrap], buttons);
+    for (const u of blobUrls) URL.revokeObjectURL(u);
+
+    if (choice === "normalize" || choice === "bleed" || choice === "white_op" || choice === "pdfx_intent") {
       await this._changeDocument(
         (bytes, t) => this._post("/api/preflight/fix", bytes, t, {
           normalize_size: choice === "normalize" ? "true" : "false",
           add_bleed_mm: choice === "bleed" ? "3" : "0",
           add_crop_marks: choice === "bleed" ? "true" : "false",
+          fix_white_overprint: choice === "white_op" ? "true" : "false",
+          add_pdfx_intent: choice === "pdfx_intent" ? "true" : "false",
         }),
         { failure: "Could not apply print fix: " },
       );
-      this.toast(choice === "normalize" ? "Normalized page sizes." : "Added 3 mm bleed and crop marks.");
+      const msgMap = {
+        normalize: "Normalized page sizes.",
+        bleed: "Added 3 mm bleed and crop marks.",
+        white_op: "Cleared overprint on white objects and text.",
+        pdfx_intent: "Added GTS_PDFX OutputIntent, /Trapped /False, and /TrimBox.",
+      };
+      this.toast(msgMap[choice]);
     }
   }
 

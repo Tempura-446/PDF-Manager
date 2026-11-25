@@ -446,9 +446,13 @@ def build_parser():
     # -- end of accessibility --
 
     sp = other("preflight", cmd_preflight,
-               "check PDFs for commercial print readiness (image DPI, unembedded fonts, RGB/CMYK, "
-               "transparency, bleed, page sizes, hairlines; exit code 0 when no errors)")
+               "check PDFs for commercial print readiness (CMYK/RGB, TAC ink limits, overprint, PDF/X-1a & PDF/X-4, "
+               "image DPI, unembedded fonts, bleed, page sizes, hairlines; exit code 0 when no errors)")
     sp.add_argument("inputs", nargs="+", metavar="input", help="PDF(s) to check")
+    sp.add_argument("--profile", choices=("standard", "pdfx-1a", "pdfx-4"), default="standard",
+                    help="compliance profile: standard, pdfx-1a, or pdfx-4 (default: standard)")
+    sp.add_argument("--max-tac", type=float, default=300.0,
+                    help="maximum Total Ink Coverage %% for CMYK vectors and images (default: 300)")
     sp.add_argument("--min-dpi", type=float, default=300, help="warning DPI threshold for images (default: 300)")
     sp.add_argument("--error-dpi", type=float, default=150, help="error DPI threshold for images (default: 150)")
     sp.add_argument("--min-bleed", type=float, default=3.0, help="minimum bleed in mm when TrimBox is set (default: 3.0)")

@@ -4,6 +4,36 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.69.0
+
+Print-Production CMYK Preflight v2 & Output Preview Suite.
+
+- **PDF/X-1a & PDF/X-4 Compliance Profiles (`pdfmanager/preflight.py`).**
+  - Added `--profile standard|pdfx-1a|pdfx-4` checking ISO 15930 rules:
+    `GTS_PDFX` `/OutputIntents` characterization profile, `/Info /Trapped`
+    status (`/True` or `/False`), `/TrimBox` or `/ArtBox` exclusivity,
+    encryption and JavaScript prohibitions, RGB colour errors, and live
+    transparency rules (`error` in PDF/X-1a, permitted in PDF/X-4).
+- **Overprint, Knockout & Total Ink Coverage (TAC) Audit.**
+  - Tracks `/ExtGState` `/OP` and `/op` across graphics states to flag critical
+    **white overprint** errors (`white_overprint` — white text/vectors that
+    would vanish on press) and pure-black small text knockouts
+    (`black_knockout_text`).
+  - Measures **Total Ink / Area Coverage (`max_tac`, default 300%)** across both
+    CMYK vector fills/strokes and embedded CMYK `Image` XObjects (`high_tac`).
+- **True CMYK Plate Separation & TAC Heatmap Output Preview (`/api/preflight/preview`, `reader.js`).**
+  - Separates real PDF `DeviceCMYK`, `DeviceGray` (K-only), and `DeviceRGB`
+    (GCR) operators and Image XObjects into individual **Cyan**, **Magenta**,
+    **Yellow**, and **Black (K)** plates plus a quantitative **TAC Heatmap**
+    highlighting warning and over-limit ink zones right inside the Reader's
+    Print Preflight dialog.
+- **One-Click Press Fixes (`preflight.fix`).**
+  - Added **Fix white overprint** (`fix_white_overprint=True`) and **Add PDF/X
+    OutputIntent** (`add_pdfx_intent=True`, setting `GTS_PDFX` `CGATS TR 001`,
+    `/Trapped /False`, and `/TrimBox`).
+- **Security Hardening.** Enforced `https://`-only URLs in OCR model downloads
+  and `core.render_scale` giant-page OOM protection in Manga mode.
+
 ## 0.68.0
 
 Manga / Comic Speech-Bubble Mode v2.
