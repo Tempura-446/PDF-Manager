@@ -287,6 +287,8 @@ def _restore_neural_entities(translated, mapping):
         pattern = re.compile(r"[\s,.\u00a0\u202f]*".join(digit_pats))
         m = pattern.search(out)
         if not m:
+            if original in out:
+                continue
             all_found = False
             continue
         before = out[: m.start()]
@@ -379,11 +381,11 @@ def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32
     context_window = int(getattr(fn, "_context_window", 0) or 0)
     joiner = "" if _is_cjk_lang(dst_lang) else " "
 
-    if glossary is None and is_neural and not is_llm:
+    if glossary is None and is_neural:
         from pdfmanager import update as _update
 
         glossary = _update.settings().get("translate_glossary") or ""
-    compiled_glossary = _compile_glossary_patterns(parse_glossary(glossary)) if (is_neural and not is_llm) else []
+    compiled_glossary = _compile_glossary_patterns(parse_glossary(glossary)) if is_neural else []
 
     cache = {}
     unique_sentences = []
@@ -398,8 +400,12 @@ def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32
             per_text_plan.append(("verbatim", text_str))
             continue
         if is_neural and is_llm:
-            sents = _chunk_sentences_for_context(split_sentences(text_str), context_window)
-            per_text_plan.append(("neural", "", "", text_str, sents, ()))
+            if compiled_glossary:
+                masked, mapping = _protect_neural_entities(text_str, compiled_glossary)
+            else:
+                masked, mapping = text_str, ()
+            sents = _chunk_sentences_for_context(split_sentences(masked), context_window)
+            per_text_plan.append(("neural", "", "", text_str, sents, mapping))
         elif is_neural:
             prefix, body, suffix = _split_structural_affixes(text_str, dst_lang)
             if not body.strip() or _is_verbatim_block(body):
@@ -407,7 +413,11 @@ def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32
                 continue
             norm_body = _normalize_all_caps(body)
             masked, mapping = _protect_neural_entities(norm_body, compiled_glossary)
-            sents = _chunk_sentences_for_context(split_sentences(masked), context_window)
+            raw_sents = split_sentences(masked)
+            safe_sents = []
+            for s in raw_sents:
+                safe_sents.extend(_split_long_for_mt(s, max_chars=450) if len(s) > 450 else [s])
+            sents = _chunk_sentences_for_context(safe_sents, min(context_window, 450) if context_window else 0)
             per_text_plan.append(("neural", prefix, suffix, norm_body, sents, mapping))
         else:
             masked, tokens = protect_tokens(text_str)

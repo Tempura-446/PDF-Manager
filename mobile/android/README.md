@@ -1,15 +1,15 @@
-# ZPDF Android Companion App (Phase 1 Foundation)
+# ZPDF Android Companion App (Phase 2)
 
-Touch-first Android WebView companion shell for ZPDF (`v0.73.0`).
+Touch-first Android WebView companion shell for ZPDF (`v0.77.0`).
 
 ## Features
 - Wraps ZPDF's touch-first PWA & Reader UI (`/manifest.webmanifest`, `/sw.js`, `mobile-touch.js`).
-- Native Android file picker (`onShowFileChooser`) for opening local PDFs and CBZ files.
-- Registers an `ACTION_VIEW` intent filter for `application/pdf`.
-- Swipe left/right page navigation, double-tap zoom toggle, and floating 44px-target mobile bottom dock (Prev / Next / Reading Theme cycle / Translate page).
-- Saved companion server URL preference (defaults to `http://10.0.2.2:8765/` for Android Emulator host loopback).
+- **Incoming `ACTION_VIEW` PDF handoff**: Tap any `.pdf` on Android and open it directly inside ZPDF Reader via `window.zpdfOpenBase64Pdf`.
+- **Offline reconnect screen & `ZpdfAndroid` JS bridge**: Clean native retry + server URL dialog when ZPDF Desktop isn't reachable yet.
+- **Manga RTL swipe mode + AI Assistant dock**: Toggle LTR/RTL swipe direction right on the floating mobile bottom dock, plus 1-tap theme cycle, translate page, and Local AI Assistant.
+- **Opt-in LAN Companion Mode**: Start ZPDF with `lan=True` (`GET /api/companion/info`) to accept RFC-1918 private LAN connections safely while keeping default desktop mode strictly `127.0.0.1`-only.
 
 ## Building in Android Studio
 1. Open `mobile/android/` in Android Studio (JDK 17, Android SDK 35).
 2. Run `./gradlew assembleDebug` or click **Run**.
-3. Start ZPDF on your desktop (`zpdf gui --port 8765`) or install the PWA directly from any mobile browser via **Add to Home Screen**.
+3. Start ZPDF on your desktop or install the PWA directly from any mobile browser via **Add to Home Screen**.

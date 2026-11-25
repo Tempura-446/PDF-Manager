@@ -43,6 +43,28 @@ STATIC_TYPES = {
 _PARAM = re.compile(r';\s*([\w*-]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;\s]*))')
 
 
+def _is_lan_host(host: str) -> bool:
+    """Return True if ``host`` (optional ``:port``) is a loopback, RFC-1918
+    private LAN IP, or ``.local`` mDNS hostname."""
+    import ipaddress
+
+    raw = (host or "").strip()
+    if not raw:
+        return False
+    if raw.startswith("["):
+        name = raw[1:].split("]", 1)[0]
+    else:
+        name = raw.rsplit(":", 1)[0]
+    low = name.lower()
+    if low in ("localhost", "127.0.0.1", "::1") or (low.endswith(".local") and len(low) > 6 and ".." not in low):
+        return True
+    try:
+        ip = ipaddress.ip_address(low)
+        return ip.is_private or ip.is_loopback or ip.is_link_local
+    except ValueError:
+        return False
+
+
 class _LazyModule:
     """Defer importing a heavy submodule until its first attribute access.
 
@@ -637,7 +659,11 @@ class HandlerBase(BaseHTTPRequestHandler):
         self._send(status, {"error": message})
 
     def _host_ok(self):
-        return self.headers.get("Host", "") in self.allowed_hosts
+        host = self.headers.get("Host", "")
+        if host in self.allowed_hosts:
+            return True
+        return bool(getattr(self, "lan_enabled", False)) and _is_lan_host(host)
+
 
     def _token_ok(self):
         ok = secrets.compare_digest(self.headers.get("X-Pdfm-Token", ""), self.token)

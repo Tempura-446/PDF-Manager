@@ -4,6 +4,33 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.77.0
+
+OCR, Translation & Manga Formatting v5 + Android Companion App Phase 2.
+
+- **OCR, Translation & Manga v5 (`ocr/layout.py`, `translate/text.py`, `translate/manga.py`).**
+  - OCR now drops hallucinated repeated-symbol border/ruler lines (`||||||||`,
+    `========`, `--------`) inside `_lines()` so table borders and scan edges
+    never pollute search or translation.
+  - Translation now protects URLs, reference codes, emails, and user glossary
+    terms with sentinels on the **LLM path** as well as offline neural MT, and
+    automatically chunks overlong sentences (>450 chars) with
+    `_split_long_for_mt` so 512-token neural models never truncate tails.
+  - Manga formatting adds optional **Comic ALL-CAPS** lettering (`comic_caps=True`
+    / `_to_comic_caps()`) and distinct upright regular typography for rectangular
+    narration/caption boxes.
+- **Android & Mobile Companion App Phase 2 (`gui.py`, `server/common.py`, `mobile-touch.js`, `mobile/android/`).**
+  - Added opt-in **LAN Companion Mode** (`make_server(..., lan=True)`) with
+    strict RFC-1918 / `.local` host validation (`_is_lan_host`) and
+    `GET /api/companion/info` pairing metadata (default remains strictly
+    `127.0.0.1`-only).
+  - Upgraded the floating mobile bottom dock (`mobile-touch.js`) with an
+    **LTR / RTL Manga swipe-direction toggle** and 1-tap **Local AI Assistant**
+    shortcut, plus `window.zpdfOpenBase64Pdf` Android intent bridge.
+  - Upgraded Android `MainActivity.kt` with incoming `ACTION_VIEW` PDF intent
+    handoff into the Reader and a clean native offline reconnect screen with
+    `ZpdfAndroid.openSettings()` / `retryConnection()` bridge.
+
 ## 0.76.0
 
 OCR, Translation & Manga Formatting v4 (Adaptive Binarization Retry, Full-Page Vertical CJK RTL Order, WCAG Contrast, Sentence-Aware Chunking & Broken-Outline Manga Recovery).
