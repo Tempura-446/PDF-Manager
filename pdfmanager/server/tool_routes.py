@@ -218,11 +218,26 @@ class ToolRoutesMixin:
     def _preflight_check(self, body):
         """Print preflight check: returns preflight.check() JSON report."""
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
-        if not uploads:
+        file_id = (fields.get("id") or "").strip()
+        opened_path = self.opened.get(file_id) if (file_id and self.opened is not None) else None
+        if not uploads and (opened_path is None or not opened_path.is_file()):
             raise UserError("no file")
         min_dpi = float(fields.get("min_dpi") or 300)
         error_dpi = float(fields.get("error_dpi") or 150)
         min_bleed = float(fields.get("min_bleed_mm") or 3.0)
+        max_tac = float(fields.get("max_tac") or 300.0)
+        profile = (fields.get("profile") or "standard").strip().lower()
+        if not uploads and opened_path is not None:
+            result = preflight.check(
+                opened_path,
+                fields.get("password") or None,
+                min_dpi=min_dpi,
+                error_dpi=error_dpi,
+                min_bleed_mm=min_bleed,
+                max_tac=max_tac,
+                profile=profile,
+            )
+            return self._send(HTTPStatus.OK, result)
         with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
             path = Path(tmp) / "file.pdf"
             path.write_bytes(uploads[0][2])
@@ -232,6 +247,8 @@ class ToolRoutesMixin:
                 min_dpi=min_dpi,
                 error_dpi=error_dpi,
                 min_bleed_mm=min_bleed,
+                max_tac=max_tac,
+                profile=profile,
             )
         return self._send(HTTPStatus.OK, result)
 
@@ -253,6 +270,8 @@ class ToolRoutesMixin:
                 add_crop_marks=(fields.get("add_crop_marks") == "true"),
                 color_strategy=(fields.get("color_strategy") or None),
                 flatten_transparency=(fields.get("flatten_transparency") == "true"),
+                fix_white_overprint=(fields.get("fix_white_overprint") == "true"),
+                add_pdfx_intent=(fields.get("add_pdfx_intent") == "true"),
             )
             return self._send(
                 HTTPStatus.OK,
@@ -260,6 +279,36 @@ class ToolRoutesMixin:
                 "application/pdf",
                 {"Content-Disposition": 'attachment; filename="preflight-fixed.pdf"'},
             )
+
+    def _preflight_preview(self, body):
+        """Render a true CMYK plate separation ('c', 'm', 'y', 'k', 'all') or TAC heatmap ('tac') PNG."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        file_id = (fields.get("id") or "").strip()
+        opened_path = self.opened.get(file_id) if (file_id and self.opened is not None) else None
+        if not uploads and (opened_path is None or not opened_path.is_file()):
+            raise UserError("no file")
+        page = max(1, int(fields.get("page") or 1))
+        plate = (fields.get("plate") or "all").strip().lower()
+        max_tac = float(fields.get("max_tac") or 300.0)
+        dpi = max(48, min(180, int(fields.get("dpi") or 100)))
+        password = fields.get("password") or None
+
+        if not uploads and opened_path is not None:
+            png_bytes, meta = preflight.render_plate_preview(
+                opened_path, password=password, page=page, plate=plate, max_tac=max_tac, dpi=dpi,
+            )
+        else:
+            with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+                path = Path(tmp) / "file.pdf"
+                path.write_bytes(uploads[0][2])
+                png_bytes, meta = preflight.render_plate_preview(
+                    path, password=password, page=page, plate=plate, max_tac=max_tac, dpi=dpi,
+                )
+        headers = {"X-ZPDF-Plate": str(meta.get("plate", plate))}
+        if "max_tac_pct" in meta:
+            headers["X-ZPDF-Max-TAC"] = str(meta["max_tac_pct"])
+            headers["X-ZPDF-Over-TAC-Pct"] = str(meta.get("over_limit_pct", 0.0))
+        return self._send(HTTPStatus.OK, png_bytes, "image/png", headers)
 
     def _translate_page(self, body):
         """Translate a single page of a PDF without modifying the document."""

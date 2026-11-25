@@ -50,6 +50,7 @@ def test_user_facing_feature_endpoints_are_wired_in_frontend():
         "/api/translate/page",
         "/api/preflight/check",
         "/api/preflight/fix",
+        "/api/preflight/preview",
         "/api/crop",
         "/api/filing/rules",
         "/api/filing/preview",

@@ -456,6 +456,8 @@ def cmd_preflight(a):
                 min_dpi=a.min_dpi,
                 error_dpi=a.error_dpi,
                 min_bleed_mm=a.min_bleed,
+                max_tac=getattr(a, "max_tac", 300.0),
+                profile=getattr(a, "profile", "standard"),
             )
         except (core.PdfManagerError, OSError) as exc:
             if len(inputs) == 1:
