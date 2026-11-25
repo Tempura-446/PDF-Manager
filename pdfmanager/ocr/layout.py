@@ -12,19 +12,40 @@ from pdfmanager.ocr.engines import Line, MIN_CONFIDENCE, MIN_SKEW, MIN_SKEW_BOXE
 from pdfmanager.ocr.models import _call_lock, _engine
 from pdfmanager.ocr.preprocess import _array, _quad, _read, recognise
 
+_LIGATURES = str.maketrans({
+    "\ufb00": "ff", "\ufb01": "fi", "\ufb02": "fl",
+    "\ufb03": "ffi", "\ufb04": "ffl", "\ufb05": "st", "\ufb06": "st",
+})
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_CJK_CHAR_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]")
+
+
+def _normalize_ocr_text(text: str) -> str:
+    """Expand Latin ligatures and strip stray control characters."""
+    if not text:
+        return ""
+    return _CTRL_RE.sub("", text.translate(_LIGATURES))
+
+
 def _lines(result):
     if not result.txts:
         return []
     lines = []
     word_results = getattr(result, "word_results", None) or [None] * len(result.txts)
     for text, box, score, found in zip(result.txts, result.boxes, result.scores, word_results):
-        if score < MIN_CONFIDENCE or not text.strip():
+        clean = _normalize_ocr_text(text)
+        stripped = clean.strip()
+        if score < MIN_CONFIDENCE or not stripped:
             continue
-        words = _words(text, found) if found else [Word(text, _quad(box), float(score))]
+        # Drop isolated 1-character low-confidence punctuation speckles
+        if len(stripped) == 1 and not stripped.isalnum() and float(score) < 0.65:
+            continue
+        words = _words(clean, found) if found else [Word(clean, _quad(box), float(score))]
+        words = [Word(_normalize_ocr_text(w.text), w.quad, w.confidence) for w in words]
         words = [w for w in (_without_blanks(word) for word in words) if w]
         if not words:
             continue
-        lines.append(Line(text, _quad(box), float(score), words))
+        lines.append(Line(clean, _quad(box), float(score), words))
     return reading_order(lines)
 
 
@@ -138,6 +159,12 @@ def _gaps(spans):
     return gaps
 
 
+def _effective_word_count(text: str) -> int:
+    cjk = len(_CJK_CHAR_RE.findall(text or ""))
+    non_cjk = len(_CJK_CHAR_RE.sub(" ", text or "").split())
+    return cjk + non_cjk
+
+
 def _prose(lines):
     """Whether lines read like a column of running text, not table cells:
     several words a line, and lines that fill most of their column."""
@@ -145,8 +172,12 @@ def _prose(lines):
         return False
     boxes = [_bbox(line) for line in lines]
     width = max(b[2] for b in boxes) - min(b[0] for b in boxes)
-    words = statistics.median(len(line.text.split()) for line in lines)
+    words = statistics.median(_effective_word_count(line.text) for line in lines)
     filled = statistics.median(b[2] - b[0] for b in boxes)
+    # Upright vertical CJK columns are tall rather than wide; accept them as prose too.
+    tall_cjk = sum(1 for ln, b in zip(lines, boxes) if (b[3] - b[1]) > 1.2 * (b[2] - b[0]) and _CJK_CHAR_RE.search(ln.text))
+    if tall_cjk >= max(2, len(lines) // 2) and words >= 3:
+        return True
     return words >= 3 and filled >= 0.5 * width
 
 
@@ -314,17 +345,30 @@ def page_orientation(image, script=None, quality="standard"):
 def _reads_wrong_way(result):
     """Whether a page's first reading suggests it is sideways or upside
     down: its text boxes run down the page, or the model is unsure of most
-    of what it read (upside-down text reads as low-confidence nonsense)."""
-    texts, scores = result.txts or (), result.scores or ()
-    boxes = result.boxes if result.boxes is not None else ()
+    of what it read (upside-down text reads as low-confidence nonsense).
+    Upright vertical CJK (tategaki) columns are tall by design and are not
+    misclassified as sideways."""
+    if isinstance(result, (list, tuple)):
+        texts = [ln.text for ln in result]
+        scores = [ln.confidence for ln in result]
+        boxes = [ln.quad for ln in result]
+    else:
+        texts, scores = result.txts or (), result.scores or ()
+        boxes = result.boxes if result.boxes is not None else ()
     across = down = 0.0
-    for box in boxes:
+    cjk_down = 0.0
+    for text, box, score in zip(texts, boxes, scores):
         width, height = _box_size(box)
         if width > 1.2 * height:
             across += width
         elif height > 1.2 * width:
             down += height
+            if score >= 0.75 and _CJK_CHAR_RE.search(text or ""):
+                cjk_down += height
     if down > across:
+        # Upright vertical CJK (tategaki) reads cleanly top-to-bottom without 90° rotation.
+        if cjk_down >= 0.5 * down:
+            return False
         return True
     chars = sum(len(t) for t in texts)
     if not chars:

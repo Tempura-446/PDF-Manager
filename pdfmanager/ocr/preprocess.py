@@ -37,15 +37,18 @@ def _measure_image(image):
     if w == 0 or h == 0:
         return {"paper": 255.0, "contrast": 0.0, "uneven": 0.0, "speckle": 0.0, "stroke_width": 0.0}
 
-    # Unblurred strided sample preserves true ink darkness (thumbnailing blurs thin strokes to grey).
-    step = max(1, max(w, h) // 1000)
+    # Unblurred strided sample on interior (excluding 4% outer scan border) preserves true ink darkness.
+    bx, by = int(w * 0.04), int(h * 0.04)
+    inner = grey.crop((bx, by, w - bx, h - by)) if (w - 2 * bx >= 32 and h - 2 * by >= 32) else grey
+    iw, ih = inner.size
+    step = max(1, max(iw, ih) // 1000)
     full_arr = np.asarray(grey, np.float32)
-    sample = full_arr[::step, ::step]
+    sample = np.asarray(inner, np.float32)[::step, ::step]
     paper = float(np.median(sample))
     p_ink = float(np.percentile(sample, 0.5))
     contrast = max(0.0, paper - p_ink)
 
-    small = grey.copy()
+    small = inner.copy()
     small.thumbnail((400, 400))
     bg_im = small.filter(ImageFilter.MaxFilter(9)).filter(ImageFilter.GaussianBlur(5))
     bg = np.asarray(bg_im, np.float32)
@@ -295,15 +298,31 @@ def _retry_low_confidence(image, lines, script=None, quality="standard"):
         if right - left < 8 or bottom - top < 6:
             updated.append(line)
             continue
+        from PIL import ImageFilter
+        import numpy as np
+
         crop = image.crop((left, top, right, bottom))
+        raw_median = float(np.median(np.asarray(crop.convert("L"), np.float32)))
         crop = ImageOps.autocontrast(crop.convert("RGB"), cutoff=1)
         crop = _dewarp_line_crop(crop)
         up = 2.0 if lh < 36.0 and max(crop.size) * 2 <= MAX_RENDER_SIDE else 1.0
         if up > 1.0:
             crop = crop.resize((max(1, round(crop.width * up)), max(1, round(crop.height * up))), Image.BICUBIC)
+            crop = crop.filter(ImageFilter.UnsharpMask(radius=1.2, percent=110, threshold=2))
         with _call_lock:
             res = engine(_array(crop), use_det=True, use_cls=False, use_rec=True)
         cand_lines = _lines(res)
+        # If crop has a dark background (e.g. white text on dark header/banner), also try inverted polarity.
+        if raw_median < 95.0:
+            inv = ImageOps.invert(crop.convert("RGB"))
+            with _call_lock:
+                inv_res = engine(_array(inv), use_det=True, use_cls=False, use_rec=True)
+            inv_lines = _lines(inv_res)
+            if inv_lines:
+                inv_score = sum(cl.confidence * len(cl.text) for cl in inv_lines)
+                cur_score = sum(cl.confidence * len(cl.text) for cl in cand_lines)
+                if inv_score > cur_score:
+                    cand_lines = inv_lines
         if not cand_lines:
             updated.append(line)
             continue

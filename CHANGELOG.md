@@ -4,6 +4,44 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.75.0
+
+OCR, Translation & Manga Formatting Power Upgrade.
+
+- **Strengthened OCR (`pdfmanager/ocr/preprocess.py`, `pdfmanager/ocr/layout.py`).**
+  - Border-safe paper/contrast measurement ignores outer 4% black scan margins
+    so scanner borders no longer skew background flattening.
+  - Low-confidence line retries now apply `UnsharpMask` after 2× upscaling on
+    small/blurry text and automatically attempt an inverted-polarity pass on
+    dark-background crops (white text on dark headers/banners).
+  - CJK-aware `_prose()` enables clean multi-column CJK splitting; upright
+    vertical CJK (*tategaki*) pages are no longer misclassified as rotated
+    sideways pages in `_reads_wrong_way()`.
+  - Post-OCR normalization expands Latin ligatures (`ﬁ/ﬂ/ﬀ/ﬃ/ﬄ`), strips stray
+    control characters, and drops isolated 1-char low-confidence punctuation
+    speckles.
+- **Improved Translation (`pdfmanager/translate/text.py`, `layout.py`).**
+  - Hardened neural entity protection for inline `` `code` ``, semantic
+    versions (`v1.2.3`), `snake_case` identifiers, and ISO currency amounts
+    (`USD`/`EUR`/`GBP`/`JPY`/`￥`), with fullwidth-digit and separator-tolerant
+    sentinel restoration.
+  - Added column-aware reading-order sorting (`_sort_blocks_reading_order`),
+    Unicode de-hyphenation (`-`, `\u00ad`, `\u2010`, `\u2011`), zero-space
+    CJK-to-CJK line joining, bold subheading separation, trimmed border-safe
+    background color sampling, and progressive line-leading tightening
+    (`1.20 → 1.08`) before clipping dense cells.
+- **Improved Manga Formatting (`pdfmanager/translate/manga.py`, `pdfmanager/cbz.py`).**
+  - Raster bubble OCR now strips narrow furigana/ruby columns and sorts
+    vertical Japanese columns right-to-left (`_order_and_clean_bubble_lines`).
+  - Added elliptical/diamond-shaped comic dialogue wrapping
+    (`_wrap_elliptical`) for oval bubbles, comic punctuation & emphasis polish
+    (`_format_comic_text`: `…`, `—`, `?!`, bold shouts up to 22pt via binary
+    search, italic whispers/thoughts), Gaussian-feathered bubble erasing masks,
+    and adaptive paper-luminance bubble detection.
+  - `cbz_to_pdf` preserves monochrome/grayscale manga pages losslessly
+    (`FlateDecode` PNG) instead of lossy JPEG so fine kanji strokes &
+    screentones stay crisp for OCR.
+
 ## 0.74.0
 
 Local AI Document Assistant (Ask this PDF with Clickable Page Citations, Document/Chapter Summarizer & Structured Table/Key-Value Extractor).

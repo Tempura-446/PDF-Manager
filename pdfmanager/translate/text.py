@@ -88,13 +88,18 @@ def split_sentences(text):
 # the neural model translates dates and counts into natural target-language grammar.
 _NEURAL_PROTECT_RE = re.compile(
     r"(?:"
-    r"https?://[^\s<>()\"']+[^\s<>()\"'.,;:!?]"
+    r"`[^`\n]{1,80}`"
+    r"|https?://[^\s<>()\"']+[^\s<>()\"'.,;:!?]"
     r"|www\.[^\s<>()\"']+[^\s<>()\"'.,;:!?]"
     r"|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
     r"|(?:\+?\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.-]\d{3,4}[\s.-]\d{3,4}"
     r"|\b[A-Z]{2,}(?:-[A-Z0-9]+){1,4}\b"
+    r"|\bv\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.]+)?\b"
+    r"|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b"
     r"|\b\d{4}-\d{2}-\d{2}\b"
-    r"|(?:[$€£¥]\s?\d[\d,]*(?:\.\d+)?)"
+    r"|(?:[$€£¥￥]\s?\d[\d,]*(?:\.\d+)?)"
+    r"|\b(?:USD|EUR|GBP|JPY|CHF|CAD|AUD|CNY|KRW)\s?\d[\d,]*(?:\.\d+)?\b"
+    r"|\b\d[\d,]*(?:\.\d+)?\s?(?:USD|EUR|GBP|JPY|CHF|CAD|AUD|CNY|KRW)\b"
     r"|\b\d{1,3}(?:,\d{3})+(?:\.\d+)?%?"
     r")"
 )
@@ -264,11 +269,22 @@ def _protect_neural_entities(text, compiled_glossary=None):
 
 
 def _restore_neural_entities(translated, mapping):
-    """Restore numeric sentinels in ``translated``; returns ``(text, all_found)``."""
+    """Restore numeric sentinels in ``translated``; returns ``(text, all_found)``.
+
+    Tolerates MT engines inserting thousands separators (``,``, ``.``, spaces)
+    or converting ASCII digits to fullwidth digits (``０-９``).
+    """
     out = translated
     all_found = True
     for sentinel, original in mapping:
-        pattern = re.compile(r"\s*".join(re.escape(ch) for ch in sentinel))
+        digit_pats = []
+        for ch in sentinel:
+            if ch.isdigit():
+                fw = chr(ord("０") + int(ch))
+                digit_pats.append(f"[{ch}{fw}]")
+            else:
+                digit_pats.append(re.escape(ch))
+        pattern = re.compile(r"[\s,.\u00a0\u202f]*".join(digit_pats))
         m = pattern.search(out)
         if not m:
             all_found = False

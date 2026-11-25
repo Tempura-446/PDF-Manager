@@ -471,10 +471,13 @@ def _sample_bg_rgb(bg_image, x0, top, x1, bottom, page_w, page_h):
         samples.append(bg_image.getpixel((px1, y)))
     if not samples:
         return (1.0, 1.0, 1.0)
-    rs = sorted(p[0] for p in samples)
-    gs = sorted(p[1] for p in samples)
-    bs = sorted(p[2] for p in samples)
-    mid = len(samples) // 2
+    # Trim the darkest 25% of border samples so thin cell strokes don't flip light cells to dark.
+    by_lum = sorted(samples, key=lambda p: 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
+    trim = by_lum[len(by_lum) // 4 :] if len(by_lum) >= 8 else by_lum
+    rs = sorted(p[0] for p in trim)
+    gs = sorted(p[1] for p in trim)
+    bs = sorted(p[2] for p in trim)
+    mid = len(trim) // 2
     return (rs[mid] / 255.0, gs[mid] / 255.0, bs[mid] / 255.0)
 
 
@@ -712,11 +715,14 @@ def _extract_layout_blocks(plumber_page):
                 horiz_overlap = min(seg["x1"], blk["x1"]) > max(seg["x0"], blk["x0"])
                 blk_w = blk["x1"] - blk["x0"]
                 short_heading = blk["lines"] == 1 and blk_w < min(140.0, page_w * 0.28) and blk["text"][-1] not in ",;"
-                if same_size and same_left and horiz_overlap and not short_heading:
+                bold_mismatch = bool(seg.get("bold")) != bool(blk.get("bold")) and not blk.get("bold_prefix")
+                if same_size and same_left and horiz_overlap and not short_heading and not bold_mismatch:
                     prev_text = blk["text"]
                     nxt_text = seg["text"]
-                    if prev_text.endswith("-") and len(prev_text) >= 2 and prev_text[-2].isalpha() and nxt_text[0].islower():
+                    if prev_text.endswith(("-", "\u00ad", "\u2010", "\u2011")) and len(prev_text) >= 2 and prev_text[-2].isalpha() and nxt_text[0].islower():
                         blk["text"] = prev_text[:-1] + nxt_text
+                    elif ord(prev_text[-1]) > 0x2E80 and ord(nxt_text[0]) > 0x2E80:
+                        blk["text"] = prev_text + nxt_text
                     else:
                         blk["text"] = prev_text + " " + nxt_text
                     blk["x0"] = min(blk["x0"], seg["x0"])
@@ -732,8 +738,35 @@ def _extract_layout_blocks(plumber_page):
             free_blocks.append(seg)
 
     blocks.extend(free_blocks)
-    blocks.sort(key=lambda b: (b["top"], b["x0"]))
-    return blocks
+    return _sort_blocks_reading_order(blocks, page_w=page_w)
+
+
+def _sort_blocks_reading_order(blocks, page_w=612.0):
+    """Order blocks column-by-column when a clean vertical gutter separates
+    multi-column text, falling back to top-to-bottom left-to-right."""
+    if len(blocks) <= 2:
+        return sorted(blocks, key=lambda b: (b["top"], b["x0"]))
+    # Find the widest vertical gutter with at least 2 blocks on each side and no crossing blocks.
+    xs = sorted(blocks, key=lambda b: (b["x0"], b["x1"]))
+    best_cut = None
+    best_gap = 0.0
+    reach = xs[0]["x1"]
+    for i in range(1, len(xs)):
+        start = xs[i]["x0"]
+        if start > reach + max(12.0, page_w * 0.025):
+            gap = start - reach
+            left_n = i
+            right_n = len(xs) - i
+            if left_n >= 2 and right_n >= 2 and gap > best_gap:
+                best_gap = gap
+                best_cut = (reach + start) / 2.0
+        reach = max(reach, xs[i]["x1"])
+    if best_cut is not None:
+        left = [b for b in blocks if (b["x0"] + b["x1"]) / 2.0 < best_cut]
+        right = [b for b in blocks if (b["x0"] + b["x1"]) / 2.0 >= best_cut]
+        if left and right:
+            return _sort_blocks_reading_order(left, page_w) + _sort_blocks_reading_order(right, page_w)
+    return sorted(blocks, key=lambda b: (b["top"], b["x0"]))
 
 
 def _strip_bt_et_ops(instructions):
@@ -929,17 +962,20 @@ def _make_layout_overlay(
 
         avail_h = max(orig_size * 1.25, (max_bottom - top) + 2 * pad)
 
-        # Auto-fit font size down gently until wrapped lines fit inside the block
-        min_size = max(5.5, orig_size * 0.55)
+        # Auto-fit font size down gently, then tighten leading (1.20 -> 1.08) before clipping
+        min_size = max(4.8 if blk.get("in_table") else 5.5, orig_size * 0.55)
         fit_size = orig_size
+        leading_mult = 1.2
         wrapped = _wrap_text(text, chosen_font, fit_size, avail_w)
-        while len(wrapped) * (fit_size * 1.2) > avail_h + 1.0 and fit_size > min_size:
+        while len(wrapped) * (fit_size * leading_mult) > avail_h + 1.0 and fit_size > min_size:
             fit_size = max(min_size, fit_size * 0.9)
             wrapped = _wrap_text(text, chosen_font, fit_size, avail_w)
+        if len(wrapped) * (fit_size * leading_mult) > avail_h + 1.0:
+            leading_mult = 1.08
 
         c.setFillColorRGB(*fg_rgb)
         c.setFont(chosen_font, fit_size)
-        leading = fit_size * 1.2
+        leading = fit_size * leading_mult
         y = height - top - fit_size * 0.88
         cx = (box_x0 + box_x1) / 2.0
         bold_prefix = bool(blk.get("bold_prefix")) and not is_rtl and align == "left"
