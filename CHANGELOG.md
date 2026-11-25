@@ -4,6 +4,35 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.70.0
+
+Print-Production CMYK Preflight v3 (Press-Room Grade).
+
+- **Recursive Form XObject (`/Subtype /Form`) Inspection & Separation (`pdfmanager/preflight.py`).**
+  - Preflight checks, pure-Python fixes, and C/M/Y/K plate separation now
+    recursively traverse nested Form XObjects (with CTM composition, Form-local
+    `/Resources`, and cycle guards), catching low-DPI images, >300% TAC fills,
+    RGB logos, hairlines, and white overprint inside placed artwork from
+    InDesign, Illustrator, Figma, and Canva.
+- **Pure-Python One-Click CMYK Press Fixes (Zero Ghostscript Required).**
+  - `fix_rich_black_text=True`: converts small rich-black body text (`<= 12 pt`)
+    to crisp pure 100% K (`0/0/0/1 k`) with `/op true` overprint.
+  - `clamp_tac`: GCR-preserving ink-limit clamping on both CMYK vectors and
+    embedded CMYK `Image` XObjects so every pixel/fill stays under your paper
+    stock's TAC limit (280% / 300% / 320%).
+  - `fix_hairlines`: bumps sub-threshold hairline strokes (`< 0.25 pt`) up to
+    `0.25 pt`.
+  - `convert_rgb_to_cmyk=True`: converts `DeviceRGB` vectors and Image XObjects
+    to `DeviceCMYK` directly in Python.
+- **Spot Ink Inventory & Registration-Colour Hazard Audit.**
+  - Reports all named `Separation` / `DeviceN` spot inks (`spot_colors`), warns
+    on >2 spot inks (`many_spot_colors`), and flags `/Separation /All` (400%
+    registration ink) accidentally used inside the page (`registration_color`).
+- **Live Ink-Density Eyedropper & "Fix All CMYK Press Issues" (`POST /api/preflight/inkmap`, `reader.js`).**
+  - Hover over the Reader's Output Preview to read live **`C% · M% · Y% · K%`
+    and `TAC%`** under your cursor, and apply all pure-Python CMYK press fixes
+    in one click.
+
 ## 0.69.0
 
 Print-Production CMYK Preflight v2 & Output Preview Suite.

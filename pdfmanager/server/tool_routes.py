@@ -272,6 +272,10 @@ class ToolRoutesMixin:
                 flatten_transparency=(fields.get("flatten_transparency") == "true"),
                 fix_white_overprint=(fields.get("fix_white_overprint") == "true"),
                 add_pdfx_intent=(fields.get("add_pdfx_intent") == "true"),
+                fix_rich_black_text=(fields.get("fix_rich_black_text") == "true"),
+                clamp_tac=float(fields.get("clamp_tac") or 0.0),
+                fix_hairlines=float(fields.get("fix_hairlines") or 0.0),
+                convert_rgb_to_cmyk=(fields.get("convert_rgb_to_cmyk") == "true"),
             )
             return self._send(
                 HTTPStatus.OK,
@@ -309,6 +313,26 @@ class ToolRoutesMixin:
             headers["X-ZPDF-Max-TAC"] = str(meta["max_tac_pct"])
             headers["X-ZPDF-Over-TAC-Pct"] = str(meta.get("over_limit_pct", 0.0))
         return self._send(HTTPStatus.OK, png_bytes, "image/png", headers)
+
+    def _preflight_inkmap(self, body):
+        """Return a compact 4-channel (C, M, Y, K) ink-percentage grid for the Reader eyedropper."""
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        file_id = (fields.get("id") or "").strip()
+        opened_path = self.opened.get(file_id) if (file_id and self.opened is not None) else None
+        if not uploads and (opened_path is None or not opened_path.is_file()):
+            raise UserError("no file")
+        page = max(1, int(fields.get("page") or 1))
+        dpi = max(36, min(120, int(fields.get("dpi") or 72)))
+        password = fields.get("password") or None
+
+        if not uploads and opened_path is not None:
+            grid = preflight.compute_ink_grid(opened_path, password=password, page=page, dpi=dpi)
+        else:
+            with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
+                path = Path(tmp) / "file.pdf"
+                path.write_bytes(uploads[0][2])
+                grid = preflight.compute_ink_grid(path, password=password, page=page, dpi=dpi)
+        return self._send(HTTPStatus.OK, grid)
 
     def _translate_page(self, body):
         """Translate a single page of a PDF without modifying the document."""
