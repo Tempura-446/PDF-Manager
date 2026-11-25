@@ -1,6 +1,6 @@
 # ZPDF
 
-`pdfm` is a PDF toolkit you can use three ways: as a **desktop app**, from
+`ZPDF` is a PDF toolkit you can use three ways: as a **desktop app**, from
 the **command line**, or as a **Python library**.
 
 It includes a full **PDF reader** with tabs, where you can also annotate,
