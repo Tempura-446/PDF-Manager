@@ -398,6 +398,12 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._attachments_update(body)
             if path == "/api/translate/page":
                 return self._translate_page(body)
+            if path == "/api/ai/ask":
+                return self._ai_ask(body)
+            if path == "/api/ai/summarize":
+                return self._ai_summarize(body)
+            if path == "/api/ai/extract":
+                return self._ai_extract(body)
             if path == "/api/settings":
                 return self._save_settings(body)
             if path == "/api/stamps":

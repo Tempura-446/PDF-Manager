@@ -27,6 +27,7 @@ import { Annotating } from "./annotate.js";
 import { CheckOcrMode } from "./checkocr.js";
 import { CropMode } from "./cropmode.js";
 import { attachMobileTouch } from "./mobile-touch.js";
+import { openAiAssistant } from "./ai-assistant.js";
 import { Finding } from "./find.js";
 import { FormMode } from "./formmode.js";
 import { Layering } from "./layers.js";
@@ -517,6 +518,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       this.#menuItem("print", "Print preflight check…", () => this.checkPreflight()),
       this.#menuItem("edittext", "Translate this page…", () => this.translateCurrentPage()),
       this.#menuItem("split", "Live bilingual reading…", () => this.openSplitView("__translate__")),
+      this.#menuItem("command", "Local AI assistant (Ask / Summarize / Extract)…", () => openAiAssistant(this, "ask")),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
       this.#menuItem("access", "Check accessibility", () => this.checkAccessibility()),  // -- accessibility --
       this.#menuItem("x", "Close this document", () => this.closeTab()),
@@ -1769,6 +1771,9 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       { icon: "print", label: "Print preflight check", words: "dpi cmyk rgb bleed fonts hairline press", run: () => this.checkPreflight() },
       { icon: "edittext", label: "Translate this page", words: "translate language offline page spanish french german chinese", run: () => this.translateCurrentPage() },
       { icon: "split", label: "Live bilingual reading", words: "translate bilingual book split view side by side language", run: () => this.openSplitView("__translate__") },
+      { icon: "command", label: "Ask this PDF (Local AI)", words: "ai assistant ask question ollama lm studio local llm chat citations", run: () => openAiAssistant(this, "ask") },
+      { icon: "command", label: "Summarize PDF (Local AI)", words: "ai summary chapter bullets study notes ollama local llm", run: () => openAiAssistant(this, "summarize") },
+      { icon: "command", label: "Extract table / key-values to CSV or JSON (Local AI)", words: "ai extract invoice table csv json structured ollama local llm", run: () => openAiAssistant(this, "extract") },
       ...(this.activeTab?.fileId ? [{ icon: "save", label: "Save", keys: "Ctrl+S", words: "write file", run: () => this.save() }] : []),
       { icon: "save", label: this.activeTab?.fileId ? "Save as" : this._edited() ? "Save a copy with your changes" : "Save a copy",
         keys: this.activeTab?.fileId ? "Ctrl+Shift+S" : "Ctrl+S", words: "download export copy", run: () => this.saveCopy() },
