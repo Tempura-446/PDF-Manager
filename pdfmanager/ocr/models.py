@@ -94,9 +94,9 @@ def _best_model_source(kind):
     return _model_entry(key, label)
 
 
-def _fetch(url, target):
+def _fetch(url, target, label=None):
     import urllib.request
-    from pdfmanager import policy
+    from pdfmanager import policy, progress
 
     if not str(url or "").startswith("https://"):
         raise core.PdfManagerError(f"OCR model download URL must use https:// (got {url!r})")
@@ -106,12 +106,28 @@ def _fetch(url, target):
     except policy.PolicyError as exc:
         raise core.PdfManagerError(str(exc)) from None
 
-    with urllib.request.urlopen(url, timeout=60) as response, open(target, "wb") as out:
+    req = urllib.request.Request(url, headers={"User-Agent": "ZPDF"})
+    with urllib.request.urlopen(req, timeout=60) as response, open(target, "wb") as out:
+        raw_total = response.headers.get("Content-Length") if response.headers else None
+        total = int(raw_total) if raw_total and str(raw_total).isdigit() else 0
+        done = 0
+        last_report = 0
         while True:
+            progress.check()
             chunk = response.read(1 << 16)
             if not chunk:
                 break
             out.write(chunk)
+            done += len(chunk)
+            if label and (done - last_report >= 512 * 1024 or (total and done >= total)):
+                last_report = done
+                done_mb = done / (1024 * 1024)
+                if total > 0:
+                    total_mb = total / (1024 * 1024)
+                    pct = min(100, int(round(done * 100 / total)))
+                    progress.say(f"getting the {label} ({done_mb:.1f} / {total_mb:.0f} MB, {pct}%)")
+                else:
+                    progress.say(f"getting the {label} ({done_mb:.1f} MB)")
 
 
 def _sha256(path):
@@ -133,8 +149,15 @@ def _download_model(label, url, digest, target, size_note="about 10 MB", fallbac
     target.parent.mkdir(parents=True, exist_ok=True)
     part = target.with_name(target.name + ".part")
     progress.say(f"getting the {label} (once, {size_note})")
+    fetch_fn = _ocr_attr("_fetch", _fetch)
     try:
-        _ocr_attr("_fetch", _fetch)(url, part)
+        if fetch_fn is _fetch:
+            fetch_fn(url, part, label=label)
+        else:
+            fetch_fn(url, part)
+    except progress.Cancelled:
+        part.unlink(missing_ok=True)
+        raise
     except Exception as exc:
         part.unlink(missing_ok=True)
         raise core.PdfManagerError(
@@ -241,7 +264,13 @@ def _engine(script=None, quality="standard", use_gpu=None, rec_model_path=None):
     key = (script, quality, gpu, rec_key) if rec_key else (script, quality, gpu)
     with _engine_lock:
         if key not in _engines:
-            params = {"Global.return_word_box": True}
+            params = {
+                "Global.return_word_box": True,
+                "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+            }
+            raw_threads = os.environ.get("ZPDF_OCR_THREADS", "").strip()
+            if raw_threads.isdigit() and int(raw_threads) > 0:
+                params["EngineConfig.onnxruntime.intra_op_num_threads"] = int(raw_threads)
             if gpu:
                 params["EngineConfig.onnxruntime.use_dml"] = True
             if quality == "best":

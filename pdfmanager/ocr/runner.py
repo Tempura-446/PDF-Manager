@@ -134,6 +134,9 @@ def render_scale(width_pt, height_pt, dpi=RENDER_DPI):
 
 PARALLEL_MIN_PAGES = 3  # spin up worker processes only when at least this many unique scan pages need OCR
 MAX_WORKERS = 4         # cap parallel OCR workers (each loads its own ONNX Runtime session)
+MAX_BEST_WORKERS = 2    # PP-OCRv5 server models use ~1.5-2 GB RAM and heavy CPU per worker
+STANDARD_WORKER_RAM_MB = 600
+BEST_WORKER_RAM_MB = 1800
 
 
 def _available_memory_mb():
@@ -169,16 +172,18 @@ def _available_memory_mb():
     return None
 
 
-def default_workers(page_count):
+def default_workers(page_count, quality="standard"):
     """Number of worker processes for parallel OCR, sized to CPU cores and
     available memory (1 when fewer than PARALLEL_MIN_PAGES need reading)."""
     if page_count < PARALLEL_MIN_PAGES:
         return 1
     cores = os.cpu_count() or 1
-    n = min(MAX_WORKERS, max(1, cores // 2 if cores > 2 else cores))
+    cap = MAX_BEST_WORKERS if quality == "best" else MAX_WORKERS
+    ram_per_worker = BEST_WORKER_RAM_MB if quality == "best" else STANDARD_WORKER_RAM_MB
+    n = min(cap, max(1, cores // 2 if cores > 2 else cores))
     avail_mb = _ocr_attr("_available_memory_mb", _available_memory_mb)()
     if avail_mb is not None:
-        n = min(n, max(1, avail_mb // 600))
+        n = min(n, max(1, avail_mb // ram_per_worker))
     return max(1, min(n, page_count))
 
 
@@ -218,7 +223,8 @@ def _recognise_scan_page(image, doc, page_idx, page_w, page_h, scale, rotate, de
     angle = 0.0
     if rotate:
         first = _with_quality(_ocr_attr("_read", _read), image, script, quality)
-        turn = _with_quality(_ocr_attr("page_orientation", page_orientation), image, script, quality) if _reads_wrong_way(first) else 0
+        # Orientation check only decides 0/90/180/270 deg; always use fast standard model.
+        turn = _with_quality(_ocr_attr("page_orientation", page_orientation), image, script, "standard") if _reads_wrong_way(first) else 0
         if turn:
             image = image.rotate(turn, expand=True)
         else:
@@ -243,7 +249,8 @@ def _recognise_scan_page(image, doc, page_idx, page_w, page_h, scale, rotate, de
                 high_image = high_image.rotate(-angle, resample=Image.BICUBIC, fillcolor="white")
             high_lines = _scale_lines(_lines(_with_quality(_ocr_attr("_read", _read), high_image, script, quality)),
                                       scale / high_scale)
-            high_lines = _retry_low_confidence(image, high_lines, script, quality)
+            if quality != "best":
+                high_lines = _retry_low_confidence(image, high_lines, script, quality)
             if _lines_score(high_lines) > _lines_score(lines):
                 lines = reading_order(high_lines)
     return lines, turn, angle, image.size
@@ -325,6 +332,11 @@ def shutdown_ocr_pool():
             logging.getLogger("zpdf").debug("runner.shutdown_ocr_pool: %s", _exc)
 
 
+def _init_ocr_worker(threads):
+    """Bound ONNX Runtime threads per worker process to prevent CPU oversubscription."""
+    os.environ["ZPDF_OCR_THREADS"] = str(max(1, int(threads)))
+
+
 def _acquire_ocr_pool(max_workers, *, custom_worker=False):
     """Return ``(executor, is_shared)``. Reuses a warm ProcessPoolExecutor across
     batch OCR files so workers keep ONNX models loaded; falls back to a dedicated
@@ -333,14 +345,21 @@ def _acquire_ocr_pool(max_workers, *, custom_worker=False):
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
 
+    threads_per_worker = max(1, (os.cpu_count() or 1) // max(1, max_workers))
+    pool_kw = {
+        "max_workers": max_workers,
+        "mp_context": multiprocessing.get_context("spawn"),
+        "initializer": _init_ocr_worker,
+        "initargs": (threads_per_worker,),
+    }
     if custom_worker:
-        return ProcessPoolExecutor(max_workers=max_workers, mp_context=multiprocessing.get_context("spawn")), False
+        return ProcessPoolExecutor(**pool_kw), False
 
     old_pool = None
     with _OCR_POOL_LOCK:
         if _OCR_POOL_STATE["in_use"]:
             # Another concurrent OCR job owns the shared pool -> dedicated one-off pool.
-            return ProcessPoolExecutor(max_workers=max_workers, mp_context=multiprocessing.get_context("spawn")), False
+            return ProcessPoolExecutor(**pool_kw), False
         timer = _OCR_POOL_STATE.get("timer")
         if timer is not None:
             timer.cancel()
@@ -350,7 +369,7 @@ def _acquire_ocr_pool(max_workers, *, custom_worker=False):
             old_pool = pool
             pool = None
         if pool is None:
-            pool = ProcessPoolExecutor(max_workers=max_workers, mp_context=multiprocessing.get_context("spawn"))
+            pool = ProcessPoolExecutor(**pool_kw)
             _OCR_POOL_STATE["pool"] = pool
             _OCR_POOL_STATE["workers"] = max_workers
         _OCR_POOL_STATE["in_use"] = True
@@ -463,6 +482,7 @@ def _refine_tables(image, lines, script=None, quality="standard"):
         image,
         lines,
         read_crop_fn=lambda crop: _lines(_with_quality(_ocr_attr("_read", _read), crop, script, quality)),
+        max_cell_retries=16 if quality == "best" else 48,
     )
 
 
@@ -495,7 +515,7 @@ def _record_unsure_stat(report, page_num, unsure_count, word_count):
 
 def _read_pages(source, output, force, deskew, rotate, script, note, quality="standard",
                 report=None, workers=None, _page_worker=None):
-    from concurrent.futures import ProcessPoolExecutor, as_completed
+    from concurrent.futures import FIRST_COMPLETED, wait
 
     import pypdfium2 as pdfium
     import pypdfium2.raw as pdfium_raw
@@ -619,7 +639,7 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
         # Pass 2: recognise each unique non-blank scan page (in parallel when beneficial).
         results_by_hash = {}
         unique_items = list(first_for_hash.items())
-        n_workers = default_workers(len(unique_items)) if workers is None else max(1, int(workers))
+        n_workers = default_workers(len(unique_items), quality=quality) if workers is None else max(1, int(workers))
         min_parallel = 2 if workers is not None else PARALLEL_MIN_PAGES
         can_pool = _page_worker is not None or (_ocr_attr("recognise", recognise) is _ORIG_RECOGNISE and _ocr_attr("_read", _read) is _ORIG_READ)
         use_pool = n_workers > 1 and len(unique_items) >= min_parallel and can_pool
@@ -634,15 +654,19 @@ def _read_pages(source, output, force, deskew, rotate, script, note, quality="st
                     executor.submit(worker_fn, (str(source), info[0], rotate, deskew, script, quality)): info[0]
                     for _h, info in unique_items
                 }
-                for fut in as_completed(futs):
-                    page_idx = futs[fut]
-                    try:
-                        _p, lines, turn, angle, img_size = fut.result()
-                    except Exception as exc:
-                        raise core.PdfManagerError(f"OCR failed on page {page_idx + 1}: {exc}") from None
-                    results_by_hash[hash_by_page[page_idx]] = (lines, turn, angle, img_size)
-                    done_count += 1
-                    progress.report(min(done_count, total - 1), total, "page")
+                pending = set(futs)
+                while pending:
+                    progress.check()
+                    done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        page_idx = futs[fut]
+                        try:
+                            _p, lines, turn, angle, img_size = fut.result()
+                        except Exception as exc:
+                            raise core.PdfManagerError(f"OCR failed on page {page_idx + 1}: {exc}") from None
+                        results_by_hash[hash_by_page[page_idx]] = (lines, turn, angle, img_size)
+                        done_count += 1
+                        progress.report(min(done_count, total - 1), total, "page")
             except progress.Cancelled:
                 _release_ocr_pool(executor, shared, broken=True)
                 raise

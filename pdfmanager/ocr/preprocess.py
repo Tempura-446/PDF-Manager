@@ -284,22 +284,31 @@ def _adaptive_binarize_crop(crop):
     return Image.fromarray(out, mode="L").convert("RGB")
 
 
+MAX_BEST_LINE_RETRIES = 8  # server-model retries are ~15x heavier than mobile; focus on worst lines
+
+
 def _retry_low_confidence(image, lines, script=None, quality="standard"):
     """Re-read low-confidence lines from a cleaned/enlarged crop and keep
     whichever reading has higher confidence (never both)."""
     from PIL import Image, ImageOps
+    from pdfmanager import progress
 
     if not lines or not any(line.confidence < RETRY_CONFIDENCE for line in lines):
         return lines
     w_img, h_img = image.size
     engine = _ocr_attr("_engine", _engine)(script, quality)
+    limit = MAX_BEST_LINE_RETRIES if quality == "best" else MAX_LINE_RETRIES
+    low_idxs = sorted(
+        (idx for idx, ln in enumerate(lines) if ln.confidence < RETRY_CONFIDENCE),
+        key=lambda idx: lines[idx].confidence,
+    )[:limit]
+    retry_set = set(low_idxs)
     updated = []
-    retried = 0
-    for line in lines:
-        if line.confidence >= RETRY_CONFIDENCE or retried >= MAX_LINE_RETRIES:
+    for idx, line in enumerate(lines):
+        if idx not in retry_set:
             updated.append(line)
             continue
-        retried += 1
+        progress.check()
         from pdfmanager.ocr.layout import _bbox, _lines, _union
         x0, y0, x1, y1 = _bbox(line)
         lh = max(y1 - y0, 1.0)
@@ -338,8 +347,10 @@ def _retry_low_confidence(image, lines, script=None, quality="standard"):
                 if inv_score > cur_score:
                     cand_lines = inv_lines
         # If still low confidence on a light crop, try local adaptive binarization for faint/shaded ink.
+        # In best-accuracy mode only run this extra server pass when the first retry produced no text.
         best_c = max((cl.confidence for cl in cand_lines), default=0.0)
-        if raw_median >= 95.0 and best_c < RETRY_CONFIDENCE:
+        need_bin = (not cand_lines) if quality == "best" else (best_c < RETRY_CONFIDENCE)
+        if raw_median >= 95.0 and need_bin:
             bin_crop = _adaptive_binarize_crop(crop)
             with _call_lock:
                 bin_res = engine(_array(bin_crop), use_det=True, use_cls=False, use_rec=True)
