@@ -132,7 +132,9 @@ def translate_pdf(
                         empty_pages += 1
                         continue
                     with core.PDFIUM_LOCK:
-                        pil_img = pdfium_doc[idx].render(scale=2.0).to_pil()
+                        pg = pdfium_doc[idx]
+                        r_scale = core.render_scale(pg, 2.0)
+                        pil_img = pg.render(scale=r_scale).to_pil()
                     page_img_sizes[idx] = pil_img.size
                     p_page = plumber_doc.pages[idx] if (plumber_doc is not None and idx < len(plumber_doc.pages)) else None
                     bubbles = _manga.detect_speech_bubbles(pil_img, reading_dir=reading_dir, plumber_page=p_page)
