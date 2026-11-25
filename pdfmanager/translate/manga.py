@@ -31,11 +31,36 @@ def default_reading_dir(src_lang):
 
 
 def order_manga_bubbles(bubbles, *, reading_dir="rtl"):
-    """Sort speech bubbles in comic reading order: top-to-bottom horizontal bands,
-    right-to-left (``reading_dir='rtl'``) or left-to-right (``'ltr'``) within each band."""
+    """Sort speech bubbles in comic reading order using panel/gutter-aware XY-cut.
+
+    Detects clean vertical gutters (e.g. 2-column / 4-koma manga layouts) so
+    columns read right-to-left (``'rtl'``) or left-to-right (``'ltr'``), then
+    orders bubbles top-to-bottom within each panel column/band.
+    """
     if not bubbles:
         return []
     is_ltr = str(reading_dir or "rtl").strip().lower() == "ltr"
+    if len(bubbles) >= 4:
+        xs = sorted(bubbles, key=lambda b: (b["x0"], b["x1"]))
+        best_cut = None
+        best_gap = 0.0
+        reach = xs[0]["x1"]
+        for i in range(1, len(xs)):
+            start = xs[i]["x0"]
+            if start > reach + 12.0:
+                gap = start - reach
+                if i >= 2 and (len(xs) - i) >= 2 and gap > best_gap:
+                    best_gap = gap
+                    best_cut = (reach + start) / 2.0
+            reach = max(reach, xs[i]["x1"])
+        if best_cut is not None:
+            left = [b for b in bubbles if b["cx"] < best_cut]
+            right = [b for b in bubbles if b["cx"] >= best_cut]
+            if left and right:
+                if is_ltr:
+                    return order_manga_bubbles(left, reading_dir=reading_dir) + order_manga_bubbles(right, reading_dir=reading_dir)
+                return order_manga_bubbles(right, reading_dir=reading_dir) + order_manga_bubbles(left, reading_dir=reading_dir)
+
     ordered_top = sorted(bubbles, key=lambda b: (b["y0"], b["cx"] if is_ltr else -b["cx"]))
     bands = []
     for b in ordered_top:
@@ -323,8 +348,11 @@ def detect_speech_bubbles(pil_img, *, max_dim=480, reading_dir="rtl", detect_inv
 
     paper_lum = float(np.percentile(gray, 90))
     light_thresh = max(205, min(236, int(round(paper_lum - 22.0))))
+    light_bin = Image.fromarray(((gray >= light_thresh).astype(np.uint8) * 255), mode="L")
+    # 1px morphological erosion of the light mask closes tiny 1-2px gaps in hand-drawn ink outlines
+    light_closed = np.asarray(light_bin.filter(ImageFilter.MinFilter(size=3)), dtype=np.uint8) > 127
     candidates = _scan_polarity_components(
-        gray, rgb_arr, gray >= light_thresh, inverted=False, orig_w=orig_w, orig_h=orig_h,
+        gray, rgb_arr, light_closed, inverted=False, orig_w=orig_w, orig_h=orig_h,
         plumber_page=plumber_page,
     )
     if detect_inverted:

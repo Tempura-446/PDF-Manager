@@ -330,6 +330,44 @@ def _translate_around_entities(text, fn, joiner, compiled_glossary=None):
     return re.sub(r"[ \t]{2,}", " ", out).strip()
 
 
+def _split_long_for_mt(text, max_chars=450):
+    """Split overly long paragraphs along sentence boundaries so 512-token
+    offline neural MT models never silently truncate the tail."""
+    s = str(text or "").strip()
+    if len(s) <= max_chars:
+        return [s] if s else []
+    sents = split_sentences(s) or [s]
+    chunks = []
+    cur = ""
+    for sent in sents:
+        if len(sent) > max_chars:
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            words = sent.split()
+            part = ""
+            for w in words:
+                cand = (part + " " + w).strip() if part else w
+                if len(cand) <= max_chars:
+                    part = cand
+                else:
+                    if part:
+                        chunks.append(part)
+                    part = w
+            if part:
+                chunks.append(part)
+        elif not cur:
+            cur = sent
+        elif len(cur) + 1 + len(sent) <= max_chars:
+            cur = cur + " " + sent
+        else:
+            chunks.append(cur)
+            cur = sent
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
 def translate_texts(texts, src_lang, dst_lang, *, translator=None, batch_size=32, glossary=None):
     """Translate a sequence of strings offline, preserving emails, URLs, phone
     numbers, reference codes, dates, currency, bullets, key-value labels, and

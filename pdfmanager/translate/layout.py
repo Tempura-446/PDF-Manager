@@ -450,6 +450,21 @@ def _luminance(rgb):
     return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
 
 
+def _rel_luminance(rgb):
+    """WCAG 2.1 linearized relative luminance for an (r, g, b) tuple in 0..1."""
+    def _lin(c):
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    return 0.2126 * _lin(rgb[0]) + 0.7152 * _lin(rgb[1]) + 0.0722 * _lin(rgb[2])
+
+
+def _contrast_ratio(rgb1, rgb2):
+    """WCAG 2.1 contrast ratio (1.0 .. 21.0) between two (r, g, b) colors."""
+    l1 = _rel_luminance(rgb1)
+    l2 = _rel_luminance(rgb2)
+    hi, lo = (l1, l2) if l1 >= l2 else (l2, l1)
+    return (hi + 0.05) / (lo + 0.05)
+
+
 def _sample_bg_rgb(bg_image, x0, top, x1, bottom, page_w, page_h):
     """Sample median background RGB around a block's border from a rendered page image."""
     if bg_image is None or page_w <= 0 or page_h <= 0:
@@ -882,8 +897,8 @@ def _make_layout_overlay(
             c.rect(rect_x, rect_y, rect_w, rect_h, stroke=0, fill=1)
 
         fg_rgb = blk["color"]
-        if bg_rgb is not None and abs(_luminance(fg_rgb) - _luminance(bg_rgb)) < 0.25:
-            fg_rgb = (0.0, 0.0, 0.0) if _luminance(bg_rgb) > 0.5 else (1.0, 1.0, 1.0)
+        if bg_rgb is not None and _contrast_ratio(fg_rgb, bg_rgb) < 4.5:
+            fg_rgb = (0.0, 0.0, 0.0) if _luminance(bg_rgb) > 0.45 else (1.0, 1.0, 1.0)
 
         chosen_font = fonts.font_for(
             text,
