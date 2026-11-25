@@ -4,6 +4,25 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.78.1
+
+Fix Built-in OCR Best-Accuracy Stalls & Add Live Model Download Progress.
+
+- **Built-in OCR Best-Accuracy Performance & Stability (`ocr/runner.py`, `ocr/preprocess.py`, `ocr/models.py`, `ocrtables.py`).**
+  - Fixed Best-accuracy mode stalling or appearing to hang on multi-page scans:
+    - Capped parallel worker processes for PP-OCRv5 server models to at most 2
+      (with an 1800 MB per-worker RAM budget) and bounded ONNX Runtime
+      `intra_op_num_threads` / `inter_op_num_threads` per worker to prevent CPU
+      thread oversubscription and RAM swap thrashing.
+    - Used the fast standard model for 0°/90°/180°/270° page orientation
+      detection instead of running the heavy server detector 3 extra times.
+    - Capped per-page server-model low-confidence line retries (8 worst lines)
+      and table cell re-reads (16 cells), skipping redundant second-pass server
+      detector calls when text was already recognised.
+    - Added live MB / percentage download progress and immediate Cancel support
+      when fetching the ~80 MB Best-accuracy models, plus responsive 0.5 s
+      cancellation polling in the worker pool.
+
 ## 0.78.0
 
 Direct Android Companion APK Release Packaging (`ZPDF-<version>-android.apk` + SHA-256).

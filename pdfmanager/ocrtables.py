@@ -388,16 +388,19 @@ def _column_is_numeric(cell_texts):
     return hits / len(body) >= 0.6
 
 
-def refine_tables(image, lines, read_crop_fn=None):
+def refine_tables(image, lines, read_crop_fn=None, max_cell_retries=48):
     """Detect ruled and unruled tables on a scanned page, read/refine cells
     individually (including a digits-focused second reading for numeric cells),
     and return all page lines with table cells in strict row-by-row order."""
+    from pdfmanager import progress
+
     ruled = detect_ruled_tables(image) if image is not None else []
     ruled_boxes = [t["box"] for t in ruled]
 
     # Partition lines into ruled-table lines and outside lines.
     used_ids = set()
     blocks = []  # [(sort_y, [Line, ...])]
+    cell_retries = 0
 
     for tbl in ruled:
         nrows = len(tbl["cells"])
@@ -431,7 +434,11 @@ def refine_tables(image, lines, read_crop_fn=None):
         # Cell-by-cell reading for empty-with-ink, low-confidence, or confused numeric cells.
         if read_crop_fn is not None and image is not None:
             for r in range(nrows):
+                if cell_retries >= max_cell_retries:
+                    break
                 for c in range(ncols):
+                    if cell_retries >= max_cell_retries:
+                        break
                     cell_lines = grid[r][c]
                     cell_box = tbl["cells"][r][c]
                     cell_text = " ".join(l.text for l in cell_lines).strip()
@@ -445,9 +452,13 @@ def refine_tables(image, lines, read_crop_fn=None):
                         has_confusion = looks_numeric(cell_text) and bool(_CONFUSABLE_LETTER_RE.search(cell_text))
                         need_reread = min_conf < 0.85 or has_confusion
                     if need_reread:
+                        progress.check()
+                        cell_retries += 1
                         padded, scale = _crop_cell(image, cell_box)
                         try:
                             retry_raw = read_crop_fn(padded)
+                        except progress.Cancelled:
+                            raise
                         except Exception:
                             retry_raw = []
                         retry_lines = _map_crop_lines(retry_raw, cell_box, scale)
