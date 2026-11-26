@@ -4,6 +4,15 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.83.0
+
+Direct **`.epub`**, **`.cbr`**, and **Multi-Image / Folder** Opening in the ZPDF Reader.
+
+- **Direct `.epub` E-Book Reader (`epub.py`, `server/reader_routes.py`, `gui.py`, `static/tabs.js`, `static/reader.js`, `static/tools.js`).**
+  - Open `.epub` e-books directly via **File → Open**, drag-and-drop, or the file picker—converted on the fly in pure Python into cleanly typeset PDF pages with clickable chapter outline bookmarks, embedded images, and automatic RTL detection (`page-progression-direction="rtl"`).
+- **Direct `.cbr` & Multi-Image Opening (`cbz.py`, `server/reader_routes.py`, `gui.py`, `static/tabs.js`, `static/reader.js`, `static/tools.js`).**
+  - Added `.cbr` comic/manga archive support (via `unrar`/`bsdtar`/`7z` or ZIP-renamed `.cbr` auto-detection) and `POST /api/images/open` so dropping one or more PNG/JPG/WebP scans onto the Reader or Home screen opens them directly as a single book.
+
 ## 0.82.0
 
 Scanlation Typesetting & Stroked SFX, **Settings → Offline AI Models Manager**, and **Vision-LLM OCR & Visual Translation**.

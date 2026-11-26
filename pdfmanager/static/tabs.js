@@ -50,10 +50,12 @@ export const Tabs = (Base) => class extends Base {
       }
       return;
     }
-    if (/\.cbz$/i.test(name)) {
+    if (/\.(cbz|cbr|epub)$/i.test(name)) {
+      const ext = name.match(/\.(cbz|cbr|epub)$/i)[1].toLowerCase();
+      const endpoint = { cbz: "/api/cbz/open", cbr: "/api/cbr/open", epub: "/api/epub/open" }[ext];
       if (this.loading) this.loading.hidden = false;
       try {
-        const res = await fetch("/api/cbz/open", {
+        const res = await fetch(endpoint, {
           method: "POST",
           headers: { "X-Pdfm-Token": this.token, "X-Pdfm-Filename": encodeURIComponent(name) },
           body: await file.arrayBuffer(),
@@ -64,13 +66,44 @@ export const Tabs = (Base) => class extends Base {
           return;
         }
         const pdfBytes = new Uint8Array(await res.arrayBuffer());
-        await this.openBytes(pdfBytes, name.replace(/\.cbz$/i, ".pdf"), password);
+        await this.openBytes(pdfBytes, name.replace(/\.(cbz|cbr|epub)$/i, ".pdf"), password);
       } finally {
         if (this.loading) this.loading.hidden = true;
       }
       return;
     }
+    if (/\.(png|jpe?g|webp|bmp|tiff?)$/i.test(name)) {
+      await this.openImageFiles([file], password);
+      return;
+    }
     await this.openBytes(new Uint8Array(await file.arrayBuffer()), name, password);
+  }
+
+  async openImageFiles(fileList, password = null) {
+    const imgs = [...(fileList || [])].filter((f) => /\.(png|jpe?g|webp|bmp|tiff?)$/i.test(f.name || ""));
+    if (!imgs.length) return;
+    if (this.loading) this.loading.hidden = false;
+    try {
+      const fd = new FormData();
+      const first = imgs[0].name || "images";
+      fd.append("title", imgs.length === 1 ? first.replace(/\.[^.]+$/, "") : `${first.replace(/\.[^.]+$/, "")}_book`);
+      for (const f of imgs) fd.append("file", f, f.name);
+      const res = await fetch("/api/images/open", {
+        method: "POST",
+        headers: { "X-Pdfm-Token": this.token },
+        body: fd,
+      });
+      if (!res.ok) {
+        const msg = (await res.json().catch(() => ({}))).error || res.statusText;
+        this.toast(msg);
+        return;
+      }
+      const pdfBytes = new Uint8Array(await res.arrayBuffer());
+      const outName = decodeURIComponent(res.headers.get("X-Pdfm-Filename") || "images.pdf");
+      await this.openBytes(pdfBytes, outName, password);
+    } finally {
+      if (this.loading) this.loading.hidden = true;
+    }
   }
 
   /** Open a PDF in a new tab, or switch to its tab if it's already open. */

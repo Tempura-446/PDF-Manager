@@ -323,7 +323,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     this.viewerEl = el("div", { class: "pdfViewer" });
     this.container = el("div", { class: "rd-container", tabindex: "0" }, this.viewerEl);
     this.loading = el("div", { class: "rd-loading", hidden: true }, el("div", { class: "rd-spinner", role: "progressbar", "aria-label": "Loading" }));
-    this.fileInput = el("input", { type: "file", accept: ".pdf,application/pdf,.cbz,.dxf,.dwg", hidden: true });
+    this.fileInput = el("input", { type: "file", accept: ".pdf,application/pdf,.epub,.cbz,.cbr,.dxf,.dwg,.png,.jpg,.jpeg,.webp", multiple: true, hidden: true });
     this.emptyOpenBtn = el("button", { class: "rd-btn primary", type: "button", html: svg("open") + "Open a PDF" });
     this.empty = el("div", { class: "rd-empty" },
       el("div", { class: "rd-empty-card" },
@@ -701,14 +701,24 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       this.empty.classList.remove("over");
       if (!hasFiles(e)) return;
       e.preventDefault(); e.stopPropagation();
-      const isPdf = (f) => f.type === "application/pdf" || /\.(pdf|cbz|dxf|dwg)$/i.test(f.name);
-      const file = [...e.dataTransfer.files].find(isPdf);
-      if (!file) { this.toast("That isn't a PDF, CBZ, or drawing."); return; }
-      // Remember dropped files for Recent (the handle must be asked for right away).
-      const item = [...e.dataTransfer.items].find((i) => i.kind === "file" && i.getAsFile() && isPdf(i.getAsFile()));
-      const handle = item && item.getAsFileSystemHandle ? item.getAsFileSystemHandle() : null;
-      if (handle) handle.then((h) => h && h.kind === "file" && files.rememberHandle(h)).catch(() => {});
-      this.openFile(file);
+      const dropped = [...e.dataTransfer.files];
+      const isDoc = (f) => f.type === "application/pdf" || /\.(pdf|epub|cbz|cbr|dxf|dwg)$/i.test(f.name);
+      const isImg = (f) => /\.(png|jpe?g|webp|bmp|tiff?)$/i.test(f.name);
+      const file = dropped.find(isDoc);
+      if (file) {
+        // Remember dropped files for Recent (the handle must be asked for right away).
+        const item = [...e.dataTransfer.items].find((i) => i.kind === "file" && i.getAsFile() && isDoc(i.getAsFile()));
+        const handle = item && item.getAsFileSystemHandle ? item.getAsFileSystemHandle() : null;
+        if (handle) handle.then((h) => h && h.kind === "file" && files.rememberHandle(h)).catch(() => {});
+        this.openFile(file);
+        return;
+      }
+      const imgs = dropped.filter(isImg);
+      if (imgs.length) {
+        this.openImageFiles(imgs);
+        return;
+      }
+      this.toast("That isn't a PDF, EPUB, CBZ/CBR, drawing, or image.");
     });
 
     // Ctrl/⌘ + wheel zooms around the pointer.

@@ -196,8 +196,13 @@ document.addEventListener("drop", (e) => {
   if (!hasFiles(e) || !current || current.files === null) return;
   e.preventDefault();
   if (inReader()) {  // dropped outside the reader pane (e.g. on the rail)
-    const pdf = [...e.dataTransfer.files].find((f) => isPdf(f) || /\.cbz$/i.test(f.name));
-    if (pdf) reader.openFile(pdf);
+    const dropped = [...e.dataTransfer.files];
+    const doc = dropped.find((f) => isPdf(f) || /\.(cbz|cbr|epub)$/i.test(f.name));
+    if (doc) reader.openFile(doc);
+    else {
+      const imgs = dropped.filter((f) => /\.(png|jpe?g|webp|bmp|tiff?)$/i.test(f.name));
+      if (imgs.length && reader.openImageFiles) reader.openImageFiles(imgs);
+    }
   } else if (current.files === "home") openFilesInReader(e.dataTransfer.files);
   else if (current.files === "scan") scanAddPhotos(e.dataTransfer.files);
   else addFiles(e.dataTransfer.files);
@@ -244,11 +249,17 @@ function recentTools() { try { return JSON.parse(localStorage.getItem("pdfm-rece
 function rememberTool(id) {
   try { localStorage.setItem("pdfm-recent-tools", JSON.stringify([id, ...recentTools().filter((t) => t !== id)].slice(0, 6))); } catch (e) {}
 }
+const _READABLE_EXTS = [".cbz", ".cbr", ".epub"];
+const _isReadableDoc = (f) => isPdf(f) || _READABLE_EXTS.some((ext) => (f.name || "").toLowerCase().endsWith(ext));
+const _isReadableImg = (f) => /\.(png|jpe?g|webp|bmp|tiff?)$/i.test(f.name);
 async function openFilesInReader(list) {
-  const pdfs = [...list].filter((f) => isPdf(f) || /\.cbz$/i.test(f.name));
-  if (!pdfs.length) { showError("Drop PDF or CBZ files to read them."); return; }
+  const all = [...list];
+  const docs = all.filter(_isReadableDoc);
+  const imgs = all.filter(_isReadableImg);
+  if (!docs.length && !imgs.length) { showError("Drop PDF, EPUB, CBZ/CBR, or image files to read them."); return; }
   await select("reader");
-  for (const pdf of pdfs) await reader.openFile(pdf);
+  for (const doc of docs) await reader.openFile(doc);
+  if (imgs.length && reader.openImageFiles) await reader.openImageFiles(imgs);
 }
 function whenText(t) {
   if (!t) return "";
