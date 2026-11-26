@@ -57,6 +57,34 @@ def _get_safe_open_cached(cache_key, path):
     return safe_bytes
 
 
+_CBZ_OPEN_CACHE = collections.OrderedDict()
+_CBZ_OPEN_LOCK = threading.Lock()
+_CBZ_OPEN_MAX = 4
+
+
+def _get_cbz_open_cached(cache_key, path):
+    from pdfmanager import cbz
+
+    with _CBZ_OPEN_LOCK:
+        hit = _CBZ_OPEN_CACHE.get(cache_key)
+        if hit is not None:
+            _CBZ_OPEN_CACHE.move_to_end(cache_key)
+            return hit
+    with tempfile.TemporaryDirectory(prefix="pdfm-cbz-") as tmp:
+        out_path = Path(tmp) / "comic.pdf"
+        try:
+            cbz.cbz_to_pdf(path, out_path)
+        except Exception as exc:  # noqa: BLE001 - report conversion failure cleanly
+            return exc
+        pdf_bytes = out_path.read_bytes()
+    with _CBZ_OPEN_LOCK:
+        _CBZ_OPEN_CACHE[cache_key] = pdf_bytes
+        _CBZ_OPEN_CACHE.move_to_end(cache_key)
+        while len(_CBZ_OPEN_CACHE) > _CBZ_OPEN_MAX:
+            _CBZ_OPEN_CACHE.popitem(last=False)
+    return pdf_bytes
+
+
 class ReaderRoutesMixin:
     """Reader, annotation, layer, text-edit, OCR-correction, and markup endpoints."""
 
@@ -71,9 +99,31 @@ class ReaderRoutesMixin:
             return self._error(HTTPStatus.NOT_FOUND, "that file is no longer available")
         # The path is percent-encoded like the name: a folder called
         # "Документы" would otherwise be unsendable.
-        headers = {"X-Pdfm-Filename": gui_hook("_download_headers", _download_headers)(path.name)["X-Pdfm-Filename"],
+        display_name = f"{path.stem}.pdf" if path.suffix.lower() == ".cbz" else path.name
+        headers = {"X-Pdfm-Filename": gui_hook("_download_headers", _download_headers)(display_name)["X-Pdfm-Filename"],
                    "X-Pdfm-Path": urllib.parse.quote(str(path), safe=""),
                    "X-Pdfm-Stamp": _file_stamp(path), "Accept-Ranges": "bytes"}
+
+        if path.suffix.lower() == ".cbz":
+            cache_key = (str(path), headers["X-Pdfm-Stamp"])
+            cbz_bytes = _get_cbz_open_cached(cache_key, path)
+            if isinstance(cbz_bytes, Exception):
+                return self._error(HTTPStatus.UNPROCESSABLE_ENTITY, f"couldn't open CBZ archive: {cbz_bytes}")
+            size = len(cbz_bytes)
+            wanted = self.headers.get("Range")
+            span = _byte_range(wanted, size) if wanted else (0, size - 1)
+            if span is None:
+                return self._send(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, b"", "application/pdf",
+                                  {**headers, "Content-Range": f"bytes */{size}"})
+            start, end = span
+            if start == 0:
+                RecentFiles.add(path)
+            if wanted:
+                headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+            self._start(HTTPStatus.PARTIAL_CONTENT if wanted else HTTPStatus.OK, "application/pdf",
+                        end - start + 1, headers)
+            self.wfile.write(cbz_bytes[start:end + 1])
+            return
 
         if policy.requires_make_safe_on_open():
             # Administrator policy requires Make Safe sanitization before opening.
@@ -332,6 +382,27 @@ class ReaderRoutesMixin:
             out = Path(tmp) / "output.pdf"
             src.write_bytes(body)
             dxf.drawing_to_pdf(src, out)
+            pdf_bytes = out.read_bytes()
+        return self._send(HTTPStatus.OK, pdf_bytes, "application/pdf",
+                          {"X-Pdfm-Filename": urllib.parse.quote(f"{Path(name).stem}.pdf")})
+
+    def _cbz_open(self, body):
+        """Convert an uploaded .cbz comic/manga archive to a PDF for the reader."""
+        from pdfmanager import cbz
+
+        raw_name = self.headers.get("X-Pdfm-Filename") or "comic.cbz"
+        try:
+            raw_name = urllib.parse.unquote(raw_name)
+        except Exception as _exc:
+            logging.getLogger("zpdf").debug("reader_routes.ReaderRoutesMixin._cbz_open: %s", _exc)
+        name = Path(raw_name).name or "comic.cbz"
+        if Path(name).suffix.lower() != ".cbz":
+            raise UserError("choose a .cbz comic or manga archive")
+        with tempfile.TemporaryDirectory(prefix="pdfm-cbz-") as tmp:
+            src = Path(tmp) / "input.cbz"
+            out = Path(tmp) / "output.pdf"
+            src.write_bytes(body)
+            cbz.cbz_to_pdf(src, out)
             pdf_bytes = out.read_bytes()
         return self._send(HTTPStatus.OK, pdf_bytes, "application/pdf",
                           {"X-Pdfm-Filename": urllib.parse.quote(f"{Path(name).stem}.pdf")})

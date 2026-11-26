@@ -196,7 +196,7 @@ document.addEventListener("drop", (e) => {
   if (!hasFiles(e) || !current || current.files === null) return;
   e.preventDefault();
   if (inReader()) {  // dropped outside the reader pane (e.g. on the rail)
-    const pdf = [...e.dataTransfer.files].find(isPdf);
+    const pdf = [...e.dataTransfer.files].find((f) => isPdf(f) || /\.cbz$/i.test(f.name));
     if (pdf) reader.openFile(pdf);
   } else if (current.files === "home") openFilesInReader(e.dataTransfer.files);
   else if (current.files === "scan") scanAddPhotos(e.dataTransfer.files);
@@ -245,8 +245,8 @@ function rememberTool(id) {
   try { localStorage.setItem("pdfm-recent-tools", JSON.stringify([id, ...recentTools().filter((t) => t !== id)].slice(0, 6))); } catch (e) {}
 }
 async function openFilesInReader(list) {
-  const pdfs = [...list].filter(isPdf);
-  if (!pdfs.length) { showError("Drop PDF files to read them."); return; }
+  const pdfs = [...list].filter((f) => isPdf(f) || /\.cbz$/i.test(f.name));
+  if (!pdfs.length) { showError("Drop PDF or CBZ files to read them."); return; }
   await select("reader");
   for (const pdf of pdfs) await reader.openFile(pdf);
 }

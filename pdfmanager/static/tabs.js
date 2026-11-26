@@ -50,6 +50,26 @@ export const Tabs = (Base) => class extends Base {
       }
       return;
     }
+    if (/\.cbz$/i.test(name)) {
+      if (this.loading) this.loading.hidden = false;
+      try {
+        const res = await fetch("/api/cbz/open", {
+          method: "POST",
+          headers: { "X-Pdfm-Token": this.token, "X-Pdfm-Filename": encodeURIComponent(name) },
+          body: await file.arrayBuffer(),
+        });
+        if (!res.ok) {
+          const msg = (await res.json().catch(() => ({}))).error || res.statusText;
+          this.toast(msg);
+          return;
+        }
+        const pdfBytes = new Uint8Array(await res.arrayBuffer());
+        await this.openBytes(pdfBytes, name.replace(/\.cbz$/i, ".pdf"), password);
+      } finally {
+        if (this.loading) this.loading.hidden = true;
+      }
+      return;
+    }
     await this.openBytes(new Uint8Array(await file.arrayBuffer()), name, password);
   }
 
