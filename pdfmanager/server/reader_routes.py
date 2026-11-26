@@ -62,18 +62,27 @@ _CBZ_OPEN_LOCK = threading.Lock()
 _CBZ_OPEN_MAX = 4
 
 
+_BOOK_OPEN_EXTS = {".cbz", ".cbr", ".epub"}
+
+
 def _get_cbz_open_cached(cache_key, path):
-    from pdfmanager import cbz
+    from pdfmanager import cbz, epub
 
     with _CBZ_OPEN_LOCK:
         hit = _CBZ_OPEN_CACHE.get(cache_key)
         if hit is not None:
             _CBZ_OPEN_CACHE.move_to_end(cache_key)
             return hit
-    with tempfile.TemporaryDirectory(prefix="pdfm-cbz-") as tmp:
-        out_path = Path(tmp) / "comic.pdf"
+    ext = Path(path).suffix.lower()
+    with tempfile.TemporaryDirectory(prefix="pdfm-book-") as tmp:
+        out_path = Path(tmp) / "book.pdf"
         try:
-            cbz.cbz_to_pdf(path, out_path)
+            if ext == ".epub":
+                epub.epub_to_pdf(path, out_path)
+            elif ext == ".cbr":
+                cbz.cbr_to_pdf(path, out_path)
+            else:
+                cbz.cbz_to_pdf(path, out_path)
         except Exception as exc:  # noqa: BLE001 - report conversion failure cleanly
             return exc
         pdf_bytes = out_path.read_bytes()
@@ -99,16 +108,17 @@ class ReaderRoutesMixin:
             return self._error(HTTPStatus.NOT_FOUND, "that file is no longer available")
         # The path is percent-encoded like the name: a folder called
         # "Документы" would otherwise be unsendable.
-        display_name = f"{path.stem}.pdf" if path.suffix.lower() == ".cbz" else path.name
+        is_book = path.suffix.lower() in _BOOK_OPEN_EXTS
+        display_name = f"{path.stem}.pdf" if is_book else path.name
         headers = {"X-Pdfm-Filename": gui_hook("_download_headers", _download_headers)(display_name)["X-Pdfm-Filename"],
                    "X-Pdfm-Path": urllib.parse.quote(str(path), safe=""),
                    "X-Pdfm-Stamp": _file_stamp(path), "Accept-Ranges": "bytes"}
 
-        if path.suffix.lower() == ".cbz":
+        if is_book:
             cache_key = (str(path), headers["X-Pdfm-Stamp"])
             cbz_bytes = _get_cbz_open_cached(cache_key, path)
             if isinstance(cbz_bytes, Exception):
-                return self._error(HTTPStatus.UNPROCESSABLE_ENTITY, f"couldn't open CBZ archive: {cbz_bytes}")
+                return self._error(HTTPStatus.UNPROCESSABLE_ENTITY, f"couldn't open {path.suffix.upper()} file: {cbz_bytes}")
             size = len(cbz_bytes)
             wanted = self.headers.get("Range")
             span = _byte_range(wanted, size) if wanted else (0, size - 1)
@@ -406,6 +416,65 @@ class ReaderRoutesMixin:
             pdf_bytes = out.read_bytes()
         return self._send(HTTPStatus.OK, pdf_bytes, "application/pdf",
                           {"X-Pdfm-Filename": urllib.parse.quote(f"{Path(name).stem}.pdf")})
+
+    def _epub_open(self, body):
+        """Convert an uploaded .epub e-book to a PDF for the reader."""
+        from pdfmanager import epub
+
+        raw_name = self.headers.get("X-Pdfm-Filename") or "book.epub"
+        try:
+            raw_name = urllib.parse.unquote(raw_name)
+        except Exception as _exc:
+            logging.getLogger("zpdf").debug("reader_routes._epub_open: %s", _exc)
+        name = Path(raw_name).name or "book.epub"
+        if Path(name).suffix.lower() != ".epub":
+            raise UserError("choose an .epub e-book")
+        with tempfile.TemporaryDirectory(prefix="pdfm-epub-") as tmp:
+            src = Path(tmp) / "input.epub"
+            out = Path(tmp) / "output.pdf"
+            src.write_bytes(body)
+            epub.epub_to_pdf(src, out)
+            pdf_bytes = out.read_bytes()
+        return self._send(HTTPStatus.OK, pdf_bytes, "application/pdf",
+                          {"X-Pdfm-Filename": urllib.parse.quote(f"{Path(name).stem}.pdf")})
+
+    def _cbr_open(self, body):
+        """Convert an uploaded .cbr comic archive to a PDF for the reader."""
+        from pdfmanager import cbz
+
+        raw_name = self.headers.get("X-Pdfm-Filename") or "comic.cbr"
+        try:
+            raw_name = urllib.parse.unquote(raw_name)
+        except Exception as _exc:
+            logging.getLogger("zpdf").debug("reader_routes._cbr_open: %s", _exc)
+        name = Path(raw_name).name or "comic.cbr"
+        if Path(name).suffix.lower() != ".cbr":
+            raise UserError("choose a .cbr comic or manga archive")
+        with tempfile.TemporaryDirectory(prefix="pdfm-cbr-") as tmp:
+            src = Path(tmp) / "input.cbr"
+            out = Path(tmp) / "output.pdf"
+            src.write_bytes(body)
+            cbz.cbr_to_pdf(src, out)
+            pdf_bytes = out.read_bytes()
+        return self._send(HTTPStatus.OK, pdf_bytes, "application/pdf",
+                          {"X-Pdfm-Filename": urllib.parse.quote(f"{Path(name).stem}.pdf")})
+
+    def _images_open(self, body):
+        """Convert one or more uploaded images (or an image folder drop) into a single PDF."""
+        from pdfmanager import cbz
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        if not uploads:
+            raise UserError("no images uploaded")
+        items = [(fname or f"page_{i:03d}.png", data) for i, (_field, fname, data) in enumerate(uploads, 1)]
+        title = (fields.get("title") or "").strip() or Path(items[0][0]).stem or "images"
+        rtl = _bool(fields.get("rtl"))
+        with tempfile.TemporaryDirectory(prefix="pdfm-imgs-") as tmp:
+            out = Path(tmp) / "images.pdf"
+            cbz.images_to_pdf(items, out, rtl_viewer=rtl)
+            pdf_bytes = out.read_bytes()
+        return self._send(HTTPStatus.OK, pdf_bytes, "application/pdf",
+                          {"X-Pdfm-Filename": urllib.parse.quote(f"{_safe_name(title)}.pdf")})
 
     def _text_edit(self, body):
         """Change words on the reader's pages; sends back the changed PDF."""

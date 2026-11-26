@@ -365,6 +365,12 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._drawing_open(body)
             if path == "/api/cbz/open":
                 return self._cbz_open(body)
+            if path == "/api/epub/open":
+                return self._epub_open(body)
+            if path == "/api/cbr/open":
+                return self._cbr_open(body)
+            if path == "/api/images/open":
+                return self._images_open(body)
             if path in ("/api/comments/summary", "/api/comments/markdown", "/api/comments/export", "/api/comments/import"):
                 return self._comments(path.rsplit("/", 1)[1], body)
             if path == "/api/text/edit":
@@ -987,8 +993,8 @@ class DesktopApi:
 
         chosen = self._window.create_file_dialog(
             webview.FileDialog.OPEN, directory=str(Path.home()),
-            file_types=("PDF & Comic files (*.pdf;*.cbz)", "PDF files (*.pdf)",
-                        "Comic / Manga archives (*.cbz)", "All files (*.*)"))
+            file_types=("PDF, E-Books & Comics (*.pdf;*.epub;*.cbz;*.cbr)", "PDF files (*.pdf)",
+                        "E-Books (*.epub)", "Comic / Manga archives (*.cbz;*.cbr)", "All files (*.*)"))
         if not chosen:
             return None
         path = Path(chosen if isinstance(chosen, str) else chosen[0])

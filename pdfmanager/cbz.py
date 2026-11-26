@@ -271,3 +271,143 @@ def translate_cbz(
             )
             res["output"] = str(dst)
         return res
+
+
+def images_to_pdf(items, output_pdf, *, rtl_viewer=False):
+    """Convert an ordered sequence of image ``Path``s or ``(name, bytes)`` pairs into a PDF.
+
+    Items are natural-sorted by filename and embedded at their exact aspect ratio.
+    """
+    from PIL import Image
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import DictionaryObject, NameObject
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+
+    dst = Path(output_pdf)
+    normalized = []
+    for item in items:
+        if isinstance(item, (str, Path)):
+            p = Path(item)
+            if p.is_file() and p.suffix.lower() in IMAGE_EXTS:
+                normalized.append((p.name, p.read_bytes()))
+        elif isinstance(item, tuple) and len(item) == 2:
+            name, raw = item
+            if Path(str(name)).suffix.lower() in IMAGE_EXTS and raw:
+                normalized.append((str(name), bytes(raw)))
+    if not normalized:
+        raise core.PdfManagerError("no supported images provided")
+
+    normalized.sort(key=lambda pair: _natural_sort_key(pair[0]))
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf)
+    used_names = []
+    total = len(normalized)
+    for idx, (name, raw) in enumerate(normalized):
+        progress.check()
+        progress.report(idx, total, "converting image page")
+        try:
+            with Image.open(io.BytesIO(raw)) as im:
+                is_gray = im.mode in ("1", "L", "LA")
+                im_out = im.convert("L") if is_gray else im.convert("RGB")
+                w_px, h_px = im_out.size
+                scale = 72.0 / 150.0
+                w_pt = max(72.0, min(1440.0, w_px * scale))
+                h_pt = w_pt * (float(h_px) / max(1.0, float(w_px)))
+                c.setPageSize((w_pt, h_pt))
+                img_buf = io.BytesIO()
+                if is_gray:
+                    im_out.save(img_buf, format="PNG", optimize=True)
+                else:
+                    im_out.save(img_buf, format="JPEG", quality=92)
+                img_buf.seek(0)
+                c.drawImage(ImageReader(img_buf), 0, 0, width=w_pt, height=h_pt)
+                c.showPage()
+                used_names.append(name)
+        except Exception as _exc:
+            logging.getLogger("zpdf").debug("cbz.images_to_pdf %s: %s", name, _exc)
+            continue
+
+    if not used_names:
+        raise core.PdfManagerError("no readable images found")
+    c.save()
+    buf.seek(0)
+
+    reader = PdfReader(buf)
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    if rtl_viewer:
+        writer._root_object[NameObject("/ViewerPreferences")] = DictionaryObject(
+            {NameObject("/Direction"): NameObject("/R2L")}
+        )
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with open(dst, "wb") as fh:
+        writer.write(fh)
+    return {"pages": len(used_names), "entries": used_names, "rtl": bool(rtl_viewer), "output": str(dst)}
+
+
+def cbr_to_pdf(cbr_path, output_pdf, *, rtl_viewer="auto"):
+    """Convert a ``.cbr`` (RAR comic/manga archive) into a PDF using available system tools.
+
+    Uses ``bsdtar``, ``unrar``, or ``7z`` if installed on PATH. Also supports
+    ZIP-renamed ``.cbr`` files automatically.
+    """
+    import shutil
+    import subprocess
+
+    src = Path(cbr_path)
+    if not src.is_file():
+        raise core.PdfManagerError(f"CBR file not found: {src}")
+
+    # Many ".cbr" files in the wild are actually ZIP archives renamed to .cbr
+    if zipfile.is_zipfile(src):
+        return cbz_to_pdf(src, output_pdf, rtl_viewer=rtl_viewer)
+
+    extractor = None
+    for tool in ("unrar", "bsdtar", "7z"):
+        exe = shutil.which(tool)
+        if exe:
+            extractor = (tool, exe)
+            break
+    if extractor is None:
+        raise core.PdfManagerError(
+            "Opening RAR-format .cbr archives requires 'unrar', 'bsdtar', or '7z' on PATH "
+            "(or convert the archive to .cbz)."
+        )
+
+    tool, exe = extractor
+    with tempfile.TemporaryDirectory(prefix="zpdf-cbr-") as tmp:
+        tmp_dir = Path(tmp)
+        if tool == "unrar":
+            cmd = [exe, "x", "-o+", "-idq", str(src), str(tmp_dir) + "/"]
+        elif tool == "bsdtar":
+            cmd = [exe, "-xf", str(src), "-C", str(tmp_dir)]
+        else:
+            cmd = [exe, "x", "-y", f"-o{tmp_dir}", str(src)]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if proc.returncode != 0:
+            raise core.PdfManagerError(f"could not extract CBR archive ({tool}): {(proc.stderr or proc.stdout).strip()[:200]}")
+
+        root_resolved = tmp_dir.resolve()
+        images = []
+        is_rtl = False
+        for p in sorted(tmp_dir.rglob("*")):
+            if not p.is_file():
+                continue
+            try:
+                p.resolve().relative_to(root_resolved)
+            except ValueError:
+                continue
+            if p.name.startswith(".") or "__MACOSX" in p.parts:
+                continue
+            if p.name.lower() == "comicinfo.xml" and rtl_viewer == "auto":
+                raw = p.read_text(encoding="utf-8", errors="ignore")
+                m = re.search(r"<Manga>\s*([^<]+?)\s*</Manga>", raw, re.IGNORECASE)
+                if m and m.group(1).strip().lower() in ("yes", "yesandrighttoleft"):
+                    is_rtl = True
+            elif p.suffix.lower() in IMAGE_EXTS:
+                images.append(p)
+        if rtl_viewer != "auto":
+            is_rtl = bool(rtl_viewer)
+        return images_to_pdf(images, output_pdf, rtl_viewer=is_rtl)
