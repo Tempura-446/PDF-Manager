@@ -57,22 +57,24 @@ def _save_folders(folders):
 
 
 def add_folder(folder_path):
-    """Add a local directory to the Bookshelf library."""
-    p = Path(str(folder_path or "")).expanduser()
-    if not p.is_dir():
-        raise core.PdfManagerError(f"folder not found: {p}")
-    resolved = str(p.resolve())
+    """Add a local directory path to the Bookshelf library."""
+    import os
+
+    raw = str(folder_path or "").strip()
+    if not raw or "\x00" in raw:
+        raise core.PdfManagerError("enter a valid folder path")
+    norm = os.path.normpath(os.path.expanduser(raw))
     folders = list_folders()
-    if resolved not in folders:
-        folders.append(resolved)
+    if norm not in folders:
+        folders.append(norm)
         _save_folders(folders)
     return folders
 
 
 def remove_folder(folder_path):
     """Remove a directory from the Bookshelf library."""
-    target = str(Path(str(folder_path or "")).expanduser().resolve()) if folder_path else ""
-    folders = [f for f in list_folders() if f != folder_path and f != target]
+    raw = str(folder_path or "").strip()
+    folders = [f for f in list_folders() if f != raw]
     _save_folders(folders)
     return folders
 

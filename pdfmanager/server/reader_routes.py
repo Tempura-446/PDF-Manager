@@ -510,17 +510,12 @@ class ReaderRoutesMixin:
         from pdfmanager import bookshelf
 
         data = json.loads(body or b"{}")
-        raw_path = str(data.get("path") or "").strip()
-        if not raw_path:
-            raise UserError("no file path")
-        p = Path(raw_path).resolve()
-        if not p.is_file() or p.suffix.lower() not in bookshelf.BOOK_EXTS:
+        book_id = str(data.get("id") or "").strip()
+        if not book_id:
+            raise UserError("no book id")
+        p = bookshelf.find_by_id(book_id)
+        if p is None or not p.is_file():
             raise UserError("file not found")
-        # Ensure the file is inside one of the user's configured Bookshelf folders (or already opened)
-        allowed = [Path(f).resolve() for f in bookshelf.list_folders()]
-        in_lib = any(p == root or root in p.parents for root in allowed)
-        if not in_lib:
-            raise UserError("file is not inside a configured Bookshelf folder")
         key = self.opened.add(p)
         return self._send(HTTPStatus.OK, {"id": key, "name": p.name, "path": str(p)})
 

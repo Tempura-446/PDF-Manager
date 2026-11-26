@@ -359,7 +359,7 @@ async function renderHome() {
           class: "shelf-card",
           title: item.path,
           onclick: async () => {
-            const opened = await jsonApi("/api/library/open", { path: item.path });
+            const opened = await jsonApi("/api/library/open", { id: item.id });
             if (opened?.id) await openInReaderById([opened.id]);
           },
         },

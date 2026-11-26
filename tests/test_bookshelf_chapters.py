@@ -69,9 +69,10 @@ def test_bookshelf_scan_thumbs_and_sibling_chapters(tmp_path, monkeypatch, app):
         assert jpeg.startswith(b"\xff\xd8\xff")
 
     # 4) Open from library & navigate Next / Prev chapters
+    book_id_2 = data["items"][1]["id"]
     req_open = urllib.request.Request(
         f"{base}/api/library/open",
-        data=json.dumps({"path": str(c2)}).encode("utf-8"),
+        data=json.dumps({"id": book_id_2}).encode("utf-8"),
         headers={"Content-Type": "application/json", "X-Pdfm-Token": token},
         method="POST",
     )
