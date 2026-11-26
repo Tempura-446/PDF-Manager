@@ -290,13 +290,13 @@ function factsLine(facts) {
 const MULTI_TOOLS = [["merge", "Several PDFs into one"], ["compare", "What changed between two versions"], ["search", "Find words or ask a question across its PDFs", "Search a folder"]];
 async function renderHome() {
   const host = $("home-host");
-  const input = el("input", { type: "file", accept: ".pdf,application/pdf", multiple: true, hidden: true });
+  const input = el("input", { type: "file", accept: ".pdf,application/pdf,.epub,.cbz,.cbr,.png,.jpg,.jpeg,.webp", multiple: true, hidden: true });
   input.addEventListener("change", () => { if (input.files.length) openFilesInReader(input.files); input.value = ""; });
   const drop = el("div", { class: "start-drop" },
     icon("upload"),
-    el("div", {}, el("b", {}, "Drop PDFs here"), ", or choose them from your computer.", el("br"), "Nothing leaves this PC."),
+    el("div", {}, el("b", {}, "Drop PDFs, EPUBs, or CBZ/CBR manga here"), ", or choose them from your computer.", el("br"), "Nothing leaves this PC."),
     el("div", { class: "start-acts" },
-      el("button", { type: "button", class: "btn seal", onclick: (e) => { e.stopPropagation(); input.click(); } }, icon("reader"), "Open a PDF"),
+      el("button", { type: "button", class: "btn seal", onclick: (e) => { e.stopPropagation(); input.click(); } }, icon("reader"), "Open a file"),
       ops.some((o) => o.id === "scan") ? el("button", { type: "button", class: "btn secondary", "data-tool": "scan", title: TAGLINES.scan,
         onclick: (e) => { e.stopPropagation(); select("scan"); } }, icon("scan"), "Scan paper") : null));
   drop.addEventListener("click", (e) => { if (!e.target.closest("button")) input.click(); });
@@ -321,9 +321,91 @@ async function renderHome() {
   parts.push(el("div", { class: "start-cols" },
     el("section", { class: "start-sec", "aria-label": "Recent files" }, el("span", { class: "lbl" }, "Recent"), recentList),
     el("section", { class: "start-sec", "aria-label": "Start from several files" }, el("span", { class: "lbl" }, "Start from several files"), multi)));
+
+  // Visual Cover-Art Bookshelf
+  const shelfGrid = el("div", { class: "shelf-grid" });
+  const shelfFilter = el("input", { type: "search", class: "shelf-filter", placeholder: "Filter library…", "aria-label": "Filter bookshelf" });
+  const addFolderBtn = el("button", { type: "button", class: "btn secondary pb-small" }, "+ Add folder");
+  const shelfFoldersBar = el("div", { class: "shelf-folders" });
+  const refreshShelf = async (q = "") => {
+    try {
+      const data = await (await api(`/api/library${q ? `?q=${encodeURIComponent(q)}` : ""}`)).json();
+      if (!inHome()) return;
+      const folders = data.folders || [];
+      shelfFoldersBar.replaceChildren(...folders.map((f) => {
+        const chip = el("span", { class: "shelf-chip", title: f }, f.split(/[\\/]/).filter(Boolean).pop() || f);
+        const rm = el("button", { type: "button", title: `Remove ${f}`, onclick: async () => {
+          await jsonApi("/api/library/folder", { action: "remove", path: f });
+          refreshShelf(shelfFilter.value);
+        } }, "×");
+        chip.append(rm);
+        return chip;
+      }));
+      const items = data.items || [];
+      if (!items.length) {
+        shelfGrid.replaceChildren(el("p", { class: "start-empty" },
+          folders.length ? "No PDF, EPUB, or CBZ/CBR files matched." : "Add a local folder of PDFs, e-books, or manga to browse by cover art."));
+        return;
+      }
+      shelfGrid.replaceChildren(...items.slice(0, 60).map((item) => {
+        const img = el("img", {
+          class: "shelf-cover",
+          alt: item.stem,
+          loading: "lazy",
+          src: `/api/library/thumb/${encodeURIComponent(item.id)}`,
+        });
+        const card = el("button", {
+          type: "button",
+          class: "shelf-card",
+          title: item.path,
+          onclick: async () => {
+            const opened = await jsonApi("/api/library/open", { path: item.path });
+            if (opened?.id) await openInReaderById([opened.id]);
+          },
+        },
+          el("div", { class: "shelf-thumb" }, img, el("span", { class: "shelf-badge" }, item.ext)),
+          el("div", { class: "shelf-name" }, item.stem),
+          el("div", { class: "shelf-folder" }, item.folder),
+        );
+        return card;
+      }));
+    } catch { /* library optional */ }
+  };
+  addFolderBtn.addEventListener("click", async () => {
+    let picked = "";
+    try {
+      if (window.pywebview?.api?.pick_folder) picked = await window.pywebview.api.pick_folder();
+    } catch { picked = ""; }
+    if (!picked) picked = window.prompt("Enter full path to a folder of PDFs, EPUBs, or CBZ/CBR manga:") || "";
+    if (!picked.trim()) return;
+    try {
+      await jsonApi("/api/library/folder", { action: "add", path: picked.trim() });
+      await refreshShelf(shelfFilter.value);
+    } catch (err) {
+      showError(err?.message || String(err));
+    }
+  });
+  let shelfTimer = null;
+  shelfFilter.addEventListener("input", () => {
+    clearTimeout(shelfTimer);
+    shelfTimer = setTimeout(() => refreshShelf(shelfFilter.value), 160);
+  });
+  parts.push(el("section", { class: "start-sec shelf-sec", "aria-label": "Bookshelf library" },
+    el("div", { class: "shelf-head" },
+      el("span", { class: "lbl" }, "Bookshelf"),
+      shelfFilter,
+      addFolderBtn,
+    ),
+    shelfFoldersBar,
+    shelfGrid,
+  ));
+
   host.replaceChildren(...parts);
   host.hidden = false;
-  await fillRecent(recentList, { emptyText: "PDFs you open show up here.", still: inHome });
+  await Promise.all([
+    fillRecent(recentList, { emptyText: "PDFs you open show up here.", still: inHome }),
+    refreshShelf(),
+  ]);
 }
 
 // ---- Recent files: one list, on the start screen and under the reader's "Open a PDF" ----
