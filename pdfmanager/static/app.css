@@ -1177,3 +1177,89 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
 .watch-add .watch-row { display: flex; gap: 8px; }
 .watch-add label[for] span { font-weight: 600; color: var(--text-2); }
 .watch-add .watch-row input { flex: 1; min-width: 0; height: 38px; padding: 0 11px; border: 1px solid var(--input-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; }
+
+/* ---- Visual Cover-Art Bookshelf (Home Screen) ------------------------------ */
+.shelf-sec { margin-top: 22px; }
+.shelf-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.shelf-head .lbl { margin: 0; }
+.shelf-filter {
+  margin-left: auto;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  min-width: 170px;
+}
+.shelf-folders { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.shelf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.shelf-chip button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.7;
+}
+.shelf-chip button:hover { opacity: 1; }
+.shelf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(126px, 1fr));
+  gap: 14px;
+}
+.shelf-card {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: inherit;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+.shelf-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+.shelf-thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2 / 2.8;
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(128, 128, 128, 0.12);
+  margin-bottom: 7px;
+}
+.shelf-cover { width: 100%; height: 100%; object-fit: cover; display: block; }
+.shelf-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(18, 20, 26, 0.82);
+  color: #fff;
+}
+.shelf-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.shelf-folder { font-size: 11px; opacity: 0.65; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

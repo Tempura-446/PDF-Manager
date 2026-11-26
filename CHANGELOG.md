@@ -4,6 +4,15 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.84.0
+
+**Visual Cover-Art Bookshelf** on the Home Screen & **Next/Previous Chapter (`]` / `[`)** Navigation in the Reader.
+
+- **Visual Cover-Art Bookshelf (`bookshelf.py`, `server/reader_routes.py`, `gui.py`, `static/tools.js`, `static/app.css`).**
+  - Add local folders of PDFs, `.epub` e-books, and `.cbz`/`.cbr` manga to the Home screen **Bookshelf**, browse by cached JPEG cover thumbnails with format badges (`PDF`/`EPUB`/`CBZ`/`CBR`) and instant live filtering, and click any cover to open directly in the Reader.
+- **Next / Previous Chapter Navigation (`bookshelf.py`, `server/reader_routes.py`, `static/reader.js`).**
+  - Press `]` or `[` (or use the Command Palette) while reading any book opened from a folder to jump seamlessly to the natural-sorted next or previous chapter/volume in the same folder.
+
 ## 0.83.0
 
 Direct **`.epub`**, **`.cbr`**, and **Multi-Image / Folder** Opening in the ZPDF Reader.

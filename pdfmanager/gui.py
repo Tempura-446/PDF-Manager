@@ -203,6 +203,11 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
             from pdfmanager import models_manager
 
             return self._send(HTTPStatus.OK, {"models": models_manager.list_models()})
+        if path == "/api/library":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("q", [""])[0]
+            return self._library_list(query=q)
+        if path.startswith("/api/library/thumb/"):
+            return self._library_thumb(path.split("/api/library/thumb/", 1)[1])
         if path == "/api/stamps":  # the stamps of your own (stamps.py)
             from pdfmanager import stamps
 
@@ -371,6 +376,12 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._cbr_open(body)
             if path == "/api/images/open":
                 return self._images_open(body)
+            if path == "/api/library/folder":
+                return self._library_folder(body)
+            if path == "/api/library/open":
+                return self._library_open(body)
+            if path == "/api/library/neighbors":
+                return self._library_neighbors(body)
             if path in ("/api/comments/summary", "/api/comments/markdown", "/api/comments/export", "/api/comments/import"):
                 return self._comments(path.rsplit("/", 1)[1], body)
             if path == "/api/text/edit":

@@ -476,6 +476,67 @@ class ReaderRoutesMixin:
         return self._send(HTTPStatus.OK, pdf_bytes, "application/pdf",
                           {"X-Pdfm-Filename": urllib.parse.quote(f"{_safe_name(title)}.pdf")})
 
+    def _library_list(self, query=""):
+        from pdfmanager import bookshelf
+
+        return self._send(HTTPStatus.OK, bookshelf.scan_library(query=query))
+
+    def _library_folder(self, body):
+        from pdfmanager import bookshelf
+
+        data = json.loads(body or b"{}")
+        action = str(data.get("action") or "add").strip().lower()
+        folder = str(data.get("path") or "").strip()
+        if action == "remove":
+            bookshelf.remove_folder(folder)
+        else:
+            if not folder:
+                raise UserError("enter a folder path")
+            bookshelf.add_folder(folder)
+        return self._send(HTTPStatus.OK, bookshelf.scan_library())
+
+    def _library_thumb(self, book_id):
+        from pdfmanager import bookshelf
+
+        path = bookshelf.find_by_id(book_id)
+        if path is None:
+            return self._error(HTTPStatus.NOT_FOUND, "book not found")
+        raw = bookshelf.cover_thumbnail(path)
+        if not raw:
+            return self._error(HTTPStatus.NOT_FOUND, "thumbnail unavailable")
+        return self._send(HTTPStatus.OK, raw, "image/jpeg", {"Cache-Control": "private, max-age=300"})
+
+    def _library_open(self, body):
+        from pdfmanager import bookshelf
+
+        data = json.loads(body or b"{}")
+        book_id = str(data.get("id") or "").strip()
+        if not book_id:
+            raise UserError("no book id")
+        p = bookshelf.find_by_id(book_id)
+        if p is None or not p.is_file():
+            raise UserError("file not found")
+        key = self.opened.add(p)
+        return self._send(HTTPStatus.OK, {"id": key, "name": p.name, "path": str(p)})
+
+    def _library_neighbors(self, body):
+        from pdfmanager import bookshelf
+
+        data = json.loads(body or b"{}")
+        file_id = str(data.get("id") or "").strip()
+        path = self.opened.get(file_id) if (file_id and self.opened is not None) else None
+        if path is None or not path.is_file():
+            return self._send(HTTPStatus.OK, {"prev": None, "next": None, "index": 0, "total": 0})
+        info = bookshelf.sibling_chapters(path)
+        want = str(data.get("open") or "").strip().lower()
+        opened_neighbor = None
+        if want in ("prev", "next") and info.get(want):
+            np = Path(info[want])
+            if np.is_file():
+                nkey = self.opened.add(np)
+                opened_neighbor = {"id": nkey, "name": np.name, "path": str(np)}
+        return self._send(HTTPStatus.OK, {**info, "opened": opened_neighbor})
+
     def _text_edit(self, body):
         """Change words on the reader's pages; sends back the changed PDF."""
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)

@@ -867,6 +867,8 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       case "R": this.rotate(-90); break;
       case "t": this.togglePanel(); break;
       case "T": this.openMangaLens(); break;
+      case "[": this.openNeighborChapter(-1); break;
+      case "]": this.openNeighborChapter(1); break;
       case "e": this.useTool(this.textEditMode ? "NONE" : "EDITTEXT"); break;
       case "m": this.measureTool(this.measureMode === "distance" ? null : "distance"); break;
       // The annotate bar's labelled tools, while it's open (H, C, A, D, S; again: back to Select).
@@ -1647,6 +1649,35 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     await this.mangaLens.open(opts);
   }
 
+  async openNeighborChapter(delta = 1) {
+    const fileId = this.activeTab?.fileId;
+    if (!fileId) {
+      this.toast("Chapter navigation works for files opened from a folder on disk.");
+      return;
+    }
+    const want = delta < 0 ? "prev" : "next";
+    try {
+      const res = await fetch("/api/library/neighbors", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(this.token ? { "X-Pdfm-Token": this.token } : {}),
+        },
+        body: JSON.stringify({ id: fileId, open: want }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      if (!data.opened?.id) {
+        this.toast(delta < 0 ? "Already at the first file in this folder." : "Already at the last file in this folder.");
+        return;
+      }
+      await this.openUrl(`/api/file/${data.opened.id}`, data.opened.name, null, null, data.opened.id);
+      this.toast(`${data.opened.name} (${delta < 0 ? Math.max(1, data.index - 1) : Math.min(data.total, data.index + 1)} of ${data.total})`);
+    } catch (err) {
+      this.toast(err?.message || String(err));
+    }
+  }
+
   /** A toast that explains the tool just chosen: it goes when that tool or
    *  its bar does, or when another bar opens (see #endHint). */
   /** Open a link that leaves the document, in the browser: only web, mail
@@ -1786,6 +1817,8 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       { icon: "minus", label: "Zoom out", keys: "Ctrl −", run: () => v.decreaseScale() },
       { icon: "up", label: "First page", keys: "Home", words: "start beginning", run: () => this.goToPage(1) },
       { icon: "down", label: "Last page", keys: "End", words: "end", run: () => this.goToPage(v.pagesCount) },
+      { icon: "book", label: "Next chapter / file in folder", keys: "]", words: "next chapter volume comic manga folder sibling", run: () => this.openNeighborChapter(1) },
+      { icon: "book", label: "Previous chapter / file in folder", keys: "[", words: "previous prev chapter volume comic manga folder sibling", run: () => this.openNeighborChapter(-1) },
       { icon: "spread", label: "Two-page view", words: "spread book", run: () => this.toggleSpread() },
       { icon: "spread", label: "Cover page alone (align two-page spreads)", words: "spread cover offset even odd manga book", run: () => this.toggleCoverOffset() },
       { icon: "book", label: "Right-to-left manga reading", words: "rtl manga comic japanese direction spread", run: () => this.toggleRtlReading() },
