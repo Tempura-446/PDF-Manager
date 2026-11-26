@@ -148,8 +148,8 @@ def test_every_way_online_is_stated():
     root = Path(privacy.__file__).parent
     calling = sorted(p.relative_to(root).as_posix() for p in root.rglob("*.py")
                      if "urlopen(" in p.read_text(encoding="utf-8") and p.name != "privacy.py")
-    # i18n.py: language packs & translation models; ocr/models.py: language data; translate/manga_ai.py: optional Manga AI ONNX models; update.py: versions and updates. (Timestamps go through pyHanko, in certsign.py.)
-    assert calling == ["i18n.py", "ocr/models.py", "translate/manga_ai.py", "update.py"], calling
+    # i18n.py: language packs & translation models; ocr/models.py: language data; translate/manga_ai.py: optional Manga AI ONNX models; update.py: versions and updates; vlm.py: user-configured Vision-LLM endpoint. (Timestamps go through pyHanko, in certsign.py.)
+    assert calling == ["i18n.py", "ocr/models.py", "translate/manga_ai.py", "update.py", "vlm.py"], calling
     # escl.py: a network scanner, on the local network only (0.44.0)
     others = sorted(p.relative_to(root).as_posix() for p in root.rglob("*.py") if p.name != "privacy.py" and any(
         mark in p.read_text(encoding="utf-8") for mark in ("http.client.HTTP", "socket.socket(")))

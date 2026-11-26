@@ -769,11 +769,12 @@ def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, d
         w_frac, h_frac = (0.84, 0.80) if shape == "rect" else (0.74, 0.72)
         inner_w = max(12.0, pw * w_frac)
         inner_h = max(12.0, ph * h_frac)
-        # Rectangular narration/caption boxes use crisp upright regular text; dialogue uses bold/italic
+        # Rectangular narration/caption boxes use crisp upright regular text; dialogue uses comic lettering
         is_caption = shape == "rect" and comic_style == "normal"
         use_bold = (not is_caption) and (comic_style != "thought")
         use_italic = comic_style == "thought"
-        chosen_font = fonts.font_for(display_text, family="sans", bold=use_bold, italic=use_italic)
+        want_family = "sans" if is_caption else "comic"
+        chosen_font = fonts.font_for(display_text, family=want_family, bold=use_bold, italic=use_italic)
 
         # Higher dynamic ceiling for short exclamations, binary search for exact fit
         hi = max(7.0, min(22.0 if comic_style == "shout" else 15.0, ph * (0.25 if comic_style == "shout" else 0.21)))
@@ -814,6 +815,7 @@ def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, d
         center_y = (py0 + py1) / 2.0
         start_y = center_y + (total_h / 2.0) - best_sz * 0.85
 
+        use_halo = bool(bubble.get("borderless") or bubble.get("needs_inpaint"))
         c.saveState()
         c.setFillColorRGB(txt_r, txt_g, txt_b)
         c.setFont(chosen_font, best_sz)
@@ -822,13 +824,35 @@ def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, d
             if ly < py0 + inset_y * 0.75:
                 break
             lw = pdfmetrics.stringWidth(line, chosen_font, best_sz)
-            if lw > inner_w and lw > 0:
-                fit_sz = max(5.2, best_sz * (inner_w / lw))
-                c.setFont(chosen_font, fit_sz)
-                c.drawCentredString(center_x, ly, line)
-                c.setFont(chosen_font, best_sz)
+            draw_sz = max(5.2, best_sz * (inner_w / lw)) if (lw > inner_w and lw > 0) else best_sz
+            if use_halo:
+                # Scanlation-grade contrasting outline behind borderless SFX/floating text
+                lum = 0.299 * txt_r + 0.587 * txt_g + 0.114 * txt_b
+                halo_rgb = (0.04, 0.04, 0.06) if lum > 0.5 else (1.0, 1.0, 1.0)
+                draw_w = pdfmetrics.stringWidth(line, chosen_font, draw_sz)
+                c.saveState()
+                c.setLineJoin(1)
+                c.setLineWidth(max(1.2, draw_sz * 0.16))
+                c.setStrokeColorRGB(*halo_rgb)
+                c.setFillColorRGB(txt_r, txt_g, txt_b)
+                to = c.beginText(center_x - draw_w / 2.0, ly)
+                to.setFont(chosen_font, draw_sz)
+                to.setTextRenderMode(1)  # stroke halo first
+                to.textOut(line)
+                c.drawText(to)
+                to2 = c.beginText(center_x - draw_w / 2.0, ly)
+                to2.setFont(chosen_font, draw_sz)
+                to2.setTextRenderMode(0)  # crisp fill on top
+                to2.textOut(line)
+                c.drawText(to2)
+                c.restoreState()
             else:
-                c.drawCentredString(center_x, ly, line)
+                if draw_sz != best_sz:
+                    c.setFont(chosen_font, draw_sz)
+                    c.drawCentredString(center_x, ly, line)
+                    c.setFont(chosen_font, best_sz)
+                else:
+                    c.drawCentredString(center_x, ly, line)
         c.restoreState()
 
     c.showPage()

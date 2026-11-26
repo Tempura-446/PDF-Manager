@@ -56,6 +56,9 @@ ONLINE = [
     {"what": "Opening a link in a PDF",
      "when": "only when you click it (ZPDF asks first and shows the real address)",
      "sends": "nothing from ZPDF: your browser opens the page"},
+    {"what": "Vision-LLM OCR & visual page translation",
+     "when": "only when you explicitly run Vision-LLM OCR/translation using your configured local or BYOK endpoint",
+     "sends": "the rendered image of the selected page to the endpoint you configured (defaults to localhost)"},
 ]
 
 _lock = threading.Lock()

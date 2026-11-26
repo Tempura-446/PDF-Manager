@@ -685,6 +685,37 @@ class ReaderRoutesMixin:
             )
         return self._send(HTTPStatus.OK, res)
 
+    def _ai_vlm_ocr(self, body):
+        """Run Vision-LLM OCR or direct visual page translation on a single PDF/CBZ page."""
+        from pdfmanager import cbz, vlm
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        file_id = (fields.get("id") or "").strip()
+        opened_path = self.opened.get(file_id) if (file_id and self.opened is not None) else None
+        if not uploads and (opened_path is None or not opened_path.is_file()):
+            raise UserError("no file")
+        page_num = int(fields.get("page") or 1)
+        translate_to = (fields.get("translate_to") or "").strip()
+        prompt = (fields.get("prompt") or "").strip() or None
+        model = (fields.get("model") or "").strip() or None
+        password = fields.get("password") or None
+
+        with tempfile.TemporaryDirectory(prefix="pdfm-vlm-") as tmp:
+            if opened_path is not None and opened_path.is_file() and not uploads:
+                if opened_path.suffix.lower() == ".cbz":
+                    pdf_path = Path(tmp) / "comic.pdf"
+                    cbz.cbz_to_pdf(opened_path, pdf_path, rtl_viewer="auto")
+                else:
+                    pdf_path = opened_path
+            else:
+                pdf_path = Path(tmp) / "file.pdf"
+                pdf_path.write_bytes(uploads[0][2])
+            res = vlm.vlm_ocr_pdf_page(
+                pdf_path, page_num, password=password,
+                translate_to=translate_to, prompt=prompt, model=model,
+            )
+        return self._send(HTTPStatus.OK, res)
+
     def _images_list(self, body):
         """The pictures on the reader's pages (see pageimages.py)."""
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)

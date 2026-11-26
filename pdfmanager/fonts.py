@@ -38,34 +38,58 @@ UNICODE_FONTS = [
     "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
     "/usr/share/fonts/truetype/arphic/uming.ttc",
 ]
+COMIC_FONTS = [
+    r"C:\Windows\Fonts\comicbd.ttf", r"C:\Windows\Fonts\comic.ttf",
+    "/System/Library/Fonts/Supplemental/Comic Sans MS Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Comic Sans MS.ttf",
+    "/Library/Fonts/Comic Neue Bold.ttf", "/Library/Fonts/AnimeAce2_Reg.ttf",
+    "/usr/share/fonts/truetype/comic-neue/ComicNeue-Bold.ttf",
+    "/usr/share/fonts/truetype/msttcorefonts/Comic_Sans_MS_Bold.ttf",
+    "/usr/share/fonts/truetype/msttcorefonts/Comic_Sans_MS.ttf",
+]
 _loaded = {}
+
+
+def _try_ttfont(path, needed):
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    if not Path(path).is_file():
+        return None
+    if path not in _loaded:
+        name = "PdfmFont" + str(len(_loaded))
+        try:
+            font = TTFont(name, path, subfontIndex=0) if path.lower().endswith(".ttc") \
+                else TTFont(name, path)
+            pdfmetrics.registerFont(font)
+            _loaded[path] = (name, set(font.face.charToGlyph))
+        except Exception:  # not a TrueType font reportlab can use
+            _loaded[path] = None
+    if _loaded[path] and needed <= _loaded[path][1]:
+        return _loaded[path][0]
+    return None
 
 
 def font_for(text, family="sans", bold=False, italic=False):
     """A reportlab font name able to show ``text``, close to the style."""
+    needed = {ord(ch) for ch in text if not ch.isspace()}
+    if family == "comic":
+        for path in COMIC_FONTS:
+            hit = _try_ttfont(path, needed)
+            if hit:
+                return hit
+        family = "sans"
     try:
         text.encode("cp1252")
         return BASE14[(family, bold, italic)]
     except UnicodeEncodeError:
         pass
     from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
 
-    needed = {ord(ch) for ch in text if not ch.isspace()}
     for path in UNICODE_FONTS:
-        if not Path(path).is_file():
-            continue
-        if path not in _loaded:
-            name = "PdfmFont" + str(len(_loaded))
-            try:
-                font = TTFont(name, path, subfontIndex=0) if path.lower().endswith(".ttc") \
-                    else TTFont(name, path)
-                pdfmetrics.registerFont(font)
-                _loaded[path] = (name, set(font.face.charToGlyph))
-            except Exception:  # not a TrueType font reportlab can use
-                _loaded[path] = None
-        if _loaded[path] and needed <= _loaded[path][1]:
-            return _loaded[path][0]
+        hit = _try_ttfont(path, needed)
+        if hit:
+            return hit
     # Chinese, Japanese and Korean without a suitable font installed: fonts
     # that PDF readers supply themselves.
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont

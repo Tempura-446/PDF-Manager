@@ -199,6 +199,10 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                                               "on": available and winsetup.context_menu_registered()})
         if path == "/api/settings":
             return self._send(HTTPStatus.OK, _settings_for_page(type(self).instance_mode))
+        if path == "/api/models/status":
+            from pdfmanager import models_manager
+
+            return self._send(HTTPStatus.OK, {"models": models_manager.list_models()})
         if path == "/api/stamps":  # the stamps of your own (stamps.py)
             from pdfmanager import stamps
 
@@ -419,6 +423,18 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._ai_summarize(body)
             if path == "/api/ai/extract":
                 return self._ai_extract(body)
+            if path == "/api/ai/vlm-ocr":
+                return self._ai_vlm_ocr(body)
+            if path == "/api/models/download":
+                from pdfmanager import models_manager
+
+                pack_id = str(json.loads(body or b"{}").get("id") or "").strip()
+                return self._send(HTTPStatus.OK, models_manager.download_model(pack_id))
+            if path == "/api/models/delete":
+                from pdfmanager import models_manager
+
+                pack_id = str(json.loads(body or b"{}").get("id") or "").strip()
+                return self._send(HTTPStatus.OK, models_manager.delete_model(pack_id))
             if path == "/api/settings":
                 return self._save_settings(body)
             if path == "/api/stamps":
