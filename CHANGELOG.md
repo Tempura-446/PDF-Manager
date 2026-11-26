@@ -4,6 +4,18 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.82.0
+
+Scanlation Typesetting & Stroked SFX, **Settings → Offline AI Models Manager**, and **Vision-LLM OCR & Visual Translation**.
+
+- **Scanlation-Grade Typesetting & Stroked SFX (`fonts.py`, `translate/manga.py`).**
+  - Added comic lettering font discovery (`family="comic"`) for manga speech bubbles while keeping crisp sans-serif for narration captions.
+  - Added contrasting stroke halos (`1 Tr` outline + `0 Tr` fill) behind borderless floating SFX/text over complex manga artwork.
+- **Settings → Offline AI Models Manager (`models_manager.py`, `gui.py`, `gui.html`, `static/settings.js`).**
+  - Added `GET /api/models/status`, `POST /api/models/download`, and `POST /api/models/delete` plus a dedicated **Offline AI models (OCR & Manga AI)** card in Settings to inspect disk usage, pre-download, or remove PP-OCRv6 Medium, RT-DETR v2 Bubble Detector, Japanese Manga-OCR, and LaMa-Manga ONNX weights.
+- **Vision-LLM OCR & Visual Page Translation (`vlm.py`, `server/reader_routes.py`, `gui.py`, `privacy.py`).**
+  - Added pure-stdlib OpenAI-compatible Vision-LLM client (`POST /api/ai/vlm-ocr`) that sends rendered PDF/CBZ page images to your local VLM (Ollama `qwen2.5vl` / `gemma3` / `llama3.2-vision`, LM Studio) or BYOK endpoint for high-accuracy OCR or direct visual page translation.
+
 ## 0.81.0
 
 Manga Reader Superpowers: **True RTL Manga Spreads**, **Live Manga Lens**, and **Interactive Bubble Editor**.

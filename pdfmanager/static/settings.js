@@ -55,6 +55,7 @@ async function openSettings() {
   updateStatus("watch-status", "");
   updateStatus("filing-status", "");
   try { await loadLanguages(); } catch (e) { updateStatus("lang-status", e.message, true); }
+  try { await loadAiModels(); } catch (e) { if ($("ai-models-status")) updateStatus("ai-models-status", e.message, true); }
   try { await loadWatch(); } catch (e) { updateStatus("watch-status", e.message, true); }
   try { if (typeof loadFilingRules === "function") await loadFilingRules(); } catch (e) { updateStatus("filing-status", e.message, true); }
   try {
@@ -763,3 +764,50 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) ping
 window.addEventListener("pywebviewready", () => { if (current && current.fields) renderForm(); });
 window.ZpdfI18n?.load?.(token)?.catch?.(() => {});
 load();
+
+async function loadAiModels() {
+  const list = $("set-ai-models-list");
+  if (!list) return;
+  const info = await jsonApi("/api/models/status");
+  renderAiModels(info.models || []);
+}
+
+function renderAiModels(models) {
+  const list = $("set-ai-models-list");
+  if (!list) return;
+  list.replaceChildren(...models.map((m) => {
+    const li = document.createElement("li");
+    li.className = "watch-item";
+    li.style.alignItems = "center";
+    const infoBox = document.createElement("div");
+    infoBox.className = "wi-text";
+    const title = document.createElement("div");
+    title.style.fontWeight = "600";
+    const szMb = m.size_bytes > 0 ? `${Math.max(1, Math.round(m.size_bytes / 1_000_000))} MB` : `~${m.approx_mb} MB`;
+    title.textContent = `${m.name} (${m.installed ? `Installed · ${szMb}` : `Not installed · ${szMb}`})`;
+    const desc = document.createElement("div");
+    desc.className = "dlg-hint";
+    desc.style.margin = "2px 0 0";
+    desc.textContent = m.description;
+    infoBox.append(title, desc);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = m.installed ? "btn secondary pb-small" : "btn pb-small";
+    btn.textContent = m.installed ? "Remove" : "Download";
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      updateStatus("ai-models-status", m.installed ? `Removing ${m.name}…` : `Downloading ${m.name} (~${m.approx_mb} MB)…`);
+      try {
+        const res = await jsonApi(m.installed ? "/api/models/delete" : "/api/models/download", { id: m.id });
+        renderAiModels(res.models || []);
+        updateStatus("ai-models-status", m.installed ? `Removed ${m.name}.` : `Installed ${m.name}.`);
+      } catch (err) {
+        updateStatus("ai-models-status", err.message || String(err), true);
+        btn.disabled = false;
+      }
+    });
+    li.append(infoBox, btn);
+    return li;
+  }));
+}
