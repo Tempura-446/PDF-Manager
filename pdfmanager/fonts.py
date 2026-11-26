@@ -39,13 +39,9 @@ UNICODE_FONTS = [
     "/usr/share/fonts/truetype/arphic/uming.ttc",
 ]
 COMIC_FONTS = [
-    r"C:\Windows\Fonts\comicbd.ttf", r"C:\Windows\Fonts\comic.ttf",
-    "/System/Library/Fonts/Supplemental/Comic Sans MS Bold.ttf",
-    "/System/Library/Fonts/Supplemental/Comic Sans MS.ttf",
-    "/Library/Fonts/Comic Neue Bold.ttf", "/Library/Fonts/AnimeAce2_Reg.ttf",
+    r"C:\Windows\Fonts\AnimeAce2_Reg.ttf", r"C:\Windows\Fonts\ComicNeue-Bold.ttf",
+    "/Library/Fonts/AnimeAce2_Reg.ttf", "/Library/Fonts/Comic Neue Bold.ttf",
     "/usr/share/fonts/truetype/comic-neue/ComicNeue-Bold.ttf",
-    "/usr/share/fonts/truetype/msttcorefonts/Comic_Sans_MS_Bold.ttf",
-    "/usr/share/fonts/truetype/msttcorefonts/Comic_Sans_MS.ttf",
 ]
 _loaded = {}
 
