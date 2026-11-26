@@ -162,21 +162,30 @@ def info(path):
 _PAD = bytes.fromhex("28bf4e5e4e758a4164004e56fffa01082e2e00b6d0683e802f0ca9fe6453697a")
 
 
+def _compute_o_value_key(owner_pw_bytes, revision, bits):
+    """PDF 1.7 Algorithm 3 (steps 1-4): derive the RC4 key for the /O entry."""
+    import hashlib
+
+    digest = hashlib.md5((owner_pw_bytes + _PAD)[:32], usedforsecurity=False).digest()
+    if revision >= 3:
+        for _ in range(50):
+            digest = hashlib.md5(digest, usedforsecurity=False).digest()
+    return digest[:max(5, bits // 8)]
+
+
 def _user_password(path, owner_password):
     """The password to open an RC4-protected PDF, worked out from its
     permissions password (the old scheme keeps it, scrambled with that
-    password: PDF 1.7, algorithm 7). "" when anyone can open the file.
-    pypdf's own reading of the old scheme does the work."""
+    password: PDF 1.7, algorithm 7). "" when anyone can open the file."""
     from pypdf import PdfReader
     from pypdf._crypt_providers import rc4_decrypt
-    from pypdf._encryption import AlgV4
 
     encrypt = PdfReader(str(path)).trailer["/Encrypt"].get_object()
     revision = int(encrypt.get("/R", 2))
     bits = int(encrypt.get("/Length", 40)) if revision >= 3 else 40
     scrambled = encrypt["/O"]
     scrambled = scrambled.original_bytes if hasattr(scrambled, "original_bytes") else bytes(scrambled)
-    key = AlgV4.compute_O_value_key(owner_password.encode("latin-1", "replace"), revision, bits)
+    key = _compute_o_value_key(owner_password.encode("latin-1", "replace"), revision, bits)
     if revision == 2:
         plain = rc4_decrypt(key, scrambled)
     else:
