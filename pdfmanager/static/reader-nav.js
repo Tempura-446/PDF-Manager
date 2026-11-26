@@ -55,7 +55,30 @@ export const ReaderNav = (Base) => class extends Base {
 
   toggleSpread() {
     const { SpreadMode } = viewer;
-    this.pdfViewer.spreadMode = this.pdfViewer.spreadMode === SpreadMode.NONE ? SpreadMode.ODD : SpreadMode.NONE;
+    if (this.pdfViewer.spreadMode === SpreadMode.NONE) {
+      this.pdfViewer.spreadMode = this.coverOffset ? SpreadMode.EVEN : SpreadMode.ODD;
+    } else {
+      this.pdfViewer.spreadMode = SpreadMode.NONE;
+    }
+  }
+  toggleCoverOffset() {
+    const { SpreadMode } = viewer;
+    this.coverOffset = !this.coverOffset;
+    if (this.pdfViewer.spreadMode === SpreadMode.NONE) {
+      this.pdfViewer.spreadMode = this.coverOffset ? SpreadMode.EVEN : SpreadMode.ODD;
+    } else {
+      this.pdfViewer.spreadMode = this.coverOffset ? SpreadMode.EVEN : SpreadMode.ODD;
+    }
+    this.toast(this.coverOffset ? "Cover page alone (double spreads aligned)." : "Standard two-page pairing.");
+  }
+  toggleRtlReading(force = null) {
+    const next = force === null ? !this.rtlReading : Boolean(force);
+    this.rtlReading = next;
+    if (this.container) this.container.classList.toggle("rtl-reading", next);
+    if (this.splitContainer) this.splitContainer.classList.toggle("rtl-reading", next);
+    if (force === null) {
+      this.toast(next ? "Right-to-left manga reading on (← next, → previous)." : "Left-to-right reading on.");
+    }
   }
   toggleHand() { this.container.classList.toggle("hand"); }
   pageTheme() {

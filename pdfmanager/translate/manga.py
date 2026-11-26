@@ -799,6 +799,15 @@ def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, d
             else:
                 hi = mid
 
+        font_scale = float(bubble.get("font_scale") or 1.0)
+        font_scale = max(0.5, min(2.0, font_scale))
+        if font_scale != 1.0:
+            best_sz = max(5.0, min(28.0, best_sz * font_scale))
+            if shape == "oval":
+                best_lines = _wrap_elliptical(display_text, chosen_font, best_sz, rx, ry, best_sz * 1.18)
+            else:
+                best_lines = _wrap_balanced(display_text, chosen_font, best_sz, inner_w)
+
         leading = best_sz * 1.18
         total_h = len(best_lines) * leading
         center_x = (px0 + px1) / 2.0
@@ -826,3 +835,218 @@ def make_manga_overlay(width, height, img_w, img_h, bubbles, translated_texts, d
     c.save()
     buf.seek(0)
     return PdfReader(buf).pages[0]
+
+
+def translate_manga_page_bubbles(
+    pdf_path,
+    page_num,
+    src_lang,
+    dst_lang,
+    *,
+    password=None,
+    use_ai=True,
+    reading_dir="auto",
+    ocr_fn=None,
+    translate_fn=None,
+):
+    """Detect, OCR, and translate speech bubbles on a single PDF page.
+
+    Returns a JSON-serializable dict with normalized ``[0..1]`` bubble boxes
+    for interactive Reader overlay display and editing.
+    """
+    import pypdfium2 as pdfium
+    from pdfmanager import core
+    from pdfmanager.translate import engines
+
+    src = str(pdf_path)
+    p_idx = max(0, int(page_num) - 1)
+    rdir = default_reading_dir(src_lang) if reading_dir == "auto" else reading_dir
+
+    try:
+        doc = pdfium.PdfDocument(src, password=password or None)
+    except Exception as exc:
+        raise core.PdfManagerError(f"could not open PDF for Manga Lens: {exc}") from None
+
+    try:
+        if p_idx >= len(doc):
+            raise core.PdfManagerError(f"page {page_num} out of range (document has {len(doc)} pages)")
+        page = doc[p_idx]
+        try:
+            pil_img = page.render(scale=150.0 / 72.0).to_pil().convert("RGB")
+        finally:
+            page.close()
+    finally:
+        doc.close()
+
+    img_w, img_h = pil_img.size
+    plumber_page = None
+    plumber_doc = None
+    try:
+        import pdfplumber
+
+        plumber_doc = pdfplumber.open(src, password=password or None)
+        if p_idx < len(plumber_doc.pages):
+            plumber_page = plumber_doc.pages[p_idx]
+    except Exception:
+        plumber_page = None
+
+    try:
+        raw_bubbles = detect_speech_bubbles(
+            pil_img, reading_dir=rdir, detect_inverted=True, plumber_page=plumber_page, use_ai=bool(use_ai),
+        )
+        extracted = []
+        for b in raw_bubbles:
+            txt = extract_bubble_text(
+                pil_img, b, src_lang,
+                ocr_fn=ocr_fn, plumber_page=plumber_page, reading_order=rdir, use_ai=bool(use_ai),
+            )
+            if txt and txt.strip():
+                extracted.append((b, txt.strip()))
+    finally:
+        if plumber_doc is not None:
+            try:
+                plumber_doc.close()
+            except Exception as _exc:
+                logging.getLogger("zpdf").debug("manga.translate_page_bubbles.close: %s", _exc)
+
+    if not extracted:
+        return {
+            "page": p_idx + 1,
+            "src_lang": src_lang,
+            "dst_lang": dst_lang,
+            "reading_dir": rdir,
+            "width": img_w,
+            "height": img_h,
+            "bubbles": [],
+        }
+
+    originals = [t for _, t in extracted]
+    if translate_fn is not None:
+        translated = list(translate_fn(originals, src_lang, dst_lang))
+    else:
+        translated = engines.translate_batch(originals, src_lang, dst_lang)
+
+    out_bubbles = []
+    for idx, ((b, orig), trans) in enumerate(zip(extracted, translated)):
+        bg = b.get("bg_rgb", (1.0, 1.0, 1.0))
+        fg = b.get("text_rgb", (0.06, 0.06, 0.08))
+        out_bubbles.append({
+            "id": idx,
+            "x0": round(float(b["x0"]) / max(1.0, float(img_w)), 5),
+            "y0": round(float(b["y0"]) / max(1.0, float(img_h)), 5),
+            "x1": round(float(b["x1"]) / max(1.0, float(img_w)), 5),
+            "y1": round(float(b["y1"]) / max(1.0, float(img_h)), 5),
+            "original": orig,
+            "translated": str(trans or ""),
+            "shape": str(b.get("shape", "oval")),
+            "inverted": bool(b.get("inverted", False)),
+            "borderless": bool(b.get("borderless", False)),
+            "needs_inpaint": bool(b.get("needs_inpaint", False)),
+            "bg_rgb": [round(float(bg[0]), 4), round(float(bg[1]), 4), round(float(bg[2]), 4)],
+            "text_rgb": [round(float(fg[0]), 4), round(float(fg[1]), 4), round(float(fg[2]), 4)],
+            "font_scale": 1.0,
+        })
+
+    return {
+        "page": p_idx + 1,
+        "src_lang": src_lang,
+        "dst_lang": dst_lang,
+        "reading_dir": rdir,
+        "width": img_w,
+        "height": img_h,
+        "bubbles": out_bubbles,
+    }
+
+
+def apply_manga_page_bubbles(
+    pdf_path,
+    output_pdf,
+    page_num,
+    bubbles,
+    dst_lang,
+    *,
+    password=None,
+    comic_caps=False,
+    use_ai=True,
+):
+    """Permanently burn edited Manga Lens bubble overlays onto a single PDF page."""
+    from pathlib import Path
+    from pypdf import PdfReader, PdfWriter
+    from pdfmanager import core
+
+    src = Path(pdf_path)
+    dst = Path(output_pdf)
+    reader = PdfReader(str(src))
+    if reader.is_encrypted:
+        reader.decrypt(password or "")
+
+    p_idx = max(0, int(page_num) - 1)
+    if p_idx >= len(reader.pages):
+        raise core.PdfManagerError(f"page {page_num} out of range (document has {len(reader.pages)} pages)")
+
+    target_page = reader.pages[p_idx]
+    width = float(target_page.mediabox.width)
+    height = float(target_page.mediabox.height)
+
+    pil_img = None
+    want_inpaint = bool(use_ai) and any(bool(b.get("needs_inpaint") or b.get("borderless")) for b in (bubbles or []))
+    if want_inpaint:
+        try:
+            import pypdfium2 as pdfium
+
+            doc = pdfium.PdfDocument(str(src), password=password or None)
+            try:
+                p = doc[p_idx]
+                try:
+                    pil_img = p.render(scale=150.0 / 72.0).to_pil().convert("RGB")
+                finally:
+                    p.close()
+            finally:
+                doc.close()
+        except Exception:
+            pil_img = None
+
+    img_w = float(pil_img.size[0]) if pil_img is not None else max(1.0, width * (150.0 / 72.0))
+    img_h = float(pil_img.size[1]) if pil_img is not None else max(1.0, height * (150.0 / 72.0))
+
+    norm_bubbles = []
+    texts = []
+    for b in (bubbles or []):
+        txt = str(b.get("translated") or "").strip()
+        if not txt:
+            continue
+        x0 = max(0.0, min(1.0, float(b.get("x0", 0.0)))) * img_w
+        y0 = max(0.0, min(1.0, float(b.get("y0", 0.0)))) * img_h
+        x1 = max(0.0, min(1.0, float(b.get("x1", 0.0)))) * img_w
+        y1 = max(0.0, min(1.0, float(b.get("y1", 0.0)))) * img_h
+        if x1 <= x0 + 2 or y1 <= y0 + 2:
+            continue
+        bg = b.get("bg_rgb") or [1.0, 1.0, 1.0]
+        fg = b.get("text_rgb") or [0.06, 0.06, 0.08]
+        norm_bubbles.append({
+            "x0": x0, "y0": y0, "x1": x1, "y1": y1,
+            "box": (int(round(x0)), int(round(y0)), int(round(x1)), int(round(y1))),
+            "shape": str(b.get("shape") or "oval"),
+            "inverted": bool(b.get("inverted", False)),
+            "borderless": bool(b.get("borderless", False)),
+            "needs_inpaint": bool(b.get("needs_inpaint", False)),
+            "bg_rgb": (float(bg[0]), float(bg[1]), float(bg[2])),
+            "text_rgb": (float(fg[0]), float(fg[1]), float(fg[2])),
+            "font_scale": float(b.get("font_scale") or 1.0),
+        })
+        texts.append(txt)
+
+    writer = PdfWriter()
+    for i, page in enumerate(reader.pages):
+        out_page = writer.add_page(page)
+        if i == p_idx and norm_bubbles:
+            overlay = make_manga_overlay(
+                width, height, img_w, img_h, norm_bubbles, texts, dst_lang,
+                comic_caps=comic_caps, pil_img=pil_img, use_ai=use_ai,
+            )
+            out_page.merge_page(overlay)
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with open(dst, "wb") as fh:
+        writer.write(fh)
+    return {"page": p_idx + 1, "bubbles_applied": len(norm_bubbles), "output": str(dst)}

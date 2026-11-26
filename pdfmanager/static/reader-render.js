@@ -482,6 +482,13 @@ export const ReaderRender = (Base) => class extends Base {
       // The rest of a file read in pieces, as soon as the first page is on
       // screen (not before: it would slow that down). See HOLD_BYTES.
       if (tab.url && !tab.bytes && tab.size <= HOLD_BYTES) this._whenShown(() => this._readAll(tab).catch(() => {}), { now: true });
+      if (this.mangaLens?.active) this.mangaLens.close();
+      doc.getViewerPreferences?.().then((prefs) => {
+        if (this.doc !== doc) return;
+        const isR2l = prefs?.Direction === "R2L";
+        this.toggleRtlReading(isR2l);
+        if (isR2l) this.toast("Right-to-left manga mode enabled (← next, → previous).");
+      }).catch(() => {});
       doc.getPageLabels().then((labels) => {
         if (doc !== this.doc || !labels) return;
         // Only use labels that differ from plain page numbers.

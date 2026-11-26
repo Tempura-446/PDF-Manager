@@ -409,6 +409,10 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._attachments_update(body)
             if path == "/api/translate/page":
                 return self._translate_page(body)
+            if path == "/api/translate/manga-page":
+                return self._translate_manga_page(body)
+            if path == "/api/translate/manga-page/apply":
+                return self._apply_manga_page(body)
             if path == "/api/ai/ask":
                 return self._ai_ask(body)
             if path == "/api/ai/summarize":

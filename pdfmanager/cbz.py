@@ -49,12 +49,31 @@ def _build_comic_info_xml(meta):
     return "\n".join(lines).encode("utf-8")
 
 
-def cbz_to_pdf(cbz_path, output_pdf, *, rtl_viewer=False):
+def detect_cbz_rtl(cbz_path):
+    """Return True when a CBZ archive's ComicInfo.xml marks it as RTL manga."""
+    try:
+        with zipfile.ZipFile(cbz_path, "r") as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                if Path(info.filename).name.lower() == "comicinfo.xml" and (info.file_size or 0) <= 512_000:
+                    raw = zf.read(info).decode("utf-8", errors="ignore")
+                    m = re.search(r"<Manga>\s*([^<]+?)\s*</Manga>", raw, re.IGNORECASE)
+                    if m and m.group(1).strip().lower() in ("yes", "yesandrighttoleft"):
+                        return True
+                    return False
+    except Exception:
+        return False
+    return False
+
+
+def cbz_to_pdf(cbz_path, output_pdf, *, rtl_viewer="auto"):
     """Convert a ``.cbz`` (or ``.zip``) comic/manga archive into a PDF.
 
     Images are ordered via natural sort (``page_2.png`` before ``page_10.png``)
     and embedded at their exact aspect ratio. Pass ``rtl_viewer=True`` to set
-    ``/ViewerPreferences << /Direction /R2L >>`` for manga right-to-left reading.
+    ``/ViewerPreferences << /Direction /R2L >>`` for manga right-to-left reading,
+    or ``rtl_viewer="auto"`` (default) to detect from ``ComicInfo.xml``.
     """
     from PIL import Image
     from pypdf import PdfReader, PdfWriter
@@ -66,6 +85,8 @@ def cbz_to_pdf(cbz_path, output_pdf, *, rtl_viewer=False):
     dst = Path(output_pdf)
     if not src.is_file():
         raise core.PdfManagerError(f"CBZ file not found: {src}")
+
+    is_rtl = detect_cbz_rtl(src) if rtl_viewer == "auto" else bool(rtl_viewer)
 
     try:
         zf = zipfile.ZipFile(src, "r")
@@ -138,13 +159,13 @@ def cbz_to_pdf(cbz_path, output_pdf, *, rtl_viewer=False):
     writer = PdfWriter()
     for page in reader.pages:
         writer.add_page(page)
-    if rtl_viewer:
+    if is_rtl:
         vp = DictionaryObject({NameObject("/Direction"): NameObject("/R2L")})
         writer._root_object[NameObject("/ViewerPreferences")] = vp
     dst.parent.mkdir(parents=True, exist_ok=True)
     with open(dst, "wb") as fh:
         writer.write(fh)
-    return {"pages": len(used_names), "entries": used_names, "rtl": bool(rtl_viewer), "output": str(dst)}
+    return {"pages": len(used_names), "entries": used_names, "rtl": is_rtl, "output": str(dst)}
 
 
 def pdf_to_cbz(

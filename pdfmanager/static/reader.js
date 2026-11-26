@@ -31,6 +31,7 @@ import { openAiAssistant } from "./ai-assistant.js";
 import { Finding } from "./find.js";
 import { FormMode } from "./formmode.js";
 import { Layering } from "./layers.js";
+import { MangaLens } from "./manga-lens.js";
 import { MarkupEditing } from "./markedit.js";
 import { Measuring } from "./measuring.js";
 import { ReaderNav } from "./reader-nav.js";
@@ -498,6 +499,8 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       this.#menuItem("cw", "Rotate the view clockwise", () => this.rotate(90)),
       this.#menuItem("ccw", "Rotate the view counter-clockwise", () => this.rotate(-90)),
       this.#menuItem("spread", "Two-page view", () => this.toggleSpread(), spread),
+      this.#menuItem("spread", "Cover page alone (align spreads)", () => this.toggleCoverOffset(), !!this.coverOffset),
+      this.#menuItem("book", "Right-to-left manga reading", () => this.toggleRtlReading(), !!this.rtlReading),
       this.#menuItem("spread", "Split view (side by side)", () => this.toggleSplitView(), this.splitOpen),
       this.#menuItem("hand", "Hand tool (drag to scroll)", () => this.toggleHand(), this.container.classList.contains("hand")),
       this.#menuItem("moon", "Page theme: Smart Night", () => this.setPageTheme(pageTheme === "night" ? "light" : "night"), pageTheme === "night"),
@@ -517,6 +520,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       this.#menuItem("rect", "Crop pages visually…", () => this.openCropMode(), this.cropMode),
       this.#menuItem("print", "Print preflight check…", () => this.checkPreflight()),
       this.#menuItem("edittext", "Translate this page…", () => this.translateCurrentPage()),
+      this.#menuItem("edittext", "Manga Lens (live page overlay & bubble editor)", () => this.openMangaLens(), !!this.mangaLens?.active),
       this.#menuItem("split", "Live bilingual reading…", () => this.openSplitView("__translate__")),
       this.#menuItem("command", "Local AI assistant (Ask / Summarize / Extract)…", () => openAiAssistant(this, "ask")),
       this.#menuItem("info", "Document properties", () => this.showProperties()),
@@ -852,6 +856,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       case "r": this.rotate(90); break;
       case "R": this.rotate(-90); break;
       case "t": this.togglePanel(); break;
+      case "T": this.openMangaLens(); break;
       case "e": this.useTool(this.textEditMode ? "NONE" : "EDITTEXT"); break;
       case "m": this.measureTool(this.measureMode === "distance" ? null : "distance"); break;
       // The annotate bar's labelled tools, while it's open (H, C, A, D, S; again: back to Select).
@@ -864,8 +869,16 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       }
       case "Home": v.currentPageNumber = 1; break;
       case "End": v.currentPageNumber = v.pagesCount; break;
-      case "ArrowLeft": if (this.container.scrollWidth <= this.container.clientWidth) v.previousPage(); else return; break;
-      case "ArrowRight": if (this.container.scrollWidth <= this.container.clientWidth) v.nextPage(); else return; break;
+      case "ArrowLeft":
+        if (this.container.scrollWidth <= this.container.clientWidth) {
+          if (this.rtlReading) v.nextPage(); else v.previousPage();
+        } else return;
+        break;
+      case "ArrowRight":
+        if (this.container.scrollWidth <= this.container.clientWidth) {
+          if (this.rtlReading) v.previousPage(); else v.nextPage();
+        } else return;
+        break;
       default: return;
     }
     e.preventDefault();
@@ -1614,6 +1627,16 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     }
   }
 
+  async openMangaLens(opts = {}) {
+    if (!this.doc) return;
+    if (!this.mangaLens) this.mangaLens = new MangaLens(this);
+    if (this.mangaLens.active && opts.toggle) {
+      this.mangaLens.close();
+      return;
+    }
+    await this.mangaLens.open(opts);
+  }
+
   /** A toast that explains the tool just chosen: it goes when that tool or
    *  its bar does, or when another bar opens (see #endHint). */
   /** Open a link that leaves the document, in the browser: only web, mail
@@ -1754,6 +1777,8 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       { icon: "up", label: "First page", keys: "Home", words: "start beginning", run: () => this.goToPage(1) },
       { icon: "down", label: "Last page", keys: "End", words: "end", run: () => this.goToPage(v.pagesCount) },
       { icon: "spread", label: "Two-page view", words: "spread book", run: () => this.toggleSpread() },
+      { icon: "spread", label: "Cover page alone (align two-page spreads)", words: "spread cover offset even odd manga book", run: () => this.toggleCoverOffset() },
+      { icon: "book", label: "Right-to-left manga reading", words: "rtl manga comic japanese direction spread", run: () => this.toggleRtlReading() },
       { icon: "spread", label: this.splitOpen ? "Close split view" : "Split view (side by side)", keys: "Ctrl+\\", words: "compare side by side two panes dual view", run: () => this.toggleSplitView() },
       ...(this.splitOpen ? [
         { icon: "spread", label: "Switch split pane", keys: "F6", words: "focus left right pane", run: () => this.switchSplitPane() },
@@ -1770,6 +1795,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       { icon: "rect", label: "Crop pages visually", words: "trim margins box cut", run: () => this.openCropMode() },
       { icon: "print", label: "Print preflight check", words: "dpi cmyk rgb bleed fonts hairline press", run: () => this.checkPreflight() },
       { icon: "edittext", label: "Translate this page", words: "translate language offline page spanish french german chinese", run: () => this.translateCurrentPage() },
+      { icon: "edittext", label: "Manga Lens (translate page overlay & bubble editor)", keys: "Shift+T", words: "manga lens comic bubble translate overlay edit scanlation", run: () => this.openMangaLens() },
       { icon: "split", label: "Live bilingual reading", words: "translate bilingual book split view side by side language", run: () => this.openSplitView("__translate__") },
       { icon: "command", label: "Ask this PDF (Local AI)", words: "ai assistant ask question ollama lm studio local llm chat citations", run: () => openAiAssistant(this, "ask") },
       { icon: "command", label: "Summarize PDF (Local AI)", words: "ai summary chapter bullets study notes ollama local llm", run: () => openAiAssistant(this, "summarize") },

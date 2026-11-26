@@ -11,7 +11,7 @@ from pathlib import Path
 
 from pdfmanager import applog, filefacts, progress
 from pdfmanager.server.common import (
-    EXPECTED_ERRORS, UserError, _bool, _file_mentions, _parse_multipart,
+    EXPECTED_ERRORS, UserError, _bool, _download_headers, _file_mentions, _parse_multipart,
     _safe_name, gui_hook, lazy_module,
 )
 
@@ -360,6 +360,81 @@ class ToolRoutesMixin:
                 path, page_num, src_lang, dst_lang, password=fields.get("password") or None,
             )
         return self._send(HTTPStatus.OK, result)
+
+    def _translate_manga_page(self, body):
+        """Detect, OCR, and translate speech bubbles on a single PDF/CBZ page for the Reader Manga Lens."""
+        from pdfmanager import cbz
+        from pdfmanager.translate import manga
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        file_id = (fields.get("id") or "").strip()
+        opened_path = self.opened.get(file_id) if (file_id and self.opened is not None) else None
+        if not uploads and (opened_path is None or not opened_path.is_file()):
+            raise UserError("no file")
+        page_num = int(fields.get("page") or 1)
+        src_lang = fields.get("from") or "auto"
+        dst_lang = fields.get("to") or "en"
+        use_ai = _bool(fields.get("manga_ai", "true"))
+        reading_dir = fields.get("reading_dir") or "auto"
+        password = fields.get("password") or None
+
+        with tempfile.TemporaryDirectory(prefix="pdfm-lens-") as tmp:
+            if opened_path is not None and opened_path.is_file() and not uploads:
+                if opened_path.suffix.lower() == ".cbz":
+                    pdf_path = Path(tmp) / "comic.pdf"
+                    cbz.cbz_to_pdf(opened_path, pdf_path, rtl_viewer="auto")
+                else:
+                    pdf_path = opened_path
+            else:
+                pdf_path = Path(tmp) / "file.pdf"
+                pdf_path.write_bytes(uploads[0][2])
+            result = manga.translate_manga_page_bubbles(
+                pdf_path, page_num, src_lang, dst_lang,
+                password=password, use_ai=use_ai, reading_dir=reading_dir,
+            )
+        return self._send(HTTPStatus.OK, result)
+
+    def _apply_manga_page(self, body):
+        """Burn edited Manga Lens bubbles permanently onto a single PDF page and return the updated PDF."""
+        from pdfmanager import cbz
+        from pdfmanager.translate import manga
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        file_id = (fields.get("id") or "").strip()
+        opened_path = self.opened.get(file_id) if (file_id and self.opened is not None) else None
+        if not uploads and (opened_path is None or not opened_path.is_file()):
+            raise UserError("no file")
+        page_num = int(fields.get("page") or 1)
+        dst_lang = fields.get("to") or "en"
+        comic_caps = _bool(fields.get("comic_caps"))
+        use_ai = _bool(fields.get("manga_ai", "true"))
+        password = fields.get("password") or None
+        try:
+            bubbles = json.loads(fields.get("bubbles") or "[]")
+        except Exception:
+            raise UserError("invalid bubbles payload") from None
+        if not isinstance(bubbles, list):
+            raise UserError("bubbles must be a list")
+
+        with tempfile.TemporaryDirectory(prefix="pdfm-lens-apply-") as tmp:
+            if opened_path is not None and opened_path.is_file() and not uploads:
+                if opened_path.suffix.lower() == ".cbz":
+                    src_pdf = Path(tmp) / "comic.pdf"
+                    cbz.cbz_to_pdf(opened_path, src_pdf, rtl_viewer="auto")
+                else:
+                    src_pdf = opened_path
+                out_name = f"{opened_path.stem}.pdf"
+            else:
+                src_pdf = Path(tmp) / "in.pdf"
+                src_pdf.write_bytes(uploads[0][2])
+                out_name = uploads[0][1] or "translated.pdf"
+            out_pdf = Path(tmp) / "out.pdf"
+            manga.apply_manga_page_bubbles(
+                src_pdf, out_pdf, page_num, bubbles, dst_lang,
+                password=password, comic_caps=comic_caps, use_ai=use_ai,
+            )
+            pdf_bytes = out_pdf.read_bytes()
+        return self._send(HTTPStatus.OK, pdf_bytes, "application/pdf", _download_headers(out_name))
 
     def _facts(self, body):
         """What a file the page holds is (see filefacts), and what to offer for it."""

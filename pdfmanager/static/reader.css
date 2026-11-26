@@ -1192,3 +1192,121 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
 /* Keyboard-selected redaction mark */
 .rd-redactmark.rd-redact-sel { outline: 2px solid var(--accent, #2b6cb0); outline-offset: 2px; }
 
+
+/* ---- Right-to-Left Manga Spread Mode --------------------------------------- */
+.rd-viewport.rtl-reading .pdfViewer .spread,
+.rtl-reading .pdfViewer .spread {
+  flex-direction: row-reverse;
+}
+
+/* ---- Live Manga Lens Overlay & Interactive Bubble Editor ------------------- */
+.rd-lens-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 95;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  max-width: calc(100vw - 32px);
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--surface, #1d1e24);
+  color: var(--ink, #f4f4f6);
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.14));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
+  font-size: 13px;
+}
+.rd-lens-title { font-weight: 700; letter-spacing: 0.01em; margin-right: 2px; }
+.rd-lens-sel {
+  font: inherit;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line, rgba(128, 128, 128, 0.35));
+  background: var(--bg, #14151a);
+  color: inherit;
+}
+.rd-lens-arrow { opacity: 0.65; }
+.rd-lens-chk { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+.rd-lens-status { opacity: 0.8; font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.rd-manga-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  pointer-events: auto;
+  transition: opacity 0.12s ease;
+}
+.rd-manga-layer.peeking {
+  opacity: 0.05;
+  pointer-events: none;
+}
+.rd-manga-bubble {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 6% 8%;
+  box-sizing: border-box;
+  line-height: 1.18;
+  font-weight: 700;
+  font-family: "Comic Sans MS", "Trebuchet MS", system-ui, sans-serif;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
+  user-select: none;
+}
+.rd-manga-bubble.oval { border-radius: 48%; }
+.rd-manga-bubble.rect { border-radius: 6px; }
+.rd-manga-bubble.selected {
+  outline: 2px solid var(--accent, #4f8cff);
+  outline-offset: 2px;
+  z-index: 30;
+  user-select: text;
+}
+.rd-manga-bubble-text {
+  width: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  word-wrap: break-word;
+  outline: none;
+}
+.rd-manga-bubble-tools {
+  position: absolute;
+  top: -28px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 3px;
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: #1b1c22;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  cursor: grab;
+  white-space: nowrap;
+}
+.rd-manga-bubble-tools button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 5px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.rd-manga-bubble-tools button:hover { background: rgba(255, 255, 255, 0.16); }
+.rd-manga-resize {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--accent, #4f8cff);
+  border: 2px solid #fff;
+  cursor: nwse-resize;
+}
