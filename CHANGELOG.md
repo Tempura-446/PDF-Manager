@@ -4,6 +4,16 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.80.1
+
+Open `.cbz` Comic & Manga Archives Directly in the ZPDF Reader.
+
+- **Direct `.cbz` Reader Support (`server/reader_routes.py`, `gui.py`, `static/reader.js`, `static/tabs.js`, `static/tools.js`).**
+  - Open `.cbz` archives directly via **File → Open**, drag-and-drop onto the
+    Reader or Home screen, or the file picker—converted on the fly into a
+    readable, annotatable, translatable PDF (with HTTP Range streaming and
+    in-memory caching for files opened from disk).
+
 ## 0.80.0
 
 Optional **Manga AI Pack** (ONNX Neural Bubble & Borderless Text Detector, Japanese `manga-ocr`, LaMa-Manga Neural Inpainting, and Page-Context LLM Manga Script Translation).

@@ -359,6 +359,8 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._form_import(body)
             if path == "/api/drawing/open":
                 return self._drawing_open(body)
+            if path == "/api/cbz/open":
+                return self._cbz_open(body)
             if path in ("/api/comments/summary", "/api/comments/markdown", "/api/comments/export", "/api/comments/import"):
                 return self._comments(path.rsplit("/", 1)[1], body)
             if path == "/api/text/edit":
@@ -965,7 +967,8 @@ class DesktopApi:
 
         chosen = self._window.create_file_dialog(
             webview.FileDialog.OPEN, directory=str(Path.home()),
-            file_types=("PDF files (*.pdf)", "All files (*.*)"))
+            file_types=("PDF & Comic files (*.pdf;*.cbz)", "PDF files (*.pdf)",
+                        "Comic / Manga archives (*.cbz)", "All files (*.*)"))
         if not chosen:
             return None
         path = Path(chosen if isinstance(chosen, str) else chosen[0])

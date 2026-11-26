@@ -159,38 +159,6 @@ def info(path):
     return {"protected": True, "method": method, "weak": weak, "advice": advice}
 
 
-_PAD = bytes.fromhex("28bf4e5e4e758a4164004e56fffa01082e2e00b6d0683e802f0ca9fe6453697a")
-
-
-def _user_password(path, owner_password):
-    """The password to open an RC4-protected PDF, worked out from its
-    permissions password (the old scheme keeps it, scrambled with that
-    password: PDF 1.7, algorithm 7). "" when anyone can open the file.
-    pypdf's own reading of the old scheme does the work."""
-    from pypdf import PdfReader
-    from pypdf._crypt_providers import rc4_decrypt
-    from pypdf._encryption import AlgV4
-
-    encrypt = PdfReader(str(path)).trailer["/Encrypt"].get_object()
-    revision = int(encrypt.get("/R", 2))
-    bits = int(encrypt.get("/Length", 40)) if revision >= 3 else 40
-    scrambled = encrypt["/O"]
-    scrambled = scrambled.original_bytes if hasattr(scrambled, "original_bytes") else bytes(scrambled)
-    key = AlgV4.compute_O_value_key(owner_password.encode("latin-1", "replace"), revision, bits)
-    if revision == 2:
-        plain = rc4_decrypt(key, scrambled)
-    else:
-        plain = scrambled
-        for i in range(19, -1, -1):
-            plain = rc4_decrypt(bytes(b ^ i for b in key), plain)
-    end = -1
-    for cut in range(33):  # the password, then as much of the padding as fits in 32 bytes
-        if plain[cut:32] == _PAD[:32 - cut]:
-            end = cut
-            break
-    return plain[:end if end >= 0 else 32].decode("latin-1")
-
-
 def upgrade(path, output, password):
     """Write the PDF with AES-256 instead of its old encryption, with the
     same password and the same limits. Returns what was done, in words.
@@ -222,7 +190,8 @@ def upgrade(path, output, password):
         typed = password or ""
         if pdf.owner_password_matched:
             # Everything is known: qpdf recovers the password to open from the old encryption.
-            user = _user_password(path, typed)
+            raw_user = pdf.encryption.user_password
+            user = raw_user.decode("latin-1") if isinstance(raw_user, (bytes, bytearray)) else str(raw_user)
             owner, kept = typed, "its passwords and limits are as they were"
             if not owner or owner == user:
                 owner = user if not limited else secrets.token_urlsafe(24)
