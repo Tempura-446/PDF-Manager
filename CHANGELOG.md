@@ -4,6 +4,18 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.81.0
+
+Manga Reader Superpowers: **True RTL Manga Spreads**, **Live Manga Lens**, and **Interactive Bubble Editor**.
+
+- **True Right-to-Left Manga Spread Mode & Cover Page Offset (`cbz.py`, `static/reader-nav.js`, `static/reader-render.js`, `static/reader.js`, `static/reader.css`).**
+  - Auto-detects RTL manga from `ComicInfo.xml` (`<Manga>YesAndRightToLeft</Manga>`) when opening `.cbz` archives and from PDF `/ViewerPreferences /Direction /R2L`.
+  - Adds **Right-to-left manga reading** (reversed two-page spread order + flipped `←`/`→` page keys) and **Cover page alone (align spreads)** (`SpreadMode.EVEN` vs `ODD`) to the Reader View menu and Command Palette.
+- **Live "Translate This Page" Manga Lens & Interactive Bubble Editor (`translate/manga.py`, `server/tool_routes.py`, `static/manga-lens.js`, `static/reader.js`, `static/reader.css`).**
+  - Press `Shift+T` (or open **Manga Lens** from the menu/Command Palette) to detect, OCR, and translate speech bubbles on the current page only, rendered as interactive overlays directly over the artwork.
+  - Hold `Space` (or click **Original**) to peek at the original art underneath.
+  - Click any bubble overlay to edit its text inline, adjust font size (`A-`/`A+`), drag to move, resize, or remove, then click **Apply to PDF** to burn the edited bubbles into the page with full Undo/Redo support.
+
 ## 0.80.1
 
 Open `.cbz` Comic & Manga Archives Directly in the ZPDF Reader.
