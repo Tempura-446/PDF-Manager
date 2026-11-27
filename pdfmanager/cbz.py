@@ -246,28 +246,54 @@ def pdf_to_cbz(
     core.open_pdf(src, password=password)
     dst.parent.mkdir(parents=True, exist_ok=True)
 
+    import collections
+    import concurrent.futures
+    import os
+
+    save_kwargs = {"format": pil_fmt}
+    if pil_fmt in ("JPEG", "WEBP"):
+        save_kwargs["quality"] = max(50, min(100, int(quality)))
+    if pil_fmt == "WEBP":
+        save_kwargs["method"] = 4
+
+    def _encode_page(pil_img):
+        buf = io.BytesIO()
+        pil_img.save(buf, **save_kwargs)
+        return buf.getvalue()
+
     with core.PDFIUM_LOCK:
         doc = pdfium.PdfDocument(str(src), password=password)
         total = len(doc)
-        try:
-            with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_STORED) as zf:
+
+    workers = min(4, max(1, os.cpu_count() or 2))
+    max_in_flight = workers * 2
+    try:
+        with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_STORED) as zf:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                pending = collections.deque()
                 for idx in range(total):
                     progress.check()
                     progress.report(idx, max(1, total), "exporting CBZ page")
-                    pg = doc[idx]
-                    r_scale = core.render_scale(pg, float(dpi) / 72.0)
-                    pil_img = pg.render(scale=r_scale).to_pil().convert("RGB")
-                    buf = io.BytesIO()
-                    save_kwargs = {"format": pil_fmt}
-                    if pil_fmt in ("JPEG", "WEBP"):
-                        save_kwargs["quality"] = max(50, min(100, int(quality)))
-                    pil_img.save(buf, **save_kwargs)
-                    zf.writestr(f"{idx + 1:04d}.{ext}", buf.getvalue())
-                if comic_info and isinstance(comic_info, dict):
-                    meta = dict(comic_info)
-                    meta.setdefault("PageCount", total)
-                    zf.writestr("ComicInfo.xml", _build_comic_info_xml(meta))
-        finally:
+                    with core.PDFIUM_LOCK:
+                        pg = doc[idx]
+                        try:
+                            r_scale = core.render_scale(pg, float(dpi) / 72.0)
+                            pil_img = pg.render(scale=r_scale).to_pil().convert("RGB")
+                        finally:
+                            pg.close()
+                    pending.append((idx, pool.submit(_encode_page, pil_img)))
+                    if len(pending) >= max_in_flight:
+                        done_idx, fut = pending.popleft()
+                        zf.writestr(f"{done_idx + 1:04d}.{ext}", fut.result())
+                while pending:
+                    done_idx, fut = pending.popleft()
+                    zf.writestr(f"{done_idx + 1:04d}.{ext}", fut.result())
+            if comic_info and isinstance(comic_info, dict):
+                meta = dict(comic_info)
+                meta.setdefault("PageCount", total)
+                zf.writestr("ComicInfo.xml", _build_comic_info_xml(meta))
+    finally:
+        with core.PDFIUM_LOCK:
             doc.close()
 
     return {"pages": total, "format": ext, "output": str(dst)}

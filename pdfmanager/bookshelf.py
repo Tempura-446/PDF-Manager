@@ -189,17 +189,18 @@ def _render_cover_pil(path, max_w=240):
     if ext == ".pdf":
         import pypdfium2 as pdfium
 
-        doc = pdfium.PdfDocument(str(p))
-        try:
-            if len(doc) == 0:
-                return None
-            page = doc[0]
+        with core.PDFIUM_LOCK:
+            doc = pdfium.PdfDocument(str(p))
             try:
-                pil = page.render(scale=0.5).to_pil().convert("RGB")
+                if len(doc) == 0:
+                    return None
+                page = doc[0]
+                try:
+                    pil = page.render(scale=0.5).to_pil().convert("RGB")
+                finally:
+                    page.close()
             finally:
-                page.close()
-        finally:
-            doc.close()
+                doc.close()
     elif ext in (".cbz", ".cbr") and zipfile.is_zipfile(p):
         with zipfile.ZipFile(p, "r") as zf:
             imgs = [

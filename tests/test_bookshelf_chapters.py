@@ -102,3 +102,26 @@ def test_bookshelf_scan_thumbs_and_sibling_chapters(tmp_path, monkeypatch, app):
     assert pdata["opened"]["name"] == "ch_1.cbz"
     assert c1.resolve() == bookshelf.find_by_id(book_id).resolve()
     assert c10.is_file()
+
+
+def test_large_json_api_response_gzip_compression(tmp_path, monkeypatch, app):
+    import gzip
+
+    base, token, _srv = app
+    monkeypatch.setattr(appdata, "_data_dir", lambda: tmp_path / "zpdf-gz")
+    lib_dir = tmp_path / "big-shelf"
+    lib_dir.mkdir()
+    for i in range(40):
+        _make_pdf(lib_dir / f"volume_{i:03d}_very_long_series_title_for_gzip_test.pdf")
+    bookshelf.add_folder(str(lib_dir))
+
+    req = urllib.request.Request(
+        f"{base}/api/library",
+        headers={"X-Pdfm-Token": token, "Accept-Encoding": "gzip"},
+    )
+    with urllib.request.urlopen(req) as resp:
+        assert resp.status == 200
+        assert resp.headers.get("Content-Encoding") == "gzip"
+        raw = gzip.decompress(resp.read())
+        payload = json.loads(raw.decode("utf-8"))
+        assert len(payload["items"]) == 40

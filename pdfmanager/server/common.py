@@ -628,7 +628,22 @@ class HandlerBase(BaseHTTPRequestHandler):
             body = json.dumps(body).encode()
         elif isinstance(body, str):
             body = body.encode()
-        self._start(status, ctype, len(body), headers, cache)
+        out_headers = dict(headers) if headers else None
+        if (
+            len(body) >= 4096
+            and (ctype.startswith("application/json") or ctype.startswith("text/"))
+            and (not out_headers or "Content-Encoding" not in out_headers)
+            and "gzip" in (self.headers.get("Accept-Encoding", "") if hasattr(self, "headers") and self.headers else "").lower()
+        ):
+            import gzip
+
+            compressed = gzip.compress(body, compresslevel=5)
+            if len(compressed) < len(body):
+                body = compressed
+                out_headers = dict(out_headers or {})
+                out_headers["Content-Encoding"] = "gzip"
+                out_headers["Vary"] = "Accept-Encoding"
+        self._start(status, ctype, len(body), out_headers, cache)
         self.wfile.write(body)
 
     def _start(self, status, ctype, length, headers=None, cache=False):
