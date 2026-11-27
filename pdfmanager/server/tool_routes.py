@@ -378,13 +378,11 @@ class ToolRoutesMixin:
         reading_dir = fields.get("reading_dir") or "auto"
         password = fields.get("password") or None
 
+        from pdfmanager.server.reader_routes import _resolve_opened_pdf
+
         with tempfile.TemporaryDirectory(prefix="pdfm-lens-") as tmp:
             if opened_path is not None and opened_path.is_file() and not uploads:
-                if opened_path.suffix.lower() == ".cbz":
-                    pdf_path = Path(tmp) / "comic.pdf"
-                    cbz.cbz_to_pdf(opened_path, pdf_path, rtl_viewer="auto")
-                else:
-                    pdf_path = opened_path
+                pdf_path = _resolve_opened_pdf(opened_path, tmp)
             else:
                 pdf_path = Path(tmp) / "file.pdf"
                 pdf_path.write_bytes(uploads[0][2])
@@ -396,7 +394,7 @@ class ToolRoutesMixin:
 
     def _apply_manga_page(self, body):
         """Burn edited Manga Lens bubbles permanently onto a single PDF page and return the updated PDF."""
-        from pdfmanager import cbz
+        from pdfmanager.server.reader_routes import _resolve_opened_pdf
         from pdfmanager.translate import manga
 
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
@@ -418,11 +416,7 @@ class ToolRoutesMixin:
 
         with tempfile.TemporaryDirectory(prefix="pdfm-lens-apply-") as tmp:
             if opened_path is not None and opened_path.is_file() and not uploads:
-                if opened_path.suffix.lower() == ".cbz":
-                    src_pdf = Path(tmp) / "comic.pdf"
-                    cbz.cbz_to_pdf(opened_path, src_pdf, rtl_viewer="auto")
-                else:
-                    src_pdf = opened_path
+                src_pdf = _resolve_opened_pdf(opened_path, tmp)
                 out_name = f"{opened_path.stem}.pdf"
             else:
                 src_pdf = Path(tmp) / "in.pdf"

@@ -95,6 +95,21 @@ def _get_cbz_open_cached(cache_key, path):
     return pdf_bytes
 
 
+def _resolve_opened_pdf(opened_path, tmp_dir):
+    """Return a PDF Path for ``opened_path``, converting & caching CBZ/CBR/EPUB books."""
+    p = Path(opened_path)
+    if p.suffix.lower() not in _BOOK_OPEN_EXTS:
+        return p
+    st = p.stat()
+    cache_key = (str(p.resolve()), st.st_mtime_ns, st.st_size)
+    pdf_bytes = _get_cbz_open_cached(cache_key, p)
+    if isinstance(pdf_bytes, Exception):
+        raise UserError(f"could not open {p.name}: {pdf_bytes}") from None
+    out = Path(tmp_dir) / "book.pdf"
+    out.write_bytes(pdf_bytes)
+    return out
+
+
 class ReaderRoutesMixin:
     """Reader, annotation, layer, text-edit, OCR-correction, and markup endpoints."""
 
@@ -196,7 +211,10 @@ class ReaderRoutesMixin:
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
         password = fields.get("password") or None
         if fields.get("id"):
-            return self._send(HTTPStatus.OK, layers.info(self._opened_path(fields["id"]), password))
+            opened = self._opened_path(fields["id"])
+            if opened.suffix.lower() in _BOOK_OPEN_EXTS:
+                return self._send(HTTPStatus.OK, {"layers": []})
+            return self._send(HTTPStatus.OK, layers.info(opened, password))
         if not uploads:
             raise UserError("no file")
         with tempfile.TemporaryDirectory(prefix="pdfm-") as tmp:
@@ -239,6 +257,8 @@ class ReaderRoutesMixin:
             path = self.opened.get(fields["id"]) if self.opened is not None else None
             if path is None:
                 raise UserError("that file is no longer available")
+            if path.suffix.lower() in _BOOK_OPEN_EXTS:
+                return self._send(HTTPStatus.OK, {"pages": []})
             return self._send(HTTPStatus.OK, {"pages": viewports.stored_scales(path, password)})
         if not uploads:
             raise UserError("no file")
@@ -819,8 +839,8 @@ class ReaderRoutesMixin:
         return self._send(HTTPStatus.OK, res)
 
     def _ai_vlm_ocr(self, body):
-        """Run Vision-LLM OCR or direct visual page translation on a single PDF/CBZ page."""
-        from pdfmanager import cbz, vlm
+        """Run Vision-LLM OCR or direct visual page translation on a single PDF/CBZ/CBR/EPUB page."""
+        from pdfmanager import vlm
 
         fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
         file_id = (fields.get("id") or "").strip()
@@ -835,11 +855,7 @@ class ReaderRoutesMixin:
 
         with tempfile.TemporaryDirectory(prefix="pdfm-vlm-") as tmp:
             if opened_path is not None and opened_path.is_file() and not uploads:
-                if opened_path.suffix.lower() == ".cbz":
-                    pdf_path = Path(tmp) / "comic.pdf"
-                    cbz.cbz_to_pdf(opened_path, pdf_path, rtl_viewer="auto")
-                else:
-                    pdf_path = opened_path
+                pdf_path = _resolve_opened_pdf(opened_path, tmp)
             else:
                 pdf_path = Path(tmp) / "file.pdf"
                 pdf_path.write_bytes(uploads[0][2])

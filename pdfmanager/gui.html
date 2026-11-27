@@ -226,6 +226,10 @@
       <section class="set-card">
         <h3>Offline AI models (OCR &amp; Manga AI)</h3>
         <p class="dlg-hint">Pre-download or remove optional ONNX weights for PP-OCRv6 (Medium, Small &amp; Tiny) and Manga AI Pack (neural bubbles, Baberu OCR v1.2 JA/ZH/EN, LaMa inpainting).</p>
+        <div id="ai-dl-wrap" hidden class="set-dl-row">
+          <span class="job-progress" id="ai-dl-bar" role="progressbar" aria-label="AI model download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></span>
+          <button type="button" class="btn secondary pb-small" id="ai-dl-cancel" data-i18n="common.cancel">Cancel</button>
+        </div>
         <p class="dlg-status" id="ai-models-status" aria-live="polite"></p>
         <ul class="watch-list" id="set-ai-models-list" aria-label="Offline AI models"></ul>
       </section>

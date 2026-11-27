@@ -446,7 +446,7 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 from pdfmanager import models_manager
 
                 pack_id = str(json.loads(body or b"{}").get("id") or "").strip()
-                return self._send(HTTPStatus.OK, models_manager.download_model(pack_id))
+                return self._job_or_now(lambda: {"json": models_manager.download_model(pack_id)})
             if path == "/api/models/delete":
                 from pdfmanager import models_manager
 

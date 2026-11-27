@@ -4,6 +4,18 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.87.2
+
+Book Route Caching, Vision-LLM Default Model Safety & Async Offline AI Model Downloads:
+
+- **Cached CBZ / CBR / EPUB Support Across Secondary Reader Routes (`server/reader_routes.py`, `server/tool_routes.py`).**
+  - Unified `_resolve_opened_pdf()` backed by `_get_cbz_open_cached()` so **Manga Lens** (`/api/translate/manga-page`, `/api/translate/manga-page/apply`) and **Vision-LLM OCR** (`/api/ai/vlm-ocr`) work seamlessly on disk-opened `.cbz`, `.cbr`, and `.epub` books without re-converting archives from scratch.
+  - Short-circuited `/api/layers` and `/api/scales` to return empty lists for disk-opened `.cbz`/`.cbr`/`.epub` books instead of passing raw archive paths to PDF parsers.
+- **Vision-LLM Default Model Safety (`vlm.py`).**
+  - Added optional `vlm_model` setting support and prevented Vision-LLM image requests from falling back to the legacy text-only `qwen2.5:7b` default saved by Settings (automatically using `qwen2.5vl:7b` unless a multimodal or explicit model is configured).
+- **Async Cancellable Offline AI Model Downloads (`gui.py`, `gui.html`, `static/settings.js`).**
+  - Routed `/api/models/download` through `_job_or_now()` and added a live progress bar + Cancel button (`#ai-dl-wrap`) in Settings → Offline AI Models so large ONNX downloads (`PP-OCRv6`, `Baberu OCR`, `LaMa`) report live progress and can be cancelled cleanly.
+
 ## 0.87.1
 
 Post-Upgrade Deep Audit & Reliability Pass — fixes across Live Manga Lens, Bookshelf, Chapter Navigation, CBZ/CBR/EPUB, VLM Security, and AI Model RAM Management.

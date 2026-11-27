@@ -797,11 +797,73 @@ function renderAiModels(models) {
     btn.textContent = m.installed ? "Remove" : "Download";
     btn.addEventListener("click", async () => {
       btn.disabled = true;
-      updateStatus("ai-models-status", m.installed ? `Removing ${m.name}…` : `Downloading ${m.name} (~${m.approx_mb} MB)…`);
+      if (m.installed) {
+        updateStatus("ai-models-status", `Removing ${m.name}…`);
+        try {
+          const res = await jsonApi("/api/models/delete", { id: m.id });
+          renderAiModels(res.models || []);
+          updateStatus("ai-models-status", `Removed ${m.name}.`);
+        } catch (err) {
+          updateStatus("ai-models-status", err.message || String(err), true);
+          btn.disabled = false;
+        }
+        return;
+      }
+
+      const dlWrap = $("ai-dl-wrap"), dlBar = $("ai-dl-bar"), dlCancel = $("ai-dl-cancel");
+      let activeJobId = null, wasCancelled = false;
+      const setBar = (frac) => {
+        if (!dlBar) return;
+        const pct = Math.max(0, Math.min(100, Math.round((frac || 0) * 100)));
+        dlBar.setAttribute("aria-valuenow", String(pct));
+        dlBar.firstElementChild.style.width = `${pct}%`;
+      };
+      if (dlCancel) {
+        dlCancel.disabled = false;
+        dlCancel.textContent = "Cancel";
+        dlCancel.onclick = async () => {
+          if (!activeJobId) return;
+          wasCancelled = true;
+          dlCancel.disabled = true;
+          dlCancel.textContent = "Cancelling…";
+          try { await jsonApi(`/api/job/${activeJobId}/cancel`, {}); } catch {}
+        };
+      }
+      const aiDlUi = {
+        start(id) {
+          activeJobId = id;
+          if (dlWrap) dlWrap.hidden = false;
+          setBar(0);
+        },
+        say(msg) { updateStatus("ai-models-status", msg); },
+        progress(f) { setBar(f); },
+        cancelled() { wasCancelled = true; },
+        end() {
+          activeJobId = null;
+          if (dlWrap) dlWrap.hidden = true;
+          setBar(0);
+        },
+      };
+      updateStatus("ai-models-status", `Downloading ${m.name} (~${m.approx_mb} MB)…`);
       try {
-        const res = await jsonApi(m.installed ? "/api/models/delete" : "/api/models/download", { id: m.id });
+        let res;
+        if (typeof runJob === "function") {
+          const resp = await runJob("/api/models/download", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: m.id }),
+          }, aiDlUi);
+          if (!resp || wasCancelled) {
+            updateStatus("ai-models-status", `Cancelled downloading ${m.name}.`);
+            btn.disabled = false;
+            return;
+          }
+          res = await resp.json();
+        } else {
+          res = await jsonApi("/api/models/download", { id: m.id });
+        }
         renderAiModels(res.models || []);
-        updateStatus("ai-models-status", m.installed ? `Removed ${m.name}.` : `Installed ${m.name}.`);
+        updateStatus("ai-models-status", `Installed ${m.name}.`);
       } catch (err) {
         updateStatus("ai-models-status", err.message || String(err), true);
         btn.disabled = false;
