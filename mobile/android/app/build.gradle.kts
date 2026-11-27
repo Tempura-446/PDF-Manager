@@ -11,8 +11,8 @@ android {
         applicationId = "com.tempura446.zpdf"
         minSdk = 26
         targetSdk = 35
-        versionCode = 840
-        versionName = "0.84.0"
+        versionCode = 850
+        versionName = "0.85.0"
     }
 
     buildTypes {

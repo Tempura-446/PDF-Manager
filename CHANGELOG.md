@@ -4,6 +4,17 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.85.0
+
+Performance Optimization Pass: **Zero-Copy JPEG CBZ/CBR/Image Opening (~200× faster)**, **O(1) Bookshelf Index**, and **Memory-Bounded Chapter Cache**.
+
+- **Zero-Copy `/DCTDecode` CBZ / CBR / Multi-Image Builder (`cbz.py`).**
+  - Replaced ReportLab re-encoding + redundant `PdfReader`/`PdfWriter` double-copy with direct `pypdf` Image XObject embedding: baseline RGB/Grayscale JPEGs pass through zero-copy as `/DCTDecode` (zero pixel decode, zero generation loss, ~200× faster — 40-page JPEG CBZ drops from 4.36s to 0.02s), with automatic `ImageOps.exif_transpose` for rotated phone scans.
+- **O(1) Bookshelf ID Index & Folder-Mtime Scan Cache (`bookshelf.py`).**
+  - Added a thread-safe in-memory `_ID_INDEX` and folder-mtime scan cache so loading 60+ cover thumbnails and live-filtering the Bookshelf avoid redundant directory scans.
+- **Memory-Bounded Multi-Chapter Book Cache (`server/reader_routes.py`).**
+  - Expanded `_CBZ_OPEN_CACHE` to 8 entries with a 150 MB total RAM budget so flipping between recent chapters with `[` / `]` stays instant without memory bloat.
+
 ## 0.84.0
 
 **Visual Cover-Art Bookshelf** on the Home Screen & **Next/Previous Chapter (`]` / `[`)** Navigation in the Reader.

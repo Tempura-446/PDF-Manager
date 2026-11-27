@@ -59,9 +59,8 @@ def _get_safe_open_cached(cache_key, path):
 
 _CBZ_OPEN_CACHE = collections.OrderedDict()
 _CBZ_OPEN_LOCK = threading.Lock()
-_CBZ_OPEN_MAX = 4
-
-
+_CBZ_OPEN_MAX = 8
+_CBZ_OPEN_MAX_BYTES = 150 * 1024 * 1024  # 150 MB total cache cap
 _BOOK_OPEN_EXTS = {".cbz", ".cbr", ".epub"}
 
 
@@ -89,7 +88,9 @@ def _get_cbz_open_cached(cache_key, path):
     with _CBZ_OPEN_LOCK:
         _CBZ_OPEN_CACHE[cache_key] = pdf_bytes
         _CBZ_OPEN_CACHE.move_to_end(cache_key)
-        while len(_CBZ_OPEN_CACHE) > _CBZ_OPEN_MAX:
+        while len(_CBZ_OPEN_CACHE) > _CBZ_OPEN_MAX or (
+            len(_CBZ_OPEN_CACHE) > 1 and sum(len(v) for v in _CBZ_OPEN_CACHE.values()) > _CBZ_OPEN_MAX_BYTES
+        ):
             _CBZ_OPEN_CACHE.popitem(last=False)
     return pdf_bytes
 

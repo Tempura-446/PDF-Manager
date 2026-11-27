@@ -67,19 +67,93 @@ def detect_cbz_rtl(cbz_path):
     return False
 
 
+def _append_image_page(writer, raw):
+    """Embed raw image bytes directly as a PDF Image XObject page.
+
+    Baseline RGB/Grayscale JPEGs without EXIF rotation are passed through
+    zero-copy as ``/DCTDecode`` (zero pixel decode, zero generation loss).
+    Other formats (PNG, WebP, progressive JPEG, EXIF-rotated photos) are
+    normalized cleanly with ``ImageOps.exif_transpose`` and embedded directly.
+    """
+    import zlib
+    from PIL import Image, ImageOps
+    from pypdf.generic import DictionaryObject, NameObject, NumberObject, StreamObject
+
+    with Image.open(io.BytesIO(raw)) as im:
+        exif_orient = None
+        try:
+            exif_orient = im.getexif().get(274)
+        except Exception:
+            exif_orient = None
+        fast_jpeg = (
+            im.format == "JPEG"
+            and im.mode in ("RGB", "L")
+            and not im.info.get("progressive")
+            and exif_orient in (None, 1)
+        )
+        if fast_jpeg:
+            w_px, h_px = im.size
+            cs = "/DeviceGray" if im.mode == "L" else "/DeviceRGB"
+            img_bytes = raw
+            flt = "/DCTDecode"
+        else:
+            im2 = ImageOps.exif_transpose(im)
+            is_gray = im2.mode in ("1", "L", "LA")
+            im_out = im2.convert("L") if is_gray else im2.convert("RGB")
+            w_px, h_px = im_out.size
+            if is_gray:
+                cs = "/DeviceGray"
+                img_bytes = zlib.compress(im_out.tobytes(), level=6)
+                flt = "/FlateDecode"
+            else:
+                cs = "/DeviceRGB"
+                jbuf = io.BytesIO()
+                im_out.save(jbuf, format="JPEG", quality=92)
+                img_bytes = jbuf.getvalue()
+                flt = "/DCTDecode"
+
+    scale = 72.0 / 150.0
+    w_pt = max(72.0, min(1440.0, w_px * scale))
+    h_pt = w_pt * (float(h_px) / max(1.0, float(w_px)))
+
+    img_obj = StreamObject()
+    img_obj._data = img_bytes
+    img_obj.update({
+        NameObject("/Type"): NameObject("/XObject"),
+        NameObject("/Subtype"): NameObject("/Image"),
+        NameObject("/Width"): NumberObject(w_px),
+        NameObject("/Height"): NumberObject(h_px),
+        NameObject("/ColorSpace"): NameObject(cs),
+        NameObject("/BitsPerComponent"): NumberObject(8),
+        NameObject("/Filter"): NameObject(flt),
+        NameObject("/Length"): NumberObject(len(img_bytes)),
+    })
+    img_ref = writer._add_object(img_obj)
+
+    content = StreamObject()
+    content_bytes = f"q {w_pt:.2f} 0 0 {h_pt:.2f} 0 0 cm /Im0 Do Q\n".encode("ascii")
+    content._data = content_bytes
+    content[NameObject("/Length")] = NumberObject(len(content_bytes))
+    content_ref = writer._add_object(content)
+
+    page = writer.add_blank_page(width=w_pt, height=h_pt)
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/XObject"): DictionaryObject({NameObject("/Im0"): img_ref}),
+    })
+    page[NameObject("/Contents")] = content_ref
+
+
 def cbz_to_pdf(cbz_path, output_pdf, *, rtl_viewer="auto"):
     """Convert a ``.cbz`` (or ``.zip``) comic/manga archive into a PDF.
 
     Images are ordered via natural sort (``page_2.png`` before ``page_10.png``)
-    and embedded at their exact aspect ratio. Pass ``rtl_viewer=True`` to set
-    ``/ViewerPreferences << /Direction /R2L >>`` for manga right-to-left reading,
-    or ``rtl_viewer="auto"`` (default) to detect from ``ComicInfo.xml``.
+    and embedded at their exact aspect ratio with zero-copy JPEG passthrough.
+    Pass ``rtl_viewer=True`` to set ``/ViewerPreferences << /Direction /R2L >>``
+    for manga right-to-left reading, or ``rtl_viewer="auto"`` (default) to detect
+    from ``ComicInfo.xml``.
     """
-    from PIL import Image
-    from pypdf import PdfReader, PdfWriter
+    from pypdf import PdfWriter
     from pypdf.generic import DictionaryObject, NameObject
-    from reportlab.lib.utils import ImageReader
-    from reportlab.pdfgen import canvas
 
     src = Path(cbz_path)
     dst = Path(output_pdf)
@@ -93,6 +167,8 @@ def cbz_to_pdf(cbz_path, output_pdf, *, rtl_viewer="auto"):
     except (zipfile.BadZipFile, OSError) as exc:
         raise core.PdfManagerError(f"could not open CBZ archive: {exc}") from None
 
+    writer = PdfWriter()
+    used_names = []
     with zf:
         infos = zf.infolist()
         if len(infos) > MAX_CBZ_ENTRIES:
@@ -118,47 +194,22 @@ def cbz_to_pdf(cbz_path, output_pdf, *, rtl_viewer="auto"):
             raise core.PdfManagerError("CBZ archive contains no supported images")
 
         image_infos.sort(key=lambda inf: _natural_sort_key(inf.filename))
-        buf = io.BytesIO()
-        c = canvas.Canvas(buf)
         total = len(image_infos)
-        used_names = []
 
         for idx, info in enumerate(image_infos):
             progress.check()
             progress.report(idx, total, "converting CBZ page")
             raw = zf.read(info)
             try:
-                with Image.open(io.BytesIO(raw)) as im:
-                    is_gray = im.mode in ("1", "L", "LA")
-                    im_out = im.convert("L") if is_gray else im.convert("RGB")
-                    w_px, h_px = im_out.size
-                    # Target 150 DPI -> PDF points (72 pt/in) with reasonable page bounds
-                    scale = 72.0 / 150.0
-                    w_pt = max(72.0, min(1440.0, w_px * scale))
-                    h_pt = w_pt * (float(h_px) / max(1.0, float(w_px)))
-                    c.setPageSize((w_pt, h_pt))
-                    img_buf = io.BytesIO()
-                    if is_gray:
-                        im_out.save(img_buf, format="PNG", optimize=True)
-                    else:
-                        im_out.save(img_buf, format="JPEG", quality=92)
-                    img_buf.seek(0)
-                    c.drawImage(ImageReader(img_buf), 0, 0, width=w_pt, height=h_pt)
-                    c.showPage()
-                    used_names.append(info.filename)
+                _append_image_page(writer, raw)
+                used_names.append(info.filename)
             except Exception as _exc:
                 logging.getLogger("zpdf").debug("cbz.cbz_to_pdf.page %s: %s", info.filename, _exc)
                 continue
 
         if not used_names:
             raise core.PdfManagerError("no readable images found in CBZ archive")
-        c.save()
-        buf.seek(0)
 
-    reader = PdfReader(buf)
-    writer = PdfWriter()
-    for page in reader.pages:
-        writer.add_page(page)
     if is_rtl:
         vp = DictionaryObject({NameObject("/Direction"): NameObject("/R2L")})
         writer._root_object[NameObject("/ViewerPreferences")] = vp
@@ -276,13 +327,11 @@ def translate_cbz(
 def images_to_pdf(items, output_pdf, *, rtl_viewer=False):
     """Convert an ordered sequence of image ``Path``s or ``(name, bytes)`` pairs into a PDF.
 
-    Items are natural-sorted by filename and embedded at their exact aspect ratio.
+    Items are natural-sorted by filename and embedded at their exact aspect ratio
+    with zero-copy JPEG passthrough.
     """
-    from PIL import Image
-    from pypdf import PdfReader, PdfWriter
+    from pypdf import PdfWriter
     from pypdf.generic import DictionaryObject, NameObject
-    from reportlab.lib.utils import ImageReader
-    from reportlab.pdfgen import canvas
 
     dst = Path(output_pdf)
     normalized = []
@@ -299,44 +348,22 @@ def images_to_pdf(items, output_pdf, *, rtl_viewer=False):
         raise core.PdfManagerError("no supported images provided")
 
     normalized.sort(key=lambda pair: _natural_sort_key(pair[0]))
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf)
+    writer = PdfWriter()
     used_names = []
     total = len(normalized)
     for idx, (name, raw) in enumerate(normalized):
         progress.check()
         progress.report(idx, total, "converting image page")
         try:
-            with Image.open(io.BytesIO(raw)) as im:
-                is_gray = im.mode in ("1", "L", "LA")
-                im_out = im.convert("L") if is_gray else im.convert("RGB")
-                w_px, h_px = im_out.size
-                scale = 72.0 / 150.0
-                w_pt = max(72.0, min(1440.0, w_px * scale))
-                h_pt = w_pt * (float(h_px) / max(1.0, float(w_px)))
-                c.setPageSize((w_pt, h_pt))
-                img_buf = io.BytesIO()
-                if is_gray:
-                    im_out.save(img_buf, format="PNG", optimize=True)
-                else:
-                    im_out.save(img_buf, format="JPEG", quality=92)
-                img_buf.seek(0)
-                c.drawImage(ImageReader(img_buf), 0, 0, width=w_pt, height=h_pt)
-                c.showPage()
-                used_names.append(name)
+            _append_image_page(writer, raw)
+            used_names.append(name)
         except Exception as _exc:
             logging.getLogger("zpdf").debug("cbz.images_to_pdf %s: %s", name, _exc)
             continue
 
     if not used_names:
         raise core.PdfManagerError("no readable images found")
-    c.save()
-    buf.seek(0)
 
-    reader = PdfReader(buf)
-    writer = PdfWriter()
-    for page in reader.pages:
-        writer.add_page(page)
     if rtl_viewer:
         writer._root_object[NameObject("/ViewerPreferences")] = DictionaryObject(
             {NameObject("/Direction"): NameObject("/R2L")}
