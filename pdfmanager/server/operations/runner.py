@@ -116,6 +116,32 @@ def _run_files(op, files, opts, password, extra_files, work, notes):
             json_out = out_dir / f"{files[0].stem}_vs_{files[1].stem}_diff.json"
             json_out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
             outputs.append(json_out)
+    elif op == "redline":
+        from pdfmanager import redline
+
+        if len(files) != 2:
+            raise UserError("add exactly two files: the original, then the revised version")
+        report = redline.compute_redline(files[0], files[1], password=password)
+        ai_text = None
+        if _bool(opts.get("explain")):
+            ai_text = redline.explain_redline_ai(report).get("explanation")
+        fmt = str(opts.get("format") or "pdf").strip().lower()
+        base = f"{files[0].stem}_vs_{files[1].stem}_redline"
+        if fmt == "md":
+            out = out_dir / f"{base}.md"
+            out.write_text(redline.export_redline_markdown(report, ai_summary=ai_text), encoding="utf-8")
+        elif fmt == "html":
+            out = out_dir / f"{base}.html"
+            out.write_text(redline.export_redline_html(report, ai_summary=ai_text), encoding="utf-8")
+        else:
+            out = out_dir / f"{base}.pdf"
+            redline.export_redline_pdf(report, out, ai_summary=ai_text)
+        s = report["summary"]
+        notes.append(
+            f"Redline: {s['total_changes']} change(s) "
+            f"({s['modified']} modified, {s['added']} added, {s['removed']} removed, {s['material']} material)"
+        )
+        outputs = [out]
     elif op == "compare-sets":
         from pdfmanager import sheetsets
 

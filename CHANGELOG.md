@@ -4,6 +4,18 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.93.0
+
+Smart Redline Contract & Specification Diff:
+
+- **Clause-by-Clause Smart Redline Engine (`redline.py`).**
+  - Extracts logical clauses/paragraphs per page and computes word-level insertion/deletion redline spans between two PDF revisions.
+  - Automatically flags **material numeric, currency, percentage, payment-term, and date changes** (e.g. `Net 30` → `Net 60`, `$10,000` → `$12,500`, `15%` → `20%`).
+  - Exports structured **Redline Review Reports** to `.pdf` (red strikethrough deletions + green bold insertions), standalone `.html`, and GitHub-Flavored `.md`.
+  - Optional offline **AI Change & Risk Summary** via your configured local LLM (`assistant._chat()`).
+- **Catalog Tool & CLI (`server/operations/catalog.py`, `server/operations/runner.py`, `cli/parser.py`).**
+  - Added **Smart Redline Diff (Contracts & Specs)** under the Combine tools group and `zpdf redline old.pdf new.pdf -o redline.pdf [--format pdf|html|md] [--explain] [--json]`.
+
 ## 0.92.0
 
 Instant QR "Phone ↔ Desktop" Wireless Scanner & AirDrop-Style File Drop:
