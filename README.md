@@ -1,21 +1,13 @@
 # ZPDF
 
-`ZPDF` is a PDF toolkit you can use three ways: as a **desktop app**, from
-the **command line**, or as a **Python library**.
+**The 100% Offline Document, Book & Manga Studio** *(PDF · EPUB · CBZ/CBR · CAD · Offline AI)*
 
-It includes a full **PDF reader** with tabs, where you can also annotate,
-sign and change existing text, and it can merge, split (also at bookmarks or
-into files of a maximum size), compare, extract, reorder, insert blank pages,
-rotate, resize, crop (also trimming white margins automatically), n-up, make
-**booklets** for folded printing, compress (three levels), convert colours
-(grayscale / RGB / CMYK, with ICC profiles), OCR and clean up scans, redact,
-flatten, remove hidden data, convert to PDF/A (and check PDF/A), make PDFs
-**accessible** (tags for screen readers, and a check like Acrobat's), Word, Excel,
-**PowerPoint** and **HTML**, and from Office files or images, edit bookmarks, encrypt, watermark and number pages, add headers,
-footers and **Bates numbers**, create **fillable forms** (finding a printed
-form's fields by itself), pull out pictures
-and attached files, run several of these in a row as a **recipe**, and
-organize, rename, de-duplicate, **search** and watch whole folders of PDFs.
+`ZPDF` runs three ways: as a **desktop app** (Windows, macOS, Linux + Android Companion), from the **command line**, or as a **Python library** — with zero telemetry, zero cloud uploads, and zero subscriptions.
+
+- **Universal Reader & Bookshelf:** Open **PDF**, **`.epub`** (with chapter bookmarks), **`.cbz`/`.cbr`** comic archives, **`.dxf`/`.dwg`** drawings, and image folders directly. Includes a **Visual Cover-Art Bookshelf**, **`[` / `]` chapter navigation**, **True RTL Manga Spreads** with cover-page offset, 4 reading themes (Light, Smart Night, Warm Sepia, E-Ink), split view + revision diff, Workspace Sessions, direct text editing, fillable forms (auto-detected), digital signing (`pyHanko`), and permanent redaction.
+- **Offline Manga & Book Translation Studio:** Commercial-safe Apache-2.0 MADLAD-400, OPUS-MT, or your local LLM — featuring the optional pure-ONNX **Manga AI Pack** (RT-DETR v2 bubble/borderless detector, Japanese `manga-ocr`, LaMa-Manga neural inpainting), **Live Manga Lens (`Shift+T`)** with hold-`Space` peek and an **Interactive Bubble Editor**, scanlation-grade stroked SFX, vertical CJK (*tategaki*) with furigana stripping, and live bilingual reading.
+- **Built-in PP-OCRv6 & Local AI:** Shipped **PP-OCRv6 Medium** OCR (50 languages), in-place **Check OCR** editor, **Settings → Offline AI Models Manager**, **Vision-LLM OCR & visual translation**, plus *Ask this PDF* (with `[p. N]` citations), Summarizer, and JSON/CSV extraction via Ollama / LM Studio / BYOK.
+- **Press-Room, CAD & Full PDF Toolkit:** Pure-Python CMYK preflight (PDF/X-1a & PDF/X-4, C/M/Y/K plates, TAC heatmap, live ink eyedropper), PDF ↔ DXF & calibrated blueprint takeoff, merge/split/reorder/crop/booklets/compress/PDF-A/PDF-UA accessibility, Word/Excel/PowerPoint/HTML/Markdown conversions, multi-step **Recipes**, Watch Folders, Smart Auto-Filing, and Local Semantic Folder Search.
 
 ## Install
 
