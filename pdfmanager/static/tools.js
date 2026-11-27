@@ -325,7 +325,12 @@ async function renderHome() {
     el("section", { class: "start-sec", "aria-label": "Recent files" }, el("span", { class: "lbl" }, "Recent"), recentList),
     el("section", { class: "start-sec", "aria-label": "Start from several files" }, el("span", { class: "lbl" }, "Start from several files"), multi)));
 
-  // Visual Cover-Art Bookshelf
+  // Continue Reading strip + Visual Cover-Art Bookshelf
+  const continueGrid = el("div", { class: "continue-grid" });
+  const continueSec = el("section", { class: "start-sec continue-sec", "aria-label": "Continue reading", hidden: true },
+    el("span", { class: "lbl" }, "Continue Reading"),
+    continueGrid,
+  );
   const shelfGrid = el("div", { class: "shelf-grid" });
   const shelfFilter = el("input", { type: "search", class: "shelf-filter", placeholder: "Filter library…", "aria-label": "Filter bookshelf" });
   const addFolderBtn = el("button", { type: "button", class: "btn secondary pb-small" }, "+ Add folder");
@@ -338,12 +343,71 @@ async function renderHome() {
     }
     shelfBlobUrls = [];
   };
+  const makeBookCard = (item, seq, { compact = false } = {}) => {
+    const img = el("img", {
+      class: "shelf-cover",
+      alt: item.stem,
+      loading: "lazy",
+    });
+    api(`/api/library/thumb/${encodeURIComponent(item.id)}`)
+      .then((r) => (r.ok ? r.blob() : null))
+      .then((blob) => {
+        if (!blob || seq !== shelfSeq) return;
+        const objUrl = URL.createObjectURL(blob);
+        shelfBlobUrls.push(objUrl);
+        img.src = objUrl;
+      })
+      .catch(() => {});
+    const prog = item.progress || null;
+    const pct = prog && prog.total > 0 ? Math.min(100, Math.max(0, Number(prog.percent) || 0)) : 0;
+    const progBar = prog && prog.total > 0
+      ? el("div", { class: "shelf-progress", title: `Page ${prog.page} of ${prog.total} (${pct}%)` },
+          el("div", { class: "shelf-progress-bar", style: `width:${pct}%` }))
+      : null;
+    const subText = prog && prog.total > 0
+      ? `p. ${prog.page}/${prog.total} · ${pct}%`
+      : item.folder;
+    return el("button", {
+      type: "button",
+      class: compact ? "shelf-card continue-card" : "shelf-card",
+      title: item.path,
+      onclick: async () => {
+        try {
+          const opened = await jsonApi("/api/library/open", { id: item.id });
+          if (opened?.id) {
+            const p = opened.progress || prog;
+            const goto = p && p.page > 0 ? {
+              page: p.page,
+              scale: p.zoom || undefined,
+              rtl: typeof p.rtl === "boolean" ? p.rtl : undefined,
+              spread: typeof p.spread === "boolean" ? p.spread : undefined,
+            } : null;
+            await openInReaderById([opened.id], goto);
+          }
+        } catch (err) {
+          if (typeof toast === "function") toast(err?.message || "Could not open book");
+        }
+      },
+    },
+      el("div", { class: "shelf-thumb" }, img, el("span", { class: "shelf-badge" }, item.ext), progBar),
+      el("div", { class: "shelf-name" }, item.stem),
+      el("div", { class: "shelf-folder" }, subText),
+    );
+  };
   const refreshShelf = async (q = "") => {
     const seq = ++shelfSeq;
     try {
       const data = await (await api(`/api/library${q ? `?q=${encodeURIComponent(q)}` : ""}`)).json();
       if (seq !== shelfSeq || !inHome()) return;
       revokeShelfBlobs();
+      const recent = data.recent || [];
+      if (recent.length && !q) {
+        continueSec.hidden = false;
+        continueGrid.replaceChildren(...recent.slice(0, 8).map((item) => makeBookCard(item, seq, { compact: true })));
+      } else {
+        continueSec.hidden = true;
+        continueGrid.replaceChildren();
+      }
       const folders = data.folders || [];
       shelfFoldersBar.replaceChildren(...folders.map((f) => {
         const chip = el("span", { class: "shelf-chip", title: f }, f.split(/[\\/]/).filter(Boolean).pop() || f);
@@ -364,40 +428,7 @@ async function renderHome() {
           folders.length ? "No PDF, EPUB, or CBZ/CBR files matched." : "Add a local folder of PDFs, e-books, or manga to browse by cover art."));
         return;
       }
-      shelfGrid.replaceChildren(...items.slice(0, 60).map((item) => {
-        const img = el("img", {
-          class: "shelf-cover",
-          alt: item.stem,
-          loading: "lazy",
-        });
-        api(`/api/library/thumb/${encodeURIComponent(item.id)}`)
-          .then((r) => (r.ok ? r.blob() : null))
-          .then((blob) => {
-            if (!blob || seq !== shelfSeq) return;
-            const objUrl = URL.createObjectURL(blob);
-            shelfBlobUrls.push(objUrl);
-            img.src = objUrl;
-          })
-          .catch(() => {});
-        const card = el("button", {
-          type: "button",
-          class: "shelf-card",
-          title: item.path,
-          onclick: async () => {
-            try {
-              const opened = await jsonApi("/api/library/open", { id: item.id });
-              if (opened?.id) await openInReaderById([opened.id]);
-            } catch (err) {
-              if (typeof toast === "function") toast(err?.message || "Could not open book");
-            }
-          },
-        },
-          el("div", { class: "shelf-thumb" }, img, el("span", { class: "shelf-badge" }, item.ext)),
-          el("div", { class: "shelf-name" }, item.stem),
-          el("div", { class: "shelf-folder" }, item.folder),
-        );
-        return card;
-      }));
+      shelfGrid.replaceChildren(...items.slice(0, 60).map((item) => makeBookCard(item, seq)));
     } catch { /* library optional */ }
   };
   addFolderBtn.addEventListener("click", async () => {
@@ -419,6 +450,7 @@ async function renderHome() {
     clearTimeout(shelfTimer);
     shelfTimer = setTimeout(() => refreshShelf(shelfFilter.value), 160);
   });
+  parts.push(continueSec);
   parts.push(el("section", { class: "start-sec shelf-sec", "aria-label": "Bookshelf library" },
     el("div", { class: "shelf-head" },
       el("span", { class: "lbl" }, "Bookshelf"),

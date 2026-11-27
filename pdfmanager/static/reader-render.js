@@ -742,6 +742,28 @@ export const ReaderRender = (Base) => class extends Base {
       percent,
       updatedAt: Date.now(),
     });
+    const fileId = this.activeTab?.fileId;
+    if (fileId) {
+      clearTimeout(this._progressTimer);
+      const payload = {
+        file_id: fileId,
+        page,
+        total,
+        zoom: String(this.pdfViewer.currentScaleValue || ""),
+        rtl: !!this.rtlReading,
+        spread: (this.pdfViewer.spreadMode || 0) > 0,
+      };
+      this._progressTimer = setTimeout(() => {
+        fetch("/api/library/progress", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(this.token ? { "X-Pdfm-Token": this.token } : {}),
+          },
+          body: JSON.stringify(payload),
+        }).catch(() => {});
+      }, 600);
+    }
   }
 
   _busy(on) { this.loading.hidden = !on; }

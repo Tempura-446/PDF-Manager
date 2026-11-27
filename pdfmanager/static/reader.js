@@ -520,6 +520,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       this.#menuItem("rect", "Crop pages visually…", () => this.openCropMode(), this.cropMode),
       this.#menuItem("print", "Print preflight check…", () => this.checkPreflight()),
       this.#menuItem("edittext", "Translate this page…", () => this.translateCurrentPage()),
+      this.#menuItem("edittext", "Vision-LLM OCR / Translate page…", () => this.openVlmPageTool()),
       this.#menuItem("edittext", "Manga Lens (live page overlay & bubble editor)", () => this.openMangaLens(), !!this.mangaLens?.active),
       this.#menuItem("split", "Live bilingual reading…", () => this.openSplitView("__translate__")),
       this.#menuItem("command", "Local AI assistant (Ask / Summarize / Extract)…", () => openAiAssistant(this, "ask")),
@@ -1652,6 +1653,117 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       return;
     }
     await this.mangaLens.open(opts);
+  }
+
+  async openVlmPageTool() {
+    if (!this.doc) return;
+    const pageNum = this.currentPage || 1;
+    const totalPages = this.pdfViewer?.pagesCount || this.doc.numPages || 1;
+    const tab = this.activeTab;
+
+    const modelSel = el("select", { class: "rd-input" },
+      el("option", { value: "translategemma:4b" }, "TranslateGemma 4B (Fast visual translate)"),
+      el("option", { value: "qwen2.5vl:7b" }, "Qwen2.5-VL 7B (High-accuracy OCR & layout)"),
+      el("option", { value: "translategemma:12b" }, "TranslateGemma 12B (High-quality translate)"),
+      el("option", { value: "llama3.2-vision:11b" }, "Llama 3.2 Vision 11B"),
+    );
+    const savedModel = store.get("pdfm-vlm-model", "translategemma:4b");
+    if ([...modelSel.options].some((o) => o.value === savedModel)) modelSel.value = savedModel;
+
+    const modeSel = el("select", { class: "rd-input" },
+      el("option", { value: "translate" }, "Translate page image"),
+      el("option", { value: "ocr" }, "OCR / Extract Markdown text"),
+    );
+    modeSel.value = store.get("pdfm-vlm-mode", "translate");
+
+    const langSel = el("select", { class: "rd-input" },
+      ...["English", "Japanese", "Chinese", "Korean", "Spanish", "French", "German", "Italian", "Portuguese", "Russian", "Arabic", "Vietnamese", "Thai"].map(
+        (lang) => el("option", { value: lang }, lang)
+      ),
+    );
+    langSel.value = store.get("pdfm-vlm-lang", "English");
+    const syncLangVis = () => { langSel.disabled = modeSel.value !== "translate"; };
+    modeSel.addEventListener("change", syncLangVis);
+    syncLangVis();
+
+    const promptInput = el("input", {
+      type: "text",
+      class: "rd-input",
+      placeholder: "Optional custom prompt (e.g. extract table as CSV)…",
+    });
+
+    const pick = await this._dialog(
+      `Vision-LLM — Page ${pageNum} of ${totalPages}`,
+      [
+        el("p", { style: "margin:0 0 8px;opacity:.85" },
+          "Send the rendered page image directly to your local Ollama / OpenAI-compatible Vision-LLM for OCR or direct image translation."),
+        el("label", { class: "rd-field" }, "Vision model", modelSel),
+        el("label", { class: "rd-field" }, "Action", modeSel),
+        el("label", { class: "rd-field" }, "Target language", langSel),
+        el("label", { class: "rd-field" }, "Custom prompt (optional)", promptInput),
+      ],
+      [["cancel", "Cancel"], ["run", "Run Vision-LLM", true]],
+    );
+    if (pick !== "run") return;
+
+    const model = modelSel.value;
+    const mode = modeSel.value;
+    const targetLang = mode === "translate" ? langSel.value : "";
+    const customPrompt = promptInput.value.trim();
+    store.set("pdfm-vlm-model", model);
+    store.set("pdfm-vlm-mode", mode);
+    store.set("pdfm-vlm-lang", langSel.value);
+
+    this.toast(`Running ${model} on page ${pageNum}…`, 4000);
+    this._busy(true);
+    let data = null;
+    try {
+      const form = new FormData();
+      if (tab?.fileId) {
+        form.append("id", tab.fileId);
+      } else {
+        const bytes = await this._bytes();
+        form.append("file", new Blob([bytes], { type: "application/pdf" }), tab?.name || "file.pdf");
+      }
+      form.append("page", String(pageNum));
+      form.append("model", model);
+      if (targetLang) form.append("translate_to", targetLang);
+      if (customPrompt) form.append("prompt", customPrompt);
+      if (tab?.password) form.append("password", tab.password);
+
+      const res = await fetch("/api/ai/vlm-ocr", {
+        method: "POST",
+        headers: this.token ? { "X-Pdfm-Token": this.token } : {},
+        body: form,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      data = json;
+    } catch (err) {
+      this._busy(false);
+      this.toast(`Vision-LLM failed: ${err?.message || err}`, 6000);
+      return;
+    }
+    this._busy(false);
+
+    const out = el("textarea", {
+      class: "rd-input",
+      rows: 14,
+      readOnly: true,
+      style: "width:100%;font-family:inherit;line-height:1.5;resize:vertical;",
+    });
+    out.value = String(data?.text || "(empty response)");
+    const choice = await this._dialog(
+      `Vision-LLM Result — Page ${pageNum} (${data?.model || model})`,
+      [out],
+      [["close", "Close"], ["copy", "Copy text", true]],
+    );
+    if (choice === "copy" && navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(out.value);
+        this.toast("Copied Vision-LLM output.");
+      } catch (_) {}
+    }
   }
 
   async openNeighborChapter(delta = 1) {
