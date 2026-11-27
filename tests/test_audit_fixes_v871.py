@@ -153,3 +153,53 @@ def test_bookshelf_remove_folder_normalizes_and_thumb_single_cache_control(tmp_p
 
     # Trailing slash should still remove the normalized folder
     assert bookshelf.remove_folder(str(lib) + "/") == []
+
+
+def test_layers_and_scales_short_circuit_for_disk_opened_epub(tmp_path, app):
+    from test_more import multipart
+
+    url, token, srv = app
+    epub_path = tmp_path / "story.epub"
+    with zipfile.ZipFile(epub_path, "w") as zf:
+        zf.writestr("ch1.xhtml", "<html><body><p>Hello EPUB</p></body></html>")
+    key = srv.RequestHandlerClass.opened.add(epub_path)
+
+    for route, expected in (("/api/layers", {"layers": []}), ("/api/scales", {"pages": []})):
+        body, hdrs = multipart({"id": key}, [])
+        req = urllib.request.Request(f"{url}{route}", data=body, headers={**hdrs, "X-Pdfm-Token": token})
+        with urllib.request.urlopen(req) as resp:
+            assert resp.status == 200
+            assert json.loads(resp.read()) == expected
+
+
+def test_vlm_resolve_config_skips_legacy_text_only_qwen_default(monkeypatch):
+    from pdfmanager import update
+
+    monkeypatch.setattr(update, "settings", lambda: {"translate_model": "qwen2.5:7b"})
+    _, mdl, _ = vlm._resolve_vlm_config()
+    assert mdl == "qwen2.5vl:7b"
+
+    monkeypatch.setattr(update, "settings", lambda: {"translate_model": "translategemma:4b"})
+    _, mdl2, _ = vlm._resolve_vlm_config()
+    assert mdl2 == "translategemma:4b"
+
+    monkeypatch.setattr(update, "settings", lambda: {"translate_model": "qwen2.5:7b", "vlm_model": "gemma3:12b"})
+    _, mdl3, _ = vlm._resolve_vlm_config()
+    assert mdl3 == "gemma3:12b"
+
+
+def test_models_download_supports_async_job_mode(monkeypatch, app):
+    url, token, _srv = app
+    monkeypatch.setattr(models_manager, "download_model", lambda pid: {"downloaded": pid, "models": []})
+
+    req = urllib.request.Request(
+        f"{url}/api/models/download",
+        data=json.dumps({"id": "ppocr_v6_tiny"}).encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-Pdfm-Token": token, "X-Pdfm-Async": "1"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req) as resp:
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert "job" in data
+

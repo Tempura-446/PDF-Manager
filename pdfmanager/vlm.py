@@ -64,7 +64,16 @@ def _encode_pil_png(pil_img, max_dim=1600):
 def _resolve_vlm_config(api_url=None, model=None, api_key=None):
     cfg = update.settings()
     url = (api_url or cfg.get("translate_api_url") or "http://localhost:11434/v1").strip().rstrip("/")
-    mdl = (model or cfg.get("translate_model") or "qwen2.5vl:7b").strip()
+    saved_vlm = str(cfg.get("vlm_model") or "").strip()
+    saved_tr = str(cfg.get("translate_model") or "").strip()
+    if model:
+        mdl = str(model).strip()
+    elif saved_vlm:
+        mdl = saved_vlm
+    elif saved_tr and saved_tr.lower() != "qwen2.5:7b":
+        mdl = saved_tr
+    else:
+        mdl = "qwen2.5vl:7b"
     key = api_key if api_key is not None else (cfg.get("translate_api_key") or "")
     if not url.startswith(("http://", "https://")):
         raise core.PdfManagerError("Vision-LLM API URL must start with http:// or https://")
