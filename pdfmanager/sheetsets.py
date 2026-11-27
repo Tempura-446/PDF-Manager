@@ -176,34 +176,35 @@ def detect_sheets(path, region=None, password=None) -> list[dict]:
     """
     src = Path(path)
     rx0, ry0, rx1, ry1 = region if region and len(region) == 4 else (0.50, 0.0, 1.0, 0.35)
-    doc = _open_pdfium(src, password)
-    results = []
-    try:
-        for pno in range(1, len(doc) + 1):
-            page = doc[pno - 1]
-            try:
-                pw, ph = page.get_size()
-                lines = _extract_lines_in_region(page, rx0 * pw, ry0 * ph, rx1 * pw, ry1 * ph)
-                num, num_idx = _pick_sheet_number(lines)
-                if not num and region is None:
-                    # Fallback: scan full page if title block is elsewhere.
-                    all_lines = _extract_lines_in_region(page, 0.0, 0.0, pw, ph)
-                    num, num_idx = _pick_sheet_number(all_lines)
-                    if num:
-                        lines = all_lines
-                title = _pick_sheet_title(lines, num_idx, num) if lines else ""
-                label = f"{num} {title}".strip() if num else (title or f"Page {pno}")
-                results.append({
-                    "page": pno,
-                    "number": num or f"Page-{pno}",
-                    "detected": bool(num),
-                    "title": title,
-                    "label": label,
-                })
-            finally:
-                page.close()
-    finally:
-        doc.close()
+    with core.PDFIUM_LOCK:
+        doc = _open_pdfium(src, password)
+        results = []
+        try:
+            for pno in range(1, len(doc) + 1):
+                page = doc[pno - 1]
+                try:
+                    pw, ph = page.get_size()
+                    lines = _extract_lines_in_region(page, rx0 * pw, ry0 * ph, rx1 * pw, ry1 * ph)
+                    num, num_idx = _pick_sheet_number(lines)
+                    if not num and region is None:
+                        # Fallback: scan full page if title block is elsewhere.
+                        all_lines = _extract_lines_in_region(page, 0.0, 0.0, pw, ph)
+                        num, num_idx = _pick_sheet_number(all_lines)
+                        if num:
+                            lines = all_lines
+                    title = _pick_sheet_title(lines, num_idx, num) if lines else ""
+                    label = f"{num} {title}".strip() if num else (title or f"Page {pno}")
+                    results.append({
+                        "page": pno,
+                        "number": num or f"Page-{pno}",
+                        "detected": bool(num),
+                        "title": title,
+                        "label": label,
+                    })
+                finally:
+                    page.close()
+        finally:
+            doc.close()
     return results
 
 
@@ -412,33 +413,38 @@ def compare_sets(
     unchanged = []
     diff_images: list[Image.Image] = []
 
-    doc1 = _open_pdfium(p1, password_v1)
-    doc2 = _open_pdfium(p2, password_v2)
-    try:
-        for num in all_nums:
-            in1 = num in map1
-            in2 = num in map2
-            if in1 and not in2:
-                removed.append({"sheet": num, "page_v1": map1[num]})
-            elif in2 and not in1:
-                added.append({"sheet": num, "page_v2": map2[num]})
-            else:
-                a1 = _render_gray(doc1, map1[num] - 1, dpi)
-                a2 = _render_gray(doc2, map2[num] - 1, dpi)
-                if a1.shape != a2.shape:
-                    diff_ratio = 1.0
+    with core.PDFIUM_LOCK:
+        doc1 = _open_pdfium(p1, password_v1)
+        try:
+            doc2 = _open_pdfium(p2, password_v2)
+        except Exception:
+            doc1.close()
+            raise
+        try:
+            for num in all_nums:
+                in1 = num in map1
+                in2 = num in map2
+                if in1 and not in2:
+                    removed.append({"sheet": num, "page_v1": map1[num]})
+                elif in2 and not in1:
+                    added.append({"sheet": num, "page_v2": map2[num]})
                 else:
-                    diff_ratio = float(np.mean(np.abs(a1 - a2) > 25))
-                entry = {"sheet": num, "page_v1": map1[num], "page_v2": map2[num], "diff_ratio": round(diff_ratio, 5)}
-                if diff_ratio > threshold:
-                    changed.append(entry)
-                    if out_pdf is not None:
-                        diff_images.append(_overlay_image(a1, a2))
-                else:
-                    unchanged.append(entry)
-    finally:
-        doc1.close()
-        doc2.close()
+                    a1 = _render_gray(doc1, map1[num] - 1, dpi)
+                    a2 = _render_gray(doc2, map2[num] - 1, dpi)
+                    if a1.shape != a2.shape:
+                        diff_ratio = 1.0
+                    else:
+                        diff_ratio = float(np.mean(np.abs(a1 - a2) > 25))
+                    entry = {"sheet": num, "page_v1": map1[num], "page_v2": map2[num], "diff_ratio": round(diff_ratio, 5)}
+                    if diff_ratio > threshold:
+                        changed.append(entry)
+                        if out_pdf is not None:
+                            diff_images.append(_overlay_image(a1, a2))
+                    else:
+                        unchanged.append(entry)
+        finally:
+            doc1.close()
+            doc2.close()
 
     result_pdf = None
     if out_pdf is not None and diff_images:

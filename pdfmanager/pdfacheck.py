@@ -913,7 +913,7 @@ def parse_verapdf(xml_text):
 def _verapdf(path, level, exe):
     command = [exe, "--format", "mrr", "--maxfailuresdisplayed", "5"]
     command += ["--flavour", level] if level else []
-    command.append(str(path))
+    command.append(str(Path(path).resolve()))
     try:
         run = subprocess.run(command, capture_output=True, text=True, timeout=900,
                              encoding="utf-8", errors="replace",

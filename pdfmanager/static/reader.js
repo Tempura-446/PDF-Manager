@@ -1449,6 +1449,10 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
   }
 
   /** Translate the currently visible page offline without modifying the PDF. */
+  get currentPage() {
+    return this.pdfViewer?.currentPageNumber || 1;
+  }
+
   async _translateLanguages() {
     if (this._cachedTranslateLangs) return this._cachedTranslateLangs;
     const fallback = [
@@ -1459,13 +1463,14 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       ["ru", "Русский (Russian)"], ["it", "Italiano (Italian)"],
     ];
     try {
-      const res = await fetch("/api/ops", {
+      const res = await fetch("/api/operations", {
         headers: this.token ? { "X-Pdfm-Token": this.token } : {},
       });
       if (res.ok) {
-        const ops = await res.json();
+        const data = await res.json();
+        const ops = Array.isArray(data) ? data : data?.operations;
         const tr = Array.isArray(ops) ? ops.find((o) => o.id === "translate") : null;
-        const field = tr?.fields?.find((f) => f.name === "target_lang");
+        const field = tr?.fields?.find((f) => f.key === "target_lang" || f.name === "target_lang");
         if (Array.isArray(field?.choices) && field.choices.length) {
           this._cachedTranslateLangs = field.choices;
           return this._cachedTranslateLangs;

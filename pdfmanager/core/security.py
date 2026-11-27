@@ -160,10 +160,20 @@ def compress(path, output, level="medium", image_quality=None, max_dpi=None, pas
             else:
                 target_met = best_size is not None and best_size <= target_bytes
             used_level, used_dpi, used_quality = best_meta
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(best_path, out_path)
-            if notes is not None:
-                notes.extend(best_notes)
+            same_file = src_path.is_file() and src_path.resolve() == out_path.resolve()
+            if keep_smaller and not was_encrypted and original_bytes > 0 and best_size is not None and best_size > original_bytes:
+                if not same_file:
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(src_path, out_path)
+                kept_original = True
+                target_met = original_bytes <= target_bytes
+                if notes is not None:
+                    notes.append("already optimized; kept original size")
+            else:
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(best_path, out_path)
+                if notes is not None:
+                    notes.extend(best_notes)
     else:
         same_file = src_path.is_file() and src_path.resolve() == out_path.resolve()
         if keep_smaller and same_file:
@@ -371,12 +381,12 @@ def _decrypt_unprotected(path, output, password):
         from pdfmanager import pdfpermissions
 
         try:
-            with pikepdf.open(path, password=password or "") as pdf:
+            with open_pikepdf(path, password) as pdf:
                 if not pdf.owner_password_matched and pdfpermissions.restricts(pdf.allow):
                     raise PdfManagerError(
                         f"this PDF limits what can be done with it ({pdfpermissions.describe(pdf.allow)}):"
                         " removing its protection needs its permissions password")
-        except pikepdf.PdfError:
+        except (pikepdf.PdfError, pikepdf.PasswordError):
             pass  # qpdf can't read it: pypdf already could
     writer = clone_document(reader)
     return _write(writer, output)

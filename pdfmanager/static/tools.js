@@ -345,8 +345,12 @@ async function renderHome() {
       shelfFoldersBar.replaceChildren(...folders.map((f) => {
         const chip = el("span", { class: "shelf-chip", title: f }, f.split(/[\\/]/).filter(Boolean).pop() || f);
         const rm = el("button", { type: "button", title: `Remove ${f}`, onclick: async () => {
-          await jsonApi("/api/library/folder", { action: "remove", path: f });
-          refreshShelf(shelfFilter.value);
+          try {
+            await jsonApi("/api/library/folder", { action: "remove", path: f });
+            refreshShelf(shelfFilter.value);
+          } catch (err) {
+            if (typeof toast === "function") toast(err?.message || "Could not remove folder");
+          }
         } }, "×");
         chip.append(rm);
         return chip;
@@ -377,8 +381,12 @@ async function renderHome() {
           class: "shelf-card",
           title: item.path,
           onclick: async () => {
-            const opened = await jsonApi("/api/library/open", { id: item.id });
-            if (opened?.id) await openInReaderById([opened.id]);
+            try {
+              const opened = await jsonApi("/api/library/open", { id: item.id });
+              if (opened?.id) await openInReaderById([opened.id]);
+            } catch (err) {
+              if (typeof toast === "function") toast(err?.message || "Could not open book");
+            }
           },
         },
           el("div", { class: "shelf-thumb" }, img, el("span", { class: "shelf-badge" }, item.ext)),

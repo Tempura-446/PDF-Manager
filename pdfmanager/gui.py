@@ -121,6 +121,15 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
     def do_GET(self):
         if not self._host_ok():
             return self._error(HTTPStatus.FORBIDDEN, "bad host")
+        try:
+            return self._do_get()
+        except EXPECTED_ERRORS as exc:
+            return self._error(HTTPStatus.BAD_REQUEST, str(exc))
+        except Exception as exc:
+            logging.getLogger("zpdf").exception("GET %s failed: %s", self.path, exc)
+            return self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "something went wrong handling that request")
+
+    def _do_get(self):
         path = self.path.split("?", 1)[0]
         if path == "/":
             page = resources.files("pdfmanager").joinpath("gui.html").read_text("utf-8")

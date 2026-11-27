@@ -58,6 +58,9 @@ def split(path, outdir, every=None, ranges=None, prefix=None, password=None, boo
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
+    if prefix:
+        prefix = _title_filename(str(prefix).replace("/", "_").replace("\\", "_").replace("..", "_"))
+
     if bookmarks:
         groups = _bookmark_groups(path, total, int(bookmarks), password)
         width = max(2, len(str(len(groups))))
@@ -73,13 +76,15 @@ def split(path, outdir, every=None, ranges=None, prefix=None, password=None, boo
             written.append(_write(_writer_from_pages(reader, indices), outdir / name))
         return written
 
-    prefix = prefix or Path(path).stem
-    width = len(str(total))
+    prefix = prefix or _title_filename(Path(path).stem) or "page"
+    width = len(str(max(1, total)))
 
     def label(g):
         return f"{g[0] + 1:0{width}d}" if len(g) == 1 else f"{g[0] + 1:0{width}d}-{g[-1] + 1:0{width}d}"
 
     if max_size is not None:
+        if total == 0:
+            raise PdfManagerError("PDF has no pages to split")
         written = []
         for indices, data in _size_chunks(path, reader, max_size, notes):
             written.append(_write(_Bytes(data), outdir / f"{prefix}_{label(indices)}.pdf"))

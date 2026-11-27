@@ -243,9 +243,14 @@ def format_name(record, pattern):
         "date": record["date"],
         "stem": path.stem,
     }
+    import string
+
+    for _lit, field_name, _spec, _conv in string.Formatter().parse(pattern):
+        if field_name is not None and field_name not in fields:
+            raise PdfManagerError(f"bad rename pattern {pattern!r}: unsupported field {field_name!r}")
     try:
         return _safe(pattern.format(**fields))
-    except (KeyError, ValueError, IndexError) as exc:
+    except (KeyError, ValueError, IndexError, AttributeError) as exc:
         raise PdfManagerError(f"bad rename pattern {pattern!r}: {exc}") from None
 
 

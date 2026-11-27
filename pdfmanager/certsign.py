@@ -852,6 +852,8 @@ def _check_one(reader, fq_name, value, ref, roots, pages):
     validity = cert["tbs_certificate"]["validity"]
     signed_at = status.signer_reported_dt if not timestamp else None
     if signed_at is not None:
+        if signed_at.tzinfo is None:
+            signed_at = signed_at.replace(tzinfo=timezone.utc)
         expired = not (validity["not_before"].native <= signed_at <= validity["not_after"].native)
     revoked = bool(getattr(status, "revoked", False))
     entry["revocation_status"] = "revoked" if revoked else "not_checked"

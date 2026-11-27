@@ -249,7 +249,7 @@ def _libreoffice(src, dst, target, import_filter=None):
         command = [soffice, f"-env:UserInstallation={profile}", "--headless", "--norestore"]
         if import_filter:
             command.append(f"--infilter={import_filter}")
-        command += ["--convert-to", target, "--outdir", str(tmp / "out"), str(src)]
+        command += ["--convert-to", target, "--outdir", str(tmp / "out"), str(Path(src).resolve())]
         result = _run(command, what="LibreOffice")
         produced = list((tmp / "out").glob("*")) if (tmp / "out").exists() else []
         if not produced:

@@ -304,13 +304,16 @@ def process_files(paths, settings, known_hashes=None, left_out=None):
         folder.mkdir(parents=True, exist_ok=True)
         target = organize._unique(folder / name, set())
         shutil.move(str(work), str(target))
+    retired = 0
     try:
         for each in paths:
             _retire(each, settings)
+            retired += 1
     except OSError:
-        # The original is still in the inbox (locked, perhaps) and will be
-        # picked up again, so don't leave a copy behind to be duplicated.
-        target.unlink(missing_ok=True)
+        # Only remove the output if no inputs were retired yet; otherwise
+        # deleting the merged output would lose the already-retired inputs.
+        if retired == 0:
+            target.unlink(missing_ok=True)
         raise
     if digest is not None:
         known_hashes.add(digest)
