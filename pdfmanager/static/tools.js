@@ -512,6 +512,61 @@ async function renderHome() {
     else refreshShelf(shelfFilter.value);
     shelfFilter.focus();
   });
+  const shelfAskBox = el("div", { class: "shelf-ask-box", hidden: true });
+  const shelfAskBtn = el("button", {
+    type: "button",
+    class: "btn secondary pb-small",
+    title: "Ask your local LLM a question grounded across all PDFs and EPUBs in your Bookshelf",
+  }, "Ask AI");
+  const runShelfAsk = async (question) => {
+    const q = String(question || "").trim();
+    if (q.length < 2) {
+      shelfFilter.focus();
+      if (typeof toast === "function") toast("Type a question in the Bookshelf box first, then click Ask AI.");
+      return;
+    }
+    shelfAskBox.hidden = false;
+    shelfAskBox.replaceChildren(el("p", { class: "start-empty" }, `Searching Bookshelf & asking local AI about “${q}”…`));
+    try {
+      const data = await jsonApi("/api/library/ask", { query: q, top_k: 6 });
+      if (!inHome()) return;
+      const cites = data.citations || [];
+      const citeBar = cites.length
+        ? el("div", { class: "shelf-ask-cites" },
+            ...cites.map((c) => el("button", {
+              type: "button",
+              class: "shelf-cite-chip",
+              title: c.snippet || c.name,
+              onclick: async () => {
+                try {
+                  const opened = await jsonApi("/api/library/open", { id: c.id });
+                  if (opened?.id) await openInReaderById([opened.id], { page: c.page });
+                } catch (err) {
+                  if (typeof toast === "function") toast(err?.message || "Could not open source");
+                }
+              },
+            }, `[${c.num}] ${c.stem} · p. ${c.page}`)))
+        : null;
+      const closeBtn = el("button", {
+        type: "button",
+        class: "btn secondary pb-small",
+        onclick: () => { shelfAskBox.hidden = true; },
+      }, "Close");
+      shelfAskBox.replaceChildren(
+        el("div", { class: "shelf-ask-head" },
+          el("span", { class: "shelf-ask-title" },
+            data.model ? `Bookshelf AI (${data.model})` : "Bookshelf AI"),
+          closeBtn,
+        ),
+        el("div", { class: "shelf-ask-answer" }, String(data.answer || "")),
+        citeBar,
+      );
+    } catch (err) {
+      shelfAskBox.replaceChildren(el("p", { class: "start-empty" },
+        `Bookshelf AI failed: ${err?.message || err}`));
+    }
+  };
+  shelfAskBtn.addEventListener("click", () => runShelfAsk(shelfFilter.value));
   let shelfTimer = null;
   shelfFilter.addEventListener("input", () => {
     clearTimeout(shelfTimer);
@@ -526,9 +581,11 @@ async function renderHome() {
       el("span", { class: "lbl" }, "Bookshelf"),
       shelfFilter,
       shelfFullTextBtn,
+      shelfAskBtn,
       addFolderBtn,
     ),
     shelfFoldersBar,
+    shelfAskBox,
     shelfGrid,
     shelfSearchList,
   ));

@@ -224,6 +224,8 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
         if path == "/api/library/search":
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             return self._library_search(query=qs.get("q", [""])[0], limit=qs.get("limit", ["50"])[0])
+        if path == "/api/library/index/status":
+            return self._library_index_status()
         if path.startswith("/api/library/thumb/"):
             return self._library_thumb(path.split("/api/library/thumb/", 1)[1])
         if path == "/api/stamps":  # the stamps of your own (stamps.py)
@@ -402,6 +404,8 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._library_neighbors(body)
             if path == "/api/library/progress":
                 return self._library_progress_save(body)
+            if path == "/api/library/ask":
+                return self._library_ask(body)
             if path == "/api/translate/manga-batch":
                 return self._translate_manga_batch(body)
             if path in ("/api/comments/summary", "/api/comments/markdown", "/api/comments/export", "/api/comments/import"):

@@ -4,6 +4,18 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.91.0
+
+Persistent SQLite FTS5 Library Index & Offline "Ask Your Bookshelf" RAG:
+
+- **Incremental SQLite FTS5 Library Index (`library_index.py`, `bookshelf.py`).**
+  - Replaced per-query linear scanning with a persistent `mtime_ns`-cached SQLite FTS5 index (`library-index.sqlite`) using `unicode61` tokenization and BM25 relevance ranking for sub-20 ms full-text search across thousands of PDFs & EPUBs.
+  - Only new or modified files are re-indexed; deleted files are pruned automatically.
+- **"Ask Your Bookshelf" Offline RAG (`library_index.py`, `server/reader_routes.py`, `gui.py`, `cli/parser.py`, `static/tools.js`, `static/app.css`).**
+  - Added `POST /api/library/ask` and `GET /api/library/index/status`: retrieves the highest-ranked BM25 excerpts across your Bookshelf folders and sends them to your local Ollama / OpenAI-compatible LLM for grounded answers with inline `[1]` citations.
+  - Added an **Ask AI** button in the Home Bookshelf header displaying the answer and clickable `[Book · p. N]` citation chips that jump directly to the cited page in the Reader.
+  - Added `zpdf library-search <query>` and `zpdf library-ask <question>` CLI subcommands.
+
 ## 0.90.0
 
 Track B + Track C — Batch Manga Volume Translator & Offline Library Full-Text Search:
