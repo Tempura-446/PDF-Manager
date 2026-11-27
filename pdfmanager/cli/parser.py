@@ -810,6 +810,8 @@ def build_parser():
         sp.add_argument("--port", type=int, default=0, help="port (default: any free port)")
         sp.add_argument("--no-browser", action="store_true",
                         help="just start the server and print its link")
+        sp.add_argument("--lan", action="store_true",
+                        help="allow Android Companion / LAN devices on your local network to connect")
         if name == "gui":
             from pdfmanager.quickactions import ACTIONS
 
@@ -926,11 +928,24 @@ def build_parser():
     return p
 
 
+_RANGE_FLAGS = frozenset({"-p", "--pages", "--ranges", "--remove"})
+_LEADING_DASH_RANGE_RE = re.compile(r"^-\d+(?:[,-]\d+)*$")
+
+
 def _leading_dash_ranges(argv):
     """argparse takes '-3,5' for an option name, but '-3' is the page range
-    1 to 3; spell such a value out as '1-3,5' so `-p -3,5` works."""
-    return ["1" + arg if re.match(r"-\d", arg) and not re.fullmatch(r"-\d*\.?\d+", arg) else arg
-            for arg in argv]
+    1 to 3; spell such a value out as '1-3,5' when it follows a page-range
+    flag so `-p -3,5` works without corrupting filenames like `-2026-report.pdf`."""
+    out = []
+    prev_is_range_flag = False
+    for arg in argv:
+        if prev_is_range_flag and _LEADING_DASH_RANGE_RE.match(arg):
+            out.append("1" + arg)
+            prev_is_range_flag = False
+            continue
+        out.append(arg)
+        prev_is_range_flag = arg in _RANGE_FLAGS
+    return out
 
 
 def main(argv=None):

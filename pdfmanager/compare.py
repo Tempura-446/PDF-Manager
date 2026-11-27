@@ -165,10 +165,15 @@ def _load(path, password, dpi):
         try:
             for number, page in enumerate(doc):
                 progress.report(number, len(doc), "page")
-                textpage = page.get_textpage()
-                text = textpage.get_text_range() + " " + fields.get(number, "")
-                textpage.close()
-                image = page.render(scale=core.render_scale(page, dpi / 72)).to_pil().convert("RGB")
+                try:
+                    textpage = page.get_textpage()
+                    try:
+                        text = textpage.get_text_range() + " " + fields.get(number, "")
+                    finally:
+                        textpage.close()
+                    image = page.render(scale=core.render_scale(page, dpi / 72)).to_pil().convert("RGB")
+                finally:
+                    page.close()
                 buf = io.BytesIO()
                 image.save(buf, "PNG", compress_level=1)
                 pages.append((" ".join(text.split()), buf.getvalue()))

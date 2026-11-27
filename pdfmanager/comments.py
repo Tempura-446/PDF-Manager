@@ -82,39 +82,45 @@ def collect(path, password=None):
         try:
             for number, page in enumerate(reader.pages, 1):
                 page_label = labels[number - 1] if number - 1 < len(labels) else str(number)
+                pdf_page = None
                 textpage = None
-                for ref in page.get("/Annots") or []:
-                    annot = ref.get_object()
-                    if not isinstance(annot, DictionaryObject) or annot.get("/Subtype") not in KINDS:
-                        continue
-                    item = {"page": number, "label": page_label, "kind": KINDS[annot["/Subtype"]],
-                            "author": _str(annot.get("/T")), "date": _date_text(annot.get("/M") or annot.get("/CreationDate")),
-                            "text": _str(annot.get("/Contents")).strip(), "subject": _str(annot.get("/Subj")),
-                            "color": _color_hex(annot.get("/C")),
-                            "marked": "", "replies": [],
-                            "top": max(_nums(annot.get("/Rect"))[1::2] or [0])}
-                    effect = annot.get("/BE")
-                    if annot["/Subtype"] == "/Polygon" and isinstance(effect, DictionaryObject) \
-                            and effect.get("/S") == "/C":
-                        item["kind"] = "Cloud"
-                    if annot["/Subtype"] == "/Line" and any("Arrow" in _str(e) for e in annot.get("/LE") or []):
-                        item["kind"] = "Arrow"
-                    if annot["/Subtype"] in MARKED:
-                        if textpage is None:
-                            textpage = doc[number - 1].get_textpage()
-                        item["marked"] = _marked_text(textpage, annot)
-                    if annot["/Subtype"] == "/Stamp" and not item["text"]:
-                        item["text"] = item["subject"] or _str(annot.get("/Name")).lstrip("/")
-                    key = getattr(ref, "idnum", None)
-                    if key is not None:
-                        by_ref[key] = item
-                    irt = annot.get("/IRT")
-                    if irt is not None and getattr(irt, "idnum", None) is not None:
-                        replies.append((irt.idnum, item))
-                    else:
-                        found.append(item)
-                if textpage is not None:
-                    textpage.close()
+                try:
+                    for ref in page.get("/Annots") or []:
+                        annot = ref.get_object()
+                        if not isinstance(annot, DictionaryObject) or annot.get("/Subtype") not in KINDS:
+                            continue
+                        item = {"page": number, "label": page_label, "kind": KINDS[annot["/Subtype"]],
+                                "author": _str(annot.get("/T")), "date": _date_text(annot.get("/M") or annot.get("/CreationDate")),
+                                "text": _str(annot.get("/Contents")).strip(), "subject": _str(annot.get("/Subj")),
+                                "color": _color_hex(annot.get("/C")),
+                                "marked": "", "replies": [],
+                                "top": max(_nums(annot.get("/Rect"))[1::2] or [0])}
+                        effect = annot.get("/BE")
+                        if annot["/Subtype"] == "/Polygon" and isinstance(effect, DictionaryObject) \
+                                and effect.get("/S") == "/C":
+                            item["kind"] = "Cloud"
+                        if annot["/Subtype"] == "/Line" and any("Arrow" in _str(e) for e in annot.get("/LE") or []):
+                            item["kind"] = "Arrow"
+                        if annot["/Subtype"] in MARKED:
+                            if textpage is None:
+                                pdf_page = doc[number - 1]
+                                textpage = pdf_page.get_textpage()
+                            item["marked"] = _marked_text(textpage, annot)
+                        if annot["/Subtype"] == "/Stamp" and not item["text"]:
+                            item["text"] = item["subject"] or _str(annot.get("/Name")).lstrip("/")
+                        key = getattr(ref, "idnum", None)
+                        if key is not None:
+                            by_ref[key] = item
+                        irt = annot.get("/IRT")
+                        if irt is not None and getattr(irt, "idnum", None) is not None:
+                            replies.append((irt.idnum, item))
+                        else:
+                            found.append(item)
+                finally:
+                    if textpage is not None:
+                        textpage.close()
+                    if pdf_page is not None:
+                        pdf_page.close()
         finally:
             doc.close()
     for parent, item in replies:

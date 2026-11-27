@@ -17,6 +17,7 @@ import hmac
 import importlib.util
 import inspect
 import io
+import ipaddress
 import json
 import os
 import re
@@ -162,9 +163,14 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
             return self._sessions_list()
         if path == "/api/companion/info":
             port = self.server.server_address[1]
+            lan_on = bool(getattr(self, "lan_enabled", False))
             host = self.headers.get("Host") or f"127.0.0.1:{port}"
+            if lan_on and host.startswith(("127.0.0.1", "localhost")):
+                lan_ip = _detect_lan_ip()
+                if lan_ip:
+                    host = f"{lan_ip}:{port}"
             return self._send(HTTPStatus.OK, {
-                "lan_enabled": bool(getattr(self, "lan_enabled", False)),
+                "lan_enabled": lan_on,
                 "url": f"http://{host}/#token={self.token}",
                 "version": __version__,
                 "pwa_manifest": "/manifest.webmanifest",
@@ -690,6 +696,29 @@ class _Server(ThreadingHTTPServer):
 
 
 
+def _detect_lan_ip():
+    """Return a non-loopback IPv4 address for this host (preferring RFC-1918
+    private LAN addresses) without opening any outbound socket."""
+    try:
+        infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+    except OSError:
+        return None
+    fallback = None
+    for info in infos:
+        ip_str = info[4][0]
+        try:
+            addr = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        if addr.is_loopback or addr.is_unspecified or addr.is_link_local:
+            continue
+        if addr.is_private:
+            return ip_str
+        if fallback is None:
+            fallback = ip_str
+    return fallback
+
+
 def make_server(port=0, desktop=False, open_paths=(), prefer=None, action=None, lan=False):
     """Create (but don't start) the server. Returns (server, url). The
     server's result cache is ``server.RequestHandlerClass.results`` and its
@@ -706,7 +735,8 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None, action=None, 
                                                "opened": opened, "allow_eval": desktop,
                                                "last_seen": time.monotonic(),
                                                "closed_at": None, "jobs": progress.JobStore(),
-                                               "pages": {}, "events": Events(),
+                                               "pages": {}, "pages_lock": threading.Lock(),
+                                               "events": Events(),
                                                "saved_over": SavedOver(), "unsaved": UnsavedWork(),
                                                "work": WorkFolders(), "scans": scanpdf.ScanBoxes()})
     handler.actions = quickactions.Batches(lambda batch: _start_action(handler, batch))
@@ -734,12 +764,16 @@ def make_server(port=0, desktop=False, open_paths=(), prefer=None, action=None, 
     return server, url
 
 
-def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False, action=None):
+def serve(port=0, open_browser=True, open_paths=(), exit_when_closed=False, action=None, lan=False):
     """Run in the browser: print the link, open it, serve until Ctrl+C (or,
     with ``exit_when_closed``, until the page has been closed)."""
     privacy.begin_run()
-    server, url = make_server(port, open_paths=() if action else open_paths, prefer=APP_PORT, action=action)
+    server, url = make_server(port, open_paths=() if action else open_paths, prefer=APP_PORT, action=action, lan=lan)
     print(f"ZPDF is running at {url}")
+    if lan:
+        lan_ip = _detect_lan_ip()
+        if lan_ip:
+            print(f"LAN companion URL: http://{lan_ip}:{server.server_address[1]}/#token={server.token}")
     print("Keep this window open while you use it; press Ctrl+C to stop.")
     if open_browser:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
@@ -791,6 +825,7 @@ def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5
     pages = getattr(handler, "pages", None)
     if pages is None:
         pages = {}
+    pages_lock = getattr(handler, "pages_lock", None)
     while True:
         time.sleep(poll)
         if getattr(handler, "quit_requested", False):
@@ -803,14 +838,27 @@ def wait_until_closed(handler, proc=None, idle=300, idle_handed_off=90, poll=0.5
             handler.last_seen = min(handler.last_seen + gap, now)
             if handler.closed_at is not None:
                 handler.closed_at = min(handler.closed_at + gap, now)
+            if pages_lock is not None:
+                with pages_lock:
+                    for page, seen in list(pages.items()):
+                        pages[page] = min(seen + gap, now)
+            else:
+                for page, seen in list(pages.items()):
+                    if page in pages:  # not one that said goodbye just now
+                        pages[page] = min(seen + gap, now)
+        if pages_lock is not None:
+            with pages_lock:
+                for page, seen in list(pages.items()):
+                    if now - seen > idle:
+                        pages.pop(page, None)
+                no_pages = not pages
+        else:
             for page, seen in list(pages.items()):
-                if page in pages:  # not one that said goodbye just now
-                    pages[page] = min(seen + gap, now)
-        for page, seen in list(pages.items()):
-            if now - seen > idle:
-                pages.pop(page, None)
+                if now - seen > idle:
+                    pages.pop(page, None)
+            no_pages = not pages
         closed = handler.closed_at
-        if (closed is not None and not pages and handler.last_seen <= closed
+        if (closed is not None and no_pages and handler.last_seen <= closed
                 and now - closed > grace):
             _log("closing: the last page said goodbye")
             return
@@ -1114,7 +1162,7 @@ def _startup_background_color():
     return "#0f1114" if _os_prefers_dark() else "#f6f6f3"
 
 
-def run_desktop(port=0, open_paths=(), action=None, hidden=False):
+def run_desktop(port=0, open_paths=(), action=None, hidden=False, lan=False):
     """Open ZPDF in its own window (needs pywebview). Returns False if
     no window could be opened, so the caller can fall back to the browser.
 
@@ -1131,7 +1179,7 @@ def run_desktop(port=0, open_paths=(), action=None, hidden=False):
     except (OSError, IndexError):
         pass
     server, url = make_server(port, desktop=True, open_paths=() if action else open_paths, prefer=APP_PORT,
-                              action=action)
+                              action=action, lan=lan)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     handler = server.RequestHandlerClass
@@ -1358,13 +1406,13 @@ def find_app_browser():
     return None
 
 
-def run_app_window(port=0, open_paths=(), action=None):
+def run_app_window(port=0, open_paths=(), action=None, lan=False):
     """Open ZPDF as an Edge/Chrome app window. Returns False if no
     such browser is installed. Results are saved like downloads."""
     browser = find_app_browser()
     if not browser:
         return False
-    server, url = make_server(port, open_paths=() if action else open_paths, prefer=APP_PORT, action=action)
+    server, url = make_server(port, open_paths=() if action else open_paths, prefer=APP_PORT, action=action, lan=lan)
     # A browser profile of its own keeps the window separate from the user's
     # normal browsing, so closing the app never touches their other windows.
     # A second copy of the app (on another port) gets a temporary profile of
@@ -1539,7 +1587,7 @@ def _rename_old_install():
         _log(f"launch: renaming the old shortcuts failed: {exc!r}")
 
 
-def launch(open_paths=(), port=0, action=None, background_start=False):
+def launch(open_paths=(), port=0, action=None, background_start=False, lan=False):
     """Open the app the best way available: its own pywebview window, else
     an Edge/Chrome app window, else a browser tab. Returns once closed. If
     the app is already running, it gets the files instead. ``action``: a
@@ -1560,10 +1608,10 @@ def launch(open_paths=(), port=0, action=None, background_start=False):
                 _log("launch: can't start in the background here; not starting")
                 return
             privacy.begin_run()
-            if not run_desktop(port=port, hidden=True):
+            if not run_desktop(port=port, hidden=True, lan=lan):
                 _log("launch: the window couldn't be made; not starting in the background")
             return
-        if not port and forward_to_running_app(open_paths, action=action):
+        if not port and not lan and forward_to_running_app(open_paths, action=action):
             _log("launch: handed to the running copy")
             return
         privacy.begin_run()  # this copy's working files, in its own folder; earlier leftovers swept
@@ -1573,11 +1621,11 @@ def launch(open_paths=(), port=0, action=None, background_start=False):
         # window (for tests and troubleshooting).
         choice = os.environ.get("PDFM_WINDOW", "").strip().lower()
         todo = (action, list(open_paths)) if action else None
-        if choice in ("", "desktop") and run_desktop(port=port, open_paths=open_paths, action=todo):
+        if choice in ("", "desktop") and run_desktop(port=port, open_paths=open_paths, action=todo, lan=lan):
             return
-        if choice in ("", "app-window") and run_app_window(port=port, open_paths=open_paths, action=todo):
+        if choice in ("", "app-window") and run_app_window(port=port, open_paths=open_paths, action=todo, lan=lan):
             return
-        serve(port=port, open_paths=open_paths, exit_when_closed=True, action=todo)
+        serve(port=port, open_paths=open_paths, exit_when_closed=True, action=todo, lan=lan)
     finally:
         _startup.release()
         privacy.end_run()
