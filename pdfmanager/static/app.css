@@ -1286,4 +1286,54 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
   padding-bottom: 6px;
 }
 .continue-card { min-width: 126px; }
+.shelf-search-toggle.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.shelf-search-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.shelf-search-meta {
+  margin: 0 0 2px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+.shelf-search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: inherit;
+  cursor: pointer;
+}
+.shelf-search-hit:hover { border-color: var(--accent); }
+.shelf-search-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.shelf-search-title { font-weight: 600; font-size: 13px; }
+.shelf-search-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(128, 128, 128, 0.16);
+  white-space: nowrap;
+}
+.shelf-search-snip { font-size: 12.5px; line-height: 1.45; opacity: 0.88; }
+.shelf-search-snip mark {
+  background: rgba(250, 204, 21, 0.35);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
 

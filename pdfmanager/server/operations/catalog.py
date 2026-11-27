@@ -710,6 +710,17 @@ OPERATIONS = [
                 _f("manga_ai", "Enhanced Manga AI (neural bubbles, Baberu OCR JA/ZH/EN, LaMa inpainting)", "check", False,
                    hint="Manga mode only: downloads optional Apache-2.0 ONNX models once (~193 MB) for borderless text, "
                         "Japanese/Chinese/English manga fonts & SFX, and screentone inpainting.")]},
+    {"id": "manga-batch", "group": "Convert", "label": "Batch Manga Volume Translator", "files": "manga",
+     "action": "Translate volume",
+     "help": "Translate multiple .cbz, .cbr, or .pdf manga chapters in one offline batch using Baberu OCR v1.2, "
+             "LaMa screentone inpainting, and your configured offline translator. Exports translated .cbz or .pdf.",
+     "fields": [_f("source_lang", "From language", "select", "ja",
+                   choices=[["auto", "Auto-detect"], *_TRANSLATE_LANGS]),
+                _f("target_lang", "To language", "select", "en",
+                   choices=list(_TRANSLATE_LANGS)),
+                _f("export_format", "Output format", "select", "cbz",
+                   choices=[["cbz", "Comic / Manga archive (.cbz)"], ["pdf", "PDF document (.pdf)"]]),
+                _f("manga_ai", "Enhanced Manga AI (Baberu OCR v1.2 + LaMa inpainting)", "check", True)]},
     # Quantities: a schedule of what was measured on a drawing (pdfmanager/quantities.py)
     {"id": "quantities", "group": "Convert", "label": "Quantities from a drawing", "files": "pdf",
      "help": "A schedule (takeoff) of everything measured on a drawing: the dimensions and measurements "

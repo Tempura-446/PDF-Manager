@@ -450,3 +450,149 @@ def list_recent_progress(limit=12, *, _prog_map=None):
         })
     return out
 
+
+def _make_snippet(text, pos, length, radius=64):
+    clean = " ".join(text.split())
+    if not clean:
+        return ("", "", "")
+    # Re-locate inside whitespace-normalized string for clean UI rendering
+    idx = clean.lower().find(text[pos:pos + length].lower())
+    if idx < 0:
+        idx = min(max(0, pos), max(0, len(clean) - 1))
+    start = max(0, idx - radius)
+    end = min(len(clean), idx + length + radius)
+    before = ("…" if start > 0 else "") + clean[start:idx]
+    match = clean[idx:idx + length]
+    after = clean[idx + length:end] + ("…" if end < len(clean) else "")
+    return (before, match, after)
+
+
+def _search_pdf(path, query_lower, max_hits=3):
+    from pypdf import PdfReader
+
+    hits = []
+    try:
+        reader = PdfReader(str(path))
+        if reader.is_encrypted:
+            try:
+                if not reader.decrypt(""):
+                    return hits
+            except Exception as exc:  # noqa: BLE001
+                _LOG.debug("bookshelf._search_pdf decrypt %s: %s", path, exc)
+                return hits
+        for page_idx, page in enumerate(reader.pages, 1):
+            try:
+                txt = page.extract_text() or ""
+            except Exception as exc:  # noqa: BLE001
+                _LOG.debug("bookshelf._search_pdf page %s #%d: %s", path, page_idx, exc)
+                continue
+            pos = txt.lower().find(query_lower)
+            if pos >= 0:
+                before, match, after = _make_snippet(txt, pos, len(query_lower))
+                hits.append({
+                    "page": page_idx,
+                    "before": before,
+                    "match": match,
+                    "after": after,
+                })
+                if len(hits) >= max_hits:
+                    break
+    except Exception as exc:  # noqa: BLE001
+        _LOG.debug("bookshelf._search_pdf %s: %s", path, exc)
+    return hits
+
+
+def _search_epub(path, query_lower, max_hits=3):
+    from pdfmanager import epub
+
+    hits = []
+    if not zipfile.is_zipfile(path):
+        return hits
+    try:
+        with zipfile.ZipFile(path, "r") as zf:
+            members = sorted(
+                (
+                    inf for inf in zf.infolist()
+                    if not inf.is_dir()
+                    and inf.file_size <= 8 * 1024 * 1024
+                    and Path(inf.filename).suffix.lower() in (".xhtml", ".html", ".htm")
+                ),
+                key=lambda inf: _natural_sort_key_epub(inf.filename),
+            )
+            for chap_idx, inf in enumerate(members, 1):
+                try:
+                    raw = zf.read(inf).decode("utf-8", errors="ignore")
+                    parser = epub._ChapterParser()
+                    parser.feed(raw)
+                    parser.close()
+                    txt = " ".join(t for tag, t in parser.blocks if tag != "img" and t)
+                except Exception as exc:  # noqa: BLE001
+                    _LOG.debug("bookshelf._search_epub %s %s: %s", path, inf.filename, exc)
+                    continue
+                pos = txt.lower().find(query_lower)
+                if pos >= 0:
+                    before, match, after = _make_snippet(txt, pos, len(query_lower))
+                    hits.append({
+                        "page": chap_idx,
+                        "before": before,
+                        "match": match,
+                        "after": after,
+                    })
+                    if len(hits) >= max_hits:
+                        break
+    except Exception as exc:  # noqa: BLE001
+        _LOG.debug("bookshelf._search_epub %s: %s", path, exc)
+    return hits
+
+
+def _natural_sort_key_epub(name):
+    return _natural_key(name)
+
+
+def search_library(query, *, limit=50, max_per_book=3):
+    """Offline full-text search across all PDFs and EPUBs in configured Bookshelf folders."""
+    q = str(query or "").strip()
+    if len(q) < 2:
+        return {"query": q, "results": [], "scanned_books": 0, "truncated": False}
+    q_lower = q.lower()
+    cap = max(1, min(200, int(limit or 50)))
+    per_book = max(1, min(10, int(max_per_book or 3)))
+    all_items = _all_items_cached(list_folders())
+    results = []
+    scanned = 0
+    truncated = False
+    for it in all_items:
+        ext = str(it.get("ext") or "").lower()
+        if ext not in ("pdf", "epub"):
+            continue
+        scanned += 1
+        p = Path(it["path"])
+        if not p.is_file():
+            continue
+        hits = _search_pdf(p, q_lower, max_hits=per_book) if ext == "pdf" else _search_epub(p, q_lower, max_hits=per_book)
+        for h in hits:
+            results.append({
+                "id": it["id"],
+                "name": it["name"],
+                "stem": it["stem"],
+                "ext": it["ext"],
+                "folder": it["folder"],
+                "path": it["path"],
+                "page": h["page"],
+                "before": h["before"],
+                "match": h["match"],
+                "after": h["after"],
+            })
+            if len(results) >= cap:
+                truncated = True
+                break
+        if truncated:
+            break
+    return {
+        "query": q,
+        "results": results,
+        "scanned_books": scanned,
+        "truncated": truncated,
+    }
+
+

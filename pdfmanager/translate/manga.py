@@ -1088,3 +1088,165 @@ def apply_manga_page_bubbles(
     with open(dst, "wb") as fh:
         writer.write(fh)
     return {"page": p_idx + 1, "bubbles_applied": len(norm_bubbles), "output": str(dst)}
+
+
+_BATCH_MANGA_EXTS = {".cbz", ".cbr", ".pdf"}
+
+
+def _natural_sort_key(name):
+    return [int(tok) if tok.isdigit() else tok.lower() for tok in re.split(r"(\d+)", str(name))]
+
+
+def translate_manga_batch(
+    inputs,
+    output_dir,
+    *,
+    src_lang="ja",
+    dst_lang="en",
+    export_format="cbz",
+    manga_ai=True,
+    engine="auto",
+    dpi=180,
+    quality=85,
+    image_format="webp",
+    password=None,
+    progress_cb=None,
+):
+    """Translate a folder or list of ``.cbz``/``.cbr``/``.pdf`` manga chapters
+    offline and export each chapter as a translated ``.cbz`` or ``.pdf``.
+
+    Per-chapter errors are recorded without aborting earlier/later chapters.
+    """
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from pdfmanager import cbz, core, progress
+    from pdfmanager.translate import translate_pdf
+
+    if isinstance(inputs, (str, Path)):
+        p = Path(inputs)
+        if p.is_dir():
+            sources = sorted(
+                (
+                    e for e in p.iterdir()
+                    if e.is_file() and not e.name.startswith(".") and e.suffix.lower() in _BATCH_MANGA_EXTS
+                ),
+                key=lambda e: _natural_sort_key(e.name),
+            )
+        elif p.is_file():
+            sources = [p]
+        else:
+            raise core.PdfManagerError(f"input not found: {p}")
+    else:
+        sources = []
+        for item in inputs or ():
+            p = Path(item)
+            if p.is_dir():
+                sources.extend(sorted(
+                    (
+                        e for e in p.iterdir()
+                        if e.is_file() and not e.name.startswith(".") and e.suffix.lower() in _BATCH_MANGA_EXTS
+                    ),
+                    key=lambda e: _natural_sort_key(e.name),
+                ))
+            elif p.is_file() and p.suffix.lower() in _BATCH_MANGA_EXTS:
+                sources.append(p)
+
+    if not sources:
+        raise core.PdfManagerError("no .cbz, .cbr, or .pdf manga files found")
+
+    fmt = str(export_format or "cbz").strip().lower()
+    if fmt not in ("cbz", "pdf"):
+        fmt = "cbz"
+    dst_code = str(dst_lang or "en").strip().lower()
+    out_root = Path(output_dir)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    chapters = []
+    outputs = []
+    total_pages = 0
+    succeeded = 0
+    failed = 0
+    total_files = len(sources)
+    is_rtl = default_reading_dir(src_lang) == "rtl"
+
+    for idx, src in enumerate(sources):
+        progress.check()
+        progress.report(idx, total_files, f"chapter {idx + 1}/{total_files}: {src.name}")
+        if callable(progress_cb):
+            progress_cb(idx, total_files, src.name)
+        ext = src.suffix.lower()
+        out_name = f"{src.stem}_{dst_code}.{fmt}"
+        out_path = out_root / out_name
+        try:
+            with tempfile.TemporaryDirectory(prefix="zpdf-mbatch-") as tmp:
+                tmp_dir = Path(tmp)
+                if ext == ".cbz":
+                    src_pdf = tmp_dir / "source.pdf"
+                    cbz.cbz_to_pdf(src, src_pdf)
+                elif ext == ".cbr":
+                    src_pdf = tmp_dir / "source.pdf"
+                    cbz.cbr_to_pdf(src, src_pdf)
+                else:
+                    src_pdf = src
+
+                translated_pdf = tmp_dir / "translated.pdf"
+                info = translate_pdf(
+                    src_pdf,
+                    translated_pdf,
+                    src_lang=src_lang,
+                    dst_lang=dst_lang,
+                    mode="manga",
+                    engine=engine,
+                    manga_ai=bool(manga_ai),
+                    password=password if ext == ".pdf" else None,
+                )
+                pages_done = int((info or {}).get("pages") or 0)
+                if fmt == "cbz":
+                    cbz.pdf_to_cbz(
+                        translated_pdf,
+                        out_path,
+                        dpi=dpi,
+                        image_format=image_format,
+                        quality=quality,
+                        comic_info={
+                            "Title": src.stem,
+                            "Manga": "YesAndRightToLeft" if is_rtl else "No",
+                        },
+                    )
+                else:
+                    shutil.copyfile(translated_pdf, out_path)
+            outputs.append(str(out_path))
+            total_pages += pages_done
+            succeeded += 1
+            chapters.append({
+                "input": str(src),
+                "output": str(out_path),
+                "pages": pages_done,
+                "status": "ok",
+                "error": None,
+            })
+        except progress.Cancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("zpdf").debug("manga.translate_manga_batch %s: %s", src, exc)
+            failed += 1
+            chapters.append({
+                "input": str(src),
+                "output": None,
+                "pages": 0,
+                "status": "error",
+                "error": str(exc),
+            })
+
+    progress.report(total_files, total_files, "done")
+    return {
+        "outputs": outputs,
+        "chapters": chapters,
+        "total_pages": total_pages,
+        "succeeded": succeeded,
+        "failed": failed,
+        "export_format": fmt,
+    }
+

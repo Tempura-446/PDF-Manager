@@ -1305,7 +1305,7 @@ async function select(id) {
   $("run-label").textContent = current.action || (folder ? "Apply" : "Run");
   $("run").classList.toggle("secondary", previews);
   $("preview").classList.toggle("secondary", !previews);
-  $("file-input").accept = { images: "image/*", office: OFFICE_ACCEPT, web: WEB_ACCEPT, drawing: DRAWING_ACCEPT }[current.files] || ".pdf,application/pdf";
+  $("file-input").accept = { images: "image/*", office: OFFICE_ACCEPT, web: WEB_ACCEPT, drawing: DRAWING_ACCEPT, manga: MANGA_ACCEPT }[current.files] || ".pdf,application/pdf";
   $("drop-hint").textContent = {
     images: "JPG, PNG, TIFF… one page per image, in this order",
     office: "Word, Excel, PowerPoint, OpenDocument, RTF, text or web page files",
@@ -1418,9 +1418,11 @@ function isPdf(f) { return f.type === "application/pdf" || /\.pdf$/i.test(f.name
 const WEB_ACCEPT = ".html,.htm,.xhtml,.mht,.mhtml";
 const OFFICE_ACCEPT = ".html,.htm,.xhtml,.mht,.mhtml,.doc,.docx,.docm,.dot,.dotx,.rtf,.odt,.wpd,.txt,.xls,.xlsx,.xlsm,.xlsb,.ods,.csv,.ppt,.pptx,.pptm,.pps,.ppsx,.odp";
 const DRAWING_ACCEPT = ".dxf,.dwg";
+const MANGA_ACCEPT = ".cbz,.cbr,.pdf";
 function isOffice(f) { const ext = (f.name.match(/\.[^.]+$/) || [""])[0].toLowerCase(); return ext && OFFICE_ACCEPT.split(",").includes(ext); }
 function isDrawing(f) { const ext = (f.name.match(/\.[^.]+$/) || [""])[0].toLowerCase(); return ext && DRAWING_ACCEPT.split(",").includes(ext); }
 function isWeb(f) { const ext = (f.name.match(/\.[^.]+$/) || [""])[0].toLowerCase(); return ext && WEB_ACCEPT.split(",").includes(ext); }
-function accepts(kind) { return kind === "images" ? isImage : kind === "office" ? isOffice : kind === "drawing" ? isDrawing : kind === "web" ? isWeb : isPdf; }
+function isManga(f) { const ext = (f.name.match(/\.[^.]+$/) || [""])[0].toLowerCase(); return ext && MANGA_ACCEPT.split(",").includes(ext); }
+function accepts(kind) { return kind === "images" ? isImage : kind === "office" ? isOffice : kind === "drawing" ? isDrawing : kind === "web" ? isWeb : kind === "manga" ? isManga : isPdf; }
 function isImage(f) { return f.type.startsWith("image/"); }
 

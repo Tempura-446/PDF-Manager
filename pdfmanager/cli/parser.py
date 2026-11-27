@@ -488,6 +488,37 @@ def build_parser():
     sp.add_argument("--password", help=f"password for encrypted input (or set {PASSWORD_ENV})")
     sp.add_argument("--json", action="store_true", help="print JSON")
 
+    def cmd_translate_manga_batch(a):
+        from pdfmanager.translate import manga as manga_mod
+
+        out_dir = a.output or str(Path(a.inputs[0]).resolve().parent / f"translated-{a.to_lang}")
+        res = manga_mod.translate_manga_batch(
+            a.inputs,
+            out_dir,
+            src_lang=a.from_lang,
+            dst_lang=a.to_lang,
+            export_format=a.format,
+            manga_ai=not a.no_ai,
+            password=a.password,
+        )
+        if a.json:
+            print(json.dumps(res, indent=2, ensure_ascii=False))
+        else:
+            print(f"Translated {res['succeeded']}/{res['succeeded'] + res['failed']} chapter(s) "
+                  f"({res['total_pages']} pages) → {out_dir}")
+        return 0 if res["succeeded"] > 0 else 1
+
+    sp = other("translate-manga-batch", cmd_translate_manga_batch,
+               "batch-translate a folder or list of .cbz/.cbr/.pdf manga chapters offline")
+    sp.add_argument("inputs", nargs="+", metavar="input", help="manga files (.cbz, .cbr, .pdf) or folders")
+    sp.add_argument("--from", dest="from_lang", default="ja", help="source language code (default: ja)")
+    sp.add_argument("--to", dest="to_lang", default="en", help="target language code (default: en)")
+    sp.add_argument("--format", choices=("cbz", "pdf"), default="cbz", help="output format (default: cbz)")
+    sp.add_argument("--no-ai", action="store_true", help="disable Enhanced Manga AI ONNX models")
+    sp.add_argument("-o", "--output", help="output folder path")
+    sp.add_argument("--password", help=f"password for encrypted PDFs (or set {PASSWORD_ENV})")
+    sp.add_argument("--json", action="store_true", help="print JSON")
+
     sp = other("cbz-to-pdf", cmd_cbz_to_pdf,
                "convert a .cbz comic/manga archive to a PDF (natural page sort + optional RTL viewer)")
     sp.add_argument("input", metavar="input.cbz", help="CBZ archive to convert")

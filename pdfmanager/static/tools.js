@@ -17,7 +17,7 @@ function addFiles(list) {
   renderFiles();
   clearMessages();
   if (twice && !rejected) appToast(twice === 1 ? "That file is already in the list." : `${plural(twice, "file")} were already in the list.`);
-  if (rejected) showError(`${plural(rejected, "file")} skipped — only ${{ images: "images", office: "Word, Excel, PowerPoint, OpenDocument, RTF, text or web page files", web: "saved web pages (.html, .mht)", drawing: "DXF or DWG drawings" }[current.files] || "PDFs"} can be used here.`);
+  if (rejected) showError(`${plural(rejected, "file")} skipped — only ${{ images: "images", office: "Word, Excel, PowerPoint, OpenDocument, RTF, text or web page files", web: "saved web pages (.html, .mht)", drawing: "DXF or DWG drawings", manga: "manga archives (.cbz, .cbr) or PDFs" }[current.files] || "PDFs"} can be used here.`);
 }
 
 async function inspect(it) {
@@ -445,20 +445,92 @@ async function renderHome() {
       showError(err?.message || String(err));
     }
   });
+  let shelfFullText = false;
+  const shelfSearchList = el("div", { class: "shelf-search-list", hidden: true });
+  const shelfFullTextBtn = el("button", {
+    type: "button",
+    class: "btn secondary pb-small shelf-search-toggle",
+    "aria-pressed": "false",
+    title: "Search inside the text of all PDFs and EPUBs in your Bookshelf",
+  }, "Inside text");
+  const runShelfSearch = async (q) => {
+    const seq = ++shelfSeq;
+    const trimmed = String(q || "").trim();
+    if (trimmed.length < 2) {
+      shelfSearchList.replaceChildren(el("p", { class: "start-empty" }, "Type at least 2 characters to search inside all PDFs & EPUBs in your Bookshelf."));
+      return;
+    }
+    shelfSearchList.replaceChildren(el("p", { class: "start-empty" }, `Searching inside books for “${trimmed}”…`));
+    try {
+      const data = await (await api(`/api/library/search?q=${encodeURIComponent(trimmed)}`)).json();
+      if (seq !== shelfSeq || !inHome() || !shelfFullText) return;
+      const hits = data.results || [];
+      if (!hits.length) {
+        shelfSearchList.replaceChildren(el("p", { class: "start-empty" },
+          `No matches found for “${trimmed}” across ${plural(data.scanned_books || 0, "book")}.`));
+        return;
+      }
+      shelfSearchList.replaceChildren(
+        el("p", { class: "shelf-search-meta" },
+          `${plural(hits.length, "match")} across ${plural(data.scanned_books || 0, "book")}${data.truncated ? " (showing first results)" : ""}`),
+        ...hits.map((hit) => el("button", {
+          type: "button",
+          class: "shelf-search-hit",
+          title: hit.path,
+          onclick: async () => {
+            try {
+              const opened = await jsonApi("/api/library/open", { id: hit.id });
+              if (opened?.id) await openInReaderById([opened.id], { page: hit.page, find: trimmed });
+            } catch (err) {
+              if (typeof toast === "function") toast(err?.message || "Could not open book");
+            }
+          },
+        },
+          el("div", { class: "shelf-search-top" },
+            el("span", { class: "shelf-search-title" }, hit.stem),
+            el("span", { class: "shelf-search-badge" }, `${hit.ext} · p. ${hit.page}`),
+          ),
+          el("div", { class: "shelf-search-snip" },
+            hit.before || "",
+            el("mark", {}, hit.match || trimmed),
+            hit.after || "",
+          ),
+        )),
+      );
+    } catch (err) {
+      if (seq === shelfSeq) shelfSearchList.replaceChildren(el("p", { class: "start-empty" }, err?.message || "Search failed."));
+    }
+  };
+  shelfFullTextBtn.addEventListener("click", () => {
+    shelfFullText = !shelfFullText;
+    shelfFullTextBtn.setAttribute("aria-pressed", String(shelfFullText));
+    shelfFullTextBtn.classList.toggle("active", shelfFullText);
+    shelfFilter.placeholder = shelfFullText ? "Search text inside all books…" : "Filter library…";
+    shelfGrid.hidden = shelfFullText;
+    shelfSearchList.hidden = !shelfFullText;
+    if (shelfFullText) runShelfSearch(shelfFilter.value);
+    else refreshShelf(shelfFilter.value);
+    shelfFilter.focus();
+  });
   let shelfTimer = null;
   shelfFilter.addEventListener("input", () => {
     clearTimeout(shelfTimer);
-    shelfTimer = setTimeout(() => refreshShelf(shelfFilter.value), 160);
+    shelfTimer = setTimeout(() => {
+      if (shelfFullText) runShelfSearch(shelfFilter.value);
+      else refreshShelf(shelfFilter.value);
+    }, shelfFullText ? 300 : 160);
   });
   parts.push(continueSec);
   parts.push(el("section", { class: "start-sec shelf-sec", "aria-label": "Bookshelf library" },
     el("div", { class: "shelf-head" },
       el("span", { class: "lbl" }, "Bookshelf"),
       shelfFilter,
+      shelfFullTextBtn,
       addFolderBtn,
     ),
     shelfFoldersBar,
     shelfGrid,
+    shelfSearchList,
   ));
 
   host.replaceChildren(...parts);
