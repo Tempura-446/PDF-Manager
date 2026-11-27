@@ -887,20 +887,22 @@ def translate_manga_page_bubbles(
     rdir = default_reading_dir(src_lang) if reading_dir == "auto" else reading_dir
 
     try:
-        doc = pdfium.PdfDocument(src, password=password or None)
+        with core.PDFIUM_LOCK:
+            doc = pdfium.PdfDocument(src, password=password or None)
+            try:
+                if p_idx >= len(doc):
+                    raise core.PdfManagerError(f"page {page_num} out of range (document has {len(doc)} pages)")
+                page = doc[p_idx]
+                try:
+                    pil_img = page.render(scale=150.0 / 72.0).to_pil().convert("RGB")
+                finally:
+                    page.close()
+            finally:
+                doc.close()
+    except core.PdfManagerError:
+        raise
     except Exception as exc:
         raise core.PdfManagerError(f"could not open PDF for Manga Lens: {exc}") from None
-
-    try:
-        if p_idx >= len(doc):
-            raise core.PdfManagerError(f"page {page_num} out of range (document has {len(doc)} pages)")
-        page = doc[p_idx]
-        try:
-            pil_img = page.render(scale=150.0 / 72.0).to_pil().convert("RGB")
-        finally:
-            page.close()
-    finally:
-        doc.close()
 
     img_w, img_h = pil_img.size
     plumber_page = None
@@ -1018,15 +1020,16 @@ def apply_manga_page_bubbles(
         try:
             import pypdfium2 as pdfium
 
-            doc = pdfium.PdfDocument(str(src), password=password or None)
-            try:
-                p = doc[p_idx]
+            with core.PDFIUM_LOCK:
+                doc = pdfium.PdfDocument(str(src), password=password or None)
                 try:
-                    pil_img = p.render(scale=150.0 / 72.0).to_pil().convert("RGB")
+                    p = doc[p_idx]
+                    try:
+                        pil_img = p.render(scale=150.0 / 72.0).to_pil().convert("RGB")
+                    finally:
+                        p.close()
                 finally:
-                    p.close()
-            finally:
-                doc.close()
+                    doc.close()
         except Exception:
             pil_img = None
 

@@ -126,19 +126,22 @@ def vlm_ocr_pdf_page(
 
     p_idx = max(0, int(page_num) - 1)
     try:
-        doc = pdfium.PdfDocument(str(pdf_path), password=password or None)
+        with core.PDFIUM_LOCK:
+            doc = pdfium.PdfDocument(str(pdf_path), password=password or None)
+            try:
+                if p_idx >= len(doc):
+                    raise core.PdfManagerError(f"page {page_num} out of range (document has {len(doc)} pages)")
+                page = doc[p_idx]
+                try:
+                    pil_img = page.render(scale=float(dpi) / 72.0).to_pil().convert("RGB")
+                finally:
+                    page.close()
+            finally:
+                doc.close()
+    except core.PdfManagerError:
+        raise
     except Exception as exc:
         raise core.PdfManagerError(f"could not open PDF for Vision-LLM: {exc}") from None
-    try:
-        if p_idx >= len(doc):
-            raise core.PdfManagerError(f"page {page_num} out of range (document has {len(doc)} pages)")
-        page = doc[p_idx]
-        try:
-            pil_img = page.render(scale=float(dpi) / 72.0).to_pil().convert("RGB")
-        finally:
-            page.close()
-    finally:
-        doc.close()
 
     text = vlm_ocr_image(
         pil_img,
