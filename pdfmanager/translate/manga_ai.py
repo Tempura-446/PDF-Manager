@@ -216,11 +216,33 @@ def _ort_session(model_path):
     return ort.InferenceSession(str(model_path), sess_options=opts, providers=providers)
 
 
+def reset(component=None):
+    """Release cached ONNX Runtime sessions from RAM (all or one component)."""
+    with _SESSION_LOCK:
+        if component is None:
+            _SESSIONS.clear()
+            return
+        drop = [
+            k for k in _SESSIONS
+            if k[0] == component or (component == "ocr" and k[0] == "baberu_ocr")
+        ]
+        for k in drop:
+            _SESSIONS.pop(k, None)
+
+
 def _get_detector_session(model_path=None):
-    path = Path(model_path) if model_path else ensure_manga_ai(("detector",), download=False).get("detector")
-    if path is None or not path.is_file():
-        return None
+    if model_path:
+        path = Path(model_path)
+    else:
+        path = _component_paths("detector")[0]
     key = ("detector", str(path))
+    with _SESSION_LOCK:
+        if key in _SESSIONS:
+            return _SESSIONS[key]
+    if not (path.is_file() and path.stat().st_size > 0):
+        return None
+    if not model_path and ensure_manga_ai(("detector",), download=False).get("detector") is None:
+        return None
     with _SESSION_LOCK:
         if key not in _SESSIONS:
             _SESSIONS[key] = _ort_session(path)
@@ -228,8 +250,8 @@ def _get_detector_session(model_path=None):
 
 
 def _get_ocr_sessions(model_dir=None):
-    mdir = Path(model_dir) if model_dir else ensure_manga_ai(("ocr",), download=False).get("ocr")
-    if mdir is None or not mdir.is_dir():
+    mdir = Path(model_dir) if model_dir else (manga_ai_dir() / "ocr")
+    if not mdir.is_dir():
         return None
     # Preferred: Baberu OCR v1.2 (DINOv2 + 6-layer GQA KV-cache decoder, ja/zh/en)
     vis_p = mdir / "vision_int4.onnx"
@@ -240,6 +262,15 @@ def _get_ocr_sessions(model_dir=None):
     bvocab_p = mdir / "vocab.json"
     if vis_p.is_file() and pre_p.is_file() and stp_p.is_file() and bvocab_p.is_file():
         key = ("baberu_ocr", str(mdir), vis_p.name)
+        with _SESSION_LOCK:
+            if key in _SESSIONS:
+                return _SESSIONS[key]
+        if (
+            not model_dir
+            and vis_p.name == "vision_int4.onnx"
+            and ensure_manga_ai(("ocr",), download=False).get("ocr") is None
+        ):
+            return None
         with _SESSION_LOCK:
             if key not in _SESSIONS:
                 _SESSIONS[key] = (
@@ -265,10 +296,18 @@ def _get_ocr_sessions(model_dir=None):
 
 
 def _get_inpaint_session(model_path=None):
-    path = Path(model_path) if model_path else ensure_manga_ai(("inpaint",), download=False).get("inpaint")
-    if path is None or not path.is_file():
-        return None
+    if model_path:
+        path = Path(model_path)
+    else:
+        path = _component_paths("inpaint")[0]
     key = ("inpaint", str(path))
+    with _SESSION_LOCK:
+        if key in _SESSIONS:
+            return _SESSIONS[key]
+    if not (path.is_file() and path.stat().st_size > 0):
+        return None
+    if not model_path and ensure_manga_ai(("inpaint",), download=False).get("inpaint") is None:
+        return None
     with _SESSION_LOCK:
         if key not in _SESSIONS:
             _SESSIONS[key] = _ort_session(path)

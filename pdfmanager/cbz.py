@@ -90,6 +90,9 @@ def _append_image_page(writer, raw):
             and im.mode in ("RGB", "L")
             and not im.info.get("progressive")
             and exif_orient in (None, 1)
+            and raw.rstrip(b"\x00\xff") != raw[:2]
+            and b"\xff\xd9" in raw[-64:]
+            and b"\xff\xc9" not in raw[:512]
         )
         if fast_jpeg:
             w_px, h_px = im.size
@@ -98,7 +101,12 @@ def _append_image_page(writer, raw):
             flt = "/DCTDecode"
         else:
             im2 = ImageOps.exif_transpose(im)
-            is_gray = im2.mode in ("1", "L", "LA")
+            if im2.mode in ("RGBA", "LA", "PA") or (im2.mode == "P" and "transparency" in im2.info):
+                rgba = im2.convert("RGBA")
+                bg = Image.new("RGB", rgba.size, (255, 255, 255))
+                bg.paste(rgba, mask=rgba.split()[3])
+                im2 = bg
+            is_gray = im2.mode in ("1", "L")
             im_out = im2.convert("L") if is_gray else im2.convert("RGB")
             w_px, h_px = im_out.size
             if is_gray:
@@ -199,8 +207,8 @@ def cbz_to_pdf(cbz_path, output_pdf, *, rtl_viewer="auto"):
         for idx, info in enumerate(image_infos):
             progress.check()
             progress.report(idx, total, "converting CBZ page")
-            raw = zf.read(info)
             try:
+                raw = zf.read(info)
                 _append_image_page(writer, raw)
                 used_names.append(info.filename)
             except Exception as _exc:
@@ -430,26 +438,31 @@ def cbr_to_pdf(cbr_path, output_pdf, *, rtl_viewer="auto"):
         )
 
     tool, exe = extractor
+    src_resolved = src.resolve()
     with tempfile.TemporaryDirectory(prefix="zpdf-cbr-") as tmp:
         tmp_dir = Path(tmp)
         if tool == "unrar":
-            cmd = [exe, "x", "-o+", "-idq", str(src), str(tmp_dir) + "/"]
+            cmd = [exe, "x", "-o+", "-idq", "--", str(src_resolved), str(tmp_dir) + "/"]
         elif tool == "bsdtar":
-            cmd = [exe, "-xf", str(src), "-C", str(tmp_dir)]
+            cmd = [exe, "-xf", str(src_resolved), "-C", str(tmp_dir)]
         else:
-            cmd = [exe, "x", "-y", f"-o{tmp_dir}", str(src)]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            cmd = [exe, "x", "-y", f"-o{tmp_dir}", "--", str(src_resolved)]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            raise core.PdfManagerError(f"CBR extraction timed out ({tool})") from None
         if proc.returncode != 0:
             raise core.PdfManagerError(f"could not extract CBR archive ({tool}): {(proc.stderr or proc.stdout).strip()[:200]}")
 
         root_resolved = tmp_dir.resolve()
         images = []
+        total_bytes = 0
         is_rtl = False
         for p in sorted(tmp_dir.rglob("*")):
             if not p.is_file():
                 continue
             try:
-                p.resolve().relative_to(root_resolved)
+                rel = p.resolve().relative_to(root_resolved)
             except ValueError:
                 continue
             if p.name.startswith(".") or "__MACOSX" in p.parts:
@@ -460,7 +473,13 @@ def cbr_to_pdf(cbr_path, output_pdf, *, rtl_viewer="auto"):
                 if m and m.group(1).strip().lower() in ("yes", "yesandrighttoleft"):
                     is_rtl = True
             elif p.suffix.lower() in IMAGE_EXTS:
-                images.append(p)
+                if len(images) >= MAX_PAGES:
+                    raise core.PdfManagerError(f"CBR archive has more than {MAX_PAGES} images")
+                total_bytes += p.stat().st_size
+                if total_bytes > MAX_TOTAL_BYTES:
+                    raise core.PdfManagerError("CBR archive exceeds safe uncompressed size limit")
+                # Preserve relative folder path so multi-chapter CBRs sort in order
+                images.append((rel.as_posix(), p.read_bytes()))
         if rtl_viewer != "auto":
             is_rtl = bool(rtl_viewer)
         return images_to_pdf(images, output_pdf, rtl_viewer=is_rtl)

@@ -73,7 +73,7 @@ def test_vlm_ocr_image_and_http_endpoint(tmp_path, monkeypatch, app):
         def __exit__(self, *a):
             return False
 
-        def read(self):
+        def read(self, _n=-1):
             return json.dumps({
                 "choices": [{"message": {"content": "Translated manga page text"}}]
             }).encode("utf-8")

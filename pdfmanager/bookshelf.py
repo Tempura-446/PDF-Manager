@@ -87,8 +87,11 @@ def add_folder(folder_path):
 
 def remove_folder(folder_path):
     """Remove a directory from the Bookshelf library."""
+    import os
+
     raw = str(folder_path or "").strip()
-    folders = [f for f in list_folders() if f != raw]
+    norm = os.path.normpath(os.path.expanduser(raw)) if raw else ""
+    folders = [f for f in list_folders() if f != raw and f != norm]
     _save_folders(folders)
     return folders
 
@@ -202,10 +205,13 @@ def _render_cover_pil(path, max_w=240):
             finally:
                 doc.close()
     elif ext in (".cbz", ".cbr") and zipfile.is_zipfile(p):
+        from PIL import ImageOps
+
         with zipfile.ZipFile(p, "r") as zf:
             imgs = [
                 inf for inf in zf.infolist()
                 if not inf.is_dir()
+                and inf.file_size <= 32 * 1024 * 1024
                 and not Path(inf.filename).name.startswith(".")
                 and "__MACOSX" not in inf.filename.split("/")
                 and Path(inf.filename).suffix.lower() in cbz.IMAGE_EXTS
@@ -214,19 +220,25 @@ def _render_cover_pil(path, max_w=240):
                 return None
             imgs.sort(key=lambda inf: _natural_key(inf.filename))
             with Image.open(io.BytesIO(zf.read(imgs[0]))) as im:
-                pil = im.convert("RGB")
+                pil = ImageOps.exif_transpose(im).convert("RGB")
     elif ext == ".epub" and zipfile.is_zipfile(p):
+        from PIL import ImageOps
+
         with zipfile.ZipFile(p, "r") as zf:
             imgs = [
                 inf for inf in zf.infolist()
-                if not inf.is_dir() and Path(inf.filename).suffix.lower() in cbz.IMAGE_EXTS
+                if not inf.is_dir()
+                and inf.file_size <= 32 * 1024 * 1024
+                and not Path(inf.filename).name.startswith(".")
+                and "__MACOSX" not in inf.filename.split("/")
+                and Path(inf.filename).suffix.lower() in cbz.IMAGE_EXTS
             ]
             if not imgs:
                 return None
             # Prefer a file with "cover" in its name, otherwise first image
             imgs.sort(key=lambda inf: (0 if "cover" in inf.filename.lower() else 1, _natural_key(inf.filename)))
             with Image.open(io.BytesIO(zf.read(imgs[0]))) as im:
-                pil = im.convert("RGB")
+                pil = ImageOps.exif_transpose(im).convert("RGB")
     else:
         return None
 
@@ -239,6 +251,7 @@ def _render_cover_pil(path, max_w=240):
 
 def cover_thumbnail(path, max_w=240):
     """Return cached JPEG bytes for a book's cover thumbnail, or a clean placeholder JPEG."""
+    import os
     from PIL import Image, ImageDraw
 
     p = Path(path)
@@ -273,7 +286,9 @@ def cover_thumbnail(path, max_w=240):
     pil.save(buf, format="JPEG", quality=82, optimize=True)
     raw = buf.getvalue()
     try:
-        cache_file.write_bytes(raw)
+        part = cache_file.with_name(f"{cache_file.name}.{os.getpid()}.part")
+        part.write_bytes(raw)
+        os.replace(part, cache_file)
     except OSError:
         pass
     return raw

@@ -110,28 +110,16 @@ def vlm_ocr_image(
         ],
     }
 
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    from pdfmanager import i18n, progress
+
+    progress.check()
+    headers = {"Accept": "application/json"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
 
     endpoint = url if url.endswith("/chat/completions") else f"{url}/chat/completions"
-    req = urllib.request.Request(
-        endpoint,
-        data=json.dumps(payload).encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
+    data = i18n._http_post_json(endpoint, payload, headers=headers, timeout=timeout)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:240]
-        raise core.PdfManagerError(f"Vision-LLM request failed (HTTP {exc.code}): {detail}") from None
-    except Exception as exc:
-        raise core.PdfManagerError(f"could not reach Vision-LLM at {endpoint}: {exc}") from None
-
-    try:
-        data = json.loads(raw)
         text = data["choices"][0]["message"]["content"]
     except Exception:
         raise core.PdfManagerError("unexpected response format from Vision-LLM") from None

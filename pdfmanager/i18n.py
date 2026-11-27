@@ -381,6 +381,20 @@ def remove_pack(code):
         if root in alt.parents and alt.is_dir():
             dest = alt
     if dest.is_dir():
+        import sys as _sys
+
+        tmod = _sys.modules.get("pdfmanager.translate")
+        if tmod is not None and hasattr(tmod, "unload_cached_models"):
+            try:
+                tmod.unload_cached_models()
+            except Exception:
+                pass
+        omod = _sys.modules.get("pdfmanager.ocr.models")
+        if omod is not None and hasattr(omod, "reset"):
+            try:
+                omod.reset()
+            except Exception:
+                pass
         shutil.rmtree(dest)
     if get_language() == norm:
         set_language(DEFAULT_LANG)
