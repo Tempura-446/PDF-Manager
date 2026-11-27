@@ -4,6 +4,16 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.92.0
+
+Instant QR "Phone ↔ Desktop" Wireless Scanner & AirDrop-Style File Drop:
+
+- **Pure-Python QR Code Pairing (`qrcode_svg.py`, `gui.py`, `static/tools.js`, `static/app.css`).**
+  - Added `qrcode_svg.make_qr_svg()` (backed by ReportLab's built-in QR encoder — zero new dependencies, zero cloud calls) and `GET /api/companion/qr`.
+  - Added a **Connect Phone** button on Home that opens a QR pairing modal with scannable LAN QR code, copyable URL, and `--lan` status guidance.
+- **Zero-Install Mobile Companion Page (`static/mobile-drop.html`, `server/reader_routes.py`).**
+  - Added `GET /mobile-drop` and `POST /api/companion/drop`: scan the QR code from any iOS or Android camera to snap multi-page document photos (bundled automatically into a clean PDF and popped open on desktop) or wirelessly drop PDF/EPUB/CBZ/CBR files straight into desktop ZPDF over local Wi-Fi.
+
 ## 0.91.0
 
 Persistent SQLite FTS5 Library Index & Offline "Ask Your Bookshelf" RAG:

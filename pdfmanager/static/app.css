@@ -1370,6 +1370,22 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
   cursor: pointer;
 }
 .shelf-cite-chip:hover { border-color: var(--accent); color: var(--accent); }
+.qr-pair-modal {
+  max-width: 390px;
+  width: 92vw;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--fg);
+  padding: 18px;
+}
+.qr-pair-modal::backdrop { background: rgba(0, 0, 0, 0.55); }
+.qr-pair-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.qr-pair-note { font-size: 12.5px; opacity: 0.8; line-height: 1.45; margin: 0 0 12px; }
+.qr-img-wrap { display: flex; justify-content: center; padding: 10px; background: #fff; border-radius: 10px; margin-bottom: 12px; }
+.qr-url-row { display: flex; gap: 6px; }
+.qr-url-input { flex: 1; font-size: 12px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: inherit; }
+
 
 
 

@@ -139,6 +139,8 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
             return self._static("manifest.webmanifest")
         if path == "/sw.js":
             return self._static("sw.js")
+        if path == "/mobile-drop":
+            return self._static("mobile-drop.html")
         if not self._token_ok():
             return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
         if path == "/api/operations":
@@ -161,7 +163,7 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
             return self._recent()
         if path == "/api/sessions":
             return self._sessions_list()
-        if path == "/api/companion/info":
+        if path in ("/api/companion/info", "/api/companion/qr"):
             port = self.server.server_address[1]
             lan_on = bool(getattr(self, "lan_enabled", False))
             host = self.headers.get("Host") or f"127.0.0.1:{port}"
@@ -169,9 +171,18 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 lan_ip = _detect_lan_ip()
                 if lan_ip:
                     host = f"{lan_ip}:{port}"
+            mobile_drop_url = f"http://{host}/mobile-drop#token={self.token}"
+            if path == "/api/companion/qr":
+                from pdfmanager import qrcode_svg
+
+                svg = qrcode_svg.make_qr_svg(mobile_drop_url)
+                return self._send(HTTPStatus.OK, svg.encode("utf-8"), "image/svg+xml; charset=utf-8",
+                                  {"Cache-Control": "no-store"})
             return self._send(HTTPStatus.OK, {
                 "lan_enabled": lan_on,
                 "url": f"http://{host}/#token={self.token}",
+                "mobile_drop_url": mobile_drop_url,
+                "qr_url": "/api/companion/qr",
                 "version": __version__,
                 "pwa_manifest": "/manifest.webmanifest",
             })
@@ -408,6 +419,8 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._library_ask(body)
             if path == "/api/translate/manga-batch":
                 return self._translate_manga_batch(body)
+            if path == "/api/companion/drop":
+                return self._companion_drop(body)
             if path in ("/api/comments/summary", "/api/comments/markdown", "/api/comments/export", "/api/comments/import"):
                 return self._comments(path.rsplit("/", 1)[1], body)
             if path == "/api/text/edit":

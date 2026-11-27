@@ -675,6 +675,71 @@ class ReaderRoutesMixin:
                 {"X-Pdfm-Filename": urllib.parse.quote(f"manga-translated-{safe_lang}.zip")},
             )
 
+    def _companion_drop(self, body):
+        """Receive camera scan photos or wireless file drops from a paired phone
+        and immediately open the result in the desktop ZPDF Reader."""
+        import os
+        import re
+        import time
+
+        from pdfmanager import appdata, cbz
+
+        ctype = self.headers.get("Content-Type", "")
+        fields, uploads = _parse_multipart(ctype, body)
+        if not uploads:
+            raise UserError("no files uploaded")
+        mode = str(fields.get("mode") or "open").strip().lower()
+        drop_dir = (appdata.data_dir() / "phone-drops").resolve()
+        drop_dir.mkdir(parents=True, exist_ok=True)
+        drop_prefix = str(drop_dir) + os.sep
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+
+        image_exts = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+        doc_exts = {".pdf", ".epub", ".cbz", ".cbr"}
+
+        opened_ids = []
+        first_name = ""
+        image_items = []
+
+        for idx, (_field, fname, raw) in enumerate(uploads):
+            ext = Path(str(fname or "")).suffix.lower()
+            if mode == "scan" or ext in image_exts:
+                image_items.append((f"page_{idx + 1:03d}{ext if ext in image_exts else '.jpg'}", raw))
+            elif ext in doc_exts:
+                stem = re.sub(r"[^\w.-]+", "_", Path(str(fname or "drop")).stem).strip("._") or f"phone_{stamp}"
+                out_str = os.path.normpath(os.path.join(str(drop_dir), f"{stem}_{stamp}_{idx + 1}{ext}"))
+                if not out_str.startswith(drop_prefix):
+                    raise UserError("invalid filename")
+                target = Path(out_str)
+                target.write_bytes(raw)
+                fid = self.opened.add(target)
+                opened_ids.append(fid)
+                if not first_name:
+                    first_name = target.name
+            else:
+                raise UserError(f"unsupported file type: {ext or 'unknown'}")
+
+        if image_items:
+            pdf_name = f"PhoneScan_{stamp}.pdf"
+            out_str = os.path.normpath(os.path.join(str(drop_dir), pdf_name))
+            if not out_str.startswith(drop_prefix):
+                raise UserError("invalid scan filename")
+            pdf_target = Path(out_str)
+            cbz.images_to_pdf(image_items, pdf_target)
+            fid = self.opened.add(pdf_target)
+            opened_ids.append(fid)
+            if not first_name:
+                first_name = pdf_target.name
+
+        if opened_ids and getattr(self, "events", None) is not None:
+            self.events.push({"open": opened_ids})
+        return self._send(HTTPStatus.OK, {
+            "ok": True,
+            "ids": opened_ids,
+            "name": first_name,
+            "pages": len(image_items) if image_items else len(opened_ids),
+        })
+
     def _library_neighbors(self, body):
         from pdfmanager import bookshelf
 

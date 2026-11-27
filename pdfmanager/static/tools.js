@@ -575,6 +575,50 @@ async function renderHome() {
       else refreshShelf(shelfFilter.value);
     }, shelfFullText ? 300 : 160);
   });
+  const phonePairBtn = el("button", {
+    type: "button",
+    class: "btn secondary pb-small",
+    title: "Pair your phone via QR code for wireless camera scanning and file drop over local Wi-Fi",
+    onclick: async () => {
+      try {
+        const info = await (await api("/api/companion/info")).json();
+        const qrBlob = await (await api("/api/companion/qr")).blob();
+        const qrUrl = URL.createObjectURL(qrBlob);
+        const modal = el("dialog", { class: "qr-pair-modal" });
+        const close = () => {
+          URL.revokeObjectURL(qrUrl);
+          modal.close();
+          modal.remove();
+        };
+        const urlBox = el("input", { type: "text", class: "qr-url-input", value: info.mobile_drop_url || info.url || "", readOnly: true });
+        modal.append(
+          el("div", { class: "qr-pair-head" },
+            el("strong", {}, "Connect Phone (Wireless Scanner & File Drop)"),
+            el("button", { type: "button", class: "btn secondary pb-small", onclick: close }, "Close"),
+          ),
+          el("p", { class: "qr-pair-note" },
+            info.lan_enabled
+              ? "Scan this QR code with your phone camera on the same Wi-Fi network — no app install needed."
+              : "LAN mode is currently off (localhost only). Launch ZPDF with `zpdf gui --lan` so phones on your Wi-Fi can connect."),
+          el("div", { class: "qr-img-wrap" }, el("img", { src: qrUrl, alt: "Phone companion QR code", width: 220, height: 220 })),
+          el("div", { class: "qr-url-row" },
+            urlBox,
+            el("button", { type: "button", class: "btn secondary pb-small", onclick: async () => {
+              try {
+                await navigator.clipboard.writeText(urlBox.value);
+                if (typeof toast === "function") toast("Copied phone companion URL.");
+              } catch {}
+            } }, "Copy"),
+          ),
+        );
+        modal.addEventListener("cancel", (e) => { e.preventDefault(); close(); });
+        document.body.append(modal);
+        modal.showModal();
+      } catch (err) {
+        if (typeof toast === "function") toast(err?.message || "Could not load QR pairing info");
+      }
+    },
+  }, "Connect Phone");
   parts.push(continueSec);
   parts.push(el("section", { class: "start-sec shelf-sec", "aria-label": "Bookshelf library" },
     el("div", { class: "shelf-head" },
@@ -582,6 +626,7 @@ async function renderHome() {
       shelfFilter,
       shelfFullTextBtn,
       shelfAskBtn,
+      phonePairBtn,
       addFolderBtn,
     ),
     shelfFoldersBar,
