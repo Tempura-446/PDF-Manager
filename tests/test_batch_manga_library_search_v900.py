@@ -14,10 +14,9 @@ import pytest
 from PIL import Image
 from reportlab.pdfgen import canvas as rl_canvas
 
-from pdfmanager import appdata, bookshelf, gui
+from pdfmanager import appdata, bookshelf, cbz, gui
 from pdfmanager.cli import parser as cli_parser
 from pdfmanager.server.operations import catalog
-from pdfmanager.translate import manga as manga_mod
 
 
 def _make_pdf(path, pages_text):
@@ -112,7 +111,7 @@ def test_translate_manga_batch_cbz_and_pdf_exports_cbz(tmp_path):
         return {"pages": 1, "mode": "manga", "src_lang": "ja"}
 
     with mock.patch("pdfmanager.translate.translate_pdf", side_effect=fake_translate_pdf):
-        res = manga_mod.translate_manga_batch(
+        res = cbz.translate_manga_batch(
             in_dir, out_dir, src_lang="ja", dst_lang="en", export_format="cbz", manga_ai=False,
         )
 

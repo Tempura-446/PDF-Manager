@@ -489,10 +489,10 @@ def build_parser():
     sp.add_argument("--json", action="store_true", help="print JSON")
 
     def cmd_translate_manga_batch(a):
-        from pdfmanager.translate import manga as manga_mod
+        from pdfmanager import cbz
 
         out_dir = a.output or str(Path(a.inputs[0]).resolve().parent / f"translated-{a.to_lang}")
-        res = manga_mod.translate_manga_batch(
+        res = cbz.translate_manga_batch(
             a.inputs,
             out_dir,
             src_lang=a.from_lang,

@@ -583,72 +583,81 @@ class ReaderRoutesMixin:
         return self._send(HTTPStatus.OK, bookshelf.search_library(query=query, limit=cap))
 
     def _translate_manga_batch(self, body):
-        """Batch-translate uploaded or local-folder .cbz/.cbr/.pdf manga chapters."""
-        from pdfmanager.translate import manga as manga_mod
+        """Batch-translate uploaded or bookshelf/opened .cbz/.cbr/.pdf manga chapters."""
+        from pdfmanager import bookshelf, cbz
 
         ctype = self.headers.get("Content-Type", "")
-        if "multipart/form-data" in ctype:
-            fields, uploads = _parse_multipart(ctype, body)
-            if not uploads:
-                raise UserError("upload one or more .cbz, .cbr, or .pdf manga files")
-            src_lang = (fields.get("source_lang") or fields.get("from") or "ja").strip()
-            dst_lang = (fields.get("target_lang") or fields.get("to") or "en").strip()
-            export_fmt = (fields.get("export_format") or fields.get("format") or "cbz").strip().lower()
-            manga_ai = _bool(fields.get("manga_ai", "1"))
-            engine = (fields.get("engine") or "auto").strip()
-            with tempfile.TemporaryDirectory(prefix="pdfm-mbatch-") as tmp:
-                in_dir = Path(tmp) / "in"
-                out_dir = Path(tmp) / "out"
-                in_dir.mkdir()
-                in_paths = []
+        src_lang = "ja"
+        dst_lang = "en"
+        export_fmt = "cbz"
+        manga_ai = True
+        engine = "auto"
+
+        with tempfile.TemporaryDirectory(prefix="pdfm-mbatch-") as tmp:
+            tmp_root = Path(tmp)
+            in_dir = tmp_root / "in"
+            out_dir = tmp_root / "out"
+            in_dir.mkdir()
+            in_paths = []
+
+            if "multipart/form-data" in ctype:
+                fields, uploads = _parse_multipart(ctype, body)
+                if not uploads:
+                    raise UserError("upload one or more .cbz, .cbr, or .pdf manga files")
+                src_lang = (fields.get("source_lang") or fields.get("from") or "ja").strip()
+                dst_lang = (fields.get("target_lang") or fields.get("to") or "en").strip()
+                export_fmt = (fields.get("export_format") or fields.get("format") or "cbz").strip().lower()
+                manga_ai = _bool(fields.get("manga_ai", "1"))
+                engine = (fields.get("engine") or "auto").strip()
                 for idx, (_field, fname, raw) in enumerate(uploads):
-                    safe = _safe_name(Path(fname or f"chapter_{idx + 1}.cbz").name)
-                    dest = in_dir / f"{idx:03d}_{safe}"
+                    ext = Path(str(fname or "")).suffix.lower()
+                    if ext not in (".cbz", ".cbr", ".pdf"):
+                        ext = ".cbz"
+                    dest = in_dir / f"chapter_{idx + 1:03d}{ext}"
                     dest.write_bytes(raw)
                     in_paths.append(dest)
-                summary = manga_mod.translate_manga_batch(
-                    in_paths, out_dir,
-                    src_lang=src_lang, dst_lang=dst_lang,
-                    export_format=export_fmt, manga_ai=manga_ai, engine=engine,
-                )
-                outs = [Path(p) for p in summary["outputs"] if Path(p).is_file()]
-                if not outs:
-                    raise UserError("no chapters could be translated")
-                if len(outs) == 1:
-                    data = outs[0].read_bytes()
-                    mime = "application/pdf" if outs[0].suffix.lower() == ".pdf" else "application/vnd.comicbook+zip"
-                    return self._send(
-                        HTTPStatus.OK, data, mime,
-                        {"X-Pdfm-Filename": urllib.parse.quote(outs[0].name)},
-                    )
-                buf = io.BytesIO()
-                with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                    for p in outs:
-                        zf.write(p, arcname=p.name)
-                return self._send(
-                    HTTPStatus.OK, buf.getvalue(), "application/zip",
-                    {"X-Pdfm-Filename": urllib.parse.quote(f"manga-translated-{dst_lang}.zip")},
-                )
+            else:
+                data = json.loads(body or b"{}")
+                src_lang = str(data.get("source_lang") or "ja").strip()
+                dst_lang = str(data.get("target_lang") or "en").strip()
+                export_fmt = str(data.get("export_format") or "cbz").strip().lower()
+                manga_ai = bool(data.get("manga_ai", True))
+                engine = str(data.get("engine") or "auto").strip()
+                for bid in data.get("book_ids") or ():
+                    p = bookshelf.find_by_id(str(bid))
+                    if p is not None and p.is_file():
+                        in_paths.append(p)
+                for fid in data.get("file_ids") or ():
+                    p = self.opened.get(str(fid)) if self.opened is not None else None
+                    if p is not None and p.is_file():
+                        in_paths.append(p)
+                if not in_paths:
+                    raise UserError("specify valid book_ids or file_ids")
 
-        data = json.loads(body or b"{}")
-        folder = str(data.get("folder") or "").strip()
-        files = data.get("files") or []
-        out_dir = str(data.get("output_dir") or "").strip()
-        if not folder and not files:
-            raise UserError("specify a folder or list of files")
-        if not out_dir:
-            base = Path(folder) if folder else Path(files[0]).parent
-            out_dir = str(base / f"translated-{data.get('target_lang') or 'en'}")
-        summary = manga_mod.translate_manga_batch(
-            folder or files,
-            out_dir,
-            src_lang=str(data.get("source_lang") or "ja"),
-            dst_lang=str(data.get("target_lang") or "en"),
-            export_format=str(data.get("export_format") or "cbz"),
-            manga_ai=bool(data.get("manga_ai", True)),
-            engine=str(data.get("engine") or "auto"),
-        )
-        return self._send(HTTPStatus.OK, summary)
+            summary = cbz.translate_manga_batch(
+                in_paths, out_dir,
+                src_lang=src_lang, dst_lang=dst_lang,
+                export_format=export_fmt, manga_ai=manga_ai, engine=engine,
+            )
+            outs = [Path(p) for p in summary["outputs"] if Path(p).is_file()]
+            if not outs:
+                raise UserError("no chapters could be translated")
+            if len(outs) == 1:
+                raw_out = outs[0].read_bytes()
+                mime = "application/pdf" if outs[0].suffix.lower() == ".pdf" else "application/vnd.comicbook+zip"
+                return self._send(
+                    HTTPStatus.OK, raw_out, mime,
+                    {"X-Pdfm-Filename": urllib.parse.quote(outs[0].name)},
+                )
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for p in outs:
+                    zf.write(p, arcname=p.name)
+            safe_lang = re.sub(r"[^A-Za-z0-9_-]+", "-", dst_lang).strip("-") or "en"
+            return self._send(
+                HTTPStatus.OK, buf.getvalue(), "application/zip",
+                {"X-Pdfm-Filename": urllib.parse.quote(f"manga-translated-{safe_lang}.zip")},
+            )
 
     def _library_neighbors(self, body):
         from pdfmanager import bookshelf

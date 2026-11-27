@@ -604,13 +604,13 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             f"({src_note} → {target_lang}, {made['mode']}{extra_note})"
         )
     elif op == "manga-batch":
-        from pdfmanager.translate import manga as manga_mod
+        from pdfmanager import cbz
 
         source_lang = opts.get("source_lang") or "ja"
         target_lang = opts.get("target_lang") or "en"
         export_format = (opts.get("export_format") or "cbz").strip().lower()
         manga_ai_opt = _bool(opts.get("manga_ai", True))
-        res = manga_mod.translate_manga_batch(
+        res = cbz.translate_manga_batch(
             [src], out_dir,
             src_lang=source_lang,
             dst_lang=target_lang,
