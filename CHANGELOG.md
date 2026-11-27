@@ -4,6 +4,17 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.90.0
+
+Track B + Track C — Batch Manga Volume Translator & Offline Library Full-Text Search:
+
+- **Batch Manga Volume Translator (`translate/manga.py`, `server/reader_routes.py`, `server/operations/catalog.py`, `server/operations/dispatch.py`, `cli/parser.py`, `static/app-core.js`).**
+  - Added `translate_manga_batch()` supporting folders or multi-file lists of `.cbz`, `.cbr`, and `.pdf` chapters with natural sorting, per-chapter fault isolation, RTL `ComicInfo.xml` tagging, and `.cbz` or `.pdf` export.
+  - Added `POST /api/translate/manga-batch` (multipart uploads → `.cbz`/`.pdf`/`.zip`, or JSON local-folder batch), the **Batch Manga Volume Translator** tool in the Convert catalog, and `zpdf translate-manga-batch <inputs...> --from ja --to en --format cbz`.
+- **Offline Library Full-Text Search (`bookshelf.py`, `server/reader_routes.py`, `gui.py`, `static/tools.js`, `static/app.css`).**
+  - Added `bookshelf.search_library(query, limit=50)` scanning all `.pdf` (via `pypdf`) and `.epub` (via `epub._ChapterParser`) books across configured Bookshelf folders completely offline.
+  - Added `GET /api/library/search?q=...` and an **Inside text** toggle button in the Home Bookshelf header displaying highlighted `<mark>` snippets and page badges that jump directly to the matching page & search term in the Reader.
+
 ## 0.89.0
 
 Track A — Persistent Reading Progress, Continue Reading Bookshelf & One-Click Vision-LLM Reader Tool:

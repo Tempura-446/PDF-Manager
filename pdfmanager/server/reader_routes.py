@@ -573,6 +573,92 @@ class ReaderRoutesMixin:
         )
         return self._send(HTTPStatus.OK, {"ok": True, "progress": entry})
 
+    def _library_search(self, query="", limit=50):
+        from pdfmanager import bookshelf
+
+        try:
+            cap = int(limit or 50)
+        except ValueError:
+            cap = 50
+        return self._send(HTTPStatus.OK, bookshelf.search_library(query=query, limit=cap))
+
+    def _translate_manga_batch(self, body):
+        """Batch-translate uploaded or bookshelf/opened .cbz/.cbr/.pdf manga chapters."""
+        from pdfmanager import bookshelf, cbz
+
+        ctype = self.headers.get("Content-Type", "")
+        src_lang = "ja"
+        dst_lang = "en"
+        export_fmt = "cbz"
+        manga_ai = True
+        engine = "auto"
+
+        with tempfile.TemporaryDirectory(prefix="pdfm-mbatch-") as tmp:
+            tmp_root = Path(tmp)
+            in_dir = tmp_root / "in"
+            out_dir = tmp_root / "out"
+            in_dir.mkdir()
+            in_paths = []
+
+            if "multipart/form-data" in ctype:
+                fields, uploads = _parse_multipart(ctype, body)
+                if not uploads:
+                    raise UserError("upload one or more .cbz, .cbr, or .pdf manga files")
+                src_lang = (fields.get("source_lang") or fields.get("from") or "ja").strip()
+                dst_lang = (fields.get("target_lang") or fields.get("to") or "en").strip()
+                export_fmt = (fields.get("export_format") or fields.get("format") or "cbz").strip().lower()
+                manga_ai = _bool(fields.get("manga_ai", "1"))
+                engine = (fields.get("engine") or "auto").strip()
+                for idx, (_field, fname, raw) in enumerate(uploads):
+                    ext = Path(str(fname or "")).suffix.lower()
+                    if ext not in (".cbz", ".cbr", ".pdf"):
+                        ext = ".cbz"
+                    dest = in_dir / f"chapter_{idx + 1:03d}{ext}"
+                    dest.write_bytes(raw)
+                    in_paths.append(dest)
+            else:
+                data = json.loads(body or b"{}")
+                src_lang = str(data.get("source_lang") or "ja").strip()
+                dst_lang = str(data.get("target_lang") or "en").strip()
+                export_fmt = str(data.get("export_format") or "cbz").strip().lower()
+                manga_ai = bool(data.get("manga_ai", True))
+                engine = str(data.get("engine") or "auto").strip()
+                for bid in data.get("book_ids") or ():
+                    p = bookshelf.find_by_id(str(bid))
+                    if p is not None and p.is_file():
+                        in_paths.append(p)
+                for fid in data.get("file_ids") or ():
+                    p = self.opened.get(str(fid)) if self.opened is not None else None
+                    if p is not None and p.is_file():
+                        in_paths.append(p)
+                if not in_paths:
+                    raise UserError("specify valid book_ids or file_ids")
+
+            cbz.translate_manga_batch(
+                in_paths, out_dir,
+                src_lang=src_lang, dst_lang=dst_lang,
+                export_format=export_fmt, manga_ai=manga_ai, engine=engine,
+            )
+            outs = sorted(p for p in out_dir.iterdir() if p.is_file()) if out_dir.is_dir() else []
+            if not outs:
+                raise UserError("no chapters could be translated")
+            if len(outs) == 1:
+                raw_out = outs[0].read_bytes()
+                mime = "application/pdf" if outs[0].suffix.lower() == ".pdf" else "application/vnd.comicbook+zip"
+                return self._send(
+                    HTTPStatus.OK, raw_out, mime,
+                    {"X-Pdfm-Filename": urllib.parse.quote(outs[0].name)},
+                )
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for p in outs:
+                    zf.write(p, arcname=p.name)
+            safe_lang = re.sub(r"[^A-Za-z0-9_-]+", "-", dst_lang).strip("-") or "en"
+            return self._send(
+                HTTPStatus.OK, buf.getvalue(), "application/zip",
+                {"X-Pdfm-Filename": urllib.parse.quote(f"manga-translated-{safe_lang}.zip")},
+            )
+
     def _library_neighbors(self, body):
         from pdfmanager import bookshelf
 

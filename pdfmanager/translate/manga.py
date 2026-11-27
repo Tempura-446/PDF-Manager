@@ -1088,3 +1088,5 @@ def apply_manga_page_bubbles(
     with open(dst, "wb") as fh:
         writer.write(fh)
     return {"page": p_idx + 1, "bubbles_applied": len(norm_bubbles), "output": str(dst)}
+
+

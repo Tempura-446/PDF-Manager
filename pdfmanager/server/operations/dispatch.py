@@ -603,6 +603,28 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             f"{src.name}: translated {made['pages']} page{'s' if made['pages'] != 1 else ''} "
             f"({src_note} → {target_lang}, {made['mode']}{extra_note})"
         )
+    elif op == "manga-batch":
+        from pdfmanager import cbz
+
+        source_lang = opts.get("source_lang") or "ja"
+        target_lang = opts.get("target_lang") or "en"
+        export_format = (opts.get("export_format") or "cbz").strip().lower()
+        manga_ai_opt = _bool(opts.get("manga_ai", True))
+        res = cbz.translate_manga_batch(
+            [src], out_dir,
+            src_lang=source_lang,
+            dst_lang=target_lang,
+            export_format=export_format,
+            manga_ai=manga_ai_opt,
+            password=password,
+        )
+        if res["failed"]:
+            err = (res["chapters"][0].get("error") if res["chapters"] else None) or "translation failed"
+            raise UserError(f"{src.name}: {err}")
+        notes.append(
+            f"{src.name}: translated {res['total_pages']} manga page{'s' if res['total_pages'] != 1 else ''} "
+            f"({source_lang} → {target_lang}, .{res['export_format']})"
+        )
     # -- end of pptx and html --
     elif op == "from-office":
         out = out_dir / f"{src.stem}.pdf"
