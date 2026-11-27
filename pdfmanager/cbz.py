@@ -509,6 +509,7 @@ def translate_manga_batch(
     Per-chapter errors are recorded without aborting earlier/later chapters.
     """
     import logging
+    import os
     import shutil
     import tempfile
 
@@ -552,8 +553,9 @@ def translate_manga_batch(
     if fmt not in ("cbz", "pdf"):
         fmt = "cbz"
     dst_code = re.sub(r"[^A-Za-z0-9_-]+", "-", str(dst_lang or "en").strip().lower()).strip("-") or "en"
-    out_root = Path(output_dir)
+    out_root = Path(output_dir).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
+    out_root_prefix = str(out_root) + os.sep
 
     chapters = []
     outputs = []
@@ -570,7 +572,10 @@ def translate_manga_batch(
             progress_cb(idx, total_files, src.name)
         ext = src.suffix.lower()
         safe_stem = re.sub(r"[^\w.-]+", "_", src.stem).strip("._") or f"chapter_{idx + 1:03d}"
-        out_path = out_root / f"{safe_stem}_{dst_code}.{fmt}"
+        out_path_str = os.path.normpath(os.path.join(str(out_root), f"{safe_stem}_{dst_code}.{fmt}"))
+        if not out_path_str.startswith(out_root_prefix):
+            raise core.PdfManagerError("invalid output filename")
+        out_path = Path(out_path_str)
         try:
             with tempfile.TemporaryDirectory(prefix="zpdf-mbatch-") as tmp:
                 tmp_dir = Path(tmp)

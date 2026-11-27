@@ -634,12 +634,12 @@ class ReaderRoutesMixin:
                 if not in_paths:
                     raise UserError("specify valid book_ids or file_ids")
 
-            summary = cbz.translate_manga_batch(
+            cbz.translate_manga_batch(
                 in_paths, out_dir,
                 src_lang=src_lang, dst_lang=dst_lang,
                 export_format=export_fmt, manga_ai=manga_ai, engine=engine,
             )
-            outs = [Path(p) for p in summary["outputs"] if Path(p).is_file()]
+            outs = sorted(p for p in out_dir.iterdir() if p.is_file()) if out_dir.is_dir() else []
             if not outs:
                 raise UserError("no chapters could be translated")
             if len(outs) == 1:
