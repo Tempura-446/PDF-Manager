@@ -163,12 +163,15 @@ def latest_version():
     return found.group(1), branch
 
 
-def release_asset_candidates(version, platform_name=None):
+def release_asset_candidates(version, platform_name=None, for_pip=False):
     """Preferred release asset names for the current OS, in priority order.
-    Falls back to ``ZPDF-<version>-windows.zip`` (the source/wheel bundle used by
-    pip installs) when platform-specific binaries aren't attached to a release."""
+    For ``pip`` installs, prefers ``ZPDF-<version>-windows.zip`` (the source
+    bundle containing ``pyproject.toml``) so ``install()`` can extract it on
+    macOS and Linux as well as Windows."""
     plat = platform_name or sys.platform
     win = f"ZPDF-{version}-windows.zip"
+    if for_pip:
+        return [win]
     if plat == "darwin":
         return [f"ZPDF-{version}-macos.dmg", f"ZPDF-{version}-macos.zip", win]
     if plat.startswith("linux"):
@@ -183,7 +186,7 @@ def _latest_release():
     if not parse_version(version):
         raise core.PdfManagerError("the newest release on GitHub has no version number")
     assets = {a.get("name"): a.get("url") for a in release.get("assets") or ()}
-    candidates = release_asset_candidates(version)
+    candidates = release_asset_candidates(version, for_pip=(how_installed() == "pip"))
     chosen = next((n for n in candidates if assets.get(n) and assets.get(n + ".sha256")), None)
     if not chosen:
         expected = candidates[0]

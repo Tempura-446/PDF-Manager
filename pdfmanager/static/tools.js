@@ -84,7 +84,7 @@ function renderFiles() {
         isPdf(it.file) ? el("button", { class: "chip-btn", type: "button", title: "Open in reader", "aria-label": `Open ${it.file.name} in the reader`, onclick: () => openInReader(it.file) }, icon("reader")) : null,
         items.length > 1 ? el("button", { class: "chip-btn", type: "button", title: "Move earlier", "aria-label": `Move ${it.file.name} earlier`, disabled: i === 0, onclick: () => move(i, i - 1) }, icon("left")) : null,
         items.length > 1 ? el("button", { class: "chip-btn", type: "button", title: "Move later", "aria-label": `Move ${it.file.name} later`, disabled: i === items.length - 1, onclick: () => move(i, i + 1) }, icon("right")) : null,
-        el("button", { class: "chip-btn", type: "button", title: "Remove", "aria-label": `Remove ${it.file.name}`, onclick: () => { items.splice(i, 1); carried = null; renderFiles(); } }, icon("x"))));
+        el("button", { class: "chip-btn", type: "button", title: "Remove", "aria-label": `Remove ${it.file.name}`, onclick: () => { if (it.thumb && it.thumb.startsWith("blob:")) URL.revokeObjectURL(it.thumb); items.splice(i, 1); carried = null; renderFiles(); } }, icon("x"))));
     card.addEventListener("dragstart", (e) => { dragId = it.id; card.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", it.id); });
     card.addEventListener("dragend", () => { dragId = null; card.classList.remove("dragging"); });
     card.addEventListener("dragover", (e) => { if (dragId) { e.preventDefault(); card.classList.add("drop-before"); } });
@@ -172,6 +172,9 @@ function redactChosen() {
 $("form").addEventListener("input", () => { if (current?.id === "redact") updateSummary(); });
 /** Back to an empty tool: no files, no result, options as they were. */
 function startOver() {
+  for (const it of items) {
+    if (it.thumb && it.thumb.startsWith("blob:")) URL.revokeObjectURL(it.thumb);
+  }
   items = [];
   // What was drawn on the pages goes with the files.
   for (const id of ["f-fields", "f-edits", "f-boxes"]) if ($(id)) $(id).value = "";

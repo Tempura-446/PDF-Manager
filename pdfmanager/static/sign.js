@@ -179,12 +179,18 @@ export const Signing = (Base) => class extends Base {
       const f = pick.files[0];
       if (!f) return;
       const img = new Image();
-      img.src = URL.createObjectURL(f);
-      await img.decode().catch(() => {});
-      clear();
-      const s = Math.min((W - 20) / img.width, (H - 20) / img.height, 1);
-      ctx.drawImage(img, (W - img.width * s) / 2, (H - img.height * s) / 2, img.width * s, img.height * s);
-      URL.revokeObjectURL(img.src);
+      const objUrl = URL.createObjectURL(f);
+      try {
+        img.src = objUrl;
+        await img.decode().catch(() => {});
+        clear();
+        if (img.width && img.height) {
+          const s = Math.min((W - 20) / img.width, (H - 20) / img.height, 1);
+          ctx.drawImage(img, (W - img.width * s) / 2, (H - img.height * s) / 2, img.width * s, img.height * s);
+        }
+      } finally {
+        URL.revokeObjectURL(objUrl);
+      }
       drawn = true; picked = f;
     });
     const remember = el("input", { type: "checkbox", checked: true });

@@ -4,6 +4,22 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.88.1
+
+Audit Polish, LAN Companion CLI Wiring, Resource Hygiene & Update/CLI Fixes:
+
+- **LAN Companion CLI (`cli/parser.py`, `cli/commands_multi.py`, `gui.py`).**
+  - Wired `--lan` flag on `zpdf gui` and `zpdf view` through `launch()`, `run_desktop()`, `run_app_window()`, and `serve()` to `make_server(..., lan=True)`.
+  - Added offline-safe `_detect_lan_ip()` (via `socket.getaddrinfo`) so `/api/companion/info` and the terminal banner report the host's real LAN IPv4 address instead of `127.0.0.1` when `--lan` is active.
+- **Server Concurrency & Memory Hygiene (`server/common.py`, `gui.py`, `compare.py`, `comments.py`, `redactcontent.py`, `static/tools.js`, `static/scan-ui.js`, `static/sign.js`).**
+  - Deduplicated `OpenFiles.add()` via reverse path lookup so re-opening the same file reuses its existing token instead of accumulating entries.
+  - Synchronized `handler.pages` updates/removals with `pages_lock` across `_token_ok`, `_bye`, and `wait_until_closed`.
+  - Closed remaining PDFium `PdfPage` and `textpage` handles in `try/finally` blocks in `compare._load()`, `comments.py`, and `redactcontent.py`.
+  - Revoked temporary `URL.createObjectURL` blobs on removal/reset/unload in `tools.js`, `scan-ui.js`, and `sign.js`.
+- **Update & CLI Parser Fixes (`update.py`, `cli/parser.py`).**
+  - Fixed `update.release_asset_candidates()` to prefer the source zip bundle (`ZPDF-<version>-windows.zip` with `pyproject.toml`) for `pip` installs on macOS/Linux instead of `.dmg`/`.AppImage`.
+  - Scoped `_leading_dash_ranges()` to page-range flags (`-p`, `--pages`, `--ranges`, `--remove`) so filenames or passwords starting with `-<digit>` (e.g., `-2026-report.pdf`) are never rewritten.
+
 ## 0.88.0
 
 Deep 3-Track Stability, Security & Correctness Hardening Pass across Frontend/Reader, Core PDF, Server/Watch/CLI, and Android Companion:

@@ -422,6 +422,12 @@ function scanThumbUrl(p) {
   scanState.thumbs.set(key, pending);
   return pending;
 }
+window.addEventListener("pagehide", () => {
+  for (const p of scanState.thumbs.values()) {
+    Promise.resolve(p).then((u) => { if (u && u.startsWith("blob:")) URL.revokeObjectURL(u); }).catch(() => {});
+  }
+  scanState.thumbs.clear();
+});
 /** The picture turned ``turn`` degrees, as big as its box allows. */
 function scanTurnStyle(p) {
   const w = p.width || 1, h = p.height || 1.25, bw = 1, bh = 1.25;

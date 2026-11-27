@@ -333,9 +333,10 @@ def cmd_gui(a):
         if not Path(path).is_file():
             raise core.PdfManagerError(f"no such file: {path}")
     action = getattr(a, "action", None)
+    lan = bool(getattr(a, "lan", False))
     if a.browser or a.no_browser:
         gui.serve(port=a.port, open_browser=not a.no_browser, open_paths=paths,
-                  action=(action, paths) if action else None)
+                  action=(action, paths) if action else None, lan=lan)
     else:
-        gui.launch(paths, port=a.port, action=action, background_start=bool(getattr(a, "background", False)))
+        gui.launch(paths, port=a.port, action=action, background_start=bool(getattr(a, "background", False)), lan=lan)
 

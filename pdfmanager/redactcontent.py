@@ -1347,11 +1347,21 @@ def _verify(path, password, data, areas, regexes, loose=()):
         new_doc = pdfium.PdfDocument(data)
         try:
             for number, boxes in sorted(areas.items()):
-                old_text, new_text = old_doc[number].get_textpage(), new_doc[number].get_textpage()
-                old, new = _chars(old_text), _chars(new_text)
-                full = new_text.get_text_range()
-                old_text.close()
-                new_text.close()
+                old_page = old_doc[number]
+                new_page = new_doc[number]
+                old_text = new_text = None
+                try:
+                    old_text = old_page.get_textpage()
+                    new_text = new_page.get_textpage()
+                    old, new = _chars(old_text), _chars(new_text)
+                    full = new_text.get_text_range()
+                finally:
+                    if old_text is not None:
+                        old_text.close()
+                    if new_text is not None:
+                        new_text.close()
+                    old_page.close()
+                    new_page.close()
                 boxes = _Areas(boxes)
                 gone = [box is not None and _center_in(box, boxes, 0) for _, box in old]
                 removed = "".join(ch if hit else " " for (ch, _), hit in zip(old, gone))

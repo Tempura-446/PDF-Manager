@@ -208,16 +208,21 @@ class OpenFiles:
 
     def __init__(self):
         self.items = {}
+        self._by_path = {}
         self.lock = threading.Lock()
 
     def add(self, path):
         path = Path(path).expanduser().resolve()
         if not path.is_file():
             raise FileNotFoundError(f"no such file: {path}")
-        key = secrets.token_urlsafe(9)
         with self.lock:
+            existing = self._by_path.get(path)
+            if existing is not None and self.items.get(existing) == path:
+                return existing
+            key = secrets.token_urlsafe(9)
             self.items[key] = path
-        return key
+            self._by_path[path] = key
+            return key
 
     def get(self, key):
         with self.lock:
@@ -707,7 +712,12 @@ class HandlerBase(BaseHTTPRequestHandler):
             type(self).last_seen = now  # a page is still open
             page = self.headers.get("X-Pdfm-Page", "")[:64]
             if page and self.pages is not None:
-                self.pages[page] = now
+                lock = getattr(self, "pages_lock", None)
+                if lock is not None:
+                    with lock:
+                        self.pages[page] = now
+                else:
+                    self.pages[page] = now
         return ok
 
     def _static(self, rel):
@@ -838,7 +848,12 @@ class HandlerBase(BaseHTTPRequestHandler):
         if not secrets.compare_digest(query.get("token", [""])[0], self.token):
             return self._error(HTTPStatus.FORBIDDEN, "missing or wrong token")
         if self.pages is not None:
-            self.pages.pop(query.get("page", [""])[0], None)
+            lock = getattr(self, "pages_lock", None)
+            if lock is not None:
+                with lock:
+                    self.pages.pop(query.get("page", [""])[0], None)
+            else:
+                self.pages.pop(query.get("page", [""])[0], None)
         if self.unsaved is not None:
             self.unsaved.gone(query.get("page", [""])[0])
         type(self).closed_at = gui_hook("time", time).monotonic()
