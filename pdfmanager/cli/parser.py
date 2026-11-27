@@ -559,6 +559,43 @@ def build_parser():
     sp.add_argument("--model", help="local LLM model override (default: configured Settings model)")
     sp.add_argument("--json", action="store_true", help="print JSON")
 
+    def cmd_redline(a):
+        from pdfmanager import redline
+
+        report = redline.compute_redline(a.old, a.new, password=a.password)
+        ai_text = redline.explain_redline_ai(report).get("explanation") if a.explain else None
+        if a.output:
+            out = Path(a.output)
+            fmt = a.format or out.suffix.lstrip(".").lower() or "pdf"
+            if fmt == "md":
+                out.write_text(redline.export_redline_markdown(report, ai_summary=ai_text), encoding="utf-8")
+            elif fmt == "html":
+                out.write_text(redline.export_redline_html(report, ai_summary=ai_text), encoding="utf-8")
+            else:
+                redline.export_redline_pdf(report, out, ai_summary=ai_text)
+        if a.json:
+            payload = dict(report)
+            if ai_text is not None:
+                payload["ai_summary"] = ai_text
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        else:
+            s = report["summary"]
+            print(f"Redline: {s['total_changes']} change(s) "
+                  f"({s['modified']} modified, {s['added']} added, {s['removed']} removed, {s['material']} material)")
+            if ai_text:
+                print("\n" + ai_text)
+        return 0
+
+    sp = other("redline", cmd_redline,
+               "clause-by-clause Smart Redline diff between two PDF revisions (.pdf, .html, or .md report)")
+    sp.add_argument("old", metavar="old.pdf", help="original PDF")
+    sp.add_argument("new", metavar="new.pdf", help="revised PDF")
+    sp.add_argument("-o", "--output", help="output report path (.pdf, .html, or .md)")
+    sp.add_argument("--format", choices=("pdf", "html", "md"), help="report format (inferred from -o if omitted)")
+    sp.add_argument("--explain", action="store_true", help="include local-LLM change & risk summary")
+    sp.add_argument("--password", help=f"password for encrypted PDFs (or set {PASSWORD_ENV})")
+    sp.add_argument("--json", action="store_true", help="print JSON")
+
     sp = other("cbz-to-pdf", cmd_cbz_to_pdf,
                "convert a .cbz comic/manga archive to a PDF (natural page sort + optional RTL viewer)")
     sp.add_argument("input", metavar="input.cbz", help="CBZ archive to convert")
