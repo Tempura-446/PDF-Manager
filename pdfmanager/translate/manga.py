@@ -576,7 +576,11 @@ def extract_bubble_text(pil_img, bubble, src_lang, *, ocr_fn=None, plumber_page=
         raw = ocr_fn(pre, src_lang)
         return normalize_vertical_punct(str(raw or "")).strip()
 
-    if use_ai and (not src_lang or str(src_lang).lower().startswith("ja") or src_lang == "auto"):
+    if use_ai and (
+        not src_lang
+        or src_lang == "auto"
+        or str(src_lang).lower().startswith(("ja", "zh", "en"))
+    ):
         try:
             from pdfmanager.translate import manga_ai
 

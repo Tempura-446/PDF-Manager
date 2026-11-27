@@ -25,6 +25,7 @@ TARGET = ROOT / "pdfmanager" / "static" / "pdfjs"
 KEEP = [
     ("LICENSE", "LICENSE"),
     ("legacy/build/pdf.min.mjs", "build/pdf.min.mjs"),
+    ("legacy/build/pdf.sandbox.min.mjs", "build/pdf.sandbox.min.mjs"),
     ("legacy/build/pdf.worker.min.mjs", "build/pdf.worker.min.mjs"),
     ("legacy/web/pdf_viewer.mjs", "web/pdf_viewer.mjs"),
     ("legacy/web/pdf_viewer.css", "web/pdf_viewer.css"),

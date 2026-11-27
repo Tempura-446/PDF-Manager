@@ -238,11 +238,18 @@
             <option value="llm" data-i18n="settings.translate.llm">Smart AI (Local Ollama / LM Studio or OpenAI-compatible API)</option>
           </select></label>
         <div id="set-translate-llm-wrap" hidden class="set-subbox">
-          <p class="dlg-hint">Context-aware AI translation. Works 100% offline &amp; free with local <strong>Ollama</strong> (<code>http://localhost:11434/v1</code>, e.g. <code>qwen2.5:7b</code>) or any OpenAI-compatible HTTPS API.</p>
+          <p class="dlg-hint">Context-aware AI translation &amp; Vision-LLM OCR. Works 100% offline &amp; free with local <strong>Ollama</strong> (<code>http://localhost:11434/v1</code>, e.g. <code>translategemma:4b</code>, <code>qwen2.5vl:7b</code>, <code>qwen2.5:7b</code>) or any OpenAI-compatible HTTPS API.</p>
           <label class="dlg-field"><span data-i18n="settings.translate.endpoint">Endpoint URL</span>
             <input type="text" id="set-translate-url" placeholder="http://localhost:11434/v1" autocomplete="off"></label>
           <label class="dlg-field"><span data-i18n="settings.translate.model">Model name</span>
-            <input type="text" id="set-translate-model" placeholder="qwen2.5:7b" autocomplete="off"></label>
+            <input type="text" id="set-translate-model" list="translate-model-presets" placeholder="translategemma:4b" autocomplete="off"></label>
+          <datalist id="translate-model-presets">
+            <option value="translategemma:4b">TranslateGemma 4B (fast multimodal translation, 55+ langs)</option>
+            <option value="translategemma:12b">TranslateGemma 12B (high-accuracy multimodal translation)</option>
+            <option value="qwen2.5vl:7b">Qwen2.5-VL 7B (Vision-LLM OCR &amp; manga translation)</option>
+            <option value="qwen2.5:7b">Qwen2.5 7B (general local LLM translation)</option>
+            <option value="hunyuan-mt:7b">Hunyuan-MT 7B (dedicated local translation LLM)</option>
+          </datalist>
           <label class="dlg-field"><span data-i18n="settings.translate.api_key">API key (optional for local Ollama)</span> <em id="set-translate-key-state"></em>
             <div class="set-inline-row">
               <input type="password" id="set-translate-key" placeholder="Leave blank for local Ollama / LM Studio" autocomplete="off">

@@ -34,8 +34,9 @@ from pdfmanager.ocr.engines import (
 from pdfmanager.ocr.models import (
     _best_model, _best_model_source,
     _call_lock, _check_quality, _directml_available, _directml_failed,
-    _download_model, _engine, _engine_lock, _engines, _fetch, _language_model,
-    _model_entry, _model_source, _pick_onnx, _sha256, default_gpu,
+    _download_model, _engine, _engine_lock, _engines, _fetch, _installed_standard_v6,
+    _language_model, _model_entry, _model_source, _pick_onnx, _sha256,
+    _v6_tier_model, _v6_tier_model_source, default_gpu,
     default_quality, models_dir, pack_ocr_model, reset,
 )
 from pdfmanager.ocr.preprocess import (

@@ -87,14 +87,23 @@ def _model_source(script):
     return _model_entry(f"{script}_PP-OCRv5_rec_mobile", f"{SCRIPT_NAMES.get(script, script)} reading")
 
 
+def _v6_tier_model_source(kind, tier="small"):
+    """(address, SHA-256) of a PP-OCRv6 ONNX detector ('det') or reader ('rec')
+    for ``tier`` in ('tiny', 'small', 'medium') from rapidocr's model table."""
+    if tier not in ("tiny", "small", "medium"):
+        raise core.PdfManagerError(f"unknown PP-OCRv6 tier {tier!r}")
+    label = f"PP-OCRv6 {tier} {'detection' if kind == 'det' else 'reading'}"
+    key = f"multi_PP-OCRv6_{kind}_{tier}"
+    return _model_entry(key, label, version="PP-OCRv6")
+
+
 def _best_model_source(kind):
     """(address, SHA-256) of the higher-accuracy ('best') detector or reader.
     Prefers PP-OCRv6 Medium (5.2x faster on CPU and +5% more accurate than
     PP-OCRv5 Server); falls back to PP-OCRv5 Server on older rapidocr builds."""
     label = "best-accuracy detection" if kind == "det" else "best-accuracy reading"
-    v6_key = "multi_PP-OCRv6_det_medium" if kind == "det" else "multi_PP-OCRv6_rec_medium"
     try:
-        return _model_entry(v6_key, label, version="PP-OCRv6")
+        return _v6_tier_model_source(kind, "medium")
     except core.PdfManagerError:
         v5_key = "ch_PP-OCRv5_det_server" if kind == "det" else "ch_PP-OCRv5_rec_server"
         return _model_entry(v5_key, label, version="PP-OCRv5")
@@ -249,6 +258,38 @@ def _language_model(script):
     return _ocr_attr("_download_model", _download_model)(f"{name} reading model", url, digest, _ocr_attr("models_dir", models_dir)() / f"{script}.onnx")
 
 
+def _v6_tier_model(kind, tier="small"):
+    """Fetch once and SHA-256 verify a PP-OCRv6 ONNX detector or reader for
+    ``tier`` in ('tiny', 'small', 'medium')."""
+    if tier == "medium":
+        return _best_model(kind)
+    url, digest = _ocr_attr("_v6_tier_model_source", _v6_tier_model_source)(kind, tier=tier)
+    filename = f"v6_{tier}_{kind}.onnx"
+    size_note = "about 2 MB" if tier == "tiny" else "about 8 MB"
+    label = f"PP-OCRv6 {tier} {'detection' if kind == 'det' else 'reading'} model"
+    return _ocr_attr("_download_model", _download_model)(
+        label,
+        url,
+        digest,
+        _ocr_attr("models_dir", models_dir)() / filename,
+        size_note=size_note,
+        fallback_hint="use the built-in Standard OCR weights",
+    )
+
+
+def _installed_standard_v6():
+    """If PP-OCRv6 Small (preferred) or PP-OCRv6 Tiny det+rec weights are
+    already installed in ``models_dir()``, return ``(tier, det_path, rec_path)``;
+    otherwise ``None``."""
+    base = Path(_ocr_attr("models_dir", models_dir)())
+    for tier in ("small", "tiny"):
+        det_p = base / f"v6_{tier}_det.onnx"
+        rec_p = base / f"v6_{tier}_rec.onnx"
+        if det_p.is_file() and det_p.stat().st_size > 0 and rec_p.is_file() and rec_p.stat().st_size > 0:
+            return tier, det_p, rec_p
+    return None
+
+
 def _best_model(kind):
     """The path of the higher-accuracy ('best') detector ('det') or reader ('rec'),
     fetched once and SHA-256 checked into _ocr_attr("models_dir", models_dir)()."""
@@ -308,6 +349,22 @@ def _engine(script=None, quality="standard", use_gpu=None, rec_model_path=None):
                         "Rec.model_type": ModelType.MEDIUM if use_v6_rec else ModelType.SERVER,
                         "Rec.model_path": str(rec_path),
                     })
+            elif quality == "standard" and script is None and not rec_key:
+                std_v6 = _installed_standard_v6()
+                if std_v6 is not None:
+                    from rapidocr import ModelType, OCRVersion
+
+                    tier, det_path, rec_path = std_v6
+                    mtype = getattr(ModelType, tier.upper(), None)
+                    if hasattr(OCRVersion, "PPOCRV6") and mtype is not None:
+                        params.update({
+                            "Det.ocr_version": OCRVersion.PPOCRV6,
+                            "Det.model_type": mtype,
+                            "Det.model_path": str(det_path),
+                            "Rec.ocr_version": OCRVersion.PPOCRV6,
+                            "Rec.model_type": mtype,
+                            "Rec.model_path": str(rec_path),
+                        })
             if script is not None:
                 from rapidocr import ModelType, OCRVersion
 

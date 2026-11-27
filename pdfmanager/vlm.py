@@ -1,8 +1,9 @@
 # Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Vision-LLM (VLM) OCR and visual page translation via OpenAI-compatible APIs.
 
-Works with local vision models (Ollama qwen2.5vl / gemma3 / llama3.2-vision,
-LM Studio) or any OpenAI-compatible BYOK endpoint configured in ZPDF Settings.
+Works with local vision/translation models (Ollama translategemma:4b /
+translategemma:12b / qwen2.5vl:7b / gemma3 / hunyuan-mt:7b, LM Studio) or any
+OpenAI-compatible BYOK endpoint configured in ZPDF Settings.
 Pure Python stdlib (urllib + base64); zero extra dependencies.
 """
 
@@ -13,6 +14,34 @@ import urllib.error
 import urllib.request
 
 from pdfmanager import core, update
+
+RECOMMENDED_LLM_PRESETS = (
+    {
+        "model": "translategemma:4b",
+        "label": "TranslateGemma 4B (fast multimodal translation, 55+ langs)",
+        "multimodal": True,
+    },
+    {
+        "model": "translategemma:12b",
+        "label": "TranslateGemma 12B (high-accuracy multimodal translation, 55+ langs)",
+        "multimodal": True,
+    },
+    {
+        "model": "qwen2.5vl:7b",
+        "label": "Qwen2.5-VL 7B (Vision-LLM OCR & manga translation)",
+        "multimodal": True,
+    },
+    {
+        "model": "qwen2.5:7b",
+        "label": "Qwen2.5 7B (general local LLM text translation)",
+        "multimodal": False,
+    },
+    {
+        "model": "hunyuan-mt:7b",
+        "label": "Hunyuan-MT 7B (dedicated local translation LLM)",
+        "multimodal": False,
+    },
+)
 
 _DEFAULT_OCR_PROMPT = (
     "Transcribe all readable text from this page image accurately. "
