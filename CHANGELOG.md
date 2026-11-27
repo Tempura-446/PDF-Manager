@@ -4,6 +4,18 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.94.0
+
+Zero-Cloud Neural Read-Aloud & Offline Audiobook (.wav) Export:
+
+- **Offline TTS & Audiobook Engine (`tts.py`).**
+  - Added `tts.extract_readable_sentences()`, `synthesize_wav()`, and `export_audiobook()` supporting **Kokoro-82M ONNX** (Apache-2.0 neural voices) with automatic fallback to native offline OS speech engines (Windows SAPI, macOS `say`, Linux `espeak-ng`) — zero cloud, zero network calls.
+  - Concatenates per-page spoken WAV segments with natural 0.45 s page pauses into a single 16-bit PCM `.wav` audiobook.
+- **Floating In-Reader Read-Aloud Player (`static/reader.js`, `static/reader.css`, `server/reader_routes.py`, `gui.py`).**
+  - Added **Read aloud (Audiobook player)** in the Reader menu with a floating bottom player bar (Play/Pause, Prev/Next sentence, `0.75×–2.0×` speed selector, automatic page turn) backed by `GET /api/tts/status`, `POST /api/tts/page-text`, and `POST /api/tts/speak`.
+- **Audiobook Export Tool & CLI (`server/operations/catalog.py`, `server/operations/dispatch.py`, `cli/parser.py`).**
+  - Added **Export Audiobook (.wav)** under the Convert tools group and `zpdf audiobook input.pdf -o book.wav [-p 1-5] [--speed 1.0] [--voice af_heart]`.
+
 ## 0.93.0
 
 Smart Redline Contract & Specification Diff:
