@@ -740,6 +740,55 @@ class ReaderRoutesMixin:
             "pages": len(image_items) if image_items else len(opened_ids),
         })
 
+    def _tts_status(self):
+        from pdfmanager import tts
+
+        return self._send(HTTPStatus.OK, tts.available_backends())
+
+    def _tts_page_text(self, body):
+        from pdfmanager import tts
+
+        ctype = self.headers.get("Content-Type", "")
+        if "multipart/form-data" in ctype:
+            fields, uploads = _parse_multipart(ctype, body)
+            file_id = str(fields.get("id") or "").strip()
+            page_num = max(1, int(fields.get("page") or 1))
+            password = fields.get("password") or None
+        else:
+            data = json.loads(body or b"{}")
+            uploads = []
+            file_id = str(data.get("id") or data.get("file_id") or "").strip()
+            page_num = max(1, int(data.get("page") or 1))
+            password = data.get("password") or None
+
+        opened_path = self.opened.get(file_id) if (file_id and self.opened is not None) else None
+        if not uploads and (opened_path is None or not opened_path.is_file()):
+            raise UserError("no file")
+        with tempfile.TemporaryDirectory(prefix="pdfm-tts-") as tmp:
+            if opened_path is not None and opened_path.is_file() and not uploads:
+                pdf_path = _resolve_opened_pdf(opened_path, tmp)
+            else:
+                pdf_path = Path(tmp) / "file.pdf"
+                pdf_path.write_bytes(uploads[0][2])
+            sents = tts.extract_readable_sentences(pdf_path, pages=str(page_num), password=password)
+        return self._send(HTTPStatus.OK, {"page": page_num, "sentences": [s["text"] for s in sents]})
+
+    def _tts_speak(self, body):
+        from pdfmanager import tts
+
+        data = json.loads(body or b"{}")
+        text = str(data.get("text") or "").strip()
+        if not text:
+            raise UserError("no text to speak")
+        voice = str(data.get("voice") or "af_heart").strip()
+        speed = float(data.get("speed") or 1.0)
+        backend = str(data.get("backend") or "auto").strip()
+        with tempfile.TemporaryDirectory(prefix="pdfm-speak-") as tmp:
+            out_wav = Path(tmp) / "speech.wav"
+            used = tts.synthesize_wav(text[:4000], out_wav, voice=voice, speed=speed, backend=backend)
+            raw = out_wav.read_bytes()
+        return self._send(HTTPStatus.OK, raw, "audio/wav", {"X-Pdfm-Tts-Backend": used})
+
     def _library_neighbors(self, body):
         from pdfmanager import bookshelf
 

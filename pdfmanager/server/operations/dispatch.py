@@ -625,6 +625,20 @@ def _run_file_op(op, src, out_dir, opts, password, extra_files, notes=None):
             f"{src.name}: translated {res['total_pages']} manga page{'s' if res['total_pages'] != 1 else ''} "
             f"({source_lang} → {target_lang}, .{res['export_format']})"
         )
+    elif op == "audiobook":
+        from pdfmanager import tts
+
+        out = out_dir / f"{src.stem}.wav"
+        res = tts.export_audiobook(
+            src, out,
+            pages=str(opts.get("pages") or "").strip() or None,
+            voice=str(opts.get("voice") or "af_heart"),
+            speed=float(opts.get("speed") or 1.0),
+            password=password,
+        )
+        notes.append(
+            f"{src.name}: exported {res['pages']} page(s) ({res['duration_sec']}s audio, {res['backend']})"
+        )
     # -- end of pptx and html --
     elif op == "from-office":
         out = out_dir / f"{src.stem}.pdf"

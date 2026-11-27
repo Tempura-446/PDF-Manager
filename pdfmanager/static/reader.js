@@ -521,6 +521,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       this.#menuItem("print", "Print preflight check…", () => this.checkPreflight()),
       this.#menuItem("edittext", "Translate this page…", () => this.translateCurrentPage()),
       this.#menuItem("edittext", "Vision-LLM OCR / Translate page…", () => this.openVlmPageTool()),
+      this.#menuItem("book", "Read aloud (Audiobook player)", () => this.toggleReadAloud(), !!this._ttsBar && !this._ttsBar.hidden),
       this.#menuItem("edittext", "Manga Lens (live page overlay & bubble editor)", () => this.openMangaLens(), !!this.mangaLens?.active),
       this.#menuItem("split", "Live bilingual reading…", () => this.openSplitView("__translate__")),
       this.#menuItem("command", "Local AI assistant (Ask / Summarize / Extract)…", () => openAiAssistant(this, "ask")),
@@ -1763,6 +1764,177 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
         await navigator.clipboard.writeText(out.value);
         this.toast("Copied Vision-LLM output.");
       } catch (_) {}
+    }
+  }
+
+  toggleReadAloud() {
+    if (!this.doc) return;
+    if (this._ttsBar && !this._ttsBar.hidden) {
+      this._stopReadAloud();
+      this._ttsBar.hidden = true;
+      return;
+    }
+    if (!this._ttsBar) {
+      this._ttsState = { playing: false, sentences: [], idx: 0, page: 1, speed: Number(store.get("pdfm-tts-speed", 1.0)) || 1.0, autoTurn: true, audio: null, audioUrl: null };
+      const playBtn = el("button", { type: "button", class: "rd-btn", onclick: () => {
+        if (this._ttsState.playing) this._stopReadAloud();
+        else this._startReadAloud();
+      } }, "Play");
+      const prevBtn = el("button", { type: "button", class: "rd-btn", title: "Previous sentence", onclick: () => {
+        if (!this._ttsState.sentences.length) return;
+        this._ttsState.idx = Math.max(0, this._ttsState.idx - 1);
+        if (this._ttsState.playing) { this._stopSpeechOnly(); this._speakCurrent(); }
+        else this._syncTtsLabel();
+      } }, "‹");
+      const nextBtn = el("button", { type: "button", class: "rd-btn", title: "Next sentence", onclick: () => {
+        if (!this._ttsState.sentences.length) return;
+        this._ttsState.idx = Math.min(this._ttsState.sentences.length - 1, this._ttsState.idx + 1);
+        if (this._ttsState.playing) { this._stopSpeechOnly(); this._speakCurrent(); }
+        else this._syncTtsLabel();
+      } }, "›");
+      const speedSel = el("select", { class: "rd-tts-speed", "aria-label": "Reading speed" },
+        ...[0.75, 1.0, 1.25, 1.5, 1.75, 2.0].map((v) => el("option", { value: String(v) }, `${v}×`)),
+      );
+      speedSel.value = String(this._ttsState.speed);
+      speedSel.addEventListener("change", () => {
+        this._ttsState.speed = Number(speedSel.value) || 1.0;
+        store.set("pdfm-tts-speed", this._ttsState.speed);
+      });
+      const statusEl = el("span", { class: "rd-tts-status" }, "Ready");
+      const closeBtn = el("button", { type: "button", class: "rd-btn", onclick: () => {
+        this._stopReadAloud();
+        this._ttsBar.hidden = true;
+      } }, "×");
+      this._ttsUi = { playBtn, statusEl };
+      this._ttsBar = el("div", { class: "rd-tts-bar", role: "region", "aria-label": "Read aloud player" },
+        playBtn, prevBtn, nextBtn, speedSel, statusEl, closeBtn,
+      );
+      this.root.append(this._ttsBar);
+    }
+    this._ttsBar.hidden = false;
+    this._startReadAloud();
+  }
+
+  _stopSpeechOnly() {
+    if (window.speechSynthesis) {
+      try { window.speechSynthesis.cancel(); } catch (_) {}
+    }
+    if (this._ttsState?.audio) {
+      try { this._ttsState.audio.pause(); } catch (_) {}
+      this._ttsState.audio = null;
+    }
+    if (this._ttsState?.audioUrl) {
+      try { URL.revokeObjectURL(this._ttsState.audioUrl); } catch (_) {}
+      this._ttsState.audioUrl = null;
+    }
+  }
+
+  _stopReadAloud() {
+    if (!this._ttsState) return;
+    this._ttsState.playing = false;
+    this._stopSpeechOnly();
+    if (this._ttsUi) this._ttsUi.playBtn.textContent = "Play";
+  }
+
+  _syncTtsLabel() {
+    if (!this._ttsUi || !this._ttsState) return;
+    const n = this._ttsState.sentences.length;
+    this._ttsUi.statusEl.textContent = n
+      ? `Page ${this._ttsState.page} · ${this._ttsState.idx + 1}/${n}`
+      : `Page ${this._ttsState.page} · No text`;
+  }
+
+  async _startReadAloud() {
+    if (!this.doc || !this._ttsState) return;
+    const pageNum = this.currentPage || 1;
+    this._ttsState.playing = true;
+    this._ttsState.page = pageNum;
+    if (this._ttsUi) {
+      this._ttsUi.playBtn.textContent = "Pause";
+      this._ttsUi.statusEl.textContent = `Loading page ${pageNum}…`;
+    }
+    try {
+      const tab = this.activeTab;
+      let res;
+      if (tab?.fileId) {
+        res = await fetch("/api/tts/page-text", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(this.token ? { "X-Pdfm-Token": this.token } : {}) },
+          body: JSON.stringify({ id: tab.fileId, page: pageNum, password: tab.password || "" }),
+        });
+      } else {
+        const form = new FormData();
+        const bytes = await this._bytes();
+        form.append("file", new Blob([bytes], { type: "application/pdf" }), tab?.name || "file.pdf");
+        form.append("page", String(pageNum));
+        if (tab?.password) form.append("password", tab.password);
+        res = await fetch("/api/tts/page-text", {
+          method: "POST",
+          headers: this.token ? { "X-Pdfm-Token": this.token } : {},
+          body: form,
+        });
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      this._ttsState.sentences = data.sentences || [];
+      this._ttsState.idx = 0;
+      if (!this._ttsState.sentences.length) {
+        this._stopReadAloud();
+        this._syncTtsLabel();
+        this.toast("No selectable text on this page to read aloud.");
+        return;
+      }
+      this._speakCurrent();
+    } catch (err) {
+      this._stopReadAloud();
+      this.toast(`Read aloud failed: ${err?.message || err}`);
+    }
+  }
+
+  _speakCurrent() {
+    if (!this._ttsState?.playing) return;
+    const sents = this._ttsState.sentences;
+    if (this._ttsState.idx >= sents.length) {
+      const total = this.pdfViewer?.pagesCount || this.doc?.numPages || 1;
+      if (this._ttsState.autoTurn && this._ttsState.page < total) {
+        this.goToPage(this._ttsState.page + 1);
+        setTimeout(() => { if (this._ttsState?.playing) this._startReadAloud(); }, 350);
+        return;
+      }
+      this._stopReadAloud();
+      return;
+    }
+    this._syncTtsLabel();
+    const text = sents[this._ttsState.idx];
+    const advance = () => {
+      if (!this._ttsState?.playing) return;
+      this._ttsState.idx += 1;
+      this._speakCurrent();
+    };
+    if (window.speechSynthesis) {
+      const utt = new SpeechSynthesisUtterance(text);
+      utt.rate = this._ttsState.speed || 1.0;
+      utt.onend = advance;
+      utt.onerror = () => this._stopReadAloud();
+      window.speechSynthesis.speak(utt);
+    } else {
+      fetch("/api/tts/speak", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(this.token ? { "X-Pdfm-Token": this.token } : {}) },
+        body: JSON.stringify({ text, speed: this._ttsState.speed || 1.0 }),
+      })
+        .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`HTTP ${r.status}`))))
+        .then((blob) => {
+          if (!this._ttsState?.playing) return;
+          const url = URL.createObjectURL(blob);
+          this._ttsState.audioUrl = url;
+          const audio = new Audio(url);
+          this._ttsState.audio = audio;
+          audio.onended = () => { URL.revokeObjectURL(url); this._ttsState.audioUrl = null; advance(); };
+          audio.onerror = () => this._stopReadAloud();
+          audio.play().catch(() => this._stopReadAloud());
+        })
+        .catch(() => this._stopReadAloud());
     }
   }
 

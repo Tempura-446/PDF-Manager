@@ -596,6 +596,33 @@ def build_parser():
     sp.add_argument("--password", help=f"password for encrypted PDFs (or set {PASSWORD_ENV})")
     sp.add_argument("--json", action="store_true", help="print JSON")
 
+    def cmd_audiobook(a):
+        from pdfmanager import tts
+
+        out = Path(a.output) if a.output else Path(a.input).with_suffix(".wav")
+        res = tts.export_audiobook(
+            a.input, out,
+            pages=a.pages,
+            voice=a.voice,
+            speed=a.speed,
+            password=a.password,
+        )
+        if a.json:
+            print(json.dumps(res, indent=2, ensure_ascii=False))
+        else:
+            print(f"Exported {res['pages']} page(s) ({res['duration_sec']}s, {res['backend']}) → {res['output']}")
+        return 0
+
+    sp = other("audiobook", cmd_audiobook,
+               "convert a PDF or page range into an offline .wav audiobook (Kokoro ONNX or OS TTS)")
+    sp.add_argument("input", metavar="input.pdf", help="PDF to convert to speech")
+    sp.add_argument("-o", "--output", help="output .wav path")
+    sp.add_argument("-p", "--pages", help="page range (e.g. 1-5)")
+    sp.add_argument("--speed", type=float, default=1.0, help="speech speed 0.5-2.5 (default: 1.0)")
+    sp.add_argument("--voice", default="af_heart", help="Kokoro voice id (default: af_heart)")
+    sp.add_argument("--password", help=f"password for encrypted PDFs (or set {PASSWORD_ENV})")
+    sp.add_argument("--json", action="store_true", help="print JSON")
+
     sp = other("cbz-to-pdf", cmd_cbz_to_pdf,
                "convert a .cbz comic/manga archive to a PDF (natural page sort + optional RTL viewer)")
     sp.add_argument("input", metavar="input.cbz", help="CBZ archive to convert")

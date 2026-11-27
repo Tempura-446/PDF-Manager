@@ -730,6 +730,18 @@ OPERATIONS = [
                 _f("export_format", "Output format", "select", "cbz",
                    choices=[["cbz", "Comic / Manga archive (.cbz)"], ["pdf", "PDF document (.pdf)"]]),
                 _f("manga_ai", "Enhanced Manga AI (Baberu OCR v1.2 + LaMa inpainting)", "check", True)]},
+    {"id": "audiobook", "group": "Convert", "label": "Export Audiobook (.wav)", "files": "pdf",
+     "action": "Export Audio",
+     "help": "Convert a PDF or page range into an offline spoken .wav audiobook using Kokoro-82M ONNX (if installed) "
+             "or your system's built-in offline speech engine — zero cloud.",
+     "fields": [_f("pages", "Pages (optional)", "text", "", placeholder="All pages, or e.g. 1-5"),
+                _f("speed", "Reading speed", "select", "1.0",
+                   choices=[["0.8", "0.8× (Slower)"], ["1.0", "1.0× (Normal)"],
+                            ["1.25", "1.25× (Brisk)"], ["1.5", "1.5× (Fast)"]]),
+                _f("voice", "Voice (Kokoro ONNX)", "select", "af_heart",
+                   choices=[["af_heart", "Heart (English Female)"], ["af_bella", "Bella (English Female)"],
+                            ["am_adam", "Adam (English Male)"], ["bf_emma", "Emma (British Female)"],
+                            ["jf_alpha", "Alpha (Japanese)"], ["zf_xiaobei", "Xiaobei (Chinese)"]])]},
     # Quantities: a schedule of what was measured on a drawing (pdfmanager/quantities.py)
     {"id": "quantities", "group": "Convert", "label": "Quantities from a drawing", "files": "pdf",
      "help": "A schedule (takeoff) of everything measured on a drawing: the dimensions and measurements "

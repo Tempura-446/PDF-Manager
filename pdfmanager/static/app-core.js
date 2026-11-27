@@ -76,6 +76,9 @@ const ICONS = {
   "to-md": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M8 16v-5l2 2.5L12 11v5M15 11v5m0 0-1.5-1.5M15 16l1.5-1.5"/>',
   "pdf-to-cbz": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M3 11h6M13 9h5M13 13h4"/>',
   translate: '<path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1"/><path d="M22 22l-5-10-5 10M14 18h6"/>',
+  "manga-batch": '<rect x="3" y="4" width="14" height="16" rx="2"/><path d="M7 8h6M7 12h4M17 7h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9"/>',
+  redline: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h6M7 17h8"/>',
+  audiobook: '<path d="M4 12a8 8 0 0 1 16 0v5a2 2 0 0 1-2 2h-1v-6h3M4 12v5a2 2 0 0 0 2 2h1v-6H4"/>',
   /* -- end of pptx and html -- */
   "from-office": '<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><path d="M17 14v6M14 17l3 3 3-3"/>',
   "to-dxf": '<path d="M3 20h18M4 16l5-10 5 6 4-8 2 12"/>',
