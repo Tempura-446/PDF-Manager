@@ -255,6 +255,8 @@ class ReaderRoutesMixin:
         path = self.opened.get(key) if self.opened is not None else None
         if path is None:
             raise UserError("this file can't be saved in place; use Save as")
+        if path.suffix.lower() != ".pdf":
+            raise UserError(f"{path.name} is not a PDF archive; use Save as to export your edits as a PDF")
         if b"%PDF" not in body[:1024]:
             raise UserError("not a PDF")
         expected = self.headers.get("X-Pdfm-Stamp", "")

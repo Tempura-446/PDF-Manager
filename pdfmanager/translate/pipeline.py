@@ -124,7 +124,7 @@ def translate_pdf(
             src_hint = None if want_auto else i18n.normalize_code(src_lang)
             if manga_ai:
                 comps = ["detector", "inpaint"]
-                if not src_hint or src_hint == "ja" or str(src_hint).startswith("ja-"):
+                if not src_hint or str(src_hint).lower().startswith(("ja", "zh", "en")):
                     comps.append("ocr")
                 _manga_ai.ensure_manga_ai(tuple(comps), download=True)
             reading_dir = _manga.default_reading_dir(src_hint)

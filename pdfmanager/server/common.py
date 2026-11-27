@@ -629,11 +629,14 @@ class HandlerBase(BaseHTTPRequestHandler):
         elif isinstance(body, str):
             body = body.encode()
         out_headers = dict(headers) if headers else None
+        has_ce = bool(out_headers and any(k.lower() == "content-encoding" for k in out_headers))
+        ae = (self.headers.get("Accept-Encoding", "") if hasattr(self, "headers") and self.headers else "").lower()
+        accepts_gzip = "gzip" in ae and "gzip;q=0" not in ae.replace(" ", "")
         if (
             len(body) >= 4096
             and (ctype.startswith("application/json") or ctype.startswith("text/"))
-            and (not out_headers or "Content-Encoding" not in out_headers)
-            and "gzip" in (self.headers.get("Accept-Encoding", "") if hasattr(self, "headers") and self.headers else "").lower()
+            and not has_ce
+            and accepts_gzip
         ):
             import gzip
 
@@ -642,7 +645,12 @@ class HandlerBase(BaseHTTPRequestHandler):
                 body = compressed
                 out_headers = dict(out_headers or {})
                 out_headers["Content-Encoding"] = "gzip"
-                out_headers["Vary"] = "Accept-Encoding"
+                vary_key = next((k for k in out_headers if k.lower() == "vary"), None)
+                if vary_key:
+                    if "accept-encoding" not in str(out_headers[vary_key]).lower():
+                        out_headers[vary_key] = f"{out_headers[vary_key]}, Accept-Encoding"
+                else:
+                    out_headers["Vary"] = "Accept-Encoding"
         self._start(status, ctype, len(body), out_headers, cache)
         self.wfile.write(body)
 
@@ -660,8 +668,10 @@ class HandlerBase(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(length))
         # Static files may be cached but are checked (cheaply, by ETag) on every
-        # load, so an updated app never runs old code.
-        self.send_header("Cache-Control", "no-cache" if cache else "no-store")
+        # load, so an updated app never runs old code. Respect caller's Cache-Control.
+        has_cc = any(k.lower() == "cache-control" for k in (headers or {}))
+        if not has_cc:
+            self.send_header("Cache-Control", "no-cache" if cache else "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         for k, v in (headers or {}).items():

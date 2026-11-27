@@ -707,9 +707,9 @@ OPERATIONS = [
                 _f("pages", "Pages (optional)", "text", "",
                    placeholder="All pages, or e.g. 1-5, 8"),
                 _f("auto_ocr", "Auto-OCR scanned pages (if no selectable text)", "check", False),
-                _f("manga_ai", "Enhanced Manga AI (neural bubbles, manga-ocr, LaMa inpainting)", "check", False,
-                   hint="Manga mode only: downloads optional Apache-2.0 ONNX models once for borderless text, "
-                        "Japanese manga fonts, and screentone inpainting.")]},
+                _f("manga_ai", "Enhanced Manga AI (neural bubbles, Baberu OCR JA/ZH/EN, LaMa inpainting)", "check", False,
+                   hint="Manga mode only: downloads optional Apache-2.0 ONNX models once (~193 MB) for borderless text, "
+                        "Japanese/Chinese/English manga fonts & SFX, and screentone inpainting.")]},
     # Quantities: a schedule of what was measured on a drawing (pdfmanager/quantities.py)
     {"id": "quantities", "group": "Convert", "label": "Quantities from a drawing", "files": "pdf",
      "help": "A schedule (takeoff) of everything measured on a drawing: the dimensions and measurements "

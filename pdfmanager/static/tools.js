@@ -327,10 +327,20 @@ async function renderHome() {
   const shelfFilter = el("input", { type: "search", class: "shelf-filter", placeholder: "Filter library…", "aria-label": "Filter bookshelf" });
   const addFolderBtn = el("button", { type: "button", class: "btn secondary pb-small" }, "+ Add folder");
   const shelfFoldersBar = el("div", { class: "shelf-folders" });
+  let shelfSeq = 0;
+  let shelfBlobUrls = [];
+  const revokeShelfBlobs = () => {
+    for (const u of shelfBlobUrls) {
+      try { URL.revokeObjectURL(u); } catch {}
+    }
+    shelfBlobUrls = [];
+  };
   const refreshShelf = async (q = "") => {
+    const seq = ++shelfSeq;
     try {
       const data = await (await api(`/api/library${q ? `?q=${encodeURIComponent(q)}` : ""}`)).json();
-      if (!inHome()) return;
+      if (seq !== shelfSeq || !inHome()) return;
+      revokeShelfBlobs();
       const folders = data.folders || [];
       shelfFoldersBar.replaceChildren(...folders.map((f) => {
         const chip = el("span", { class: "shelf-chip", title: f }, f.split(/[\\/]/).filter(Boolean).pop() || f);
@@ -352,8 +362,16 @@ async function renderHome() {
           class: "shelf-cover",
           alt: item.stem,
           loading: "lazy",
-          src: `/api/library/thumb/${encodeURIComponent(item.id)}`,
         });
+        api(`/api/library/thumb/${encodeURIComponent(item.id)}`)
+          .then((r) => (r.ok ? r.blob() : null))
+          .then((blob) => {
+            if (!blob || seq !== shelfSeq) return;
+            const objUrl = URL.createObjectURL(blob);
+            shelfBlobUrls.push(objUrl);
+            img.src = objUrl;
+          })
+          .catch(() => {});
         const card = el("button", {
           type: "button",
           class: "shelf-card",

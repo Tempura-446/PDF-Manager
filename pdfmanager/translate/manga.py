@@ -883,8 +883,7 @@ def translate_manga_page_bubbles(
     for interactive Reader overlay display and editing.
     """
     import pypdfium2 as pdfium
-    from pdfmanager import core
-    from pdfmanager.translate import engines
+    from pdfmanager import core, progress
 
     src = str(pdf_path)
     p_idx = max(0, int(page_num) - 1)
@@ -926,6 +925,7 @@ def translate_manga_page_bubbles(
         )
         extracted = []
         for b in raw_bubbles:
+            progress.check()
             txt = extract_bubble_text(
                 pil_img, b, src_lang,
                 ocr_fn=ocr_fn, plumber_page=plumber_page, reading_order=rdir, use_ai=bool(use_ai),
@@ -951,10 +951,17 @@ def translate_manga_page_bubbles(
         }
 
     originals = [t for _, t in extracted]
+    effective_src = src_lang
+    if not effective_src or effective_src == "auto":
+        from pdfmanager.translate import models as _tmodels
+
+        effective_src = _tmodels.detect_language("\n".join(originals)) or "ja"
     if translate_fn is not None:
-        translated = list(translate_fn(originals, src_lang, dst_lang))
+        translated = list(translate_fn(originals, effective_src, dst_lang))
     else:
-        translated = engines.translate_batch(originals, src_lang, dst_lang)
+        from pdfmanager.translate import text as _ttext
+
+        translated = list(_ttext.translate_texts(originals, effective_src, dst_lang))
 
     out_bubbles = []
     for idx, ((b, orig), trans) in enumerate(zip(extracted, translated)):

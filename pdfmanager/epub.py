@@ -63,18 +63,23 @@ class _ChapterParser(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         t = tag.lower()
+        if t == "title":
+            self._in_title = True
+            return
         if t in self.SKIP_TAGS:
             self._skip_depth += 1
             return
         if self._skip_depth:
             return
-        if t == "title":
-            self._in_title = True
-            return
-        if t == "img":
+        if t in ("img", "image"):
             self._flush()
-            attr_map = dict(attrs)
-            src = attr_map.get("src") or ""
+            attr_map = {k.lower(): v for k, v in attrs}
+            src = (
+                attr_map.get("src")
+                or attr_map.get("xlink:href")
+                or attr_map.get("href")
+                or ""
+            )
             if src:
                 self.blocks.append(("img", src))
             return
@@ -87,22 +92,22 @@ class _ChapterParser(HTMLParser):
 
     def handle_endtag(self, tag):
         t = tag.lower()
+        if t == "title":
+            self._in_title = False
+            return
         if t in self.SKIP_TAGS:
             self._skip_depth = max(0, self._skip_depth - 1)
             return
         if self._skip_depth:
             return
-        if t == "title":
-            self._in_title = False
-            return
         if t in self.BLOCK_TAGS:
             self._flush()
 
     def handle_data(self, data):
-        if self._skip_depth:
-            return
         if self._in_title:
             self.title += data
+            return
+        if self._skip_depth:
             return
         self._buf.append(data)
 
@@ -167,16 +172,25 @@ def epub_to_pdf(epub_path, output_pdf):
             opf_dir = posixpath.dirname(opf_path)
             try:
                 opf_root = ET.fromstring(zf.read(opf_path))
+                import urllib.parse
+
                 manifest = {}
                 for elem in opf_root.iter():
                     lt = _local_tag(elem.tag)
                     if lt == "title" and (elem.text or "").strip() and book_title == src.stem:
                         book_title = elem.text.strip()
+                    elif lt == "language" and (elem.text or "").strip():
+                        lang_code = elem.text.strip().lower().split("-")[0]
+                        if lang_code in ("ar", "he", "iw", "fa", "ur"):
+                            rtl = True
                     elif lt == "item":
                         iid = elem.attrib.get("id")
                         href = elem.attrib.get("href")
                         if iid and href:
-                            joined = posixpath.normpath(posixpath.join(opf_dir, href)) if opf_dir else href
+                            clean_href = urllib.parse.unquote(href.split("#", 1)[0].split("?", 1)[0])
+                            joined = posixpath.normpath(posixpath.join(opf_dir, clean_href)) if opf_dir else posixpath.normpath(clean_href)
+                            if joined.startswith("./"):
+                                joined = joined[2:]
                             manifest[iid] = joined
                     elif lt == "spine":
                         if (elem.attrib.get("page-progression-direction") or "").lower() == "rtl":
@@ -203,14 +217,14 @@ def epub_to_pdf(epub_path, output_pdf):
         max_img_h = page_h - 2 * margin - 40.0
 
         story = []
-        chapter_bookmarks = []  # (title, flowable_index)
+        chapter_bookmarks = []  # (key, title)
         page_marks = {}
 
         class _BookmarkDoc(SimpleDocTemplate):
             def afterFlowable(self, flowable):
-                label = getattr(flowable, "_epub_chapter", None)
-                if label:
-                    page_marks.setdefault(label, self.page)
+                key = getattr(flowable, "_epub_chapter", None)
+                if key is not None:
+                    page_marks.setdefault(key, self.page)
 
         buf = io.BytesIO()
         doc = _BookmarkDoc(
@@ -223,6 +237,9 @@ def epub_to_pdf(epub_path, output_pdf):
             title=book_title,
         )
 
+        import urllib.parse
+
+        _XML_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
         total = len(spine_paths)
         for idx, ch_path in enumerate(spine_paths):
             progress.check()
@@ -245,7 +262,10 @@ def epub_to_pdf(epub_path, output_pdf):
 
             for tag, content in parser.blocks:
                 if tag == "img":
-                    img_rel = posixpath.normpath(posixpath.join(ch_dir, content)) if ch_dir else content
+                    clean_src = urllib.parse.unquote(content.split("#", 1)[0].split("?", 1)[0])
+                    img_rel = posixpath.normpath(posixpath.join(ch_dir, clean_src)) if ch_dir else posixpath.normpath(clean_src)
+                    if img_rel.startswith("./"):
+                        img_rel = img_rel[2:]
                     if img_rel not in name_set:
                         continue
                     try:
@@ -253,13 +273,19 @@ def epub_to_pdf(epub_path, output_pdf):
                         with PilImage.open(io.BytesIO(img_raw)) as pil:
                             iw, ih = pil.size
                             out_buf = io.BytesIO()
-                            pil.convert("RGB").save(out_buf, format="JPEG", quality=88)
+                            if pil.mode in ("RGBA", "LA", "PA"):
+                                rgba = pil.convert("RGBA")
+                                bg = PilImage.new("RGB", rgba.size, (255, 255, 255))
+                                bg.paste(rgba, mask=rgba.split()[3])
+                                bg.save(out_buf, format="JPEG", quality=88)
+                            else:
+                                pil.convert("RGB").save(out_buf, format="JPEG", quality=88)
                             out_buf.seek(0)
                         scale = min(1.0, max_img_w / max(1.0, float(iw)), max_img_h / max(1.0, float(ih)))
                         rl_img = RlImage(out_buf, width=iw * scale, height=ih * scale)
                         if not marked_chapter:
-                            rl_img._epub_chapter = ch_title
-                            chapter_bookmarks.append(ch_title)
+                            rl_img._epub_chapter = idx
+                            chapter_bookmarks.append((idx, ch_title))
                             marked_chapter = True
                         story.append(rl_img)
                         story.append(Spacer(1, 8))
@@ -282,10 +308,11 @@ def epub_to_pdf(epub_path, output_pdf):
                     leftIndent=18 if tag in ("blockquote", "li") else 0,
                 )
                 prefix = "• " if tag == "li" else ""
-                para = Paragraph(prefix + _xml_escape(content), style)
+                safe_text = _XML_CTRL_RE.sub("", content)
+                para = Paragraph(prefix + _xml_escape(safe_text), style)
                 if not marked_chapter:
-                    para._epub_chapter = ch_title
-                    chapter_bookmarks.append(ch_title)
+                    para._epub_chapter = idx
+                    chapter_bookmarks.append((idx, ch_title))
                     marked_chapter = True
                 story.append(para)
 
@@ -299,8 +326,8 @@ def epub_to_pdf(epub_path, output_pdf):
     writer = PdfWriter()
     for page in reader.pages:
         writer.add_page(page)
-    for title in chapter_bookmarks:
-        pno = page_marks.get(title)
+    for key, title in chapter_bookmarks:
+        pno = page_marks.get(key)
         if pno and 1 <= pno <= len(writer.pages):
             writer.add_outline_item(title=title, page_number=pno - 1)
     if rtl:

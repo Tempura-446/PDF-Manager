@@ -11,6 +11,7 @@ from pathlib import Path
 from pdfmanager import core
 
 _LOG = logging.getLogger("zpdf")
+_PACK_LOCKS = {}
 
 _PACK_DEFS = (
     {
@@ -126,39 +127,59 @@ def list_models():
 
 def download_model(pack_id):
     """Download the requested offline AI model pack and return its updated status."""
-    if pack_id == "ppocr_v6":
-        from pdfmanager.ocr import models as ocr_models
+    import threading
 
-        ocr_models._best_model("det")
-        ocr_models._best_model("rec")
-    elif pack_id in _OCR_V6_TIERS:
-        from pdfmanager.ocr import models as ocr_models
+    lock = _PACK_LOCKS.setdefault(pack_id, threading.Lock())
+    with lock:
+        if pack_id == "ppocr_v6":
+            from pdfmanager.ocr import models as ocr_models
 
-        tier = _OCR_V6_TIERS[pack_id]
-        ocr_models._v6_tier_model("det", tier=tier)
-        ocr_models._v6_tier_model("rec", tier=tier)
-        ocr_models.reset()
-    elif pack_id in _MANGA_MAP:
-        from pdfmanager.translate import manga_ai
+            ocr_models._best_model("det")
+            ocr_models._best_model("rec")
+            ocr_models.reset()
+        elif pack_id in _OCR_V6_TIERS:
+            from pdfmanager.ocr import models as ocr_models
 
-        comp = _MANGA_MAP[pack_id]
-        manga_ai.ensure_manga_ai(components=(comp,), download=True)
-    else:
-        raise core.PdfManagerError(f"unknown AI model pack: {pack_id!r}")
+            tier = _OCR_V6_TIERS[pack_id]
+            ocr_models._v6_tier_model("det", tier=tier)
+            ocr_models._v6_tier_model("rec", tier=tier)
+            ocr_models.reset()
+        elif pack_id in _MANGA_MAP:
+            from pdfmanager.translate import manga_ai
+
+            comp = _MANGA_MAP[pack_id]
+            manga_ai.ensure_manga_ai(components=(comp,), download=True)
+            manga_ai.reset(comp)
+        else:
+            raise core.PdfManagerError(f"unknown AI model pack: {pack_id!r}")
     return {"downloaded": pack_id, "models": list_models()}
 
 
 def delete_model(pack_id):
     """Delete cached ONNX weights for ``pack_id`` and return freed bytes + updated list."""
     paths = list(_pack_paths(pack_id))
-    if pack_id == "manga_ocr":
-        from pdfmanager.translate import manga_ai
+    # Release open ONNX Runtime sessions BEFORE unlinking so RAM is freed and
+    # Windows does not hit PermissionError on mapped model files.
+    if pack_id in _MANGA_MAP:
+        try:
+            from pdfmanager.translate import manga_ai
 
-        legacy_root = manga_ai.manga_ai_dir() / "ocr"
-        for legacy_name in ("encoder_model.onnx", "decoder_model.onnx", "vocab.txt", "vision_fp16.onnx"):
-            cand = legacy_root / legacy_name
-            if cand not in paths:
-                paths.append(cand)
+            manga_ai.reset(_MANGA_MAP[pack_id])
+            if pack_id == "manga_ocr":
+                legacy_root = manga_ai.manga_ai_dir() / "ocr"
+                for legacy_name in ("encoder_model.onnx", "decoder_model.onnx", "vocab.txt", "vision_fp16.onnx"):
+                    cand = legacy_root / legacy_name
+                    if cand not in paths:
+                        paths.append(cand)
+        except Exception as exc:
+            _LOG.debug("models_manager.reset manga_ai: %s", exc)
+    elif pack_id in _OCR_V6_TIERS:
+        try:
+            from pdfmanager.ocr import models as ocr_models
+
+            ocr_models.reset()
+        except Exception as exc:
+            _LOG.debug("models_manager.reset ocr: %s", exc)
     freed = 0
     for p in paths:
         path = Path(p)
@@ -168,11 +189,4 @@ def delete_model(pack_id):
                 path.unlink()
             except OSError as exc:
                 _LOG.debug("models_manager.delete_model %s: %s", path, exc)
-    if pack_id in _OCR_V6_TIERS:
-        try:
-            from pdfmanager.ocr import models as ocr_models
-
-            ocr_models.reset()
-        except Exception as exc:
-            _LOG.debug("models_manager.reset ocr: %s", exc)
     return {"deleted": pack_id, "freed_bytes": freed, "models": list_models()}

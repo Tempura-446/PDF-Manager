@@ -101,7 +101,7 @@ export class MangaLens {
       this.useAi = this.aiChk.checked;
       store.set("pdfm-lens-ai", this.useAi);
     });
-    const aiLbl = el("label", { class: "rd-lens-chk", title: "Use Manga AI Pack (neural detector, manga-ocr, LaMa)" },
+    const aiLbl = el("label", { class: "rd-lens-chk", title: "Use Manga AI Pack (neural detector, Baberu OCR JA/ZH/EN, LaMa)" },
       this.aiChk, el("span", {}, "Manga AI"));
 
     this.statusEl = el("span", { class: "rd-lens-status" }, "Ready");
@@ -173,6 +173,7 @@ export class MangaLens {
     const r = this.reader;
     const tab = r.activeTab;
     if (!tab?.doc) return;
+    const seq = (this._reqSeq = (this._reqSeq || 0) + 1);
     const pageNum = r.currentPage || 1;
     this.pageNum = pageNum;
     this.selectedId = null;
@@ -200,8 +201,15 @@ export class MangaLens {
         headers: r.token ? { "X-Pdfm-Token": r.token } : {},
         body: fd,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || res.statusText);
+      if (!this.active || seq !== this._reqSeq) return;
+      let data = {};
+      try {
+        data = await res.json();
+      } catch {
+        if (!res.ok) throw new Error(res.statusText || `HTTP ${res.status}`);
+        throw new Error("Invalid response from server");
+      }
+      if (!res.ok) throw new Error(data.error || res.statusText || `HTTP ${res.status}`);
 
       this.bubbles = (data.bubbles || []).map((b, i) => ({ ...b, id: b.id ?? i }));
       this.applyBtn.disabled = this.bubbles.length === 0;
@@ -210,10 +218,11 @@ export class MangaLens {
         : "No speech bubbles found on this page.";
       this.#renderOverlay();
     } catch (err) {
+      if (!this.active || seq !== this._reqSeq) return;
       this.statusEl.textContent = err?.message || String(err);
       r.toast(`Manga Lens: ${err?.message || err}`, 5000);
     } finally {
-      if (this.runBtn) this.runBtn.disabled = false;
+      if (this.runBtn && seq === this._reqSeq) this.runBtn.disabled = false;
     }
   }
 
@@ -329,9 +338,11 @@ export class MangaLens {
           const onUp = () => {
             window.removeEventListener("pointermove", onMove);
             window.removeEventListener("pointerup", onUp);
+            window.removeEventListener("pointercancel", onUp);
           };
           window.addEventListener("pointermove", onMove);
           window.addEventListener("pointerup", onUp);
+          window.addEventListener("pointercancel", onUp);
         });
 
         // Bottom-right resize handle
@@ -353,9 +364,11 @@ export class MangaLens {
           const onUp = () => {
             window.removeEventListener("pointermove", onMove);
             window.removeEventListener("pointerup", onUp);
+            window.removeEventListener("pointercancel", onUp);
           };
           window.addEventListener("pointermove", onMove);
           window.addEventListener("pointerup", onUp);
+          window.addEventListener("pointercancel", onUp);
         });
         box.append(handle);
       }
@@ -374,16 +387,25 @@ export class MangaLens {
     const payload = JSON.stringify(this.bubbles);
     const dst = this.dstLang;
     const useAi = this.useAi;
-    this.close();
-    await r._changeDocument(
-      (bytes, tab) => r._post("/api/translate/manga-page/apply", bytes, tab, {
-        page: String(page),
-        to: dst,
-        manga_ai: useAi ? "true" : "false",
-        bubbles: payload,
-      }),
-      { failure: "Could not apply Manga Lens translation: " },
-    );
-    r.toast(`Applied translated bubbles to page ${page}.`);
+    this.applyBtn.disabled = true;
+    try {
+      await r._changeDocument(
+        (bytes, tab) => r._post("/api/translate/manga-page/apply", bytes, tab, {
+          page: String(page),
+          to: dst,
+          manga_ai: useAi ? "true" : "false",
+          bubbles: payload,
+        }),
+        {
+          failure: "Could not apply Manga Lens translation: ",
+          after: () => {
+            this.close();
+            r.toast(`Applied translated bubbles to page ${page}.`);
+          },
+        },
+      );
+    } finally {
+      if (this.active && this.applyBtn) this.applyBtn.disabled = this.bubbles.length === 0;
+    }
   }
 }

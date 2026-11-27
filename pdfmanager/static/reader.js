@@ -1671,7 +1671,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
         this.toast(delta < 0 ? "Already at the first file in this folder." : "Already at the last file in this folder.");
         return;
       }
-      await this.openUrl(`/api/file/${data.opened.id}`, data.opened.name, null, null, data.opened.id);
+      await this.openById(data.opened.id);
       this.toast(`${data.opened.name} (${delta < 0 ? Math.max(1, data.index - 1) : Math.min(data.total, data.index + 1)} of ${data.total})`);
     } catch (err) {
       this.toast(err?.message || String(err));

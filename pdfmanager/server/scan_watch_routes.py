@@ -368,9 +368,16 @@ class ScanWatchRoutesMixin:
         return self._send(HTTPStatus.OK, {"ok": True, "model": model, "sample": sample, "ms": ms})
 
     def _translate_unload(self):
+        result = {"unloaded": 0, "freed_bytes": 0}
         mod = sys.modules.get("pdfmanager.translate")
-        if mod is None:
-            return self._send(HTTPStatus.OK, {"unloaded": 0, "freed_bytes": 0})
-        return self._send(HTTPStatus.OK, mod.unload_cached_models())
+        if mod is not None:
+            result = dict(mod.unload_cached_models())
+        mai = sys.modules.get("pdfmanager.translate.manga_ai")
+        if mai is not None and hasattr(mai, "reset"):
+            mai.reset()
+        ocr_mod = sys.modules.get("pdfmanager.ocr.models")
+        if ocr_mod is not None and hasattr(ocr_mod, "reset"):
+            ocr_mod.reset()
+        return self._send(HTTPStatus.OK, result)
 
 

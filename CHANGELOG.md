@@ -4,6 +4,28 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.87.1
+
+Post-Upgrade Deep Audit & Reliability Pass — fixes across Live Manga Lens, Bookshelf, Chapter Navigation, CBZ/CBR/EPUB, VLM Security, and AI Model RAM Management.
+
+- **Live Manga Lens & Baberu OCR Fixes (`translate/manga.py`, `translate/manga_ai.py`, `translate/pipeline.py`, `static/manga-lens.js`).**
+  - Fixed a crash in `translate_manga_page_bubbles()` (replaced non-existent `engines.translate_batch` with `text.translate_texts` + `auto` language detection + `progress.check()`).
+  - Eliminated redundant per-bubble SHA-256 disk hashing in `manga_ai.py` (previously hashed 122 MB per bubble ≈ 2.4 GB/page) by checking `_SESSIONS` cache first, and restored the legacy `manga-ocr` directory fallback.
+  - Enabled Baberu OCR v1.2 auto-download in `pipeline.py` for Chinese (`zh`) and English (`en`) comics as well as Japanese (`ja`).
+  - Fixed `manga-lens.js` `applyToPdf()` so edits stay open on failure/cancel and the success toast only fires on actual apply; added request-sequence race protection, safe error parsing, and `pointercancel` cleanup.
+- **Bookshelf Cover Thumbnails, Chapter Navigation & Save-in-Place Protection (`static/tools.js`, `static/reader.js`, `server/reader_routes.py`, `bookshelf.py`).**
+  - Fixed Bookshelf cover thumbnails returning HTTP 403 by loading covers via authenticated `api()` fetches with managed `blob:` URLs (and sequence-guarded filter refreshes).
+  - Fixed `[` / `]` sibling chapter navigation crashing on non-existent `this.openUrl(...)` → now calls `this.openById(...)`.
+  - Protected disk-opened `.cbz`/`.cbr`/`.epub` books from being overwritten with raw PDF bytes on Ctrl+S (`_save_in_place` now rejects non-`.pdf` files and directs users to Save As).
+  - Hardened Bookshelf cover extraction (32 MB zip-entry cap, `__MACOSX` filter for EPUB, `ImageOps.exif_transpose`, atomic thumbnail cache writes, normalized `remove_folder`).
+- **AI Model RAM Management & VLM Security (`models_manager.py`, `vlm.py`, `i18n.py`, `server/scan_watch_routes.py`).**
+  - Added `manga_ai.reset()` and evicted cached ONNX sessions before unlinking files in `models_manager.delete_model()`, `i18n.remove_pack()`, and `/api/translate/unload` ("Free model RAM") — fixing RAM leaks and Windows `PermissionError` on delete; added per-pack download locks.
+  - Routed Vision-LLM HTTP calls through `i18n._http_post_json()` to enforce `policy.check_network_allowed()`, HTTPS for remote hosts, redirect safety, and response size caps.
+- **CBZ/CBR, EPUB & HTTP Header Hardening (`cbz.py`, `epub.py`, `server/common.py`).**
+  - Fixed EPUB `<head><title>` extraction, `%20` URI-encoded paths & `#fragment` stripping, duplicate chapter bookmark collapse, `<svg><image>` covers, `<dc:language>` RTL detection, and XML control-char stripping.
+  - Hardened CBZ/CBR zero-copy JPEG passthrough (EOI check, alpha-to-white composite, safe `zf.read`), preserved multi-folder CBR sort order, and caught `subprocess.TimeoutExpired`.
+  - Fixed duplicate conflicting `Cache-Control` headers on thumbnail responses and case-insensitive `Content-Encoding` / `Vary` handling in `server/common.py`.
+
 ## 0.87.0
 
 Latest 2026 Offline AI Modules & Viewer Refresh: **Baberu OCR v1.2 (JA/ZH/EN Manga OCR)**, **PP-OCRv6 Small & Tiny Standard OCR Tiers**, **TranslateGemma 4B/12B Presets**, and **PDF.js 6.5.438**.
