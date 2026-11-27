@@ -170,7 +170,9 @@ class _OneWatcher:
         if self.fh is not None:
             return True
         try:
-            fh = open(data_dir() / "watch.lock", "a+b")
+            root = data_dir()
+            root.mkdir(parents=True, exist_ok=True)
+            fh = open(root / "watch.lock", "a+b")
         except OSError:
             return True  # can't tell: watch all the same
         try:
@@ -292,20 +294,26 @@ class WatchFolders:
     def stop(self, timeout=5.0):
         self.stopping.set()
         self.wake.set()
-        thread, self.thread = self.thread, None
+        with self.lock:
+            thread, self.thread = self.thread, None
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout)
+            if thread.is_alive():
+                return
         self.owner.release()
 
     def _run(self):
         while not self.stopping.is_set():
-            if self.owner.acquire():
-                self.poll_all()
-            else:
-                with self.lock:
-                    for entry in self.folders:
-                        self._set(entry["id"], state="elsewhere",
-                                  detail="Another ZPDF window is watching this folder.")
+            try:
+                if self.owner.acquire():
+                    self.poll_all()
+                else:
+                    with self.lock:
+                        for entry in self.folders:
+                            self._set(entry["id"], state="elsewhere",
+                                      detail="Another ZPDF window is watching this folder.")
+            except Exception as exc:
+                logging.getLogger("zpdf").exception("watchfolders._run: %s", exc)
             self.wake.wait(self.interval)
             self.wake.clear()
 

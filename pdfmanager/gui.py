@@ -121,6 +121,12 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
     def do_GET(self):
         if not self._host_ok():
             return self._error(HTTPStatus.FORBIDDEN, "bad host")
+        try:
+            return self._do_get()
+        except (UserError, core.PdfManagerError) as exc:
+            return self._error(HTTPStatus.BAD_REQUEST, str(exc))
+
+    def _do_get(self):
         path = self.path.split("?", 1)[0]
         if path == "/":
             page = resources.files("pdfmanager").joinpath("gui.html").read_text("utf-8")

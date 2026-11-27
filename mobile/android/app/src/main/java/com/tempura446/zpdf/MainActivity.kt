@@ -78,20 +78,43 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.addJavascriptInterface(ZpdfAndroidBridge(), "ZpdfAndroid")
+        webView.setDownloadListener { dlUrl, _, _, _, _ ->
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(dlUrl)))
+            } catch (_: Exception) {
+                // Ignore if no handler available
+            }
+        }
 
         webView.webViewClient = object : WebViewClient() {
+            private fun isPrivateLanHost(host: String): Boolean {
+                if (host == "127.0.0.1" || host == "localhost" || host == "10.0.2.2" || host.endsWith(".local")) {
+                    return true
+                }
+                val parts = host.split(".")
+                if (parts.size != 4) return false
+                val octets = parts.map { it.toIntOrNull() ?: return false }
+                if (octets.any { it !in 0..255 }) return false
+                return octets[0] == 10 ||
+                    (octets[0] == 192 && octets[1] == 168) ||
+                    (octets[0] == 172 && octets[1] in 16..31)
+            }
+
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val url = request?.url ?: return false
-                val host = url.host ?: ""
-                val isLocal = host == "127.0.0.1" || host == "localhost" || host == "10.0.2.2" ||
-                    host.startsWith("192.168.") || host.startsWith("10.") || host.endsWith(".local")
-                if (isLocal) return false
-                startActivity(Intent(Intent.ACTION_VIEW, url))
+                val host = (url.host ?: "").lowercase()
+                if (isPrivateLanHost(host)) return false
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, url))
+                } catch (_: Exception) {
+                    // Ignore unhandleable external URLs
+                }
                 return true
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
+                if (url == null || url == "about:blank" || url.startsWith("data:")) return
                 pendingPdfUri?.let { uri ->
                     pendingPdfUri = null
                     deliverPdfIntentToWebView(uri)
@@ -105,6 +128,7 @@ class MainActivity : AppCompatActivity() {
             ) {
                 if (request?.isForMainFrame == true) {
                     val savedUrl = getPreferences(Context.MODE_PRIVATE).getString(KEY_SERVER_URL, DEFAULT_URL) ?: DEFAULT_URL
+                    val escapedUrl = android.text.TextUtils.htmlEncode(savedUrl)
                     val html = """
                         <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
                         <style>body{font-family:system-ui,sans-serif;background:#111318;color:#f3f4f6;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;text-align:center}
@@ -113,7 +137,7 @@ class MainActivity : AppCompatActivity() {
                         .pri{background:#d93829;color:#fff}.sec{background:#2e3440;color:#f3f4f6}code{color:#93c5fd}</style></head>
                         <body><div class="card"><h2>ZPDF Desktop Not Reachable</h2>
                         <p>Start ZPDF on your computer with LAN companion mode enabled, or update the server address.</p>
-                        <p><code>${savedUrl}</code></p>
+                        <p><code>$escapedUrl</code></p>
                         <button class="pri" onclick="ZpdfAndroid.retryConnection()">Retry</button>
                         <button class="sec" onclick="ZpdfAndroid.openSettings()">Change URL</button>
                         </div></body></html>
@@ -135,8 +159,14 @@ class MainActivity : AppCompatActivity() {
                     type = "application/pdf"
                     addCategory(Intent.CATEGORY_OPENABLE)
                 }
-                fileChooserLauncher.launch(intent)
-                return true
+                return try {
+                    fileChooserLauncher.launch(intent)
+                    true
+                } catch (_: Exception) {
+                    this@MainActivity.filePathCallback?.onReceiveValue(null)
+                    this@MainActivity.filePathCallback = null
+                    false
+                }
             }
         }
 
@@ -162,19 +192,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun deliverPdfIntentToWebView(uri: Uri) {
-        try {
-            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return
-            if (bytes.size > MAX_INTENT_PDF_BYTES) return
-            val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-            var name = "document.pdf"
-            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-                if (c.moveToFirst()) name = c.getString(0) ?: name
+        Thread {
+            try {
+                val out = java.io.ByteArrayOutputStream()
+                val buf = ByteArray(65536)
+                var total = 0
+                val opened = contentResolver.openInputStream(uri)?.use { stream ->
+                    while (true) {
+                        val n = stream.read(buf)
+                        if (n <= 0) break
+                        total += n
+                        if (total > MAX_INTENT_PDF_BYTES) return@Thread
+                        out.write(buf, 0, n)
+                    }
+                    true
+                } ?: false
+                if (!opened) return@Thread
+                val b64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+                var name = "document.pdf"
+                contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) name = c.getString(0) ?: name
+                }
+                val js = "window.zpdfOpenBase64Pdf && window.zpdfOpenBase64Pdf(${JSONObject.quote(b64)}, ${JSONObject.quote(name)});"
+                runOnUiThread { webView.evaluateJavascript(js, null) }
+            } catch (_: Exception) {
+                // Ignore unreadable external URIs cleanly
             }
-            val js = "window.zpdfOpenBase64Pdf && window.zpdfOpenBase64Pdf(${JSONObject.quote(b64)}, ${JSONObject.quote(name)});"
-            webView.evaluateJavascript(js, null)
-        } catch (_: Exception) {
-            // Ignore unreadable external URIs cleanly
-        }
+        }.start()
     }
 
     fun promptServerUrl() {

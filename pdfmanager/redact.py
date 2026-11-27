@@ -586,11 +586,16 @@ def _iter_render_redacted(path, areas, dpi, password, reason_code=None):
     label = str(reason_code).strip() if reason_code else ""
     with core.PDFIUM_LOCK:
         doc = pdfium.PdfDocument(str(path), password=password)
-        doc.init_forms()  # without this, filled-in fields are left out of the picture
         try:
-            for n, (number, boxes) in enumerate(areas.items()):
-                progress.check()
-                progress.report(n, len(areas), "blacking out page")
+            doc.init_forms()  # without this, filled-in fields are left out of the picture
+        except Exception:
+            doc.close()
+            raise
+    try:
+        for n, (number, boxes) in enumerate(areas.items()):
+            progress.check()
+            progress.report(n, len(areas), "blacking out page")
+            with core.PDFIUM_LOCK:
                 page = doc[number]
                 try:
                     page.set_rotation(0)  # draw in the page's own coordinates
@@ -599,15 +604,16 @@ def _iter_render_redacted(path, areas, dpi, password, reason_code=None):
                     image = page.render(scale=scale, may_draw_forms=True).to_pil().convert("RGB")
                 finally:
                     page.close()
-                draw = ImageDraw.Draw(image)
-                for x0, y0, x1, y1 in boxes:
-                    rx0, ry0 = (x0 - left) * scale, (top - y1) * scale
-                    rx1, ry1 = (x1 - left) * scale, (top - y0) * scale
-                    draw.rectangle([rx0, ry0, rx1, ry1], fill=(0, 0, 0))
-                    if label:
-                        draw.text((rx0 + 2, ry0 + 1), label, fill=(255, 255, 255))
-                yield number, image, (left, bottom, right, top)
-        finally:
+            draw = ImageDraw.Draw(image)
+            for x0, y0, x1, y1 in boxes:
+                rx0, ry0 = (x0 - left) * scale, (top - y1) * scale
+                rx1, ry1 = (x1 - left) * scale, (top - y0) * scale
+                draw.rectangle([rx0, ry0, rx1, ry1], fill=(0, 0, 0))
+                if label:
+                    draw.text((rx0 + 2, ry0 + 1), label, fill=(255, 255, 255))
+            yield number, image, (left, bottom, right, top)
+    finally:
+        with core.PDFIUM_LOCK:
             doc.close()
 
 

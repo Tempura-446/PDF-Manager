@@ -835,7 +835,7 @@ function renderAiModels(models) {
           if (dlWrap) dlWrap.hidden = false;
           setBar(0);
         },
-        say(msg) { updateStatus("ai-models-status", msg); },
+        message(msg) { updateStatus("ai-models-status", msg); },
         progress(f) { setBar(f); },
         cancelled() { wasCancelled = true; },
         end() {

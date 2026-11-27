@@ -4,6 +4,27 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.88.0
+
+Deep 3-Track Stability, Security & Correctness Hardening Pass across Frontend/Reader, Core PDF, Server/Watch/CLI, and Android Companion:
+
+- **Frontend & Reader Runtime Fixes (`static/reader.js`, `static/settings.js`, `static/tabs.js`, `static/reader.css`, `static/reader-render.js`, `static/checkocr.js`, `static/reader-save.js`, `static/tools.js`).**
+  - Added missing `Reader.currentPage` getter — fixes Translate Page (`"Translate page undefined"`), Live Manga Lens always translating page 1, Live Bilingual Split View (`"Page undefined"`), and Redact page fallback.
+  - Fixed Offline AI model download progress crash (`aiDlUi.say` → `aiDlUi.message` to match `followJob()`).
+  - Fixed Workspace Sessions end-to-end: added `X-Pdfm-Token` auth + `res.ok` check in `tabs.js` and added `HandlerBase._json(body)` in `server/common.py` (previously HTTP 403/500).
+  - Fixed RTL two-page manga spread CSS (`display: flex; justify-content: center; flex-direction: row-reverse`).
+  - Fixed floating mobile bottom dock never showing (wired `_syncMobileDock` when `eventBus` initializes in `reader-render.js`).
+  - Fixed `_translateLanguages()` calling nonexistent `/api/ops` → `/api/operations`, undefined `this.annotOpen` in `checkocr.js`, unchecked `/api/keep` response in `reader-save.js`, and uncaught async errors in Bookshelf handlers.
+- **Core PDF & Security Hardening (`redact.py`, `core/security.py`, `core/pages.py`, `sheetsets.py`, `certsign.py`, `organize.py`, `office.py`, `pdfacheck.py`).**
+  - Fixed `core.PDFIUM_LOCK` deadlock/leak across `yield` in `redact._iter_render_redacted()` and wrapped `sheetsets.py` PDFium calls in `core.PDFIUM_LOCK` (with safe handle cleanup).
+  - Fixed silent data loss in in-place `compress(..., target_mb=..., keep_smaller=True)` and unhandled `pikepdf.PasswordError` on owner-password-only PDFs in `core/security.py`.
+  - Sanitized `split(prefix=...)` against path traversal outside `outdir` + 0-page guards, normalized naive PDF `/M` dates to UTC in `certsign.verify()`, blocked `str.format` attribute/index traversal in `organize.format_name()`, and resolved input paths before LibreOffice/veraPDF subprocess calls.
+- **Server, Watch Folder, CLI & Android Companion (`gui.py`, `cli/common.py`, `watchfolders.py`, `watch.py`, `MainActivity.kt`).**
+  - Added top-level exception handler to `do_GET` in `gui.py`.
+  - Added `to-dxf` and `sheet-split` to `KEEP_UNENCRYPTED` in `cli/common.py` so encrypted PDFs don't crash post-conversion.
+  - Hardened Watch Folder thread lifecycle (`_run` error recovery, synchronized `stop()`, `data_dir` creation for `watch.lock`, and safe batch retirement preserving merged output if earlier inputs were already retired).
+  - Hardened Android Companion `MainActivity.kt`: added `DownloadListener`, strict RFC-1918 LAN check (including `172.16.0.0/12`), HTML-escaped offline error URL, preserved `pendingPdfUri` on offline page, bounded off-UI-thread PDF intent loading, and safe `fileChooserLauncher` error recovery.
+
 ## 0.87.2
 
 Book Route Caching, Vision-LLM Default Model Safety & Async Offline AI Model Downloads:

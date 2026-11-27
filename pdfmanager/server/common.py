@@ -678,6 +678,16 @@ class HandlerBase(BaseHTTPRequestHandler):
             self.send_header(k, v)
         self.end_headers()
 
+    def _json(self, body):
+        """Parse a JSON request body and ensure it is a JSON object."""
+        try:
+            data = json.loads(body or b"{}")
+        except ValueError:
+            raise UserError("invalid JSON request body") from None
+        if not isinstance(data, dict):
+            raise UserError("JSON request body must be an object")
+        return data
+
     def _error(self, status, message):
         # The request body may not have been read; don't reuse the connection.
         self.close_connection = True

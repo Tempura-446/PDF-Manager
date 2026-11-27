@@ -355,9 +355,13 @@ export const Tabs = (Base) => class extends Base {
 
   /** Capture current disk-backed tabs + split-view state and open Workspace Sessions modal. */
   async openWorkspaceSessions() {
+    const authHeaders = (extra = {}) => ({
+      ...(this.token ? { "X-Pdfm-Token": this.token } : {}),
+      ...extra,
+    });
     let sessions = [];
     try {
-      const res = await fetch("/api/sessions");
+      const res = await fetch("/api/sessions", { headers: authHeaders() });
       if (res.ok) sessions = (await res.json()).sessions || [];
     } catch {
       sessions = [];
@@ -400,10 +404,14 @@ export const Tabs = (Base) => class extends Base {
         openBtn.addEventListener("click", async () => { close(); await this.restoreWorkspaceSession(s); });
         const delBtn = el("button", { type: "button", class: "rd-btn compact", title: "Delete session", html: svg("x") });
         delBtn.addEventListener("click", async () => {
-          await fetch("/api/sessions/delete", {
-            method: "POST", headers: { "Content-Type": "application/json" },
+          const delRes = await fetch("/api/sessions/delete", {
+            method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({ id: s.id }),
           });
+          if (!delRes.ok) {
+            this.toast("Could not delete workspace session.");
+            return;
+          }
           sessions = sessions.filter((x) => x.id !== s.id);
           renderList(sessions);
         });
@@ -446,7 +454,7 @@ export const Tabs = (Base) => class extends Base {
         };
       }
       const res = await fetch("/api/sessions", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ name, tabs: tabsPayload, active_index: activeIdx, split: splitPayload }),
       });
       if (!res.ok) {
@@ -455,7 +463,7 @@ export const Tabs = (Base) => class extends Base {
         return;
       }
       nameInput.value = "";
-      const fresh = await fetch("/api/sessions").then((r) => (r.ok ? r.json() : { sessions: [] }));
+      const fresh = await fetch("/api/sessions", { headers: authHeaders() }).then((r) => (r.ok ? r.json() : { sessions: [] }));
       sessions = fresh.sessions || [];
       renderList(sessions);
       this.toast(`Saved workspace “${name}”.`);

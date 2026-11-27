@@ -1196,6 +1196,8 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
 /* ---- Right-to-Left Manga Spread Mode --------------------------------------- */
 .rd-viewport.rtl-reading .pdfViewer .spread,
 .rtl-reading .pdfViewer .spread {
+  display: flex;
+  justify-content: center;
   flex-direction: row-reverse;
 }
 

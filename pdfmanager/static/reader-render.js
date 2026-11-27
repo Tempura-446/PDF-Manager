@@ -527,6 +527,10 @@ export const ReaderRender = (Base) => class extends Base {
     if (this.pdfViewer) return;
     const eventBus = new viewer.EventBus();
     this.eventBus = eventBus;
+    if (this._syncMobileDock) {
+      eventBus.on("pagesinit", this._syncMobileDock);
+      eventBus.on("pagechanging", this._syncMobileDock);
+    }
     this.linkService = new viewer.PDFLinkService({ eventBus, externalLinkTarget: viewer.LinkTarget.BLANK, externalLinkRel: "noopener noreferrer nofollow" });
     this.findController = new viewer.PDFFindController({ eventBus, linkService: this.linkService });
     // Form scripts (number and date formats, totals, checks — Acrobat's AF

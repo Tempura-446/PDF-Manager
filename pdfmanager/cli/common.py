@@ -210,7 +210,7 @@ KEEP_UNENCRYPTED.update({"encrypt-for", "open-with-id"})  # protected for people
 KEEP_UNENCRYPTED.add("upgrade-protection")  # protects its own output, with both passwords
 KEEP_UNENCRYPTED.add("comments")  # a summary, CSV or XFDF; an import protects itself
 KEEP_UNENCRYPTED.add("sign-cert")  # stays protected inside the signed file; re-saving breaks it
-KEEP_UNENCRYPTED |= {"to-pptx", "to-html", "to-md"}  # -- pptx, html and markdown -- (not PDFs)
+KEEP_UNENCRYPTED |= {"to-pptx", "to-html", "to-md", "to-dxf", "sheet-split"}  # non-PDF or directory outputs
 
 
 # Commands that do not rewrite a PDF or already handle/report signatures themselves.

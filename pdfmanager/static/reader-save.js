@@ -376,8 +376,9 @@ export const ReaderSave = (Base) => class extends Base {
       body.append("file", new Blob([bytes], { type: "application/pdf" }), name);
       try {
         const res = await fetch("/api/keep", { method: "POST", body, headers: { "X-Pdfm-Token": this.token } });
-        const { id } = await res.json();
-        const path = await api.save_result(id, name, near);
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok || !payload.id) throw new Error(payload.error || res.statusText || "save failed");
+        const path = await api.save_result(payload.id, name, near);
         if (path) { saved(path); this.toast("Saved to " + path, 5000, ["Show in folder", () => this.reveal(path)]); }
       } catch (e) { this.toast("Could not save: " + (e.message || e)); }
       return;

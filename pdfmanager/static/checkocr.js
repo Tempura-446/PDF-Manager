@@ -55,7 +55,7 @@ export const CheckOcrMode = (Base) => class extends Base {
   /** Enter Check OCR mode for the active document. */
   async openCheckOcr(pageNumber = null, { autoOpen = true, allWords = false } = {}) {
     if (!this.doc) return;
-    if (this.annotOpen) this.closeAnnotate();
+    if (this.annotbar && !this.annotbar.hidden) this.closeAnnotate();
     if (this.formMode) this.closeFormMode();
     this.checkOcrMode = true;
     this._ocrAllWords = !!allWords;
