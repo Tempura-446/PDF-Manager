@@ -1,7 +1,8 @@
 # Copyright (c) 2026 Tempura-446. Licensed under the PolyForm Internal Use License 1.0.0 with a personal-use permission; see LICENSE.
 """Optional ONNX Manga AI Pack: neural bubble & borderless text detector
-(RT-DETR v2), Japanese manga-ocr ViT, LaMa-Manga neural inpainting, and
-page-context LLM manga script translation.
+(RT-DETR v2), Baberu OCR v1.2 (115M multilingual ja/zh/en manga & comic
+recognizer), LaMa-Manga neural inpainting, and page-context LLM manga script
+translation.
 
 All models are Apache-2.0 ONNX weights downloaded on demand into ZPDF's
 per-user data folder with SHA-256 verification and live MB progress. Zero
@@ -32,23 +33,28 @@ MANGA_AI_MODELS = {
         ],
     },
     "ocr": {
-        "label": "Japanese manga-ocr model",
-        "size_mb": 460,
+        "label": "Baberu OCR v1.2 (ja/zh/en manga recognizer)",
+        "size_mb": 122,
         "files": [
             {
-                "name": "encoder_model.onnx",
-                "url": "https://huggingface.co/mayocream/manga-ocr-onnx/resolve/main/encoder_model.onnx",
-                "sha256": "15fa8155fe9bc1a7d25d9bb353debaa4def033d0174e907dbd2dd6d995def85f",
+                "name": "vision_int4.onnx",
+                "url": "https://huggingface.co/genshiai-daichi/baberu-ocr/resolve/main/onnx/vision_int4.onnx",
+                "sha256": "1967ecef502e4c1e1e7c512ea0a2e06396b39ded87a8a9cc77bd7db2e981a361",
             },
             {
-                "name": "decoder_model.onnx",
-                "url": "https://huggingface.co/mayocream/manga-ocr-onnx/resolve/main/decoder_model.onnx",
-                "sha256": "ef7765261e9d1cdc34d89356986c2bbc2a082897f753a89605ae80fdfa61f5e8",
+                "name": "decoder_prefill_int8.onnx",
+                "url": "https://huggingface.co/genshiai-daichi/baberu-ocr/resolve/main/onnx/decoder_prefill_int8.onnx",
+                "sha256": "187a59cb61d3870f1f97c9eb027eb34ff19d023fba801cda113a13870be0b724",
             },
             {
-                "name": "vocab.txt",
-                "url": "https://huggingface.co/mayocream/manga-ocr-onnx/resolve/main/vocab.txt",
-                "sha256": "",  # plain UTF-8 vocabulary file (verified non-empty)
+                "name": "decoder_step_int8.onnx",
+                "url": "https://huggingface.co/genshiai-daichi/baberu-ocr/resolve/main/onnx/decoder_step_int8.onnx",
+                "sha256": "46640b0b3db77f0f0eef660bbe5dc9126a5e0fb49eb2786b2edba7b0371d9769",
+            },
+            {
+                "name": "vocab.json",
+                "url": "https://huggingface.co/genshiai-daichi/baberu-ocr/resolve/main/tokenizer/vocab.json",
+                "sha256": "",  # plain UTF-8 JSON character table (verified non-empty)
             },
         ],
     },
@@ -225,6 +231,27 @@ def _get_ocr_sessions(model_dir=None):
     mdir = Path(model_dir) if model_dir else ensure_manga_ai(("ocr",), download=False).get("ocr")
     if mdir is None or not mdir.is_dir():
         return None
+    # Preferred: Baberu OCR v1.2 (DINOv2 + 6-layer GQA KV-cache decoder, ja/zh/en)
+    vis_p = mdir / "vision_int4.onnx"
+    if not vis_p.is_file():
+        vis_p = mdir / "vision_fp16.onnx"
+    pre_p = mdir / "decoder_prefill_int8.onnx"
+    stp_p = mdir / "decoder_step_int8.onnx"
+    bvocab_p = mdir / "vocab.json"
+    if vis_p.is_file() and pre_p.is_file() and stp_p.is_file() and bvocab_p.is_file():
+        key = ("baberu_ocr", str(mdir), vis_p.name)
+        with _SESSION_LOCK:
+            if key not in _SESSIONS:
+                _SESSIONS[key] = (
+                    "baberu",
+                    _ort_session(vis_p),
+                    _ort_session(pre_p),
+                    _ort_session(stp_p),
+                    _BaberuVocab(bvocab_p),
+                )
+            return _SESSIONS[key]
+
+    # Legacy fallback: manga-ocr ViT encoder/decoder if already cached locally
     enc_p = mdir / "encoder_model.onnx"
     dec_p = mdir / "decoder_model.onnx"
     voc_p = mdir / "vocab.txt"
@@ -392,8 +419,32 @@ def detect_bubbles_neural(pil_img, *, reading_dir="rtl", score_threshold=0.35, m
 
 
 # ---------------------------------------------------------------------------
-# 2. Japanese Manga OCR (ViT Encoder-Decoder ONNX)
+# 2. Multilingual Manga OCR (Baberu OCR v1.2 ONNX + legacy manga-ocr fallback)
 # ---------------------------------------------------------------------------
+
+_BABERU_PAST_NAMES = tuple([f"past_k{i}" for i in range(6)] + [f"past_v{i}" for i in range(6)])
+
+
+class _BaberuVocab:
+    """Character-level vocabulary for Baberu OCR (ids 0..3 = pad/bos/eos/unk;
+    id >= 4 -> charset[id - 4])."""
+
+    def __init__(self, vocab_json):
+        charset = json.loads(Path(vocab_json).read_text(encoding="utf-8"))
+        self.id2ch = {0: "", 1: "", 2: "", 3: ""}
+        for i, ch in enumerate(charset):
+            self.id2ch[i + 4] = ch
+        self.bos = 1
+        self.eos = 2
+        self.content_ids = {
+            i + 4
+            for i, ch in enumerate(charset)
+            if len(ch) == 1 and ch not in "ーｰ〜~" and unicodedata.category(ch)[0] in "LN"
+        }
+
+    def decode(self, ids):
+        return "".join(self.id2ch.get(i, "") for i in ids if i >= 4).strip()
+
 
 def _load_vocab(vocab_path):
     return [line.rstrip("\r\n") for line in Path(vocab_path).read_text(encoding="utf-8").splitlines()]
@@ -415,18 +466,95 @@ def _decode_manga_tokens(token_ids, vocab):
     return re.sub(r"\s+", "", text).strip()
 
 
-def ocr_manga_crop(pil_crop, *, model_dir=None, max_length=128):
-    """Recognise Japanese manga text from a cropped bubble image using
-    ``manga-ocr`` ONNX (returns ``None`` if the model is not installed)."""
+def _ocr_baberu_crop(
+    pil_crop,
+    vis_sess,
+    pre_sess,
+    stp_sess,
+    vocab,
+    *,
+    max_length=256,
+    repetition_penalty=1.2,
+    max_content_run=12,
+    max_symbol_run=16,
+):
+    """Run Baberu OCR v1.2 three-graph ONNX inference (DINOv2 vision ->
+    decoder prefill -> KV-cached decoder step) matching upstream onnx_infer.py."""
+    import numpy as np
+    from PIL import Image
+
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    img = pil_crop.convert("RGB").resize((224, 224), Image.BICUBIC)
+    arr = (np.asarray(img, dtype=np.float32) / 255.0 - mean) / std
+    pixel_values = arr.transpose(2, 0, 1)[None, ...]  # (1, 3, 224, 224)
+
+    vis_embeds = vis_sess.run(["vision_embeds"], {"pixel_values": pixel_values})[0]
+    out = pre_sess.run(
+        None,
+        {"vision_embeds": vis_embeds, "input_ids": np.array([[vocab.bos]], dtype=np.int64)},
+    )
+    logits = np.array(out[0][0, -1], dtype=np.float64, copy=True)
+    present = out[1:]
+    seq = [vocab.bos]
+    toks = []
+    pos = int(vis_embeds.shape[1]) + 1
+
+    for _ in range(max_length):
+        progress.check()
+        if repetition_penalty != 1.0:
+            for tid in set(seq):
+                s = logits[tid]
+                logits[tid] = s * repetition_penalty if s < 0 else s / repetition_penalty
+        last = toks[-1] if toks else 0
+        cap = max_content_run if last in vocab.content_ids else (max_symbol_run if last > 3 else 0)
+        if cap:
+            run = 0
+            for t in reversed(toks):
+                if t == last:
+                    run += 1
+                else:
+                    break
+            if run >= cap:
+                logits[last] = -np.inf
+        nxt = int(np.argmax(logits))
+        if nxt == vocab.eos:
+            break
+        toks.append(nxt)
+        seq.append(nxt)
+        if len(toks) >= max_length:
+            break
+        feed = {
+            "input_ids": np.array([[nxt]], dtype=np.int64),
+            "position_ids": np.array([[pos]], dtype=np.int64),
+        }
+        for name, tensor in zip(_BABERU_PAST_NAMES, present):
+            feed[name] = tensor
+        out = stp_sess.run(None, feed)
+        logits = np.array(out[0][0, -1], dtype=np.float64, copy=True)
+        present = out[1:]
+        pos += 1
+
+    return vocab.decode(toks)
+
+
+def ocr_manga_crop(pil_crop, *, model_dir=None, max_length=256):
+    """Recognise manga/comic text (Japanese, Chinese, or English) from a cropped
+    bubble image using Baberu OCR v1.2 ONNX (or legacy ``manga-ocr`` if cached).
+    Returns ``None`` if no manga OCR model is installed."""
     import numpy as np
     from PIL import Image
 
     loaded = _get_ocr_sessions(model_dir=model_dir)
     if loaded is None:
         return None
+    if isinstance(loaded, tuple) and len(loaded) == 5 and loaded[0] == "baberu":
+        _, vis_sess, pre_sess, stp_sess, bvocab = loaded
+        return _ocr_baberu_crop(pil_crop, vis_sess, pre_sess, stp_sess, bvocab, max_length=max_length)
+
     enc_sess, dec_sess, vocab = loaded
 
-    # Standard manga-ocr ViT preprocessing: grayscale -> RGB -> 224x224 -> [-1, 1]
+    # Legacy manga-ocr ViT preprocessing: grayscale -> RGB -> 224x224 -> [-1, 1]
     img = pil_crop.convert("L").convert("RGB").resize((224, 224), Image.BILINEAR)
     arr = (np.asarray(img, dtype=np.float32) / 255.0 - 0.5) / 0.5
     pixel_values = np.transpose(arr, (2, 0, 1))[None, ...]  # (1, 3, 224, 224)
@@ -440,7 +568,7 @@ def ocr_manga_crop(pil_crop, *, model_dir=None, max_length=128):
 
     token_ids = [2]  # [CLS] decoder_start_token_id
     eos_id = 3       # [SEP]
-    for _ in range(max_length):
+    for _ in range(min(max_length, 128)):
         progress.check()
         feeds = {
             ids_name: np.array([token_ids], dtype=np.int64),

@@ -4,6 +4,19 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.87.0
+
+Latest 2026 Offline AI Modules & Viewer Refresh: **Baberu OCR v1.2 (JA/ZH/EN Manga OCR)**, **PP-OCRv6 Small & Tiny Standard OCR Tiers**, **TranslateGemma 4B/12B Presets**, and **PDF.js 6.5.438**.
+
+- **Manga AI OCR → Baberu OCR v1.2 (`translate/manga_ai.py`, `translate/manga.py`).**
+  - Replaced the legacy 460 MB Japanese-only `manga-ocr` ViT with Apache-2.0 **Baberu OCR v1.2** (122 MB INT4+INT8 ONNX, KV-cached 6-layer GQA decoder) — **3.8× smaller**, faster, higher accuracy on manga dialogue, handwriting & SFX, reads long bubbles up to 256 characters, and natively supports **Japanese, Chinese, and English** in a single checkpoint (with graceful fallback if legacy weights are already cached).
+- **Standard / Fast Built-in OCR → PP-OCRv6 Small & Tiny (`ocr/models.py`, `models_manager.py`).**
+  - Added **PP-OCRv6 Small** (7.7M, 50 languages, ~16 MB) and **PP-OCRv6 Tiny** (1.5M, ~4 MB, 3.9× faster on CPU than PP-OCRv5 Mobile) to **Settings → Offline AI Models**. Once downloaded, Standard OCR automatically upgrades from PP-OCRv5 to PP-OCRv6 while preserving zero-download offline behavior out of the box.
+- **TranslateGemma 4B / 12B & Hunyuan-MT Presets (`vlm.py`, `gui.html`).**
+  - Added one-click autocomplete presets (`translategemma:4b`, `translategemma:12b`, `qwen2.5vl:7b`, `qwen2.5:7b`, `hunyuan-mt:7b`) in Settings → Smart AI Translation & Vision-LLM OCR.
+- **PDF.js 6.5.438 (`pdfmanager/static/pdfjs/`).**
+  - Updated the bundled legacy PDF.js viewer from `6.4.299` to `6.5.438` with Mozilla's latest rendering fixes and performance improvements.
+
 ## 0.86.0
 
 Performance & Stability Optimization Pass: **Parallel `pdf_to_cbz` Export**, **Automatic API `gzip` Compression**, and **PDFium Thread-Safety Audit**.
