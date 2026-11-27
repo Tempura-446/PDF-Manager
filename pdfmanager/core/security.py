@@ -381,7 +381,11 @@ def _decrypt_unprotected(path, output, password):
         from pdfmanager import pdfpermissions
 
         try:
-            with open_pikepdf(path, password) as pdf:
+            try:
+                pdf = pikepdf.open(path, password=password or "")
+            except pikepdf.PasswordError:
+                pdf = pikepdf.open(path, password="")
+            with pdf:
                 if not pdf.owner_password_matched and pdfpermissions.restricts(pdf.allow):
                     raise PdfManagerError(
                         f"this PDF limits what can be done with it ({pdfpermissions.describe(pdf.allow)}):"
