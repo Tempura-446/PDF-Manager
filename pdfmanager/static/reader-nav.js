@@ -465,7 +465,13 @@ export const ReaderNav = (Base) => class extends Base {
 
   /** Show page ``page`` and search for ``find`` from there; ``scale`` and
    *  ``top``/``left`` (scroll position) bring back an earlier view. */
-  _goto({ page, find, scale, top, left } = {}) {
+  _goto({ page, find, scale, top, left, rtl, spread } = {}) {
+    if (typeof spread === "boolean" && (this.pdfViewer.spreadMode > 0) !== spread && typeof this.toggleSpread === "function") {
+      this.toggleSpread();
+    }
+    if (typeof rtl === "boolean" && !!this.rtlReading !== rtl && typeof this.toggleRtlReading === "function") {
+      this.toggleRtlReading();
+    }
     if (scale) this.pdfViewer.currentScaleValue = scale;
     if (page && page <= this.pdfViewer.pagesCount) this.pdfViewer.currentPageNumber = page;
     if (top != null) { this.container.scrollTop = top; this.container.scrollLeft = left || 0; }

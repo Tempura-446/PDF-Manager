@@ -540,7 +540,38 @@ class ReaderRoutesMixin:
         if p is None or not p.is_file():
             raise UserError("file not found")
         key = self.opened.add(p)
-        return self._send(HTTPStatus.OK, {"id": key, "name": p.name, "path": str(p)})
+        return self._send(HTTPStatus.OK, {
+            "id": key,
+            "name": p.name,
+            "path": str(p),
+            "progress": bookshelf.get_progress(p),
+        })
+
+    def _library_progress_get(self, file_id=""):
+        from pdfmanager import bookshelf
+
+        path = self.opened.get(file_id) if (file_id and self.opened is not None) else None
+        if path is None or not path.is_file():
+            return self._send(HTTPStatus.OK, {"progress": None})
+        return self._send(HTTPStatus.OK, {"progress": bookshelf.get_progress(path)})
+
+    def _library_progress_save(self, body):
+        from pdfmanager import bookshelf
+
+        data = json.loads(body or b"{}")
+        file_id = str(data.get("file_id") or data.get("id") or "").strip()
+        path = self.opened.get(file_id) if (file_id and self.opened is not None) else None
+        if path is None or not path.is_file():
+            return self._send(HTTPStatus.OK, {"ok": False, "progress": None})
+        entry = bookshelf.save_progress(
+            path,
+            page=data.get("page", 1),
+            total=data.get("total", 0),
+            zoom=data.get("zoom", ""),
+            rtl=bool(data.get("rtl", False)),
+            spread=bool(data.get("spread", False)),
+        )
+        return self._send(HTTPStatus.OK, {"ok": True, "progress": entry})
 
     def _library_neighbors(self, body):
         from pdfmanager import bookshelf

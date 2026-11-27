@@ -161,7 +161,8 @@ def _all_items_cached(folders):
 
 
 def scan_library(query="", *, max_items=400):
-    """Scan all configured Bookshelf folders and return natural-sorted book items."""
+    """Scan all configured Bookshelf folders and return natural-sorted book items
+    enriched with per-book reading progress and a Continue Reading recent list."""
     folders = list_folders()
     all_items = _all_items_cached(folders)
     q = str(query or "").strip().lower()
@@ -169,7 +170,19 @@ def scan_library(query="", *, max_items=400):
         filtered = [it for it in all_items if q in it["name"].lower() or q in it["folder"].lower()]
     else:
         filtered = all_items
-    return {"folders": folders, "items": filtered[:max_items]}
+    prog_map = _load_progress()
+    enriched = []
+    for it in filtered[:max_items]:
+        copy = dict(it)
+        p = prog_map.get(it["path"])
+        if p:
+            copy["progress"] = dict(p)
+        enriched.append(copy)
+    return {
+        "folders": folders,
+        "items": enriched,
+        "recent": list_recent_progress(limit=8, _prog_map=prog_map),
+    }
 
 
 def find_by_id(book_id):
@@ -181,7 +194,15 @@ def find_by_id(book_id):
     _all_items_cached(list_folders())
     with _CACHE_LOCK:
         hit = _ID_INDEX.get(book_id)
-    return hit if (hit is not None and hit.is_file()) else None
+    if hit is not None and hit.is_file():
+        return hit
+    # Fallback: check recently read books (which may live outside configured folders)
+    for raw_path in _load_progress():
+        if _book_id(raw_path) == book_id:
+            p = Path(raw_path)
+            if p.is_file():
+                return p
+    return None
 
 
 def _render_cover_pil(path, max_w=240):
@@ -321,3 +342,111 @@ def sibling_chapters(path):
         "index": idx + 1,
         "total": len(siblings),
     }
+
+
+_PROGRESS_LOCK = threading.Lock()
+_MAX_PROGRESS_ENTRIES = 500
+
+
+def _progress_path():
+    return appdata.data_dir() / "reading-progress.json"
+
+
+def _load_progress():
+    p = _progress_path()
+    if not p.is_file():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:  # noqa: BLE001
+        _LOG.debug("bookshelf._load_progress: %s", exc)
+        return {}
+
+
+def _write_progress(data):
+    import os
+
+    p = _progress_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    part = p.with_name(f"{p.name}.{os.getpid()}.part")
+    part.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(part, p)
+
+
+def save_progress(path, *, page=1, total=0, zoom="", rtl=False, spread=False):
+    """Persist per-book reading position and view preferences."""
+    import time
+
+    resolved = str(Path(path).resolve())
+    page_n = max(1, int(page or 1))
+    total_n = max(0, int(total or 0))
+    if total_n > 0:
+        page_n = min(page_n, total_n)
+        percent = min(100, max(0, round((page_n / total_n) * 100)))
+    else:
+        percent = 0
+    entry = {
+        "page": page_n,
+        "total": total_n,
+        "percent": percent,
+        "zoom": str(zoom or "")[:32],
+        "rtl": bool(rtl),
+        "spread": bool(spread),
+        "updated_at": round(time.time(), 2),
+    }
+    with _PROGRESS_LOCK:
+        data = _load_progress()
+        data[resolved] = entry
+        if len(data) > _MAX_PROGRESS_ENTRIES:
+            ordered = sorted(
+                data.items(),
+                key=lambda kv: float((kv[1] or {}).get("updated_at") or 0),
+                reverse=True,
+            )
+            data = dict(ordered[:_MAX_PROGRESS_ENTRIES])
+        try:
+            _write_progress(data)
+        except OSError as exc:
+            _LOG.debug("bookshelf.save_progress: %s", exc)
+    return entry
+
+
+def get_progress(path):
+    """Return saved reading progress dict for ``path``, or None."""
+    if not path:
+        return None
+    resolved = str(Path(path).resolve())
+    with _PROGRESS_LOCK:
+        entry = _load_progress().get(resolved)
+    return dict(entry) if isinstance(entry, dict) else None
+
+
+def list_recent_progress(limit=12, *, _prog_map=None):
+    """Return up to ``limit`` recently read books that still exist on disk."""
+    data = _prog_map if _prog_map is not None else _load_progress()
+    ranked = sorted(
+        data.items(),
+        key=lambda kv: float((kv[1] or {}).get("updated_at") or 0),
+        reverse=True,
+    )
+    out = []
+    for raw_path, prog in ranked:
+        if len(out) >= limit:
+            break
+        if not isinstance(prog, dict):
+            continue
+        p = Path(raw_path)
+        if not p.is_file() or p.suffix.lower() not in BOOK_EXTS:
+            continue
+        out.append({
+            "id": _book_id(raw_path),
+            "path": raw_path,
+            "name": p.name,
+            "stem": p.stem,
+            "ext": p.suffix.lstrip(".").upper(),
+            "folder": p.parent.name or str(p.parent),
+            "progress": dict(prog),
+        })
+    return out
+

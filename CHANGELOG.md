@@ -4,6 +4,20 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.89.0
+
+Track A — Persistent Reading Progress, Continue Reading Bookshelf & One-Click Vision-LLM Reader Tool:
+
+- **Persistent Per-Book Reading Progress (`bookshelf.py`, `server/reader_routes.py`, `gui.py`, `static/reader-render.js`, `static/reader-nav.js`).**
+  - Added `bookshelf.save_progress()`, `get_progress()`, and `list_recent_progress()` backed by atomic `reading-progress.json` (up to 500 books).
+  - Added `GET` / `POST /api/library/progress` endpoints and attached saved progress to `/api/library` and `/api/library/open`.
+  - Reader automatically saves page number, total pages, zoom, RTL manga mode, and two-page spread mode on page changes (debounced 600 ms) and restores them when reopening from Home or Bookshelf.
+- **Continue Reading Strip & Bookshelf Progress Bars (`static/tools.js`, `static/app.css`).**
+  - Added a **Continue Reading** horizontal strip on Home showing the most recently read PDFs, EPUBs, and CBZ/CBR manga with cover thumbnails, page/percentage counters, and accent progress bars.
+  - Added progress bars and `p. X/Y · Z%` labels directly on Bookshelf cover cards.
+- **One-Click Vision-LLM OCR / Translate Page (`static/reader.js`).**
+  - Added **Vision-LLM OCR / Translate page…** to the Reader menu wired directly to `/api/ai/vlm-ocr` with model presets (`translategemma:4b`, `qwen2.5vl:7b`, `translategemma:12b`, `llama3.2-vision:11b`), OCR vs. Translate mode, target language selector, optional custom prompt, and one-click Copy output.
+
 ## 0.88.1
 
 Audit Polish, LAN Companion CLI Wiring, Resource Hygiene & Update/CLI Fixes:
