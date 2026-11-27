@@ -1335,5 +1335,41 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
   border-radius: 2px;
   padding: 0 2px;
 }
+.shelf-ask-box {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  background: var(--surface);
+}
+.shelf-ask-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.shelf-ask-title { font-weight: 700; font-size: 13px; }
+.shelf-ask-answer {
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.shelf-ask-cites {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.shelf-cite-chip {
+  font-size: 11.5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.shelf-cite-chip:hover { border-color: var(--accent); color: var(--accent); }
+
 
 

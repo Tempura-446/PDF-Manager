@@ -582,6 +582,22 @@ class ReaderRoutesMixin:
             cap = 50
         return self._send(HTTPStatus.OK, bookshelf.search_library(query=query, limit=cap))
 
+    def _library_index_status(self):
+        from pdfmanager import bookshelf
+
+        return self._send(HTTPStatus.OK, bookshelf.index_status())
+
+    def _library_ask(self, body):
+        from pdfmanager import bookshelf
+
+        data = json.loads(body or b"{}")
+        query = str(data.get("query") or data.get("q") or "").strip()
+        if not query:
+            raise UserError("enter a question")
+        top_k = data.get("top_k") or 6
+        model = (str(data.get("model") or "").strip() or None)
+        return self._send(HTTPStatus.OK, bookshelf.ask_library(query, top_k=top_k, model=model))
+
     def _translate_manga_batch(self, body):
         """Batch-translate uploaded or bookshelf/opened .cbz/.cbr/.pdf manga chapters."""
         from pdfmanager import bookshelf, cbz

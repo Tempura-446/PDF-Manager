@@ -519,6 +519,46 @@ def build_parser():
     sp.add_argument("--password", help=f"password for encrypted PDFs (or set {PASSWORD_ENV})")
     sp.add_argument("--json", action="store_true", help="print JSON")
 
+    def cmd_library_search(a):
+        from pdfmanager import bookshelf
+
+        res = bookshelf.search_library(a.query, limit=a.limit)
+        if a.json:
+            print(json.dumps(res, indent=2, ensure_ascii=False))
+        else:
+            for hit in res["results"]:
+                print(f"{hit['stem']} ({hit['ext']} p.{hit['page']}): {hit['before']}{hit['match']}{hit['after']}")
+            if not res["results"]:
+                print(f"No matches found across {res['scanned_books']} book(s).")
+        return 0
+
+    sp = other("library-search", cmd_library_search,
+               "fast offline SQLite FTS5 full-text search across all Bookshelf PDFs & EPUBs")
+    sp.add_argument("query", help="search query")
+    sp.add_argument("--limit", type=int, default=30, help="maximum results (default: 30)")
+    sp.add_argument("--json", action="store_true", help="print JSON")
+
+    def cmd_library_ask(a):
+        from pdfmanager import bookshelf
+
+        res = bookshelf.ask_library(a.question, top_k=a.top_k, model=a.model)
+        if a.json:
+            print(json.dumps(res, indent=2, ensure_ascii=False))
+        else:
+            print(res["answer"])
+            if res["citations"]:
+                print("\nSources:")
+                for c in res["citations"]:
+                    print(f"  [{c['num']}] {c['stem']} ({c['ext']} p.{c['page']})")
+        return 0
+
+    sp = other("library-ask", cmd_library_ask,
+               "ask your local LLM a question grounded across your Bookshelf PDFs & EPUBs with citations")
+    sp.add_argument("question", help="question to ask your library")
+    sp.add_argument("--top-k", type=int, default=6, help="number of source excerpts (default: 6)")
+    sp.add_argument("--model", help="local LLM model override (default: configured Settings model)")
+    sp.add_argument("--json", action="store_true", help="print JSON")
+
     sp = other("cbz-to-pdf", cmd_cbz_to_pdf,
                "convert a .cbz comic/manga archive to a PDF (natural page sort + optional RTL viewer)")
     sp.add_argument("input", metavar="input.cbz", help="CBZ archive to convert")

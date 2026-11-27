@@ -550,49 +550,29 @@ def _natural_sort_key_epub(name):
 
 
 def search_library(query, *, limit=50, max_per_book=3):
-    """Offline full-text search across all PDFs and EPUBs in configured Bookshelf folders."""
-    q = str(query or "").strip()
-    if len(q) < 2:
-        return {"query": q, "results": [], "scanned_books": 0, "truncated": False}
-    q_lower = q.lower()
-    cap = max(1, min(200, int(limit or 50)))
-    per_book = max(1, min(10, int(max_per_book or 3)))
+    """Offline full-text search across all PDFs and EPUBs in configured Bookshelf folders
+    backed by a persistent incremental SQLite FTS5 index."""
+    from pdfmanager import library_index
+
     all_items = _all_items_cached(list_folders())
-    results = []
-    scanned = 0
-    truncated = False
-    for it in all_items:
-        ext = str(it.get("ext") or "").lower()
-        if ext not in ("pdf", "epub"):
-            continue
-        scanned += 1
-        p = Path(it["path"])
-        if not p.is_file():
-            continue
-        hits = _search_pdf(p, q_lower, max_hits=per_book) if ext == "pdf" else _search_epub(p, q_lower, max_hits=per_book)
-        for h in hits:
-            results.append({
-                "id": it["id"],
-                "name": it["name"],
-                "stem": it["stem"],
-                "ext": it["ext"],
-                "folder": it["folder"],
-                "path": it["path"],
-                "page": h["page"],
-                "before": h["before"],
-                "match": h["match"],
-                "after": h["after"],
-            })
-            if len(results) >= cap:
-                truncated = True
-                break
-        if truncated:
-            break
-    return {
-        "query": q,
-        "results": results,
-        "scanned_books": scanned,
-        "truncated": truncated,
-    }
+    res = library_index.search_fts(query, all_items, limit=limit, max_per_book=max_per_book)
+    for hit in res.get("results") or ():
+        hit.pop("excerpt", None)
+    return res
+
+
+def ask_library(query, *, top_k=6, model=None):
+    """Answer a question across all Bookshelf PDFs & EPUBs with local-LLM citations."""
+    from pdfmanager import library_index
+
+    all_items = _all_items_cached(list_folders())
+    return library_index.ask_library(query, all_items, top_k=top_k, model=model)
+
+
+def index_status():
+    """Return SQLite FTS5 library index statistics."""
+    from pdfmanager import library_index
+
+    return library_index.index_status()
 
 
