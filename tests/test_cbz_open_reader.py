@@ -84,3 +84,25 @@ def test_reader_frontend_and_dialog_accept_cbz():
     assert "/api/cbz/open" in (root / "static" / "tabs.js").read_text(encoding="utf-8")
     assert ".cbz" in (root / "static" / "tools.js").read_text(encoding="utf-8")
     assert "*.cbz" in (root / "gui.py").read_text(encoding="utf-8")
+
+
+def test_cbz_zero_copy_jpeg_passthrough(tmp_path):
+    from pdfmanager import cbz
+
+    img = Image.new("RGB", (320, 480), (180, 120, 90))
+    jbuf = io.BytesIO()
+    img.save(jbuf, format="JPEG", quality=85)
+    raw_jpg = jbuf.getvalue()
+
+    cbz_path = tmp_path / "fast.cbz"
+    with zipfile.ZipFile(cbz_path, "w") as zf:
+        zf.writestr("001.jpg", raw_jpg)
+
+    out_pdf = tmp_path / "fast.pdf"
+    cbz.cbz_to_pdf(cbz_path, out_pdf, rtl_viewer=False)
+    reader = PdfReader(str(out_pdf))
+    assert len(reader.pages) == 1
+    xobjs = reader.pages[0]["/Resources"]["/XObject"].get_object()
+    im0 = xobjs["/Im0"].get_object()
+    assert str(im0["/Filter"]) == "/DCTDecode"
+    assert im0._data == raw_jpg

@@ -11,6 +11,7 @@ import io
 import json
 import logging
 import re
+import threading
 import zipfile
 from pathlib import Path
 
@@ -18,6 +19,18 @@ from pdfmanager import appdata, cbz, core
 
 BOOK_EXTS = {".pdf", ".cbz", ".cbr", ".epub"}
 _LOG = logging.getLogger("zpdf")
+_CACHE_LOCK = threading.Lock()
+_SCAN_KEY = None
+_SCAN_ITEMS = []
+_ID_INDEX = {}
+
+
+def _invalidate_cache():
+    global _SCAN_KEY, _SCAN_ITEMS, _ID_INDEX
+    with _CACHE_LOCK:
+        _SCAN_KEY = None
+        _SCAN_ITEMS = []
+        _ID_INDEX = {}
 
 
 def _natural_key(text):
@@ -54,6 +67,7 @@ def _save_folders(folders):
     p = _config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({"folders": list(dict.fromkeys(folders))}, indent=2), encoding="utf-8")
+    _invalidate_cache()
 
 
 def add_folder(folder_path):
@@ -79,12 +93,27 @@ def remove_folder(folder_path):
     return folders
 
 
-def scan_library(query="", *, max_items=400):
-    """Scan all configured Bookshelf folders and return natural-sorted book items."""
-    q = str(query or "").strip().lower()
+def _folders_fingerprint(folders):
+    stamps = []
+    for folder in folders:
+        try:
+            stamps.append((folder, Path(folder).stat().st_mtime_ns))
+        except OSError:
+            stamps.append((folder, 0))
+    return (str(_config_path()), tuple(stamps))
+
+
+def _all_items_cached(folders):
+    global _SCAN_KEY, _SCAN_ITEMS, _ID_INDEX
+    fp = _folders_fingerprint(folders)
+    with _CACHE_LOCK:
+        if _SCAN_KEY == fp:
+            return _SCAN_ITEMS
+
     items = []
     seen = set()
-    for folder in list_folders():
+    id_map = {}
+    for folder in folders:
         root = Path(folder)
         if not root.is_dir():
             continue
@@ -98,8 +127,6 @@ def scan_library(query="", *, max_items=400):
             ext = entry.suffix.lower()
             if ext not in BOOK_EXTS or entry.name.startswith("."):
                 continue
-            if q and q not in entry.name.lower() and q not in root.name.lower():
-                continue
             resolved = str(entry.resolve())
             if resolved in seen:
                 continue
@@ -110,8 +137,10 @@ def scan_library(query="", *, max_items=400):
                 mtime = int(st.st_mtime)
             except OSError:
                 continue
+            bid = _book_id(resolved)
+            id_map[bid] = Path(resolved)
             items.append({
-                "id": _book_id(resolved),
+                "id": bid,
                 "path": resolved,
                 "name": entry.name,
                 "stem": entry.stem,
@@ -120,19 +149,36 @@ def scan_library(query="", *, max_items=400):
                 "size_bytes": size_bytes,
                 "mtime": mtime,
             })
-            if len(items) >= max_items:
-                break
-        if len(items) >= max_items:
-            break
-    return {"folders": list_folders(), "items": items}
+
+    with _CACHE_LOCK:
+        _SCAN_KEY = fp
+        _SCAN_ITEMS = items
+        _ID_INDEX = id_map
+    return items
+
+
+def scan_library(query="", *, max_items=400):
+    """Scan all configured Bookshelf folders and return natural-sorted book items."""
+    folders = list_folders()
+    all_items = _all_items_cached(folders)
+    q = str(query or "").strip().lower()
+    if q:
+        filtered = [it for it in all_items if q in it["name"].lower() or q in it["folder"].lower()]
+    else:
+        filtered = all_items
+    return {"folders": folders, "items": filtered[:max_items]}
 
 
 def find_by_id(book_id):
-    """Resolve a 16-char bookshelf item id back to its Path on disk."""
-    for item in scan_library(max_items=2000)["items"]:
-        if item["id"] == book_id:
-            return Path(item["path"])
-    return None
+    """Resolve a 16-char bookshelf item id back to its Path on disk in O(1)."""
+    with _CACHE_LOCK:
+        hit = _ID_INDEX.get(book_id)
+    if hit is not None and hit.is_file():
+        return hit
+    _all_items_cached(list_folders())
+    with _CACHE_LOCK:
+        hit = _ID_INDEX.get(book_id)
+    return hit if (hit is not None and hit.is_file()) else None
 
 
 def _render_cover_pil(path, max_w=240):
