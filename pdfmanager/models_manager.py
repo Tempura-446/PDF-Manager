@@ -56,6 +56,13 @@ _PACK_DEFS = (
         "description": "INT8 neural inpainter for cleanly erasing borderless text over screentones and artwork.",
         "approx_mb": 60,
     },
+    {
+        "id": "kokoro_tts",
+        "name": "Kokoro-82M Neural TTS (Audiobook & Read-Aloud)",
+        "category": "Audiobook",
+        "description": "Apache-2.0 offline neural voices (EN/JA/ZH) for Reader Read-Aloud and .wav Audiobook export.",
+        "approx_mb": 338,
+    },
 )
 
 _MANGA_MAP = {
@@ -94,6 +101,10 @@ def _pack_paths(pack_id):
         from pdfmanager.translate import manga_ai
 
         return list(manga_ai._component_paths(_MANGA_MAP[pack_id]))
+    if pack_id == "kokoro_tts":
+        from pdfmanager import tts
+
+        return list(tts._kokoro_paths())
     raise core.PdfManagerError(f"unknown AI model pack: {pack_id!r}")
 
 
@@ -150,6 +161,15 @@ def download_model(pack_id):
             comp = _MANGA_MAP[pack_id]
             manga_ai.ensure_manga_ai(components=(comp,), download=True)
             manga_ai.reset(comp)
+        elif pack_id == "kokoro_tts":
+            from pdfmanager import tts
+            from pdfmanager.translate import manga_ai
+
+            dest_dir = tts._kokoro_paths()[0].parent
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            for fname, url in tts.KOKORO_FILES:
+                manga_ai._download_file(url, dest_dir / fname)
+            tts.reset()
         else:
             raise core.PdfManagerError(f"unknown AI model pack: {pack_id!r}")
     return {"downloaded": pack_id, "models": list_models()}
@@ -180,6 +200,13 @@ def delete_model(pack_id):
             ocr_models.reset()
         except Exception as exc:
             _LOG.debug("models_manager.reset ocr: %s", exc)
+    elif pack_id == "kokoro_tts":
+        try:
+            from pdfmanager import tts
+
+            tts.reset()
+        except Exception as exc:
+            _LOG.debug("models_manager.reset tts: %s", exc)
     freed = 0
     for p in paths:
         path = Path(p)

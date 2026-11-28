@@ -331,10 +331,11 @@ def export_redline_html(report, *, ai_summary=None):
 
 
 def export_redline_pdf(report, output_pdf, *, ai_summary=None):
-    """Render a clean PDF Redline Review Report with red deletions and green insertions."""
+    """Render a clean PDF Redline Review Report with summary table, red deletions, and green insertions."""
+    from reportlab.lib import colors
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     out = Path(output_pdf)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -343,18 +344,32 @@ def export_redline_pdf(report, output_pdf, *, ai_summary=None):
     meta_style = ParagraphStyle("RedlineMeta", parent=styles["Heading4"], fontSize=10, spaceBefore=8, spaceAfter=3)
 
     s = report["summary"]
+    summary_table = Table(
+        [
+            ["Total Changes", "Modified", "Added", "Removed", "Material (Numeric/Date)"],
+            [str(s["total_changes"]), str(s["modified"]), str(s["added"]), str(s["removed"]), str(s["material"])],
+        ],
+        colWidths=[96, 86, 86, 86, 140],
+    )
+    summary_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#1e293b")),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
     story = [
         Paragraph(
             f"<b>Redline Report:</b> {_xml_escape(report['old_name'])} → {_xml_escape(report['new_name'])}",
             styles["Title"],
         ),
-        Paragraph(
-            f"Total changes: <b>{s['total_changes']}</b> "
-            f"({s['modified']} modified, {s['added']} added, {s['removed']} removed, "
-            f"<b>{s['material']} material</b>)",
-            body_style,
-        ),
-        Spacer(1, 10),
+        Spacer(1, 6),
+        summary_table,
+        Spacer(1, 12),
     ]
     if ai_summary:
         story.append(Paragraph("<b>AI Change Summary</b>", styles["Heading2"]))

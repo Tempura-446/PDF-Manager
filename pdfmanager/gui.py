@@ -186,6 +186,8 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 "version": __version__,
                 "pwa_manifest": "/manifest.webmanifest",
             })
+        if path == "/api/companion/files":
+            return self._companion_files()
         if path.startswith("/api/scan/"):
             try:
                 return self._scan_get(path[len("/api/scan/"):])
@@ -417,12 +419,16 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._library_neighbors(body)
             if path == "/api/library/progress":
                 return self._library_progress_save(body)
+            if path == "/api/library/progress/clear":
+                return self._library_progress_clear(body)
             if path == "/api/library/ask":
                 return self._library_ask(body)
             if path == "/api/translate/manga-batch":
                 return self._translate_manga_batch(body)
             if path == "/api/companion/drop":
                 return self._companion_drop(body)
+            if path == "/api/redline":
+                return self._redline_pdf(body)
             if path == "/api/tts/page-text":
                 return self._tts_page_text(body)
             if path == "/api/tts/speak":

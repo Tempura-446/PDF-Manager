@@ -16,12 +16,20 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import wave
 from pathlib import Path
 
 from pdfmanager import appdata, core, progress
 
 _LOG = logging.getLogger("zpdf")
+_KOKORO_LOCK = threading.Lock()
+_KOKORO_INSTANCE = None
+
+KOKORO_FILES = (
+    ("kokoro-v1.0.onnx", "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"),
+    ("voices-v1.0.bin", "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"),
+)
 
 KOKORO_VOICES = (
     ("af_heart", "Heart (English Female — Warm)"),
@@ -36,6 +44,13 @@ KOKORO_VOICES = (
 def _kokoro_paths():
     base = appdata.data_dir() / "models" / "kokoro"
     return base / "kokoro-v1.0.onnx", base / "voices-v1.0.bin"
+
+
+def reset():
+    """Release any cached Kokoro ONNX session so weights can be deleted or RAM reclaimed."""
+    global _KOKORO_INSTANCE
+    with _KOKORO_LOCK:
+        _KOKORO_INSTANCE = None
 
 
 def available_backends():
@@ -103,12 +118,16 @@ def extract_readable_sentences(pdf_path, *, pages=None, password=None):
 
 
 def _synth_kokoro(text, out_wav, *, voice="af_heart", speed=1.0):
+    global _KOKORO_INSTANCE
     import numpy as np
     import kokoro_onnx
 
     model_path, voices_path = _kokoro_paths()
-    kokoro = kokoro_onnx.Kokoro(str(model_path), str(voices_path))
-    samples, sample_rate = kokoro.create(text, voice=voice or "af_heart", speed=max(0.5, min(2.5, float(speed))))
+    with _KOKORO_LOCK:
+        if _KOKORO_INSTANCE is None:
+            _KOKORO_INSTANCE = kokoro_onnx.Kokoro(str(model_path), str(voices_path))
+        kokoro = _KOKORO_INSTANCE
+        samples, sample_rate = kokoro.create(text, voice=voice or "af_heart", speed=max(0.5, min(2.5, float(speed))))
     pcm = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
     pcm16 = (pcm * 32767.0).astype("<i2")
     with wave.open(str(out_wav), "wb") as wf:
