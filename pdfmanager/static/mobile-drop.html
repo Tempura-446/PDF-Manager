@@ -25,14 +25,26 @@
   #status { font-size: 13px; min-height: 20px; margin-top: 12px; text-align: center; }
   #status.ok { color: var(--ok); }
   #status.err { color: var(--err); }
-  .queue { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-  .pill { font-size: 12px; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--line); }
+  .queue { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+  .thumb-item { position: relative; width: 68px; height: 88px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); background: #000; }
+  .thumb-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb-num { position: absolute; left: 4px; bottom: 4px; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: rgba(0,0,0,0.75); color: #fff; }
+  .thumb-rm { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border: 0; border-radius: 50%; background: rgba(0,0,0,0.78); color: #fff; font-size: 13px; line-height: 1; cursor: pointer; display: grid; place-items: center; }
+  .desk-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+  .desk-head h2 { margin: 0; }
+  .mini-btn { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--fg); font-size: 12px; font-weight: 600; cursor: pointer; }
+  .desk-list { display: flex; flex-direction: column; gap: 8px; }
+  .desk-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); }
+  .desk-meta { min-width: 0; }
+  .desk-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .desk-size { font-size: 11px; color: var(--muted); }
+  .desk-empty { font-size: 12px; color: var(--muted); margin: 4px 0 0; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>ZPDF Phone Companion</h1>
-  <p class="sub">Local Wi-Fi transfer — zero cloud, opens directly in ZPDF on your desktop.</p>
+  <p class="sub">Local Wi-Fi transfer — zero cloud, two-way between your phone and desktop ZPDF.</p>
 
   <div class="card">
     <h2>1. Snap Document Pages (Wireless Scanner)</h2>
@@ -50,6 +62,15 @@
     <button id="file-btn" class="btn secondary" type="button">Choose File to Send</button>
   </div>
 
+  <div class="card">
+    <div class="desk-head">
+      <h2>3. Grab from Desktop</h2>
+      <button id="desk-refresh" class="mini-btn" type="button">Refresh</button>
+    </div>
+    <p>Download any document currently open in ZPDF on your computer.</p>
+    <div id="desk-list" class="desk-list"></div>
+  </div>
+
   <div id="status" role="status" aria-live="polite"></div>
 </div>
 <script>
@@ -60,18 +81,45 @@
   const setStatus = (msg, kind = "") => { statusEl.textContent = msg; statusEl.className = kind; };
   if (!token) setStatus("Missing pairing token — re-scan the QR code from desktop ZPDF.", "err");
 
-  const scanPages = [];
+  const scanPages = []; // { file, url }
   const scanQueue = document.getElementById("scan-queue");
   const scanSend = document.getElementById("scan-send");
   const camInput = document.getElementById("cam-input");
   const fileInput = document.getElementById("file-input");
+  const deskList = document.getElementById("desk-list");
+  const deskRefresh = document.getElementById("desk-refresh");
+
+  const clearScanPages = () => {
+    for (const item of scanPages) {
+      try { URL.revokeObjectURL(item.url); } catch (_) {}
+    }
+    scanPages.length = 0;
+  };
+  window.addEventListener("pagehide", clearScanPages);
 
   const renderQueue = () => {
-    scanQueue.replaceChildren(...scanPages.map((f, i) => {
-      const s = document.createElement("span");
-      s.className = "pill";
-      s.textContent = `Page ${i + 1}`;
-      return s;
+    scanQueue.replaceChildren(...scanPages.map((item, i) => {
+      const box = document.createElement("div");
+      box.className = "thumb-item";
+      const img = document.createElement("img");
+      img.src = item.url;
+      img.alt = `Page ${i + 1}`;
+      const num = document.createElement("span");
+      num.className = "thumb-num";
+      num.textContent = String(i + 1);
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "thumb-rm";
+      rm.title = `Remove page ${i + 1}`;
+      rm.setAttribute("aria-label", `Remove page ${i + 1}`);
+      rm.textContent = "×";
+      rm.addEventListener("click", () => {
+        const [removed] = scanPages.splice(i, 1);
+        if (removed?.url) { try { URL.revokeObjectURL(removed.url); } catch (_) {} }
+        renderQueue();
+      });
+      box.append(img, num, rm);
+      return box;
     }));
     scanSend.hidden = scanPages.length === 0;
     scanSend.textContent = `Send ${scanPages.length} Page${scanPages.length === 1 ? "" : "s"} as PDF to Desktop`;
@@ -93,20 +141,98 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       setStatus(`Sent “${data.name || "file"}” — opened on desktop!`, "ok");
-      if (mode === "scan") { scanPages.length = 0; renderQueue(); }
+      if (mode === "scan") { clearScanPages(); renderQueue(); }
+      loadDesktopFiles();
     } catch (err) {
       setStatus(`Transfer failed: ${err?.message || err}`, "err");
     }
   }
 
+  const fmtSize = (n) => {
+    const v = Number(n) || 0;
+    if (v >= 1024 * 1024) return `${(v / (1024 * 1024)).toFixed(1)} MB`;
+    if (v >= 1024) return `${Math.round(v / 1024)} KB`;
+    return `${v} B`;
+  };
+
+  async function downloadDesktopFile(file) {
+    if (!token) { setStatus("Missing pairing token.", "err"); return; }
+    setStatus(`Downloading “${file.name}”…`);
+    try {
+      const res = await fetch(`/api/file/${encodeURIComponent(file.id)}`, {
+        headers: { "X-Pdfm-Token": token },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file.name || "document.pdf";
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) {} }, 15000);
+      setStatus(`Downloaded “${file.name}”.`, "ok");
+    } catch (err) {
+      setStatus(`Download failed: ${err?.message || err}`, "err");
+    }
+  }
+
+  async function loadDesktopFiles() {
+    if (!token) {
+      deskList.replaceChildren();
+      return;
+    }
+    try {
+      const res = await fetch("/api/companion/files", {
+        headers: { "X-Pdfm-Token": token },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const files = data.files || [];
+      if (!files.length) {
+        const p = document.createElement("p");
+        p.className = "desk-empty";
+        p.textContent = "No documents open on desktop yet. Open a PDF/EPUB/CBZ on your computer and tap Refresh.";
+        deskList.replaceChildren(p);
+        return;
+      }
+      deskList.replaceChildren(...files.map((f) => {
+        const row = document.createElement("div");
+        row.className = "desk-row";
+        const meta = document.createElement("div");
+        meta.className = "desk-meta";
+        const nameEl = document.createElement("div");
+        nameEl.className = "desk-name";
+        nameEl.textContent = f.name;
+        const sizeEl = document.createElement("div");
+        sizeEl.className = "desk-size";
+        sizeEl.textContent = fmtSize(f.size_bytes);
+        meta.append(nameEl, sizeEl);
+        const dl = document.createElement("button");
+        dl.type = "button";
+        dl.className = "mini-btn";
+        dl.textContent = "Download";
+        dl.addEventListener("click", () => downloadDesktopFile(f));
+        row.append(meta, dl);
+        return row;
+      }));
+    } catch (err) {
+      const p = document.createElement("p");
+      p.className = "desk-empty";
+      p.textContent = `Could not load desktop files: ${err?.message || err}`;
+      deskList.replaceChildren(p);
+    }
+  }
+
   document.getElementById("cam-btn").addEventListener("click", () => camInput.click());
   camInput.addEventListener("change", () => {
-    for (const f of camInput.files || []) scanPages.push(f);
+    for (const f of camInput.files || []) scanPages.push({ file: f, url: URL.createObjectURL(f) });
     camInput.value = "";
     renderQueue();
     setStatus(`${scanPages.length} page(s) ready — add more or tap Send.`);
   });
-  scanSend.addEventListener("click", () => upload(scanPages, "scan"));
+  scanSend.addEventListener("click", () => upload(scanPages.map((p) => p.file), "scan"));
 
   document.getElementById("file-btn").addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", () => {
@@ -114,6 +240,9 @@
     fileInput.value = "";
     upload(picked, "open");
   });
+
+  deskRefresh.addEventListener("click", loadDesktopFiles);
+  loadDesktopFiles();
 })();
 </script>
 </body>

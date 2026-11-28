@@ -422,6 +422,36 @@ def get_progress(path):
     return dict(entry) if isinstance(entry, dict) else None
 
 
+def clear_progress(book_id_or_path):
+    """Remove a book from Continue Reading progress history by book id or path."""
+    target = str(book_id_or_path or "").strip()
+    if not target:
+        return False
+    removed = False
+    with _PROGRESS_LOCK:
+        data = _load_progress()
+        keys_to_drop = [
+            k for k in data
+            if k == target or _book_id(k) == target
+        ]
+        if not keys_to_drop:
+            try:
+                resolved = str(Path(target).resolve())
+                if resolved in data:
+                    keys_to_drop = [resolved]
+            except OSError:
+                pass
+        for k in keys_to_drop:
+            data.pop(k, None)
+            removed = True
+        if removed:
+            try:
+                _write_progress(data)
+            except OSError as exc:
+                _LOG.debug("bookshelf.clear_progress: %s", exc)
+    return removed
+
+
 def list_recent_progress(limit=12, *, _prog_map=None):
     """Return up to ``limit`` recently read books that still exist on disk."""
     data = _prog_map if _prog_map is not None else _load_progress()

@@ -692,6 +692,7 @@ export const ReaderRender = (Base) => class extends Base {
     this.closeAnnotate();
     this.closeFormMode();
     this.closeCheckOcr();
+    if (this._ttsState?.playing) this._stopReadAloud();
     this.measureTool(null);
     this.uiManager = null;
     this.annotUndo = this.annotRedo = false;

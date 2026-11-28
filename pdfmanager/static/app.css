@@ -1180,10 +1180,21 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
 
 /* ---- Visual Cover-Art Bookshelf (Home Screen) ------------------------------ */
 .shelf-sec { margin-top: 22px; }
-.shelf-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.shelf-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
 .shelf-head .lbl { margin: 0; }
+.shelf-index-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  opacity: 0.78;
+  white-space: nowrap;
+}
 .shelf-filter {
   margin-left: auto;
+  flex: 1 1 170px;
+  max-width: 280px;
   padding: 5px 10px;
   border-radius: 8px;
   border: 1px solid var(--line);
@@ -1191,7 +1202,7 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
   color: inherit;
   font: inherit;
   font-size: 13px;
-  min-width: 170px;
+  min-width: 150px;
 }
 .shelf-folders { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .shelf-chip {
@@ -1285,7 +1296,32 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
   overflow-x: auto;
   padding-bottom: 6px;
 }
-.continue-card { min-width: 126px; }
+.continue-card { position: relative; min-width: 126px; }
+.continue-dismiss {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(18, 20, 26, 0.82);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transition: opacity 0.14s ease, background 0.14s ease;
+}
+.continue-card:hover .continue-dismiss,
+.continue-card:focus-within .continue-dismiss,
+.continue-dismiss:focus {
+  opacity: 1;
+}
+.continue-dismiss:hover { background: var(--err, #ef4444); }
 .shelf-search-toggle.active {
   background: var(--accent);
   color: #fff;

@@ -513,6 +513,7 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       ...(this.activeTab?.fileId ? [this.#menuItem("save", "Save", () => this.save())] : []),
       this.#menuItem("save", this.activeTab?.fileId ? "Save as…" : this._edited() ? "Save a copy with your changes…" : "Save a copy…", () => this.saveCopy()),
       this.#menuItem("layers", this.overlay ? "Stop comparing revisions" : "Compare with another revision…", () => (this.overlay ? this.closeCompare() : this.compareRevision())),
+      this.#menuItem("layers", "Smart Redline with another PDF…", () => this.redlineWithFile()),
       this.#menuItem("badge", "Digital ID…", () => this.useTool("CERTSIGN")),
       this.#menuItem("fillable", "Prepare form (add or edit form fields)", () => this.openFormMode()),
       this.#menuItem("fillable", "Make it fillable (find the form's fields)", () => this.makeFillable()),
@@ -1767,6 +1768,17 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     }
   }
 
+  async _loadTtsStatus() {
+    if (this._ttsStatus) return this._ttsStatus;
+    try {
+      const res = await fetch("/api/tts/status", {
+        headers: this.token ? { "X-Pdfm-Token": this.token } : {},
+      });
+      if (res.ok) this._ttsStatus = await res.json();
+    } catch (_) {}
+    return this._ttsStatus || { preferred: "native", kokoro: false, voices: [] };
+  }
+
   toggleReadAloud() {
     if (!this.doc) return;
     if (this._ttsBar && !this._ttsBar.hidden) {
@@ -1775,7 +1787,18 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       return;
     }
     if (!this._ttsBar) {
-      this._ttsState = { playing: false, sentences: [], idx: 0, page: 1, speed: Number(store.get("pdfm-tts-speed", 1.0)) || 1.0, autoTurn: true, audio: null, audioUrl: null };
+      this._ttsState = {
+        playing: false,
+        sentences: [],
+        idx: 0,
+        page: 1,
+        speed: Number(store.get("pdfm-tts-speed", 1.0)) || 1.0,
+        voice: String(store.get("pdfm-tts-voice", "af_heart") || "af_heart"),
+        autoTurn: store.get("pdfm-tts-autoturn", true) !== false,
+        useKokoro: false,
+        audio: null,
+        audioUrl: null,
+      };
       const playBtn = el("button", { type: "button", class: "rd-btn", onclick: () => {
         if (this._ttsState.playing) this._stopReadAloud();
         else this._startReadAloud();
@@ -1800,19 +1823,51 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
         this._ttsState.speed = Number(speedSel.value) || 1.0;
         store.set("pdfm-tts-speed", this._ttsState.speed);
       });
+      const voiceSel = el("select", { class: "rd-tts-voice", "aria-label": "Neural voice", hidden: true });
+      voiceSel.addEventListener("change", () => {
+        this._ttsState.voice = voiceSel.value || "af_heart";
+        store.set("pdfm-tts-voice", this._ttsState.voice);
+      });
+      const autoCb = el("input", { type: "checkbox", checked: this._ttsState.autoTurn });
+      autoCb.addEventListener("change", () => {
+        this._ttsState.autoTurn = !!autoCb.checked;
+        store.set("pdfm-tts-autoturn", this._ttsState.autoTurn);
+      });
+      const autoLbl = el("label", { class: "rd-tts-auto", title: "Automatically turn to the next page when finished" },
+        autoCb, "Auto-turn",
+      );
       const statusEl = el("span", { class: "rd-tts-status" }, "Ready");
       const closeBtn = el("button", { type: "button", class: "rd-btn", onclick: () => {
         this._stopReadAloud();
         this._ttsBar.hidden = true;
       } }, "×");
-      this._ttsUi = { playBtn, statusEl };
+      this._ttsUi = { playBtn, statusEl, voiceSel };
       this._ttsBar = el("div", { class: "rd-tts-bar", role: "region", "aria-label": "Read aloud player" },
-        playBtn, prevBtn, nextBtn, speedSel, statusEl, closeBtn,
+        playBtn, prevBtn, nextBtn, speedSel, voiceSel, autoLbl, statusEl, closeBtn,
       );
       this.root.append(this._ttsBar);
     }
     this._ttsBar.hidden = false;
-    this._startReadAloud();
+    this._loadTtsStatus().then((st) => {
+      if (!this._ttsState || !this._ttsUi) return;
+      this._ttsState.useKokoro = st.preferred === "kokoro";
+      const voices = Array.isArray(st.voices) ? st.voices : [];
+      if (this._ttsState.useKokoro && voices.length) {
+        this._ttsUi.voiceSel.replaceChildren(
+          ...voices.map((v) => el("option", { value: v }, v)),
+        );
+        if (voices.includes(this._ttsState.voice)) this._ttsUi.voiceSel.value = this._ttsState.voice;
+        else {
+          this._ttsState.voice = voices[0];
+          this._ttsUi.voiceSel.value = voices[0];
+        }
+        this._ttsUi.voiceSel.hidden = false;
+      } else {
+        this._ttsUi.voiceSel.hidden = true;
+      }
+    }).finally(() => {
+      if (this._ttsBar && !this._ttsBar.hidden) this._startReadAloud();
+    });
   }
 
   _stopSpeechOnly() {
@@ -1839,8 +1894,9 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
   _syncTtsLabel() {
     if (!this._ttsUi || !this._ttsState) return;
     const n = this._ttsState.sentences.length;
+    const tag = this._ttsState.useKokoro ? "Neural · " : "";
     this._ttsUi.statusEl.textContent = n
-      ? `Page ${this._ttsState.page} · ${this._ttsState.idx + 1}/${n}`
+      ? `${tag}Page ${this._ttsState.page} · ${this._ttsState.idx + 1}/${n}`
       : `Page ${this._ttsState.page} · No text`;
   }
 
@@ -1911,30 +1967,84 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       this._ttsState.idx += 1;
       this._speakCurrent();
     };
-    if (window.speechSynthesis) {
+    const speakViaServer = () => fetch("/api/tts/speak", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(this.token ? { "X-Pdfm-Token": this.token } : {}) },
+      body: JSON.stringify({
+        text,
+        speed: this._ttsState.speed || 1.0,
+        voice: this._ttsState.voice || "af_heart",
+      }),
+    })
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((blob) => {
+        if (!this._ttsState?.playing) return;
+        const url = URL.createObjectURL(blob);
+        this._ttsState.audioUrl = url;
+        const audio = new Audio(url);
+        this._ttsState.audio = audio;
+        audio.onended = () => { URL.revokeObjectURL(url); this._ttsState.audioUrl = null; advance(); };
+        audio.onerror = () => this._stopReadAloud();
+        audio.play().catch(() => this._stopReadAloud());
+      });
+
+    if (this._ttsState.useKokoro || !window.speechSynthesis) {
+      speakViaServer().catch(() => {
+        if (window.speechSynthesis && this._ttsState?.playing) {
+          this._ttsState.useKokoro = false;
+          const utt = new SpeechSynthesisUtterance(text);
+          utt.rate = this._ttsState.speed || 1.0;
+          utt.onend = advance;
+          utt.onerror = () => this._stopReadAloud();
+          window.speechSynthesis.speak(utt);
+        } else {
+          this._stopReadAloud();
+        }
+      });
+    } else {
       const utt = new SpeechSynthesisUtterance(text);
       utt.rate = this._ttsState.speed || 1.0;
       utt.onend = advance;
       utt.onerror = () => this._stopReadAloud();
       window.speechSynthesis.speak(utt);
-    } else {
-      fetch("/api/tts/speak", {
+    }
+  }
+
+  async redlineWithFile() {
+    if (!this.doc) return;
+    const file = await this._pickPdf();
+    if (!file) return;
+    this._busy(true);
+    try {
+      const tab = this.activeTab;
+      const form = new FormData();
+      if (tab?.fileId) {
+        form.append("id", tab.fileId);
+      } else {
+        const bytes = await this._bytes();
+        form.append("old", new Blob([bytes], { type: "application/pdf" }), tab?.name || "original.pdf");
+      }
+      if (tab?.password) form.append("password", tab.password);
+      form.append("new", file, file.name || "revised.pdf");
+      const res = await fetch("/api/redline", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(this.token ? { "X-Pdfm-Token": this.token } : {}) },
-        body: JSON.stringify({ text, speed: this._ttsState.speed || 1.0 }),
-      })
-        .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`HTTP ${r.status}`))))
-        .then((blob) => {
-          if (!this._ttsState?.playing) return;
-          const url = URL.createObjectURL(blob);
-          this._ttsState.audioUrl = url;
-          const audio = new Audio(url);
-          this._ttsState.audio = audio;
-          audio.onended = () => { URL.revokeObjectURL(url); this._ttsState.audioUrl = null; advance(); };
-          audio.onerror = () => this._stopReadAloud();
-          audio.play().catch(() => this._stopReadAloud());
-        })
-        .catch(() => this._stopReadAloud());
+        headers: this.token ? { "X-Pdfm-Token": this.token } : {},
+        body: form,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const fname = decodeURIComponent(res.headers.get("X-Pdfm-Filename") || "redline.pdf");
+      const note = decodeURIComponent(res.headers.get("X-Pdfm-Note") || "Smart Redline PDF ready.");
+      const redlineFile = new File([blob], fname, { type: "application/pdf" });
+      await this.openFile(redlineFile);
+      this.toast(note, 7000);
+    } catch (err) {
+      this.toast(`Smart Redline failed: ${err?.message || err}`, 7000);
+    } finally {
+      this._busy(false);
     }
   }
 

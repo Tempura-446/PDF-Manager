@@ -789,6 +789,84 @@ class ReaderRoutesMixin:
             raw = out_wav.read_bytes()
         return self._send(HTTPStatus.OK, raw, "audio/wav", {"X-Pdfm-Tts-Backend": used})
 
+    def _library_progress_clear(self, body):
+        from pdfmanager import bookshelf
+
+        data = json.loads(body or b"{}")
+        target = str(data.get("id") or data.get("path") or "").strip()
+        removed = bookshelf.clear_progress(target) if target else False
+        return self._send(HTTPStatus.OK, {"ok": True, "removed": removed})
+
+    def _companion_files(self):
+        """Return currently opened desktop files so a paired phone can download them over LAN."""
+        files = []
+        if self.opened is not None:
+            with self.opened.lock:
+                snapshot = list(self.opened.items.items())
+            for fid, p in snapshot:
+                try:
+                    if p.is_file():
+                        files.append({
+                            "id": fid,
+                            "name": p.name,
+                            "size_bytes": int(p.stat().st_size),
+                        })
+                except OSError:
+                    continue
+        return self._send(HTTPStatus.OK, {"files": files[-30:]})
+
+    def _redline_pdf(self, body):
+        """Generate a Smart Redline PDF comparing an open/uploaded original PDF against a revised PDF."""
+        from pdfmanager import redline
+
+        fields, uploads = _parse_multipart(self.headers.get("Content-Type", ""), body)
+        file_id = str(fields.get("id") or "").strip()
+        password = fields.get("password") or None
+        opened_path = self.opened.get(file_id) if (file_id and self.opened is not None) else None
+
+        by_field = {f: (name, raw) for f, name, raw in uploads}
+        new_upload = by_field.get("new") or (uploads[-1][1:] if uploads else None)
+        old_upload = by_field.get("old")
+        if new_upload is None:
+            raise UserError("choose a revised PDF to compare against")
+        if old_upload is None and (opened_path is None or not opened_path.is_file()):
+            raise UserError("original PDF not found")
+
+        with tempfile.TemporaryDirectory(prefix="pdfm-redline-") as tmp:
+            tmp_dir = Path(tmp)
+            if old_upload is not None:
+                old_pdf = tmp_dir / "original.pdf"
+                old_pdf.write_bytes(old_upload[1])
+                old_stem = Path(old_upload[0] or "original").stem
+            else:
+                old_pdf = _resolve_opened_pdf(opened_path, tmp)
+                old_stem = opened_path.stem
+            new_pdf = tmp_dir / "revised.pdf"
+            new_pdf.write_bytes(new_upload[1])
+            new_stem = Path(new_upload[0] or "revised").stem
+            out_pdf = tmp_dir / "redline.pdf"
+
+            report = redline.compute_redline(old_pdf, new_pdf, password=password)
+            report["old_name"] = f"{old_stem}.pdf"
+            report["new_name"] = f"{new_stem}.pdf"
+            redline.export_redline_pdf(report, out_pdf)
+            raw = out_pdf.read_bytes()
+            s = report["summary"]
+            note = (
+                f"Redline: {s['total_changes']} change(s) "
+                f"({s['modified']} modified, {s['added']} added, {s['removed']} removed, {s['material']} material)"
+            )
+        fname = _safe_name(f"{old_stem}_vs_{new_stem}_redline") + ".pdf"
+        return self._send(
+            HTTPStatus.OK,
+            raw,
+            "application/pdf",
+            {
+                "X-Pdfm-Filename": urllib.parse.quote(fname),
+                "X-Pdfm-Note": urllib.parse.quote(note),
+            },
+        )
+
     def _library_neighbors(self, body):
         from pdfmanager import bookshelf
 

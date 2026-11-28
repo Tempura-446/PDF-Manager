@@ -343,6 +343,22 @@ async function renderHome() {
     }
     shelfBlobUrls = [];
   };
+  const shelfIndexBadge = el("span", { class: "shelf-index-badge", hidden: true });
+  const refreshIndexStatus = async () => {
+    try {
+      const st = await (await api("/api/library/index/status")).json();
+      if (!inHome()) return;
+      const books = Number(st.books) || 0;
+      const pages = Number(st.pages) || 0;
+      if (books > 0) {
+        shelfIndexBadge.textContent = `${books.toLocaleString()} book${books === 1 ? "" : "s"} · ${pages.toLocaleString()} p. indexed`;
+        shelfIndexBadge.title = st.fts5 ? "SQLite FTS5 full-text index active" : "SQLite full-text index active";
+        shelfIndexBadge.hidden = false;
+      } else {
+        shelfIndexBadge.hidden = true;
+      }
+    } catch { shelfIndexBadge.hidden = true; }
+  };
   const makeBookCard = (item, seq, { compact = false } = {}) => {
     const img = el("img", {
       class: "shelf-cover",
@@ -367,6 +383,32 @@ async function renderHome() {
     const subText = prog && prog.total > 0
       ? `p. ${prog.page}/${prog.total} · ${pct}%`
       : item.folder;
+    const dismissBtn = compact
+      ? el("span", {
+          role: "button",
+          tabIndex: 0,
+          class: "continue-dismiss",
+          title: `Dismiss “${item.stem}” from Continue Reading`,
+          "aria-label": `Dismiss ${item.stem} from Continue Reading`,
+          onclick: async (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            try {
+              await jsonApi("/api/library/progress/clear", { id: item.id });
+              refreshShelf(shelfFilter.value);
+            } catch (err) {
+              if (typeof toast === "function") toast(err?.message || "Could not dismiss item");
+            }
+          },
+          onkeydown: (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.stopPropagation();
+              e.preventDefault();
+              e.currentTarget.click();
+            }
+          },
+        }, "×")
+      : null;
     return el("button", {
       type: "button",
       class: compact ? "shelf-card continue-card" : "shelf-card",
@@ -389,6 +431,7 @@ async function renderHome() {
         }
       },
     },
+      dismissBtn,
       el("div", { class: "shelf-thumb" }, img, el("span", { class: "shelf-badge" }, item.ext), progBar),
       el("div", { class: "shelf-name" }, item.stem),
       el("div", { class: "shelf-folder" }, subText),
@@ -426,9 +469,11 @@ async function renderHome() {
       if (!items.length) {
         shelfGrid.replaceChildren(el("p", { class: "start-empty" },
           folders.length ? "No PDF, EPUB, or CBZ/CBR files matched." : "Add a local folder of PDFs, e-books, or manga to browse by cover art."));
+        refreshIndexStatus();
         return;
       }
       shelfGrid.replaceChildren(...items.slice(0, 60).map((item) => makeBookCard(item, seq)));
+      refreshIndexStatus();
     } catch { /* library optional */ }
   };
   addFolderBtn.addEventListener("click", async () => {
@@ -575,6 +620,18 @@ async function renderHome() {
       else refreshShelf(shelfFilter.value);
     }, shelfFullText ? 300 : 160);
   });
+  shelfFilter.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    clearTimeout(shelfTimer);
+    if (e.shiftKey) {
+      runShelfAsk(shelfFilter.value);
+    } else if (shelfFullText) {
+      runShelfSearch(shelfFilter.value);
+    } else {
+      refreshShelf(shelfFilter.value);
+    }
+  });
   const phonePairBtn = el("button", {
     type: "button",
     class: "btn secondary pb-small",
@@ -623,6 +680,7 @@ async function renderHome() {
   parts.push(el("section", { class: "start-sec shelf-sec", "aria-label": "Bookshelf library" },
     el("div", { class: "shelf-head" },
       el("span", { class: "lbl" }, "Bookshelf"),
+      shelfIndexBadge,
       shelfFilter,
       shelfFullTextBtn,
       shelfAskBtn,

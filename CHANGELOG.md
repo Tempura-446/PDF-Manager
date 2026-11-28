@@ -4,6 +4,22 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.95.0
+
+Polish, Integration & Hardening Pass across Offline TTS, Phone Companion, Bookshelf FTS5, and Smart Redline:
+
+- **Offline TTS & Read-Aloud Polish (`tts.py`, `models_manager.py`, `static/reader.js`, `static/reader-render.js`, `static/reader.css`).**
+  - Added **Kokoro-82M Neural TTS** (`kokoro_tts`) as a one-click managed pack in the Offline Models Manager (`models_manager.py`), backed by a thread-safe cached singleton session and `tts.reset()` on model deletion.
+  - Upgraded the in-Reader Read-Aloud player to automatically prefer Kokoro neural audio (`/api/tts/speak`) with a live **voice picker** and **Auto-turn** toggle when installed (falling back cleanly to browser/OS speech), and to stop playback automatically on tab switch or close.
+- **Two-Way QR Phone Companion (`static/mobile-drop.html`, `server/reader_routes.py`, `gui.py`).**
+  - Added camera page thumbnail previews with individual `×` remove buttons and automatic blob URL cleanup.
+  - Added **3. Grab from Desktop** (`GET /api/companion/files`) so paired phones can download any document currently open in desktop ZPDF over local Wi-Fi.
+- **Bookshelf, Continue Reading & FTS5 UX Polish (`bookshelf.py`, `server/reader_routes.py`, `gui.py`, `static/tools.js`, `static/app.css`).**
+  - Added hover `×` dismiss buttons on Continue Reading cards (`POST /api/library/progress/clear`), a live FTS5 index badge (`N books · M p. indexed`), responsive `.shelf-head` wrapping, and `Enter` / `Shift+Enter` keyboard triggers in the Bookshelf box.
+- **In-Reader Smart Redline Shortcut & PDF Summary Table (`redline.py`, `server/reader_routes.py`, `gui.py`, `static/reader.js`).**
+  - Added a styled summary metrics table (`Total Changes | Modified | Added | Removed | Material`) to `redline.export_redline_pdf()`.
+  - Added `POST /api/redline` and **Smart Redline with another PDF…** in the Reader menu to diff the current document against a revised PDF and open the Redline Review PDF directly in a new tab.
+
 ## 0.94.0
 
 Zero-Cloud Neural Read-Aloud & Offline Audiobook (.wav) Export:
