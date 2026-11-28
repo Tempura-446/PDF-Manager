@@ -1356,4 +1356,17 @@ svg.rd-measures { position: absolute; inset: 0; width: 100%; height: 100%; overf
   min-width: 90px;
   font-variant-numeric: tabular-nums;
 }
+.rd-tts-caption {
+  width: 100%;
+  font-size: 12px;
+  opacity: 0.82;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 540px;
+  padding-top: 2px;
+  border-top: 1px solid var(--border, rgba(128,128,128,0.18));
+}
+.rd-tts-caption:empty { display: none; }
 

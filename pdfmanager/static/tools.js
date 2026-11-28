@@ -327,8 +327,24 @@ async function renderHome() {
 
   // Continue Reading strip + Visual Cover-Art Bookshelf
   const continueGrid = el("div", { class: "continue-grid" });
+  const continueClearBtn = el("button", {
+    type: "button",
+    class: "continue-clear-btn",
+    title: "Clear all items from Continue Reading",
+    onclick: async () => {
+      try {
+        await jsonApi("/api/library/progress/clear", { all: true });
+        refreshShelf(shelfFilter.value);
+      } catch (err) {
+        if (typeof toast === "function") toast(err?.message || "Could not clear Continue Reading");
+      }
+    },
+  }, "Clear all");
   const continueSec = el("section", { class: "start-sec continue-sec", "aria-label": "Continue reading", hidden: true },
-    el("span", { class: "lbl" }, "Continue Reading"),
+    el("div", { class: "continue-head" },
+      el("span", { class: "lbl" }, "Continue Reading"),
+      continueClearBtn,
+    ),
     continueGrid,
   );
   const shelfGrid = el("div", { class: "shelf-grid" });
@@ -343,16 +359,47 @@ async function renderHome() {
     }
     shelfBlobUrls = [];
   };
-  const shelfIndexBadge = el("span", { class: "shelf-index-badge", hidden: true });
+  let reindexing = false;
+  const shelfIndexBadge = el("button", {
+    type: "button",
+    class: "shelf-index-badge",
+    hidden: true,
+    onclick: async () => {
+      if (reindexing) return;
+      reindexing = true;
+      const prev = shelfIndexBadge.textContent;
+      shelfIndexBadge.textContent = "Indexing…";
+      shelfIndexBadge.disabled = true;
+      try {
+        const st = await jsonApi("/api/library/index/rebuild", {});
+        if (!inHome()) return;
+        const books = Number(st.total_books ?? st.books) || 0;
+        const pages = Number(st.total_pages ?? st.pages) || 0;
+        shelfIndexBadge.textContent = `${books.toLocaleString()} book${books === 1 ? "" : "s"} · ${pages.toLocaleString()} p. indexed`;
+        shelfIndexBadge.hidden = books === 0;
+        if (typeof toast === "function") {
+          const updated = Number(st.sync?.indexed) || 0;
+          toast(updated ? `Bookshelf index updated (${updated} book${updated === 1 ? "" : "s"} re-indexed).` : "Bookshelf index is up to date.");
+        }
+      } catch (err) {
+        shelfIndexBadge.textContent = prev;
+        if (typeof toast === "function") toast(err?.message || "Re-index failed");
+      } finally {
+        reindexing = false;
+        shelfIndexBadge.disabled = false;
+      }
+    },
+  });
   const refreshIndexStatus = async () => {
     try {
       const st = await (await api("/api/library/index/status")).json();
       if (!inHome()) return;
-      const books = Number(st.books) || 0;
-      const pages = Number(st.pages) || 0;
+      const books = Number(st.total_books ?? st.books) || 0;
+      const pages = Number(st.total_pages ?? st.pages) || 0;
       if (books > 0) {
         shelfIndexBadge.textContent = `${books.toLocaleString()} book${books === 1 ? "" : "s"} · ${pages.toLocaleString()} p. indexed`;
-        shelfIndexBadge.title = st.fts5 ? "SQLite FTS5 full-text index active" : "SQLite full-text index active";
+        const isFts = st.engine === "sqlite-fts5" || !!st.fts5;
+        shelfIndexBadge.title = `${isFts ? "SQLite FTS5" : "SQLite"} full-text index active — click to re-index now`;
         shelfIndexBadge.hidden = false;
       } else {
         shelfIndexBadge.hidden = true;

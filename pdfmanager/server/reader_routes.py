@@ -587,6 +587,11 @@ class ReaderRoutesMixin:
 
         return self._send(HTTPStatus.OK, bookshelf.index_status())
 
+    def _library_index_rebuild(self):
+        from pdfmanager import bookshelf
+
+        return self._send(HTTPStatus.OK, bookshelf.rebuild_index())
+
     def _library_ask(self, body):
         from pdfmanager import bookshelf
 
@@ -793,6 +798,9 @@ class ReaderRoutesMixin:
         from pdfmanager import bookshelf
 
         data = json.loads(body or b"{}")
+        if data.get("all"):
+            cleared = bookshelf.clear_all_progress()
+            return self._send(HTTPStatus.OK, {"ok": True, "removed": cleared > 0, "cleared": cleared})
         target = str(data.get("id") or data.get("path") or "").strip()
         removed = bookshelf.clear_progress(target) if target else False
         return self._send(HTTPStatus.OK, {"ok": True, "removed": removed})

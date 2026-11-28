@@ -445,6 +445,19 @@ def clear_progress(book_id_or_path):
     return removed
 
 
+def clear_all_progress():
+    """Clear all Continue Reading progress entries and return how many were removed."""
+    with _PROGRESS_LOCK:
+        data = _load_progress()
+        count = len(data)
+        if count:
+            try:
+                _write_progress({})
+            except OSError as exc:
+                _LOG.debug("bookshelf.clear_all_progress: %s", exc)
+    return count
+
+
 def list_recent_progress(limit=12, *, _prog_map=None):
     """Return up to ``limit`` recently read books that still exist on disk."""
     data = _prog_map if _prog_map is not None else _load_progress()
@@ -597,5 +610,18 @@ def index_status():
     from pdfmanager import library_index
 
     return library_index.index_status()
+
+
+def rebuild_index():
+    """Force a fresh Bookshelf folder scan and incremental FTS5 index sync."""
+    global _SCAN_KEY
+    from pdfmanager import library_index
+
+    with _CACHE_LOCK:
+        _SCAN_KEY = None
+    all_items = _all_items_cached(list_folders())
+    sync_stats = library_index.sync_index(all_items)
+    status = library_index.index_status()
+    return {**status, "sync": sync_stats}
 
 

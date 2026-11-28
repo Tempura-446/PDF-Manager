@@ -421,6 +421,8 @@ class Handler(ReaderRoutesMixin, FormRoutesMixin, ToolRoutesMixin, ScanWatchRout
                 return self._library_progress_save(body)
             if path == "/api/library/progress/clear":
                 return self._library_progress_clear(body)
+            if path == "/api/library/index/rebuild":
+                return self._library_index_rebuild()
             if path == "/api/library/ask":
                 return self._library_ask(body)
             if path == "/api/translate/manga-batch":
