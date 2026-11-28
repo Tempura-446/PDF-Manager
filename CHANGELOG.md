@@ -4,6 +4,22 @@ What changed in each version of ZPDF. The newest is first; each section is
 also the notes of its release on
 [ZPDF-releases](https://github.com/Tempura-446/ZPDF-releases/releases).
 
+## 0.95.1
+
+Command Palette Parity, Read-Aloud Live Captions, Click-to-Reindex & Companion Page Reordering:
+
+- **Command Palette (`Ctrl+K`) Parity (`static/reader.js`).**
+  - Added **Vision-LLM OCR / Translate page…**, **Read aloud (Audiobook player)**, and **Smart Redline with another PDF…** to the Reader Command Palette.
+- **Read-Aloud Live Caption & Instant Controls (`static/reader.js`, `static/reader.css`).**
+  - Added a compact live sentence caption in the floating Read-Aloud bar, instant re-speak when changing speed or Kokoro voice, and `Escape` to stop/hide the bar.
+- **Bookshelf Click-to-Reindex & Continue Reading "Clear all" (`bookshelf.py`, `server/reader_routes.py`, `gui.py`, `static/tools.js`, `static/app.css`).**
+  - Added `POST /api/library/index/rebuild` and made the FTS5 index badge clickable to force a fresh folder scan & index sync on demand.
+  - Added `bookshelf.clear_all_progress()`, `{"all": true}` support on `POST /api/library/progress/clear`, and a **Clear all** button on the Continue Reading header.
+- **Phone Companion Page Reordering (`static/mobile-drop.html`).**
+  - Added `‹` / `›` reorder buttons on each snapped camera page thumbnail so pages can be reordered on the phone before bundling into a PDF.
+- **CI Workflow Hygiene (`.github/workflows/build-app.yml`).**
+  - Upgraded `actions/setup-java` and `gradle/actions/setup-gradle` to `v5` to clear Node.js 20 deprecation warnings.
+
 ## 0.95.0
 
 Polish, Integration & Hardening Pass across Offline TTS, Phone Companion, Bookshelf FTS5, and Smart Redline:

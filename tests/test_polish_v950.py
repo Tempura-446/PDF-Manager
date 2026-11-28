@@ -174,7 +174,64 @@ def test_v950_frontend_wiring():
     assert "/api/companion/files" in mobile_html
     assert "Grab from Desktop" in mobile_html
     assert "thumb-rm" in mobile_html
+    assert "thumb-mv" in mobile_html
 
     assert "/api/library/progress/clear" in tools_js
     assert "/api/library/index/status" in tools_js
+    assert "/api/library/index/rebuild" in tools_js
     assert "continue-dismiss" in tools_js
+    assert "continue-clear-btn" in tools_js
+
+    # v0.95.1 Command Palette + Read-Aloud live caption
+    assert "rd-tts-caption" in reader_js
+    assert 'label: "Read aloud (Audiobook player)"' in reader_js
+    assert 'label: "Smart Redline with another PDF…"' in reader_js
+    assert 'label: "Vision-LLM OCR / Translate page…"' in reader_js
+
+
+def test_clear_all_progress_and_index_rebuild_endpoints(tmp_path, monkeypatch):
+    from pdfmanager import library_index
+
+    monkeypatch.setattr(bookshelf, "_progress_path", lambda: tmp_path / "reading-progress.json")
+    monkeypatch.setattr(bookshelf, "_config_path", lambda: tmp_path / "bookshelf.json")
+    monkeypatch.setattr(library_index, "_db_path", lambda: tmp_path / "library-index.sqlite")
+
+    folder = tmp_path / "books"
+    folder.mkdir()
+    pdf1 = _make_pdf(folder / "one.pdf", ["Alpha contract terms"])
+    pdf2 = _make_pdf(folder / "two.pdf", ["Beta specification clause"])
+    bookshelf.add_folder(folder)
+    bookshelf.save_progress(pdf1, page=2, total=5)
+    bookshelf.save_progress(pdf2, page=4, total=8)
+
+    server, base, tok = _start_test_server()
+    try:
+        # Clear all Continue Reading entries
+        req = urllib.request.Request(
+            f"{base}/api/library/progress/clear",
+            data=json.dumps({"all": True}).encode("utf-8"),
+            headers={"X-Pdfm-Token": tok, "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        assert data["ok"] is True
+        assert data["cleared"] == 2
+        assert bookshelf.get_progress(pdf1) is None
+        assert bookshelf.get_progress(pdf2) is None
+
+        # Force-rebuild FTS5 index
+        req2 = urllib.request.Request(
+            f"{base}/api/library/index/rebuild",
+            data=b"{}",
+            headers={"X-Pdfm-Token": tok, "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req2, timeout=10) as resp2:
+            st = json.loads(resp2.read().decode("utf-8"))
+        assert st["total_books"] == 2
+        assert st["total_pages"] == 2
+        assert "sync" in st
+    finally:
+        server.shutdown()
+        server.server_close()

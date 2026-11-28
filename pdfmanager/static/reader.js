@@ -1822,11 +1822,13 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       speedSel.addEventListener("change", () => {
         this._ttsState.speed = Number(speedSel.value) || 1.0;
         store.set("pdfm-tts-speed", this._ttsState.speed);
+        if (this._ttsState.playing) { this._stopSpeechOnly(); this._speakCurrent(); }
       });
       const voiceSel = el("select", { class: "rd-tts-voice", "aria-label": "Neural voice", hidden: true });
       voiceSel.addEventListener("change", () => {
         this._ttsState.voice = voiceSel.value || "af_heart";
         store.set("pdfm-tts-voice", this._ttsState.voice);
+        if (this._ttsState.playing) { this._stopSpeechOnly(); this._speakCurrent(); }
       });
       const autoCb = el("input", { type: "checkbox", checked: this._ttsState.autoTurn });
       autoCb.addEventListener("change", () => {
@@ -1837,14 +1839,22 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
         autoCb, "Auto-turn",
       );
       const statusEl = el("span", { class: "rd-tts-status" }, "Ready");
+      const captionEl = el("div", { class: "rd-tts-caption", "aria-live": "polite" });
       const closeBtn = el("button", { type: "button", class: "rd-btn", onclick: () => {
         this._stopReadAloud();
         this._ttsBar.hidden = true;
       } }, "×");
-      this._ttsUi = { playBtn, statusEl, voiceSel };
+      this._ttsUi = { playBtn, statusEl, voiceSel, captionEl };
       this._ttsBar = el("div", { class: "rd-tts-bar", role: "region", "aria-label": "Read aloud player" },
-        playBtn, prevBtn, nextBtn, speedSel, voiceSel, autoLbl, statusEl, closeBtn,
+        playBtn, prevBtn, nextBtn, speedSel, voiceSel, autoLbl, statusEl, closeBtn, captionEl,
       );
+      this._ttsBar.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          this._stopReadAloud();
+          this._ttsBar.hidden = true;
+        }
+      });
       this.root.append(this._ttsBar);
     }
     this._ttsBar.hidden = false;
@@ -1888,7 +1898,10 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     if (!this._ttsState) return;
     this._ttsState.playing = false;
     this._stopSpeechOnly();
-    if (this._ttsUi) this._ttsUi.playBtn.textContent = "Play";
+    if (this._ttsUi) {
+      this._ttsUi.playBtn.textContent = "Play";
+      if (this._ttsUi.captionEl) this._ttsUi.captionEl.textContent = "";
+    }
   }
 
   _syncTtsLabel() {
@@ -1898,6 +1911,11 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
     this._ttsUi.statusEl.textContent = n
       ? `${tag}Page ${this._ttsState.page} · ${this._ttsState.idx + 1}/${n}`
       : `Page ${this._ttsState.page} · No text`;
+    if (this._ttsUi.captionEl) {
+      const cur = n ? String(this._ttsState.sentences[this._ttsState.idx] || "").trim() : "";
+      this._ttsUi.captionEl.textContent = cur;
+      this._ttsUi.captionEl.title = cur;
+    }
   }
 
   async _startReadAloud() {
@@ -2237,6 +2255,9 @@ export class Reader extends Tabs(CheckOcrMode(CropMode(FormMode(Finding(Signing(
       { icon: "rect", label: "Crop pages visually", words: "trim margins box cut", run: () => this.openCropMode() },
       { icon: "print", label: "Print preflight check", words: "dpi cmyk rgb bleed fonts hairline press", run: () => this.checkPreflight() },
       { icon: "edittext", label: "Translate this page", words: "translate language offline page spanish french german chinese", run: () => this.translateCurrentPage() },
+      { icon: "edittext", label: "Vision-LLM OCR / Translate page…", words: "vlm vision llm ollama ocr translate scan handwriting table formula", run: () => this.openVlmPageTool() },
+      { icon: "book", label: "Read aloud (Audiobook player)", words: "tts speech voice kokoro listen audio narrator read aloud", run: () => this.toggleReadAloud() },
+      { icon: "layers", label: "Smart Redline with another PDF…", words: "redline contract diff compare legal clause changes specification", run: () => this.redlineWithFile() },
       { icon: "edittext", label: "Manga Lens (translate page overlay & bubble editor)", keys: "Shift+T", words: "manga lens comic bubble translate overlay edit scanlation", run: () => this.openMangaLens() },
       { icon: "split", label: "Live bilingual reading", words: "translate bilingual book split view side by side language", run: () => this.openSplitView("__translate__") },
       { icon: "command", label: "Ask this PDF (Local AI)", words: "ai assistant ask question ollama lm studio local llm chat citations", run: () => openAiAssistant(this, "ask") },

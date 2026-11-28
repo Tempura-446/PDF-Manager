@@ -1184,13 +1184,18 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
 .shelf-head .lbl { margin: 0; }
 .shelf-index-badge {
   font-size: 11px;
+  font-family: inherit;
+  color: inherit;
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: var(--surface);
   opacity: 0.78;
   white-space: nowrap;
+  cursor: pointer;
 }
+.shelf-index-badge:hover { opacity: 1; border-color: var(--accent); }
+.shelf-index-badge:disabled { opacity: 0.55; cursor: wait; }
 .shelf-filter {
   margin-left: auto;
   flex: 1 1 170px;
@@ -1288,6 +1293,26 @@ body.reader-mode #reader-host { display: block; flex: 1; min-height: 0; max-widt
   transition: width 0.2s ease;
 }
 .continue-sec { margin-top: 18px; }
+.continue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.continue-head .lbl { margin: 0; }
+.continue-clear-btn {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  opacity: 0.65;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.continue-clear-btn:hover { opacity: 1; text-decoration: underline; }
 .continue-grid {
   display: grid;
   grid-auto-flow: column;
