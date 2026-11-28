@@ -81,7 +81,7 @@
   const setStatus = (msg, kind = "") => { statusEl.textContent = msg; statusEl.className = kind; };
   if (!token) setStatus("Missing pairing token — re-scan the QR code from desktop ZPDF.", "err");
 
-  const scanPages = []; // { file, url }
+  const scanPages = []; // File[]
   const scanQueue = document.getElementById("scan-queue");
   const scanSend = document.getElementById("scan-send");
   const camInput = document.getElementById("cam-input");
@@ -89,21 +89,28 @@
   const deskList = document.getElementById("desk-list");
   const deskRefresh = document.getElementById("desk-refresh");
 
-  const clearScanPages = () => {
-    for (const item of scanPages) {
-      try { URL.revokeObjectURL(item.url); } catch (_) {}
-    }
-    scanPages.length = 0;
-  };
-  window.addEventListener("pagehide", clearScanPages);
-
   const renderQueue = () => {
-    scanQueue.replaceChildren(...scanPages.map((item, i) => {
+    scanQueue.replaceChildren(...scanPages.map((file, i) => {
       const box = document.createElement("div");
       box.className = "thumb-item";
-      const img = document.createElement("img");
-      img.src = item.url;
-      img.alt = `Page ${i + 1}`;
+      const canvas = document.createElement("canvas");
+      canvas.width = 136;
+      canvas.height = 176;
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+      canvas.style.display = "block";
+      if (typeof createImageBitmap === "function") {
+        createImageBitmap(file).then((bmp) => {
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            const scale = Math.max(canvas.width / bmp.width, canvas.height / bmp.height);
+            const dw = bmp.width * scale;
+            const dh = bmp.height * scale;
+            ctx.drawImage(bmp, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh);
+          }
+          bmp.close();
+        }).catch(() => {});
+      }
       const num = document.createElement("span");
       num.className = "thumb-num";
       num.textContent = String(i + 1);
@@ -114,11 +121,10 @@
       rm.setAttribute("aria-label", `Remove page ${i + 1}`);
       rm.textContent = "×";
       rm.addEventListener("click", () => {
-        const [removed] = scanPages.splice(i, 1);
-        if (removed?.url) { try { URL.revokeObjectURL(removed.url); } catch (_) {} }
+        scanPages.splice(i, 1);
         renderQueue();
       });
-      box.append(img, num, rm);
+      box.append(canvas, num, rm);
       return box;
     }));
     scanSend.hidden = scanPages.length === 0;
@@ -141,7 +147,7 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       setStatus(`Sent “${data.name || "file"}” — opened on desktop!`, "ok");
-      if (mode === "scan") { clearScanPages(); renderQueue(); }
+      if (mode === "scan") { scanPages.length = 0; renderQueue(); }
       loadDesktopFiles();
     } catch (err) {
       setStatus(`Transfer failed: ${err?.message || err}`, "err");
@@ -227,12 +233,12 @@
 
   document.getElementById("cam-btn").addEventListener("click", () => camInput.click());
   camInput.addEventListener("change", () => {
-    for (const f of camInput.files || []) scanPages.push({ file: f, url: URL.createObjectURL(f) });
+    for (const f of camInput.files || []) scanPages.push(f);
     camInput.value = "";
     renderQueue();
     setStatus(`${scanPages.length} page(s) ready — add more or tap Send.`);
   });
-  scanSend.addEventListener("click", () => upload(scanPages.map((p) => p.file), "scan"));
+  scanSend.addEventListener("click", () => upload(scanPages, "scan"));
 
   document.getElementById("file-btn").addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", () => {

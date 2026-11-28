@@ -434,13 +434,6 @@ def clear_progress(book_id_or_path):
             k for k in data
             if k == target or _book_id(k) == target
         ]
-        if not keys_to_drop:
-            try:
-                resolved = str(Path(target).resolve())
-                if resolved in data:
-                    keys_to_drop = [resolved]
-            except OSError:
-                pass
         for k in keys_to_drop:
             data.pop(k, None)
             removed = True
